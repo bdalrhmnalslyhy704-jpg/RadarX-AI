@@ -123,37 +123,28 @@ test('Pre-Move watch creation fails closed for stale, incomplete, extended, or l
   assert.equal(buildPreMoveWatchOnlyAlert(base.candidate,{...base.snapshot,meta:{...base.snapshot.meta,live:false}},base.now),null);
 });
 
-test('Pre-Move watch notification sends only as WATCH_ONLY and suppresses repeat delivery',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-'));
-  const store=await new DurableStore({dir}).init();
+test('Pre-Move watch notification stays in-app and never sends a phone push',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
     await store.upsertSubscription('u1',pushSubscription());
-    const sent=[];
-    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
-      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
-    }};
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT',httpStatus:201};}};
     const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
     const {candidate,snapshot,now}=fixture();
     const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
     assert.ok(alert);
     const first=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(first.status,'SENT',JSON.stringify(first));
-    assert.equal(first.sent_count,1);
-    assert.equal(sent.length,1);
-    assert.equal(sent[0].watch_only,true);
-    assert.equal(sent[0].entry_eligible,false);
-    assert.equal(sent[0].paper_trading,true);
-    assert.equal(sent[0].real_order_execution,false);
-    assert.match(sent[0].title,/رادار ما قبل الحركة/);
+    assert.equal(first.status,'WATCH_ONLY_FEED_ONLY');
+    assert.equal(first.sent_count,0);
+    assert.equal(first.attempted,false);
     const second=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(second.status,'DUPLICATE_SUPPRESSED');
-    assert.equal(sent.length,1);
+    assert.equal(second.status,'WATCH_ONLY_FEED_ONLY');
+    assert.equal(second.sent_count,0);
+    assert.equal(calls,0);
     const audits=await store.readRecent('notifications',10);
-    assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.symbol==='DASHUSDT').length,1);
-  }finally{
-    await rm(dir,{recursive:true,force:true});
-  }
+    assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY'&&x.symbol==='DASHUSDT').length,2);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
 test('live-scan DOGE-like early flow becomes a bounded monitor alert when price is still negative',async()=>{
@@ -244,15 +235,9 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
     assert.ok(alert);
     assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'SENT',JSON.stringify(result));
-    assert.equal(result.sent_count,1);
-    assert.equal(sent.length,1);
-    assert.equal(sent[0].symbol,'EARLYMONITORUSDT');
-    assert.equal(sent[0].watch_only,true);
-    assert.equal(sent[0].entry_eligible,false);
-    assert.equal(sent[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
-    assert.equal(sent[0].paper_trading,true);
-    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
+    assert.equal(result.sent_count,0);
+    assert.equal(sent.length,0,'early-flow monitoring remains in the app until final confirmation');
 
     const unsafe={
       ...alert,
@@ -267,7 +252,7 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
     const rejected=await manager.notifyRadarWatchOnlyAlert(unsafe);
     assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejected.reason,'PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
-    assert.equal(sent.length,1,'weak flow must not get around the final notification gate');
+    assert.equal(sent.length,0,'weak flow and early monitoring never reach the phone before confirmation');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
@@ -300,92 +285,66 @@ test('final push gate accepts only a fresh, high-confluence ticker-activity moni
     assert.ok(alert);
     assert.equal(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'SENT',JSON.stringify(result));
-    assert.equal(result.sent_count,1);
-    assert.equal(sent.length,1);
-    assert.equal(sent[0].symbol,'CFGUSDT');
-    assert.equal(sent[0].watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
-    assert.equal(sent[0].watch_only,true);
-    assert.equal(sent[0].entry_eligible,false);
-    assert.equal(sent[0].paper_trading,true);
-    assert.equal(sent[0].real_order_execution,false);
-    assert.ok(sent[0].ticker_activity_watch_evidence);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
+    assert.equal(result.sent_count,0);
+    assert.equal(sent.length,0,'the final ticker-activity watch is visible in-app but is not a push');
 
     const weakAlert={...alert,id:alert.id.replace('CFGUSDT','WEAKUSDT'),symbol:'WEAKUSDT',
       ticker_activity_watch_evidence:{...alert.ticker_activity_watch_evidence,score:8}};
     const rejected=await manager.notifyRadarWatchOnlyAlert(weakAlert);
     assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejected.reason,'PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
-    assert.equal(sent.length,1,'weak activity evidence must never be delivered');
+    assert.equal(sent.length,0,'neither monitoring nor weak activity evidence can send a phone push');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
 });
 
-test('failed Pre-Move watch delivery is retried with the same stable event ID and remains watch-only',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-'));
-  const store=await new DurableStore({dir}).init();
+test('failed Pre-Move watch event is recorded feed-only and never queued for push retry',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
     await store.upsertSubscription('u1',pushSubscription());
-    const sent=[];
     let calls=0;
-    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
-      sent.push(payload);calls++;
-      return calls===1?{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'}:{ok:true,status:'SENT',httpStatus:201};
-    }};
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'};}};
     const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000}),retryBaseMs:1});
     const {candidate,snapshot,now}=fixture();
     const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
     assert.ok(alert);
-    const first=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(first.status,'FAILED');
-    assert.equal(first.sent_count,0);
-    assert.equal(manager.retryQueue.size,1);
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY');
+    assert.equal(result.sent_count,0);
+    assert.equal(result.attempted,false);
+    assert.equal(manager.retryQueue.size,0);
     await manager.flushRetries(Date.now()+100);
-    assert.equal(calls,2);
-    assert.equal(manager.retryQueue.size,0);
-    assert.equal(sent[0].event_id,alert.id);
-    assert.equal(sent[1].event_id,alert.id);
-    for(const payload of sent){
-      assert.equal(payload.watch_only,true);
-      assert.equal(payload.entry_eligible,false);
-      assert.equal(payload.paper_trading,true);
-      assert.equal(payload.real_order_execution,false);
-    }
+    assert.equal(calls,0);
     const audits=await store.readRecent('notifications',10);
-    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'&&x.status==='SENT'&&x.alert_id===alert.id));
-  }finally{
-    await rm(dir,{recursive:true,force:true});
-  }
+    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY'&&x.alert_id===alert.id));
+    assert.equal(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'),false);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test('failed Pre-Move watch delivery expires instead of sending stale evidence',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-expire-'));
-  const store=await new DurableStore({dir}).init();
+test('feed-only Pre-Move watch does not queue stale push retries',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-expire-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
     await store.upsertSubscription('u1',pushSubscription());
     let calls=0;
-    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){
-      calls++;return{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'};
-    }};
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:false,status:'FAILED',reason:'TEMPORARY_TEST_FAILURE'};}};
     const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000}),retryBaseMs:1});
     const {candidate,snapshot,now}=fixture();
     const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
     assert.ok(alert);
-    const first=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(first.status,'FAILED');
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY');
     await manager.flushRetries(Date.now()+22*60*1000);
-    assert.equal(calls,1);
+    assert.equal(calls,0);
     assert.equal(manager.retryQueue.size,0);
     const audits=await store.readRecent('notifications',10);
-    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'&&x.status==='EXPIRED'&&x.alert_id===alert.id));
-  }finally{
-    await rm(dir,{recursive:true,force:true});
-  }
+    assert.ok(audits.some(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY'&&x.alert_id===alert.id));
+    assert.equal(audits.some(x=>x.status==='EXPIRED'&&x.event==='RADAR_WATCH_ONLY_NOTIFICATION_RETRY'),false);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
-
 
 test('Pre-Move live watch diagnostics identify the precise gate that blocks notifications',()=>{
   const {candidate,snapshot,now}=fixture();
