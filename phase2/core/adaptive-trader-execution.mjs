@@ -212,17 +212,18 @@ export class BinanceSpotSignedClient{
   }
   async preflight(){
     if(!this.lastTimeSyncAt||this.clock()-this.lastTimeSyncAt>30*60*1000)await this.syncTime();
-    const [account,restrictions]=await Promise.all([
-      this.request('GET','/api/v3/account',{}, {signed:true}),
-      this.request('GET','/sapi/v1/account/apiRestrictions',{}, {signed:true})
-    ]);
+    const account=await this.request('GET','/api/v3/account',{}, {signed:true});
     if(account?.canTrade!==true)throw new Error('BINANCE_ACCOUNT_TRADING_NOT_ENABLED');
+    if(this.baseUrl==='https://testnet.binance.vision'){
+      return {account,restrictions:null,checked_at:this.clock(),mode:'SPOT_TESTNET'};
+    }
+    const restrictions=await this.request('GET','/sapi/v1/account/apiRestrictions',{}, {signed:true});
     if(restrictions?.enableSpotAndMarginTrading!==true)throw new Error('BINANCE_SPOT_TRADE_PERMISSION_NOT_ENABLED');
     if(restrictions?.enableWithdrawals!==false)throw new Error('BINANCE_WITHDRAWAL_PERMISSION_MUST_BE_DISABLED');
     if(restrictions?.enableFutures!==false)throw new Error('BINANCE_FUTURES_PERMISSION_MUST_BE_DISABLED');
     if(restrictions?.enableMargin!==false)throw new Error('BINANCE_MARGIN_PERMISSION_MUST_BE_DISABLED');
     if(restrictions?.ipRestrict!==true)throw new Error('BINANCE_API_KEY_IP_RESTRICTION_REQUIRED');
-    return {account,restrictions,checked_at:this.clock()};
+    return {account,restrictions,checked_at:this.clock(),mode:'LIVE_SPOT_GATED'};
   }
   async symbolFilters(symbol){
     return parseSymbolFilters(await this.request('GET','/api/v3/exchangeInfo',{symbol}),symbol);
