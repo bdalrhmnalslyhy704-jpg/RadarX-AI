@@ -247,7 +247,7 @@ export class PushManager{
         return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_RETRIES_PER_MINUTE',retryAfterMs:Math.max(1000,60_000-(now-retryAttempts[0]))};
       if(!isRetry&&categoryAttempts.length>=maxPerMinute)
         return{ok:false,status:'RATE_LIMITED',
-          reason:category==='WATCH_ONLY'?'MAX_1_WATCH_ONLY_PUSH_PER_MINUTE':'MAX_3_MARKET_PUSHES_PER_MINUTE',
+          reason:category==='WATCH_ONLY'?'WATCH_ONLY_FEED_ONLY':'MAX_1_CONFIRMED_MARKET_PUSH_PER_MINUTE',
           retryAfterMs:Math.max(1000,60_000-(now-categoryAttempts[0]))};
       const nextRecentEvents=eventId?[...recentEvents.filter(row=>row.id!==eventId||row.category!==category),{id:eventId,category,at:now}].slice(-100):recentEvents;
       const nextState={
