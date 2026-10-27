@@ -480,7 +480,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     ? new RestClient({
         baseUrls: preMoveBaseUrls,
         fetchImpl: marketRadarRestClient.fetchImpl,
-        timeoutMs: Math.min(4500, Number(marketRadarRestClient.timeoutMs) || 4500),
+        // Keep a slow/unreachable host from pushing the strict 45s Pre-Move
+        // scan SLA over budget; the next allowlisted Spot source remains available.
+        timeoutMs: Math.min(3500, Number(marketRadarRestClient.timeoutMs) || 3500),
         minIntervalMs: Number(marketRadarRestClient.minIntervalMs) || 100,
         maxRequestsPerMinute: Math.max(1, Number(marketRadarRestClient.maxRequestsPerMinute) || 240)
       })
