@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
+const firebase = await readFile('android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java', 'utf8');
 const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
 const manifest = await readFile('android/app/src/main/AndroidManifest.xml', 'utf8');
 const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
@@ -60,6 +61,17 @@ assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycl
   'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
 assert.match(service, /if \(!finalConfirmation\) return false;/,
   'early setup/monitor states must fail closed at Android last-mile');
+assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
+  'Firebase must suppress queued or legacy monitor-only pushes at the device boundary');
+assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
+  'Firebase must require entry_eligible=true before posting a phone notification');
+assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
+  'Firebase must require a final confirmed state or strict final gate');
+assert.match(firebase, /if \(watchOnly \|\| watchEvent \|\| !entryEligible \|\| followUpRequired \|\| !finalConfirmation\)/,
+  'Firebase must not render early watch, follow-up or unconfirmed data messages');
+assert.doesNotMatch(firebase, /manager\.notify\("radarx_premove_watch"/,
+  'the FCM client must have no separate local notification lane for pre-move watches');
+
 
 assert.match(service, /boolean eligible = isActionableRadarAlert\(alert\)/,
   'durable and fallback feeds must use the shared notification gate');
