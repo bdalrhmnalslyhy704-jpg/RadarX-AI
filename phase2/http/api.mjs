@@ -536,12 +536,12 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         watch_notification_top_rejections:(Array.isArray(diagnostics.samples)?diagnostics.samples:[])
           .filter(row=>row?.eligible!==true).slice(0,5).map(row=>({
             symbol:String(row?.symbol||'').slice(0,30),reason:String(row?.reason||'UNKNOWN').slice(0,100),
-            score:Number.isFinite(Number(row?.score))?Number(row.score):null,
-            session_return_pct:Number.isFinite(Number(row?.session_return_pct))?Number(row.session_return_pct):null,
-            one_hour_return_pct:Number.isFinite(Number(row?.one_hour_return_pct))?Number(row.one_hour_return_pct):null,
+            score:row?.score!==null&&row?.score!==undefined&&Number.isFinite(Number(row.score))?Number(row.score):null,
+            session_return_pct:row?.session_return_pct!==null&&row?.session_return_pct!==undefined&&Number.isFinite(Number(row.session_return_pct))?Number(row.session_return_pct):null,
+            one_hour_return_pct:row?.one_hour_return_pct!==null&&row?.one_hour_return_pct!==undefined&&Number.isFinite(Number(row.one_hour_return_pct))?Number(row.one_hour_return_pct):null,
             data_valid:row?.data_valid===true,data_stale:row?.data_stale===true,
-            data_quality:Number.isFinite(Number(row?.data_quality))?Number(row.data_quality):null,
-            liquidity_quality:Number.isFinite(Number(row?.liquidity_quality))?Number(row.liquidity_quality):null
+            data_quality:row?.data_quality!==null&&row?.data_quality!==undefined&&Number.isFinite(Number(row.data_quality))?Number(row.data_quality):null,
+            liquidity_quality:row?.liquidity_quality!==null&&row?.liquidity_quality!==undefined&&Number.isFinite(Number(row.liquidity_quality))?Number(row.liquidity_quality):null
           })),
         watch_notification_symbols:watchAlerts.map(x=>String(x.symbol||'')).filter(Boolean).slice(0,3)
       };
