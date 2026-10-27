@@ -82,6 +82,8 @@ assert.match(notificationPolicy, /ONE_MINUTE_MS = 60_000L/,
   'device policy must permit at most one confirmed notification per minute');
 assert.match(notificationPolicy, /FIFTEEN_MINUTES_MS = 15 \* 60_000L/,
   'device policy must enforce a rolling fifteen-minute quota');
+assert.match(notificationPolicy, /SYMBOL_COOLDOWN_MS = 10 \* 60_000L/,
+  'device policy must suppress the same confirmed symbol across radars for ten minutes');
 assert.match(notificationPolicy, /FileLock ignored = lockChannel\.lock\(\)/,
   'device quota must coordinate the foreground and background Android processes atomically');
 assert.match(service, /ALERT_SUPPRESSED_DEVICE_NOTIFICATION_BUDGET/,
