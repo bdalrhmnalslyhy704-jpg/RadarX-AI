@@ -298,19 +298,28 @@ test('universe rotation continues after the last successful pair and retries the
   const first=await service({limit:40,now:f.now});
   assert.equal(first.universe.eligible_spot_symbols,100);
   assert.equal(first.universe.scan_offset,0);
-  assert.equal(first.universe.scan_advance_count,28);
+  assert.equal(first.universe.scan_advance_count,40);
+  assert.equal(first.universe.scan_success_count,28);
   assert.equal(first.universe.valid_symbols,28);
+  assert.equal(first.universe.fetch_failed_symbols,12);
   assert.equal(symbolRequests[0],'ROT000USDT');
   assert.equal(symbolRequests[28],'ROT028USDT');
 
   failTail=false;
   const countBeforeSecond=symbolRequests.length;
   const second=await service({limit:40,now:Date.now()+1000});
-  assert.equal(second.universe.scan_offset,28);
-  assert.equal(second.universe.scan_advance_count,40);
+  assert.equal(second.universe.scan_offset,40);
+  assert.equal(second.universe.scan_advance_count,28);
+  assert.equal(second.universe.scan_success_count,40);
   assert.equal(second.universe.valid_symbols,40);
   assert.equal(symbolRequests[countBeforeSecond],'ROT028USDT');
   assert.equal(second.candidates[0].real_order_execution,false);
+
+  const countBeforeThird=symbolRequests.length;
+  const third=await service({limit:40,now:Date.now()+2000});
+  assert.equal(third.universe.scan_offset,68);
+  assert.equal(third.universe.valid_symbols,40);
+  assert.equal(symbolRequests[countBeforeThird],'ROT068USDT');
 });
 
 test('concurrent universe sizes keep distinct server-cache entries',async()=>{
