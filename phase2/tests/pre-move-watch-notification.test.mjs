@@ -188,14 +188,10 @@ test('live-scan DOGE-like early flow becomes a bounded monitor alert when price 
     }};
     const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'SENT',JSON.stringify(result));
-    assert.equal(result.sent_count,1);
-    assert.equal(sent[0].symbol,'DOGEUSDT');
-    assert.equal(sent[0].watch_notification_tier,'EARLY_FLOW_MONITOR');
-    assert.equal(sent[0].watch_only,true);
-    assert.equal(sent[0].entry_eligible,false);
-    assert.equal(sent[0].paper_trading,true);
-    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
+    assert.equal(result.sent_count,0);
+    assert.equal(result.attempted,false);
+    assert.equal(sent.length,0,'the DOGE-like sample is early monitoring, not a phone alert until final confirmation');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
