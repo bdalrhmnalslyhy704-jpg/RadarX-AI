@@ -226,6 +226,27 @@ jobs:
               factors_before:r.pre_move?.early_evidence?.checks??null,
               features_at_crossing:features(r.at_crossing?.features),
               factors_at_crossing:r.at_crossing?.early_evidence?.checks??null,
+              intraday_runup_status:r.intraday_runup?.status??null,
+              intraday_runup_definition:r.intraday_runup?.definition??null,
+              runup_reference_candle_at:r.intraday_runup?.baseline?.observed_at??null,
+              runup_reference_candle_close:r.intraday_runup?.baseline?.candle_close??null,
+              runup_reference_low:r.intraday_runup?.baseline?.reference_low??null,
+              runup_at:r.intraday_runup?.runup?.observed_at??null,
+              runup_price:r.intraday_runup?.runup?.price??null,
+              runup_from_reference_low_pct:r.intraday_runup?.runup?.return_from_reference_low_pct??null,
+              runup_from_reference_close_pct:r.intraday_runup?.runup?.return_from_baseline_close_pct??null,
+              snapshots_before_runup:(r.intraday_runup?.lead_snapshots_before_runup??[]).map(x=>({
+                lead_minutes:x.requested_lead_minutes,status:x.status,observed_at:x.observed_at,
+                price:x.price,change_to_runup_pct:x.price_change_to_runup_pct
+              })),
+              runup_retrospective_outcome:{
+                latest_at:r.intraday_runup?.retrospective_outcome?.latest_observed_at??null,
+                latest_price:r.intraday_runup?.retrospective_outcome?.latest_price??null,
+                return_from_runup_to_latest_pct:r.intraday_runup?.retrospective_outcome?.return_from_runup_to_latest_pct??null,
+                max_favorable_pct:r.intraday_runup?.retrospective_outcome?.max_favorable_pct_since_runup??null,
+                max_adverse_pct:r.intraday_runup?.retrospective_outcome?.max_adverse_pct_since_runup??null,
+                basis:r.intraday_runup?.retrospective_outcome?.basis??null
+              },
               orderbook_history_status:r.orderbook_history_status
             };
           });
