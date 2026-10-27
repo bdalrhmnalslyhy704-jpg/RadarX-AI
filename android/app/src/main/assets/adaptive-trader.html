@@ -407,18 +407,18 @@ async function scanMarket(){
     const limit=Number(el('universeLimit').value)||80;
     const controller=new AbortController();
     const requestTimeout=setTimeout(()=>controller.abort(),55_000);
-    let response;
+    let response,snapshot;
     try{
       response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{
         method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller.signal
       });
+      snapshot=await response.json();
     }catch(error){
       if(error && error.name==='AbortError')throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
       throw error;
     }finally{
       clearTimeout(requestTimeout);
     }
-    const snapshot=await response.json();
     if(!response.ok||snapshot.status!=='LIVE_DATA'||(snapshot.meta && snapshot.meta.live)!==true||
        (snapshot.meta && snapshot.meta.paper_trading)!==true||(snapshot.meta && snapshot.meta.real_order_execution)!==false||
        (snapshot.meta && snapshot.meta.closed_candles_only)!==true||(snapshot.meta && snapshot.meta.engine)!=='ADAPTIVE_TRADER_SIDECAR_V1'){
