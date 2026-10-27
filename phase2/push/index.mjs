@@ -191,8 +191,66 @@ const testPayload=(eventId,testId,processedAt=Date.now())=>({
 });
 
 export class PushManager{
-  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();}
+  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();}
   status(){return this.provider.status();}
+  async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now()){
+    const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
+    const queueKey=subscriptionId;
+    const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
+    const task=previous.catch(()=>{}).then(async()=>{
+      const now=Math.max(Date.now(),Number(requestedAt)||0);
+      const guardKey='RADARX:PUSH_GUARD:V1:'+subscriptionId;
+      const category=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
+      let saved={};
+      try{
+        if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+          saved=await this.store.getDedupKey(guardKey)||{};
+        else saved=this.pushGuardMemory.get(guardKey)||{};
+      }catch(error){return{ok:false,status:'PUSH_GUARD_UNAVAILABLE',reason:'PUSH_GUARD_READ_FAILED'};}
+      const attempts=(Array.isArray(saved.attempts)?saved.attempts:[]).map(Number)
+        .filter(at=>Number.isFinite(at)&&at<=now&&now-at<60_000);
+      const sentBySymbol=saved.sent_by_symbol&&typeof saved.sent_by_symbol==='object'&&!Array.isArray(saved.sent_by_symbol)
+        ?{...saved.sent_by_symbol}:{};
+      for(const [key,value] of Object.entries(sentBySymbol)){
+        const sentAt=Number(value),cooldown=key.startsWith('WATCH_ONLY|')?5*60_000:10*60_000;
+        if(!Number.isFinite(sentAt)||sentAt>now+5_000||now-sentAt>=cooldown)delete sentBySymbol[key];
+      }
+      const symbol=String(notification?.symbol||'').trim().toUpperCase();
+      const symbolKey=symbol?category+'|'+symbol:null;
+      const cooldownMs=category==='WATCH_ONLY'?5*60_000:10*60_000;
+      const lastSent=symbolKey?Number(sentBySymbol[symbolKey]):NaN;
+      if(Number.isFinite(lastSent)&&lastSent<=now&&now-lastSent<cooldownMs)
+        return{ok:false,status:'DUPLICATE_SUPPRESSED',reason:'CROSS_RADAR_SYMBOL_COOLDOWN',retryAfterMs:cooldownMs-(now-lastSent)};
+      const maxPerMinute=3;
+      if(attempts.length>=maxPerMinute)
+        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_MARKET_PUSHES_PER_MINUTE',retryAfterMs:Math.max(1000,60_000-(now-attempts[0]))};
+      const nextState={version:1,attempts:[...attempts,now],sent_by_symbol:sentBySymbol,updated_at:now};
+      try{
+        if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+          await this.store.putDedupKey(guardKey,nextState);
+        else this.pushGuardMemory.set(guardKey,nextState);
+      }catch(error){return{ok:false,status:'PUSH_GUARD_UNAVAILABLE',reason:'PUSH_GUARD_WRITE_FAILED'};}
+      let response;
+      try{response=await this.provider.send(subscription,notification);}
+      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
+      if(response?.ok===true||response?.status==='SENT'){
+        if(symbolKey)nextState.sent_by_symbol[symbolKey]=now;
+        nextState.updated_at=now;
+        try{
+          if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+            await this.store.putDedupKey(guardKey,nextState);
+          else this.pushGuardMemory.set(guardKey,nextState);
+        }catch(error){
+          // The pre-send attempt reservation remains durable; keep this process protected too.
+          this.pushGuardMemory.set(guardKey,nextState);
+        }
+      }
+      return response;
+    });
+    this.pushGuardQueues.set(queueKey,task);
+    try{return await task;}
+    finally{if(this.pushGuardQueues.get(queueKey)===task)this.pushGuardQueues.delete(queueKey);}
+  }
   providerSubscriptions(rows){
     const provider=this.provider.status()?.provider;
     if(provider==='fcm')return rows.filter(row=>row.provider==='fcm');
@@ -205,7 +263,7 @@ export class PushManager{
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
       if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
-      const r=await this.provider.send(sub,payload(signal,Date.now())),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
+      const r=await this.sendMarketPush(sub,payload(signal,Date.now()),'MARKET'),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
         signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         provider:this.provider.status().provider,attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
       await this.store.appendNotificationAudit(audit);out.push(audit);
@@ -528,16 +586,15 @@ export class PushManager{
         status:'DUPLICATE_SUPPRESSED',reason:check.reason||'DUPLICATE_SIGNAL',
         attempted:false,notifications:[],sent_count:0,attempted_count:0
       };
-      await this.deduplicator.markEmitted(dedupSignal,now);
-    }
+          }
 
     const out=[];
     for(const sub of recipients){
       let response;
-      try{response=await this.provider.send(sub,radarPayload({
+      try{response=await this.sendMarketPush(sub,radarPayload({
         ...alert,market:'SPOT',price,watch_only:true,entry_eligible:false,
         paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
-      },Date.now()));}
+      },Date.now()),'WATCH_ONLY');}
       catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit={
         event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
@@ -568,9 +625,14 @@ export class PushManager{
       }
     }
     const sent=out.filter(x=>x.status==='SENT').length;
+    if(sent>0&&this.deduplicator){
+      const dedupSignal={symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},reason_codes:['RADAR_WATCH_ONLY']};
+      await this.deduplicator.markEmitted(dedupSignal,now).catch(()=>{});
+    }
+    const suppressedOnly=out.length>0&&out.every(x=>['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status));
     return {
-      status:sent?'SENT':out.length?'FAILED':'NO_ELIGIBLE_SUBSCRIPTIONS',
-      attempted:out.length>0,notifications:out,sent_count:sent,attempted_count:out.length,
+      status:sent?'SENT':suppressedOnly?'SUPPRESSED':out.length?'FAILED':'NO_ELIGIBLE_SUBSCRIPTIONS',
+      attempted:out.some(x=>!['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status)),notifications:out,sent_count:sent,attempted_count:out.filter(x=>!['RATE_LIMITED','DUPLICATE_SUPPRESSED','PUSH_GUARD_UNAVAILABLE'].includes(x.status)).length,
       watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
     };
   }
@@ -644,7 +706,7 @@ export class PushManager{
         0
       );
       if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality))continue;
-      const r=await this.provider.send(sub,radarPayload(alert,Date.now()));
+      const r=await this.sendMarketPush(sub,radarPayload(alert,Date.now()),'MARKET');
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
@@ -713,9 +775,9 @@ export class PushManager{
       let r;
       try{
         r=watchOnly
-          ?await this.provider.send(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
-            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now))
-          :await this.provider.send(j.subscription,payload(j.signal,now));
+          ?await this.sendMarketPush(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now),'WATCH_ONLY',now)
+          :await this.sendMarketPush(j.subscription,payload(j.signal,now),'MARKET',now);
       }catch(error){r={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit=watchOnly?{
         event:'RADAR_WATCH_ONLY_NOTIFICATION_RETRY',event_class:'RADAR_ALERT',radar:String(j.alert?.radar||'PRE_MOVE'),
