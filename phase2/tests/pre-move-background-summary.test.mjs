@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildPreMoveBackgroundScanSummary} from '../core/pre-move-background-summary.mjs';
+import {buildPreMoveNotificationDeliveryState} from '../core/pre-move-background-summary.mjs';
 
 test('background summary exposes bounded near misses and the most common blockers',()=>{
   const snapshot={
@@ -58,4 +59,67 @@ test('background summary accepts empty or malformed optional diagnostics without
   assert.deepEqual(summary.watch_notification_top_rejections,[]);
   assert.equal(summary.watch_notification_eligible,0);
   assert.equal(summary.paper_trading,undefined);
+});
+
+
+test('notification delivery history distinguishes scan eligibility from actual push delivery',()=>{
+  let state=buildPreMoveNotificationDeliveryState(null,{
+    symbol:'TRXUSDT',status:'NO_SUBSCRIPTIONS',reason:'NO_PUSH_SUBSCRIPTIONS',
+    attempted:false,sent_count:0,attempted_count:0
+  },1793101620000);
+  assert.equal(state.results,1);
+  assert.equal(state.send_calls,0);
+  assert.equal(state.notifications_sent,0);
+  assert.equal(state.current_status,'NO_SUBSCRIPTIONS');
+  assert.equal(state.current_reason,'NO_PUSH_SUBSCRIPTIONS');
+
+  state=buildPreMoveNotificationDeliveryState(state,{
+    symbol:'NEARUSDT',status:'SENT',reason:null,
+    attempted:true,sent_count:1,attempted_count:1
+  },1793101680000);
+  assert.equal(state.results,2);
+  assert.equal(state.send_calls,1);
+  assert.equal(state.recipients_attempted,1);
+  assert.equal(state.notifications_sent,1);
+  assert.equal(state.current_status,'SENT');
+  assert.equal(state.status_counts.NO_SUBSCRIPTIONS,1);
+  assert.equal(state.status_counts.SENT,1);
+  assert.equal(state.last_results.length,2);
+  assert.equal(state.last_results[0].symbol,'NEARUSDT');
+  assert.equal(state.last_results[1].symbol,'TRXUSDT');
+
+  state=buildPreMoveNotificationDeliveryState(state,{
+    symbol:'HUMAUSDT',status:'FAILED',reason:'FCM_UNAVAILABLE',
+    attempted:true,sent_count:0,attempted_count:1
+  },1793101740000);
+  assert.equal(state.send_calls,2);
+  assert.equal(state.recipients_attempted,2);
+  assert.equal(state.notifications_sent,1);
+  assert.equal(state.current_status,'FAILED');
+  assert.equal(state.reason_counts.FCM_UNAVAILABLE,1);
+});
+
+test('notification delivery history bounds retained records and sanitizes unknown values',()=>{
+  let state=null;
+  for(let i=0;i<15;i++){
+    state=buildPreMoveNotificationDeliveryState(state,{
+      symbol:'C'+i+'USDT',status:i%2?'SENT':'NO_ELIGIBLE_SUBSCRIPTIONS',
+      reason:i%2?null:'USER_SETTINGS_OR_QUALITY_FILTER',
+      attempted:i%2===1,sent_count:i%2?1:0,attempted_count:i%2?1:0
+    },1793101800000+i*1000);
+  }
+  assert.equal(state.results,15);
+  assert.equal(state.notifications_sent,7);
+  assert.equal(state.send_calls,7);
+  assert.equal(state.last_results.length,10);
+  assert.equal(state.last_results[0].symbol,'C14USDT');
+  assert.equal(state.last_results.at(-1).symbol,'C5USDT');
+  const next=buildPreMoveNotificationDeliveryState(state,{
+    symbol:'BTCUSDT',status:'DELIVERY_PROMISE_REJECTED',reason:'PUSH_RESULT_PROMISE_REJECTED',
+    attempted:false,sent_count:0,attempted_count:0,error:'network unavailable'
+  },1793101900000);
+  assert.equal(next.results,16);
+  assert.equal(next.current_status,'DELIVERY_PROMISE_REJECTED');
+  assert.equal(next.last_results[0].error,'network unavailable');
+  assert.equal(next.last_results.length,10);
 });
