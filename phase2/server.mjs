@@ -247,16 +247,15 @@ export async function startServer({
       logger.warn?.(name+' start failed: '+String(error?.message??error));
     }
   };
-  // The sidecar has its own durable file and read-only scanner; it never writes into radar signal stores.
-  // Like the other market workers, it remains off in the protected staging smoke mode.
-  if(config.environment==='production'||config.radarControl?.autostart===true){
-    safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
-  }
   safeStart('MONITOR',monitor);
   // Staging smoke tests must never start live market polling unless explicitly opted in.
   // Production retains the continuous analyst worker and all twelve coordinated radars.
   const explicitStagingRadarStart=config.radarControl?.autostart===true;
   const stagingSmokeMode=config.environment==='staging'&&!explicitStagingRadarStart;
+  // Follow Build 224's shared worker-start policy: keep staging smoke isolated; run beside RadarX otherwise.
+  if(!stagingSmokeMode&&config.radarControl?.autostart!==false){
+    safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
+  }
   if(!stagingSmokeMode){
     // Keep the 20-analyst intelligence cache warm continuously in real runtime environments.
     safeStart('MULTI_ANALYST_XFACTOR',multiAnalystRadar);
