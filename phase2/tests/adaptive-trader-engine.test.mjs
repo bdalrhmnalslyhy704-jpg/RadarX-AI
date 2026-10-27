@@ -145,6 +145,33 @@ test('missed-mover audit identifies only observed moves from a previous non-watc
   assert.equal(unassessed[0].classification,'UNASSESSED_MOVE');
 });
 
+test('missed-move review finds a multi-candle rise after the latest 15-minute return cooled',()=>{
+  const now=2_000_000_000_000;
+  const events=findMissedMoverEvents({
+    history:[
+      {symbol:'COOLEDUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',evaluated:true},
+      {symbol:'COOLEDUSDT',price:1.04,at:now-30*60*1000,tier:'WATCH',evaluated:true}
+    ],
+    currentPrices:[{symbol:'COOLEDUSDT',price:1.07}],
+    now,thresholdPct:5
+  });
+  assert.equal(events.length,1);
+  assert.equal(events[0].baseline_tier,'NO_SETUP');
+  assert.equal(events[0].classification,'POTENTIAL_MISSED_MOVER');
+  assert.ok(events[0].move_pct>=5);
+
+  const seen=findMissedMoverEvents({
+    history:[
+      {symbol:'SEENUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',evaluated:true},
+      {symbol:'SEENUSDT',price:1.05,at:now-30*60*1000,tier:'WATCH',evaluated:true}
+    ],
+    currentPrices:[{symbol:'SEENUSDT',price:1.11}],
+    now,thresholdPct:5
+  });
+  assert.equal(seen[0].baseline_tier,'WATCH');
+  assert.equal(seen[0].classification,'FOLLOW_UP_MOVE');
+});
+
 test('paper portfolio opens only strict labelled setups, estimates costs and never enables real execution',()=>{
   const portfolio=createPaperPortfolio(10000);
   portfolio.enabled=true;
