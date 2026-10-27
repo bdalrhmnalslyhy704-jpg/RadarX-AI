@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
 import {
   readAdaptiveTraderExecutionConfig,
+  buildAdaptiveTraderPaperValidationProfile,
   evaluateAdaptiveTraderLiveCandidate,
   BinanceSpotSignedClient,
   AdaptiveTraderExecutionController,
@@ -45,10 +46,10 @@ function snapshot(now=Date.now(),rows=[candidate(now)]){
 const learningProfile={ready:true,resolved_samples:120,positive_outcome_rate_pct:56.2,
   adjustments:{volume:1,buyer_flow:1,structure:1,compression:1}};
 function fakeExchange({ocoError=null,ocoResponse=null,closedOco=null,exitOrder=null}={}){
-  const calls={buys:0,sells:0,ocos:0};
+  const calls={buys:0,sells:0,ocos:0,preflights:0};
   return {
     calls,
-    async preflight(){return {checked_at:Date.now()};},
+    async preflight(){calls.preflights++;return {checked_at:Date.now()};},
     async symbolFilters(){return {symbol:'TESTUSDT',baseAsset:'TEST',quoteAsset:'USDT',
       stepSize:0.01,marketStepSize:0.01,tickSize:0.01,minQty:0.01,minMarketQty:0.01,
       maxQty:100000,maxMarketQty:100000,minNotional:6,quoteOrderQtyMarketAllowed:true};},
@@ -97,6 +98,39 @@ test('mainnet requires an explicit confirmation string and a small order/loss ca
   assert.equal(enabled.max_order_quote_usdt,10);
   assert.equal(enabled.daily_loss_limit_usdt,2);
   assert.equal(JSON.stringify(enabled).includes('test-secret-only'),false);
+});
+test('mainnet remains locked until the server paper portfolio proves minimum performance',async()=>{
+  const store=fakeStore();const exchange=fakeExchange();
+  const env={...goodEnv,RADARX_ADAPTIVE_TRADER_NETWORK:'LIVE',
+    RADARX_ADAPTIVE_TRADER_LIVE_CONFIRMATION:'RADARX_SPOT_LIVE_TRADING_CONFIRMED'};
+  const controller=new AdaptiveTraderExecutionController({store,env,clientFactory:()=>exchange,logger:{warn(){},error(){}}});
+  assert.equal(controller.snapshot().mode,'WAITING_FOR_PAPER_VALIDATION');
+  const result=await controller.processSnapshot(snapshot(),{
+    learningProfile,
+    paperValidationProfile:{ready:false,resolved_paper_trades:99,win_rate_pct:60,net_pnl_usdt:10,max_drawdown_pct:1}
+  });
+  assert.equal(result.status,'WAITING_FOR_PAPER_VALIDATION');
+  assert.equal(exchange.calls.preflights,0);
+  assert.equal(exchange.calls.buys,0);
+});
+test('server paper validation requires 100 closed trades, at least 55 percent wins, positive net PnL and bounded drawdown',()=>{
+  const trade=(i,profit)=>({closed_at:i+1,net_pnl:profit,net_return_pct:profit, paper_trading:true,real_order_execution:false});
+  const notEnough=buildAdaptiveTraderPaperValidationProfile({
+    starting_balance:10000,closed_trades:Array.from({length:99},(_,i)=>trade(i,i%5===0?-1:2))
+  });
+  assert.equal(notEnough.ready,false);
+  assert.equal(notEnough.gate_conditions.minimum_trades_met,false);
+  const good=buildAdaptiveTraderPaperValidationProfile({
+    starting_balance:10000,closed_trades:Array.from({length:100},(_,i)=>trade(i,i%5===0?-1:2))
+  });
+  assert.equal(good.ready,true);
+  assert.equal(good.resolved_paper_trades,100);
+  assert.equal(good.gate_conditions.net_profit_positive,true);
+  const bad=buildAdaptiveTraderPaperValidationProfile({
+    starting_balance:10000,closed_trades:Array.from({length:100},(_,i)=>trade(i,i<55?1:-3))
+  });
+  assert.equal(bad.ready,false);
+  assert.equal(bad.gate_conditions.net_profit_positive,false);
 });
 test('live entry gates reject weak setups and require mature resolved observations',()=>{
   const now=Date.now();
