@@ -848,7 +848,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         // at most one confirmed rising alert per minute and three per rolling 15 minutes.
         String replayTestFeed = prefs().getString("radarx_test_alert_feed_url", "");
         boolean replayBudgetBypass = isDebugBuild() &&
-            replayTestFeed.matches("http://10\.0\.2\.2:18[0-9]{3}/api/radar-alerts\?radar=ALL");
+            replayTestFeed.matches("http://10[.]0[.]2[.]2:18[0-9]{3}/api/radar-alerts[?]radar=ALL");
         RadarXNotificationPolicy.Reservation notificationReservation = null;
         if (!replayBudgetBypass) {
             String policyEventId = alert.optString("event_id", "");
