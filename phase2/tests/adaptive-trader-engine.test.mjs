@@ -111,8 +111,8 @@ test('adaptive profile waits for enough labelled outcomes and never rewrites rul
 test('missed-mover audit identifies only observed moves from a previous non-watch snapshot',()=>{
   const now=2_000_000_000_000;
   const history=[
-    {symbol:'MISSEDUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP'},
-    {symbol:'WATCHUSDT',price:2,at:now-60*60*1000,tier:'WATCH'},
+    {symbol:'MISSEDUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',evaluated:true},
+    {symbol:'WATCHUSDT',price:2,at:now-60*60*1000,tier:'WATCH',evaluated:true},
     {symbol:'RECENTUSDT',price:1,at:now-5*60*1000,tier:'NO_SETUP'}
   ];
   const events=findMissedMoverEvents({history,currentPrices:[
@@ -121,10 +121,13 @@ test('missed-mover audit identifies only observed moves from a previous non-watc
     {symbol:'RECENTUSDT',price:1.08}
   ],now});
   assert.equal(events.length,2);
-  assert.equal(events[0].symbol,'MISSEDUSDT');
-  assert.equal(events[0].classification,'POTENTIAL_MISSED_MOVER');
-  assert.equal(events[0].diagnostic_only,true);
-  assert.equal(events[1].classification,'FOLLOW_UP_MOVE');
+  const missed=events.find(row=>row.symbol==='MISSEDUSDT');
+  const watched=events.find(row=>row.symbol==='WATCHUSDT');
+  assert.equal(missed.classification,'POTENTIAL_MISSED_MOVER');
+  assert.equal(missed.diagnostic_only,true);
+  assert.equal(watched.classification,'FOLLOW_UP_MOVE');
+  const unassessed=findMissedMoverEvents({history:[{symbol:'UNSEENUSDT',price:1,at:now-60*60*1000,tier:'NOT_EVALUATED',evaluated:false}],currentPrices:[{symbol:'UNSEENUSDT',price:1.08}],now});
+  assert.equal(unassessed[0].classification,'UNASSESSED_MOVE');
 });
 
 test('paper portfolio opens only strict labelled setups, estimates costs and never enables real execution',()=>{
