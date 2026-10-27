@@ -53,7 +53,8 @@ test('TEST_FIXTURE: qualified early-track gates remain feed-only until final con
       price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,source:'BINANCE_PUBLIC_REST',
       closed_candles_only:true,detected_candle_close_time:now-1000,risk_flags:[],
       notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
-        score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD']},
+        score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD'],
+        falcon_eye:{quality:70,capture:76,independent_domains:3,early_window:true}},
       signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
     });
     assert.equal(out.length,1);
