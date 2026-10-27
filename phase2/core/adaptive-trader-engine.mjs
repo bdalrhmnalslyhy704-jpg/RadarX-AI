@@ -119,12 +119,16 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const compressionScore = compressionRatio === null ? 0 : clamp((1.5 - compressionRatio) / 1.2 * 100, 0, 100);
   const oneHourReturnPct = candles.length >= 5 ? pct(current.close, candles[candles.length - 5].close) : null;
   const shortReturnPct = candles.length >= 2 ? pct(current.close, candles[candles.length - 2].close) : null;
+  const btcReceivedAt = finite(btcKlines?.receivedAt);
+  const btcEvaluationNow = btcReceivedAt !== null && btcReceivedAt <= scanStartedAt + 5 * 60 * 1000
+    ? Math.max(scanStartedAt, btcReceivedAt)
+    : scanStartedAt;
   const btcCandles = (Array.isArray(btcKlines?.data) ? btcKlines.data : Array.isArray(btcKlines) ? btcKlines : [])
-    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < evaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
+    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < btcEvaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
   const btcLast = btcCandles[btcCandles.length-1];
   const btcRecent = btcCandles.slice(-5);
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
-  const btcOneHourReturnPct = btcContiguous && btcLast && evaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
+  const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
