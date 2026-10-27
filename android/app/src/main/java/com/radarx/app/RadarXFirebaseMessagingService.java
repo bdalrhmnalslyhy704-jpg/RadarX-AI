@@ -121,7 +121,7 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 if (policyEventId == null || policyEventId.trim().isEmpty()) {
                     policyEventId = symbol + "|" + radar + "|" + String.valueOf(message.getMessageId());
                 }
-                reservation = RadarXNotificationPolicy.reserve(this, policyEventId, System.currentTimeMillis());
+                reservation = RadarXNotificationPolicy.reserve(this, policyEventId, symbol, System.currentTimeMillis());
                 if (reservation.status != RadarXNotificationPolicy.RESERVED) {
                     Log.i(TAG, "FCM_NOTIFICATION_SUPPRESSED_DEVICE_BUDGET status=" + reservation.status);
                     return;
