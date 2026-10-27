@@ -220,7 +220,8 @@ export class DurableStore {
   }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
-    const t=p+'.tmp-'+process.pid+'-'+Date.now();
+    // Use a unique temp path even across concurrent Store instances sharing one data directory.
+    const t=p+'.tmp-'+process.pid+'-'+randomUUID();
     // The outcome ledger is a large, internal 5,000-record file. Compact JSON
     // preserves the schema while avoiding a large whitespace-heavy serialization
     // buffer on every live markout update. Other JSON files remain human-readable.
