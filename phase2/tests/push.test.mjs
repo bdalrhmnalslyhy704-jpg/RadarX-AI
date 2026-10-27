@@ -222,6 +222,7 @@ test('TEST_FIXTURE: radar alerts without an explicit final gate never push',asyn
     });
     assert.equal(sent.length,1);
     assert.equal(sent[0].symbol,'CONFIRMEDUSDT');
+    assert.equal(sent[0].notification_gate_eligible,true);
     assert.equal(sent[0].watch_only,false);
     assert.equal(sent[0].signal_lifecycle_state,'CONFIRMED');
     assert.equal(sent[0].signal_lifecycle_label,'تأكيد نهائي');
@@ -482,6 +483,26 @@ test('TEST_FIXTURE: confirmed non-rising signal is suppressed without provider c
     assert.equal(result[0]?.status,'SUPPRESSED_NON_RISING');
     assert.equal(result[0]?.reason,'RISING_DIRECTION_REQUIRED');
     assert.equal(calls,0);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: strict mode cannot override a conflicting early lifecycle state',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-conflicting-lifecycle-')),store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const result=await manager.notifyRadarAlert({
+      radar:'EARLY_EXPANSION_RADAR',symbol:'CONFLICTUSDT',direction:'UP_BIAS',market:'SPOT',
+      eligible:true,entry_eligible:true,data_quality:95,liquidity_quality:90,
+      closed_candles_only:true,
+      notification_gate:{mode:'STRICT_NOTIFICATION',eligible:true,watch_only:false,requires_follow_up_confirmation:false},
+      signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر'}
+    });
+    assert.deepEqual(result,[]);
+    assert.equal(calls,0,'an early lifecycle must not push even if a stale strict-mode field is present');
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
