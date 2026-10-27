@@ -101,9 +101,13 @@ ensure_sdk_item "platforms;android-${API_LEVEL}"
 ensure_sdk_item "system-images;android-${API_LEVEL};default;x86_64"
 
 echo "RADARX_EMULATOR_SDK_READY api=${API_LEVEL}"
-echo no | timeout 90s avdmanager create avd --force -n "${AVD_NAME}" \
-  --package "system-images;android-${API_LEVEL};default;x86_64"
-AVD_DIR="${HOME}/.android/avd/${AVD_NAME}.avd"
+# Specify an installed device profile so avdmanager does not prompt for an
+# interactive custom-hardware-profile response in a non-interactive CI shell.
+AVD_PROFILE="${RADARX_EMULATOR_PROFILE:-pixel_2}"
+timeout 90s avdmanager create avd --force -n "${AVD_NAME}" \
+  --package "system-images;android-${API_LEVEL};default;x86_64" \
+  --device "${AVD_PROFILE}"
+AVD_DIR="${ANDROID_AVD_HOME:-${HOME}/.android/avd}/${AVD_NAME}.avd"
 test -s "${AVD_DIR}/config.ini"
 cat >> "${AVD_DIR}/config.ini" <<'AVD'
 hw.cpu.ncore=2
@@ -115,7 +119,7 @@ showDeviceFrame=no
 fastboot.forceColdBoot=yes
 AVD
 
-mkdir -p "$(dirname "${EMULATOR_LOG}")"
+mkdir -p "$(dirname "${EMULATOR_LOG}")" "${ANDROID_AVD_HOME:-${HOME}/.android/avd}"
 : > "${EMULATOR_LOG}"
 EMU_ARGS=(-port "${PORT}" -avd "${AVD_NAME}" -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim)
 if [[ -r /dev/kvm && -w /dev/kvm ]]; then
