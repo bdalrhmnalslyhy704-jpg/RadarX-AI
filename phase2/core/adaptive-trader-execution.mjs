@@ -142,7 +142,7 @@ export function evaluateAdaptiveTraderLiveCandidate(candidate,{learningProfile,n
   if(daily===null||daily< -3||daily>7)return reject('DAILY_MOVE_OUTSIDE_ENTRY_WINDOW');
   if(hourly===null||hourly>3.5||hourly< -2.5)return reject('HOURLY_MOVE_OUTSIDE_ENTRY_WINDOW');
   if(learningProfile?.ready!==true||Number(learningProfile?.resolved_samples||0)<MIN_LIVE_OUTCOMES)
-    return reject('INSUFFICIENT_OUT_OF_SAMPLE_LEARNING_RECORD');
+    return reject('INSUFFICIENT_RESOLVED_MARKET_OUTCOMES');
   return {eligible:true,reason:null,reasons:['LIVE_ELIGIBILITY_RULES_PASSED'],symbol,score,price:FINITE(candidate.price),
     candle_close_time:FINITE(candidate.candle_close_time),candidate_features:{...f}};
 }
@@ -218,9 +218,10 @@ export class BinanceSpotSignedClient{
     ]);
     if(account?.canTrade!==true)throw new Error('BINANCE_ACCOUNT_TRADING_NOT_ENABLED');
     if(restrictions?.enableSpotAndMarginTrading!==true)throw new Error('BINANCE_SPOT_TRADE_PERMISSION_NOT_ENABLED');
-    if(restrictions?.enableWithdrawals===true)throw new Error('BINANCE_WITHDRAWAL_PERMISSION_MUST_BE_DISABLED');
-    if(restrictions?.enableFutures===true)throw new Error('BINANCE_FUTURES_PERMISSION_MUST_BE_DISABLED');
-    if(restrictions?.enableMargin===true)throw new Error('BINANCE_MARGIN_PERMISSION_MUST_BE_DISABLED');
+    if(restrictions?.enableWithdrawals!==false)throw new Error('BINANCE_WITHDRAWAL_PERMISSION_MUST_BE_DISABLED');
+    if(restrictions?.enableFutures!==false)throw new Error('BINANCE_FUTURES_PERMISSION_MUST_BE_DISABLED');
+    if(restrictions?.enableMargin!==false)throw new Error('BINANCE_MARGIN_PERMISSION_MUST_BE_DISABLED');
+    if(restrictions?.ipRestrict!==true)throw new Error('BINANCE_API_KEY_IP_RESTRICTION_REQUIRED');
     return {account,restrictions,checked_at:this.clock()};
   }
   async symbolFilters(symbol){
