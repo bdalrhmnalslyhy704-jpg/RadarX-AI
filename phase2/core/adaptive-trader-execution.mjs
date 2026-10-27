@@ -27,30 +27,34 @@ const isLeveraged=value=>/(?:UP|DOWN|BULL|BEAR)USDT$/.test(safeSymbol(value));
 const sha=value=>createHash('sha256').update(String(value)).digest('hex');
 const clientId=(prefix,value)=>prefix+sha(value).slice(0,28);
 
-export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=100,minWinRatePct=55,maxDrawdownPct=8}={}){
+export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=100,minWinRatePct=55,maxAllowedDrawdownPct=8}={}){
   const rows=(Array.isArray(portfolio?.closed_trades)?portfolio.closed_trades:[])
     .filter(row=>row&&row.paper_trading===true&&row.real_order_execution===false&&
       FINITE(row.net_pnl)!==null&&FINITE(row.net_return_pct)!==null)
     .map(row=>({closed_at:FINITE(row.closed_at)??0,net_pnl:FINITE(row.net_pnl),net_return_pct:FINITE(row.net_return_pct)}))
     .sort((a,b)=>a.closed_at-b.closed_at);
-  let wins=0,totalNet=0,equity=FINITE(portfolio?.starting_balance)||10000,peak=equity,maxDrawdownPct=0;
+  const required=Math.max(100,Math.trunc(Number(minTrades)||100));
+  const requiredWinRate=Math.max(55,Number(minWinRatePct)||55);
+  const allowedDrawdown=Math.min(8,Math.max(0,Number.isFinite(Number(maxAllowedDrawdownPct))?Number(maxAllowedDrawdownPct):8));
+  let wins=0,totalNet=0,equity=FINITE(portfolio?.starting_balance)||10000,peak=equity,observedMaxDrawdownPct=0;
   for(const row of rows){
     if(row.net_pnl>0)wins++;
     totalNet+=row.net_pnl;equity+=row.net_pnl;peak=Math.max(peak,equity);
-    if(peak>0)maxDrawdownPct=Math.max(maxDrawdownPct,(peak-equity)/peak*100);
+    if(peak>0)observedMaxDrawdownPct=Math.max(observedMaxDrawdownPct,(peak-equity)/peak*100);
   }
   const winRatePct=rows.length?wins/rows.length*100:0;
-  const ready=rows.length>=Math.max(100,Math.trunc(Number(minTrades)||100))&&
-    winRatePct>=Math.max(55,Number(minWinRatePct)||55)&&totalNet>0&&
-    maxDrawdownPct<=Math.min(8,Math.max(0,Number(maxDrawdownPct)||8));
+  const conditions={
+    minimum_trades_met:rows.length>=required,
+    win_rate_met:winRatePct>=requiredWinRate,
+    net_profit_positive:totalNet>0,
+    drawdown_within_limit:observedMaxDrawdownPct<=allowedDrawdown
+  };
+  const ready=Object.values(conditions).every(Boolean);
   return {
-    ready,resolved_paper_trades:rows.length,required_paper_trades:Math.max(100,Math.trunc(Number(minTrades)||100)),
+    ready,resolved_paper_trades:rows.length,required_paper_trades:required,
     wins,win_rate_pct:Number(winRatePct.toFixed(2)),net_pnl_usdt:Number(totalNet.toFixed(2)),
-    max_drawdown_pct:Number(maxDrawdownPct.toFixed(2)),max_allowed_drawdown_pct:Math.min(8,Math.max(0,Number(maxDrawdownPct)||8)),
-    gate_conditions:{minimum_trades_met:rows.length>=Math.max(100,Math.trunc(Number(minTrades)||100)),
-      win_rate_met:winRatePct>=Math.max(55,Number(minWinRatePct)||55),
-      net_profit_positive:totalNet>0,
-      drawdown_within_limit:maxDrawdownPct<=Math.min(8,Math.max(0,Number(maxDrawdownPct)||8))},
+    max_drawdown_pct:Number(observedMaxDrawdownPct.toFixed(2)),max_allowed_drawdown_pct:allowedDrawdown,
+    gate_conditions:conditions,
     note:ready?'PAPER_VALIDATION_PASSED_NOT_A_PROFIT_GUARANTEE':'LIVE_MAINNET_LOCKED_UNTIL_PAPER_VALIDATION_PASSES'
   };
 }
