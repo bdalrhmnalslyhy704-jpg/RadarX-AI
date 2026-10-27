@@ -60,6 +60,10 @@ test('GET /api/early-mover-case-study returns bounded closed-candle diagnostics 
     assert.ok(report.results.every(row=>row.no_future_data_used===true));
     assert.ok(report.results.every(row=>row.status==='THRESHOLD_CROSSING_FOUND'));
     assert.ok(report.results.every(row=>
+      row.intraday_runup && typeof row.intraday_runup.status==='string' &&
+      Array.isArray(row.intraday_runup.lead_snapshots_before_runup)
+    ));
+    assert.ok(report.results.every(row=>
       Array.isArray(row.lead_snapshots_before_crossing)&&row.lead_snapshots_before_crossing.length===4
     ));
     assert.ok(report.results.every(row=>
