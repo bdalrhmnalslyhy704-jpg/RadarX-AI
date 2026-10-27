@@ -39,7 +39,7 @@ function normalizeCandle(row) {
   return values;
 }
 
-export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines = null, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   const cleanSymbol = String(symbol || ticker?.symbol || '').trim().toUpperCase();
   const lastPrice = finite(ticker?.lastPrice ?? ticker?.last_price);
   const quoteVolume24h = finite(ticker?.quoteVolume ?? ticker?.quote_volume_24h);
@@ -112,22 +112,33 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Dat
   const compressionScore = compressionRatio === null ? 0 : clamp((1.5 - compressionRatio) / 1.2 * 100, 0, 100);
   const oneHourReturnPct = candles.length >= 5 ? pct(current.close, candles[candles.length - 5].close) : null;
   const shortReturnPct = candles.length >= 2 ? pct(current.close, candles[candles.length - 2].close) : null;
+  const btcCandles = (Array.isArray(btcKlines?.data) ? btcKlines.data : Array.isArray(btcKlines) ? btcKlines : [])
+    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
+  const btcLast = btcCandles[btcCandles.length-1];
+  const btcOneHourReturnPct = btcCandles.length>=5 && btcLast && Number(now)-btcLast.closeTime<=POLICY.maxCandleAgeMs
+    ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
+  const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
+    ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
   const volumeScore = volumeRatio === null ? 0 : clamp((volumeRatio - 0.5) / 2.5 * 100, 0, 100);
   const tradeScore = tradeRatio === null ? 0 : clamp((tradeRatio - 0.5) / 2.0 * 100, 0, 100);
   const flowScore = takerBuyRatio === null ? 0 : clamp((takerBuyRatio - 0.45) / 0.25 * 100, 0, 100);
   const structureScore = breakoutAbovePriorHigh ? 95 : higherLow ? 74 : closeLocation >= 0.65 ? 56 : 32;
+  const relativeStrengthScore = relativeStrengthVsBtcPct===null ? 50 : clamp((relativeStrengthVsBtcPct+2)/4*100,0,100);
   const score = Number((
-    volumeScore * 0.20 +
-    tradeScore * 0.15 +
-    flowScore * 0.20 +
-    closeLocation * 100 * 0.15 +
-    structureScore * 0.20 +
-    compressionScore * 0.10
+    volumeScore * 0.18 +
+    tradeScore * 0.13 +
+    flowScore * 0.18 +
+    closeLocation * 100 * 0.14 +
+    structureScore * 0.19 +
+    compressionScore * 0.08 +
+    relativeStrengthScore * 0.10
   ).toFixed(1));
 
   const lateMove = change24hPct >= 8 || (oneHourReturnPct !== null && oneHourReturnPct >= 5);
-  const noChase = !lateMove && change24hPct <= 7 && (oneHourReturnPct === null || oneHourReturnPct <= 4);
+  const noChase = change24hPct >= -5 && !lateMove && change24hPct <= 7 &&
+    (oneHourReturnPct === null || oneHourReturnPct <= 4) &&
+    (relativeStrengthVsBtcPct === null || relativeStrengthVsBtcPct >= -0.25);
   const earlySetup = score >= 68 && volumeRatio !== null && volumeRatio >= 1.5 &&
     tradeRatio !== null && tradeRatio >= 1.25 && takerBuyRatio !== null && takerBuyRatio >= 0.52 &&
     closeLocation >= 0.58 && (higherLow || breakoutAbovePriorHigh) && noChase;
@@ -146,6 +157,9 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Dat
   if (higherLow) reasons.push('HIGHER_LOW_STRUCTURE');
   if (breakoutAbovePriorHigh) reasons.push('CLOSED_CANDLE_LOCAL_BREAKOUT');
   if (compressionRatio !== null && compressionRatio <= 0.8) reasons.push('VOLATILITY_COMPRESSION');
+  if (relativeStrengthVsBtcPct !== null && relativeStrengthVsBtcPct >= 0.25) reasons.push('RELATIVE_STRENGTH_VS_BTC');
+  if (relativeStrengthVsBtcPct === null) reasons.push('BTC_BENCHMARK_UNAVAILABLE');
+  if (change24hPct < -5) reasons.push('DAILY_DRAWDOWN_BLOCK');
   if (!noChase) reasons.push('ANTI_CHASE_BLOCK');
   if (lateMove) reasons.push('ALREADY_EXTENDED');
 
@@ -170,6 +184,9 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Dat
       compression_ratio: compressionRatio === null ? null : Number(compressionRatio.toFixed(3)),
       compression_score: Number(compressionScore.toFixed(1)),
       hourly_return_pct: oneHourReturnPct === null ? null : Number(oneHourReturnPct.toFixed(3)),
+      btc_hourly_return_pct: btcOneHourReturnPct === null ? null : Number(btcOneHourReturnPct.toFixed(3)),
+      relative_strength_vs_btc_pct: relativeStrengthVsBtcPct,
+      relative_strength_score: Number(relativeStrengthScore.toFixed(1)),
       recent_15m_return_pct: shortReturnPct === null ? null : Number(shortReturnPct.toFixed(3)),
       base_price: current.close
     },
@@ -202,9 +219,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
-  const [exchangeInfo, tickerResult] = await Promise.all([
+  const [exchangeInfo, tickerResult, btcKlines] = await Promise.all([
     rest.request('/api/v3/exchangeInfo'),
-    rest.request('/api/v3/ticker/24hr')
+    rest.request('/api/v3/ticker/24hr'),
+    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 20 })
   ]);
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
   const activeSpot = new Set(symbolInfo.filter(item =>
@@ -222,7 +240,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const result = await rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 });
-    return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, now, minQuoteVolume24h });
+    return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, btcKlines, now, minQuoteVolume24h });
   });
   const candidates = analyzed.map((row, index) => row && !row.error
     ? row
