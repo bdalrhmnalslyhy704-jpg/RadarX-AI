@@ -167,6 +167,26 @@ test('exchange preflight rejects keys with withdrawal or derivatives permissions
     }});
   await assert.rejects(()=>unsafeClient.preflight(),/WITHDRAWAL_PERMISSION_MUST_BE_DISABLED/);
 });
+test('reconciled net trade outcomes produce their own bounded score-calibration profile',async()=>{
+  const history=Array.from({length:40},(_,i)=>{
+    const profitable=i%2===0;
+    return {id:'SELL:'+i,symbol:'TESTUSDT',side:'SELL',status:'FILLED',
+      outcome:profitable?'UP':'DOWN',realized_pnl_usdt:profitable?0.2:-0.1,
+      entry_features:{volume_ratio:profitable?2.1:0.8,trade_ratio:profitable?1.8:0.9,
+        taker_buy_ratio:profitable?0.6:0.45,close_location:profitable?0.75:0.3,
+        higher_low:profitable,breakout_above_prior_high:false,
+        compression_ratio:profitable?0.7:1.2,hourly_return_pct:1,
+        relative_strength_vs_btc_pct:profitable?0.9:-0.6}};
+  });
+  const store=fakeStore({version:1,trade_history:history});
+  const controller=new AdaptiveTraderExecutionController({store,env:goodEnv,clientFactory:()=>fakeExchange(),logger:{warn(){},error(){}}});
+  await controller.initialize();
+  const status=controller.snapshot();
+  assert.equal(status.resolved_trade_outcomes,40);
+  assert.equal(status.trade_learning_profile.ready,true);
+  assert.ok(status.trade_learning_profile.adjustments.volume>0);
+  assert.ok(status.trade_learning_profile.adjustments.buyer_flow>0);
+});
 test('explicit testnet config can place one tiny market buy only after 100 resolved outcomes and attach an exchange OCO',async()=>{
   const store=fakeStore();const exchange=fakeExchange();
   const controller=new AdaptiveTraderExecutionController({store,env:goodEnv,clientFactory:()=>exchange,logger:{warn(){},error(){}}});
