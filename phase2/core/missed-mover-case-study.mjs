@@ -297,6 +297,108 @@ export function buildEarlyMoverCaseStudy(symbol, inputCandles, {
     features: crossingFeatures,
     early_evidence: crossingFeatures.early_evidence
   };
+
+  // Compare fixed closed-candle snapshots instead of relying on one lead time.
+  // These describe historical prices; they do not claim an alert actually fired.
+  const snapshotLeads = [60, 30, 15, 5];
+  summary.lead_snapshots_before_crossing = snapshotLeads.map(lead => {
+    const targetAt = crossing.closeTime - lead * 60 * 1000;
+    const index = indexAtOrBefore(candles, targetAt);
+    const row = index >= 0 ? candles[index] : null;
+    const closeEnough = row && targetAt - row.closeTime <= 10 * 60 * 1000;
+    if (!row || index >= crossingIndex || !closeEnough) {
+      return {
+        requested_lead_minutes: lead,
+        status: 'NO_CLOSED_CANDLE_NEAR_TARGET',
+        target_at: new Date(targetAt).toISOString(),
+        observed_at: null,
+        price: null,
+        minutes_before_crossing: null,
+        price_change_to_crossing_pct: null,
+        features: null
+      };
+    }
+    const features = featuresAt(candles, index, benchmark);
+    return {
+      requested_lead_minutes: lead,
+      status: 'CLOSED_CANDLE_SNAPSHOT',
+      target_at: new Date(targetAt).toISOString(),
+      observed_at: new Date(row.closeTime).toISOString(),
+      price: row.close,
+      minutes_before_crossing: Number(((crossing.closeTime - row.closeTime) / 60000).toFixed(2)),
+      price_change_to_crossing_pct: pct(row.close, crossing.close),
+      features
+    };
+  });
+
+  // Forward candles score outcomes only after the historical crossing. They are
+  // separate from pre-crossing features and never used to calculate those features.
+  const outcomeHorizons = [
+    { key: '5m', ms: 5 * 60 * 1000 },
+    { key: '15m', ms: 15 * 60 * 1000 },
+    { key: '30m', ms: 30 * 60 * 1000 },
+    { key: '60m', ms: 60 * 60 * 1000 },
+    { key: '4h', ms: 4 * 60 * 60 * 1000 },
+    { key: '24h', ms: DAY_MS }
+  ];
+  summary.post_crossing_outcomes = Object.fromEntries(outcomeHorizons.map(horizon => {
+    const targetAt = crossing.closeTime + horizon.ms;
+    if (targetAt > asOf || targetAt > candles.at(-1).closeTime) {
+      return [horizon.key, {
+        status: 'PENDING_HORIZON',
+        target_at: new Date(targetAt).toISOString(),
+        observed_at: null,
+        close_price: null,
+        close_return_pct: null,
+        max_favorable_pct: null,
+        max_adverse_pct: null
+      }];
+    }
+    const index = indexAtOrBefore(candles, targetAt);
+    const endpoint = index >= 0 ? candles[index] : null;
+    if (!endpoint || index <= crossingIndex ||
+        targetAt - endpoint.closeTime > INTERVAL_MS * 1.5) {
+      return [horizon.key, {
+        status: 'INCOMPLETE_CLOSED_CANDLE_DATA',
+        target_at: new Date(targetAt).toISOString(),
+        observed_at: endpoint ? new Date(endpoint.closeTime).toISOString() : null,
+        close_price: null,
+        close_return_pct: null,
+        max_favorable_pct: null,
+        max_adverse_pct: null
+      }];
+    }
+    let gap = false;
+    for (let i = crossingIndex + 1; i <= index; i++) {
+      if (candles[i].closeTime - candles[i - 1].closeTime > 10 * 60 * 1000) {
+        gap = true;
+        break;
+      }
+    }
+    if (gap) {
+      return [horizon.key, {
+        status: 'INCOMPLETE_CLOSED_CANDLE_DATA',
+        target_at: new Date(targetAt).toISOString(),
+        observed_at: new Date(endpoint.closeTime).toISOString(),
+        close_price: null,
+        close_return_pct: null,
+        max_favorable_pct: null,
+        max_adverse_pct: null
+      }];
+    }
+    const forward = candles.slice(crossingIndex + 1, index + 1);
+    const highest = Math.max(...forward.map(row => row.high));
+    const lowest = Math.min(...forward.map(row => row.low));
+    return [horizon.key, {
+      status: 'COMPLETE',
+      target_at: new Date(targetAt).toISOString(),
+      observed_at: new Date(endpoint.closeTime).toISOString(),
+      close_price: endpoint.close,
+      close_return_pct: pct(crossing.close, endpoint.close),
+      max_favorable_pct: pct(crossing.close, highest),
+      max_adverse_pct: pct(crossing.close, lowest)
+    }];
+  }));
   summary.findings = [
     'Feature values are descriptive measurements from closed five-minute spot candles, not validated predictions.',
     'The observed threshold time is the first sampled five-minute close crossing the trailing-24h return threshold.',
