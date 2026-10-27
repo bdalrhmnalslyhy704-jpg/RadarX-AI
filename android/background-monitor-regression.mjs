@@ -66,6 +66,9 @@ assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Android phone alerts must be for upward/rising opportunities only');
 assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
   'Firebase must suppress queued or legacy monitor-only pushes at the device boundary');
+assert.ok(firebase.includes('matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*")'),
+  'a final confirmed Pre-Move signal must not be suppressed merely because its radar name contains PRE_MOVE');
+
 assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
   'Firebase must require entry_eligible=true before posting a phone notification');
 assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
