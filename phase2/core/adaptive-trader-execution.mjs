@@ -525,6 +525,9 @@ export class AdaptiveTraderExecutionController{
             this.state.daily_realized_pnl_usdt=Number((Number(this.state.daily_realized_pnl_usdt||0)+pnl).toFixed(4));
             this.state.trade_history.unshift({id:clientId('ATS',intent.client_order_id),symbol:intent.symbol,side:'SELL',
               status:'FILLED',order_id:liquidation.orderId,quote_usdt:proceeds,realized_pnl_usdt:Number(pnl.toFixed(4)),
+              net_return_pct:quoteSpent>0?Number((pnl/quoteSpent*100).toFixed(3)):null,
+              outcome:pnl>0?'UP':'DOWN',entry_score:FINITE(this.state.open_position?.entry_score),
+              entry_features:{...(this.state.open_position?.entry_features||{})},
               at:this.clock(),exit_source:'EMERGENCY_AFTER_OCO_REJECTION',real_order_execution:this.config.network==='LIVE'});
             this.state.trade_history=this.state.trade_history.slice(0,500);
             this.state.open_position=null;this.state.halt_reason='PROTECTIVE_ORDER_REJECTED_AFTER_ENTRY';
