@@ -856,7 +856,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             if (policyEventId.isEmpty()) policyEventId = alert.optString("id", "");
             if (policyEventId.isEmpty()) policyEventId = notificationIdentity;
             notificationReservation = RadarXNotificationPolicy.reserve(
-                this, policyEventId, System.currentTimeMillis());
+                this, policyEventId, symbol, System.currentTimeMillis());
             if (notificationReservation.status != RadarXNotificationPolicy.RESERVED) {
                 // Suppressed events are consumed, not queued for a later burst on reconnect.
                 Log.i(TAG, "ALERT_SUPPRESSED_DEVICE_NOTIFICATION_BUDGET status=" +
