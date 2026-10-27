@@ -41,12 +41,14 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         boolean risingDirection = direction.startsWith("UP") || direction.startsWith("LONG") || direction.startsWith("BULL");
         boolean watchOnly = Boolean.parseBoolean(dataValue(message.getData(), "watch_only", "false"));
         boolean entryEligible = Boolean.parseBoolean(dataValue(message.getData(), "entry_eligible", "false"));
+        boolean notificationGateEligible = Boolean.parseBoolean(dataValue(message.getData(), "notification_gate_eligible", "false"));
         boolean followUpRequired = Boolean.parseBoolean(dataValue(message.getData(), "requires_follow_up_confirmation", "true"));
         boolean watchEvent = event.toUpperCase(java.util.Locale.ROOT).matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*") ||
                 notificationMode.matches(".*(WATCH_ONLY|MONITOR_ONLY|WATCH_EARLY).*");
         boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) || "CONFIRMED".equals(signalType) ||
                 "STRICT_NOTIFICATION".equals(notificationGateMode);
-        if (!explicitTest && (watchOnly || watchEvent || !risingDirection || !entryEligible || followUpRequired || !finalConfirmation)) {
+        if (!explicitTest && (watchOnly || watchEvent || !risingDirection || !entryEligible ||
+                !notificationGateEligible || followUpRequired || !finalConfirmation)) {
             Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
             return;
         }
