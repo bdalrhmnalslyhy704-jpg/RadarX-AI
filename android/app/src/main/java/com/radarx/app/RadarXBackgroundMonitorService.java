@@ -553,12 +553,14 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (alert.optBoolean("requires_follow_up_confirmation", false)) return false;
         String lifecycleState = alert.optString("signal_lifecycle_state", "").toUpperCase(Locale.ROOT);
         String signalType = alert.optString("signal_type", "").toUpperCase(Locale.ROOT);
+        String direction = alert.optString("direction", alert.optString("bias", "")).toUpperCase(Locale.ROOT);
+        boolean risingDirection = direction.startsWith("UP") || direction.startsWith("LONG") || direction.startsWith("BULL");
         JSONObject notificationGate = alert.optJSONObject("notification_gate");
         boolean strictGate = notificationGate != null &&
             "STRICT_NOTIFICATION".equalsIgnoreCase(notificationGate.optString("mode", ""));
         boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) ||
             "CONFIRMED".equals(signalType) || strictGate;
-        if (!finalConfirmation) return false;
+        if (!risingDirection || !finalConfirmation) return false;
         if (alert.optBoolean("data_stale", false)) return false;
         JSONObject dataStatus = alert.optJSONObject("data_status");
         if (dataStatus != null && (dataStatus.optBoolean("stale", false) ||
