@@ -27,6 +27,24 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
+        String event = dataValue(message.getData(), "event", "");
+        String eventId = dataValue(message.getData(), "event_id",
+                dataValue(message.getData(), "signal_id", ""));
+        String notificationMode = dataValue(message.getData(), "notification_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String notificationGateMode = dataValue(message.getData(), "notification_gate_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String lifecycleState = dataValue(message.getData(), "signal_lifecycle_state", "").toUpperCase(java.util.Locale.ROOT);
+        String signalType = dataValue(message.getData(), "signal_type", "").toUpperCase(java.util.Locale.ROOT);
+        boolean watchOnly = Boolean.parseBoolean(dataValue(message.getData(), "watch_only", "false"));
+        boolean entryEligible = Boolean.parseBoolean(dataValue(message.getData(), "entry_eligible", "false"));
+        boolean followUpRequired = Boolean.parseBoolean(dataValue(message.getData(), "requires_follow_up_confirmation", "true"));
+        boolean watchEvent = event.toUpperCase(java.util.Locale.ROOT).matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY|PRE_MOVE).*") ||
+                notificationMode.matches(".*(WATCH_ONLY|MONITOR_ONLY|WATCH_EARLY).*");
+        boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) || "CONFIRMED".equals(signalType) ||
+                "STRICT_NOTIFICATION".equals(notificationGateMode);
+        if (watchOnly || watchEvent || !entryEligible || followUpRequired || !finalConfirmation) {
+            Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
+            return;
+        }
         String serverAt = dataValue(message.getData(), "sent_at",
                 dataValue(message.getData(), "server_processed_at", ""));
         try {
@@ -72,12 +90,7 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         openApp.putExtra("radarx_alert_symbol", symbol);
         openApp.putExtra("radarx_alert_radar", radar);
         openApp.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        String event = dataValue(message.getData(), "event", "");
-        String eventId = dataValue(message.getData(), "event_id", dataValue(message.getData(), "signal_id", ""));
-        boolean preMoveWatchOnly = "PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(event) && !eventId.isEmpty();
-        int requestCode = preMoveWatchOnly
-                ? 55_000 + Math.floorMod(eventId.hashCode(), 1_000_000_000)
-                : Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
+        int requestCode = Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this, requestCode, openApp,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -97,12 +110,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
 
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
-            if (preMoveWatchOnly) {
-                manager.notify("radarx_premove_watch", requestCode, builder.build());
-            } else {
-                manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
-            }
-            Log.i(TAG, preMoveWatchOnly ? "PRE_MOVE_WATCH_FCM_NOTIFICATION_POSTED" : "FCM_NOTIFICATION_POSTED");
+            manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
+            Log.i(TAG, "FCM_CONFIRMED_NOTIFICATION_POSTED");
             if (!eventId.isEmpty()) {
                 RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
             }
