@@ -18,6 +18,9 @@ on:
       - 'phase2/tests/push.test.mjs'
       - 'phase2/tests/rest.test.mjs'
       - 'phase2/tests/pre-move-watch-notification.test.mjs'
+      - 'phase2/push/index.mjs'
+      - 'android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java'
+      - 'android/fcm-watch-notification-regression.mjs'
   workflow_dispatch:
 
 concurrency:
@@ -63,8 +66,10 @@ jobs:
       - name: Run focused scanner and API regression tests
         run: node --test phase2/tests/market-radar.test.mjs phase2/tests/api.test.mjs
 
-      - name: Run Android Pre-Move UI regression tests
-        run: node android/app/src/main/assets/tests/market-radar-integration.test.mjs
+      - name: Run Android Pre-Move UI and FCM watch-notification policy regressions
+        run: |
+          node android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          node android/fcm-watch-notification-regression.mjs
 
       - name: Verify historical replay and outcome accounting tests
         run: node --test phase2/tests/historical-replay-matrix.test.mjs phase2/tests/monthly-historical-replay-lab.test.mjs phase2/tests/radar-signal-outcomes.test.mjs
