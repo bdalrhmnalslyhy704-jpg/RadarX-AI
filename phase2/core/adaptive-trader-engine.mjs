@@ -229,7 +229,7 @@ async function mapLimit(items, limit, worker) {
 }
 
 export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.defaultUniverseLimit, now = Date.now(),
-  minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+  offset = 0, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
   // BTC is only a comparative benchmark. A failure to fetch it must not block
@@ -254,12 +254,24 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return activeSpot.has(symbol) && symbol.endsWith('USDT') && !isLeveragedToken(symbol) &&
       finite(row?.lastPrice) > 0 && finite(row?.quoteVolume) >= minQuoteVolume24h;
   }).sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume));
-  const selected = eligible.slice(0, safeLimit);
+  const scanOffset = eligible.length
+    ? Math.max(0, Math.trunc(Number(offset) || 0)) % eligible.length
+    : 0;
+  const selectedCount = Math.min(safeLimit, eligible.length);
+  const selected = Array.from({length:selectedCount},(_,index)=>eligible[(scanOffset+index)%eligible.length]);
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const result = await rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 });
     return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, btcKlines, now, minQuoteVolume24h });
   });
+  // Advance only through the contiguous portion whose candle requests finished.
+  // If a subset fails because the shared REST budget is busy, the next cycle retries
+  // from the first failed symbol instead of silently abandoning it.
+  let scanAdvanceCount = 0;
+  for (const row of analyzed) {
+    if (!row || row.error) break;
+    scanAdvanceCount++;
+  }
   const candidates = analyzed.map((row, index) => row && !row.error
     ? row
     : {
@@ -290,6 +302,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       analyzed_symbols: candidates.length,
       valid_symbols: validCount,
       requested_limit: safeLimit,
+      scan_offset: scanOffset,
+      scan_advance_count: scanAdvanceCount,
       coverage_pct: eligible.length ? Number((candidates.length / eligible.length * 100).toFixed(1)) : 0,
       scan_complete: candidates.length === eligible.length,
       min_quote_volume_24h: minQuoteVolume24h,
@@ -324,6 +338,7 @@ export function createAdaptiveTraderSnapshotService({
 } = {}) {
   const cache = new Map();
   const flights = new Map();
+  const rotationCursors = new Map();
   const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
     const hit = cache.get(safeLimit);
@@ -347,7 +362,15 @@ export function createAdaptiveTraderSnapshotService({
     const deadline = Date.now() + Math.max(5_000, Math.min(60_000, Math.trunc(Number(scanTimeoutMs) || 45_000)));
     rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
     const effectiveDeadline = rest.requestDeadlineAtMs;
-    const task = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, minQuoteVolume24h }).then(snapshot => {
+    const scanOffset = rotationCursors.get(safeLimit) || 0;
+    const task = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, offset: scanOffset, minQuoteVolume24h }).then(snapshot => {
+      const eligibleCount = Number(snapshot.universe?.eligible_spot_symbols) || 0;
+      const advance = Number(snapshot.universe?.scan_advance_count) || 0;
+      if (eligibleCount > 0 && advance > 0) {
+        rotationCursors.set(safeLimit, (scanOffset + advance) % eligibleCount);
+      } else if (eligibleCount > 0) {
+        rotationCursors.set(safeLimit, scanOffset % eligibleCount);
+      }
       const cachedAt = Date.now();
       cache.set(safeLimit, { snapshot, cachedAt });
       // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
