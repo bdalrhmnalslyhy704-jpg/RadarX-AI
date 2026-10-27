@@ -843,6 +843,28 @@ public final class RadarXBackgroundMonitorService extends Service {
             return true;
         }
 
+        // Debug-only 10.0.2.2 replay runs deliberately exercise cursor/restart handling.
+        // Real devices and release builds share a single file-locked budget with FCM:
+        // at most one confirmed rising alert per minute and three per rolling 15 minutes.
+        String replayTestFeed = prefs().getString("radarx_test_alert_feed_url", "");
+        boolean replayBudgetBypass = isDebugBuild() &&
+            replayTestFeed.matches("http://10\\\\.0\\\\.2\\\\.2:18[0-9]{3}/api/radar-alerts\\\\?radar=ALL");
+        RadarXNotificationPolicy.Reservation notificationReservation = null;
+        if (!replayBudgetBypass) {
+            String policyEventId = alert.optString("event_id", "");
+            if (policyEventId.isEmpty()) policyEventId = alert.optString("signal_id", "");
+            if (policyEventId.isEmpty()) policyEventId = alert.optString("id", "");
+            if (policyEventId.isEmpty()) policyEventId = notificationIdentity;
+            notificationReservation = RadarXNotificationPolicy.reserve(
+                this, policyEventId, System.currentTimeMillis());
+            if (notificationReservation.status != RadarXNotificationPolicy.RESERVED) {
+                // Suppressed events are consumed, not queued for a later burst on reconnect.
+                Log.i(TAG, "ALERT_SUPPRESSED_DEVICE_NOTIFICATION_BUDGET status=" +
+                    notificationReservation.status);
+                return true;
+            }
+        }
+
         try {
             manager.notify(notificationIdentity, notificationId, builder.build());
             // This records acceptance by NotificationManager only, not device delivery.
@@ -850,6 +872,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             else Log.i(TAG, "ALERT_POST_REQUEST_ACCEPTED");
             return true;
         } catch (RuntimeException error) {
+            RadarXNotificationPolicy.release(this, notificationReservation);
             Log.w(TAG, "ALERT_POST_FAILED", error);
             return false;
         }
