@@ -302,24 +302,30 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
 }
 
 export function createAdaptiveTraderSnapshotService({ rest, ttlMs = 90000, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
-  let cached = null;
-  let cachedAt = 0;
-  let flight = null;
+  const cache = new Map();
+  const flights = new Map();
   return async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
-    if (cached && cached.limit === safeLimit && Number(now) - cachedAt < ttlMs) {
+    const hit = cache.get(safeLimit);
+    if (hit && Number(now) - hit.cachedAt < ttlMs) {
       return {
-        ...cached.snapshot,
-        meta: { ...cached.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - cachedAt) }
+        ...hit.snapshot,
+        meta: { ...hit.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - hit.cachedAt) }
       };
     }
-    if (flight) return flight;
-    flight = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, minQuoteVolume24h }).then(snapshot => {
-      cached = { snapshot, limit: safeLimit };
-      cachedAt = Date.now();
+    const active = flights.get(safeLimit);
+    if (active) return active;
+    const task = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, minQuoteVolume24h }).then(snapshot => {
+      const cachedAt = Date.now();
+      cache.set(safeLimit, { snapshot, cachedAt });
+      // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
+      while (cache.size > 4) cache.delete(cache.keys().next().value);
       return { ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } };
-    }).finally(() => { flight = null; });
-    return flight;
+    }).finally(() => {
+      if (flights.get(safeLimit) === task) flights.delete(safeLimit);
+    });
+    flights.set(safeLimit, task);
+    return task;
   };
 }
 
