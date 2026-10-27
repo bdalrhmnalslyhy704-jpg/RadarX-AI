@@ -60,15 +60,19 @@ test('GET /api/early-mover-case-study returns bounded closed-candle diagnostics 
     assert.ok(report.results.every(row=>row.no_future_data_used===true));
     assert.ok(report.results.every(row=>row.status==='THRESHOLD_CROSSING_FOUND'));
     assert.ok(calls.some(call=>call.symbol==='BTCUSDT'));
-    assert.ok(calls.every(call=>call.interval==='5m'&&call.options.limit===1000));
+    assert.ok(calls.every(call=>call.interval==='5m'&&call.options.limit===1000&&Number.isFinite(call.options.endTime)));
     assert.equal(report.policy.real_order_execution,false);
 
     const invalid=await fetch(base+'/api/early-mover-case-study?symbols=SOXLB');
     assert.equal(invalid.status,400);
-    const allowed=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT,SYNUSDT&threshold_pct=5&lead_minutes=60');
+    const historicalAsOf=new Date(candles[980].closeTime).toISOString();
+    const allowed=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT,SYNUSDT&threshold_pct=5&lead_minutes=60&as_of='+encodeURIComponent(historicalAsOf));
     assert.equal(allowed.status,200);
-    const limited=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT&threshold_pct=80');
-    assert.equal(limited.status,400);
+    const historicalReport=await allowed.json();
+    assert.equal(historicalReport.as_of,historicalAsOf);
+    assert.ok(calls.some(call=>call.symbol==='HUMAUSDT'&&call.options.endTime===Date.parse(historicalAsOf)));
+    const invalidTimestamp=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT&as_of=2099-01-01T00%3A00%3A00Z');
+    assert.equal(invalidTimestamp.status,400);
   }finally{
     server.stopPreMoveWatchWorker?.();
     await new Promise(resolve=>server.close(resolve));
