@@ -507,3 +507,47 @@ test('TEST_FIXTURE: high buyer flow before positive return can send only a monit
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('TEST_FIXTURE: persistent push guard caps market notifications at three per minute per device across managers',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-rate-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const symbols=['BTCUSDT','ETHUSDT','SOLUSDT','XRPUSDT'];
+    await store.putUserSettings('u1',{enabled:true,symbols,timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['CONFIRMED']});
+    await store.upsertSubscription('u1',pushSubscription());
+    const provider={calls:0,status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){this.calls++;return{ok:true,status:'SENT',httpStatus:201};}};
+    const firstManager=new PushManager({provider,store});
+    for(const symbol of symbols.slice(0,3)){
+      const result=await firstManager.notifySignal({...signal(),symbol,signal_id:'RATE_LIMIT_TEST:'+symbol});
+      assert.equal(result[0]?.status,'SENT',symbol);
+    }
+    const restartedManager=new PushManager({provider,store});
+    const limited=await restartedManager.notifySignal({...signal(),symbol:symbols[3],signal_id:'RATE_LIMIT_TEST:'+symbols[3]});
+    assert.equal(limited[0]?.status,'RATE_LIMITED');
+    assert.equal(provider.calls,3,'the fourth market alert must not be sent within the same rolling minute');
+    const audits=await store.readRecent('notifications',20);
+    assert.equal(audits.filter(row=>row.event==='NOTIFICATION_ATTEMPT'&&row.status==='RATE_LIMITED').length,1);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('TEST_FIXTURE: same-symbol cross-radar market alerts are suppressed persistently after one delivery',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-symbol-dedupe-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await store.putUserSettings('u1',{enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['CONFIRMED']});
+    await store.upsertSubscription('u1',pushSubscription());
+    const provider={calls:0,status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){this.calls++;return{ok:true,status:'SENT',httpStatus:201};}};
+    const managerOne=new PushManager({provider,store});
+    const first=await managerOne.notifySignal({...signal(),signal_id:'CROSS_RADAR_FIRST'});
+    assert.equal(first[0]?.status,'SENT');
+    const managerAfterRestart=new PushManager({provider,store});
+    const duplicate=await managerAfterRestart.notifySignal({...signal(),signal_id:'CROSS_RADAR_DUPLICATE'});
+    assert.equal(duplicate[0]?.status,'DUPLICATE_SUPPRESSED');
+    assert.equal(provider.calls,1,'the same symbol must not retrigger a second push just because the manager restarted');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
