@@ -35,7 +35,10 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
   const p=new ToggleProvider(),m=new PushManager({provider:p,store});
   const s={...signal(),scores:{data_quality:50,liquidity_quality:95}};
   const out=await m.notifySignal(s);
-  assert.equal(out.length,0);assert.equal(p.calls,0);
+  assert.equal(out.length,1);
+  assert.equal(out[0].status,'SUPPRESSED_QUALITY');
+  assert.equal(out[0].reason,'DATA_AND_LIQUIDITY_QUALITY_REQUIRED');
+  assert.equal(p.calls,0);
 });
 
 
