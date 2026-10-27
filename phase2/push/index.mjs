@@ -207,8 +207,13 @@ export class PushManager{
           saved=await this.store.getDedupKey(guardKey)||{};
         else saved=this.pushGuardMemory.get(guardKey)||{};
       }catch(error){return{ok:false,status:'PUSH_GUARD_UNAVAILABLE',reason:'PUSH_GUARD_READ_FAILED'};}
-      const attempts=(Array.isArray(saved.attempts)?saved.attempts:[]).map(Number)
+      const rollingAttempts=value=>(Array.isArray(value)?value:[]).map(Number)
         .filter(at=>Number.isFinite(at)&&at<=now&&now-at<60_000);
+      const attempts=rollingAttempts(saved.attempts);
+      // Older guard records did not split traffic lanes; treat those attempts as
+      // regular market attempts conservatively so deployment cannot reset the cap.
+      const marketAttempts=rollingAttempts(saved.market_attempts??saved.attempts);
+      const watchAttempts=rollingAttempts(saved.watch_attempts);
       const sentBySymbol=saved.sent_by_symbol&&typeof saved.sent_by_symbol==='object'&&!Array.isArray(saved.sent_by_symbol)
         ?{...saved.sent_by_symbol}:{};
       for(const [key,value] of Object.entries(sentBySymbol)){
@@ -221,10 +226,20 @@ export class PushManager{
       const lastSent=symbolKey?Number(sentBySymbol[symbolKey]):NaN;
       if(Number.isFinite(lastSent)&&lastSent<=now&&now-lastSent<cooldownMs)
         return{ok:false,status:'DUPLICATE_SUPPRESSED',reason:'CROSS_RADAR_SYMBOL_COOLDOWN',retryAfterMs:cooldownMs-(now-lastSent)};
-      const maxPerMinute=3;
-      if(attempts.length>=maxPerMinute)
-        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_MARKET_PUSHES_PER_MINUTE',retryAfterMs:Math.max(1000,60_000-(now-attempts[0]))};
-      const nextState={version:1,attempts:[...attempts,now],sent_by_symbol:sentBySymbol,updated_at:now};
+      // Keep early monitoring separate so watch-only notices cannot consume
+      // the three-slot allowance reserved for stronger market alerts.
+      const categoryAttempts=category==='WATCH_ONLY'?watchAttempts:marketAttempts;
+      const maxPerMinute=category==='WATCH_ONLY'?1:3;
+      if(categoryAttempts.length>=maxPerMinute)
+        return{ok:false,status:'RATE_LIMITED',
+          reason:category==='WATCH_ONLY'?'MAX_1_WATCH_ONLY_PUSH_PER_MINUTE':'MAX_3_MARKET_PUSHES_PER_MINUTE',
+          retryAfterMs:Math.max(1000,60_000-(now-categoryAttempts[0]))};
+      const nextState={
+        version:1,attempts:[...attempts,now],
+        market_attempts:category==='MARKET'?[...marketAttempts,now]:marketAttempts,
+        watch_attempts:category==='WATCH_ONLY'?[...watchAttempts,now]:watchAttempts,
+        sent_by_symbol:sentBySymbol,updated_at:now
+      };
       try{
         if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
           await this.store.putDedupKey(guardKey,nextState);
