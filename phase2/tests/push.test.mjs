@@ -447,7 +447,25 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
     await rm(dir,{recursive:true,force:true});
   }
 
-});test('TEST_FIXTURE: persistent push guard allows at most one confirmed market push per minute per device',async()=>{
+});test('TEST_FIXTURE: unconfirmed signals are audited but never pushed to a device',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-unconfirmed-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await store.putUserSettings('u1',{enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['WATCH_EARLY']});
+    await store.upsertSubscription('u1',pushSubscription());
+    const provider={calls:0,status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){this.calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const result=await manager.notifySignal({...signal(),signal_type:'WATCH_EARLY',signal_id:'UNCONFIRMED_WATCH_SIGNAL'});
+    assert.equal(result.length,1);
+    assert.equal(result[0].status,'SUPPRESSED_UNCONFIRMED');
+    assert.equal(result[0].reason,'FINAL_CONFIRMATION_REQUIRED');
+    assert.equal(provider.calls,0);
+    const audit=await store.readRecent('notifications',10);
+    assert.ok(audit.some(row=>row.status==='SUPPRESSED_UNCONFIRMED'&&row.signal_id==='UNCONFIRMED_WATCH_SIGNAL'));
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: persistent push guard allows at most one confirmed market push per minute per device',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-rate-'));
   try{
     const store=await new DurableStore({dir}).init();
