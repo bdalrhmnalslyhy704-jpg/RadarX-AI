@@ -1,38 +1,42 @@
 # RadarX Adaptive Trader Sidecar — Build 224
 
-This is an additive, isolated sidecar. The existing twelve RadarX radar implementations, the twenty-analyst review path, their notification thresholds, and their settings are not modified by the sidecar engine. Integration adds one navigation card, one read-only market-snapshot API route, and a separate REST client.
+The Adaptive Trader is a sidecar beside the existing RadarX system. Its scanner, execution ledger, and learning records remain separate from the twelve existing radar implementations and twenty-analyst review path.
 
-## Runtime architecture
+## Scanner and learning
 
-- Android asset: android/app/src/main/assets/adaptive-trader.html
-- Local browser-memory and paper-portfolio helpers: android/app/src/main/assets/adaptive-trader-client.js
-- Independent backend analysis: phase2/core/adaptive-trader-engine.mjs
-- Read-only API: GET /api/adaptive-trader/market-snapshot?limit=40|80|120
-- Data source: Binance Spot public REST. No exchange key is accepted or stored.
-- The screen refreshes about every five minutes only while it is visible; opening the screen performs the first scan.
+- Market data: Binance Spot public REST; eligible USDT spot symbols only, excluding leveraged tokens.
+- Analysis uses contiguous closed 15-minute candles, relative volume and trade-count acceleration, taker-buy flow, close location, higher-low/local breakout structure, volatility compression, one-hour movement, and relative strength versus BTC.
+- The scanner ranks 40/80/120 highest-volume eligible symbols per requested scan. It does not claim full-market coverage unless the response says the scan is complete.
+- A separate five-minute worker stores observed price/feature samples and labels them after four hours: UP at +2% or more, DOWN at -2% or less, otherwise FLAT.
+- Calibration waits for at least 30 resolved observations and sufficient feature buckets, then adjusts ranking scores by at most four points. The execution gate additionally requires at least 100 resolved market outcomes before considering live orders. This is bounded calibration, not self-rewriting code and not proof of profitability.
 
-## Market analysis v1
+## Execution modes
 
-The sidecar ranks eligible Spot USDT symbols using the selected universe's 24-hour quote volume (minimum 750,000 USDT), closed 15-minute candles, relative candle volume and trade count, taker-buy share, close location, higher lows/local close-confirmed breakout, volatility compression, one-hour movement, and relative strength against BTC when that benchmark is fresh and contiguous. It ignores open/future candles and declines to call a move early when the asset is already extended or deeply down on the day.
+The default is **PAPER_ONLY**. The scanner and worker make no trade requests unless live execution is explicitly configured on the backend. The Android client never receives exchange API secrets.
 
-The initial scan reviews the highest-volume 40, 80, or 120 eligible pairs, not every eligible pair. universe.coverage_pct, analyzed count, valid count, and the scan_complete flag disclose the scope. A valid live response is not proof that every pair was analyzed or that the ranking predicts profitable outcomes.
+To request live execution, the backend environment must explicitly configure all of these values:
+- `RADARX_ADAPTIVE_TRADER_LIVE_ENABLED=true`
+- `RADARX_ADAPTIVE_TRADER_NETWORK=LIVE`
+- `RADARX_ADAPTIVE_TRADER_LIVE_CONFIRMATION=RADARX_SPOT_LIVE_TRADING_CONFIRMED`
+- `BINANCE_SPOT_API_KEY` and `BINANCE_SPOT_API_SECRET`
+- `RADARX_ADAPTIVE_TRADER_MAX_ORDER_USDT` between 6 and 25
+- `RADARX_ADAPTIVE_TRADER_DAILY_LOSS_LIMIT_USDT` between 1 and 5
 
-## Learning and missed-move review
+For exchange testing, use `RADARX_ADAPTIVE_TRADER_NETWORK=TESTNET` with testnet-specific credentials. Never use mainnet credentials in a test environment.
 
-The learning memory is browser-local on this device. It records price/feature snapshots; after at least four hours it labels observed outcomes (up at least 2%, down at most -2%, or flat between them). Calibration remains disabled until 30 outcomes are resolved and at least three feature buckets have eight examples each. It adjusts ranking scores by no more than four points. It does not rewrite program code, change entry gates, or modify the original RadarX detectors.
+The Binance key must be IP-restricted, permit Spot trading, and have withdrawals, futures, and margin disabled. Preflight checks fail closed when those permissions cannot be verified. Do not put secrets in the APK, repository, client-side storage, logs, or chat. Use the hosting provider's secret/environment-variable interface only.
 
-The missed-move audit begins after this screen starts collecting snapshots at least 15 minutes apart. It identifies a potential missed move only when there is a prior analyzed snapshot that was not in WATCH or EARLY_SETUP. Symbols without a prior analyzed snapshot are labelled UNASSESSED_MOVE. This is not a reconstruction of all historical market opportunities before installation.
+## Live order controls
 
-## Paper portfolio
+- Only one tracked position at a time; at most two entries per UTC day.
+- An eligible entry requires a fresh live snapshot, closed/contiguous candles, early-setup classification, calibrated score of at least 75, a minimum of 100 resolved market outcomes, strong volume/trade acceleration, positive taker-buy flow, BTC-relative strength, and anti-chase/day/hour movement gates.
+- Each order is capped at the configured 6–25 USDT maximum, and the code leaves a small USDT reserve. Actual Binance symbol filters and account balance are checked before an entry.
+- The controller sends a Spot market buy with a stable client-order ID, records the intent before the request, and avoids resubmitting orders whose result is uncertain.
+- After a confirmed fill it requests an exchange-managed OCO exit: an approximate +3% take-profit limit and a -2% stop-loss market leg. Binance maintains those exit legs at the exchange rather than depending on an Android screen or each five-minute scan.
+- If OCO placement is definitively rejected, it attempts one emergency market sell and halts. If the order result is uncertain, it does not blindly duplicate the order; trading is halted for reconciliation.
+- A daily realized-loss limit halts new entries. A kill switch is available with `RADARX_ADAPTIVE_TRADER_KILL_SWITCH=true`.
+- The OCO trigger values are not guaranteed execution prices. Gaps, spread, commissions, partial fills, outages, API permission changes, and exchange rejects can still cause losses or require manual reconciliation.
 
-The optional client-side paper simulator uses a fictional balance of 10,000 USDT by default, up to three simultaneous positions, a maximum 5% of marked equity per position, a modeled +3% take-profit, -2% stop-loss, and four-hour time exit. It estimates 0.30% round-trip cost but does not simulate true queue position, spread, market impact, API latency, or all exchange execution constraints. Results are experiments, not an assurance of profitability.
+## Validation boundaries
 
-Execution invariants:
-- paper_trading: true
-- real_order_execution: false
-- No signed trade endpoints, API keys, futures, leverage, transfers, or withdrawals.
-- Calibration and paper results stay separate from existing RadarX alert/notification state.
-
-## Validation
-
-adaptive-trader-sidecar.yml runs syntax checks, candidate/scoring and learning tests, missed-move classification, paper risk controls, API fail-closed tests, dashboard contract tests, and targeted existing RadarX regression suites. Release and live-phone notification proof must be performed separately after integration; this CI cannot establish profitability or confirm receipt on a physical device.
+CI tests validate scoring gates, learning gates, signed-request construction, exchange permission checks, risk caps, idempotency behavior, emergency recovery, and the paper-only default. Testnet execution and a deployment with actual credentials must be verified separately. Passing software tests does not establish trading profitability, and historical market outcomes do not guarantee future returns.
