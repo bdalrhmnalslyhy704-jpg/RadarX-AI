@@ -180,7 +180,7 @@ export class DurableStore {
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
-      intelligenceMemory:join(dir,'intelligence-memory.json'),adaptiveTraderState:join(dir,'adaptive-trader-state.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
+      intelligenceMemory:join(dir,'intelligence-memory.json'),adaptiveTraderState:join(dir,'adaptive-trader-state.json'),adaptiveTraderExecutionState:join(dir,'adaptive-trader-execution-state.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
     await mkdir(this.scanJourneyDir,{recursive:true});
@@ -376,6 +376,54 @@ export class DurableStore {
   async putPredictionCalibration(symbol,value){
     const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_PREDICTION_CALIBRATION_SYMBOL');
     return this.lock(async()=>{const a=await this.readJson(this.files.predictionCalibration);a[key]={...value,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.predictionCalibration,a);return a[key];});
+  }
+  async getAdaptiveTraderExecutionState(){
+    return this.readJson(this.files.adaptiveTraderExecutionState);
+  }
+  async putAdaptiveTraderExecutionState(value){
+    if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('ADAPTIVE_TRADER_EXECUTION_STATE_INVALID');
+    const text=(input,max=180)=>String(input??'').replace(/[\r\n\t]/g,' ').slice(0,max);
+    const number=(input)=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
+    const symbol=input=>/^[A-Z0-9]{5,30}$/.test(String(input||'').toUpperCase())?String(input).toUpperCase():'';
+    const pending=value.pending_buy&&typeof value.pending_buy==='object'?{
+      symbol:symbol(value.pending_buy.symbol),client_order_id:text(value.pending_buy.client_order_id,36),
+      requested_quote_usdt:number(value.pending_buy.requested_quote_usdt),created_at:number(value.pending_buy.created_at),
+      status:text(value.pending_buy.status,80),candle_close_time:number(value.pending_buy.candle_close_time)
+    }:null;
+    const position=value.open_position&&typeof value.open_position==='object'?{
+      symbol:symbol(value.open_position.symbol),base_asset:text(value.open_position.base_asset,20),
+      quantity:number(value.open_position.quantity),entry_price:number(value.open_position.entry_price),
+      entry_quote_usdt:number(value.open_position.entry_quote_usdt),entry_order_id:number(value.open_position.entry_order_id),
+      entry_client_order_id:text(value.open_position.entry_client_order_id,36),
+      oco_client_order_id:text(value.open_position.oco_client_order_id,36),
+      oco_order_list_id:number(value.open_position.oco_order_list_id),opened_at:number(value.open_position.opened_at),
+      stop_loss_price:number(value.open_position.stop_loss_price),take_profit_price:number(value.open_position.take_profit_price),
+      stop_loss_pct:number(value.open_position.stop_loss_pct),take_profit_pct:number(value.open_position.take_profit_pct),
+      protection_status:text(value.open_position.protection_status,60),oco_status:text(value.open_position.oco_status,60)
+    }:null;
+    const history=(Array.isArray(value.trade_history)?value.trade_history:[]).slice(0,500).filter(row=>row&&typeof row==='object').map(row=>({
+      id:text(row.id,80),symbol:symbol(row.symbol),side:row.side==='BUY'?'BUY':row.side==='SELL'?'SELL':'UNKNOWN',
+      status:text(row.status,40),order_id:number(row.order_id),price:number(row.price),
+      quote_usdt:number(row.quote_usdt),realized_pnl_usdt:number(row.realized_pnl_usdt),
+      at:number(row.at),exit_source:text(row.exit_source,40),real_order_execution:row.real_order_execution===true
+    }));
+    const safe={
+      version:1,updated_at:Date.now(),
+      utc_day:/^\d{4}-\d{2}-\d{2}$/.test(String(value.utc_day||''))?String(value.utc_day):null,
+      daily_trade_count:Math.max(0,Math.min(100,Math.trunc(Number(value.daily_trade_count)||0))),
+      daily_realized_pnl_usdt:number(value.daily_realized_pnl_usdt)??0,
+      halted:value.halted===true,halt_reason:text(value.halt_reason,100)||null,
+      last_event:text(value.last_event,100)||'NOT_STARTED',last_error:text(value.last_error,240)||null,
+      last_preflight_at:number(value.last_preflight_at)??0,
+      preflight_status:['NOT_CHECKED','READY','REJECTED'].includes(value.preflight_status)?value.preflight_status:'NOT_CHECKED',
+      pending_buy:pending&&pending.symbol&&pending.client_order_id?pending:null,
+      open_position:position&&position.symbol&&position.oco_client_order_id?position:null,
+      trade_history:history
+    };
+    return this.lock(async()=>{
+      await this.writeJson(this.files.adaptiveTraderExecutionState,safe);
+      return safe;
+    });
   }
   async getAdaptiveTraderState(){
     return this.readJson(this.files.adaptiveTraderState);
