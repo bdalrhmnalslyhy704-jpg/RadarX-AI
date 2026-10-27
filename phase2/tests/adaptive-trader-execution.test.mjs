@@ -100,7 +100,7 @@ test('mainnet requires an explicit confirmation string and a small order/loss ca
 test('live entry gates reject weak setups and require mature resolved observations',()=>{
   const now=Date.now();
   assert.equal(evaluateAdaptiveTraderLiveCandidate(candidate(now),{learningProfile:{ready:true,resolved_samples:99},now,snapshotAsOf:new Date(now).toISOString()}).reason,
-    'INSUFFICIENT_OUT_OF_SAMPLE_LEARNING_RECORD');
+    'INSUFFICIENT_RESOLVED_MARKET_OUTCOMES');
   assert.equal(evaluateAdaptiveTraderLiveCandidate(candidate(now,{change_24h_pct:12}),
     {learningProfile,now,snapshotAsOf:new Date(now).toISOString()}).reason,'DAILY_MOVE_OUTSIDE_ENTRY_WINDOW');
   const valid=evaluateAdaptiveTraderLiveCandidate(candidate(now),
@@ -131,7 +131,7 @@ test('signed Binance client signs the exact timestamped payload and only uses th
   await assert.rejects(()=>client.request('POST','/api/v3/account',{}, {signed:true}),/ENDPOINT_NOT_ALLOWED/);
 });
 test('exchange preflight rejects keys with withdrawal or derivatives permissions',async()=>{
-  let restrictions={enableSpotAndMarginTrading:true,enableWithdrawals:false,enableFutures:false,enableMargin:false};
+  let restrictions={ipRestrict:true,enableSpotAndMarginTrading:true,enableWithdrawals:false,enableFutures:false,enableMargin:false};
   const client=new BinanceSpotSignedClient({apiKey:'key',apiSecret:'secret',clock:()=>1700000000000,
     fetchImpl:async(url)=> {
       const path=new URL(url).pathname;
