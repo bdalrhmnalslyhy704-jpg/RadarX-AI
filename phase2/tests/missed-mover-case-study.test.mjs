@@ -49,6 +49,15 @@ test('case study finds first trailing-24h threshold crossing and snapshots only 
   assert.equal(report.at_crossing.features.price,report.crossing.price);
   assert.equal(report.pre_move.features.historical_orderbook_spread,null);
 
+  assert.equal(report.intraday_runup.status,'RUNUP_THRESHOLD_CROSSING_FOUND',JSON.stringify(report.intraday_runup));
+  assert.ok(report.intraday_runup.runup.return_from_reference_low_pct>=5);
+  assert.ok(report.intraday_runup.lead_snapshots_before_runup.every(row=>
+    row.status==='CLOSED_CANDLE_SNAPSHOT' &&
+    row.observed_at < report.intraday_runup.runup.observed_at &&
+    Number.isFinite(row.price_change_to_runup_pct)
+  ));
+  assert.ok(Number.isFinite(report.intraday_runup.retrospective_outcome.return_from_runup_to_latest_pct));
+
   assert.deepEqual(report.lead_snapshots_before_crossing.map(row=>row.requested_lead_minutes),[60,30,15,5]);
   assert.ok(report.lead_snapshots_before_crossing.every(row=>
     row.status==='CLOSED_CANDLE_SNAPSHOT' &&
@@ -86,6 +95,7 @@ test('stale, open, malformed, and future candles are excluded from the sample',(
 test('reports insufficient history and rejects non-Spot / malformed symbols',()=>{
   const short=buildEarlyMoverCaseStudy('ANIMEUSDT',makeCandles({length:120}),{now:NOW});
   assert.equal(short.status,'INSUFFICIENT_CLOSED_CANDLES');
+  assert.equal(short.intraday_runup.status,'INSUFFICIENT_CLOSED_CANDLES');
   assert.throws(()=>buildEarlyMoverCaseStudy('SOXLB',makeCandles(),{now:NOW}),/BINANCE_SPOT_USDT_SYMBOL_REQUIRED/);
   assert.throws(()=>buildEarlyMoverCaseStudy('PARTIUSDT',makeCandles(),{now:NOW,thresholdPct:0}),/INVALID_THRESHOLD_PCT/);
 });
