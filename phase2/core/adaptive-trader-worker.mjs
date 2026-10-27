@@ -73,11 +73,11 @@ export class AdaptiveTraderWorker{
     return this.starting;
   }
 
-  stop(){
+  async stop(){
     if(this.interval)clearInterval(this.interval);
     if(this.initialTimer)clearTimeout(this.initialTimer);
     this.interval=null;this.initialTimer=null;this.enabled=false;this.state.enabled=false;
-    void this.persist();
+    await this.persist();
     return this.snapshot();
   }
 
