@@ -130,6 +130,21 @@ test('signed Binance client signs the exact timestamped payload and only uses th
   assert.throws(()=>new BinanceSpotSignedClient({apiKey:'k',apiSecret:'s',baseUrl:'https://attacker.invalid'}),/ORIGIN_NOT_ALLOWED/);
   await assert.rejects(()=>client.request('POST','/api/v3/account',{}, {signed:true}),/ENDPOINT_NOT_ALLOWED/);
 });
+test('Spot Testnet preflight does not call unsupported Mainnet SAPI permission endpoints',async()=>{
+  const requested=[];
+  const client=new BinanceSpotSignedClient({apiKey:'testnet-key',apiSecret:'testnet-secret',baseUrl:'https://testnet.binance.vision',
+    clock:()=>1700000000000,
+    fetchImpl:async(url)=> {
+      const parsed=new URL(url);requested.push(parsed.pathname);
+      const value=parsed.pathname==='/api/v3/time'?{serverTime:1700000000000}:{canTrade:true,balances:[]};
+      return new Response(JSON.stringify(value),{status:200});
+    }});
+  const result=await client.preflight();
+  assert.equal(result.mode,'SPOT_TESTNET');
+  assert.equal(result.restrictions,null);
+  assert.ok(requested.includes('/api/v3/account'));
+  assert.equal(requested.some(path=>path.startsWith('/sapi/')),false);
+});
 test('exchange preflight rejects keys with withdrawal or derivatives permissions',async()=>{
   let restrictions={ipRestrict:true,enableSpotAndMarginTrading:true,enableWithdrawals:false,enableFutures:false,enableMargin:false};
   const client=new BinanceSpotSignedClient({apiKey:'key',apiSecret:'secret',clock:()=>1700000000000,
