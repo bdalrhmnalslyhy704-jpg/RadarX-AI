@@ -349,6 +349,8 @@ export class AdaptiveTraderExecutionController{
     if(String(this.state.halt_reason||'')==='KILL_SWITCH')return 'HALTED';
     if(this.state.halted)return 'HALTED';
     if(this.state.preflight_status==='REJECTED')return 'BLOCKED_EXCHANGE_PERMISSIONS';
+    if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position)
+      return 'WAITING_FOR_PAPER_VALIDATION';
     if(this.state.preflight_status==='READY'){
       if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true)return 'WAITING_FOR_PAPER_VALIDATION';
       return this.config.network==='LIVE'?'LIVE_SPOT_GATED':'SPOT_TESTNET';
