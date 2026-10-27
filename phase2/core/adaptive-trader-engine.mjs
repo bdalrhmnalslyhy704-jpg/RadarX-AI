@@ -229,7 +229,7 @@ async function mapLimit(items, limit, worker) {
 }
 
 export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.defaultUniverseLimit, now = Date.now(),
-  offset = 0, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+  offset = 0, retrySymbols = [], minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
   // BTC is only a comparative benchmark. A failure to fetch it must not block
@@ -258,20 +258,27 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     ? Math.max(0, Math.trunc(Number(offset) || 0)) % eligible.length
     : 0;
   const selectedCount = Math.min(safeLimit, eligible.length);
-  const selected = Array.from({length:selectedCount},(_,index)=>eligible[(scanOffset+index)%eligible.length]);
+  const rotationSelected = Array.from({length:selectedCount},(_,index)=>eligible[(scanOffset+index)%eligible.length]);
+  const eligibleBySymbol = new Map(eligible.map(row=>[String(row.symbol||'').toUpperCase(),row]));
+  const retrySelection = [];
+  const retrySet = new Set();
+  for (const symbol of (Array.isArray(retrySymbols)?retrySymbols:[])) {
+    const clean=String(symbol||'').trim().toUpperCase();
+    const row=eligibleBySymbol.get(clean);
+    if (!row || retrySet.has(clean) || retrySelection.length>=selectedCount) continue;
+    retrySet.add(clean);
+    retrySelection.push(row);
+  }
+  // Retry failed REST requests early, but never let one repeatedly failing pair
+  // pin the rotation cursor and starve every later eligible Spot symbol.
+  const rotationRemainder = rotationSelected.filter(row=>!retrySet.has(String(row.symbol||'').toUpperCase()));
+  const selected = [...retrySelection,...rotationRemainder].slice(0,selectedCount);
+  const rotationAdvanceCount = selected.filter(row=>!retrySet.has(String(row.symbol||'').toUpperCase())).length;
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const result = await rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 });
     return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, btcKlines, now, minQuoteVolume24h });
   });
-  // Advance only through the contiguous portion whose candle requests finished.
-  // If a subset fails because the shared REST budget is busy, the next cycle retries
-  // from the first failed symbol instead of silently abandoning it.
-  let scanAdvanceCount = 0;
-  for (const row of analyzed) {
-    if (!row || row.error) break;
-    scanAdvanceCount++;
-  }
   const candidates = analyzed.map((row, index) => row && !row.error
     ? row
     : {
@@ -291,6 +298,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     });
   candidates.sort((a, b) => (Number(b.score) || -1) - (Number(a.score) || -1));
   const validCount = candidates.filter(row => row.data_valid && !row.data_stale).length;
+  const fetchFailedSymbols = candidates
+    .filter(row=>Array.isArray(row.reason_codes)&&row.reason_codes.includes('KLINE_FETCH_FAILED'))
+    .map(row=>String(row.symbol||'').toUpperCase()).filter(Boolean);
   const source = String(tickerResult?.source || exchangeInfo?.source || 'BINANCE_PUBLIC_REST');
   return {
     status: validCount > 0 ? 'LIVE_DATA' : 'DATA_UNAVAILABLE',
@@ -303,7 +313,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       valid_symbols: validCount,
       requested_limit: safeLimit,
       scan_offset: scanOffset,
-      scan_advance_count: scanAdvanceCount,
+      scan_advance_count: rotationAdvanceCount,
+      scan_success_count: analyzed.filter(row=>row&&!row.error).length,
+      fetch_failed_symbols: fetchFailedSymbols.length,
+      retry_symbols_pending: fetchFailedSymbols,
       coverage_pct: eligible.length ? Number((candidates.length / eligible.length * 100).toFixed(1)) : 0,
       scan_complete: candidates.length === eligible.length,
       min_quote_volume_24h: minQuoteVolume24h,
@@ -339,6 +352,7 @@ export function createAdaptiveTraderSnapshotService({
   const cache = new Map();
   const flights = new Map();
   const rotationCursors = new Map();
+  const retryQueues = new Map();
   const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
     const hit = cache.get(safeLimit);
@@ -365,7 +379,10 @@ export function createAdaptiveTraderSnapshotService({
     rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
     const effectiveDeadline = rest.requestDeadlineAtMs;
     const scanOffset = rotationCursors.get(safeLimit) || 0;
-    const task = buildAdaptiveTraderMarketSnapshot({ rest, limit: safeLimit, now, offset: scanOffset, minQuoteVolume24h }).then(snapshot => {
+    const queuedRetries = retryQueues.get(safeLimit) || [];
+    const task = buildAdaptiveTraderMarketSnapshot({
+      rest, limit: safeLimit, now, offset: scanOffset, retrySymbols: queuedRetries, minQuoteVolume24h
+    }).then(snapshot => {
       const eligibleCount = Number(snapshot.universe?.eligible_spot_symbols) || 0;
       const advance = Number(snapshot.universe?.scan_advance_count) || 0;
       if (eligibleCount > 0 && advance > 0) {
@@ -373,6 +390,11 @@ export function createAdaptiveTraderSnapshotService({
       } else if (eligibleCount > 0) {
         rotationCursors.set(safeLimit, scanOffset % eligibleCount);
       }
+      const attempted = new Set((snapshot.candidates||[]).map(row=>String(row?.symbol||'').toUpperCase()).filter(Boolean));
+      const eligibleNow = new Set((snapshot.latest_prices||[]).map(row=>String(row?.symbol||'').toUpperCase()).filter(Boolean));
+      const newlyFailed = Array.isArray(snapshot.universe?.retry_symbols_pending) ? snapshot.universe.retry_symbols_pending : [];
+      const notYetAttempted = queuedRetries.filter(symbol=>eligibleNow.has(symbol)&&!attempted.has(symbol));
+      retryQueues.set(safeLimit,[...new Set([...newlyFailed,...notYetAttempted])].slice(0,safeLimit));
       const cachedAt = Date.now();
       cache.set(safeLimit, { snapshot, cachedAt });
       // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
