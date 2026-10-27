@@ -223,6 +223,7 @@ test('TEST_FIXTURE: radar alerts without an explicit final gate never push',asyn
     assert.equal(sent.length,1);
     assert.equal(sent[0].symbol,'CONFIRMEDUSDT');
     assert.equal(sent[0].notification_gate_eligible,true);
+    assert.equal(sent[0].notification_gate_mode,'STRICT_NOTIFICATION');
     assert.equal(sent[0].watch_only,false);
     assert.equal(sent[0].signal_lifecycle_state,'CONFIRMED');
     assert.equal(sent[0].signal_lifecycle_label,'تأكيد نهائي');
@@ -467,6 +468,24 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
     assert.equal(provider.calls,0);
     const audit=await store.readRecent('notifications',10);
     assert.ok(audit.some(row=>row.status==='SUPPRESSED_UNCONFIRMED'&&row.signal_id==='UNCONFIRMED_WATCH_SIGNAL'));
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: a CONFIRMED signal with an early lifecycle state is suppressed',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-conflicting-signal-lifecycle-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await store.putUserSettings('u1',{enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['CONFIRMED']});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const result=await manager.notifySignal({...signal(),signal_id:'CONFLICTING_SIGNAL_LIFECYCLE',
+      signal_lifecycle_state:'EARLY_SETUP',
+      notification_gate:{eligible:true,watch_only:false,requires_follow_up_confirmation:false}});
+    assert.equal(result[0]?.status,'SUPPRESSED_UNCONFIRMED');
+    assert.equal(result[0]?.reason,'CONFLICTING_LIFECYCLE_STATE');
+    assert.equal(calls,0);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
