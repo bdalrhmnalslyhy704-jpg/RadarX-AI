@@ -123,7 +123,7 @@ test('Pre-Move watch creation fails closed for stale, incomplete, extended, or l
   assert.equal(buildPreMoveWatchOnlyAlert(base.candidate,{...base.snapshot,meta:{...base.snapshot.meta,live:false}},base.now),null);
 });
 
-test('Pre-Move watch notification stays in-app and never sends a phone push',async()=>{
+test('ordinary watch-only Pre-Move observations remain in-app until a qualified monitor tier',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
@@ -188,10 +188,14 @@ test('live-scan DOGE-like early flow becomes a bounded monitor alert when price 
     }};
     const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
-    assert.equal(result.sent_count,0);
-    assert.equal(result.attempted,false);
-    assert.equal(sent.length,0,'the DOGE-like sample is early monitoring, not a phone alert until final confirmation');
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(result.attempted,true);
+    assert.equal(sent.length,1,'a strictly qualified early-flow monitor reaches the phone as a non-entry heads-up');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(sent[0].notification_mode,'PRE_MOVE_WATCH_ONLY');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
@@ -231,9 +235,15 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
     assert.ok(alert);
     assert.equal(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
-    assert.equal(result.sent_count,0);
-    assert.equal(sent.length,0,'early-flow monitoring remains in the app until final confirmation');
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1,'high-evidence EARLY_FLOW_MONITOR is a phone heads-up while remaining non-actionable');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].signal_type,'WATCH_ONLY');
+    const duplicate=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(duplicate.status,'DUPLICATE_SUPPRESSED');
+    assert.equal(sent.length,1,'the same coin is capped by its per-symbol cooldown');
 
     const unsafe={
       ...alert,
@@ -248,7 +258,7 @@ test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation,
     const rejected=await manager.notifyRadarWatchOnlyAlert(unsafe);
     assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejected.reason,'PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
-    assert.equal(sent.length,0,'weak flow and early monitoring never reach the phone before confirmation');
+    assert.equal(sent.length,1,'weak flow remains blocked and does not produce an additional push');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
@@ -281,22 +291,25 @@ test('final push gate accepts only a fresh, high-confluence ticker-activity moni
     assert.ok(alert);
     assert.equal(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
     const result=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(result));
-    assert.equal(result.sent_count,0);
-    assert.equal(sent.length,0,'the final ticker-activity watch is visible in-app but is not a push');
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1,'a fresh high-confluence ticker-activity monitor sends a watch-only push');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
 
     const weakAlert={...alert,id:alert.id.replace('CFGUSDT','WEAKUSDT'),symbol:'WEAKUSDT',
       ticker_activity_watch_evidence:{...alert.ticker_activity_watch_evidence,score:8}};
     const rejected=await manager.notifyRadarWatchOnlyAlert(weakAlert);
     assert.equal(rejected.status,'REJECTED_WATCH_ONLY');
     assert.equal(rejected.reason,'PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
-    assert.equal(sent.length,0,'neither monitoring nor weak activity evidence can send a phone push');
+    assert.equal(sent.length,1,'weak activity evidence cannot add a second phone push');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
 });
 
-test('failed Pre-Move watch event is recorded feed-only and never queued for push retry',async()=>{
+test('non-tiered Pre-Move watch remains feed-only and cannot queue push retries',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-watch-retry-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});

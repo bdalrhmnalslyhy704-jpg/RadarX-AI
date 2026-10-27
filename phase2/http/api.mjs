@@ -13,6 +13,7 @@ import {radarTelemetry,renderRadarTelemetryDashboard} from '../core/radar-teleme
 import {buildRadarReadinessAudit} from '../core/radar-readiness-audit.mjs';
 import {RADAR_OUTCOME_ARCHIVES,buildRadarSignalOutcomeReport,emptyRadarSignalOutcomeState} from '../core/radar-signal-outcomes.mjs';
 import {buildRadarMissedMoverAuditReport} from '../core/radar-missed-mover-audit.mjs';
+import {buildEarlyMoverCaseStudy} from '../core/missed-mover-case-study.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -1614,6 +1615,77 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             meta:{...(cached?.meta||{}),live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'MULTI_ANALYST',analysis_mode:'SCAN_FAILED',request_id:requestId,force_refresh_requested:runNow}
           });
         }
+      }
+      if(u.pathname==='/api/early-mover-case-study'&&req.method==='GET'){
+        const denied={paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
+        if(!marketRadarRestClient||typeof marketRadarRestClient.klines!=='function')
+          return send(res,503,{error:'CASE_STUDY_MARKET_DATA_CLIENT_UNAVAILABLE',...denied});
+        if(!rateOk('early-mover-case-study|'+(req.socket.remoteAddress||'unknown'),4))
+          return send(res,429,{error:'CASE_STUDY_RATE_LIMITED',retry_after_seconds:60,...denied});
+        const defaults=['HUMAUSDT','SYNUSDT','REZUSDT','ANIMEUSDT','PARTIUSDT','HAEDALUSDT'];
+        const symbolsRaw=String(u.searchParams.get('symbols')||defaults.join(','));
+        const symbols=[...new Set(symbolsRaw.split(',').map(x=>x.trim().toUpperCase()).filter(Boolean))];
+        if(!symbols.length||symbols.length>8||symbols.some(x=>!/^[A-Z0-9]{2,20}USDT$/.test(x)))
+          return send(res,400,{error:'INVALID_SYMBOLS',message:'Use 1-8 Binance Spot USDT symbols separated by commas.',...denied});
+        const thresholdPct=Number(u.searchParams.get('threshold_pct')||5);
+        const windowHours=Number(u.searchParams.get('window_hours')||24);
+        const leadMinutes=Number(u.searchParams.get('lead_minutes')||60);
+        if(!Number.isFinite(thresholdPct)||thresholdPct<1||thresholdPct>30||
+           !Number.isFinite(windowHours)||windowHours<6||windowHours>48||
+           !Number.isFinite(leadMinutes)||leadMinutes<15||leadMinutes>240)
+          return send(res,400,{error:'INVALID_CASE_STUDY_OPTIONS',accepted:{threshold_pct:'1..30',window_hours:'6..48',lead_minutes:'15..240'},...denied});
+        const wallClockNow=Date.now();
+        const asOfRaw=String(u.searchParams.get('as_of')||'').trim();
+        let asOf=wallClockNow;
+        if(asOfRaw){
+          if(/^\\d{13}$/.test(asOfRaw))asOf=Number(asOfRaw);
+          else if(/^\\d{10}$/.test(asOfRaw))asOf=Number(asOfRaw)*1000;
+          else asOf=Date.parse(asOfRaw);
+          if(!Number.isFinite(asOf)||asOf<=0||asOf>wallClockNow){
+            return send(res,400,{error:'INVALID_AS_OF_TIMESTAMP',
+              message:'as_of must be a past ISO-8601 timestamp with timezone, Unix seconds, or Unix milliseconds.',
+              ...denied});
+          }
+        }
+        let benchmarkCandles=[];
+        let benchmarkStatus='UNAVAILABLE';
+        try{
+          const benchmark=await marketRadarRestClient.klines('BTCUSDT','5m',{limit:1000,endTime:asOf});
+          benchmarkCandles=Array.isArray(benchmark?.candles)?benchmark.candles:[];
+          benchmarkStatus=benchmarkCandles.length?'AVAILABLE':'NO_CANDLES';
+        }catch(error){
+          benchmarkStatus='UNAVAILABLE';
+        }
+        const results=await Promise.all(symbols.map(async symbol=>{
+          try{
+            const response=await marketRadarRestClient.klines(symbol,'5m',{limit:1000,endTime:asOf});
+            const candles=Array.isArray(response?.candles)?response.candles:[];
+            return buildEarlyMoverCaseStudy(symbol,candles,{
+              now:asOf,benchmarkCandles,thresholdPct,windowHours,leadMinutes
+            });
+          }catch(error){
+            return {symbol,status:'MARKET_DATA_FETCH_FAILED',
+              error:String(error?.message??error??'MARKET_DATA_FETCH_FAILED').slice(0,180),
+              source:'BINANCE_SPOT_PUBLIC_REST',no_future_data_used:true};
+          }
+        }));
+        return send(res,200,{
+          report:'RADARX_EARLY_MOVER_CASE_STUDY_V1',
+          as_of:new Date(asOf).toISOString(),
+          source:'BINANCE_SPOT_PUBLIC_REST',
+          interval:'5m',
+          threshold_measure:'TRAILING_24H_CLOSE_TO_CLOSE_RETURN',
+          options:{symbols,threshold_pct:thresholdPct,window_hours:windowHours,lead_minutes:leadMinutes},
+          benchmark:{symbol:'BTCUSDT',status:benchmarkStatus},
+          results,
+          policy:{...denied,closed_candles_only:true,real_orders:false},
+          limitations:[
+            'Historical feature values come from retained Binance Spot closed five-minute candles only.',
+            'Historical order-book depth and spread are not available from klines and remain unknown.',
+            'This endpoint is retrospective evidence, not a promise of future rises and not a trading instruction.',
+            'An old rise is not evidence that RadarX had the necessary data or actually generated a candidate at that time.'
+          ]
+        });
       }
       if(u.pathname==='/api/pre-move-radar-status'&&req.method==='GET'){
         return send(res,200,{...preMoveBackgroundWorkerSnapshot(),as_of:new Date().toISOString(),

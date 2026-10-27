@@ -66,7 +66,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -172,6 +172,12 @@ const radarPayload=(alert,processedAt=Date.now(),gateModeOverride=null)=>{
   sent_time_12h:formatRadarTime12h(processedAt),
   sent_timezone:'Asia/Aden',
   source:alert.source||'Binance Public REST',
+  closed_candles_only:alert?.closed_candles_only===true,
+  data_valid:alert?.data_status?.data_valid===true,
+  data_stale:alert?.data_status?.data_stale===true||alert?.data_stale===true,
+  future_data_detected:alert?.data_status?.future_data_detected===true,
+  data_quality:alert?.data_quality??null,
+  liquidity_quality:alert?.liquidity_quality??null,
   confidence_score:'UNKNOWN',
   paper_trading:true,
   real_order_execution:false,
@@ -196,7 +202,7 @@ const testPayload=(eventId,testId,processedAt=Date.now())=>({
 });
 
 export class PushManager{
-  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();}
+  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();this.preMoveWatchPushBySymbol=new Map();this.preMoveWatchPushAttempts=[];}
   status(){return this.provider.status();}
   async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now(),isRetry=false){
     const requestedCategory=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
@@ -657,27 +663,110 @@ export class PushManager{
       attempted:false,notifications:[],sent_count:0,attempted_count:0
     };
 
+    // Only three evidence-validated Pre-Move tiers may generate a monitor-only
+    // phone notification. They remain explicitly non-actionable and cannot be
+    // promoted into the confirmed market-push/order path.
+    const qualifiedPreMoveTiers=new Set([
+      'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR'
+    ]);
+    const isQualifiedPreMovePush=event==='PRE_MOVE_RADAR_WATCH_ONLY'&&alert?.radar==='PRE_MOVE'&&
+      qualifiedPreMoveTiers.has(String(alert?.watch_notification_tier||''));
+    if(!isQualifiedPreMovePush){
+      const notifications=[];
+      for(const sub of recipients){
+        const audit={
+          event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
+          radar:String(alert?.radar||'EARLY_EXPANSION_RADAR'),radar_name:radarTitle(alert),
+          symbol,alert_id:alert?.id||null,subscription_id:sub.id,user_id:sub.user_id,
+          status:'WATCH_ONLY_FEED_ONLY',provider:providerStatus.provider||'unknown',
+          attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,
+          attempted:false,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+          confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
+          micro_data_validated:microValidatedEarlyFlow,
+          liquidity_evidence_status:microValidatedEarlyFlow?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':null,
+          quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,event_type:event,source
+        };
+        try{await this.store.appendNotificationAudit(audit);}catch{}
+        notifications.push(audit);
+      }
+      return {
+        status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED',attempted:false,
+        notifications,sent_count:0,attempted_count:0,watch_only:true,entry_eligible:false,
+        paper_trading:true,real_order_execution:false
+      };
+    }
+
+    const lastSent=Number(this.preMoveWatchPushBySymbol.get(symbol)||0);
+    if(lastSent&&now-lastSent<30*60*1000){
+      return {status:'DUPLICATE_SUPPRESSED',reason:'PRE_MOVE_SYMBOL_COOLDOWN',
+        attempted:false,notifications:[],sent_count:0,attempted_count:0,
+        retry_after_ms:Math.max(0,30*60*1000-(now-lastSent)),watch_only:true,entry_eligible:false};
+    }
+    this.preMoveWatchPushAttempts=this.preMoveWatchPushAttempts.filter(at=>at>now-15*60*1000);
+    if(this.preMoveWatchPushAttempts.length>=3){
+      return {status:'RATE_LIMITED',reason:'MAX_3_PRE_MOVE_WATCH_PUSHES_PER_15_MINUTES',
+        attempted:false,notifications:[],sent_count:0,attempted_count:0,
+        retry_after_ms:Math.max(1000,15*60*1000-(now-this.preMoveWatchPushAttempts[0])),
+        watch_only:true,entry_eligible:false};
+    }
+
+    // Reserve the symbol slot synchronously to suppress concurrent duplicate scans.
+    this.preMoveWatchPushBySymbol.set(symbol,now);
+    this.preMoveWatchPushAttempts.push(now);
     const notifications=[];
+    let sentCount=0,firstFailure=null;
     for(const sub of recipients){
+      const processedAt=Date.now();
+      const push=radarPayload({
+        ...alert,
+        market:'SPOT',direction:'NONE',signal_type:'WATCH_ONLY',
+        notification_mode:'PRE_MOVE_WATCH_ONLY',
+        notification_gate:{...(alert?.notification_gate||{}),eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
+        watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
+      },processedAt,'PRE_MOVE_WATCH_ONLY');
+      push.notification_mode='PRE_MOVE_WATCH_ONLY';
+      push.signal_type='WATCH_ONLY';
+      push.watch_only=true;
+      push.entry_eligible=false;
+      push.requires_follow_up_confirmation=true;
+      push.title='RadarX • مراقبة مبكرة • '+symbol;
+      push.message=[symbol,
+        alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+          ?'تسارع موثق في الحجم والصفقات وضغط الشراء — مراقبة فقط، لا دخول'
+          :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+            ?'نشاط مبكر قوي والبنية قيد التأكد — مراقبة فقط، لا دخول'
+            :'دلائل تدفق شراء مبكرة — مراقبة فقط، لا دخول'
+      ].join(' • ');
+
+      let response;
+      try{response=await this.provider.send(sub,push);}
+      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
+      const status=response?.ok===true?'SENT':String(response?.status||'FAILED');
+      if(response?.ok===true)sentCount++;
+      else if(!firstFailure)firstFailure=response?.reason||status;
       const audit={
         event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
-        radar:String(alert?.radar||'EARLY_EXPANSION_RADAR'),radar_name:radarTitle(alert),
+        radar:String(alert?.radar||'PRE_MOVE'),radar_name:radarTitle(alert),
         symbol,alert_id:alert?.id||null,subscription_id:sub.id,user_id:sub.user_id,
-        status:'WATCH_ONLY_FEED_ONLY',provider:providerStatus.provider||'unknown',
-        attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,
-        attempted:false,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
-        confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
-        micro_data_validated:microValidatedEarlyFlow,
-        liquidity_evidence_status:microValidatedEarlyFlow?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':null,
-        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,event_type:event,source
+        status,provider:providerStatus.provider||'unknown',attempted_at:processedAt,
+        reason:response?.reason??null,http_status:response?.httpStatus??null,attempted:true,
+        watch_only:true,entry_eligible:false,signal_type:'WATCH_ONLY',
+        notification_mode:'PRE_MOVE_WATCH_ONLY',
+        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+        data_quality:dataQuality,liquidity_quality:liquidityQuality,
+        watch_notification_tier:alert?.watch_notification_tier||null,
+        micro_data_validated:microValidatedEarlyFlow,event_type:event,source
       };
       try{await this.store.appendNotificationAudit(audit);}catch{}
       notifications.push(audit);
     }
+    if(sentCount===0)this.preMoveWatchPushBySymbol.delete(symbol);
+    const deliveryStatus=sentCount===recipients.length?'SENT':sentCount>0?'PARTIAL_FAILURE':'FAILED';
     return {
-      status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED',attempted:false,
-      notifications,sent_count:0,attempted_count:0,watch_only:true,entry_eligible:false,
-      paper_trading:true,real_order_execution:false
+      status:deliveryStatus,reason:sentCount===0?(firstFailure||'PUSH_DELIVERY_FAILED'):null,
+      attempted:true,notifications,sent_count:sentCount,attempted_count:recipients.length,
+      watch_only:true,entry_eligible:false,signal_type:'WATCH_ONLY',
+      notification_mode:'PRE_MOVE_WATCH_ONLY',paper_trading:true,real_order_execution:false
     };
   }
 
