@@ -48,6 +48,18 @@ test('case study finds first trailing-24h threshold crossing and snapshots only 
   assert.ok(report.pre_move.features.taker_buy_share_15m>0.55);
   assert.equal(report.at_crossing.features.price,report.crossing.price);
   assert.equal(report.pre_move.features.historical_orderbook_spread,null);
+  assert.equal(report.pre_move.production_pre_move_replay.no_future_data_used,true);
+  assert.equal(report.pre_move.production_pre_move_replay.as_of,report.pre_move.observed_at);
+  assert.ok(report.pre_move.production_pre_move_replay.full_alert_reconstruction.startsWith('UNKNOWN_'));
+  assert.ok(Date.parse(report.pre_move.production_pre_move_replay.latest_closed_candle_at)<=Date.parse(report.pre_move.observed_at));
+  assert.ok(report.lead_snapshots_before_crossing.every(row=>
+    row.production_pre_move_replay?.no_future_data_used===true &&
+    row.production_pre_move_replay.as_of===row.observed_at &&
+    Date.parse(row.production_pre_move_replay.latest_closed_candle_at)<=Date.parse(row.observed_at)
+  ));
+  assert.ok(report.at_crossing.production_pre_move_replay.no_future_data_used);
+  assert.equal(report.at_crossing.production_pre_move_replay.as_of,report.crossing.observed_at);
+
 
   assert.equal(report.intraday_runup.status,'RUNUP_THRESHOLD_CROSSING_FOUND',JSON.stringify(report.intraday_runup));
   assert.ok(report.intraday_runup.runup.return_from_reference_low_pct>=5);
