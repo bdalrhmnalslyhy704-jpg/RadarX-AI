@@ -250,6 +250,29 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
 });
 
 
+test('BTC benchmark failure does not disable otherwise valid Spot candidate analysis',async()=>{
+  const f=marketFixture();
+  const rest={
+    request:async(path,query={})=>{
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
+        {symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']}
+      ]},source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/ticker/24hr')return {data:[{...f.ticker,quoteVolume:'5000000'}],source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')throw new Error('BTC_BENCHMARK_TEMPORARILY_UNAVAILABLE');
+      if(path==='/api/v3/klines'&&query.symbol==='TESTUSDT')return f.klines;
+      throw new Error('UNEXPECTED_REQUEST');
+    }
+  };
+  const snapshot=await createAdaptiveTraderSnapshotService({rest})({limit:20,now:f.now});
+  assert.equal(snapshot.status,'LIVE_DATA');
+  assert.equal(snapshot.universe.valid_symbols,1);
+  assert.equal(snapshot.candidates[0].data_valid,true);
+  assert.ok(snapshot.candidates[0].reason_codes.includes('BTC_BENCHMARK_UNAVAILABLE'));
+  assert.equal(snapshot.meta.btc_benchmark_available,false);
+  assert.equal(snapshot.meta.btc_benchmark_error,'BTC_BENCHMARK_TEMPORARILY_UNAVAILABLE');
+  assert.equal(rest.requestDeadlineAtMs,null);
+});
+
 test('concurrent universe sizes keep distinct server-cache entries',async()=>{
   const f=marketFixture();
   const rest={async request(path,query={}) {
