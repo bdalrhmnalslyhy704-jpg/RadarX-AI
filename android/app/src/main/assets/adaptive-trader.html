@@ -405,7 +405,19 @@ async function scanMarket(){
   addJournal('بدأ فحص جديد من نقطة بيانات السوق المستقلة.');
   try{
     const limit=Number(el('universeLimit').value)||80;
-    const response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{method:'GET',cache:'no-store',headers:{Accept:'application/json'}});
+    const controller=new AbortController();
+    const requestTimeout=setTimeout(()=>controller.abort(),55_000);
+    let response;
+    try{
+      response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{
+        method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller.signal
+      });
+    }catch(error){
+      if(error && error.name==='AbortError')throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
+      throw error;
+    }finally{
+      clearTimeout(requestTimeout);
+    }
     const snapshot=await response.json();
     if(!response.ok||snapshot.status!=='LIVE_DATA'||(snapshot.meta && snapshot.meta.live)!==true||
        (snapshot.meta && snapshot.meta.paper_trading)!==true||(snapshot.meta && snapshot.meta.real_order_execution)!==false||
