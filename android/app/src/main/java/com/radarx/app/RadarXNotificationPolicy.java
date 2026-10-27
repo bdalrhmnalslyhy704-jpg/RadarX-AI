@@ -32,6 +32,7 @@ final class RadarXNotificationPolicy {
     private static final long ONE_MINUTE_MS = 60_000L;
     private static final long FIFTEEN_MINUTES_MS = 15 * 60_000L;
     private static final long DEDUP_TTL_MS = 24 * 60 * 60_000L;
+    private static final long SYMBOL_COOLDOWN_MS = 10 * 60_000L;
     private static final int MAX_PUSHES_PER_WINDOW = 3;
     private static final int MAX_REMEMBERED_EVENTS = 2000;
     private static final long MAX_STATE_BYTES = 1024 * 1024L;
@@ -52,9 +53,10 @@ final class RadarXNotificationPolicy {
 
     private RadarXNotificationPolicy() {}
 
-    static Reservation reserve(Context context, String rawEventId, long requestedAt) {
+    static Reservation reserve(Context context, String rawEventId, String rawSymbol, long requestedAt) {
         String eventId = rawEventId == null ? "" : rawEventId.trim();
         if (eventId.isEmpty()) return new Reservation(STORAGE_ERROR, "", 0L);
+        String symbol = rawSymbol == null ? "" : rawSymbol.trim().toUpperCase(java.util.Locale.ROOT);
         long now = requestedAt > 0L ? requestedAt : System.currentTimeMillis();
         synchronized (PROCESS_LOCK) {
             File dir = context.getFilesDir();
@@ -89,6 +91,10 @@ final class RadarXNotificationPolicy {
                         if (at <= 0L || at > now + 5000L || now - at >= DEDUP_TTL_MS) continue;
                         events.put(row);
                         if (eventId.equals(row.optString("id", ""))) duplicate = true;
+                        String previousSymbol = row.optString("symbol", "").toUpperCase(java.util.Locale.ROOT);
+                        long age = now - at;
+                        if (!symbol.isEmpty() && symbol.equals(previousSymbol) &&
+                                age >= 0L && age < SYMBOL_COOLDOWN_MS) duplicate = true;
                     }
                 }
                 if (duplicate) return new Reservation(DUPLICATE, eventId, 0L);
@@ -103,6 +109,7 @@ final class RadarXNotificationPolicy {
                 attempts.put(attempt);
                 JSONObject event = new JSONObject();
                 event.put("id", eventId);
+                event.put("symbol", symbol);
                 event.put("at", now);
                 events.put(event);
                 while (events.length() > MAX_REMEMBERED_EVENTS) events.remove(0);
