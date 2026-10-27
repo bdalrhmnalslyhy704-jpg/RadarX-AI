@@ -403,10 +403,14 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
       }
     };
     const out=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
-    assert.equal(out.attempted,false);
-    assert.equal(out.sent_count,0);
-    assert.equal(sent.length,0,'monitor-only alerts cannot reach the phone before confirmation');
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.attempted,true);
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1,'qualified structure-pending watch sends only a non-entry heads-up');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(sent[0].notification_mode,'PRE_MOVE_WATCH_ONLY');
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
@@ -446,10 +450,13 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
       }
     };
     const out=await manager.notifyRadarWatchOnlyAlert(alert);
-    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
-    assert.equal(out.attempted,false);
-    assert.equal(out.sent_count,0);
-    assert.equal(sent.length,0,'monitor-only alerts cannot reach the phone before confirmation');
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.attempted,true);
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1,'qualified buyer flow sends an early non-entry monitor notification');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
   }finally{
     await rm(dir,{recursive:true,force:true});
   }
