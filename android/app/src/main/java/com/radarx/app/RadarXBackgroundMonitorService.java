@@ -547,32 +547,51 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static boolean isActionableRadarAlert(JSONObject alert) {
         if (alert == null) return false;
         if (alert.optBoolean("watch_only", false) || alert.optBoolean("monitor_only", false)) return false;
-        if (alert.has("eligible") && !alert.optBoolean("eligible", false)) return false;
+        if (!alert.optBoolean("eligible", false)) return false;
         // Missing entry eligibility is not permission to notify.
-        if (!alert.has("entry_eligible") || !alert.optBoolean("entry_eligible", false)) return false;
+        if (!alert.optBoolean("entry_eligible", false)) return false;
         if (alert.optBoolean("requires_follow_up_confirmation", false)) return false;
+        String notificationMode = alert.optString("notification_mode", "").toUpperCase(Locale.ROOT);
+        if (notificationMode.contains("WATCH_ONLY") || notificationMode.contains("WATCH_EARLY") ||
+                notificationMode.contains("MONITOR_ONLY")) return false;
         String lifecycleState = alert.optString("signal_lifecycle_state", "").toUpperCase(Locale.ROOT);
         String signalType = alert.optString("signal_type", "").toUpperCase(Locale.ROOT);
+        if (!lifecycleState.isEmpty() && !"CONFIRMED".equals(lifecycleState)) return false;
         String direction = alert.optString("direction", alert.optString("bias", "")).toUpperCase(Locale.ROOT);
         boolean risingDirection = direction.startsWith("UP") || direction.startsWith("LONG") || direction.startsWith("BULL");
         JSONObject notificationGate = alert.optJSONObject("notification_gate");
+        if (notificationGate != null &&
+                (!notificationGate.optBoolean("eligible", false) ||
+                 notificationGate.optBoolean("watch_only", false) ||
+                 notificationGate.optBoolean("requires_follow_up_confirmation", false))) return false;
+        JSONObject eliteGate = alert.optJSONObject("elite_gate");
+        if (eliteGate != null && !eliteGate.optBoolean("eligible", false)) return false;
         boolean strictGate = notificationGate != null &&
-            "STRICT_NOTIFICATION".equalsIgnoreCase(notificationGate.optString("mode", ""));
+            "STRICT_NOTIFICATION".equalsIgnoreCase(notificationGate.optString("mode", "")) &&
+            notificationGate.optBoolean("eligible", false) &&
+            !notificationGate.optBoolean("watch_only", false) &&
+            !notificationGate.optBoolean("requires_follow_up_confirmation", false);
         boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) ||
             "CONFIRMED".equals(signalType) || strictGate;
         if (!risingDirection || !finalConfirmation) return false;
+        if (!alert.optBoolean("closed_candles_only", false)) return false;
+        if (!"SPOT".equalsIgnoreCase(alert.optString("market", ""))) return false;
+        double dataQuality = alert.optDouble("data_quality",
+            alert.optJSONObject("data_status") == null ? Double.NaN :
+                alert.optJSONObject("data_status").optDouble("data_quality", Double.NaN));
+        double liquidityQuality = alert.optDouble("liquidity_quality",
+            alert.optJSONObject("liquidity_metrics") == null ? Double.NaN :
+                alert.optJSONObject("liquidity_metrics").optDouble("liquidity_quality", Double.NaN));
+        if (!Double.isFinite(dataQuality) || dataQuality < 70.0 || dataQuality > 100.0 ||
+                !Double.isFinite(liquidityQuality) || liquidityQuality < 60.0 || liquidityQuality > 100.0) return false;
         if (alert.optBoolean("data_stale", false)) return false;
         JSONObject dataStatus = alert.optJSONObject("data_status");
         if (dataStatus != null && (dataStatus.optBoolean("stale", false) ||
                 dataStatus.optBoolean("data_stale", false) ||
                 "DATA_STALE".equalsIgnoreCase(dataStatus.optString("status", "")) ||
                 "DATA_UNAVAILABLE".equalsIgnoreCase(dataStatus.optString("status", "")))) return false;
-        JSONObject eliteGate = alert.optJSONObject("elite_gate");
-        if (eliteGate != null && eliteGate.has("eligible") && !eliteGate.optBoolean("eligible", false)) return false;
-        if (notificationGate != null && notificationGate.has("eligible") &&
-                !notificationGate.optBoolean("eligible", false)) return false;
-        if (alert.has("data_quality") && alert.optDouble("data_quality", 0.0) < 70.0) return false;
-        if (alert.has("market") && !"SPOT".equalsIgnoreCase(alert.optString("market", ""))) return false;
+        if (notificationGate != null && !notificationGate.optBoolean("eligible", false)) return false;
+        if (eliteGate != null && !eliteGate.optBoolean("eligible", false)) return false;
 
         String event = alert.optString("event", alert.optString("type", "")).toUpperCase(Locale.ROOT);
         if (event.contains("WATCH_ONLY") || event.contains("MONITOR_ONLY")) return false;
