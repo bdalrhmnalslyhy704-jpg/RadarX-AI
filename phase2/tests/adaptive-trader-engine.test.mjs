@@ -72,6 +72,21 @@ test('incomplete or future candles are rejected rather than treated as live evid
   assert.ok(futureResult.data_valid===false || futureResult.candle_close_time<future.now);
 });
 
+test('BTC-relative weakness and deep daily drawdown block early setup claims',()=>{
+  const candidate=marketFixture({change24h:-12,currentMove:0.9});
+  const result=scoreAdaptiveTraderCandidate(candidate);
+  assert.equal(result.data_valid,true);
+  assert.equal(result.paper_candidate,false);
+  assert.ok(result.reason_codes.includes('DAILY_DRAWDOWN_BLOCK'));
+
+  const relative=marketFixture({change24h:2.2,currentMove:0.6});
+  const btc=marketFixture({change24h:4.1,currentMove:2.4});
+  const compared=scoreAdaptiveTraderCandidate({...relative,btcKlines:btc.klines});
+  assert.equal(compared.data_valid,true);
+  assert.ok(Number.isFinite(compared.features.relative_strength_vs_btc_pct));
+  assert.ok(compared.features.relative_strength_vs_btc_pct<0);
+});
+
 test('late daily/hourly moves are explicitly blocked from the early setup tier',()=>{
   const f=marketFixture({change24h:15,currentMove:1.1});
   const result=scoreAdaptiveTraderCandidate(f);
@@ -193,5 +208,5 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.equal(snapshot.candidates[0].symbol,'TESTUSDT');
   const cached=await service({limit:20,now:f.now+1000});
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
-  assert.equal(requests.filter(x=>x.path==='/api/v3/klines').length,1);
+  assert.equal(requests.filter(x=>x.path==='/api/v3/klines').length,2);
 });
