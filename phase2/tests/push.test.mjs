@@ -214,7 +214,7 @@ test('TEST_FIXTURE: radar alerts without an explicit final gate never push',asyn
     await m.notifyRadarAlert({
       radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'CONFIRMEDUSDT',eligible:true,entry_eligible:true,
       data_quality:95,liquidity_quality:85,
-      notification_gate:{eligible:true,watch_only:false,requires_follow_up_confirmation:false,score:90,confirmations:7},
+      notification_gate:{eligible:true,watch_only:false,requires_follow_up_confirmation:false,mode:'STRICT_NOTIFICATION',score:90,confirmations:7},
       signal_lifecycle:{state:'CONFIRMED',label:'تأكيد نهائي',transition:'CONFIRMED_BREAKOUT',reason_codes:['CLOSED_CANDLE_BREAKOUT']}
     });
     assert.equal(sent.length,1);
