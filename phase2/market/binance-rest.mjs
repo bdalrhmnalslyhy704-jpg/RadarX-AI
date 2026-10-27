@@ -2,6 +2,20 @@ import {normalizeEpochMs} from '../core/data-quality.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+function awaitBeforeDeadline(promise, deadlineAtMs, onTimeout) {
+  const deadline=Number(deadlineAtMs);
+  if(!Number.isFinite(deadline)||deadline<=0)return promise;
+  const remaining=deadline-Date.now();
+  if(remaining<=0)return Promise.reject(onTimeout());
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(onTimeout()),remaining);
+    Promise.resolve(promise).then(
+      value=>{clearTimeout(timer);resolve(value);},
+      error=>{clearTimeout(timer);reject(error);}
+    );
+  });
+}
+
 export function retryAfterMs(headers) {
   const raw = headers?.get?.('retry-after');
   if (raw == null) return null;
@@ -351,10 +365,17 @@ export class RestClient {
     }
     if(SHARED.inflight.has(key)){
       try{
-        const shared=await SHARED.inflight.get(key);
+        const shared=await awaitBeforeDeadline(SHARED.inflight.get(key),this.requestDeadlineAtMs,()=>{
+          const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
+          error.name='ScanDeadlineError';
+          this.lastError=error.message;
+          this.state='ERROR';
+          return error;
+        });
         return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:Date.now()},null);
       }catch(error){
         this.lastError=String(error?.message??error);
+        if(error?.name==='ScanDeadlineError')this.state='ERROR';
         throw error;
       }
     }
