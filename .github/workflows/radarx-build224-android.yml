@@ -33,7 +33,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Set up Gradle compatible with Android Gradle Plugin 8.7.3
         uses: gradle/actions/setup-gradle@v4
