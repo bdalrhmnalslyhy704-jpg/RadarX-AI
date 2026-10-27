@@ -58,6 +58,17 @@ test('live closed-candle scoring produces a transparent candidate, never an entr
   assert.ok(result.features.volume_ratio>1);
 });
 
+test('fresh REST responses received during a slow scan are not misclassified as future data',()=>{
+  const scanStartedAt=Date.now()-15_000;
+  const f=marketFixture({now:scanStartedAt});
+  f.klines.receivedAt=scanStartedAt+8_000;
+  const result=scoreAdaptiveTraderCandidate(f);
+  assert.equal(result.data_valid,true);
+  assert.equal(result.data_stale,false);
+  assert.equal(Date.parse(result.as_of),scanStartedAt+8_000);
+  assert.ok(result.candle_age_ms>=8_000);
+});
+
 test('incomplete or future candles are rejected rather than treated as live evidence',()=>{
   const f=marketFixture({now:Date.now()});
   f.klines.data=f.klines.data.slice(0,11);
