@@ -132,6 +132,19 @@ test('server paper validation requires 100 closed trades, at least 55 percent wi
   assert.equal(bad.ready,false);
   assert.equal(bad.gate_conditions.net_profit_positive,false);
 });
+test('a strong old paper history cannot hide a losing most-recent validation window',()=>{
+  const row=(i,pnl)=>({closed_at:i+1,net_pnl:pnl,net_return_pct:pnl,paper_trading:true,real_order_execution:false});
+  const history=[
+    ...Array.from({length:100},(_,i)=>row(i,2)),
+    ...Array.from({length:100},(_,i)=>row(100+i,-1))
+  ];
+  const profile=buildAdaptiveTraderPaperValidationProfile({starting_balance:10000,closed_trades:history});
+  assert.equal(profile.resolved_paper_trades,200);
+  assert.equal(profile.evaluation_window_trades,100);
+  assert.equal(profile.win_rate_pct,0);
+  assert.equal(profile.ready,false);
+  assert.equal(profile.gate_conditions.net_profit_positive,false);
+});
 test('live entry gates reject weak setups and require mature resolved observations',()=>{
   const now=Date.now();
   assert.equal(evaluateAdaptiveTraderLiveCandidate(candidate(now),{learningProfile:{ready:true,resolved_samples:99},now,snapshotAsOf:new Date(now).toISOString()}).reason,
