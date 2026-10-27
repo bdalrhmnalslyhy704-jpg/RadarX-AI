@@ -84,10 +84,12 @@ assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
   'Firebase must require entry_eligible=true before posting a phone notification');
 assert.match(firebase, /boolean notificationGateEligible = Boolean\.parseBoolean/,
   'Firebase must require explicit notification gate eligibility before posting');
-assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
-  'Firebase must require a final confirmed state or strict final gate');
-assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\| !notificationGateEligible \|\| followUpRequired \|\| !finalConfirmation\)\)/,
-  'Firebase must not render early watches or messages without explicit gate eligibility and final confirmation, except an explicit test push');
+assert.match(firebase, /boolean lifecycleConflicts = !lifecycleState\.isEmpty\(\) && !"CONFIRMED"\.equals\(lifecycleState\)/,
+  'Firebase must reject a lifecycle that conflicts with a strict-looking gate');
+assert.match(firebase, /boolean finalConfirmation = !lifecycleConflicts && \(/,
+  'Firebase must require an internally consistent final confirmation state');
+assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\| !notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation\)\)/,
+  'Firebase must not render early watches or messages with inconsistent lifecycle/gate eligibility, except an explicit test push');
 assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
 assert.match(service, /RadarXNotificationPolicy\.reserve/,
