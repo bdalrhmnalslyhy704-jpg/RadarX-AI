@@ -19,10 +19,22 @@ function candle(t, close=100, tfMs=900000) {
     sourceTime:Date.now()
   };
 }
-function series(tf, count=250, lastAgeMs=60_000) {
+function series(tf, count=250, lastAgeMs=60_000, nowMs=Date.now()) {
   const step = tf==='4h' ? 14_400_000 : tf==='1h' ? 3_600_000 : 900_000;
-  const lastOpen = Math.floor((Date.now() - lastAgeMs - step) / step) * step;
+  const lastOpen = Math.floor((nowMs - lastAgeMs - step) / step) * step;
   return Array.from({length:count},(_,i)=>candle(lastOpen-(count-1-i)*step,100+i*0.05,step));
+}
+
+function stablePreMoveTestTime(nowMs=Date.now()) {
+  // These tests depend on the Asia/Aden 04:00 session boundary. Pin scans to
+  // 08:00 local on the current Aden calendar date so CI does not fail at 04:00
+  // before enough closed 15m candles have formed for live evidence.
+  const parts=new Intl.DateTimeFormat('en-CA',{
+    timeZone:'Asia/Aden',year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date(nowMs));
+  const value=Object.fromEntries(parts.filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
+  const sessionReady=new Date(`${value.year}-${value.month}-${value.day}T08:00:00+03:00`).getTime();
+  return Math.max(nowMs,sessionReady);
 }
 
 function exchangeInfo() {
@@ -46,7 +58,7 @@ function tickers() {
   ];
 }
 
-function makeRest({wideSpread=false}={}) {
+function makeRest({wideSpread=false,clock=()=>Date.now()}={}) {
   const calls=[];
   let active=0,maxActive=0;
   const rest = {
@@ -63,7 +75,7 @@ function makeRest({wideSpread=false}={}) {
       active++;maxActive=Math.max(maxActive,active);
       try{
         await new Promise(r=>setTimeout(r,5));
-        return {source:'TEST',receivedAt:Date.now(),candles:series(tf)};
+        return {source:'TEST',receivedAt:clock(),candles:series(tf,250,60_000,clock())};
       } finally {active--;}
     },
     depth:async(symbol)=>{
@@ -799,8 +811,10 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
 
 
 test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{
+  const scanNow=stablePreMoveTestTime();
   const scanner=new MarketUniverseScanner({
-    rest:makeRest(),
+    rest:makeRest({clock:()=>scanNow}),
+    clock:()=>scanNow,
     config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2,deepKlines:160},
     strategyEvaluator:evaluator
   });
@@ -819,13 +833,13 @@ test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audi
 
 
 test('Pre-Move scan removes already-extended coins before limiting actionable results',async()=>{
-  const scanNow=Date.now();
+  const scanNow=stablePreMoveTestTime();
   const cursorRows=new Map();
   const rotationStateStore={
     async getDedupKey(key){return cursorRows.get(key)||null;},
     async putDedupKey(key,value){cursorRows.set(key,value);}
   };
-  const rest=makeRest();
+  const rest=makeRest({clock:()=>scanNow});
   const originalRequest=rest.request;
   rest.request=async path=>{
     const response=await originalRequest(path);

@@ -27,6 +27,32 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
+        String event = dataValue(message.getData(), "event", "");
+        String eventId = dataValue(message.getData(), "event_id",
+                dataValue(message.getData(), "signal_id", ""));
+        String eventClass = dataValue(message.getData(), "event_class", "").toUpperCase(java.util.Locale.ROOT);
+        String messageType = dataValue(message.getData(), "type", "").toUpperCase(java.util.Locale.ROOT);
+        boolean explicitTest = "TEST_PUSH_ONLY".equals(eventClass) || "TEST_PUSH_ONLY".equals(messageType);
+        String notificationMode = dataValue(message.getData(), "notification_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String notificationGateMode = dataValue(message.getData(), "notification_gate_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String lifecycleState = dataValue(message.getData(), "signal_lifecycle_state", "").toUpperCase(java.util.Locale.ROOT);
+        String signalType = dataValue(message.getData(), "signal_type", "").toUpperCase(java.util.Locale.ROOT);
+        String direction = dataValue(message.getData(), "direction", "").toUpperCase(java.util.Locale.ROOT);
+        boolean risingDirection = direction.startsWith("UP") || direction.startsWith("LONG") || direction.startsWith("BULL");
+        boolean watchOnly = Boolean.parseBoolean(dataValue(message.getData(), "watch_only", "false"));
+        boolean entryEligible = Boolean.parseBoolean(dataValue(message.getData(), "entry_eligible", "false"));
+        boolean notificationGateEligible = Boolean.parseBoolean(dataValue(message.getData(), "notification_gate_eligible", "false"));
+        boolean followUpRequired = Boolean.parseBoolean(dataValue(message.getData(), "requires_follow_up_confirmation", "true"));
+        boolean watchEvent = event.toUpperCase(java.util.Locale.ROOT).matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*") ||
+                notificationMode.matches(".*(WATCH_ONLY|MONITOR_ONLY|WATCH_EARLY).*");
+        boolean lifecycleConflicts = !lifecycleState.isEmpty() && !"CONFIRMED".equals(lifecycleState);
+        boolean finalConfirmation = !lifecycleConflicts && ("CONFIRMED".equals(lifecycleState) ||
+                "CONFIRMED".equals(signalType) || "STRICT_NOTIFICATION".equals(notificationGateMode));
+        if (!explicitTest && (watchOnly || watchEvent || !risingDirection || !entryEligible ||
+                !notificationGateEligible || followUpRequired || lifecycleConflicts || !finalConfirmation)) {
+            Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
+            return;
+        }
         String serverAt = dataValue(message.getData(), "sent_at",
                 dataValue(message.getData(), "server_processed_at", ""));
         try {
@@ -58,8 +84,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             body = dataValue(message.getData(), "body", "");
             if (body.trim().isEmpty()) {
                 String symbol = dataValue(message.getData(), "symbol", "");
-                String event = dataValue(message.getData(), "event", "اكتشاف جديد");
-                body = (symbol.isEmpty() ? event : symbol + " • " + event)
+                String fallbackEvent = dataValue(message.getData(), "event", "اكتشاف جديد");
+                body = (symbol.isEmpty() ? fallbackEvent : symbol + " • " + fallbackEvent)
                         + " | تداول ورقي فقط";
             }
         }
@@ -72,12 +98,7 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         openApp.putExtra("radarx_alert_symbol", symbol);
         openApp.putExtra("radarx_alert_radar", radar);
         openApp.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        String event = dataValue(message.getData(), "event", "");
-        String eventId = dataValue(message.getData(), "event_id", dataValue(message.getData(), "signal_id", ""));
-        boolean preMoveWatchOnly = "PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(event) && !eventId.isEmpty();
-        int requestCode = preMoveWatchOnly
-                ? 55_000 + Math.floorMod(eventId.hashCode(), 1_000_000_000)
-                : Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
+        int requestCode = Math.abs((symbol + "|" + radar + "|" + message.getMessageId()).hashCode());
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this, requestCode, openApp,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -97,14 +118,27 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
 
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
-            if (preMoveWatchOnly) {
-                manager.notify("radarx_premove_watch", requestCode, builder.build());
-            } else {
-                manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
+            RadarXNotificationPolicy.Reservation reservation = null;
+            if (!explicitTest) {
+                String policyEventId = eventId;
+                if (policyEventId == null || policyEventId.trim().isEmpty()) {
+                    policyEventId = symbol + "|" + radar + "|" + String.valueOf(message.getMessageId());
+                }
+                reservation = RadarXNotificationPolicy.reserve(this, policyEventId, symbol, System.currentTimeMillis());
+                if (reservation.status != RadarXNotificationPolicy.RESERVED) {
+                    Log.i(TAG, "FCM_NOTIFICATION_SUPPRESSED_DEVICE_BUDGET status=" + reservation.status);
+                    return;
+                }
             }
-            Log.i(TAG, preMoveWatchOnly ? "PRE_MOVE_WATCH_FCM_NOTIFICATION_POSTED" : "FCM_NOTIFICATION_POSTED");
-            if (!eventId.isEmpty()) {
-                RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
+            try {
+                manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
+                Log.i(TAG, explicitTest ? "FCM_TEST_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED");
+                if (!eventId.isEmpty()) {
+                    RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
+                }
+            } catch (RuntimeException error) {
+                RadarXNotificationPolicy.release(this, reservation);
+                Log.w(TAG, "FCM_NOTIFICATION_POST_FAILED", error);
             }
         }
     }

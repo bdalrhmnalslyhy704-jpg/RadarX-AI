@@ -66,7 +66,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -112,7 +112,7 @@ const radarTitle=s=>s?.radar_name||({
   ROTATION_LAG_RADAR:'Radar 3 — Rotation/Lag',
   LIQUIDITY_ABSORPTION_RADAR:'Radar 4 — Liquidity Absorption'
 }[String(s?.radar||'').toUpperCase()]||'RadarX');
-const radarPayload=(alert,processedAt=Date.now())=>{
+const radarPayload=(alert,processedAt=Date.now(),gateModeOverride=null)=>{
   const watchOnly=alert?.notification_gate?.watch_only===true||alert?.watch_only===true;
   const needsFollowUp=watchOnly||alert?.notification_gate?.requires_follow_up_confirmation===true;
   const lowLiquidityWatch=alert?.low_liquidity_burst_bypass===true||
@@ -124,6 +124,8 @@ const radarPayload=(alert,processedAt=Date.now())=>{
   event_id:alert.event_id||alert.id||null,
   signal_id:alert.signal_id||alert.id||null,
   notification_mode:watchOnly?'WATCH_ONLY_EARLY_TRACK':'STANDARD_RADAR_ALERT',
+  notification_gate_mode:gateModeOverride??alert?.notification_gate?.mode??alert?.elite_gate?.mode??null,
+  notification_gate_eligible:alert?.notification_gate?.eligible===true||alert?.elite_gate?.eligible===true,
   watch_only:watchOnly,
   entry_eligible:watchOnly?false:(alert?.entry_eligible??null),
   watch_notification_tier:alert?.watch_notification_tier??null,
@@ -178,7 +180,10 @@ const radarPayload=(alert,processedAt=Date.now())=>{
 };
 
 const payload=(s,processedAt=Date.now())=>({type:'RADARX_SIGNAL',event_class:marketEventClass(s.data_status?.source??s.source),signal_id:s.signal_id,symbol:s.symbol,market:s.market,strategy:s.strategy,direction:s.direction,
-  signal_type:s.signal_type,timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
+  signal_type:s.signal_type,entry_eligible:true,watch_only:false,notification_mode:'STRICT_NOTIFICATION',
+  notification_gate_mode:'STRICT_NOTIFICATION',notification_gate_eligible:true,notification_gate_eligible:true,
+  requires_follow_up_confirmation:false,signal_lifecycle_state:'CONFIRMED',
+  timeframe:s.candle?.timeframe,candle_open_time:s.candle?.open_time,candle_close_time:s.candle?.close_time,
   price:s.price?.reference??null,data_quality:s.scores?.data_quality,liquidity_quality:s.scores?.liquidity_quality,
   risk_filter:s.risk_filter,risk_reasons:s.risk_reasons,reason_codes:s.reason_codes,source:s.data_status?.source??'UNKNOWN',
   source_time:s.candle?.close_time??null,server_processed_at:processedAt,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false});
@@ -191,8 +196,116 @@ const testPayload=(eventId,testId,processedAt=Date.now())=>({
 });
 
 export class PushManager{
-  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();}
+  constructor({provider,store,deduplicator=null,retryBaseMs=15000}){this.provider=provider;this.store=store;this.deduplicator=deduplicator;this.retryBaseMs=retryBaseMs;this.retryQueue=new Map();this.pushGuardQueues=new Map();this.pushGuardMemory=new Map();}
   status(){return this.provider.status();}
+  async sendMarketPush(subscription,notification,kind='MARKET',requestedAt=Date.now(),isRetry=false){
+    const requestedCategory=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
+    if(requestedCategory==='WATCH_ONLY'||notification?.watch_only===true||notification?.entry_eligible===false||/WATCH_ONLY/.test(String(notification?.notification_mode||'')))
+      return{ok:false,status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED'};
+    const direction=String(notification?.direction??notification?.bias??'').trim().toUpperCase();
+    const risingDirection=/^(UP|LONG|BULL)/.test(direction);
+    const lifecycleState=String(notification?.signal_lifecycle_state||'').trim().toUpperCase();
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
+    const finalConfirmation=String(notification?.signal_type||'').toUpperCase()==='CONFIRMED'||
+      lifecycleState==='CONFIRMED'||
+      String(notification?.notification_gate_mode||'').toUpperCase()==='STRICT_NOTIFICATION';
+    const spotPaperPolicy=String(notification?.market||'').trim().toUpperCase()==='SPOT'&&
+      notification?.paper_trading===true&&notification?.real_order_execution===false;
+    if(!spotPaperPolicy||notification?.entry_eligible!==true||notification?.notification_gate_eligible!==true||
+       !risingDirection||lifecycleConflicts||!finalConfirmation)
+      return{ok:false,status:'SUPPRESSED_UNCONFIRMED',
+        reason:!spotPaperPolicy?'SPOT_PAPER_POLICY_REQUIRED':
+          !risingDirection?'RISING_DIRECTION_REQUIRED':
+          lifecycleConflicts?'CONFLICTING_LIFECYCLE_STATE':
+          notification?.notification_gate_eligible!==true?'FINAL_GATE_ELIGIBILITY_REQUIRED':'FINAL_CONFIRMATION_REQUIRED'};
+    const subscriptionId=String(subscription?.id||subscription?.installation_id||subscription?.user_id||'unknown');
+    const queueKey=subscriptionId;
+    const previous=this.pushGuardQueues.get(queueKey)||Promise.resolve();
+    const task=previous.catch(()=>{}).then(async()=>{
+      const now=Math.max(Date.now(),Number(requestedAt)||0);
+      const guardKey='RADARX:PUSH_GUARD:V1:'+subscriptionId;
+      const category=String(kind||'MARKET').toUpperCase()==='WATCH_ONLY'?'WATCH_ONLY':'MARKET';
+      let saved={};
+      try{
+        if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+          saved=await this.store.getDedupKey(guardKey)||{};
+        else saved=this.pushGuardMemory.get(guardKey)||{};
+      }catch(error){return{ok:false,status:'PUSH_GUARD_UNAVAILABLE',reason:'PUSH_GUARD_READ_FAILED'};}
+      const rollingAttempts=value=>(Array.isArray(value)?value:[]).map(Number)
+        .filter(at=>Number.isFinite(at)&&at<=now&&now-at<60_000);
+      const attempts=rollingAttempts(saved.attempts);
+      // Older guard records did not split traffic lanes; treat those attempts as
+      // regular market attempts conservatively so deployment cannot reset the cap.
+      const marketAttempts=rollingAttempts(saved.market_attempts??saved.attempts);
+      const watchAttempts=rollingAttempts(saved.watch_attempts);
+      const marketAttempts15m=(Array.isArray(saved.market_attempts_15m)?saved.market_attempts_15m:[]).map(Number)
+        .filter(at=>Number.isFinite(at)&&at<=now&&now-at<15*60_000);
+      const retryAttempts=rollingAttempts(saved.retry_attempts);
+      const eventId=String(notification?.event_id||notification?.alert_id||notification?.signal_id||notification?.id||'').trim();
+      const recentEvents=(Array.isArray(saved.recent_events)?saved.recent_events:[]).filter(row=>row&&typeof row.id==='string'&&Number.isFinite(Number(row.at))&&Number(row.at)<=now&&now-Number(row.at)<20*60_000);
+      const hasRetryReservation=Boolean(eventId&&recentEvents.some(row=>row.id===eventId&&row.category===category));
+      const sentBySymbol=saved.sent_by_symbol&&typeof saved.sent_by_symbol==='object'&&!Array.isArray(saved.sent_by_symbol)
+        ?{...saved.sent_by_symbol}:{};
+      for(const [key,value] of Object.entries(sentBySymbol)){
+        const sentAt=Number(value),cooldown=key.startsWith('WATCH_ONLY|')?5*60_000:10*60_000;
+        if(!Number.isFinite(sentAt)||sentAt>now+5_000||now-sentAt>=cooldown)delete sentBySymbol[key];
+      }
+      const symbol=String(notification?.symbol||'').trim().toUpperCase();
+      const symbolKey=symbol?category+'|'+symbol:null;
+      const cooldownMs=category==='WATCH_ONLY'?5*60_000:10*60_000;
+      const lastSent=symbolKey?Number(sentBySymbol[symbolKey]):NaN;
+      if(Number.isFinite(lastSent)&&lastSent<=now&&now-lastSent<cooldownMs)
+        return{ok:false,status:'DUPLICATE_SUPPRESSED',reason:'CROSS_RADAR_SYMBOL_COOLDOWN',retryAfterMs:cooldownMs-(now-lastSent)};
+      // Confirmed alerts are deliberately sparse: one per minute and at most three per rolling 15 minutes.
+      // Watch-only observations are handled as feed-only above and never reach the provider.
+      const categoryAttempts=category==='WATCH_ONLY'?watchAttempts:marketAttempts;
+      const maxPerMinute=category==='WATCH_ONLY'?0:1;
+      if(!isRetry&&category==='MARKET'&&marketAttempts15m.length>=3)
+        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_CONFIRMED_MARKET_PUSHES_PER_15_MINUTES',retryAfterMs:Math.max(1000,15*60_000-(now-marketAttempts15m[0]))};
+      if(isRetry&&!hasRetryReservation)
+        return{ok:false,status:'RETRY_BLOCKED',reason:'RETRY_EVENT_NOT_PREVIOUSLY_RESERVED'};
+      if(isRetry&&retryAttempts.length>=3)
+        return{ok:false,status:'RATE_LIMITED',reason:'MAX_3_RETRIES_PER_MINUTE',retryAfterMs:Math.max(1000,60_000-(now-retryAttempts[0]))};
+      if(!isRetry&&categoryAttempts.length>=maxPerMinute)
+        return{ok:false,status:'RATE_LIMITED',
+          reason:category==='WATCH_ONLY'?'WATCH_ONLY_FEED_ONLY':'MAX_1_CONFIRMED_MARKET_PUSH_PER_MINUTE',
+          retryAfterMs:Math.max(1000,60_000-(now-categoryAttempts[0]))};
+      const nextRecentEvents=eventId?[...recentEvents.filter(row=>row.id!==eventId||row.category!==category),{id:eventId,category,at:now}].slice(-100):recentEvents;
+      const nextState={
+        version:1,attempts:[...attempts,now],
+        market_attempts:category==='MARKET'?[...marketAttempts,now]:marketAttempts,
+        market_attempts_15m:category==='MARKET'?[...marketAttempts15m,now]:marketAttempts15m,
+        watch_attempts:category==='WATCH_ONLY'?[...watchAttempts,now]:watchAttempts,
+        retry_attempts:isRetry?[...retryAttempts,now]:retryAttempts,
+        recent_events:nextRecentEvents,
+        sent_by_symbol:sentBySymbol,updated_at:now
+      };
+      try{
+        if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+          await this.store.putDedupKey(guardKey,nextState);
+        else this.pushGuardMemory.set(guardKey,nextState);
+      }catch(error){return{ok:false,status:'PUSH_GUARD_UNAVAILABLE',reason:'PUSH_GUARD_WRITE_FAILED'};}
+      let response;
+      try{response=await this.provider.send(subscription,notification);}
+      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
+      if(response?.ok===true||response?.status==='SENT'){
+        if(symbolKey)nextState.sent_by_symbol[symbolKey]=now;
+        nextState.updated_at=now;
+        try{
+          if(typeof this.store?.getDedupKey==='function'&&typeof this.store?.putDedupKey==='function')
+            await this.store.putDedupKey(guardKey,nextState);
+          else this.pushGuardMemory.set(guardKey,nextState);
+        }catch(error){
+          // The pre-send attempt reservation remains durable; keep this process protected too.
+          this.pushGuardMemory.set(guardKey,nextState);
+        }
+      }
+      return response;
+    });
+    this.pushGuardQueues.set(queueKey,task);
+    try{return await task;}
+    finally{if(this.pushGuardQueues.get(queueKey)===task)this.pushGuardQueues.delete(queueKey);}
+  }
   providerSubscriptions(rows){
     const provider=this.provider.status()?.provider;
     if(provider==='fcm')return rows.filter(row=>row.provider==='fcm');
@@ -200,12 +313,38 @@ export class PushManager{
     return rows;
   }
   async notifySignal(signal){
+    const signalType=String(signal?.signal_type||'').trim().toUpperCase();
+    const direction=String(signal?.direction||signal?.bias||'').trim().toUpperCase();
+    const lifecycleState=String(signal?.signal_lifecycle_state??signal?.signal_lifecycle?.state??'').trim().toUpperCase();
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
+    const risingDirection=/^(UP|LONG|BULL)/.test(direction);
+    const confirmed=signalType==='CONFIRMED'&&risingDirection&&!lifecycleConflicts&&signal?.watch_only!==true&&signal?.entry_eligible!==false&&
+      signal?.notification_gate?.eligible!==false&&signal?.notification_gate?.watch_only!==true&&
+      signal?.notification_gate?.requires_follow_up_confirmation!==true;
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),cache=new Map(),out=[];
     for(const sub of rows){
       let settings=cache.get(sub.user_id);if(!settings){settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();cache.set(sub.user_id,settings);}
       if(!settings.enabled||!settings.symbols.includes(signal.symbol)||!settings.timeframes.includes(signal.candle?.timeframe)||!settings.signalTypes.includes(signal.signal_type))continue;
-      if(Number(signal.scores?.data_quality)<settings.minDataQuality||Number(signal.scores?.liquidity_quality)<settings.minLiquidityQuality)continue;
-      const r=await this.provider.send(sub,payload(signal,Date.now())),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
+      if(!confirmed){
+        const risingDenied=!risingDirection;
+        const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),signal_id:signal.signal_id,
+          subscription_id:sub.id,user_id:sub.user_id,status:risingDenied?'SUPPRESSED_NON_RISING':'SUPPRESSED_UNCONFIRMED',
+          provider:this.provider.status().provider,attempted_at:Date.now(),
+          reason:risingDenied?'RISING_DIRECTION_REQUIRED':lifecycleConflicts?'CONFLICTING_LIFECYCLE_STATE':
+            signal?.notification_gate?.requires_follow_up_confirmation===true?'FINAL_CONFIRMATION_REQUIRED':'FINAL_CONFIRMATION_REQUIRED',
+          http_status:null,attempted:false};
+        await this.store.appendNotificationAudit(audit);out.push(audit);continue;
+      }
+      const dataQuality=Number(signal.scores?.data_quality),liquidityQuality=Number(signal.scores?.liquidity_quality);
+      if(!Number.isFinite(dataQuality)||!Number.isFinite(liquidityQuality)||
+         dataQuality<settings.minDataQuality||liquidityQuality<settings.minLiquidityQuality){
+        const audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
+          signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:'SUPPRESSED_QUALITY',
+          provider:this.provider.status().provider,attempted_at:Date.now(),reason:'DATA_AND_LIQUIDITY_QUALITY_REQUIRED',
+          http_status:null,attempted:false};
+        await this.store.appendNotificationAudit(audit);out.push(audit);continue;
+      }
+      const r=await this.sendMarketPush(sub,payload(signal,Date.now()),'MARKET'),audit={event:'NOTIFICATION_ATTEMPT',event_class:marketEventClass(signal.data_status?.source??signal.source),
         signal_id:signal.signal_id,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         provider:this.provider.status().provider,attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
       await this.store.appendNotificationAudit(audit);out.push(audit);
@@ -518,62 +657,30 @@ export class PushManager{
       attempted:false,notifications:[],sent_count:0,attempted_count:0
     };
 
-    if(this.deduplicator){
-      const dedupSignal={
-        symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},
-        reason_codes:['RADAR_WATCH_ONLY',String(alert?.radar||'UNKNOWN_RADAR'),event]
-      };
-      const check=await this.deduplicator.canEmit(dedupSignal,now);
-      if(!check.allowed)return {
-        status:'DUPLICATE_SUPPRESSED',reason:check.reason||'DUPLICATE_SIGNAL',
-        attempted:false,notifications:[],sent_count:0,attempted_count:0
-      };
-      await this.deduplicator.markEmitted(dedupSignal,now);
-    }
-
-    const out=[];
+    const notifications=[];
     for(const sub of recipients){
-      let response;
-      try{response=await this.provider.send(sub,radarPayload({
-        ...alert,market:'SPOT',price,watch_only:true,entry_eligible:false,
-        paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
-      },Date.now()));}
-      catch(error){response={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit={
         event:'RADAR_WATCH_ONLY_NOTIFICATION',event_class:'RADAR_ALERT',
         radar:String(alert?.radar||'EARLY_EXPANSION_RADAR'),radar_name:radarTitle(alert),
         symbol,alert_id:alert?.id||null,subscription_id:sub.id,user_id:sub.user_id,
-        status:response?.status||'FAILED',provider:providerStatus.provider||'unknown',
-        attempted_at:Date.now(),reason:response?.reason??null,http_status:response?.httpStatus??null,
-        watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+        status:'WATCH_ONLY_FEED_ONLY',provider:providerStatus.provider||'unknown',
+        attempted_at:Date.now(),reason:'FINAL_CONFIRMATION_REQUIRED',http_status:null,
+        attempted:false,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
         confidence_score:'UNKNOWN',data_quality:dataQuality,liquidity_quality:liquidityQuality,
         micro_data_validated:microValidatedEarlyFlow,
         liquidity_evidence_status:microValidatedEarlyFlow?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE':null,
-        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,
-        event_type:event,source
+        quote_volume_24h:microValidatedEarlyFlow?quoteVolume24h:null,event_type:event,source
       };
       try{await this.store.appendNotificationAudit(audit);}catch{}
-      out.push(audit);
-      if(response?.status==='GONE'){
-        try{await this.store.disableSubscription(sub.id);}catch{}
-      } else if(response?.status==='FAILED'){
-        // Keep retries tied to this exact, stable watch event and subscription.
-        // Retried pushes remain WATCH_ONLY and expire if their closed-candle evidence ages out.
-        const retryKey=String(sub.id)+'|RADAR_WATCH_ONLY|'+String(alert?.id||symbol+'|'+event);
-        this.retryQueue.set(retryKey,{
-          kind:'RADAR_WATCH_ONLY',subscription:sub,
-          alert:{...alert,market:'SPOT',watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},
-          nextAt:Date.now()+this.retryBaseMs,attempt:1
-        });
-      }
+      notifications.push(audit);
     }
-    const sent=out.filter(x=>x.status==='SENT').length;
     return {
-      status:sent?'SENT':out.length?'FAILED':'NO_ELIGIBLE_SUBSCRIPTIONS',
-      attempted:out.length>0,notifications:out,sent_count:sent,attempted_count:out.length,
-      watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
+      status:'WATCH_ONLY_FEED_ONLY',reason:'FINAL_CONFIRMATION_REQUIRED',attempted:false,
+      notifications,sent_count:0,attempted_count:0,watch_only:true,entry_eligible:false,
+      paper_trading:true,real_order_execution:false
     };
   }
+
   async notifyRadarAlert(alert){
     const gate=alert?.notification_gate||alert?.elite_gate||{};
     // A qualified early-track gate is a monitoring notification, not an entry alert.
@@ -613,6 +720,24 @@ export class PushManager{
        alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
       return [];
     }
+    // Alert delivery is public Spot/paper-only. Missing policy fields fail closed.
+    if(String(alert?.market||'').trim().toUpperCase()!=='SPOT'||
+       alert?.paper_trading!==true||alert?.real_order_execution!==false)return [];
+    // An "eligible" bit alone is not confirmation. Require the shared gate's strict mode,
+    // an explicit confirmed lifecycle, or a fully measured Elite gate when no shared gate exists.
+    const elite=alert?.elite_gate;
+    const eliteGateConfirmed=!alert?.notification_gate&&elite?.eligible===true&&
+      Number.isFinite(Number(elite.confirmations))&&Number(elite.confirmations)>=Number(elite.min_confirmations??6)&&
+      Number.isFinite(Number(elite.category_hits))&&Number(elite.category_hits)>=Number(elite.min_category_hits??1);
+    const lifecycleState=String(alert?.signal_lifecycle?.state??alert?.signal_lifecycle_state??'').trim().toUpperCase();
+    const lifecycleConfirmed=lifecycleState==='CONFIRMED';
+    const lifecycleConflicts=Boolean(lifecycleState&&lifecycleState!=='CONFIRMED');
+    const strictConfirmation=gate?.mode==='STRICT_NOTIFICATION'||(!alert?.notification_gate&&eliteGateConfirmed)||lifecycleConfirmed;
+    if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
+       alert?.entry_eligible!==true||alert?.watch_only===true||alert?.eligible===false||
+       lifecycleConflicts||!strictConfirmation)return [];
+    const direction=String(alert?.direction??alert?.bias??'').trim().toUpperCase();
+    if(!/^(UP|LONG|BULL)/.test(direction))return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
@@ -643,8 +768,36 @@ export class PushManager{
         alert?.falcon_eye?.data_quality ??
         0
       );
-      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality))continue;
-      const r=await this.provider.send(sub,radarPayload(alert,Date.now()));
+      const lq=Number(
+        alert?.liquidity_quality ??
+        alert?.data_status?.liquidity_quality ??
+        alert?.liquidity_metrics?.liquidity_quality ??
+        alert?.components?.liquidity_quality ??
+        alert?.components?.liquidity ??
+        alert?.early_move?.liquidity_quality ??
+        alert?.early_wake?.liquidity_quality ??
+        alert?.pre_explosion?.liquidity_quality ??
+        alert?.strong_move?.liquidity_quality ??
+        alert?.rotation?.liquidity_quality ??
+        alert?.liquidity_absorption?.liquidity_quality ??
+        alert?.kahir_analysis?.liquidity_quality ??
+        alert?.analysis?.liquidity_quality ??
+        alert?.analysis?.liquidity_score ??
+        alert?.doomsday?.liquidity_quality ??
+        alert?.professor_opinion?.liquidity_quality ??
+        alert?.deep_scan?.assessment?.liquidity_quality ??
+        alert?.deep_scan?.assessment?.liquidity_score ??
+        alert?.almuqawim?.liquidity_quality ??
+        alert?.early_expansion?.liquidity_quality ??
+        alert?.coin_hunter?.liquidity_quality ??
+        alert?.factors?.liquidity_quality ??
+        alert?.whale_accumulation?.liquidity_quality ??
+        alert?.falcon_eye?.liquidity_quality ??
+        Number.NaN
+      );
+      if(!Number.isFinite(dq)||dq<Number(settings.minDataQuality)||
+         !Number.isFinite(lq)||lq<Number(settings.minLiquidityQuality))continue;
+      const r=await this.sendMarketPush(sub,radarPayload(alert,Date.now(),'STRICT_NOTIFICATION'),'MARKET');
       const audit={event:'RADAR_ALERT_NOTIFICATION',event_class:'RADAR_ALERT',radar:alert.radar||'UNKNOWN_RADAR',radar_name:radarTitle(alert),
         symbol:alert.symbol,alert_id:alert.id||null,subscription_id:sub.id,user_id:sub.user_id,status:r.status,
         attempted_at:Date.now(),reason:r.reason??null,http_status:r.httpStatus??null};
@@ -713,9 +866,9 @@ export class PushManager{
       let r;
       try{
         r=watchOnly
-          ?await this.provider.send(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
-            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now))
-          :await this.provider.send(j.subscription,payload(j.signal,now));
+          ?await this.sendMarketPush(j.subscription,radarPayload({...j.alert,market:'SPOT',watch_only:true,entry_eligible:false,
+            paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'},now),'WATCH_ONLY',now,true)
+          :await this.sendMarketPush(j.subscription,payload(j.signal,now),'MARKET',now,true);
       }catch(error){r={ok:false,status:'FAILED',reason:String(error?.message??error).slice(0,160)};}
       const audit=watchOnly?{
         event:'RADAR_WATCH_ONLY_NOTIFICATION_RETRY',event_class:'RADAR_ALERT',radar:String(j.alert?.radar||'PRE_MOVE'),

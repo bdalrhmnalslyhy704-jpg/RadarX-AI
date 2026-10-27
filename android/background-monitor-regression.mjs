@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
+const firebase = await readFile('android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java', 'utf8');
+const notificationPolicy = await readFile('android/app/src/main/java/com/radarx/app/RadarXNotificationPolicy.java', 'utf8');
 const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
 const manifest = await readFile('android/app/src/main/AndroidManifest.xml', 'utf8');
 const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
@@ -46,6 +48,73 @@ assert.doesNotMatch(service, /candidates = body\.optJSONArray\("candidates"\)/,
   'unqualified radar analysis candidates must never be promoted into Android notifications');
 assert.match(service, /private static boolean isActionableRadarAlert\(JSONObject alert\)/,
   'Android must enforce a shared last-mile notification eligibility gate');
+assert.doesNotMatch(service, /pollPreMoveWatchOnlyAlertsSafely\(\);/,
+  'the active background loop must not turn every early watch into a local phone notification');
+assert.match(service, /PRE_MOVE_WATCH_FEED_ONLY_LOCAL_PUSH_DISABLED/,
+  'early pre-move monitoring must stay inside the app, not post local Android notifications');
+assert.match(service, /PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED/,
+  'the obsolete local watch notifier must fail closed if called by any future code');
+assert.doesNotMatch(service, /manager\.notify\("radarx_premove_watch"/,
+  'no Android local notification path may post a watch-only candidate');
+assert.match(service, /if \(!alert\.optBoolean\("entry_eligible", false\)\) return false;/,
+  'phone alerts must require explicit entry eligibility; missing fields do not count as approval');
+assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
+  'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
+assert.match(service, /if \(!risingDirection \|\| !finalConfirmation\) return false;/,
+  'only confirmed rising opportunities may pass Android last-mile');
+
+assert.match(service, /if \(!alert\.optBoolean\("closed_candles_only", false\)\) return false;/,
+  'Android must reject alerts that do not explicitly use closed-candle evidence');
+assert.match(service, /!Double\.isFinite\(dataQuality\) \|\| dataQuality < 70\.0/,
+  'Android must suppress phone alerts with missing or weak measured data quality');
+assert.match(service, /!Double\.isFinite\(liquidityQuality\) \|\| liquidityQuality < 60\.0/,
+  'Android must suppress phone alerts with missing or weak measured liquidity quality');
+assert.match(service, /notificationGate\.optBoolean\("watch_only", false\)/,
+  'a strict-looking gate marked watch-only cannot pass the local alert boundary');
+assert.match(service, /notificationGate\.optBoolean\("requires_follow_up_confirmation", false\)/,
+  'a strict-looking gate that still requires confirmation cannot pass the local alert boundary');
+assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
+  'Android phone alerts must be for upward/rising opportunities only');
+assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
+  'Firebase must suppress queued or legacy monitor-only pushes at the device boundary');
+assert.ok(firebase.includes('matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*")'),
+  'a final confirmed Pre-Move signal must not be suppressed merely because its radar name contains PRE_MOVE');
+
+assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
+  'Firebase must require entry_eligible=true before posting a phone notification');
+assert.match(firebase, /boolean notificationGateEligible = Boolean\.parseBoolean/,
+  'Firebase must require explicit notification gate eligibility before posting');
+assert.match(firebase, /boolean lifecycleConflicts = !lifecycleState\.isEmpty\(\) && !"CONFIRMED"\.equals\(lifecycleState\)/,
+  'Firebase must reject a lifecycle that conflicts with a strict-looking gate');
+assert.match(firebase, /boolean finalConfirmation = !lifecycleConflicts && \(/,
+  'Firebase must require an internally consistent final confirmation state');
+assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
+  'Firebase must put the watch, rising-direction and entry gates before posting');
+assert.match(firebase, /!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation/,
+  'Firebase must not render messages without eligible gate and internally consistent final confirmation');
+assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
+  'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
+assert.match(service, /RadarXNotificationPolicy\.reserve/,
+  'the background alert feed must share the device notification budget with FCM');
+assert.match(firebase, /RadarXNotificationPolicy\.reserve/,
+  'Firebase delivery must use the same per-device budget as the background feed');
+assert.match(notificationPolicy, /ONE_MINUTE_MS = 60_000L/,
+  'device policy must permit at most one confirmed notification per minute');
+assert.match(notificationPolicy, /FIFTEEN_MINUTES_MS = 15 \* 60_000L/,
+  'device policy must enforce a rolling fifteen-minute quota');
+assert.match(notificationPolicy, /SYMBOL_COOLDOWN_MS = 10 \* 60_000L/,
+  'device policy must suppress the same confirmed symbol across radars for ten minutes');
+assert.match(notificationPolicy, /FileLock ignored = lockChannel\.lock\(\)/,
+  'device quota must coordinate the foreground and background Android processes atomically');
+assert.match(service, /ALERT_SUPPRESSED_DEVICE_NOTIFICATION_BUDGET/,
+  'suppressed archived alerts must be consumed rather than queued into a later notification burst');
+assert.match(firebase, /FCM_NOTIFICATION_SUPPRESSED_DEVICE_BUDGET/,
+  'FCM messages above the shared budget must be suppressed on device');
+
+assert.doesNotMatch(firebase, /manager\.notify\("radarx_premove_watch"/,
+  'the FCM client must have no separate local notification lane for pre-move watches');
+
+
 assert.match(service, /boolean eligible = isActionableRadarAlert\(alert\)/,
   'durable and fallback feeds must use the shared notification gate');
 assert.match(service, /alert\.optBoolean\("watch_only", false\)/);
