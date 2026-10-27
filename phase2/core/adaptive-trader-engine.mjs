@@ -45,8 +45,15 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const quoteVolume24h = finite(ticker?.quoteVolume ?? ticker?.quote_volume_24h);
   const change24hPct = finite(ticker?.priceChangePercent ?? ticker?.price_change_24h);
   const receivedAt = finite(klines?.receivedAt);
+  const scanStartedAt = finite(now) ?? Date.now();
+  // REST receive time is local transport metadata, not exchange candle time. A
+  // slow scan may finish after scanStartedAt; evaluate candles at the response
+  // time instead of misclassifying that fresh response as data from the future.
+  const evaluationNow = receivedAt !== null && receivedAt <= scanStartedAt + 5 * 60 * 1000
+    ? Math.max(scanStartedAt, receivedAt)
+    : scanStartedAt;
   const candles = (Array.isArray(klines?.data) ? klines.data : Array.isArray(klines) ? klines : [])
-    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < Number(now))
+    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < evaluationNow)
     .sort((a, b) => a.closeTime - b.closeTime);
   const source = String(klines?.source || 'BINANCE_PUBLIC_REST');
 
@@ -69,11 +76,11 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
       change24hPct === null) {
     return { ...base, tier: 'DATA_REJECTED', score: null, reason_codes: ['UNIVERSE_OR_TICKER_GATE'] };
   }
-  if (receivedAt !== null && (receivedAt > Number(now) + 5000 || Number(now) - receivedAt > 5 * 60 * 1000)) {
+  if (receivedAt !== null && (receivedAt > scanStartedAt + 5 * 60 * 1000 || scanStartedAt - receivedAt > 5 * 60 * 1000)) {
     return { ...base, data_stale: true, tier: 'DATA_REJECTED', score: null, reason_codes: ['TICKER_SNAPSHOT_STALE_OR_FUTURE'] };
   }
   if (candles.length < POLICY.minClosedCandles) {
-    return { ...base, data_stale: candles.length > 0 && Number(now) - candles[candles.length - 1].closeTime > POLICY.maxCandleAgeMs,
+    return { ...base, data_stale: candles.length > 0 && evaluationNow - candles[candles.length - 1].closeTime > POLICY.maxCandleAgeMs,
       tier: 'DATA_REJECTED', score: null, reason_codes: ['INSUFFICIENT_CLOSED_CANDLES'] };
   }
 
@@ -84,7 +91,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   if (hasCandleGaps) {
     return { ...base, tier: 'DATA_REJECTED', score: null, reason_codes: ['CLOSED_CANDLE_GAPS'] };
   }
-  const candleAgeMs = Number(now) - current.closeTime;
+  const candleAgeMs = evaluationNow - current.closeTime;
   if (candleAgeMs < 0 || candleAgeMs > POLICY.maxCandleAgeMs) {
     return { ...base, data_stale: true, tier: 'DATA_REJECTED', score: null, candle_age_ms: candleAgeMs,
       reason_codes: ['CLOSED_CANDLE_STALE_OR_FUTURE'] };
@@ -113,11 +120,11 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const oneHourReturnPct = candles.length >= 5 ? pct(current.close, candles[candles.length - 5].close) : null;
   const shortReturnPct = candles.length >= 2 ? pct(current.close, candles[candles.length - 2].close) : null;
   const btcCandles = (Array.isArray(btcKlines?.data) ? btcKlines.data : Array.isArray(btcKlines) ? btcKlines : [])
-    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
+    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < evaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
   const btcLast = btcCandles[btcCandles.length-1];
   const btcRecent = btcCandles.slice(-5);
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
-  const btcOneHourReturnPct = btcContiguous && btcLast && Number(now)-btcLast.closeTime<=POLICY.maxCandleAgeMs
+  const btcOneHourReturnPct = btcContiguous && btcLast && evaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
@@ -169,7 +176,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
     ...base,
     data_valid: true,
     data_stale: false,
-    as_of: new Date(Number(now)).toISOString(),
+    as_of: new Date(evaluationNow).toISOString(),
     candle_close_time: current.closeTime,
     candle_age_ms: candleAgeMs,
     score,
