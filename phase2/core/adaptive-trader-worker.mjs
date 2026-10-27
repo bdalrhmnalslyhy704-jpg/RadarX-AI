@@ -9,7 +9,7 @@ const SAMPLE_HORIZON_MS=4*60*60*1000;
 const HISTORY_MIN_INTERVAL_MS=15*60*1000;
 const SNAPSHOT_LIMIT=40;
 const MAX_SAMPLES=1000;
-const MAX_HISTORY=5000;
+const MAX_HISTORY=15000;
 const MAX_MISSED=500;
 
 function emptyState(){
@@ -199,6 +199,9 @@ export class AdaptiveTraderWorker{
     const ids=new Set(this.state.missed_movers.map(row=>row.id));
     for(const event of events){
       if(ids.has(event.id))continue;
+      const alreadyReported=(this.state.missed_movers||[]).some(row=>
+        row.symbol===event.symbol&&now-Number(row.recorded_at||0)<6*60*60*1000);
+      if(alreadyReported)continue;
       this.state.missed_movers.unshift({...event,recorded_at:now});
       ids.add(event.id);
     }
