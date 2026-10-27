@@ -579,7 +579,7 @@ export class PushManager{
     if(this.deduplicator){
       const dedupSignal={
         symbol,direction:'NONE',candle:{timeframe:'WATCH_ONLY'},
-        reason_codes:['RADAR_WATCH_ONLY',String(alert?.radar||'UNKNOWN_RADAR'),event]
+        reason_codes:['RADAR_WATCH_ONLY']
       };
       const check=await this.deduplicator.canEmit(dedupSignal,now);
       if(!check.allowed)return {
