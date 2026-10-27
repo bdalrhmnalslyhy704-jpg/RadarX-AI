@@ -682,10 +682,16 @@ export class PushManager{
        alert?.eligible===false||/WATCH_ONLY|WATCH_EARLY/.test(watchLabel)){
       return [];
     }
-    // A generic radar alert can push only after an explicit final, non-watch gate passes.
-    // Missing a gate, requesting follow-up confirmation, or retaining a watch-only state keeps it in-app.
+    // An "eligible" bit alone is not confirmation. Require the shared gate's strict mode,
+    // an explicit confirmed lifecycle, or a fully measured Elite gate when no shared gate exists.
+    const elite=alert?.elite_gate;
+    const eliteGateConfirmed=!alert?.notification_gate&&elite?.eligible===true&&
+      Number.isFinite(Number(elite.confirmations))&&Number(elite.confirmations)>=Number(elite.min_confirmations??6)&&
+      Number.isFinite(Number(elite.category_hits))&&Number(elite.category_hits)>=Number(elite.min_category_hits??1);
+    const lifecycleConfirmed=alert?.signal_lifecycle?.state==='CONFIRMED'||alert?.signal_lifecycle_state==='CONFIRMED';
+    const strictConfirmation=gate?.mode==='STRICT_NOTIFICATION'||(!alert?.notification_gate&&eliteGateConfirmed)||lifecycleConfirmed;
     if(gate?.eligible!==true||gate?.watch_only===true||gate?.requires_follow_up_confirmation===true||
-       alert?.entry_eligible===false||alert?.watch_only===true||alert?.eligible===false)return [];
+       alert?.entry_eligible===false||alert?.watch_only===true||alert?.eligible===false||!strictConfirmation)return [];
     const rows=this.providerSubscriptions(await this.store.getSubscriptions()),out=[];
     for(const sub of rows){
       const settings=await this.store.getUserSettings(sub.user_id)||defaultSettings();
