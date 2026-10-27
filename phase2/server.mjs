@@ -241,7 +241,7 @@ export async function startServer({
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   // The sidecar has its own durable file and read-only scanner; it never writes into radar signal stores.
   // Like the other market workers, it remains off in the protected staging smoke mode.
-  if(config.environment!=='staging'||config.radarControl?.autostart===true){
+  if(config.environment==='production'||config.radarControl?.autostart===true){
     safeStart('ADAPTIVE_TRADER_SIDECAR',adaptiveTraderWorker);
   }
   const safeStart=(name,instance)=>{
