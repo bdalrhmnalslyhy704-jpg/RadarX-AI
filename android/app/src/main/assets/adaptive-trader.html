@@ -90,8 +90,8 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
   <div class="control-group">
     <label class="muted" for="universeLimit" style="font-size:10px">حجم فحص السوق</label>
     <select id="universeLimit" class="select">
-      <option value="40">40 زوجًا</option>
-      <option value="80" selected>80 زوجًا</option>
+      <option value="40" selected>40 زوجًا</option>
+      <option value="80">80 زوجًا</option>
       <option value="120">120 زوجًا</option>
     </select>
     <label class="toggle"><input type="checkbox" id="paperToggle"> تشغيل محاكاة الصفقات تلقائيًا</label>
@@ -219,7 +219,10 @@ function persist(){
     state.missedMovers=state.missedMovers.slice(-MAX_MISSED);
     state.journal=state.journal.slice(-150);
     localStorage.setItem(STORAGE_KEY,JSON.stringify(state));
-    el('memoryText').textContent='الذاكرة المحلية: '+state.samples.filter(x=>x.outcome).length+' نتائج مكتملة';
+    const worker=state.serverStatus;
+    el('memoryText').textContent=worker
+      ?'ذاكرة الخادم المنفصلة: '+(Number(worker.memory?.resolved_samples)||0)+' نتائج مكتملة · '+String(worker.status||'غير معروف')
+      :'ذاكرة محلية احتياطية: '+state.samples.filter(x=>x.outcome).length+' نتائج مكتملة';
   }catch(error){
     el('memoryText').textContent='تعذر حفظ الذاكرة المحلية؛ صدّر البيانات للاحتفاظ بها.';
     addJournal('تحذير: مساحة التخزين المحلية غير كافية أو غير متاحة.', 'warning');
@@ -232,7 +235,11 @@ function fmt(value,d=2){const n=num(value);return n===null?'—':n.toLocaleStrin
 function money(value){const n=num(value);return n===null?'—':'$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function percent(value){const n=num(value);return n===null?'—':(n>0?'+':'')+fmt(n,2)+'%';}
 function timeText(value){const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ar',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'});}
-function profile(){return buildAdaptiveLearningProfile(state.samples);}
+function profile(){
+  const remote=state.serverStatus?.learning_profile;
+  if(remote&&(remote.ready===true||(Number(remote.resolved_samples)||0)>0))return remote;
+  return buildAdaptiveLearningProfile(state.samples);
+}
 function displayScore(candidate){return applyAdaptiveLearning(candidate.score,candidate.features||{},profile());}
 function addJournal(message,kind='info',at=Date.now()){
   state.journal.push({at:Number(at),message:String(message),kind});
@@ -250,14 +257,17 @@ function updateLabels(snapshot){
   el('kpiCoverage').textContent=fmt(universe.coverage_pct,1)+'% من الأزواج المؤهلة'+(universe.scan_complete?' · كاملة':' · تغطية جزئية');
   el('kpiEarly').textContent=(snapshot.candidates||[]).filter(x=>x.data_valid&&x.tier==='EARLY_SETUP').length;
   el('asOfText').textContent='وقت قراءة البيانات: '+timeText(snapshot.as_of);
-  el('sourceText').textContent='المصدر: '+String(snapshot.source||'غير متاح')+' · شموع مغلقة فقط';
+  const worker=state.serverStatus;
+  el('sourceText').textContent='المصدر: '+String(snapshot.source||'غير متاح')+' · شموع مغلقة فقط'+(worker?' · مراقبة الخادم: '+String(worker.status||'غير متاح'):'');
   el('kpiEquity').textContent=money(estimatePaperEquity(state.portfolio));
   const closed=state.portfolio.closed_trades||[];
   const net=closed.reduce((sum,row)=>sum+(num(row.net_pnl)||0),0);
   el('kpiPnl').textContent=closed.length?('صافي محاكاة مغلقة: '+money(net)):'لا توجد صفقات مغلقة';
   const wins=closed.filter(x=>(num(x.net_pnl)||0)>0).length;
   el('kpiWinRate').textContent=closed.length?fmt(wins/closed.length*100,1)+'%':'—';
-  el('kpiMissed').textContent=String(state.missedMovers.filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length);
+  const remoteMissed=Array.isArray(state.serverStatus?.missed_movers)?state.serverStatus.missed_movers:[];
+  const missedMap=new Map([...remoteMissed,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
+  el('kpiMissed').textContent=String([...missedMap.values()].filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length);
   el('candidateCaption').textContent='الترتيب لا يمثل احتمال ربح · '+(universe.scan_complete?'تغطية كاملة لهذه العينة':'لم تُحلّل كل الأزواج المؤهلة');
 }
 function resolveLearningSamples(snapshot,now){
@@ -348,6 +358,22 @@ function applySnapshot(snapshot){
   persist();
   render();
 }
+async function refreshWorkerStatus(){
+  try{
+    const response=await fetch(API_BASE+'/api/adaptive-trader/status',{method:'GET',cache:'no-store',headers:{Accept:'application/json'}});
+    const value=await response.json();
+    if(!response.ok||value.real_order_execution!==false||value.paper_trading!==true)throw new Error(value.error||'WORKER_STATUS_NOT_VERIFIED');
+    const previous=state.serverStatus?.status;
+    state.serverStatus=value;
+    if(previous&&previous!==value.status)addJournal('تغيّرت حالة المتداول الخادمي إلى '+String(value.status)+'.',value.status==='DEGRADED'?'warning':'info');
+    persist();render();
+    return true;
+  }catch(error){
+    if(!state.serverStatus)addJournal('حالة ذاكرة الخادم غير متاحة حاليًا؛ لم تُختلق بيانات. '+String(error?.message||error),'warning');
+    return false;
+  }
+}
+
 async function scanMarket(){
   if(scanBusy)return;
   scanBusy=true;
@@ -364,6 +390,8 @@ async function scanMarket(){
       throw new Error(snapshot.reason||snapshot.error||'LIVE_MARKET_DATA_NOT_VERIFIED');
     }
     applySnapshot(snapshot);
+    await refreshWorkerStatus();
+    render();
     setStatus(snapshot.universe.scan_complete?'اكتمل المسح الحي':'بيانات حية — تغطية جزئية ظاهرة', 'good');
   }catch(error){
     setStatus('تعذر التحقق من بيانات السوق الحية', 'bad');
@@ -405,9 +433,12 @@ function renderCandidates(snapshot){
 }
 function renderMissed(){
   const root=el('missedList');
-  if(!state.missedMovers.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
+  const serverRows=Array.isArray(state.serverStatus?.missed_movers)?state.serverStatus.missed_movers:[];
+  const merged=new Map([...serverRows,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
+  const rows=[...merged.values()].sort((a,b)=>Number(b.recorded_at||Date.parse(b.baseline_at)||0)-Number(a.recorded_at||Date.parse(a.baseline_at)||0));
+  if(!rows.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
   root.innerHTML='<div class="table-wrap"><table><thead><tr><th>العملة</th><th>التصنيف</th><th>السعر السابق</th><th>السعر الحالي</th><th>التغير</th><th>وقت خط الأساس</th></tr></thead><tbody>'+
-    state.missedMovers.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'إشارة محتملة فاتتنا':row.classification==='UNASSESSED_MOVE'?'حركة لم تُحلّل':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
+    rows.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'إشارة محتملة فاتتنا':row.classification==='UNASSESSED_MOVE'?'حركة لم تُحلّل':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
     '</tbody></table></div>';
 }
 function renderPortfolio(){
@@ -426,13 +457,14 @@ function renderPortfolio(){
 function renderLearning(){
   const rows=state.samples.filter(row=>row.outcome);
   const model=profile();
+  const resolvedCount=Number(model.resolved_samples)||rows.length;
   el('learnStatus').textContent=model.ready?'المعايرة مفعّلة على الترتيب فقط':'الانتظار حتى اكتمال العينة';
   el('learnStatus').className='tag '+(model.ready?'early':'watch');
   el('learnDescription').textContent=model.ready
     ?'اكتمل عدد النتائج المطلوب؛ تُطبّق تعديلات محدودة على ترتيب المرشحين فقط. قواعد الدخول والرادارات الأصلية والتنفيذ الحقيقي لا تتغير.'
     :'المنظومة تحفظ النتائج وتنتظر أمثلة حقيقية مرصودة لمدة أربع ساعات على الأقل. لن تدّعي أنها تعلمت قبل اكتمال العينة.';
   el('learnProgress').style.width=Math.min(100,rows.length/30*100)+'%';
-  el('learnCount').textContent=rows.length+' من 30 نتيجة مكتملة · معدل النتائج الإيجابية '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)';
+  el('learnCount').textContent=resolvedCount+' من 30 نتيجة مكتملة · معدل النتائج الإيجابية '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+(state.serverStatus?' · ذاكرة خادمية منفصلة':'');
   const labels={volume:'تسارع الحجم',buyer_flow:'ضغط الشراء',structure:'البنية السعرية',compression:'انكماش التذبذب'};
   el('learnAdjustments').innerHTML=Object.keys(labels).map(function(key){
     const value=num(model.adjustments[key])||0;
@@ -493,7 +525,9 @@ el('paperToggle').addEventListener('change',function(){
 document.querySelectorAll('[data-tab]').forEach(function(button){button.addEventListener('click',function(){showTab(button.getAttribute('data-tab'));});});
 render();
 setStatus(state.lastSnapshot?'آخر عرض محفوظ محليًا — نفّذ فحصًا جديدًا للتأكد من الحالة الحية':'جاهز لفحص السوق الحقيقي','idle');
-if(!state.lastSnapshot)addJournal('تهيئة المتداول الجانبي: التنفيذ الحقيقي معطل، والذاكرة محلية.');
+if(!state.lastSnapshot)addJournal('تهيئة المتداول الجانبي: التنفيذ الحقيقي معطل، والذاكرة محلية مع مراقبة خادمية منفصلة.');
+void refreshWorkerStatus();
+setInterval(function(){if(document.visibilityState==='visible')void refreshWorkerStatus();},60*1000);
 // Poll only while this page is visible; this sidecar never changes the original radar workers.
 setInterval(function(){if(document.visibilityState==='visible'&&!scanBusy)void scanMarket();},5*60*1000);
 if(!state.lastSnapshot)setTimeout(function(){if(document.visibilityState==='visible')void scanMarket();},500);
