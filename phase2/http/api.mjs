@@ -1634,11 +1634,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
            !Number.isFinite(windowHours)||windowHours<6||windowHours>48||
            !Number.isFinite(leadMinutes)||leadMinutes<15||leadMinutes>240)
           return send(res,400,{error:'INVALID_CASE_STUDY_OPTIONS',accepted:{threshold_pct:'1..30',window_hours:'6..48',lead_minutes:'15..240'},...denied});
-        const asOf=Date.now();
+        const wallClockNow=Date.now();
+        const asOfRaw=String(u.searchParams.get('as_of')||'').trim();
+        let asOf=wallClockNow;
+        if(asOfRaw){
+          if(/^\\d{13}$/.test(asOfRaw))asOf=Number(asOfRaw);
+          else if(/^\\d{10}$/.test(asOfRaw))asOf=Number(asOfRaw)*1000;
+          else asOf=Date.parse(asOfRaw);
+          if(!Number.isFinite(asOf)||asOf<=0||asOf>wallClockNow){
+            return send(res,400,{error:'INVALID_AS_OF_TIMESTAMP',
+              message:'as_of must be a past ISO-8601 timestamp with timezone, Unix seconds, or Unix milliseconds.',
+              ...denied});
+          }
+        }
         let benchmarkCandles=[];
         let benchmarkStatus='UNAVAILABLE';
         try{
-          const benchmark=await marketRadarRestClient.klines('BTCUSDT','5m',{limit:1000});
+          const benchmark=await marketRadarRestClient.klines('BTCUSDT','5m',{limit:1000,endTime:asOf});
           benchmarkCandles=Array.isArray(benchmark?.candles)?benchmark.candles:[];
           benchmarkStatus=benchmarkCandles.length?'AVAILABLE':'NO_CANDLES';
         }catch(error){
@@ -1646,7 +1658,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         const results=await Promise.all(symbols.map(async symbol=>{
           try{
-            const response=await marketRadarRestClient.klines(symbol,'5m',{limit:1000});
+            const response=await marketRadarRestClient.klines(symbol,'5m',{limit:1000,endTime:asOf});
             const candles=Array.isArray(response?.candles)?response.candles:[];
             return buildEarlyMoverCaseStudy(symbol,candles,{
               now:asOf,benchmarkCandles,thresholdPct,windowHours,leadMinutes
