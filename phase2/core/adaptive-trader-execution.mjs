@@ -28,7 +28,7 @@ const sha=value=>createHash('sha256').update(String(value)).digest('hex');
 const clientId=(prefix,value)=>prefix+sha(value).slice(0,28);
 
 export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=100,minWinRatePct=55,maxAllowedDrawdownPct=8}={}){
-  const rows=(Array.isArray(portfolio?.closed_trades)?portfolio.closed_trades:[])
+  const allRows=(Array.isArray(portfolio?.closed_trades)?portfolio.closed_trades:[])
     .filter(row=>row&&row.paper_trading===true&&row.real_order_execution===false&&
       FINITE(row.net_pnl)!==null&&FINITE(row.net_return_pct)!==null)
     .map(row=>({closed_at:FINITE(row.closed_at)??0,net_pnl:FINITE(row.net_pnl),net_return_pct:FINITE(row.net_return_pct)}))
@@ -36,6 +36,7 @@ export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=1
   const required=Math.max(100,Math.trunc(Number(minTrades)||100));
   const requiredWinRate=Math.max(55,Number(minWinRatePct)||55);
   const allowedDrawdown=Math.min(8,Math.max(0,Number.isFinite(Number(maxAllowedDrawdownPct))?Number(maxAllowedDrawdownPct):8));
+  const rows=allRows.slice(-required);
   let wins=0,totalNet=0,equity=FINITE(portfolio?.starting_balance)||10000,peak=equity,observedMaxDrawdownPct=0;
   for(const row of rows){
     if(row.net_pnl>0)wins++;
@@ -44,14 +45,14 @@ export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=1
   }
   const winRatePct=rows.length?wins/rows.length*100:0;
   const conditions={
-    minimum_trades_met:rows.length>=required,
-    win_rate_met:winRatePct>=requiredWinRate,
-    net_profit_positive:totalNet>0,
-    drawdown_within_limit:observedMaxDrawdownPct<=allowedDrawdown
+    minimum_trades_met:allRows.length>=required,
+    win_rate_met:rows.length>=required&&winRatePct>=requiredWinRate,
+    net_profit_positive:rows.length>=required&&totalNet>0,
+    drawdown_within_limit:rows.length>=required&&observedMaxDrawdownPct<=allowedDrawdown
   };
   const ready=Object.values(conditions).every(Boolean);
   return {
-    ready,resolved_paper_trades:rows.length,required_paper_trades:required,
+    ready,resolved_paper_trades:allRows.length,evaluation_window_trades:rows.length,required_paper_trades:required,
     wins,win_rate_pct:Number(winRatePct.toFixed(2)),net_pnl_usdt:Number(totalNet.toFixed(2)),
     max_drawdown_pct:Number(observedMaxDrawdownPct.toFixed(2)),max_allowed_drawdown_pct:allowedDrawdown,
     gate_conditions:conditions,
