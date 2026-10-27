@@ -476,9 +476,17 @@ export class AdaptiveTraderExecutionController{
     try{
       const oco=await this.client.placeProtectiveOco({symbol:intent.symbol,quantity:formatNumber(netQty,filters.stepSize),
         stopPrice:formatNumber(stop,filters.tickSize),takeProfitPrice:formatNumber(target,filters.tickSize),listClientOrderId:ocoId});
+      const ocoIdValue=FINITE(oco?.orderListId);
+      const ocoStatus=String(oco?.listOrderStatus||'');
+      const ocoType=String(oco?.listStatusType||'');
+      if(!(ocoIdValue>0)||!['EXECUTING','EXECUTED','ALL_DONE'].includes(ocoStatus)||!['EXEC_STARTED','EXEC_FINISHED'].includes(ocoType)){
+        const error=new Error('PROTECTIVE_ORDER_RESPONSE_UNVERIFIED');
+        error.indeterminate=true;
+        throw error;
+      }
       this.state.open_position.protection_status='ACTIVE';
-      this.state.open_position.oco_status=String(oco?.listOrderStatus||oco?.listStatusType||'EXECUTING');
-      this.state.open_position.oco_order_list_id=oco?.orderListId??null;
+      this.state.open_position.oco_status=ocoStatus;
+      this.state.open_position.oco_order_list_id=ocoIdValue;
       this.state.last_error=null;await this.persist();
       return {status:'BUY_FILLED_AND_OCO_PROTECTED',position:this.state.open_position};
     }catch(error){
