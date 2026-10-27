@@ -26,7 +26,7 @@ final class RadarXPushRegistration {
     private static final String INSTALLATION_ID = "installation_id";
     private static volatile long lastSyncAttemptAtMs = 0L;
     private static final long SYNC_RETRY_MIN_INTERVAL_MS = 60_000L;
-    private static final String BACKEND = "https://dhdtech-url-required.invalid";
+    private static final String BACKEND = "https://radarx-backend.dhdtech.site";
     private static final ExecutorService NETWORK = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "RadarX-Push-Registration");
         thread.setDaemon(true);
