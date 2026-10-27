@@ -35,7 +35,7 @@ jobs:
   # Publish only from the official Build 224 branch after its backend and Android checks pass.
   release-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
 
@@ -1064,7 +1064,8 @@ jobs:
           ls -l /dev/kvm
 
       - name: Required Release UI/service smoke + Debug durable replay acceptance
-        timeout-minutes: 10
+        # The test boots API 30, validates online/offline service behavior, and replays 623 archived alerts.
+        timeout-minutes: 55
         env:
           RADARX_APK_PATH: ${{ runner.temp }}/radarx-release/radarx-release.apk
           RADARX_REPLAY_APK_PATH: android/app/build/outputs/apk/debug/app-debug.apk
