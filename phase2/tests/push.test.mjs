@@ -212,7 +212,7 @@ test('TEST_FIXTURE: radar alerts without an explicit final gate never push',asyn
     const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT'};}};
     const m=new PushManager({provider,store});
     await m.notifyRadarAlert({
-      radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'CONFIRMEDUSDT',eligible:true,entry_eligible:true,
+      radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8',symbol:'CONFIRMEDUSDT',direction:'UP_BIAS',eligible:true,entry_eligible:true,
       data_quality:95,liquidity_quality:85,
       notification_gate:{eligible:true,watch_only:false,requires_follow_up_confirmation:false,mode:'STRICT_NOTIFICATION',score:90,confirmations:7},
       signal_lifecycle:{state:'CONFIRMED',label:'تأكيد نهائي',transition:'CONFIRMED_BREAKOUT',reason_codes:['CLOSED_CANDLE_BREAKOUT']}
@@ -463,6 +463,22 @@ test('TEST_FIXTURE: high-activity Pre-Move alerts pass the push validator with s
     assert.equal(provider.calls,0);
     const audit=await store.readRecent('notifications',10);
     assert.ok(audit.some(row=>row.status==='SUPPRESSED_UNCONFIRMED'&&row.signal_id==='UNCONFIRMED_WATCH_SIGNAL'));
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: confirmed non-rising signal is suppressed without provider contact',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-push-non-rising-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    await store.putUserSettings('u1',{enabled:true,symbols:['BTCUSDT'],timeframes:['15m'],minDataQuality:70,minLiquidityQuality:60,signalTypes:['CONFIRMED']});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const result=await manager.notifySignal({...signal(),direction:'DOWN',signal_id:'CONFIRMED_BUT_NOT_RISING'});
+    assert.equal(result[0]?.status,'SUPPRESSED_NON_RISING');
+    assert.equal(result[0]?.reason,'RISING_DIRECTION_REQUIRED');
+    assert.equal(calls,0);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
