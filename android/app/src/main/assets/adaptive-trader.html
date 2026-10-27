@@ -182,7 +182,7 @@ import {
 
 const API_BASE='https://radarx-backend.dhdtech.site';
 const STORAGE_KEY='radarx_adaptive_trader_v1';
-const MAX_HISTORY=7000;
+const MAX_HISTORY=15000;
 const MAX_SAMPLES=1800;
 const MAX_MISSED=500;
 const state=loadState();
@@ -330,7 +330,9 @@ function recordMissedMovers(snapshot,now){
   const existing=new Set(state.missedMovers.map(row=>row.id));
   for(const event of events){
     if(existing.has(event.id))continue;
-    state.missedMovers.unshift(event);
+    const alreadyReported=state.missedMovers.some(row=>row.symbol===event.symbol&&now-Number(row.recorded_at||Date.parse(row.baseline_at)||0)<6*60*60*1000);
+    if(alreadyReported)continue;
+    state.missedMovers.unshift({...event,recorded_at:now});
     addJournal('حركة مرصودة بعد لقطة سابقة: '+event.symbol+' '+percent(event.move_pct)+'؛ التصنيف '+event.classification+'.','warning',now);
     existing.add(event.id);
   }
