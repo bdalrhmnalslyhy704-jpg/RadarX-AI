@@ -114,45 +114,71 @@ test('TEST_FIXTURE: Radar 8 watch push fails closed on stale or incomplete evide
 });
 
 
-test('TEST_FIXTURE: validated early-flow watch sends once with non-entry metadata',async()=>{
+test('TEST_FIXTURE: validated early-flow watch stays in-app before confirmation',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-earlyflow-watch-send-')),store=await new DurableStore({dir}).init();
-  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
-  await store.upsertSubscription('u1',pushSubscription());
-  const sent=[];
-  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
-  const manager=new PushManager({provider,store});
-  const now=Date.now();
-  const out=await manager.notifyRadarWatchOnlyAlert({
-  assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
-  assert.equal(out.attempted,false);
-  assert.equal(out.sent_count,0);
-  assert.equal(out.attempted_count,0);
-  assert.equal(sent.length,0,'early watch observations must stay in-app until final confirmation');
-  const audits=await store.readRecent('notifications',10);
-  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY').length,1);
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
+    const manager=new PushManager({provider,store});
+    const now=Date.now();
+    const out=await manager.notifyRadarWatchOnlyAlert({
+      event:'EARLY_FLOW_WATCH_ONLY',potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
+      radar:'EARLY_EXPANSION_RADAR',symbol:'EARLYFLOWUSDT',market:'SPOT',direction:'UP_BIAS',
+      price:1.02,price_change_24h:1.2,data_quality:88,liquidity_quality:82,data_stale:false,
+      source:'BINANCE_PUBLIC_REST',detected_at:now,detected_candle_close_time:now-1000,
+      closed_candles_only:true,watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+      early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:now-1000,
+        micro_score:70,confirmation_count:5,rvol_1m:1.5,rvol_5m:1.3,trade_rvol_1m:1.4,trade_rvol_5m:1.2,
+        taker_buy_ratio:.56,acceleration_1m_pct:.08}
+    });
+    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
+    assert.equal(out.attempted,false);
+    assert.equal(out.sent_count,0);
+    assert.equal(sent.length,0);
+    assert.equal(manager.retryQueue.size,0);
+    const audits=await store.readRecent('notifications',10);
+    assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY').length,1);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
 
-    await rm(dir,{recursive:true,force:true});
-
-});test('TEST_FIXTURE: validated Micro early-flow may send a monitor-only alert without fabricated depth scores',async()=>{
+test('TEST_FIXTURE: validated Micro early-flow stays in-app without fabricated depth scores',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-micro-watch-no-depth-score-')),store=await new DurableStore({dir}).init();
-  await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
-  await store.upsertSubscription('u1',pushSubscription());
-  const sent=[];
-  const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
-  const manager=new PushManager({provider,store});
-  const now=Date.now();
-  const out=await manager.notifyRadarWatchOnlyAlert({
-  assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
-  assert.equal(out.attempted,false);
-  assert.equal(out.sent_count,0);
-  assert.equal(out.attempted_count,0);
-  assert.equal(sent.length,0,'early watch observations must stay in-app until final confirmation');
-  const audits=await store.readRecent('notifications',10);
-  assert.equal(audits.filter(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY').length,1);
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};}};
+    const manager=new PushManager({provider,store});
+    const now=Date.now();
+    const out=await manager.notifyRadarWatchOnlyAlert({
+      event:'EARLY_FLOW_WATCH_ONLY',potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
+      radar:'EARLY_EXPANSION_RADAR',symbol:'MICROWATCHUSDT',market:'SPOT',direction:'UP_BIAS',
+      price:1.02,price_change_24h:2.1,data_quality:null,liquidity_quality:null,data_stale:false,
+      source:'BINANCE_PUBLIC_REST',quote_volume_24h:900000,micro_data_validated:true,
+      liquidity_evidence_status:'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE',
+      detected_at:now,detected_candle_close_time:now-1000,closed_candles_only:true,
+      watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+      early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:now-1000,
+        micro_score:60,confirmation_count:3,rvol_1m:1.25,rvol_5m:1.05,trade_rvol_1m:1.05,trade_rvol_5m:1.16,
+        taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.01,return_1m:.02,return_5m:.04},
+      risk_flags:['EARLY_FLOW_WATCH_ONLY'],reason_codes:['MICRO_EARLY_FLOW']
+    });
+    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
+    assert.equal(out.attempted,false);
+    assert.equal(out.sent_count,0);
+    assert.equal(sent.length,0);
+    const audits=await store.readRecent('notifications',10);
+    const audit=audits.find(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY');
+    assert.ok(audit);
+    assert.equal(audit.data_quality,null);
+    assert.equal(audit.liquidity_quality,null);
+    assert.equal(audit.micro_data_validated,true);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
 
-    await rm(dir,{recursive:true,force:true});
-
-});test('TEST_FIXTURE: missing radar data quality fails closed instead of inheriting 100',async()=>{
+test('TEST_FIXTURE: missing radar data quality fails closed instead of inheriting 100',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-radar-missing-dq-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
   await store.upsertSubscription('u1',pushSubscription());
