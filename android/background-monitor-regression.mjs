@@ -56,12 +56,23 @@ assert.match(service, /PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQU
   'the obsolete local watch notifier must fail closed if called by any future code');
 assert.doesNotMatch(service, /manager\.notify\("radarx_premove_watch"/,
   'no Android local notification path may post a watch-only candidate');
-assert.match(service, /!alert\.has\("entry_eligible"\) \|\| !alert\.optBoolean\("entry_eligible", false\)/,
+assert.match(service, /if \(!alert\.optBoolean\("entry_eligible", false\)\) return false;/,
   'phone alerts must require explicit entry eligibility; missing fields do not count as approval');
 assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
   'phone alerts must require an explicit CONFIRMED lifecycle/signal or strict notification gate');
 assert.match(service, /if \(!risingDirection \|\| !finalConfirmation\) return false;/,
   'only confirmed rising opportunities may pass Android last-mile');
+
+assert.match(service, /if \(!alert\.optBoolean\("closed_candles_only", false\)\) return false;/,
+  'Android must reject alerts that do not explicitly use closed-candle evidence');
+assert.match(service, /!Double\.isFinite\(dataQuality\) \|\| dataQuality < 70\.0/,
+  'Android must suppress phone alerts with missing or weak measured data quality');
+assert.match(service, /!Double\.isFinite\(liquidityQuality\) \|\| liquidityQuality < 60\.0/,
+  'Android must suppress phone alerts with missing or weak measured liquidity quality');
+assert.match(service, /notificationGate\.optBoolean\("watch_only", false\)/,
+  'a strict-looking gate marked watch-only cannot pass the local alert boundary');
+assert.match(service, /notificationGate\.optBoolean\("requires_follow_up_confirmation", false\)/,
+  'a strict-looking gate that still requires confirmation cannot pass the local alert boundary');
 assert.match(service, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Android phone alerts must be for upward/rising opportunities only');
 assert.match(firebase, /FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED/,
@@ -71,10 +82,12 @@ assert.ok(firebase.includes('matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*"
 
 assert.match(firebase, /boolean entryEligible = Boolean\.parseBoolean/,
   'Firebase must require entry_eligible=true before posting a phone notification');
+assert.match(firebase, /boolean notificationGateEligible = Boolean\.parseBoolean/,
+  'Firebase must require explicit notification gate eligibility before posting');
 assert.match(firebase, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
   'Firebase must require a final confirmed state or strict final gate');
-assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\| followUpRequired \|\| !finalConfirmation\)\)/,
-  'Firebase must not render early watches or unconfirmed/non-rising data messages, except an explicit test push');
+assert.match(firebase, /if \(!explicitTest && \(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\| !notificationGateEligible \|\| followUpRequired \|\| !finalConfirmation\)\)/,
+  'Firebase must not render early watches or messages without explicit gate eligibility and final confirmation, except an explicit test push');
 assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
 assert.match(service, /RadarXNotificationPolicy\.reserve/,
