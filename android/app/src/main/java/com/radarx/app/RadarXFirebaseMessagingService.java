@@ -45,10 +45,11 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         boolean followUpRequired = Boolean.parseBoolean(dataValue(message.getData(), "requires_follow_up_confirmation", "true"));
         boolean watchEvent = event.toUpperCase(java.util.Locale.ROOT).matches(".*(WATCH_ONLY|WATCH_EARLY|MONITOR_ONLY).*") ||
                 notificationMode.matches(".*(WATCH_ONLY|MONITOR_ONLY|WATCH_EARLY).*");
-        boolean finalConfirmation = "CONFIRMED".equals(lifecycleState) || "CONFIRMED".equals(signalType) ||
-                "STRICT_NOTIFICATION".equals(notificationGateMode);
+        boolean lifecycleConflicts = !lifecycleState.isEmpty() && !"CONFIRMED".equals(lifecycleState);
+        boolean finalConfirmation = !lifecycleConflicts && ("CONFIRMED".equals(lifecycleState) ||
+                "CONFIRMED".equals(signalType) || "STRICT_NOTIFICATION".equals(notificationGateMode));
         if (!explicitTest && (watchOnly || watchEvent || !risingDirection || !entryEligible ||
-                !notificationGateEligible || followUpRequired || !finalConfirmation)) {
+                !notificationGateEligible || followUpRequired || lifecycleConflicts || !finalConfirmation)) {
             Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
             return;
         }
