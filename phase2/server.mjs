@@ -27,6 +27,7 @@ import {FalconEyeRadar} from './core/falcon-eye-radar.mjs';
 import {SymbolDeepAnalyzer} from './core/symbol-deep-analyzer.mjs';
 import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
+import {createAdaptiveTraderSnapshotService} from './core/adaptive-trader-engine.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
 import {MultiAnalystEngine} from './core/multi-analyst-engine.mjs';
@@ -139,6 +140,10 @@ export async function startServer({
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
   const marketRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  // The Adaptive Trader uses an independent read-only scanner and its own short-lived snapshot cache.
+  // It does not feed, configure, or modify any of the twelve existing radar decisions.
+  const adaptiveTraderRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
   const moveConfig={...(config.moveRadar||{})};
   const moveScanner=new MarketUniverseScanner({rest,rotationStateStore:store,config:{
     minQuoteVolume24h:moveConfig.minQuoteVolume24h,
@@ -226,7 +231,7 @@ export async function startServer({
     ...analystReviewBridge,expected_specialists:19,expected_final_analyst:1,
     mode:'NON_BLOCKING_REVIEW_ONLY',paper_trading:true,real_order_execution:false
   }));
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker,adaptiveTraderSnapshotProvider});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
