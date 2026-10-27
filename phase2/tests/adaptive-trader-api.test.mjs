@@ -14,7 +14,8 @@ async function start({provider}={}) {
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const server=createApiServer({
     config,store,monitor,pushProvider:new NoopPushProvider(),
-    ...(provider?{adaptiveTraderSnapshotProvider:provider}:{})
+    ...(provider?{adaptiveTraderSnapshotProvider:provider}:{}),
+    ...(worker?{adaptiveTraderWorker:worker}:{})
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   return {dir,store,server,base:'http://127.0.0.1:'+server.address().port};
@@ -75,6 +76,33 @@ test('adaptive trader endpoint does not fabricate results when market fetch fail
     assert.equal(body.error,'ADAPTIVE_TRADER_MARKET_DATA_FETCH_FAILED');
     assert.deepEqual(body.candidates,[]);
     assert.equal(body.meta.real_order_execution,false);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+
+test('adaptive trader status exposes the independent background worker with read-only policy',async()=>{
+  const worker={snapshot:()=>({
+    status:'RUNNING',enabled:true,running:true,in_flight:false,scan_count:5,successful_scans:5,
+    interval_ms:300000,last_scan_at:new Date().toISOString(),last_error:null,
+    learning_profile:{ready:false,resolved_samples:4,adjustments:{volume:0,buyer_flow:0,structure:0,compression:0}},
+    missed_movers:[{id:'TESTUSDT:1',symbol:'TESTUSDT',classification:'UNASSESSED_MOVE',move_pct:5.5}],
+    memory:{resolved_samples:4,unresolved_samples:16,history_rows:100,potential_missed_movers:0},
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
+  })};
+  const {dir,server,base}=await start({worker});
+  try{
+    const response=await fetch(base+'/api/adaptive-trader/status');
+    assert.equal(response.status,200);
+    const value=await response.json();
+    assert.equal(value.service,'RADARX_ADAPTIVE_TRADER_SIDECAR');
+    assert.equal(value.status,'RUNNING');
+    assert.equal(value.interval_ms,300000);
+    assert.equal(value.real_order_execution,false);
+    assert.equal(value.paper_trading,true);
+    assert.equal(value.missed_movers[0].classification,'UNASSESSED_MOVE');
   }finally{
     await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
