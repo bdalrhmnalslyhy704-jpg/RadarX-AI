@@ -86,7 +86,6 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, now = Dat
 
   const prior8 = candles.slice(-9, -1);
   const prior3 = candles.slice(-4, -1);
-  const prior4 = candles.slice(-5, -1);
   const previous8Ranges = candles.slice(-12, -4).map(c => (c.high - c.low) / c.close * 100);
   const recent4Ranges = candles.slice(-4).map(c => (c.high - c.low) / c.close * 100);
   const volumeBaseline = mean(prior8.map(c => c.quoteVolume));
@@ -198,7 +197,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
   const [exchangeInfo, tickerResult] = await Promise.all([
-    rest.request('/api/v3/exchangeInfo', { permissions: 'SPOT' }),
+    rest.request('/api/v3/exchangeInfo'),
     rest.request('/api/v3/ticker/24hr')
   ]);
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
@@ -365,7 +364,8 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
     const move = (price / previous.price - 1) * 100;
     if (move < thresholdPct) continue;
     const previousTier = String(previous.tier || 'NOT_EVALUATED');
-    const wasOnRadar = ['EARLY_SETUP', 'WATCH'].includes(previousTier);
+    const wasEvaluated = previous.evaluated === true;
+    const wasOnRadar = wasEvaluated && ['EARLY_SETUP', 'WATCH'].includes(previousTier);
     events.push({
       symbol,
       baseline_at: new Date(previous.at).toISOString(),
@@ -373,7 +373,8 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
       current_price: price,
       move_pct: Number(move.toFixed(2)),
       baseline_tier: previousTier,
-      classification: wasOnRadar ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
+      classification: !wasEvaluated ? 'UNASSESSED_MOVE' : wasOnRadar ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
+      baseline_was_evaluated: wasEvaluated,
       diagnostic_only: true,
       reason: 'OBSERVED_PRICE_MOVED_AFTER_PRIOR_SNAPSHOT',
       no_future_data_used_for_baseline: true
