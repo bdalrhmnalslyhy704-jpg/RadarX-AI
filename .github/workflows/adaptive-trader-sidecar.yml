@@ -1,0 +1,50 @@
+name: Build 224 Adaptive Trader Sidecar
+
+on:
+  push:
+    branches:
+      - feature/build224-adaptive-trader-standalone-20261027
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - "phase2/core/adaptive-trader-engine.mjs"
+      - "phase2/http/api.mjs"
+      - "phase2/server.mjs"
+      - "phase2/tests/adaptive-trader-*.test.mjs"
+      - "android/app/src/main/assets/adaptive-trader*"
+      - "android/app/src/main/assets/index.html"
+      - ".github/workflows/adaptive-trader-sidecar.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sidecar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check isolated sidecar modules
+        run: |
+          node --check phase2/core/adaptive-trader-engine.mjs
+          node --check android/app/src/main/assets/adaptive-trader-client.js
+      - name: Unit-test scoring, missed movers, calibration and paper risk
+        run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs
+      - name: Test read-only market API and fail-closed behavior
+        run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-api.test.mjs
+      - name: Test Android dashboard integration and paper-only guards
+        run: |
+          node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
+          node --test --test-timeout=60000 android/app/src/main/assets/tests/market-radar-integration.test.mjs
+      - name: Run existing pre-move and analyst regression tests
+        run: |
+          node --test --test-timeout=60000 phase2/tests/pre-move-watch-notification.test.mjs
+          node --test --test-timeout=60000 phase2/tests/missed-mover-case-study.test.mjs
+          node --test --test-timeout=60000 phase2/tests/multi-analyst-engine.test.mjs
