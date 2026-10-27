@@ -324,7 +324,7 @@ export function createAdaptiveTraderSnapshotService({
 } = {}) {
   const cache = new Map();
   const flights = new Map();
-  return async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
+  const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
     const hit = cache.get(safeLimit);
     if (hit && Number(now) - hit.cachedAt < ttlMs) {
@@ -337,7 +337,12 @@ export function createAdaptiveTraderSnapshotService({
     // with the other radars. Coalescing different universe requests avoids a
     // burst of overlapping 40/80/120-pair scans on that shared budget.
     const active = flights.values().next().value;
-    if (active) return active;
+    if (active) {
+      // Preserve the requested universe size, but wait until the current scan
+      // releases the shared REST budget before starting another scan.
+      try { await active; } catch {}
+      return getSnapshot({ limit: safeLimit, now: Date.now() });
+    }
     const previousDeadline = Number(rest.requestDeadlineAtMs) > 0 ? Number(rest.requestDeadlineAtMs) : null;
     const deadline = Date.now() + Math.max(5_000, Math.min(60_000, Math.trunc(Number(scanTimeoutMs) || 45_000)));
     rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
@@ -355,6 +360,7 @@ export function createAdaptiveTraderSnapshotService({
     flights.set(safeLimit, task);
     return task;
   };
+  return getSnapshot;
 }
 
 export function buildAdaptiveLearningProfile(samples = [], { minSamples = POLICY.learningMinOutcomes, minimumBucket = 8 } = {}) {
