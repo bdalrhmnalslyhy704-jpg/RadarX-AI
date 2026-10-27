@@ -44,8 +44,12 @@ assert.match(background,/KAHIR_RADAR/);
 
 const tradliActivity = await readFile(new URL('./app/src/main/java/com/radarx/app/TradliActivity.java', import.meta.url), 'utf8');
 assert.ok(tradliActivity.includes('PRIMARY_BACKEND_ORIGIN = "'+(process.env.RADARX_BACKEND_BASE_URL||'https://radarx-backend.dhdtech.site')+'";'));
-assert.doesNotMatch(await readFile(new URL('./app/src/main/assets/radarx-backend-client.mjs', import.meta.url), 'utf8'),/railway\.app/i);
-assert.doesNotMatch(await readFile(new URL('./app/src/main/assets/radarx-backend-client.js', import.meta.url), 'utf8'),/railway\.app/i);
+const backendClientModule = await readFile(new URL('./app/src/main/assets/radarx-backend-client.mjs', import.meta.url), 'utf8');
+const backendClientScript = await readFile(new URL('./app/src/main/assets/radarx-backend-client.js', import.meta.url), 'utf8');
+assert.doesNotMatch(backendClientModule,/railway\.app/i);
+assert.doesNotMatch(backendClientScript,/railway\.app/i);
+assert.ok(backendClientModule.includes("DEFAULT_BACKEND_BASE_URL = '"+(process.env.RADARX_BACKEND_BASE_URL||'https://radarx-backend.dhdtech.site')+"'"));
+assert.ok(backendClientScript.includes("DEFAULT_BACKEND_BASE_URL = '"+(process.env.RADARX_BACKEND_BASE_URL||'https://radarx-backend.dhdtech.site')+"'"));
 assert.ok(tradliActivity.includes('FALLBACK_BACKEND_ORIGIN = "";'));
 assert.doesNotMatch(tradliActivity,/railway\.app/i);
 assert.match(tradliActivity,/PRIMARY_BACKEND_ORIGIN\.equalsIgnoreCase\(origin\)/);
