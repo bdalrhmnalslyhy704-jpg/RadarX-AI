@@ -458,7 +458,49 @@ export class DurableStore {
       learning_profile:value.learning_profile&&typeof value.learning_profile==='object'?value.learning_profile:null,
       samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-1000):[],
       price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-15000):[],
-      missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[]
+      missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[],
+      paper_portfolio:(()=>{
+        const source=value.paper_portfolio&&typeof value.paper_portfolio==='object'?value.paper_portfolio:{};
+        const features=input=>{
+          if(!input||typeof input!=='object'||Array.isArray(input))return {};
+          return {
+            volume_ratio:Number.isFinite(Number(input.volume_ratio))?Number(input.volume_ratio):null,
+            trade_ratio:Number.isFinite(Number(input.trade_ratio))?Number(input.trade_ratio):null,
+            taker_buy_ratio:Number.isFinite(Number(input.taker_buy_ratio))?Number(input.taker_buy_ratio):null,
+            close_location:Number.isFinite(Number(input.close_location))?Number(input.close_location):null,
+            higher_low:input.higher_low===true,breakout_above_prior_high:input.breakout_above_prior_high===true,
+            compression_ratio:Number.isFinite(Number(input.compression_ratio))?Number(input.compression_ratio):null,
+            hourly_return_pct:Number.isFinite(Number(input.hourly_return_pct))?Number(input.hourly_return_pct):null,
+            relative_strength_vs_btc_pct:Number.isFinite(Number(input.relative_strength_vs_btc_pct))?Number(input.relative_strength_vs_btc_pct):null
+          };
+        };
+        const number=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
+        const symbol=input=>/^[A-Z0-9]{5,30}$/.test(String(input||'').toUpperCase())?String(input).toUpperCase():'';
+        const open=(Array.isArray(source.open_positions)?source.open_positions:[]).slice(-3).filter(row=>row&&typeof row==='object').map(row=>({
+          id:String(row.id||'').slice(0,100),symbol:symbol(row.symbol),
+          entry_price:number(row.entry_price),mark_price:number(row.mark_price),
+          quantity:number(row.quantity),notional:number(row.notional),opened_at:number(row.opened_at),
+          entry_score:number(row.entry_score),entry_features:features(row.entry_features),
+          mode:'PAPER_ONLY',paper_trading:true,real_order_execution:false
+        })).filter(row=>row.symbol&&row.entry_price>0&&row.notional>0);
+        const closed=(Array.isArray(source.closed_trades)?source.closed_trades:[]).slice(-2000).filter(row=>row&&typeof row==='object').map(row=>({
+          id:String(row.id||'').slice(0,100),symbol:symbol(row.symbol),
+          entry_price:number(row.entry_price),exit_price:number(row.exit_price),
+          notional:number(row.notional),quantity:number(row.quantity),
+          opened_at:number(row.opened_at),closed_at:number(row.closed_at),
+          entry_score:number(row.entry_score),entry_features:features(row.entry_features),
+          gross_return_pct:number(row.gross_return_pct),net_return_pct:number(row.net_return_pct),
+          net_pnl:number(row.net_pnl),exit_reason:String(row.exit_reason||'').slice(0,60),
+          paper_trading:true,real_order_execution:false
+        })).filter(row=>row.symbol&&row.closed_at>0&&row.net_pnl!==null&&row.net_return_pct!==null);
+        return {
+          version:1,mode:'PAPER_ONLY',enabled:true,
+          starting_balance:number(source.starting_balance)>0?number(source.starting_balance):10000,
+          cash:number(source.cash)>=0?number(source.cash):10000,
+          created_at:number(source.created_at)||Date.now(),updated_at:Date.now(),
+          open_positions:open,closed_trades:closed,paper_trading:true,real_order_execution:false
+        };
+      })()
     };
     return this.lock(async()=>{
       await this.writeJson(this.files.adaptiveTraderState,safe);
