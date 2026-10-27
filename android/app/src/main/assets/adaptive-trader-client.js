@@ -95,7 +95,8 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
       current_price: price,
       move_pct: Number(move.toFixed(2)),
       baseline_tier: previousTier,
-      classification: ['EARLY_SETUP', 'WATCH'].includes(previousTier) ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
+      classification: previous.evaluated !== true ? 'UNASSESSED_MOVE' : ['EARLY_SETUP', 'WATCH'].includes(previousTier) ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
+    baseline_was_evaluated: previous.evaluated === true,
       diagnostic_only: true,
       reason: 'OBSERVED_PRICE_MOVED_AFTER_PRIOR_SNAPSHOT'
     });
