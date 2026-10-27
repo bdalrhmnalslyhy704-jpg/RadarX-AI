@@ -27,6 +27,34 @@ const isLeveraged=value=>/(?:UP|DOWN|BULL|BEAR)USDT$/.test(safeSymbol(value));
 const sha=value=>createHash('sha256').update(String(value)).digest('hex');
 const clientId=(prefix,value)=>prefix+sha(value).slice(0,28);
 
+export function buildAdaptiveTraderPaperValidationProfile(portfolio,{minTrades=100,minWinRatePct=55,maxDrawdownPct=8}={}){
+  const rows=(Array.isArray(portfolio?.closed_trades)?portfolio.closed_trades:[])
+    .filter(row=>row&&row.paper_trading===true&&row.real_order_execution===false&&
+      FINITE(row.net_pnl)!==null&&FINITE(row.net_return_pct)!==null)
+    .map(row=>({closed_at:FINITE(row.closed_at)??0,net_pnl:FINITE(row.net_pnl),net_return_pct:FINITE(row.net_return_pct)}))
+    .sort((a,b)=>a.closed_at-b.closed_at);
+  let wins=0,totalNet=0,equity=FINITE(portfolio?.starting_balance)||10000,peak=equity,maxDrawdownPct=0;
+  for(const row of rows){
+    if(row.net_pnl>0)wins++;
+    totalNet+=row.net_pnl;equity+=row.net_pnl;peak=Math.max(peak,equity);
+    if(peak>0)maxDrawdownPct=Math.max(maxDrawdownPct,(peak-equity)/peak*100);
+  }
+  const winRatePct=rows.length?wins/rows.length*100:0;
+  const ready=rows.length>=Math.max(100,Math.trunc(Number(minTrades)||100))&&
+    winRatePct>=Math.max(55,Number(minWinRatePct)||55)&&totalNet>0&&
+    maxDrawdownPct<=Math.min(8,Math.max(0,Number(maxDrawdownPct)||8));
+  return {
+    ready,resolved_paper_trades:rows.length,required_paper_trades:Math.max(100,Math.trunc(Number(minTrades)||100)),
+    wins,win_rate_pct:Number(winRatePct.toFixed(2)),net_pnl_usdt:Number(totalNet.toFixed(2)),
+    max_drawdown_pct:Number(maxDrawdownPct.toFixed(2)),max_allowed_drawdown_pct:Math.min(8,Math.max(0,Number(maxDrawdownPct)||8)),
+    gate_conditions:{minimum_trades_met:rows.length>=Math.max(100,Math.trunc(Number(minTrades)||100)),
+      win_rate_met:winRatePct>=Math.max(55,Number(minWinRatePct)||55),
+      net_profit_positive:totalNet>0,
+      drawdown_within_limit:maxDrawdownPct<=Math.min(8,Math.max(0,Number(maxDrawdownPct)||8))},
+    note:ready?'PAPER_VALIDATION_PASSED_NOT_A_PROFIT_GUARANTEE':'LIVE_MAINNET_LOCKED_UNTIL_PAPER_VALIDATION_PASSES'
+  };
+}
+
 export function readAdaptiveTraderExecutionConfig(env=process.env){
   const requested=String(env.RADARX_ADAPTIVE_TRADER_LIVE_ENABLED||'').trim().toLowerCase()==='true';
   const network=String(env.RADARX_ADAPTIVE_TRADER_NETWORK||'').trim().toUpperCase();
@@ -302,6 +330,7 @@ export class AdaptiveTraderExecutionController{
       pending_order_reconciliation:Boolean(this.state.pending_buy),
       resolved_trade_outcomes:tradeLearningProfile.resolved_samples,
       trade_learning_profile:tradeLearningProfile,
+      paper_validation_profile:this.state.paper_validation_profile||null,
       open_position:this.state.open_position?{symbol:this.state.open_position.symbol,opened_at:this.state.open_position.opened_at,
         entry_price:this.state.open_position.entry_price,quantity:this.state.open_position.quantity,
         protection_status:this.state.open_position.protection_status,oco_status:this.state.open_position.oco_status}:null,
@@ -316,7 +345,10 @@ export class AdaptiveTraderExecutionController{
     if(String(this.state.halt_reason||'')==='KILL_SWITCH')return 'HALTED';
     if(this.state.halted)return 'HALTED';
     if(this.state.preflight_status==='REJECTED')return 'BLOCKED_EXCHANGE_PERMISSIONS';
-    if(this.state.preflight_status==='READY')return this.config.network==='LIVE'?'LIVE_SPOT_GATED':'SPOT_TESTNET';
+    if(this.state.preflight_status==='READY'){
+      if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true)return 'WAITING_FOR_PAPER_VALIDATION';
+      return this.config.network==='LIVE'?'LIVE_SPOT_GATED':'SPOT_TESTNET';
+    }
     return 'WAITING_FOR_PREFLIGHT';
   }
   async initialize(){
@@ -357,7 +389,7 @@ export class AdaptiveTraderExecutionController{
       return false;
     }
   }
-  async processSnapshot(snapshot,{learningProfile=null}={}){
+  async processSnapshot(snapshot,{learningProfile=null,paperValidationProfile=null}={}){
     if(this.inFlight)return {status:'BUSY',execution:this.snapshot()};
     if(!this.initialized)await this.initialize();
     this.rollUtcDay();
@@ -377,6 +409,13 @@ export class AdaptiveTraderExecutionController{
     if(!Number.isFinite(asOf)||asOf>this.clock()+5000||this.clock()-asOf>MAX_SNAPSHOT_AGE_MS){
       this.state.last_event='STALE_LIVE_SNAPSHOT';this.state.last_error='MARKET_SNAPSHOT_STALE';await this.persist();
       return {status:'BLOCKED',execution:this.snapshot()};
+    }
+    this.state.paper_validation_ready=paperValidationProfile?.ready===true;
+    this.state.paper_validation_profile=paperValidationProfile&&typeof paperValidationProfile==='object'?paperValidationProfile:null;
+    if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true){
+      this.state.last_event='WAITING_FOR_PAPER_VALIDATION';
+      this.state.last_error=null;await this.persist();
+      return {status:'WAITING_FOR_PAPER_VALIDATION',execution:this.snapshot()};
     }
     if(!await this.ensurePreflight())return {status:'BLOCKED',execution:this.snapshot()};
     this.inFlight=true;
