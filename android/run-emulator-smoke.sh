@@ -101,13 +101,15 @@ ensure_sdk_item "platforms;android-${API_LEVEL}"
 ensure_sdk_item "system-images;android-${API_LEVEL};default;x86_64"
 
 echo "RADARX_EMULATOR_SDK_READY api=${API_LEVEL}"
-# Specify an installed device profile so avdmanager does not prompt for an
-# interactive custom-hardware-profile response in a non-interactive CI shell.
-AVD_PROFILE="${RADARX_EMULATOR_PROFILE:-pixel_2}"
-timeout 90s avdmanager create avd --force -n "${AVD_NAME}" \
-  --package "system-images;android-${API_LEVEL};default;x86_64" \
-  --device "${AVD_PROFILE}"
-AVD_DIR="${ANDROID_AVD_HOME:-${HOME}/.android/avd}/${AVD_NAME}.avd"
+# Keep AVD creation bounded while feeding the documented noninteractive
+# "no custom hardware profile" answer through the inner shell's stdin pipe.
+AVD_PACKAGE="system-images;android-${API_LEVEL};default;x86_64"
+AVD_HOME="${ANDROID_AVD_HOME:-${HOME}/.android/avd}"
+mkdir -p "${AVD_HOME}" "$(dirname "${EMULATOR_LOG}")"
+export ANDROID_AVD_HOME="${AVD_HOME}"
+timeout 90s bash -c 'printf "no\\n" | avdmanager create avd --force -n "$1" --package "$2"' _ "${AVD_NAME}" "${AVD_PACKAGE}"
+echo "RADARX_AVD_CREATED name=${AVD_NAME} package=${AVD_PACKAGE}"
+AVD_DIR="${AVD_HOME}/${AVD_NAME}.avd"
 test -s "${AVD_DIR}/config.ini"
 cat >> "${AVD_DIR}/config.ini" <<'AVD'
 hw.cpu.ncore=2
