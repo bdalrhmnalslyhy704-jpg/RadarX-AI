@@ -267,7 +267,7 @@ export class AdaptiveTraderExecutionController{
   }),logger=console,clock=()=>Date.now()}={}){
     if(!store||typeof store.getAdaptiveTraderExecutionState!=='function'||typeof store.putAdaptiveTraderExecutionState!=='function')
       throw new Error('ADAPTIVE_TRADER_EXECUTION_STORE_REQUIRED');
-    this.store=store;this.config=readAdaptiveTraderExecutionConfig(env);this.logger=logger;this.clock=clock;
+    this.store=store;this.config=readAdaptiveTraderExecutionConfig(env);this.logger=logger;this.clock=clock;this.env=env;
     this.client=this.config.enabled?clientFactory(this.config):null;
     this.state={version:1,utc_day:null,daily_trade_count:0,daily_realized_pnl_usdt:0,halted:false,halt_reason:null,
       last_event:'NOT_STARTED',last_error:null,last_preflight_at:0,preflight_status:'NOT_CHECKED',
@@ -349,11 +349,10 @@ export class AdaptiveTraderExecutionController{
     this.rollUtcDay();
     if(!this.config.requested){this.state.last_event='PAPER_ONLY_LIVE_EXECUTION_NOT_REQUESTED';await this.persist();return {status:'PAPER_ONLY',execution:this.snapshot()};}
     if(!this.config.enabled){this.state.last_event='LIVE_CONFIGURATION_BLOCKED';this.state.last_error=this.config.block_reasons.join(',');await this.persist();return {status:'BLOCKED',execution:this.snapshot()};}
-    if(String(process.env.RADARX_ADAPTIVE_TRADER_KILL_SWITCH||'').trim().toLowerCase()==='true'){
+    const killSwitch=String(this.env.RADARX_ADAPTIVE_TRADER_KILL_SWITCH||'').trim().toLowerCase()==='true';
+    if(killSwitch&&!this.state.halted){
       this.state.halted=true;this.state.halt_reason='KILL_SWITCH';this.state.last_event='KILL_SWITCH_ACTIVE';await this.persist();
-      return {status:'HALTED',execution:this.snapshot()};
     }
-    if(this.state.halted)return {status:'HALTED',execution:this.snapshot()};
     if(!snapshot||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
        snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
        snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'){
@@ -376,6 +375,7 @@ export class AdaptiveTraderExecutionController{
         await this.reconcilePosition();
         return {status:'POSITION_MONITORED',execution:this.snapshot()};
       }
+      if(killSwitch||this.state.halted)return {status:'HALTED',execution:this.snapshot()};
       if(this.state.daily_realized_pnl_usdt<=-Math.abs(this.config.daily_loss_limit_usdt)){
         this.state.halted=true;this.state.halt_reason='DAILY_LOSS_LIMIT';this.state.last_event='DAILY_LOSS_LIMIT_REACHED';
         await this.persist();return {status:'HALTED',execution:this.snapshot()};
@@ -410,6 +410,12 @@ export class AdaptiveTraderExecutionController{
   }
   async openProtectedPosition(candidate,decision,snapshot){
     const symbol=decision.symbol;
+    const closeAt=Number(candidate.candle_close_time)||Date.parse(snapshot.as_of);
+    const buyId=clientId('ATB',symbol+':'+String(closeAt));
+    if(this.state.trade_history.some(row=>row?.id===buyId&&row?.side==='BUY')){
+      this.state.last_event='SIGNAL_CANDLE_ALREADY_TRADED';
+      return {status:'NO_TRADE_DUPLICATE_CLOSED_CANDLE'};
+    }
     const filters=await this.client.symbolFilters(symbol);
     if(!filters.quoteOrderQtyMarketAllowed)throw new Error('SYMBOL_MARKET_QUOTE_ORDER_QTY_UNAVAILABLE');
     const account=await this.client.account();
@@ -417,8 +423,6 @@ export class AdaptiveTraderExecutionController{
     const quoteAmount=Math.min(Number(this.config.max_order_quote_usdt),Math.max(0,freeUsdt-2));
     const minOrder=Math.max(MIN_ORDER_USDT,filters.minNotional);
     if(!(quoteAmount>=minOrder))throw new Error('INSUFFICIENT_FREE_USDT_OR_MIN_NOTIONAL');
-    const closeAt=Number(candidate.candle_close_time)||Date.parse(snapshot.as_of);
-    const buyId=clientId('ATB',symbol+':'+String(closeAt));
     const positionIntent={symbol,client_order_id:buyId,requested_quote_usdt:Number(quoteAmount.toFixed(2)),
       created_at:this.clock(),status:'PENDING_BUY_RECONCILIATION',candle_close_time:closeAt};
     this.state.pending_buy=positionIntent;await this.persist();
@@ -477,6 +481,32 @@ export class AdaptiveTraderExecutionController{
       this.state.halted=true;this.state.halt_reason='PROTECTIVE_ORDER_NOT_CONFIRMED';
       this.state.last_error=cleanText(error?.message||'PROTECTIVE_ORDER_NOT_CONFIRMED');
       await this.persist();
+      if(!error?.indeterminate){
+        try{
+          const liquidation=await this.client.placeMarketSell({symbol:intent.symbol,
+            quantity:formatNumber(netQty,filters.marketStepSize),clientOrderId:clientId('ATS',intent.client_order_id)});
+          if(liquidation?.status==='FILLED'&&Number(liquidation?.executedQty)>0&&Number(liquidation?.cummulativeQuoteQty)>0){
+            const proceeds=Number(liquidation.cummulativeQuoteQty),fees=(quoteSpent+proceeds)*FEE_ESTIMATE_RATE;
+            const pnl=proceeds-quoteSpent-fees;
+            this.state.daily_realized_pnl_usdt=Number((Number(this.state.daily_realized_pnl_usdt||0)+pnl).toFixed(4));
+            this.state.trade_history.unshift({id:clientId('ATS',intent.client_order_id),symbol:intent.symbol,side:'SELL',
+              status:'FILLED',order_id:liquidation.orderId,quote_usdt:proceeds,realized_pnl_usdt:Number(pnl.toFixed(4)),
+              at:this.clock(),exit_source:'EMERGENCY_AFTER_OCO_REJECTION',real_order_execution:this.config.network==='LIVE'});
+            this.state.trade_history=this.state.trade_history.slice(0,500);
+            this.state.open_position=null;this.state.halt_reason='PROTECTIVE_ORDER_REJECTED_AFTER_ENTRY';
+            this.state.last_event='EMERGENCY_SELL_FILLED_AFTER_OCO_REJECTION';
+            await this.persist();
+            return {status:'EMERGENCY_LIQUIDATION_FILLED',error:this.state.last_error};
+          }
+          this.state.open_position.protection_status='EMERGENCY_SELL_UNCONFIRMED';
+          this.state.last_error='EMERGENCY_SELL_FILL_NOT_CONFIRMED';
+        }catch(liquidationError){
+          this.state.open_position.protection_status=liquidationError?.indeterminate?'EMERGENCY_SELL_UNKNOWN':'EMERGENCY_SELL_FAILED';
+          this.state.last_error=cleanText(liquidationError?.message||'EMERGENCY_SELL_FAILED');
+        }
+        this.state.halt_reason='PROTECTIVE_ORDER_REJECTED_AFTER_ENTRY';
+        await this.persist();
+      }
       return {status:'BUY_FILLED_PROTECTION_REQUIRES_RECONCILIATION',error:this.state.last_error};
     }
   }
