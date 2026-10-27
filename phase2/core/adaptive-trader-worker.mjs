@@ -1,4 +1,5 @@
-import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning} from './adaptive-trader-engine.mjs';
+import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
+import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -12,11 +13,19 @@ const MAX_SAMPLES=1000;
 const MAX_HISTORY=15000;
 const MAX_MISSED=500;
 
+function createServerPaperPortfolio(){
+  const portfolio=createPaperPortfolio(10000);
+  portfolio.enabled=true;
+  return portfolio;
+}
 function emptyState(){
+  const paperPortfolio=createServerPaperPortfolio();
   return {
     version:1,enabled:false,scan_count:0,successful_scans:0,
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
+    paper_portfolio:paperPortfolio,
+    paper_validation_profile:buildAdaptiveTraderPaperValidationProfile(paperPortfolio),
     samples:[],price_history:[],missed_movers:[]
   };
 }
@@ -51,8 +60,14 @@ export class AdaptiveTraderWorker{
             samples:saved.samples.slice(-MAX_SAMPLES),
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
-            learning_profile:saved.learning_profile||buildAdaptiveLearningProfile(saved.samples)
+            learning_profile:saved.learning_profile||buildAdaptiveLearningProfile(saved.samples),
+            paper_portfolio:saved.paper_portfolio&&saved.paper_portfolio.mode==='PAPER_ONLY'&&saved.paper_portfolio.real_order_execution===false&&
+              Array.isArray(saved.paper_portfolio.open_positions)&&Array.isArray(saved.paper_portfolio.closed_trades)
+              ?{...createServerPaperPortfolio(),...saved.paper_portfolio,enabled:true,paper_trading:true,real_order_execution:false,
+                open_positions:saved.paper_portfolio.open_positions.slice(-3),closed_trades:saved.paper_portfolio.closed_trades.slice(-2000)}
+              :createServerPaperPortfolio()
           };
+          this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
@@ -112,19 +127,23 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.state.samples);
+      const adaptiveCandidates=snapshot.candidates.map(candidate=>{
+        const baseScore=finite(candidate?.score);
+        const learnedScore=applyAdaptiveLearning(baseScore,candidate?.features||{},this.state.learning_profile);
+        return baseScore===null||learnedScore===null?candidate:{
+          ...candidate,base_score:baseScore,score:learnedScore,
+          learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
+        };
+      }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+      const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
+      this.recordServerPaperPortfolio(executionSnapshot,now);
       this.lastExecutionResult=null;
       if(this.executionController){
         try{
-          const adaptiveCandidates=snapshot.candidates.map(candidate=>{
-            const baseScore=finite(candidate?.score);
-            const learnedScore=applyAdaptiveLearning(baseScore,candidate?.features||{},this.state.learning_profile);
-            return baseScore===null||learnedScore===null?candidate:{
-              ...candidate,base_score:baseScore,score:learnedScore,
-              learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
-            };
-          }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
-          const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
-          this.lastExecutionResult=await this.executionController.processSnapshot(executionSnapshot,{learningProfile:this.state.learning_profile});
+          this.lastExecutionResult=await this.executionController.processSnapshot(executionSnapshot,{
+            learningProfile:this.state.learning_profile,
+            paperValidationProfile:this.state.paper_validation_profile
+          });
         }catch(error){
           this.lastExecutionResult={status:'EXECUTION_CONTROLLER_ERROR',error:String(error?.message??error).slice(0,180)};
           this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
@@ -153,6 +172,41 @@ export class AdaptiveTraderWorker{
       }));
       return {status:'FAILED',error:this.state.last_error};
     }finally{this.inFlight=false;}
+  }
+
+  recordServerPaperPortfolio(snapshot,now){
+    const portfolio=this.state.paper_portfolio;
+    if(!portfolio||portfolio.mode!=='PAPER_ONLY'||portfolio.real_order_execution!==false){
+      this.state.paper_portfolio=createServerPaperPortfolio();
+    }
+    const paper=this.state.paper_portfolio;
+    paper.enabled=true;paper.paper_trading=true;paper.real_order_execution=false;
+    const advanced=advancePaperPortfolio(paper,snapshot.latest_prices,now);
+    const candidates=[...(snapshot.candidates||[])].sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+    let opened=0;
+    for(const candidate of candidates){
+      if((paper.open_positions||[]).length>=3)break;
+      const symbol=cleanSymbol(candidate?.symbol);
+      if(!symbol)continue;
+      const priorTimes=[
+        ...(paper.open_positions||[]).filter(row=>cleanSymbol(row.symbol)===symbol).map(row=>finite(row.opened_at)||0),
+        ...(paper.closed_trades||[]).filter(row=>cleanSymbol(row.symbol)===symbol).map(row=>finite(row.closed_at)||0)
+      ];
+      const lastEntryAt=priorTimes.length?Math.max(...priorTimes):0;
+      if(lastEntryAt>0&&Number(now)-lastEntryAt<SAMPLE_HORIZON_MS)continue;
+      const openedResult=openPaperPosition(paper,candidate,now);
+      if(openedResult.opened)opened++;
+    }
+    paper.updated_at=Number(now);
+    this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(paper);
+    this.state.paper_activity={
+      last_updated_at:Number(now),
+      newly_closed:(advanced.newlyClosed||[]).length,
+      newly_opened:opened,
+      equity:estimatePaperEquity(paper),
+      net_pnl_usdt:Number(((Number(paper.starting_balance)||10000)===0?0:
+        estimatePaperEquity(paper)-(Number(paper.starting_balance)||10000)).toFixed(2))
+    };
   }
 
   resolveSamples(snapshot,now){
@@ -261,6 +315,15 @@ export class AdaptiveTraderWorker{
       next_scan_at:this.enabled?new Date(Date.now()+this.intervalMs).toISOString():null,
       last_summary:this.state.last_summary,
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.state.samples),
+      paper_validation_profile:this.state.paper_validation_profile||buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio),
+      server_paper_portfolio:{
+        starting_balance:Number(this.state.paper_portfolio?.starting_balance)||10000,
+        equity:estimatePaperEquity(this.state.paper_portfolio),
+        net_pnl_usdt:Number((estimatePaperEquity(this.state.paper_portfolio)-(Number(this.state.paper_portfolio?.starting_balance)||10000)).toFixed(2)),
+        open_positions:(this.state.paper_portfolio?.open_positions||[]).length,
+        closed_trades:(this.state.paper_portfolio?.closed_trades||[]).length,
+        activity:this.state.paper_activity||null
+      },
       missed_movers:(this.state.missed_movers||[]).slice(0,100),
       paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
       execution:this.executionController?.snapshot?.()||{
