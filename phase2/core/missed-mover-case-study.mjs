@@ -61,7 +61,7 @@ function returnAtHorizon(rows, index, candlesBack) {
   if (startIndex < 0) return null;
   const start = rows[startIndex], end = rows[index];
   if (!start || !end) return null;
-  if (end.closeTime - start.closeTime < candlesBack * INTERVAL_MS - 10 * 60 * 1000) return null;
+  if (Math.abs((end.closeTime - start.closeTime) - candlesBack * INTERVAL_MS) > 10 * 60 * 1000) return null;
   return pct(start.close, end.close);
 }
 
@@ -92,7 +92,7 @@ function benchmarkReturnAt(benchmark, timestamp, candlesBack) {
   const endIndex = indexAtOrBefore(benchmark, timestamp);
   if (endIndex < candlesBack) return null;
   const end = benchmark[endIndex], start = benchmark[endIndex - candlesBack];
-  if (timestamp - end.closeTime > 10 * 60 * 1000 || end.closeTime - start.closeTime < candlesBack * INTERVAL_MS - 10 * 60 * 1000) return null;
+  if (timestamp - end.closeTime > 10 * 60 * 1000 || Math.abs((end.closeTime - start.closeTime) - candlesBack * INTERVAL_MS) > 10 * 60 * 1000) return null;
   return pct(start.close, end.close);
 }
 
