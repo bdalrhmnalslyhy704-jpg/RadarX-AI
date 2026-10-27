@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const service = await readFile('android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java', 'utf8');
 const firebase = await readFile('android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java', 'utf8');
+const notificationPolicy = await readFile('android/app/src/main/java/com/radarx/app/RadarXNotificationPolicy.java', 'utf8');
 const main = await readFile('android/app/src/main/java/com/radarx/app/MainActivity.java', 'utf8');
 const manifest = await readFile('android/app/src/main/AndroidManifest.xml', 'utf8');
 const replayFixture = await readFile('android/background-replay-test-server.mjs', 'utf8');
@@ -73,6 +74,21 @@ assert.match(firebase, /if \(watchOnly \|\| watchEvent \|\| !entryEligible \|\| 
   'Firebase must not render early watch, follow-up or unconfirmed data messages');
 assert.match(firebase, /boolean risingDirection = direction\.startsWith\("UP"\)/,
   'Firebase must suppress non-rising directions even when a stale message is otherwise marked confirmed');
+assert.match(service, /RadarXNotificationPolicy\.reserve/,
+  'the background alert feed must share the device notification budget with FCM');
+assert.match(firebase, /RadarXNotificationPolicy\.reserve/,
+  'Firebase delivery must use the same per-device budget as the background feed');
+assert.match(notificationPolicy, /ONE_MINUTE_MS = 60_000L/,
+  'device policy must permit at most one confirmed notification per minute');
+assert.match(notificationPolicy, /FIFTEEN_MINUTES_MS = 15 \* 60_000L/,
+  'device policy must enforce a rolling fifteen-minute quota');
+assert.match(notificationPolicy, /FileLock ignored = lockChannel\.lock\(\)/,
+  'device quota must coordinate the foreground and background Android processes atomically');
+assert.match(service, /ALERT_SUPPRESSED_DEVICE_NOTIFICATION_BUDGET/,
+  'suppressed archived alerts must be consumed rather than queued into a later notification burst');
+assert.match(firebase, /FCM_NOTIFICATION_SUPPRESSED_DEVICE_BUDGET/,
+  'FCM messages above the shared budget must be suppressed on device');
+
 assert.doesNotMatch(firebase, /manager\.notify\("radarx_premove_watch"/,
   'the FCM client must have no separate local notification lane for pre-move watches');
 
