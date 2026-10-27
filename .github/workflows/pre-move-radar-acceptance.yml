@@ -149,6 +149,97 @@ jobs:
           }));
           NODE
 
+      - name: Audit screenshot gainers against closed Spot candles before and at the move
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          URL="$BASE/api/early-mover-case-study?threshold_pct=5&window_hours=24&lead_minutes=60"
+          TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
+          OUT="$RUNNER_TEMP/early-mover-case-study.json"
+          CODE="000"
+          READY=false
+          for attempt in $(seq 1 5); do
+            rm -f "$TMP"
+            CURL_EXIT=0
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 35 -o "$TMP" -w "%{http_code}" "$URL")" || CURL_EXIT=$?
+            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ]; then
+              if node --input-type=module - "$TMP" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==6) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+              then
+                mv "$TMP" "$OUT"
+                READY=true
+                break
+              fi
+              echo "::warning::Early-mover case-study response was not complete JSON on attempt $attempt/5."
+            else
+              case "$CODE" in
+                000|404|429|502|503|504)
+                  echo "::warning::Early-mover historical endpoint not ready (curl=$CURL_EXIT HTTP=$CODE) on attempt $attempt/5."
+                  ;;
+                *)
+                  echo "::error::Early-mover case-study API returned unexpected HTTP $CODE."
+                  cat "$TMP" 2>/dev/null | head -c 3000 || true
+                  exit 1
+                  ;;
+              esac
+            fi
+            rm -f "$TMP"
+            if [ "$attempt" -lt 5 ]; then sleep 10; fi
+          done
+          if [ "$READY" != "true" ]; then
+            echo "::error::DHDTech did not expose a complete early-mover case study after rollout retries."
+            cat "$TMP" 2>/dev/null | head -c 3000 || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/early-mover-case-study.json','utf8'));
+          if(b.source!=='BINANCE_SPOT_PUBLIC_REST'||b.policy?.paper_trading!==true||b.policy?.real_order_execution!==false)
+            throw new Error('EARLY_MOVER_CASE_STUDY_POLICY_OR_SOURCE_INVALID');
+          const keys=[
+            'return_15m_pct','return_1h_pct','return_24h_pct',
+            'quote_volume_ratio_15m_vs_prior_2h','trade_count_ratio_15m_vs_prior_2h',
+            'taker_buy_share_15m','compression_ratio_20_vs_previous_20',
+            'range_1h_pct','distance_below_prior_1h_high_pct',
+            'close_location_pct','three_higher_lows','relative_strength_vs_btc_1h_pct'
+          ];
+          const rows=b.results.map(r=>{
+            if(r.no_future_data_used!==true)throw new Error('EARLY_MOVER_FUTURE_DATA_GUARD_FAILED:'+r.symbol);
+            if(['MARKET_DATA_FETCH_FAILED','INSUFFICIENT_CLOSED_CANDLES'].includes(r.status))
+              throw new Error('EARLY_MOVER_HISTORY_UNAVAILABLE:'+r.symbol+':'+r.status+':'+String(r.reason||r.error||''));
+            const features=f=>f?Object.fromEntries(keys.map(k=>[k,f[k]??null])):null;
+            return {
+              symbol:r.symbol,status:r.status,closed_candles:r.closed_candles,
+              first_crossing_at:r.crossing?.observed_at??null,
+              price_before_move:r.pre_move?.price??null,
+              minutes_before_crossing:r.pre_move?.minutes_before_crossing??null,
+              price_at_crossing:r.crossing?.price??null,
+              price_24h_reference:r.crossing?.price_24h_before_crossing??null,
+              trailing_24h_return_at_crossing_pct:r.crossing?.trailing_24h_return_pct??null,
+              change_from_watch_snapshot_to_crossing_pct:r.crossing?.move_from_pre_move_snapshot_pct??r.pre_move?.price_change_from_pre_move_to_crossing_pct??null,
+              features_before:features(r.pre_move?.features),
+              factors_before:r.pre_move?.early_evidence?.checks??null,
+              features_at_crossing:features(r.at_crossing?.features),
+              factors_at_crossing:r.at_crossing?.early_evidence?.checks??null,
+              orderbook_history_status:r.orderbook_history_status
+            };
+          });
+          console.log('EARLY_MOVER_RETROSPECTIVE_AUDIT '+JSON.stringify({
+            threshold_pct:b.options.threshold_pct,
+            threshold_measure:b.threshold_measure,
+            window_hours:b.options.window_hours,
+            lead_minutes:b.options.lead_minutes,
+            benchmark:b.benchmark,
+            results:rows,
+            limitation:'Descriptive closed-candle features, not a validated forecast. Order-book history is unavailable.'
+          }));
+          NODE
+
       - name: Verify one live scan from the 20-analyst center on DHDTech
         timeout-minutes: 6
         run: |
