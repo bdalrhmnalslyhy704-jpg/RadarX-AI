@@ -17,9 +17,10 @@ test('standalone Arabic adaptive trader page is linked from the existing RadarX 
   assert.match(home,/openAdaptiveTraderBtn/);
 });
 
-test('market scan has a bounded network timeout so the scan button cannot remain busy forever',()=>{
+test('market scan retries one transient timeout, then fails closed without inventing data',()=>{
   assert.match(html,/new AbortController\(\)/);
   assert.match(html,/70_000/);
+  assert.match(html,/if\(error&&error\.name==='AbortError'\)\{\s*if\(attempt===0\)/);
   assert.match(html,/ADAPTIVE_TRADER_SCAN_TIMEOUT/);
   assert.match(html,/signal:controller\.signal/);
 });

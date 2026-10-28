@@ -457,7 +457,14 @@ async function scanMarket(){
         snapshot=await response.json();
         break;
       }catch(error){
-        if(error&&error.name==='AbortError')throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
+        if(error&&error.name==='AbortError'){
+          if(attempt===0){
+            addJournal('انتهت مهلة طلب فحص السوق؛ تجري إعادة محاولة واحدة ببيانات حية.','warning');
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            continue;
+          }
+          throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
+        }
         if(error&&error.name==='TypeError'){
           if(attempt===0){
             await new Promise(resolve=>setTimeout(resolve,1000));
