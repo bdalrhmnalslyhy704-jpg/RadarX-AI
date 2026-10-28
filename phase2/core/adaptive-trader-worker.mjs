@@ -316,6 +316,7 @@ export class AdaptiveTraderWorker{
       mover_audit:candidates.filter(row=>row.data_valid===true&&!row.data_stale&&row.tier==='LATE_MOVE')
         .slice().sort((a,b)=>(Number(b.change_24h_pct)||0)-(Number(a.change_24h_pct)||0)).slice(0,15).map(row=>({
           symbol:row.symbol,price:row.price,score:row.score,tier:'LATE_MOVE',
+          quote_volume_24h:row.quote_volume_24h,
           change_24h_pct:row.change_24h_pct,selection_lane:row.selection_lane||null,
           reason_codes:row.reason_codes,paper_candidate:false,entry_eligible:false,
           paper_trading:true,real_order_execution:false
