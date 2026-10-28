@@ -180,6 +180,7 @@ public final class RadarXBackgroundMonitorService extends Service {
             Log.w(TAG, "Background unified radar fetch failed", error);
             updateStatus("لا يوجد اتصال بالخادم الآن • تعذر التحقق من التنبيهات • ستستأنف المراقبة ويُراجع السجل الدائم عند عودة الاتصال");
         }
+        pollPreMoveWatchOnlyAlertsSafely();
         }
     }
 
@@ -442,14 +443,65 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void pollPreMoveWatchOnlyAlertsSafely() {
-        // Watch-only/pre-expansion rows are for in-app review only. No local Android
-        // notification is allowed before a separate final-confirmation signal exists.
-        if (!stopping) Log.d(TAG, "PRE_MOVE_WATCH_FEED_ONLY_LOCAL_PUSH_DISABLED");
+        if (stopping) return;
+        final long now = System.currentTimeMillis();
+        if (now - lastPreMoveWatchPollAtMs < PRE_MOVE_WATCH_POLL_MS) return;
+        lastPreMoveWatchPollAtMs = now;
+        HttpURLConnection connection = null;
+        try {
+            // This endpoint returns only server-qualified Pre-Move monitor candidates.
+            // Do not force a new market scan from the phone; the server owns scan cadence.
+            connection = (HttpURLConnection) new URL(
+                BACKEND_ORIGIN + "/api/pre-move-radar?quote=USDT&limit=50"
+            ).openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(5_000);
+            connection.setReadTimeout(12_000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            int status = connection.getResponseCode();
+            if (status != 200) {
+                Log.w(TAG, "PRE_MOVE_WATCH_POLL_HTTP_" + status);
+                return;
+            }
+            JSONObject root = new JSONObject(new String(
+                readAll(connection.getInputStream()), StandardCharsets.UTF_8
+            ));
+            JSONObject meta = root.optJSONObject("meta");
+            if (!"ready".equalsIgnoreCase(root.optString("status", "")) ||
+                meta == null ||
+                !"PRE_MOVE".equalsIgnoreCase(meta.optString("radar", "")) ||
+                !meta.optBoolean("live", false) ||
+                !meta.optBoolean("paper_trading", false) ||
+                meta.optBoolean("real_order_execution", true) ||
+                !"Binance Public REST".equals(root.optString("source", ""))) {
+                Log.d(TAG, "PRE_MOVE_WATCH_POLL_NOT_READY");
+                return;
+            }
+            JSONArray alerts = root.optJSONArray("watch_notification_candidates");
+            if (alerts == null) return;
+            int inspected = Math.min(3, alerts.length());
+            int posted = 0;
+            for (int i = 0; i < inspected; i++) {
+                JSONObject alert = alerts.optJSONObject(i);
+                if (!isValidPreMoveWatchOnlyAlert(alert, System.currentTimeMillis())) continue;
+                if (notifyPreMoveWatchOnlyAlert(alert, alert.optString("id", ""))) posted++;
+            }
+            if (posted > 0) Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_NOTIFICATIONS_POSTED count=" + posted);
+        } catch (Exception error) {
+            Log.w(TAG, "PRE_MOVE_WATCH_POLL_FAILED", error);
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
     }
 
     private boolean isValidPreMoveWatchOnlyAlert(JSONObject alert, long now) {
         if (alert == null || !alert.optBoolean("watch_only", false) ||
                 alert.optBoolean("entry_eligible", true) ||
+                !("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(alert.optString("watch_notification_tier", "")) ||
+                  "EARLY_FLOW_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(alert.optString("watch_notification_tier", ""))) ||
                 !"PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(alert.optString("event", "")) ||
                 !"WATCH_EARLY".equalsIgnoreCase(alert.optString("potential_label", "")) ||
                 !"SPOT".equalsIgnoreCase(alert.optString("market", "")) ||
@@ -534,9 +586,64 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private boolean notifyPreMoveWatchOnlyAlert(JSONObject alert, String eventId) {
-        // Intentionally feed-only: early monitoring is not a phone notification.
-        Log.d(TAG, "PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED");
-        return false;
+        final long now = System.currentTimeMillis();
+        if (!isValidPreMoveWatchOnlyAlert(alert, now)) return false;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null || !manager.areNotificationsEnabled()) {
+            Log.w(TAG, "PRE_MOVE_WATCH_POST_BLOCKED_NOTIFICATIONS_DISABLED");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = manager.getNotificationChannel(CHANNEL_PRE_MOVE_WATCH);
+            if (channel == null || channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                Log.w(TAG, "PRE_MOVE_WATCH_POST_BLOCKED_CHANNEL_DISABLED");
+                return false;
+            }
+        }
+        String symbol = alert.optString("symbol", "").toUpperCase(Locale.ROOT);
+        String identity = eventId == null ? "" : eventId.trim();
+        if (identity.isEmpty()) identity = alert.optString("id", "").trim();
+        if (identity.isEmpty() || symbol.isEmpty()) return false;
+        int notificationId = 46_000 + Math.floorMod(identity.hashCode(), 900_000_000);
+        RadarXNotificationPolicy.Reservation reservation = RadarXNotificationPolicy.reserve(
+            this, identity, symbol, now
+        );
+        if (reservation.status != RadarXNotificationPolicy.RESERVED) {
+            Log.i(TAG, "PRE_MOVE_WATCH_SUPPRESSED_DEVICE_BUDGET status=" + reservation.status);
+            return false;
+        }
+        double price = alert.optDouble("price", Double.NaN);
+        double score = alert.optJSONObject("pre_move_context") == null
+            ? Double.NaN : alert.optJSONObject("pre_move_context").optDouble("score", Double.NaN);
+        String tier = alert.optString("watch_notification_tier", "WATCH_EARLY");
+        String priceText = Double.isFinite(price) && price > 0.0 ? formatPrice(price) : "غير متوفر";
+        String scoreText = Double.isFinite(score) ? scoreFmt.format(score) : "غير متوفر";
+        String title = "RadarX • مراقبة مبكرة • " + symbol;
+        String body = "السعر: " + priceText + " • درجة المراقبة: " + scoreText + " • " + tier;
+        String note = "فرصة مراقبة فقط، وليست توصية دخول. شموع مغلقة وبيانات Binance Spot عامة؛ التنفيذ الحقيقي متوقف.";
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent pending = PendingIntent.getActivity(
+            this, notificationId, open,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        Notification.Builder builder = notificationBuilder(CHANNEL_PRE_MOVE_WATCH)
+            .setSmallIcon(com.radarx.app.R.drawable.ic_radarx)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(new Notification.BigTextStyle().bigText(body + " • " + note))
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_EVENT)
+            .setPriority(Notification.PRIORITY_HIGH);
+        try {
+            manager.notify("radarx_premove_watch", notificationId, builder.build());
+            Log.i(TAG, "PRE_MOVE_WATCH_LOCAL_POST_REQUEST_ACCEPTED");
+            return true;
+        } catch (RuntimeException error) {
+            RadarXNotificationPolicy.release(this, reservation);
+            Log.w(TAG, "PRE_MOVE_WATCH_LOCAL_POST_FAILED", error);
+            return false;
+        }
     }
 
     /**
