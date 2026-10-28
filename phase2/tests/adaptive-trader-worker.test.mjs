@@ -70,7 +70,8 @@ test('background sidecar restores its own memory, resolves outcomes and records 
   });
   const snapshotProvider=async()=>({
     status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date().toISOString(),
-    universe:{eligible_spot_symbols:2,analyzed_symbols:2,valid_symbols:2,requested_limit:40,coverage_pct:100,scan_complete:true},
+    universe:{eligible_spot_symbols:3,analyzed_symbols:3,valid_symbols:3,requested_limit:40,coverage_pct:100,scan_complete:true,
+      selection_lane_counts:{EMERGING_MOVER:1,EXTENDED_MOVER_AUDIT:1,TOP_VOLUME:1}},
     candidates:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2,score:59.5,tier:'WATCH',
         data_valid:true,data_stale:false,features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
@@ -79,11 +80,17 @@ test('background sidecar restores its own memory, resolves outcomes and records 
       {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1,score:57,tier:'WATCH',
         data_valid:true,data_stale:false,features:{volume_ratio:1.1,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.6,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:1.1,relative_strength_vs_btc_pct:0},
-        reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false}
+        reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false},
+      {symbol:'LATEUSDT',price:1.2,quote_volume_24h:1_200_000,change_24h_pct:12.3,score:44,tier:'LATE_MOVE',
+        selection_lane:'EXTENDED_MOVER_AUDIT',data_valid:true,data_stale:false,paper_candidate:false,entry_eligible:false,
+        paper_trading:true,real_order_execution:false,reason_codes:['LATE_MOVE_NO_CHASE'],
+        features:{volume_ratio:2.1,trade_ratio:1.8,taker_buy_ratio:0.58,close_location:0.9,
+          higher_low:false,breakout_above_prior_high:false,compression_ratio:0.8,relative_strength_vs_btc_pct:2.0}}
     ],
     latest_prices:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2},
-      {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1}
+      {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1},
+      {symbol:'LATEUSDT',price:1.2,quote_volume_24h:1_200_000,change_24h_pct:12.3}
     ],
     meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
       confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
@@ -96,7 +103,12 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     assert.equal(result.status,'SUCCESS');
     const status=worker.snapshot();
     assert.equal(status.successful_scans,9);
-    assert.equal(status.last_summary.counts.valid,2);
+    assert.equal(status.last_summary.counts.valid,3);
+    assert.equal(status.last_summary.counts.late_move,1);
+    assert.equal(status.last_summary.mover_audit.length,1);
+    assert.equal(status.last_summary.mover_audit[0].symbol,'LATEUSDT');
+    assert.equal(status.last_summary.mover_audit[0].selection_lane,'EXTENDED_MOVER_AUDIT');
+    assert.equal(status.last_summary.mover_audit[0].paper_candidate,false);
     assert.equal(status.memory.resolved_samples,1);
     assert.ok(status.missed_movers.some(row=>row.symbol==='TESTUSDT'&&row.classification==='POTENTIAL_MISSED_MOVER'));
     assert.equal(status.real_order_execution,false);
