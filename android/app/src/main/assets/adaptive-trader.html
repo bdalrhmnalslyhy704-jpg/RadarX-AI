@@ -407,8 +407,17 @@ async function refreshWorkerStatus(){
 
     const completed=value.last_scan_at?timeText(value.last_scan_at):'لا توجد دورة ناجحة بعد';
     const errorText=value.last_error?' · آخر خطأ: '+String(value.last_error).slice(0,110):'';
+    const transport=value.notification_transport||{};
+    const provider=String(transport.provider||'UNKNOWN').toUpperCase();
+    const fcmDevices=Number(transport.fcm_devices)||0;
+    const pushText=provider==='FCM'
+      ?'FCM '+(transport.enabled===true?'مفعّل':'معطّل')+' · أجهزة مسجلة '+fcmDevices+
+        (fcmDevices===0?' (لا يوجد جهاز مسجّل)':'')+' · الاستلام الفعلي غير مثبت'
+      :'مزود إشعارات الهاتف '+provider+' · FCM '+(transport.enabled===true?'مفعّل':'غير مفعّل')+
+        ' · أجهزة مسجلة '+fcmDevices;
     el('sourceText').textContent='المصدر: Binance Public REST · فحص الخادم: '+String(value.status||'UNKNOWN')+
-      ' · آخر نجاح: '+completed+' · نجاح '+(Number(value.successful_scans)||0)+'/'+(Number(value.scan_count)||0)+errorText;
+      ' · آخر نجاح: '+completed+' · نجاح '+(Number(value.successful_scans)||0)+'/'+(Number(value.scan_count)||0)+
+      ' · '+pushText+errorText;
     persist();render();
     return true;
   }catch(error){
