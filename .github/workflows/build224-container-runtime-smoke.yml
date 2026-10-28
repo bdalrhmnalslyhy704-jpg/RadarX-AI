@@ -37,8 +37,9 @@ jobs:
         run: |
           node --check phase2/core/adaptive-trader-engine.mjs
           node --check phase2/core/adaptive-trader-worker.mjs
+          node --check phase2/core/early-move-sentinel.mjs
           node --check phase2/core/store.mjs
-          node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs phase2/tests/adaptive-trader-api.test.mjs phase2/tests/adaptive-trader-worker.test.mjs phase2/tests/adaptive-trader-execution.test.mjs
+          node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs phase2/tests/adaptive-trader-api.test.mjs phase2/tests/adaptive-trader-worker.test.mjs phase2/tests/adaptive-trader-execution.test.mjs phase2/tests/early-move-sentinel.test.mjs phase2/tests/pre-move-watch-notification.test.mjs phase2/tests/fcm-push.test.mjs
           node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
       - name: Build exact container image
         run: docker build --pull -t radarx-build224-smoke .
