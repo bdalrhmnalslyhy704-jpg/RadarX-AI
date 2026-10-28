@@ -153,69 +153,72 @@ jobs:
         timeout-minutes: 8
         run: |
           set -euo pipefail
-          SNAPSHOT_TMP="$RUNNER_TEMP/adaptive-trader-snapshot.tmp.json"
-          SNAPSHOT_JSON="$RUNNER_TEMP/adaptive-trader-snapshot.json"
-          CODE="000"
-          CURL_EXIT=0
-          CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 240 -o "$SNAPSHOT_TMP" -w "%{http_code}" "$BASE/api/adaptive-trader/market-snapshot?limit=40")" || CURL_EXIT=$?
-          if [ "$CURL_EXIT" -ne 0 ] || [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech Adaptive Trader live market scan failed (curl=$CURL_EXIT HTTP=$CODE)."
-            cat "$SNAPSHOT_TMP" 2>/dev/null | head -c 5000 || true
-            exit 1
-          fi
-          mv "$SNAPSHOT_TMP" "$SNAPSHOT_JSON"
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-trader-snapshot.json','utf8'));
-          const u=x.universe||{},m=x.meta||{};
-          const summary={
-            status:x.status,source:x.source,eligible:u.eligible_spot_symbols,
-            analyzed:u.analyzed_symbols,valid:u.valid_symbols,coverage_pct:u.coverage_pct,
-            scan_complete:u.scan_complete,engine:m.engine,
-            real_order_execution:m.real_order_execution
-          };
-          console.log('ADAPTIVE_TRADER_DHDTECH_LIVE_SCAN '+JSON.stringify(summary));
-          if(x.status!=='LIVE_DATA'||m.live!==true||m.paper_trading!==true||
-             m.real_order_execution!==false||m.closed_candles_only!==true||
-             m.engine!=='ADAPTIVE_TRADER_SIDECAR_V1')
-            throw new Error('DHDTECH_ADAPTIVE_TRADER_LIVE_CONTRACT_INVALID '+JSON.stringify(summary));
-          if(!(Number(u.eligible_spot_symbols)>0)||!(Number(u.analyzed_symbols)>0)||
-             !(Number(u.valid_symbols)>0)||!Array.isArray(x.candidates)||
-             !x.candidates.some(row=>row.data_valid===true&&Number.isFinite(Number(row.score))))
-            throw new Error('DHDTECH_ADAPTIVE_TRADER_ZERO_VALID_ANALYSIS '+JSON.stringify(summary));
-          NODE
-          WORKER_OK=0
+          # The independent server worker owns recurring market scans. Read its
+          # verified last-good snapshot instead of launching a second heavy scan
+          # in parallel with the Multi-Analyst and Pre-Move acceptance checks.
           STATUS_TMP="$RUNNER_TEMP/adaptive-trader-status.tmp.json"
           STATUS_JSON="$RUNNER_TEMP/adaptive-trader-status.json"
-          for attempt in $(seq 1 24); do
+          READY=0
+          CODE=000
+          for attempt in $(seq 1 30); do
             rm -f "$STATUS_TMP"
-            curl --location --silent --show-error --connect-timeout 8 --max-time 15 -o "$STATUS_TMP" "$BASE/api/adaptive-trader/status" || true
-            if [ -s "$STATUS_TMP" ] && node --input-type=module - "$STATUS_TMP" <<'NODE'
+            CURL_EXIT=0
+            CODE="$(curl --location --silent --show-error --connect-timeout 5 --max-time 8 -o "$STATUS_TMP" -w "%{http_code}" "$BASE/api/adaptive-trader/status")" || CURL_EXIT=$?
+            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ] && [ -s "$STATUS_TMP" ]; then
+              if node --input-type=module - "$STATUS_TMP" <<'NODE'
           import fs from 'node:fs';
           try {
             const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            process.exit(Number(x.successful_scans)>0&&!!x.last_scan_at&&x.last_error===null&&
-              Number(x.memory?.history_rows)>0&&x.real_order_execution===false&&x.paper_trading===true?0:1);
+            const s=x.last_summary||{},m=s.meta||{};
+            const scanAt=Date.parse(String(x.last_scan_at||''));
+            const summaryAt=Date.parse(String(s.as_of||''));
+            const scanAgeMs=Date.now()-scanAt;
+            const summaryAgeMs=Date.now()-summaryAt;
+            const ok=x.scanner_contract==='SERVER_DRIVEN_SCAN_V2'&&
+              Number(x.successful_scans)>0&&Number.isFinite(scanAt)&&scanAgeMs>=0&&scanAgeMs<=8*60*1000&&
+              x.last_error===null&&x.paper_trading===true&&x.real_order_execution===false&&
+              Number(x.memory?.history_rows)>0&&s.status==='LIVE_DATA'&&
+              Number.isFinite(summaryAt)&&summaryAgeMs>=0&&summaryAgeMs<=8*60*1000&&
+              m.live===true&&m.paper_trading===true&&m.real_order_execution===false&&
+              m.closed_candles_only===true&&m.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
+              Array.isArray(s.candidates)&&s.candidates.length>0&&
+              s.candidates.some(row=>row.data_valid===true&&Number.isFinite(Number(row.score)))&&
+              Array.isArray(s.latest_prices)&&s.latest_prices.length>0;
+            process.exit(ok?0:1);
           } catch { process.exit(1); }
           NODE
-            then
-              mv "$STATUS_TMP" "$STATUS_JSON"
-              WORKER_OK=1
-              break
+              then
+                mv "$STATUS_TMP" "$STATUS_JSON"
+                READY=1
+                break
+              fi
+              echo "::warning::DHDTech worker status is reachable but its latest verified scan or memory is not ready (attempt $attempt/30)."
+            else
+              case "$CODE" in
+                000|502|503|504)
+                  echo "::warning::DHDTech worker status transport/gateway error (curl=$CURL_EXIT HTTP=$CODE), attempt $attempt/30."
+                  ;;
+                *)
+                  echo "::warning::DHDTech worker status returned HTTP $CODE, attempt $attempt/30."
+                  ;;
+              esac
             fi
-            sleep 5
+            if [ "$attempt" -lt 30 ]; then sleep 5; fi
           done
-          if [ "$WORKER_OK" != "1" ]; then
-            echo "::error::DHDTech Adaptive Trader worker did not prove a successful background scan and persisted price history."
+          if [ "$READY" != "1" ]; then
+            echo "::error::DHDTech Adaptive Trader worker did not prove a fresh successful live scan and persisted price history."
             cat "$STATUS_TMP" 2>/dev/null | head -c 5000 || true
             exit 1
           fi
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-trader-status.json','utf8'));
+          const s=x.last_summary||{};
           console.log('ADAPTIVE_TRADER_DHDTECH_WORKER_MEMORY_OK '+JSON.stringify({
-            status:x.status,scan_count:x.scan_count,successful_scans:x.successful_scans,
+            status:x.status,scanner_contract:x.scanner_contract,
+            scan_count:x.scan_count,successful_scans:x.successful_scans,
             last_scan_at:x.last_scan_at,last_error:x.last_error,
+            candidate_count:s.candidates?.length,latest_price_count:s.latest_prices?.length,
             unresolved_samples:x.memory?.unresolved_samples,resolved_samples:x.memory?.resolved_samples,
             history_rows:x.memory?.history_rows,real_order_execution:x.real_order_execution
           }));
