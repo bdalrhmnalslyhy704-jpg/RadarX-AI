@@ -62,6 +62,31 @@ assert.equal(queued.symbol,'TESTUSDT');
 assert.equal(queued.trigger.movePct,1.01);
 assert.equal(queued.trigger.previousMovePct,.8);
 
+// A real price impulse must be considered even when the 24h percentage barely changes.
+{
+  const pulseSentinel=new EarlyMoveSentinel({
+    rest:{},store:{},config:{thresholdPct:1,earlyWakeTriggerPct:0.6,earlyWakeDeltaPct:0.25,
+      earlyWakeMax24hMovePct:0.9,earlyWakeScanCooldownMs:90000},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'STOPPED'}}})
+  });
+  pulseSentinel.running=true;
+  pulseSentinel.spotSymbols=new Set(['TESTUSDT']);
+  let calls=0,lastCall=null;
+  pulseSentinel.queueDeep=(symbol,row,trigger,mode)=>{
+    calls++;lastCall={symbol,row,trigger,mode};
+  };
+  pulseSentinel.processTicker({symbol:'TESTUSDT',lastPrice:1,priceChange24h:0.70},false);
+  assert.equal(calls,0);
+  pulseSentinel.processTicker({symbol:'TESTUSDT',lastPrice:1.003,priceChange24h:0.71},false);
+  assert.equal(calls,1);
+  assert.equal(lastCall.mode,'EARLY_WAKE');
+  assert.ok(lastCall.trigger.priceDeltaPct>=0.25);
+  assert.ok(lastCall.trigger.dailyChangeDeltaPct<0.25);
+  // Cooldown blocks repeated scans from a series of small ticks in the same burst.
+  pulseSentinel.processTicker({symbol:'TESTUSDT',lastPrice:1.006,priceChange24h:0.72},false);
+  assert.equal(calls,1);
+}
+
 console.log('Early Move Sentinel tests passed');
 
 
