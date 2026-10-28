@@ -11,6 +11,7 @@ on:
       - ".github/workflows/dhdtech-adaptive-trader-acceptance.yml"
       - ".github/workflows/android-release-apk.yml"
       - ".github/workflows/build224-container-runtime-smoke.yml"
+      - ".github/workflows/pre-move-radar-acceptance.yml"
 
 permissions:
   contents: read
