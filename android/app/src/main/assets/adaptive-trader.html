@@ -116,6 +116,9 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
 <section id="tab-opportunities" class="panel">
   <div class="panel-head"><b>الفرص التي حللها المتداول المستقل</b><span id="candidateCaption" class="tiny">تظهر النتائج بعد فحص بيانات حقيقية</span></div>
   <div id="candidateList" class="candidates"><div class="empty"><b>جاهز لأول فحص</b>اضغط «فحص السوق الحقيقي» لقراءة البيانات وتحليل الشموع المغلقة.</div></div>
+  <div class="section-title" style="margin-top:22px"><h2>عملات رُصدت بعد الصعود — تدقيق فقط</h2><span id="moverAuditCaption" class="tiny">لا تعني توصية دخول</span></div>
+  <p class="muted" style="font-size:10px;line-height:1.8;margin-top:0">يعرض الخادم هنا العملات ذات الحركة الممتدة التي فحص بياناتها بالفعل. تبقى منفصلة عن الفرص المبكرة كي لا تتحول الزيادة السابقة إلى مطاردة أو توصية شراء.</p>
+  <div id="moverAuditList" class="candidates"><div class="empty"><b>لم تصل نتائج تدقيق الحركات الممتدة بعد</b>ستظهر العملات عندما ينشر الخادم نتيجة فحص حديثة لهذه الفئة.</div></div>
 </section>
 
 <section id="tab-missed" class="panel" hidden>
@@ -517,6 +520,37 @@ function renderCandidates(snapshot){
       '</article>';
   }).join('');
 }
+function renderMoverAudit(){
+  const root=el('moverAuditList');
+  const caption=el('moverAuditCaption');
+  if(!root)return;
+  const summary=state.serverStatus&&state.serverStatus.last_summary;
+  const source=Array.isArray(summary&&summary.mover_audit)?summary.mover_audit:[];
+  const rows=source.filter(function(row){
+    return row&&row.tier==='LATE_MOVE'&&row.paper_candidate===false&&
+      row.entry_eligible===false&&row.paper_trading===true&&row.real_order_execution===false;
+  }).slice().sort(function(a,b){return (num(b.change_24h_pct)||0)-(num(a.change_24h_pct)||0);}).slice(0,15);
+  if(caption)caption.textContent=rows.length+' حركة ممتدة · تدقيق فقط · لا دخول';
+  if(!rows.length){
+    root.innerHTML='<div class="empty"><b>لا توجد حركات ممتدة مؤكدة في آخر ملخص للخادم</b>لن نخترع عملات أو نرفعها إلى القائمة دون بيانات حديثة وصالحة. هذا القسم منفصل عن فرص ما قبل الحركة.</div>';
+    return;
+  }
+  root.innerHTML=rows.map(function(row){
+    const reasons=(Array.isArray(row.reason_codes)?row.reason_codes:[]).slice(0,3)
+      .map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
+    return '<article class="candidate late">'+
+      '<div class="candidate-top"><div><div class="symbol">'+esc(row.symbol)+'</div><div class="price">'+esc(fmt(row.price,8))+' USDT</div></div>'+
+      '<span class="tag late">حركة ممتدة — لا مطاردة</span></div>'+
+      '<div class="metrics">'+
+        '<div class="metric"><b>'+esc(percent(row.change_24h_pct))+'</b><span>تغير 24 ساعة</span></div>'+
+        '<div class="metric"><b>'+esc(fmt(row.score,1))+'</b><span>درجة الرصد (ليست احتمال ربح)</span></div>'+
+        '<div class="metric"><b>'+esc(money(row.quote_volume_24h))+'</b><span>حجم 24 ساعة</span></div>'+
+        '<div class="metric"><b>'+esc(row.selection_lane||'EXTENDED_MOVER_AUDIT')+'</b><span>مسار الفحص</span></div>'+
+      '</div><div class="reasons">'+reasons+'</div>'+
+      '<div class="tiny" style="margin-top:8px">تدقيق فقط · paper_candidate=false · entry_eligible=false · real_order_execution=false</div>'+
+      '</article>';
+  }).join('');
+}
 function renderMissed(){
   const root=el('missedList');
   const serverRows=Array.isArray((state.serverStatus && state.serverStatus.missed_movers))?state.serverStatus.missed_movers:[];
@@ -627,6 +661,7 @@ function render(){
   renderExecutionStatus();
   if(snapshot)renderCandidates(snapshot);
   else renderCandidates(null);
+  renderMoverAudit();
   renderMissed();renderPortfolio();renderLearning();renderJournal();
   if(state.lastScanAt&&!scanBusy)el('asOfText').textContent='آخر مسح حقيقي: '+timeText(state.lastScanAt)+' · هذه الذاكرة محلية';
 }
