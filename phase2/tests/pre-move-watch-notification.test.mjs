@@ -355,6 +355,30 @@ test('feed-only Pre-Move watch does not queue stale push retries',async()=>{
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
+test('non-qualified Pre-Move watches are reported as feed-only even when no phone subscription exists',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-feed-only-no-subscriber-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    const provider={status:()=>({provider:'fcm',enabled:true}),async send(){
+      throw new Error('FEED_ONLY_MUST_NOT_SEND');
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const {candidate,snapshot,now}=fixture();
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert);
+    assert.notEqual(alert.watch_notification_tier,'HIGH_ACTIVITY_STRUCTURE_PENDING');
+    assert.notEqual(alert.watch_notification_tier,'EARLY_FLOW_MONITOR');
+    assert.notEqual(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'WATCH_ONLY_FEED_ONLY');
+    assert.equal(result.reason,'FINAL_CONFIRMATION_REQUIRED');
+    assert.equal(result.attempted,false);
+    assert.equal(result.sent_count,0);
+    assert.equal(manager.retryQueue.size,0);
+    assert.equal((await store.readRecent('notifications',10)).length,0);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
 test('Pre-Move live watch diagnostics identify the precise gate that blocks notifications',()=>{
   const {candidate,snapshot,now}=fixture();
   const blocked={...candidate,symbol:'BLOCKEDUSDT',data_status:{data_valid:false,data_stale:true}};
