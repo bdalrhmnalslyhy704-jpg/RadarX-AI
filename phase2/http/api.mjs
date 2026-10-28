@@ -888,9 +888,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           status:'DATA_UNAVAILABLE',error:'ADAPTIVE_TRADER_MARKET_DATA_UNAVAILABLE',candidates:[],latest_prices:[],
           meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
         });
-        const rawLimit=Number(u.searchParams.get('limit')||40);
-        const requested=Math.max(40,Math.min(120,Math.trunc(Number.isFinite(rawLimit)?rawLimit:40)));
-        const limit=requested<=60?40:requested<=100?80:120;
+        const rawLimit=Number(u.searchParams.get('limit')||60);
+        const requested=Math.max(40,Math.min(120,Math.trunc(Number.isFinite(rawLimit)?rawLimit:60)));
+        const limit=requested<=40?40:requested<=60?60:requested<=100?80:120;
         try{
           const snapshot=await adaptiveTraderSnapshotProvider({limit});
           if(!snapshot||!Array.isArray(snapshot.candidates)||snapshot.meta?.paper_trading!==true||

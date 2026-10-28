@@ -147,9 +147,13 @@ export async function startServer({
   const adaptiveTraderRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
   const adaptiveTraderExecutionController=new AdaptiveTraderExecutionController({store,env:process.env,logger});
+  const adaptiveTraderIntervalMs=Math.max(60_000,Math.min(600_000,
+    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_INTERVAL_MS)||300_000)));
+  const adaptiveTraderScanLimit=Math.max(40,Math.min(120,
+    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_SCAN_LIMIT)||60)));
   const adaptiveTraderWorker=new AdaptiveTraderWorker({
     store,snapshotProvider:adaptiveTraderSnapshotProvider,executionController:adaptiveTraderExecutionController,logger,
-    intervalMs:300000,scanLimit:40
+    intervalMs:adaptiveTraderIntervalMs,scanLimit:adaptiveTraderScanLimit
   });
   const moveConfig={...(config.moveRadar||{})};
   const moveScanner=new MarketUniverseScanner({rest,rotationStateStore:store,config:{

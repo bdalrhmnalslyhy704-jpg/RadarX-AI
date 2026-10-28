@@ -109,6 +109,8 @@ public final class RadarXBackgroundMonitorService extends Service {
             stopping = false;
         }
 
+        RadarXPushRegistration.syncIfConfigured(getApplicationContext());
+
         try {
             startAsForeground();
         } catch (Throwable error) {

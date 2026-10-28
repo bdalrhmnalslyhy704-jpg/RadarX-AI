@@ -8,7 +8,7 @@ const finite=value=>{
 const DEFAULT_INTERVAL_MS=5*60*1000;
 const SAMPLE_HORIZON_MS=4*60*60*1000;
 const HISTORY_MIN_INTERVAL_MS=15*60*1000;
-const SNAPSHOT_LIMIT=40;
+const SNAPSHOT_LIMIT=60;
 const MAX_SAMPLES=1000;
 const MAX_HISTORY=15000;
 const MAX_MISSED=500;
@@ -21,7 +21,7 @@ function createServerPaperPortfolio(){
 function emptyState(){
   const paperPortfolio=createServerPaperPortfolio();
   return {
-    version:1,enabled:false,scan_count:0,successful_scans:0,
+    version:1,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     paper_portfolio:paperPortfolio,
@@ -57,6 +57,10 @@ export class AdaptiveTraderWorker{
         if(saved&&saved.version===1&&Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
           this.state={
             ...emptyState(),...saved,
+            scan_cursor:Number.isFinite(Number(saved.scan_cursor))&&Number(saved.scan_cursor)>=0
+              ?Math.trunc(Number(saved.scan_cursor))
+              :Math.max(0,Math.trunc(Number(saved.last_summary?.universe?.scan_offset)||0)+
+                Math.trunc(Number(saved.last_summary?.universe?.scan_advance_count)||0)),
             samples:saved.samples.slice(-MAX_SAMPLES),
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
@@ -110,7 +114,7 @@ export class AdaptiveTraderWorker{
     this.state.last_started_at=started;
     this.state.last_error=null;
     try{
-      const snapshot=await this.snapshotProvider({limit:this.scanLimit,now:Date.now()});
+      const snapshot=await this.snapshotProvider({limit:this.scanLimit,now:Date.now(),offset:this.state.scan_cursor});
       if(!snapshot||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
          snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
          snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'||
@@ -119,6 +123,12 @@ export class AdaptiveTraderWorker{
       }
       const now=Date.parse(snapshot.as_of);
       if(!Number.isFinite(now)||now>Date.now()+5000)throw new Error('ADAPTIVE_TRADER_SNAPSHOT_TIME_INVALID');
+      const eligibleCount=Number(snapshot.universe?.eligible_spot_symbols)||0;
+      const scanOffset=Number(snapshot.universe?.scan_offset);
+      const advanceCount=Number(snapshot.universe?.scan_advance_count);
+      if(eligibleCount>0&&Number.isFinite(scanOffset)&&Number.isFinite(advanceCount)){
+        this.state.scan_cursor=(Math.max(0,Math.trunc(scanOffset))+Math.max(0,Math.trunc(advanceCount)))%eligibleCount;
+      }
       this.resolveSamples(snapshot,now);
       this.collectPriceHistory(snapshot,now);
       this.collectMissedMovers(snapshot,now);
@@ -149,7 +159,7 @@ export class AdaptiveTraderWorker{
           this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
         }
       }
-      this.state.last_summary=this.buildSummary(snapshot);
+      this.state.last_summary=this.buildSummary({...snapshot,candidates:adaptiveCandidates});
       await this.persist();
       this.logger.info?.('[ADAPTIVE_TRADER_SCAN_COMPLETE] '+JSON.stringify({
         as_of:snapshot.as_of,scan_count:this.state.scan_count,
@@ -331,7 +341,7 @@ export class AdaptiveTraderWorker{
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
-      interval_ms:this.intervalMs,scan_limit:this.scanLimit,
+      interval_ms:this.intervalMs,scan_limit:this.scanLimit,scan_cursor:Number(this.state.scan_cursor)||0,
       scan_count:Number(this.state.scan_count)||0,
       successful_scans:Number(this.state.successful_scans)||0,
       last_started_at:this.state.last_started_at,

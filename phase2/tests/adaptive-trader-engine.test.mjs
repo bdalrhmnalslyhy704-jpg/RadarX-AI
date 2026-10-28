@@ -382,6 +382,29 @@ test('universe rotation continues after the last successful pair and retries the
   assert.equal(symbolRequests[countBeforeThird],'ROT036USDT');
 });
 
+
+test('explicit persisted scan offset overrides the process-local cursor and cached result',async()=>{
+  const f=marketFixture();
+  const symbols=Array.from({length:100},(_,i)=>'OFF'+String(i).padStart(3,'0')+'USDT');
+  const rest={async request(path,query={}){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:symbols.map(symbol=>({
+      symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:Date.now()};
+    if(path==='/api/v3/ticker/24hr')return {data:symbols.map((symbol,i)=>({
+      symbol,lastPrice:'10',quoteVolume:String(5_000_000-i*10_000),priceChangePercent:'1.5'
+    })),source:'https://data-api.binance.vision',receivedAt:Date.now()};
+    if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:90_000,scanTimeoutMs:60_000});
+  const first=await service({limit:40,now:Date.now(),offset:5});
+  assert.equal(first.universe.scan_offset,5);
+  const second=await service({limit:40,now:Date.now()+1000,offset:50});
+  assert.equal(second.universe.scan_offset,50);
+  assert.equal(second.candidates.length,40);
+});
+
 test('concurrent universe sizes keep distinct server-cache entries',async()=>{
   const f=marketFixture();
   const rest={async request(path,query={}) {

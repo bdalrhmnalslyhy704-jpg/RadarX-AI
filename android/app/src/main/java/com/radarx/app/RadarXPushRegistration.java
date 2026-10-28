@@ -148,39 +148,55 @@ final class RadarXPushRegistration {
                 || FirebaseApp.getApps(context).isEmpty()) return;
         final String installationId = installationId(context);
         NETWORK.execute(() -> {
-            HttpURLConnection connection = null;
-            try {
-                JSONObject body = new JSONObject();
-                body.put("installation_id", installationId);
-                body.put("token", token);
-                body.put("notifications_enabled", true);
-                connection = (HttpURLConnection) new URL(BACKEND + "/api/push/device/register").openConnection();
-                connection.setRequestMethod("POST");
-                connection.setConnectTimeout(3500);
-                connection.setReadTimeout(4500);
-                connection.setInstanceFollowRedirects(false);
-                connection.setDoOutput(true);
-                connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-                connection.setRequestProperty("Accept", "application/json");
-                byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
-                connection.setFixedLengthStreamingMode(bytes.length);
-                try (OutputStream output = connection.getOutputStream()) {
-                    output.write(bytes);
+            for (int attempt = 1; attempt <= 4; attempt++) {
+                HttpURLConnection connection = null;
+                boolean retry = false;
+                try {
+                    JSONObject body = new JSONObject();
+                    body.put("installation_id", installationId);
+                    body.put("token", token);
+                    body.put("notifications_enabled", true);
+                    connection = (HttpURLConnection) new URL(BACKEND + "/api/push/device/register").openConnection();
+                    connection.setRequestMethod("POST");
+                    connection.setConnectTimeout(3500);
+                    connection.setReadTimeout(4500);
+                    connection.setInstanceFollowRedirects(false);
+                    connection.setDoOutput(true);
+                    connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                    connection.setRequestProperty("Accept", "application/json");
+                    byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                    connection.setFixedLengthStreamingMode(bytes.length);
+                    try (OutputStream output = connection.getOutputStream()) {
+                        output.write(bytes);
+                    }
+                    int status = connection.getResponseCode();
+                    if (status == 200 || status == 201) {
+                        Log.i(TAG, "FCM_DEVICE_REGISTERED");
+                        return;
+                    }
+                    if (status == 503) {
+                        Log.i(TAG, "FCM_PROVIDER_NOT_READY; LOCAL_NOTIFICATION_FALLBACK_ACTIVE");
+                    } else {
+                        Log.w(TAG, "FCM_DEVICE_REGISTRATION_HTTP_" + status + " attempt=" + attempt);
+                    }
+                    retry = status == 429 || status >= 500;
+                    if (!retry) return;
+                } catch (Exception error) {
+                    // Never log the registration token; it is a send credential.
+                    Log.w(TAG, "FCM_DEVICE_REGISTRATION_ATTEMPT_FAILED attempt=" + attempt);
+                    retry = true;
+                } finally {
+                    if (connection != null) connection.disconnect();
                 }
-                int status = connection.getResponseCode();
-                if (status == 200 || status == 201) {
-                    Log.i(TAG, "FCM_DEVICE_REGISTERED");
-                } else if (status == 503) {
-                    Log.i(TAG, "FCM_PROVIDER_NOT_READY; LOCAL_NOTIFICATION_FALLBACK_ACTIVE");
-                } else {
-                    Log.w(TAG, "FCM_DEVICE_REGISTRATION_HTTP_" + status);
+                if (retry && attempt < 4) {
+                    try { Thread.sleep(750L * attempt * attempt); }
+                    catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
-            } catch (Exception error) {
-                // Never log the registration token; it is a send credential.
-                Log.w(TAG, "FCM_DEVICE_REGISTRATION_FAILED");
-            } finally {
-                if (connection != null) connection.disconnect();
             }
+            Log.w(TAG, "FCM_DEVICE_REGISTRATION_RETRIES_EXHAUSTED; LOCAL_NOTIFICATION_FALLBACK_ACTIVE");
         });
     }
 }

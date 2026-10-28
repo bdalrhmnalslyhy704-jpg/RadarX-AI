@@ -95,7 +95,8 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
   <div class="control-group">
     <label class="muted" for="universeLimit" style="font-size:10px">حجم فحص السوق</label>
     <select id="universeLimit" class="select">
-      <option value="40" selected>40 زوجًا</option>
+      <option value="40">40 زوجًا</option>
+      <option value="60" selected>60 زوجًا</option>
       <option value="80">80 زوجًا</option>
       <option value="120">120 زوجًا</option>
     </select>
@@ -420,7 +421,7 @@ async function refreshWorkerStatus(){
         ' · أجهزة مسجلة '+fcmDevices;
     el('sourceText').textContent='المصدر: Binance Public REST · فحص الخادم: '+String(value.status||'UNKNOWN')+
       ' · آخر نجاح: '+completed+' · نجاح '+(Number(value.successful_scans)||0)+'/'+(Number(value.scan_count)||0)+
-      ' · '+pushText+errorText;
+      ' · مؤشر التدوير '+(Number(value.scan_cursor)||0)+' · '+pushText+errorText;
     persist();render();
     return true;
   }catch(error){
@@ -443,7 +444,7 @@ async function scanMarket(){
   setStatus('جارٍ طلب فحص مباشر من الخادم؛ تبقى آخر نتيجة محفوظة حتى نجاح الطلب','idle');
   addJournal('بدأ طلب فحص مباشر لبيانات Binance Spot المغلقة.');
   try{
-    const limit=Number(el('universeLimit').value)||40;
+    const limit=Number(el('universeLimit').value)||60;
     const endpoint=API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit);
     let response,snapshot;
     for(let attempt=0;attempt<2;attempt++){

@@ -267,7 +267,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const change = changePct(row);
     return change !== null && change >= 0.25 && change < 8;
   }).sort((a,b) => {
-    const rank = row => clamp(100 - Math.abs((changePct(row) ?? -100) - 2.5) * 15, 0, 100);
+    const rank = row => clamp(100 - Math.abs((changePct(row) ?? -100) - 4.0) * 15, 0, 100);
     return rank(b)-rank(a) ||
       Number(b.quoteVolume)-Number(a.quoteVolume) ||
       String(a.symbol||'').localeCompare(String(b.symbol||''));
@@ -417,10 +417,19 @@ export function createAdaptiveTraderSnapshotService({
   const flights = new Map();
   const rotationCursors = new Map();
   const retryQueues = new Map();
-  const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now() } = {}) => {
+  const flightOffsets = new Map();
+  const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now(), offset } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
+    const requestedOffset = offset === undefined || offset === null || !Number.isFinite(Number(offset))
+      ? null : Math.max(0, Math.trunc(Number(offset)));
     const hit = cache.get(safeLimit);
-    if (hit && Number(now) - hit.cachedAt < ttlMs) {
+    const hitEligibleCount = Number(hit?.snapshot?.universe?.eligible_spot_symbols) || 0;
+    const normalizedRequestedOffset = requestedOffset === null ? null
+      : (hitEligibleCount > 0 ? requestedOffset % hitEligibleCount : requestedOffset);
+    const hitOffset = Number(hit?.snapshot?.universe?.scan_offset);
+    const cacheOffsetMatches = requestedOffset === null ||
+      (Number.isFinite(hitOffset) && hitOffset === normalizedRequestedOffset);
+    if (hit && cacheOffsetMatches && Number(now) - hit.cachedAt < ttlMs) {
       return {
         ...hit.snapshot,
         meta: { ...hit.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - hit.cachedAt) }
@@ -434,15 +443,20 @@ export function createAdaptiveTraderSnapshotService({
       const [activeLimit, active] = activeEntry;
       // Identical requests should share one scan. A different universe size
       // waits, then gets its own scan rather than consuming the wrong result.
-      if (activeLimit === safeLimit) return active;
+      if (activeLimit === safeLimit) {
+        const activeOffset = flightOffsets.get(activeLimit);
+        if (requestedOffset === null || activeOffset === requestedOffset) return active;
+        try { await active; } catch {}
+        return getSnapshot({ limit: safeLimit, now: Date.now(), offset: requestedOffset });
+      }
       try { await active; } catch {}
-      return getSnapshot({ limit: safeLimit, now: Date.now() });
+      return getSnapshot({ limit: safeLimit, now: Date.now(), offset: requestedOffset });
     }
     const previousDeadline = Number(rest.requestDeadlineAtMs) > 0 ? Number(rest.requestDeadlineAtMs) : null;
     const deadline = Date.now() + Math.max(5_000, Math.min(60_000, Math.trunc(Number(scanTimeoutMs) || 45_000)));
     rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
     const effectiveDeadline = rest.requestDeadlineAtMs;
-    const scanOffset = rotationCursors.get(safeLimit) || 0;
+    const scanOffset = requestedOffset === null ? (rotationCursors.get(safeLimit) || 0) : requestedOffset;
     const queuedRetries = retryQueues.get(safeLimit) || [];
     const task = buildAdaptiveTraderMarketSnapshot({
       rest, limit: safeLimit, now, offset: scanOffset, retrySymbols: queuedRetries, minQuoteVolume24h
@@ -471,9 +485,12 @@ export function createAdaptiveTraderSnapshotService({
       return { ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } };
     }).finally(() => {
       if (rest.requestDeadlineAtMs === effectiveDeadline) rest.requestDeadlineAtMs = previousDeadline;
-      for (const [key, activeTask] of flights) if (activeTask === task) flights.delete(key);
+      for (const [key, activeTask] of flights) {
+        if (activeTask === task) { flights.delete(key); flightOffsets.delete(key); }
+      }
     });
     flights.set(safeLimit, task);
+    flightOffsets.set(safeLimit, scanOffset);
     return task;
   };
   return getSnapshot;
