@@ -41,6 +41,18 @@ test('dashboard consumes the verified server worker snapshot and reports network
   assert.match(html,/آخر نجاح/);
 });
 
+test('dashboard shows already-extended movers in a separate audit-only list, never as entry candidates',()=>{
+  assert.match(html,/moverAuditList/);
+  assert.match(html,/function renderMoverAudit\(\)/);
+  assert.match(html,/mover_audit/);
+  assert.match(html,/LATE_MOVE/);
+  assert.match(html,/paper_candidate===false/);
+  assert.match(html,/entry_eligible===false/);
+  assert.match(html,/real_order_execution===false/);
+  assert.match(html,/حركة ممتدة — لا مطاردة/);
+  assert.match(html,/تدقيق فقط/);
+});
+
 test('dashboard distinguishes push-provider status from actual device delivery',()=>{
   assert.match(html,/value\.notification_transport/);
   assert.match(html,/fcm_devices/);
