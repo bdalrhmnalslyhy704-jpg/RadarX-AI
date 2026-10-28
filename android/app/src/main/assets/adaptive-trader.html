@@ -436,7 +436,7 @@ async function scanMarket(){
     let response,snapshot;
     for(let attempt=0;attempt<2;attempt++){
       const controller=new AbortController();
-      const requestTimeout=setTimeout(()=>controller.abort(),55_000);
+      const requestTimeout=setTimeout(()=>controller.abort(),70_000);
       try{
         response=await fetch(endpoint,{
           method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller.signal
