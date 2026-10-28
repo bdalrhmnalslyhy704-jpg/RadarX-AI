@@ -41,26 +41,40 @@ jobs:
             let lastObserved=null;
             while(Date.now()<deadline){
               try{
-                const response=await fetch(url.origin+'/api/adaptive-trader/status',{
-                  headers:{Accept:'application/json', 'Cache-Control':'no-cache'},
-                  signal:AbortSignal.timeout(8000)
-                });
-                const value=await response.json();
+                const [response,deploymentResponse]=await Promise.all([
+                  fetch(url.origin+'/api/adaptive-trader/status',{
+                    headers:{Accept:'application/json', 'Cache-Control':'no-cache'},
+                    signal:AbortSignal.timeout(8000)
+                  }),
+                  fetch(url.origin+'/api/deployment-info',{
+                    headers:{Accept:'application/json', 'Cache-Control':'no-cache'},
+                    signal:AbortSignal.timeout(8000)
+                  })
+                ]);
+                const [value,deployment]=await Promise.all([response.json(),deploymentResponse.json()]);
                 const summary=value.last_summary;
                 const meta=summary&&summary.meta;
                 const scannedAt=Date.parse(String(value.last_scan_at||''));
                 const summaryAt=Date.parse(String(summary&&summary.as_of||''));
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
+                const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
+                  deployment.expected_radars===12&&deployment.registered_radars===12&&
+                  deployment.pre_move_scanner_ready===true&&
+                  deployment.analyst_system&&deployment.analyst_system.expected_analysts===20&&
+                  deployment.analyst_system.engine_configured===true&&
+                  deployment.analyst_system.review_bridge_installed===true&&
+                  deployment.paper_trading===true&&deployment.real_order_execution===false;
                 const candidates=summary&&summary.candidates;
                 const prices=summary&&summary.latest_prices;
                 lastObserved={
                   http:response.status,status:value.status,scan_count:value.scan_count,
                   successful_scans:value.successful_scans,last_error:value.last_error,
-                  last_scan_at:value.last_scan_at,history_rows:historyRows,
+                  radars:deployment.registered_radars,analysts:deployment.analyst_system&&deployment.analyst_system.expected_analysts,
+                  system_healthy:systemHealthy,last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
                   latest_prices:Array.isArray(prices)?prices.length:null
                 };
-                const valid=response.ok&&value.paper_trading===true&&value.real_order_execution===false&&
+                const valid=response.ok&&systemHealthy&&value.paper_trading===true&&value.real_order_execution===false&&
                   Number(value.successful_scans)>0&&value.last_error===null&&
                   Number.isFinite(scannedAt)&&scannedAt>=started-12*60*1000&&
                   summary&&summary.status==='LIVE_DATA'&&Number.isFinite(summaryAt)&&
