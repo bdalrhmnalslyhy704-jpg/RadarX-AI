@@ -108,6 +108,7 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     assert.equal(status.last_summary.mover_audit.length,1);
     assert.equal(status.last_summary.mover_audit[0].symbol,'LATEUSDT');
     assert.equal(status.last_summary.mover_audit[0].selection_lane,'EXTENDED_MOVER_AUDIT');
+    assert.equal(status.last_summary.mover_audit[0].quote_volume_24h,1_200_000);
     assert.equal(status.last_summary.mover_audit[0].paper_candidate,false);
     assert.equal(status.memory.resolved_samples,1);
     assert.ok(status.missed_movers.some(row=>row.symbol==='TESTUSDT'&&row.classification==='POTENTIAL_MISSED_MOVER'));
