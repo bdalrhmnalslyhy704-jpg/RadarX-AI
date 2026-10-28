@@ -836,6 +836,57 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
 });
 
 
+test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',async()=>{
+  const scanNow=stablePreMoveTestTime();
+  const alpha=n=>{
+    let value=n,out='';
+    do{out=String.fromCharCode(65+(value%26))+out;value=Math.floor(value/26)-1;}while(value>=0);
+    return out;
+  };
+  const names=Array.from({length:70},(_,i)=>'COIN'+alpha(i)+'USDT');
+  const exchangeRows=names.map(symbol=>({
+    symbol,baseAsset:symbol.slice(0,-4),quoteAsset:'USDT',status:'TRADING',
+    isSpotTradingAllowed:true,permissions:['SPOT']
+  }));
+  const tickerRows=names.map((symbol,i)=>({
+    symbol,lastPrice:'1',highPrice:'1.1',lowPrice:'0.9',
+    quoteVolume:String(5_000_000+i*1000),count:100_000+i,priceChangePercent:'1'
+  }));
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:exchangeRows},source:'TEST'};
+      if(path==='/api/v3/ticker/24hr')return {data:tickerRows,source:'TEST'};
+      throw new Error('UNEXPECTED_PATH:'+path);
+    },
+    async klines(){throw new Error('DEEP_SCAN_SHOULD_USE_STUB');},
+    async depth(){throw new Error('DEEP_SCAN_SHOULD_USE_STUB');}
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,clock:()=>scanNow,
+    config:{minQuoteVolume24h:750000,scanLimit:50,deepConcurrency:4}
+  });
+  let seen=[];
+  scanner.scanPreMoveSymbol=async ticker=>{seen.push(ticker.symbol);return null;};
+
+  const first=await scanner.scanPreMove({quote:'USDT',limit:50});
+  const firstSymbols=new Set(seen);
+  assert.equal(first.universe.requested,50);
+  assert.equal(first.universe.per_cycle_scan_cap,40);
+  assert.equal(first.universe.discovered,40);
+  assert.equal(first.universe.deep_scanned,40);
+  assert.equal(first.universe.rotation_width,33);
+  assert.equal(seen.length,40);
+
+  seen=[];
+  const second=await scanner.scanPreMove({quote:'USDT',limit:50});
+  assert.equal(second.universe.rotation_cycle,1);
+  assert.equal(second.universe.discovered,40);
+  assert.equal(second.universe.deep_scanned,40);
+  const newlyCovered=seen.filter(symbol=>!firstSymbols.has(symbol));
+  assert.ok(newlyCovered.length>=25,
+    'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
+});
+
 test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{
   const scanNow=stablePreMoveTestTime();
   const scanner=new MarketUniverseScanner({

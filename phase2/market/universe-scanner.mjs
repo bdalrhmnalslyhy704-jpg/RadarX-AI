@@ -8,6 +8,10 @@ import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit
 import {finiteNumberOr} from '../core/finite-number.mjs';
 import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
+// A bounded rotating deep-scan keeps the live Pre-Move request under the
+// 45-second service objective while preserving broad symbol coverage over cycles.
+export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 40;
+
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
   scanLimit: 20,
@@ -1120,7 +1124,10 @@ export function buildPreMoveTargetPlan(candles,ticker={},now=Date.now()){
     reason_codes:[...new Set(reasons)],price_basis:'LAST_TICKER_PRICE_AT_SCAN',closed_candles_used:rows.length,
     closed_candles_only:true,paper_only:true,not_guaranteed:true};
 }
-export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,limit=30,rotationOffset=0,activitySignals=null}={}){
+export function rankPreMoveTickerRows(tickers,symbols,{
+  minQuoteVolume24h=MARKET_RADAR_DEFAULTS.minQuoteVolume24h,
+  limit=30,rotationOffset=0,activitySignals=null,pinnedFraction=0.20,activityPriorityLimit=null
+}={}){
   const allowed=new Set(symbols.map(x=>x.symbol));
   // Discovery is intentionally broader than the final alert liquidity gate. A
   // live, active Spot pair below the alert volume floor must still get a turn in
@@ -1159,10 +1166,16 @@ export function rankPreMoveTickerRows(tickers,symbols,{minQuoteVolume24h=MARKET_
   // Keep only the highest-ranked 20% pinned. Reserve a second, bounded lane
   // for unusually strong live ticker-activity bursts so alphabetical rotation
   // cannot delay every fast-emerging pair until its next full-market turn.
-  const pinnedCount=Math.min(Math.ceil(take*0.20),ranked.length);
+  const pinnedShare=Number.isFinite(Number(pinnedFraction))
+    ?Math.max(0.05,Math.min(0.50,Number(pinnedFraction))):0.20;
+  const pinnedCount=Math.min(Math.ceil(take*pinnedShare),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
   const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
-  const activityPrioritySlots=Math.min(5,Math.floor(take*0.20));
+  const defaultActivityPrioritySlots=Math.min(5,Math.floor(take*0.20));
+  const requestedActivitySlots=activityPriorityLimit==null
+    ?defaultActivityPrioritySlots
+    :Math.max(0,Math.trunc(Number(activityPriorityLimit)||0));
+  const activityPrioritySlots=Math.min(defaultActivityPrioritySlots,requestedActivitySlots);
   const activityPriority=ranked
     .filter(x=>!pinnedSymbols.has(x.symbol)&&
       Number(x.pre_move_activity_score)>=3&&
@@ -2311,7 +2324,10 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    const discoveryLimit=Math.max(20,normalizedLimit);
+    // Bound one request to 40 symbols so candle + depth reads can finish inside the
+    // 45-second service objective. The persisted cursor rotates the broader universe
+    // across completed cycles; fewer pinned rows keep per-cycle rotating coverage wide.
+    const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(20,normalizedLimit));
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
     let rotationCursorSource='PROCESS_MEMORY_FALLBACK';
@@ -2332,13 +2348,19 @@ export class MarketUniverseScanner {
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
       this._preMoveRotationCycle=rotationCycle+1;
     }
-    const rotatingWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.20)-Math.min(5,Math.floor(discoveryLimit*0.20)));
+    const preMovePinnedFraction=0.10;
+    const preMoveActivityPrioritySlots=3;
+    const rotatingWidth=Math.max(1,discoveryLimit-
+      Math.ceil(discoveryLimit*preMovePinnedFraction)-
+      Math.min(preMoveActivityPrioritySlots,Math.floor(discoveryLimit*0.20)));
     const rotationOffset=(rotationCycle*rotatingWidth);
     const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       limit:discoveryLimit,
       rotationOffset,
-      activitySignals:tickerActivitySignals
+      activitySignals:tickerActivitySignals,
+      pinnedFraction:preMovePinnedFraction,
+      activityPriorityLimit:preMoveActivityPrioritySlots
     });
     // The live DHDTech pass still exceeded its 45s objective at 40 workers.
     // This scan is I/O-bound (15m candles + depth per symbol), so allow one
@@ -2508,7 +2530,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit
