@@ -41,7 +41,7 @@ export RADARX_PUSH_PROVIDER
 # Prefer DHDTech's persistent volume when it is mounted and writable.
 # Preserve an explicit operator-selected directory; never silently relocate it.
 if [ -z "${RADARX_DATA_DIR:-}" ]; then
-  if [ -d /data ] && [ -w /data ] && mkdir -p /data/radarx 2>/dev/null && [ -w /data/radarx ]; then
+  if [ -d /data ] && grep -qs " /data " /proc/mounts && [ -w /data ] && mkdir -p /data/radarx 2>/dev/null && [ -w /data/radarx ]; then
     export RADARX_DATA_DIR=/data/radarx
   else
     export RADARX_DATA_DIR=./.radarx-data
