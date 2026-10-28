@@ -171,7 +171,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                 JSONArray radars = root.optJSONArray("radars");
                 updateStatus("رادارات مستقلة • " + (radars == null ? 6 : radars.length()) +
                     " • اكتشافات جديدة: " + count);
-                // Early watch candidates stay in the in-app radar feed; they must never trigger phone notifications.
+                // Only the separately qualified Pre-Move watch endpoint may notify locally;
+                // ordinary radar candidates still require the strict confirmed-entry gate.
             } else {
                 updateStatus("الرادارات المستقلة غير متاحة حاليًا؛ لا يتم توليد بيانات صناعية");
             }
