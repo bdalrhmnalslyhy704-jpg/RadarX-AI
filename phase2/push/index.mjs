@@ -686,7 +686,8 @@ export class PushManager{
     // Only three evidence-validated Pre-Move tiers may generate a monitor-only
     // phone notification; all other watch tiers remain feed-only.
     const qualifiedPreMoveTiers=new Set([
-      'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR'
+      'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR',
+      'ACCUMULATION_PREP_MONITOR'
     ]);
     const isQualifiedPreMovePush=event==='PRE_MOVE_RADAR_WATCH_ONLY'&&alert?.radar==='PRE_MOVE'&&
       qualifiedPreMoveTiers.has(String(alert?.watch_notification_tier||''));
@@ -752,6 +753,7 @@ export class PushManager{
       push.signal_type='WATCH_ONLY';
       push.watch_only=true;
       push.entry_eligible=false;
+      push.watch_notification_tier=alert?.watch_notification_tier||null;
       push.requires_follow_up_confirmation=true;
       push.title='RadarX • مراقبة مبكرة • '+symbol;
       push.message=[symbol,
@@ -759,7 +761,9 @@ export class PushManager{
           ?'تسارع موثق في الحجم والصفقات وضغط الشراء — مراقبة فقط، لا دخول'
           :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
             ?'نشاط مبكر قوي والبنية قيد التأكد — مراقبة فقط، لا دخول'
-            :'دلائل تدفق شراء مبكرة — مراقبة فقط، لا دخول'
+            :alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR'
+              ?'تراكم مبكر بسيولة قوية وحجم وصفقات متزايدة — مراقبة فقط، لا دخول'
+              :'دلائل تدفق شراء مبكرة — مراقبة فقط، لا دخول'
       ].join(' • ');
 
       let response;
