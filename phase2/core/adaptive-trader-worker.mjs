@@ -316,6 +316,7 @@ export class AdaptiveTraderWorker{
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
     return {
+      scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,
       scan_count:Number(this.state.scan_count)||0,
