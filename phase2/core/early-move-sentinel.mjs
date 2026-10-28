@@ -752,10 +752,23 @@ export class EarlyMoveSentinel {
     const previous=Number(prev.priceChange24h), current=Number(row.priceChange24h);
     if(!Number.isFinite(previous)||!Number.isFinite(current))return;
     const delta=current-previous;
+    const previousPrice=Number(prev.lastPrice), currentPrice=Number(row.lastPrice);
+    const priceDeltaPct=Number.isFinite(previousPrice)&&previousPrice>0&&
+      Number.isFinite(currentPrice)&&currentPrice>0
+      ?(currentPrice/previousPrice-1)*100:null;
+    // The 24h-change field can stay nearly flat while a genuine short impulse
+    // is forming. Use both the 24h-change delta and the observed tick-price move,
+    // but preserve the strict early-stage daily-move ceiling.
+    const impulseDeltaPct=Number.isFinite(priceDeltaPct)?Math.max(delta,priceDeltaPct):delta;
     const wakeCross=previous<this.config.earlyWakeTriggerPct&&current>=this.config.earlyWakeTriggerPct&&current<=this.config.earlyWakeMax24hMovePct;
-    const wakeImpulse=delta>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
-    if(wakeCross||wakeImpulse){
-      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:delta,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
+    const wakeImpulse=impulseDeltaPct>=this.config.earlyWakeDeltaPct&&current>=0&&current<=this.config.earlyWakeMax24hMovePct;
+    const now=this.clock();
+    const wakeScanKey='EARLY_WAKE:'+symbol;
+    const lastWakeScan=Number(this.lastEarlyScanAt.get(wakeScanKey)||0);
+    if((wakeCross||wakeImpulse)&&now-lastWakeScan>=this.config.earlyWakeScanCooldownMs){
+      this.lastEarlyScanAt.set(wakeScanKey,now);
+      this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:impulseDeltaPct,
+        dailyChangeDeltaPct:delta,priceDeltaPct,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
     }
     const crossedUp=previous<this.config.thresholdPct&&current>=this.config.thresholdPct;
     const crossedDown=previous>-this.config.thresholdPct&&current<=-this.config.thresholdPct;
