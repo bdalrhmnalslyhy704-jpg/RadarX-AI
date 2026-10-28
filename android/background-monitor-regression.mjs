@@ -48,14 +48,24 @@ assert.doesNotMatch(service, /candidates = body\.optJSONArray\("candidates"\)/,
   'unqualified radar analysis candidates must never be promoted into Android notifications');
 assert.match(service, /private static boolean isActionableRadarAlert\(JSONObject alert\)/,
   'Android must enforce a shared last-mile notification eligibility gate');
-assert.doesNotMatch(service, /pollPreMoveWatchOnlyAlertsSafely\(\);/,
-  'the active background loop must not turn every early watch into a local phone notification');
-assert.match(service, /PRE_MOVE_WATCH_FEED_ONLY_LOCAL_PUSH_DISABLED/,
-  'early pre-move monitoring must stay inside the app, not post local Android notifications');
-assert.match(service, /PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED/,
-  'the obsolete local watch notifier must fail closed if called by any future code');
-assert.doesNotMatch(service, /manager\.notify\("radarx_premove_watch"/,
-  'no Android local notification path may post a watch-only candidate');
+assert.match(service, /pollPreMoveWatchOnlyAlertsSafely\(\);/,
+  'the background service must poll the server-owned Pre-Move candidate lane independently of the ordinary radar feed');
+assert.match(service, /\/api\/pre-move-radar\?quote=USDT&limit=50/,
+  'the local fallback must consume the dedicated Pre-Move API rather than reclassifying arbitrary radar candidates');
+assert.match(service, /watch_notification_candidates/,
+  'only candidates that pass the server Pre-Move notification gate may reach the local fallback');
+assert.match(service, /TICKER_ACTIVITY_ACCELERATION_MONITOR/,
+  'the local fallback must whitelist the market-wide early-activity monitor tier');
+assert.match(service, /EARLY_FLOW_MONITOR/,
+  'the local fallback must whitelist only the validated early buyer-flow tier');
+assert.match(service, /HIGH_ACTIVITY_STRUCTURE_PENDING/,
+  'the local fallback must apply the stricter exceptional high-activity tier');
+assert.match(service, /PRE_MOVE_WATCH_LOCAL_NOTIFICATIONS_POSTED/,
+  'the local fallback must report when a qualified watch notification was accepted by Android');
+assert.match(service, /manager\.notify\("radarx_premove_watch", notificationId, builder\.build\(\)\)/,
+  'the bounded local fallback must post a dedicated monitor-only notification');
+assert.match(service, /RadarXNotificationPolicy\.reserve/,
+  'Pre-Move monitor notifications must share the same cross-process quota and symbol cooldown as FCM');
 assert.match(service, /if \(!alert\.optBoolean\("entry_eligible", false\)\) return false;/,
   'phone alerts must require explicit entry eligibility; missing fields do not count as approval');
 assert.match(service, /boolean finalConfirmation = "CONFIRMED"\.equals\(lifecycleState\)/,
