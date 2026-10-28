@@ -877,9 +877,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           status:'UNAVAILABLE',enabled:false,running:false,in_flight:false,
           error:'ADAPTIVE_TRADER_WORKER_UNAVAILABLE',missed_movers:[],
           memory:{resolved_samples:0,unresolved_samples:0,history_rows:0,potential_missed_movers:0},
+          notification_transport:await notificationTransportSnapshot(),
           paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
         });
-        return send(res,200,{service:'RADARX_ADAPTIVE_TRADER_SIDECAR',...adaptiveTraderWorker.snapshot()});
+        return send(res,200,{service:'RADARX_ADAPTIVE_TRADER_SIDECAR',...adaptiveTraderWorker.snapshot(),
+          notification_transport:await notificationTransportSnapshot()});
       }
       if(u.pathname==='/api/adaptive-trader/market-snapshot'&&req.method==='GET'){
         if(typeof adaptiveTraderSnapshotProvider!=='function')return send(res,503,{
