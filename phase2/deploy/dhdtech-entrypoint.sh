@@ -14,11 +14,8 @@ export RADARX_ENV="${RADARX_ENV:-production}"
 # must never silently leave every radar idle. This does not enable order execution.
 export RADARX_RADARS_AUTOSTART=true
 export RADARX_STAGING_TEST_PUSH_ENABLED="${RADARX_STAGING_TEST_PUSH_ENABLED:-false}"
-trusted_origins='https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site,https://radarx-build-224.dhdtech.site,https://dhdtech.site'
-if [ -n "${RADARX_ALLOWED_ORIGINS:-}" ]; then
-  export RADARX_ALLOWED_ORIGINS="${RADARX_ALLOWED_ORIGINS},${trusted_origins}"
-else
-  export RADARX_ALLOWED_ORIGINS="$trusted_origins"
+if [ -z "${RADARX_ALLOWED_ORIGINS:-}" ]; then
+  export RADARX_ALLOWED_ORIGINS='https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site,https://radarx-build-224.dhdtech.site,https://dhdtech.site'
 fi
 export RADARX_HOST="${RADARX_HOST:-0.0.0.0}"
 export RADARX_REAL_ORDER_EXECUTION=false
@@ -43,6 +40,11 @@ export RADARX_PUSH_PROVIDER
 if [ -z "${RADARX_DATA_DIR:-}" ]; then
   if [ -d /data ] && grep -qs " /data " /proc/mounts && [ -w /data ] && mkdir -p /data/radarx 2>/dev/null && [ -w /data/radarx ]; then
     export RADARX_DATA_DIR=/data/radarx
+    # Migrate only missing files from the old container-local directory.
+    # Existing persistent records always win; this is idempotent across restarts.
+    if [ -d ./.radarx-data ] && [ "$(cd ./.radarx-data && pwd)" != "$(cd "$RADARX_DATA_DIR" && pwd)" ]; then
+      cp -an ./.radarx-data/. "$RADARX_DATA_DIR"/ 2>/dev/null || true
+    fi
   else
     export RADARX_DATA_DIR=./.radarx-data
   fi
