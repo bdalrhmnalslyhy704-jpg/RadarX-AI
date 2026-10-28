@@ -27,6 +27,19 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
     assert.equal(status.status,'UNAVAILABLE');assert.equal(status.scanner_ready,false);
     assert.equal(status.worker.enabled,false);assert.equal(status.paper_trading,true);
     assert.equal(status.real_order_execution,false);
+    assert.equal(status.notification_transport.provider,'none');
+    assert.equal(status.notification_transport.enabled,false);
+    assert.equal(status.notification_transport.fcm_devices,0);
+    assert.equal(status.notification_transport.physical_device_delivery_verified,false);
+    assert.equal(Object.hasOwn(status.notification_transport,'fcm_token'),false);
+    const deploymentResponse=await fetch('http://127.0.0.1:'+server.address().port+'/api/deployment-info');
+    assert.equal(deploymentResponse.status,200);
+    const deployment=await deploymentResponse.json();
+    assert.equal(deployment.push.provider,'none');
+    assert.equal(deployment.push.enabled,false);
+    assert.equal(deployment.push.active_subscriptions,0);
+    assert.equal(deployment.push.fcm_devices,0);
+    assert.equal(Object.hasOwn(deployment.push,'fcm_token'),false);
   }finally{
     server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
