@@ -228,7 +228,7 @@ jobs:
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          URL="$BASE/api/early-mover-case-study?threshold_pct=5&window_hours=24&lead_minutes=60&as_of=2026-10-27T11:07:00.000Z"
+          URL="$BASE/api/early-mover-case-study?symbols=INITUSDT,BLURUSDT,SHELLUSDT,BMTUSDT&threshold_pct=5&window_hours=24&lead_minutes=60"
           TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
           OUT="$RUNNER_TEMP/early-mover-case-study.json"
           CODE="000"
@@ -242,7 +242,8 @@ jobs:
           import fs from 'node:fs';
           try {
             const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==6) process.exit(1);
+            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==4||
+               JSON.stringify(body.options?.symbols)!==JSON.stringify(['INITUSDT','BLURUSDT','SHELLUSDT','BMTUSDT'])) process.exit(1);
           } catch { process.exit(1); }
           NODE
               then
