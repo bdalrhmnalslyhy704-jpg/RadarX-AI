@@ -33,6 +33,7 @@ test('server paper portfolio records isolated trades and persists evidence witho
     const result=await worker.runOnce();
     assert.equal(result.status,'SUCCESS');
     const status=worker.snapshot();
+    assert.equal(status.scanner_contract,'SERVER_DRIVEN_SCAN_V2');
     assert.equal(status.last_summary.status,'LIVE_DATA');
     assert.equal(status.last_summary.meta.live,true);
     assert.equal(status.last_summary.meta.real_order_execution,false);
