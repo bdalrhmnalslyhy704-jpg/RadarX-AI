@@ -78,8 +78,8 @@ function makeRest({wideSpread=false,clock=()=>Date.now()}={}) {
         return {source:'TEST',receivedAt:clock(),candles:series(tf,250,60_000,clock())};
       } finally {active--;}
     },
-    depth:async(symbol)=>{
-      calls.push({type:'depth',symbol});
+    depth:async(symbol,limit)=>{
+      calls.push({type:'depth',symbol,limit});
       return {source:'TEST',data:{
         bids:[['100',wideSpread?'10':'10000']],
         asks:[[wideSpread?'100.5':'100.01',wideSpread?'10':'10000']]
@@ -710,6 +710,8 @@ test('Pre-Move deep scan keeps a low-volume symbol non-actionable and records th
     quoteVolume24h:18000,tradeCount24h:420,quoteAsset:'USDT'
   },1,{});
   assert.equal(result.data_status.volume_gate_pass,false);
+  assert.equal(rest.calls.find(call=>call.type==='depth')?.limit,20,
+    'the broad Pre-Move pass should fetch only the 20 closest book levels, sufficient for near-spread liquidity checks');
   assert.equal(result.data_status.data_valid,false,'broad discovery must not weaken the minimum-volume gate for alert-eligible results');
   assert.ok(result.reason_codes.includes('BELOW_MIN_QUOTE_VOLUME'));
 });

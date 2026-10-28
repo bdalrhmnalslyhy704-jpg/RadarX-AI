@@ -1802,9 +1802,10 @@ export class MarketUniverseScanner {
     );
   }
 
-  async fetchDepth(symbol) {
+  async fetchDepth(symbol, limit = 100) {
+    const safeLimit = Math.max(5, Math.min(100, Math.trunc(Number(limit) || 100)));
     return withRetry(
-      () => this.rest.depth(symbol, 100),
+      () => this.rest.depth(symbol, safeLimit),
       {
         attempts: this.config.retryAttempts,
         baseMs: this.config.retryBaseMs,
@@ -2168,7 +2169,7 @@ export class MarketUniverseScanner {
     const limit15m=Math.max(200,Math.min(300,Math.trunc(Number(options.fifteenMinuteKlines)||200)));
     const requests=await Promise.allSettled([
       this.fetchSeries(symbol,'15m',limit15m),
-      this.fetchDepth(symbol)
+      this.fetchDepth(symbol, 20)
     ]);
     const normalized=(result,tf)=>{
       const fetchedAt=Number(result?.receivedAt)||this.clock();
