@@ -512,6 +512,26 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     }
   };
   let preMoveBackgroundInterval=null,preMoveBackgroundInitialTimer=null,preMoveBackgroundInFlight=false;
+  async function notificationTransportSnapshot(){
+    let providerStatus={provider:'unknown',enabled:false},rows=[];
+    try{providerStatus=pushProvider?.status?.()||providerStatus;}catch{}
+    try{const value=await store.getSubscriptions();if(Array.isArray(value))rows=value;}catch{}
+    const active=rows.filter(row=>row&&row.disabled!==true);
+    const provider=String(providerStatus.provider||'unknown');
+    const providerRows=provider==='fcm'
+      ?active.filter(row=>row.provider==='fcm')
+      :provider==='webpush'
+        ?active.filter(row=>(row.provider||'webpush')==='webpush')
+        :[];
+    return {
+      provider,enabled:providerStatus.enabled===true,
+      active_subscriptions:active.length,
+      provider_subscriptions:providerRows.length,
+      fcm_devices:active.filter(row=>row.provider==='fcm').length,
+      webpush_subscriptions:active.filter(row=>(row.provider||'webpush')==='webpush').length,
+      physical_device_delivery_verified:false
+    };
+  }
   function preMoveBackgroundWorkerSnapshot(){
     const state=preMoveBackgroundWorkerState,enabled=state.enabled===true;
     const status=!preMoveRadarScanner?'UNAVAILABLE':
@@ -849,7 +869,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             review_bridge_installed:pushManager?.__radarAnalystReviewBridgeInstalled===true
           },
           market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
-          confidence_score:'UNKNOWN',push:{provider:pushProvider?.status?.().provider??'unknown',enabled:pushProvider?.status?.().enabled===true}
+          confidence_score:'UNKNOWN',push:await notificationTransportSnapshot()
         });
       }
       if(u.pathname==='/api/adaptive-trader/status'&&req.method==='GET'){
@@ -1739,6 +1759,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       }
       if(u.pathname==='/api/pre-move-radar-status'&&req.method==='GET'){
         return send(res,200,{...preMoveBackgroundWorkerSnapshot(),as_of:new Date().toISOString(),
+          notification_transport:await notificationTransportSnapshot(),
           last_background_scan:preMoveBackgroundWorkerState.last_summary});
       }
       if(u.pathname==='/api/pre-move-radar'&&req.method==='GET'){
