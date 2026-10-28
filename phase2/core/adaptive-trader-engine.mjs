@@ -258,29 +258,88 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     ? Math.max(0, Math.trunc(Number(offset) || 0)) % eligible.length
     : 0;
   const selectedCount = Math.min(safeLimit, eligible.length);
-  const rotationSelected = Array.from({length:selectedCount},(_,index)=>eligible[(scanOffset+index)%eligible.length]);
   const eligibleBySymbol = new Map(eligible.map(row=>[String(row.symbol||'').toUpperCase(),row]));
-  const retrySelection = [];
+  const changePct = row => finite(row?.priceChangePercent);
+  // Deep-scan slots are split across liquid leaders, emerging movers and an
+  // explicitly audit-only lane for already-extended movers. This lets the
+  // trader recognize missed rallies without treating them as new entries.
+  const emergingMovers = eligible.filter(row => {
+    const change = changePct(row);
+    return change !== null && change >= 0.25 && change < 8;
+  }).sort((a,b) => {
+    const rank = row => clamp(100 - Math.abs((changePct(row) ?? -100) - 2.5) * 15, 0, 100);
+    return rank(b)-rank(a) ||
+      Number(b.quoteVolume)-Number(a.quoteVolume) ||
+      String(a.symbol||'').localeCompare(String(b.symbol||''));
+  });
+  const extendedMovers = eligible.filter(row => {
+    const change = changePct(row);
+    return change !== null && change >= 8;
+  }).sort((a,b) =>
+    Number(changePct(b))-Number(changePct(a)) ||
+    Number(b.quoteVolume)-Number(a.quoteVolume) ||
+    String(a.symbol||'').localeCompare(String(b.symbol||''))
+  );
+  const selectedBySymbol = new Map();
   const retrySet = new Set();
+  // A broken endpoint should not consume the whole scan forever. Retry at most
+  // 20% of a batch and rotate unattempted retries ahead of repeated failures.
+  const retryLimit = Math.min(selectedCount, Math.max(1, Math.floor(selectedCount * 0.20)));
   for (const symbol of (Array.isArray(retrySymbols)?retrySymbols:[])) {
     const clean=String(symbol||'').trim().toUpperCase();
     const row=eligibleBySymbol.get(clean);
-    if (!row || retrySet.has(clean) || retrySelection.length>=selectedCount) continue;
+    if (!row || retrySet.has(clean) || retrySet.size>=retryLimit) continue;
     retrySet.add(clean);
-    retrySelection.push(row);
+    selectedBySymbol.set(clean,{...row,selection_lane:'RETRY'});
   }
-  // Retry failed REST requests early, but never let one repeatedly failing pair
-  // pin the rotation cursor and starve every later eligible Spot symbol.
-  const rotationRemainder = rotationSelected.filter(row=>!retrySet.has(String(row.symbol||'').toUpperCase()));
-  const selected = [...retrySelection,...rotationRemainder].slice(0,selectedCount);
-  const rotationAdvanceCount = selected.filter(row=>!retrySet.has(String(row.symbol||'').toUpperCase())).length;
+  const rotationReserve = selectedCount
+    ? Math.min(selectedCount,Math.max(1,Math.ceil(selectedCount*0.15)))
+    : 0;
+  const priorityBudget = Math.max(0,selectedCount-rotationReserve);
+  const addLane = (rows,quota,lane) => {
+    let added=0;
+    for (const row of rows) {
+      if (selectedBySymbol.size>=priorityBudget || selectedBySymbol.size>=selectedCount || added>=quota) break;
+      const symbol=String(row?.symbol||'').trim().toUpperCase();
+      if (!symbol || selectedBySymbol.has(symbol)) continue;
+      selectedBySymbol.set(symbol,{...row,selection_lane:lane});
+      added++;
+    }
+  };
+  const volumeLeaders = eligible.filter(row => {
+    const change=changePct(row);
+    return change===null || change<8;
+  });
+  addLane(volumeLeaders,Math.ceil(selectedCount*0.25),'TOP_VOLUME');
+  // Give extended coins a bounded, diagnostic-only pass before spending the
+  // remaining priority budget on early movers. Their result stays LATE_MOVE.
+  addLane(extendedMovers,Math.ceil(selectedCount*0.25),'EXTENDED_MOVER_AUDIT');
+  addLane(emergingMovers,Math.ceil(selectedCount*0.30),'EMERGING_MOVER');
+
+  let rotationVisited=0;
+  while(selectedBySymbol.size<selectedCount && rotationVisited<eligible.length) {
+    const row=eligible[(scanOffset+rotationVisited)%eligible.length];
+    rotationVisited++;
+    const symbol=String(row?.symbol||'').trim().toUpperCase();
+    if(!symbol || selectedBySymbol.has(symbol)) continue;
+    selectedBySymbol.set(symbol,{...row,selection_lane:'ROTATING_COVERAGE'});
+  }
+  const selected=[...selectedBySymbol.values()].slice(0,selectedCount);
+  // Advance by the number of rows actually traversed. Repeated priority picks
+  // do not freeze coverage, and previously failed pairs cannot pin this cursor.
+  const rotationAdvanceCount=rotationVisited;
+  const selectionLaneCounts=selected.reduce((counts,row)=>{
+    const lane=String(row?.selection_lane||'UNKNOWN');
+    counts[lane]=(counts[lane]||0)+1;
+    return counts;
+  },{});
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const result = await rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 });
     return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, btcKlines, now, minQuoteVolume24h });
   });
   const candidates = analyzed.map((row, index) => row && !row.error
-    ? row
+    ? { ...row, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
     : {
       symbol: selected[index]?.symbol || 'UNKNOWN',
       price: finite(selected[index]?.lastPrice),
@@ -292,6 +351,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       score: null,
       reason_codes: ['KLINE_FETCH_FAILED'],
       error: String(row?.error || 'KLINE_FETCH_FAILED'),
+      selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
       paper_trading: true,
       real_order_execution: false,
       confidence_score: 'UNKNOWN'
@@ -320,6 +380,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       coverage_pct: eligible.length ? Number((candidates.length / eligible.length * 100).toFixed(1)) : 0,
       scan_complete: candidates.length === eligible.length,
       min_quote_volume_24h: minQuoteVolume24h,
+      emerging_movers_available: emergingMovers.length,
+      extended_movers_available: extendedMovers.length,
+      selection_strategy: 'MOVER_AWARE_ROTATION_V1',
+      selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },
     candidates,
@@ -394,7 +458,12 @@ export function createAdaptiveTraderSnapshotService({
       const eligibleNow = new Set((snapshot.latest_prices||[]).map(row=>String(row?.symbol||'').toUpperCase()).filter(Boolean));
       const newlyFailed = Array.isArray(snapshot.universe?.retry_symbols_pending) ? snapshot.universe.retry_symbols_pending : [];
       const notYetAttempted = queuedRetries.filter(symbol=>eligibleNow.has(symbol)&&!attempted.has(symbol));
-      retryQueues.set(safeLimit,[...new Set([...newlyFailed,...notYetAttempted])].slice(0,safeLimit));
+      // Rotate never-attempted retry entries to the front so the same failing
+      // eight pairs cannot indefinitely starve the tail of the retry queue.
+      retryQueues.set(safeLimit,[...new Set([
+        ...notYetAttempted,
+        ...newlyFailed.filter(symbol=>!notYetAttempted.includes(symbol))
+      ])].slice(0,safeLimit));
       const cachedAt = Date.now();
       cache.set(safeLimit, { snapshot, cachedAt });
       // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
