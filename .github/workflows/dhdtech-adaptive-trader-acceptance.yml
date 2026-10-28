@@ -1,0 +1,98 @@
+name: Build 224 DHDTech Adaptive Trader Live Acceptance
+
+on:
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - "Dockerfile"
+      - "phase2/**"
+      - "android/**"
+      - ".github/workflows/dhdtech-adaptive-trader-acceptance.yml"
+      - ".github/workflows/android-release-apk.yml"
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  verify-dhdtech:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for the deployed DHDTech worker to complete a verified live scan
+        uses: actions/github-script@v7
+        env:
+          RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
+        with:
+          script: |
+            const base=String(process.env.RADARX_BACKEND_BASE_URL||'').trim();
+            let url;
+            try { url=new URL(base); } catch { core.setFailed('RADARX_BACKEND_BASE_URL is not a valid URL.'); return; }
+            if(url.protocol!=='https:'||url.pathname!=='/'||url.username||url.password||url.search||url.hash||/\.up\.railway\.app$/i.test(url.hostname)){
+              core.setFailed('RADARX_BACKEND_BASE_URL must be the bare HTTPS DHDTech origin.');
+              return;
+            }
+
+            const started=Date.now();
+            const deadline=started+12*60*1000;
+            const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+            let lastError='No status response yet';
+            let lastObserved=null;
+            while(Date.now()<deadline){
+              try{
+                const response=await fetch(url.origin+'/api/adaptive-trader/status',{
+                  headers:{Accept:'application/json', 'Cache-Control':'no-cache'},
+                  signal:AbortSignal.timeout(8000)
+                });
+                const value=await response.json();
+                const summary=value.last_summary;
+                const meta=summary&&summary.meta;
+                const scannedAt=Date.parse(String(value.last_scan_at||''));
+                const summaryAt=Date.parse(String(summary&&summary.as_of||''));
+                const historyRows=Number(value.memory&&value.memory.history_rows)||0;
+                const candidates=summary&&summary.candidates;
+                const prices=summary&&summary.latest_prices;
+                lastObserved={
+                  http:response.status,status:value.status,scan_count:value.scan_count,
+                  successful_scans:value.successful_scans,last_error:value.last_error,
+                  last_scan_at:value.last_scan_at,history_rows:historyRows,
+                  candidates:Array.isArray(candidates)?candidates.length:null,
+                  latest_prices:Array.isArray(prices)?prices.length:null
+                };
+                const valid=response.ok&&value.paper_trading===true&&value.real_order_execution===false&&
+                  Number(value.successful_scans)>0&&value.last_error===null&&
+                  Number.isFinite(scannedAt)&&scannedAt>=started-12*60*1000&&
+                  summary&&summary.status==='LIVE_DATA'&&Number.isFinite(summaryAt)&&
+                  summaryAt>=started-12*60*1000&&meta&&meta.live===true&&
+                  meta.paper_trading===true&&meta.real_order_execution===false&&
+                  meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
+                  Array.isArray(candidates)&&candidates.length>0&&
+                  Array.isArray(prices)&&prices.length>0&&historyRows>0;
+                if(valid){
+                  const description='Live DHDTech scan verified; '+candidates.length+' analyzed, '+historyRows+' history rows.';
+                  await github.rest.repos.createCommitStatus({
+                    owner:context.repo.owner,repo:context.repo.repo,sha:context.sha,
+                    state:'success',context:'dhdtech-adaptive-trader-live',
+                    description:description.slice(0,140),target_url:url.origin+'/api/adaptive-trader/status'
+                  });
+                  core.info('DHDTECH_ADAPTIVE_TRADER_LIVE_OK '+JSON.stringify(lastObserved));
+                  return;
+                }
+                lastError='Live worker schema or scan evidence is not ready';
+              }catch(error){
+                lastError=String(error&&error.message||error).slice(0,180);
+              }
+              core.info('Waiting for the deployed DHDTech worker: '+lastError+
+                (lastObserved?' | '+JSON.stringify(lastObserved):''));
+              await delay(15000);
+            }
+
+            await github.rest.repos.createCommitStatus({
+              owner:context.repo.owner,repo:context.repo.repo,sha:context.sha,
+              state:'failure',context:'dhdtech-adaptive-trader-live',
+              description:('DHDTech live scan not verified: '+lastError).slice(0,140),
+              target_url:url.origin+'/api/adaptive-trader/status'
+            });
+            core.setFailed('DHDTech Adaptive Trader live acceptance failed: '+lastError+
+              (lastObserved?' | '+JSON.stringify(lastObserved):''));
