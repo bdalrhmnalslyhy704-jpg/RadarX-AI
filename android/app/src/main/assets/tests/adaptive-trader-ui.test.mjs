@@ -34,6 +34,19 @@ test('adaptive trader UI has visible data coverage and paper-only status',()=>{
   assert.match(html,/تغطية جزئية/);
 });
 
+test('dashboard consumes the verified server worker snapshot and reports network or CORS failure',()=>{
+  assert.match(html,/value\.last_summary/);
+  assert.match(html,/BACKEND_NETWORK_OR_CORS_UNAVAILABLE/);
+  assert.match(html,/successful_scans/);
+  assert.match(html,/آخر نجاح/);
+});
+
+test('server owns the recurring scan loop; page visibility only polls status',()=>{
+  assert.match(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'\)void refreshWorkerStatus\(\);\},15\*1000\)/);
+  assert.doesNotMatch(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'&&!scanBusy\)void scanMarket\(\);\},5\*60\*1000\)/);
+  assert.doesNotMatch(html,/setTimeout\(function\(\)\{if\(document\.visibilityState==='visible'\)void scanMarket\(\);\},500\)/);
+});
+
 test('sidecar client contains no exchange order execution endpoint or secret storage',()=>{
   assert.doesNotMatch(client,/\/api\/v3\/order/);
   assert.doesNotMatch(client,/newOrder|createOrder|apiSecret|secretKey|BINANCE_API_SECRET/i);
