@@ -277,6 +277,59 @@ test('BTC benchmark failure does not disable otherwise valid Spot candidate anal
   assert.equal(rest.requestDeadlineAtMs,null);
 });
 
+test('mover-aware scan includes rising and extended Spot pairs outside the highest-volume rows',async()=>{
+  const f=marketFixture();
+  const regular=Array.from({length:100},(_,i)=>({
+    symbol:'ROT'+String(i).padStart(3,'0')+'USDT',
+    lastPrice:'10',
+    quoteVolume:String(10_000_000-i*89_000),
+    priceChangePercent:'0.1',
+    count:'2000'
+  }));
+  const early=Array.from({length:15},(_,i)=>({
+    symbol:i===0?'EARLYUSDT':'EARM'+String(i).padStart(2,'0')+'USDT',
+    lastPrice:'10',
+    quoteVolume:String(1_000_000-i*2_000),
+    priceChangePercent:String(i===0?2.5:(0.8+i*0.15).toFixed(2)),
+    count:'2500'
+  }));
+  const lateSymbols=[
+    ['INITUSDT',28.49],['WENBUSDT',16.31],['BLURUSDT',14.07],['KORUBUSDT',13.44],
+    ['SKHYBUSDT',12.29],['SHELLUSDT',11.64],['SNXXBUSDT',10.72],['AXTIBUSDT',9.40],['BMTUSDT',9.11]
+  ];
+  const late=lateSymbols.map(([symbol,change],i)=>({
+    symbol,lastPrice:'10',quoteVolume:String(900_000-i*4_000),
+    priceChangePercent:String(change),count:'3500'
+  }));
+  const tickers=[...regular,...early,...late];
+  const rest={async request(path,query={}) {
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers,source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
+  assert.equal(snapshot.status,'LIVE_DATA');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ROTATION_V1');
+  assert.equal(snapshot.universe.emerging_movers_available,15);
+  assert.equal(snapshot.universe.extended_movers_available,9);
+  assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
+  const earlyCandidate=snapshot.candidates.find(row=>row.symbol==='EARLYUSDT');
+  assert.ok(earlyCandidate);
+  assert.equal(earlyCandidate.selection_lane,'EMERGING_MOVER');
+  for(const [symbol] of lateSymbols){
+    const candidate=snapshot.candidates.find(row=>row.symbol===symbol);
+    assert.ok(candidate, symbol+' must be inspected even when it is outside the top-volume rows');
+    assert.equal(candidate.selection_lane,'EXTENDED_MOVER_AUDIT');
+    assert.equal(candidate.tier,'LATE_MOVE');
+    assert.equal(candidate.paper_candidate,false);
+    assert.equal(candidate.entry_eligible,false);
+    assert.equal(candidate.real_order_execution,false);
+  }
+});
+
 test('universe rotation continues after the last successful pair and retries the failed tail',async()=>{
   const f=marketFixture();
   const symbols=Array.from({length:100},(_,i)=>'ROT'+String(i).padStart(3,'0')+'USDT');
@@ -312,18 +365,21 @@ test('universe rotation continues after the last successful pair and retries the
   failTail=false;
   const countBeforeSecond=symbolRequests.length;
   const second=await service({limit:40,now:Date.now()+1000});
-  assert.equal(second.universe.scan_offset,40);
-  assert.equal(second.universe.scan_advance_count,28);
+  assert.equal(second.universe.scan_offset,
+    (first.universe.scan_offset+first.universe.scan_advance_count)%100);
   assert.equal(second.universe.scan_success_count,40);
   assert.equal(second.universe.valid_symbols,40);
+  assert.ok(second.universe.scan_advance_count>0);
   assert.equal(symbolRequests[countBeforeSecond],'ROT028USDT');
+  assert.equal(symbolRequests[countBeforeSecond+7],'ROT035USDT');
   assert.equal(second.candidates[0].real_order_execution,false);
 
   const countBeforeThird=symbolRequests.length;
   const third=await service({limit:40,now:Date.now()+2000});
-  assert.equal(third.universe.scan_offset,68);
+  assert.equal(third.universe.scan_offset,
+    (second.universe.scan_offset+second.universe.scan_advance_count)%100);
   assert.equal(third.universe.valid_symbols,40);
-  assert.equal(symbolRequests[countBeforeThird],'ROT068USDT');
+  assert.equal(symbolRequests[countBeforeThird],'ROT036USDT');
 });
 
 test('concurrent universe sizes keep distinct server-cache entries',async()=>{
