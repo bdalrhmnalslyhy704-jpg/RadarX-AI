@@ -849,7 +849,7 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
     isSpotTradingAllowed:true,permissions:['SPOT']
   }));
   const tickerRows=names.map((symbol,i)=>({
-    symbol,lastPrice:'1',highPrice24h:'1.1',lowPrice24h:'0.9',
+    symbol,lastPrice:'1',highPrice:'1.1',lowPrice:'0.9',
     quoteVolume:String(5_000_000+i*1000),count:100_000+i,priceChangePercent:'1'
   }));
   const rest={
