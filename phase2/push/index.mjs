@@ -663,15 +663,11 @@ export class PushManager{
          liquidityQuality<Number(settings.minLiquidityQuality??60))continue;
       recipients.push(sub);
     }
-    if(!recipients.length)return {
-      status:rows.length?'NO_ELIGIBLE_SUBSCRIPTIONS':'NO_SUBSCRIPTIONS',
-      reason:rows.length?'USER_SETTINGS_OR_QUALITY_FILTER':'NO_PUSH_SUBSCRIPTIONS',
-      attempted:false,notifications:[],sent_count:0,attempted_count:0
-    };
-
+    // Classify feed-only observations before subscription checks. Otherwise a
+    // normal watch-tier candidate with no phone subscriptions is misleadingly
+    // reported as a delivery failure even though policy forbids pushing it.
     // Only three evidence-validated Pre-Move tiers may generate a monitor-only
-    // phone notification. They remain explicitly non-actionable and cannot be
-    // promoted into the confirmed market-push/order path.
+    // phone notification; all other watch tiers remain feed-only.
     const qualifiedPreMoveTiers=new Set([
       'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR'
     ]);
@@ -701,6 +697,11 @@ export class PushManager{
         paper_trading:true,real_order_execution:false
       };
     }
+    if(!recipients.length)return {
+      status:rows.length?'NO_ELIGIBLE_SUBSCRIPTIONS':'NO_SUBSCRIPTIONS',
+      reason:rows.length?'USER_SETTINGS_OR_QUALITY_FILTER':'NO_PUSH_SUBSCRIPTIONS',
+      attempted:false,notifications:[],sent_count:0,attempted_count:0
+    };
 
     const lastSent=Number(this.preMoveWatchPushBySymbol.get(symbol)||0);
     if(lastSent&&now-lastSent<30*60*1000){
