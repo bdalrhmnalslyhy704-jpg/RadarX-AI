@@ -2340,10 +2340,12 @@ export class MarketUniverseScanner {
       rotationOffset,
       activitySignals:tickerActivitySignals
     });
-    // The live DHDTech acceptance measured 47.191s at 32 workers. Raise the
-    // bounded I/O fan-out slightly so the 50-symbol rotating pass can meet its
-    // 45s service objective. Request-weight/rate limits remain enforced by RestClient.
-    const preMoveConcurrency=40;
+    // The live DHDTech pass still exceeded its 45s objective at 40 workers.
+    // This scan is I/O-bound (15m candles + depth per symbol), so allow one
+    // bounded worker per discovered symbol. The shared RestClient request/weight
+    // budget remains the hard exchange limit; rotation still advances only after
+    // the full slice completes and persists.
+    const preMoveConcurrency=Math.min(50,Math.max(1,discovery.length));
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
