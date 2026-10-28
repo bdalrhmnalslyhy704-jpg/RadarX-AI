@@ -209,6 +209,7 @@ const MAX_MISSED=500;
 const state=loadState();
 let currentTab='opportunities';
 let scanBusy=false;
+let lastStatusError=null;
 
 function freshState(){
   return {version:1,lastSnapshot:null,lastScanAt:null,samples:[],priceHistory:[],missedMovers:[],journal:[],portfolio:createPaperPortfolio(10000),paperEnabled:false};
@@ -388,11 +389,37 @@ async function refreshWorkerStatus(){
     if(!response.ok||value.real_order_execution!==false||value.paper_trading!==true)throw new Error(value.error||'WORKER_STATUS_NOT_VERIFIED');
     const previous=(state.serverStatus && state.serverStatus.status);
     state.serverStatus=value;
+    lastStatusError=null;
     if(previous&&previous!==value.status)addJournal('تغيّرت حالة المتداول الخادمي إلى '+String(value.status)+'.',value.status==='DEGRADED'?'warning':'info');
+
+    // The server is already scanning every five minutes. Display its latest
+    // verified result instead of forcing a duplicate market-wide scan from the phone.
+    const summary=value.last_summary;
+    const summaryAt=Date.parse(String(summary&&summary.as_of||''));
+    const currentAt=Number(state.lastScanAt)||0;
+    if(summary&&summary.status==='LIVE_DATA'&&summary.meta&&summary.meta.live===true&&
+       summary.meta.paper_trading===true&&summary.meta.real_order_execution===false&&
+       summary.meta.closed_candles_only===true&&summary.meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
+       Array.isArray(summary.candidates)&&Array.isArray(summary.latest_prices)&&
+       Number.isFinite(summaryAt)&&summaryAt>currentAt){
+      applySnapshot(summary);
+    }
+
+    const completed=value.last_scan_at?timeText(value.last_scan_at):'لا توجد دورة ناجحة بعد';
+    const errorText=value.last_error?' · آخر خطأ: '+String(value.last_error).slice(0,110):'';
+    el('sourceText').textContent='المصدر: Binance Public REST · فحص الخادم: '+String(value.status||'UNKNOWN')+
+      ' · آخر نجاح: '+completed+' · نجاح '+(Number(value.successful_scans)||0)+'/'+(Number(value.scan_count)||0)+errorText;
     persist();render();
     return true;
   }catch(error){
-    if(!state.serverStatus)addJournal('حالة ذاكرة الخادم غير متاحة حاليًا؛ لم تُختلق بيانات. '+String((error && error.message)||error),'warning');
+    const code=error&&error.name==='TypeError'?'BACKEND_NETWORK_OR_CORS_UNAVAILABLE':
+      String((error&&error.message)||error||'WORKER_STATUS_UNAVAILABLE');
+    if(lastStatusError!==code){
+      addJournal('تعذرت قراءة حالة المتداول من الخادم: '+code+'؛ لم تُنشأ بيانات بديلة.','warning');
+      lastStatusError=code;
+    }
+    el('sourceText').textContent='تعذر الاتصال بخادم المتداول أو السماح بـ CORS · '+code+' · البيانات المحفوظة لا تُعد بيانات حية';
+    persist();renderJournal();
     return false;
   }
 }
@@ -401,43 +428,58 @@ async function scanMarket(){
   if(scanBusy)return;
   scanBusy=true;
   const button=el('scanBtn');button.disabled=true;button.textContent='◌ جارٍ فحص السوق…';
-  setStatus('جارٍ جلب بيانات Spot وتحليل الشموع المغلقة','idle');
-  addJournal('بدأ فحص جديد من نقطة بيانات السوق المستقلة.');
+  setStatus('جارٍ طلب فحص مباشر من الخادم؛ تبقى آخر نتيجة محفوظة حتى نجاح الطلب','idle');
+  addJournal('بدأ طلب فحص مباشر لبيانات Binance Spot المغلقة.');
   try{
-    const limit=Number(el('universeLimit').value)||80;
-    const controller=new AbortController();
-    const requestTimeout=setTimeout(()=>controller.abort(),55_000);
+    const limit=Number(el('universeLimit').value)||40;
+    const endpoint=API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit);
     let response,snapshot;
-    try{
-      response=await fetch(API_BASE+'/api/adaptive-trader/market-snapshot?limit='+encodeURIComponent(limit),{
-        method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller.signal
-      });
-      snapshot=await response.json();
-    }catch(error){
-      if(error && error.name==='AbortError')throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
-      throw error;
-    }finally{
-      clearTimeout(requestTimeout);
+    for(let attempt=0;attempt<2;attempt++){
+      const controller=new AbortController();
+      const requestTimeout=setTimeout(()=>controller.abort(),55_000);
+      try{
+        response=await fetch(endpoint,{
+          method:'GET',cache:'no-store',headers:{Accept:'application/json'},signal:controller.signal
+        });
+        snapshot=await response.json();
+        break;
+      }catch(error){
+        if(error&&error.name==='AbortError')throw new Error('ADAPTIVE_TRADER_SCAN_TIMEOUT');
+        if(error&&error.name==='TypeError'){
+          if(attempt===0){
+            await new Promise(resolve=>setTimeout(resolve,1000));
+            continue;
+          }
+          throw new Error('BACKEND_NETWORK_OR_CORS_UNAVAILABLE');
+        }
+        throw error;
+      }finally{
+        clearTimeout(requestTimeout);
+      }
     }
-    if(!response.ok||snapshot.status!=='LIVE_DATA'||(snapshot.meta && snapshot.meta.live)!==true||
-       (snapshot.meta && snapshot.meta.paper_trading)!==true||(snapshot.meta && snapshot.meta.real_order_execution)!==false||
-       (snapshot.meta && snapshot.meta.closed_candles_only)!==true||(snapshot.meta && snapshot.meta.engine)!=='ADAPTIVE_TRADER_SIDECAR_V1'){
+    if(!response||!snapshot)throw new Error('BACKEND_MARKET_SCAN_NO_RESPONSE');
+    if(!response.ok||snapshot.status!=='LIVE_DATA'||(snapshot.meta&&snapshot.meta.live)!==true||
+       (snapshot.meta&&snapshot.meta.paper_trading)!==true||(snapshot.meta&&snapshot.meta.real_order_execution)!==false||
+       (snapshot.meta&&snapshot.meta.closed_candles_only)!==true||(snapshot.meta&&snapshot.meta.engine)!=='ADAPTIVE_TRADER_SIDECAR_V1'){
       throw new Error(snapshot.reason||snapshot.error||'LIVE_MARKET_DATA_NOT_VERIFIED');
     }
     applySnapshot(snapshot);
     await refreshWorkerStatus();
     render();
-    setStatus(snapshot.universe.scan_complete?'اكتمل المسح الحي':'بيانات حية — تغطية جزئية ظاهرة', 'good');
+    setStatus(snapshot.universe.scan_complete?'اكتمل المسح الحي':'بيانات حية — تغطية جزئية ظاهرة','good');
   }catch(error){
-    setStatus('تعذر التحقق من بيانات السوق الحية', 'bad');
-    addJournal('فشل الفحص الحي: '+String((error && error.message)||error)+'؛ لم تُنشأ بيانات بديلة.','error');
-    persist();renderJournal();
-    el('candidateList').innerHTML='<div class="empty"><b>لم تصل بيانات حية صالحة</b>لم تُستخدم بيانات وهمية. تحقق من اتصال الخادم ثم أعد الفحص.<br><span class="tiny">'+esc(String((error && error.message)||error))+'</span></div>';
+    const message=String((error&&error.message)||error||'SCAN_FAILED');
+    await refreshWorkerStatus();
+    setStatus(state.lastSnapshot?'تعذر الفحص اليدوي؛ تُعرض آخر نتيجة ناجحة':'تعذر التحقق من بيانات السوق الحية','bad');
+    addJournal('فشل طلب الفحص المباشر: '+message+'؛ لم تُنشأ بيانات بديلة.','error');
+    persist();render();
+    if(!state.lastSnapshot){
+      el('candidateList').innerHTML='<div class="empty"><b>لم تصل بيانات حية صالحة</b>لم تُستخدم بيانات وهمية. تحقق من اتصال الخادم أو إعداد CORS ثم أعد الفحص.<br><span class="tiny">'+esc(message)+'</span></div>';
+    }
   }finally{
     scanBusy=false;button.disabled=false;button.textContent='◉ فحص السوق الحقيقي';
   }
 }
-
 function renderCandidates(snapshot){
   const root=el('candidateList');
   if(!snapshot||!Array.isArray(snapshot.candidates)){root.innerHTML='<div class="empty"><b>لا توجد بيانات</b>ابدأ فحص السوق.</div>';return;}
@@ -612,13 +654,11 @@ el('paperToggle').addEventListener('change',function(){
 });
 document.querySelectorAll('[data-tab]').forEach(function(button){button.addEventListener('click',function(){showTab(button.getAttribute('data-tab'));});});
 render();
-setStatus(state.lastSnapshot?'آخر عرض محفوظ محليًا — نفّذ فحصًا جديدًا للتأكد من الحالة الحية':'جاهز لفحص السوق الحقيقي','idle');
-if(!state.lastSnapshot)addJournal('تهيئة المتداول الجانبي: التنفيذ الحقيقي معطل، والذاكرة محلية مع مراقبة خادمية منفصلة.');
+setStatus(state.lastSnapshot?'آخر عرض محفوظ محليًا؛ يجري تحديثه من حالة الخادم':'بانتظار أول نتيجة ناجحة من فاحص الخادم','idle');
+if(!state.lastSnapshot)addJournal('تهيئة واجهة المتداول؛ الفاحص الخادمي مستقل ودوري كل خمس دقائق، ونتائج التداول الحقيقية مقفلة.');
 void refreshWorkerStatus();
-setInterval(function(){if(document.visibilityState==='visible')void refreshWorkerStatus();},60*1000);
-// Poll only while this page is visible; this sidecar never changes the original radar workers.
-setInterval(function(){if(document.visibilityState==='visible'&&!scanBusy)void scanMarket();},5*60*1000);
-if(!state.lastSnapshot)setTimeout(function(){if(document.visibilityState==='visible')void scanMarket();},500);
+// Status polling is light-weight; the independent server worker owns the recurring market scans.
+setInterval(function(){if(document.visibilityState==='visible')void refreshWorkerStatus();},15*1000);
 </script>
 </body>
 </html>
