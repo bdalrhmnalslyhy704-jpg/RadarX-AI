@@ -451,6 +451,7 @@ export class DurableStore {
       enabled:value.enabled===true,
       scan_count:Math.max(0,Math.trunc(Number(value.scan_count)||0)),
       successful_scans:Math.max(0,Math.trunc(Number(value.successful_scans)||0)),
+      scan_cursor:Math.max(0,Math.trunc(Number(value.scan_cursor)||0)),
       last_started_at:value.last_started_at!==null&&value.last_started_at!==undefined&&Number.isFinite(Number(value.last_started_at))?Number(value.last_started_at):null,
       last_scan_at:value.last_scan_at!==null&&value.last_scan_at!==undefined&&Number.isFinite(Number(value.last_scan_at))?Number(value.last_scan_at):null,
       last_duration_ms:value.last_duration_ms!==null&&value.last_duration_ms!==undefined&&Number.isFinite(Number(value.last_duration_ms))?Math.max(0,Number(value.last_duration_ms)):null,
