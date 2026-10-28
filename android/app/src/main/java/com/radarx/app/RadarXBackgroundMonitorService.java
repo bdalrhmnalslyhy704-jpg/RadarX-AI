@@ -504,7 +504,8 @@ public final class RadarXBackgroundMonitorService extends Service {
                 alert.optBoolean("entry_eligible", true) ||
                 !("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(alert.optString("watch_notification_tier", "")) ||
                   "EARLY_FLOW_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
-                  "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(alert.optString("watch_notification_tier", ""))) ||
+                  "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "ACCUMULATION_PREP_MONITOR".equals(alert.optString("watch_notification_tier", ""))) ||
                 !"PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(alert.optString("event", "")) ||
                 !"WATCH_EARLY".equalsIgnoreCase(alert.optString("potential_label", "")) ||
                 !"SPOT".equalsIgnoreCase(alert.optString("market", "")) ||
@@ -556,6 +557,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         String tier = alert.optString("watch_notification_tier", "");
         boolean isTickerActivityMonitor = "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier);
         boolean isEarlyFlowMonitor = "EARLY_FLOW_MONITOR".equals(tier);
+        boolean isAccumulationPrepMonitor = "ACCUMULATION_PREP_MONITOR".equals(tier);
         JSONObject tickerEvidence = alert.optJSONObject("ticker_activity_watch_evidence");
         double tickerScore = tickerEvidence == null ? Double.NaN : tickerEvidence.optDouble("score", Double.NaN);
         double tickerVolumeRatio = tickerEvidence == null ? Double.NaN : tickerEvidence.optDouble("volume_acceleration_ratio", Double.NaN);
@@ -609,33 +611,49 @@ public final class RadarXBackgroundMonitorService extends Service {
                 Double.isFinite(hour) && hour >= -0.5 && hour <= 3.5 &&
                 Double.isFinite(structure) && structure >= 50.0 &&
                 participation >= 4;
+        boolean accumulationPrepQualified = isAccumulationPrepMonitor &&
+                Double.isFinite(daily) && daily >= -3.0 && daily <= 4.5 &&
+                Double.isFinite(score) && score >= 66.0 &&
+                Double.isFinite(session) && session >= 0.0 && session <= 3.5 &&
+                Double.isFinite(hour) && hour >= -0.35 && hour <= 1.5 &&
+                Double.isFinite(volume) && volume >= 1.5 &&
+                Double.isFinite(trades) && trades >= 1.35 &&
+                Double.isFinite(buy) && buy >= 0.50 &&
+                Double.isFinite(buyDelta) && buyDelta >= 0.01 &&
+                Double.isFinite(closeLocation) && closeLocation >= 0.45 &&
+                Double.isFinite(relative) && relative >= 0.75 &&
+                Double.isFinite(quality) && quality >= 95.0 &&
+                Double.isFinite(liquidity) && liquidity >= 90.0 &&
+                Double.isFinite(structure) && structure >= 60.0 && participation >= 4;
         if ((isTickerActivityMonitor && !tickerActivityQualified) ||
                 (isEarlyFlowMonitor && !earlyFlowQualified) ||
-                ("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) && !highActivityStructurePending)) return false;
+                ("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) && !highActivityStructurePending) ||
+                (isAccumulationPrepMonitor && !accumulationPrepQualified)) return false;
 
-        double minimumQuality = isTickerActivityMonitor || isEarlyFlowMonitor ? 85.0 :
-                highActivityStructurePending ? 80.0 : 70.0;
-        double minimumLiquidity = isTickerActivityMonitor ? 75.0 :
+        double minimumQuality = isAccumulationPrepMonitor ? 95.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? 85.0 : highActivityStructurePending ? 80.0 : 70.0;
+        double minimumLiquidity = isAccumulationPrepMonitor ? 90.0 : isTickerActivityMonitor ? 75.0 :
                 isEarlyFlowMonitor || highActivityStructurePending ? 70.0 : 60.0;
-        double minimumDaily = isTickerActivityMonitor || isEarlyFlowMonitor ? -5.0 :
-                highActivityStructurePending ? -5.0 : -12.0;
-        double maximumDaily = isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 :
-                highActivityStructurePending ? 6.0 : 12.0;
-        double minimumSession = highActivityStructurePending ? -0.75 :
+        double minimumDaily = isAccumulationPrepMonitor ? -3.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? -5.0 : highActivityStructurePending ? -5.0 : -12.0;
+        double maximumDaily = isAccumulationPrepMonitor ? 4.5 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 : highActivityStructurePending ? 6.0 : 12.0;
+        double minimumSession = isAccumulationPrepMonitor ? 0.0 : highActivityStructurePending ? -0.75 :
                 isTickerActivityMonitor || isEarlyFlowMonitor ? -1.25 : 0.0;
-        double maximumSession = highActivityStructurePending ? 5.0 :
+        double maximumSession = isAccumulationPrepMonitor ? 3.5 : highActivityStructurePending ? 5.0 :
                 isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 : 6.0;
-        double minimumHour = highActivityStructurePending ? -0.5 :
+        double minimumHour = isAccumulationPrepMonitor ? -0.35 : highActivityStructurePending ? -0.5 :
                 isTickerActivityMonitor || isEarlyFlowMonitor ? -0.75 : 0.15;
-        double maximumHour = highActivityStructurePending ? 3.5 :
+        double maximumHour = isAccumulationPrepMonitor ? 1.5 : highActivityStructurePending ? 3.5 :
                 isTickerActivityMonitor || isEarlyFlowMonitor ? 2.5 : 4.5;
-        double minimumStructure = isTickerActivityMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 50.0 : 60.0;
-        int minimumParticipation = isEarlyFlowMonitor || highActivityStructurePending ? 4 : 3;
+        double minimumStructure = isAccumulationPrepMonitor ? 60.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 50.0 : 60.0;
+        int minimumParticipation = isAccumulationPrepMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 4 : 3;
         if (!Double.isFinite(quality) || quality < minimumQuality || quality > 100.0 ||
                 !Double.isFinite(liquidity) || liquidity < minimumLiquidity || liquidity > 100.0 ||
                 !Double.isFinite(price) || price <= 0.0 || !Double.isFinite(daily) ||
                 daily < minimumDaily || daily > maximumDaily ||
-                !Double.isFinite(score) || score < 68.0 || !Double.isFinite(session) ||
+                !Double.isFinite(score) || score < (isAccumulationPrepMonitor ? 66.0 : 68.0) || !Double.isFinite(session) ||
                 session < minimumSession || session > maximumSession ||
                 !Double.isFinite(hour) || hour < minimumHour || hour > maximumHour ||
                 !Double.isFinite(structure) || structure < minimumStructure ||

@@ -142,7 +142,9 @@ const radarPayload=(alert,processedAt=Date.now(),gateModeOverride=null)=>{
         ?'تسارع قوي في حجم التداول والصفقات — مراقبة مبكرة فقط، ليس دخولًا'
         :alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
           ?'نشاط مبكر قوي — البنية السعرية قيد التشكّل — مراقبة فقط، ليس دخولًا'
-          :'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
+          :alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR'
+            ?'تراكم مبكر بسيولة قوية — مراقبة فقط، ليس دخولًا'
+            :'مراقبة مبكرة فقط — تحتاج تأكيدًا'].filter(Boolean).join(' • ')
     :alert?.signal_lifecycle?.state&&alert.signal_lifecycle.state!=='MONITOR'&&alert?.signal_lifecycle?.label
       ?[alert.symbol,alert.signal_lifecycle.label].filter(Boolean).join(' • ')
       :undefined,
@@ -469,7 +471,8 @@ export class PushManager{
          p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
          p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
         return rejected('PRE_MOVE_WATCH_EVIDENCE_INVALID');
-      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<68||
+      const accumulationPrepTier=alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR';
+      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<(accumulationPrepTier?66:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -513,6 +516,17 @@ export class PushManager{
       // can prompt a non-entry watch before the next closed-candle return is positive,
       // but it still requires fresh closed candles, measured liquidity, buyer-flow
       // confluence, recent durable activity baselines, and strict anti-chase limits.
+      const accumulationPrepMonitor=accumulationPrepTier&&
+        dailyMove!==null&&dailyMove>=-3&&dailyMove<=4.5&&
+        score!==null&&score>=66&&
+        session!==null&&session>=0&&session<=3.5&&
+        hour!==null&&hour>=-0.35&&hour<=1.5&&
+        volumeRatio!==null&&volumeRatio>=1.5&&tradeRatio!==null&&tradeRatio>=1.35&&
+        taker!==null&&taker>=0.50&&takerDelta!==null&&takerDelta>=0.01&&
+        closeLocation!==null&&closeLocation>=0.45&&relative!==null&&relative>=0.75&&
+        quoteVolume24h!==null&&quoteVolume24h>=750000&&
+        dataQuality!==null&&dataQuality>=95&&liquidityQuality!==null&&liquidityQuality>=90&&
+        structure!==null&&structure>=60&&independentEvidence>=4;
       const tickerActivityEvidence=alert?.ticker_activity_watch_evidence||{};
       const tickerActivityScore=firstFinite([tickerActivityEvidence?.score]);
       const tickerActivityVolumeRatio=firstFinite([tickerActivityEvidence?.volume_acceleration_ratio]);
@@ -538,7 +552,7 @@ export class PushManager{
         hour!==null&&hour>=-0.75&&hour<=2.5&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
         structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
-      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor;
+      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||accumulationPrepMonitor;
       // Validate the claimed special tier before generic price-window checks so bad
       // or stale tier evidence is rejected for the right reason at the final gate.
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
@@ -547,13 +561,16 @@ export class PushManager{
         return rejected('PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
       if(alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&!tickerActivityMonitor)
         return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
-      if(session<(highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>(highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
-         hour<(highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>(highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
+      if(accumulationPrepTier&&!accumulationPrepMonitor)
+        return rejected('PRE_MOVE_ACCUMULATION_PREP_TIER_UNVERIFIED');
+      if(session<(accumulationPrepMonitor?0:highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
+         session>(accumulationPrepMonitor?3.5:highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         hour<(accumulationPrepMonitor?-0.35:highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
+         hour>(accumulationPrepMonitor?1.5:highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       const independentEvidenceFloor=tickerActivityMonitor?3:preMoveMonitorCorridor?4:3;
-      if(structure===null||(structure<(preMoveMonitorCorridor?50:60))||
+      const minimumMonitorStructure=accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
+      if(structure===null||(structure<minimumMonitorStructure)||
          independentEvidence<independentEvidenceFloor)
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
     }else if(event==='STRONG_MOVE_WATCH_ONLY'){

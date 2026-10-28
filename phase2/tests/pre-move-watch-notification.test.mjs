@@ -201,6 +201,57 @@ test('live-scan DOGE-like early flow becomes a bounded monitor alert when price 
   }
 });
 
+
+test('live near-miss with 1.5x volume, 1.5x trades and strong relative strength receives non-entry accumulation-prep heads-up',async()=>{
+  const now=Date.now();
+  const candidate={
+    symbol:'LINKUSDT',last_price:12.5,price_change_24h:2.695,quote_volume_24h:7_500_000,
+    data_quality:100,liquidity_quality:98.94,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST'},
+    watch_only:true,alert_eligible:false,risk_flags:[],
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-8*60_000,
+      score:67.6,session_return_pct:1.5785,one_hour_return_pct:-0.0849,
+      volume_acceleration:1.7754,trade_acceleration:1.5660,
+      taker_buy_ratio:0.5207,taker_buy_acceleration:0.0169,
+      mean_close_location:0.4855,relative_strength_vs_market_pct:1.6853,
+      components:{squeeze:55,structure:65.62,buying_pressure:56},
+      reasons:['VOLUME_ACCELERATING','TRADE_COUNT_ACCELERATING','RELATIVE_STRENGTH']
+    }
+  };
+  const snapshot={source:'Binance Public REST',meta:{
+    radar:'PRE_MOVE',live:true,paper_trading:true,real_order_execution:false
+  }};
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'a qualified high-liquidity accumulation near-miss should be visible as monitoring');
+  assert.equal(alert.watch_notification_tier,'ACCUMULATION_PREP_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+  const dir=await mkdtemp(join(tmpdir(),'radarx-accumulation-prep-monitor-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].watch_notification_tier,'ACCUMULATION_PREP_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation, as monitor-only',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-early-flow-monitor-'));
   const store=await new DurableStore({dir}).init();
