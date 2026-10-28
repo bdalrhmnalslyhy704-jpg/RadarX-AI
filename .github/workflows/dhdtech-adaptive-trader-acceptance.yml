@@ -57,6 +57,7 @@ jobs:
                 const scannedAt=Date.parse(String(value.last_scan_at||''));
                 const summaryAt=Date.parse(String(summary&&summary.as_of||''));
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
+                const workerContract=value.scanner_contract==='SERVER_DRIVEN_SCAN_V2';
                 const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
                   deployment.expected_radars===12&&deployment.registered_radars===12&&
                   deployment.pre_move_scanner_ready===true&&
@@ -70,15 +71,16 @@ jobs:
                   http:response.status,status:value.status,scan_count:value.scan_count,
                   successful_scans:value.successful_scans,last_error:value.last_error,
                   radars:deployment.registered_radars,analysts:deployment.analyst_system&&deployment.analyst_system.expected_analysts,
-                  system_healthy:systemHealthy,last_scan_at:value.last_scan_at,history_rows:historyRows,
+                  system_healthy:systemHealthy,worker_contract:value.scanner_contract||null,
+                  last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
                   latest_prices:Array.isArray(prices)?prices.length:null
                 };
-                const valid=response.ok&&systemHealthy&&value.paper_trading===true&&value.real_order_execution===false&&
+                const valid=response.ok&&systemHealthy&&workerContract&&value.paper_trading===true&&value.real_order_execution===false&&
                   Number(value.successful_scans)>0&&value.last_error===null&&
-                  Number.isFinite(scannedAt)&&scannedAt>=started-12*60*1000&&
+                  Number.isFinite(scannedAt)&&scannedAt>=started&&
                   summary&&summary.status==='LIVE_DATA'&&Number.isFinite(summaryAt)&&
-                  summaryAt>=started-12*60*1000&&meta&&meta.live===true&&
+                  summaryAt>=started&&meta&&meta.live===true&&
                   meta.paper_trading===true&&meta.real_order_execution===false&&
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
