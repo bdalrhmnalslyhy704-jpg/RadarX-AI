@@ -41,6 +41,14 @@ test('dashboard consumes the verified server worker snapshot and reports network
   assert.match(html,/آخر نجاح/);
 });
 
+test('dashboard distinguishes push-provider status from actual device delivery',()=>{
+  assert.match(html,/value\.notification_transport/);
+  assert.match(html,/fcm_devices/);
+  assert.match(html,/لا يوجد جهاز مسجّل/);
+  assert.match(html,/الاستلام الفعلي غير مثبت/);
+  assert.match(html,/مزود إشعارات الهاتف/);
+});
+
 test('server owns the recurring scan loop; page visibility only polls status',()=>{
   assert.match(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'\)void refreshWorkerStatus\(\);\},15\*1000\)/);
   assert.doesNotMatch(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'&&!scanBusy\)void scanMarket\(\);\},5\*60\*1000\)/);
