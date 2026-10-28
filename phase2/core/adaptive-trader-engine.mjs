@@ -347,7 +347,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
 }
 
 export function createAdaptiveTraderSnapshotService({
-  rest, ttlMs = 90000, minQuoteVolume24h = POLICY.minQuoteVolume24h, scanTimeoutMs = 45_000
+  rest, ttlMs = 90000, minQuoteVolume24h = POLICY.minQuoteVolume24h, scanTimeoutMs = 60_000
 } = {}) {
   const cache = new Map();
   const flights = new Map();
