@@ -281,17 +281,28 @@ export class AdaptiveTraderWorker{
   }
 
   buildSummary(snapshot){
+    const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>({...row}));
+    const latestPrices=(Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[]).map(row=>({...row}));
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
       universe:{...(snapshot.universe||{})},
-      counts:{
-        valid:snapshot.candidates.filter(row=>row.data_valid===true&&!row.data_stale).length,
-        early_setup:snapshot.candidates.filter(row=>row.data_valid===true&&row.tier==='EARLY_SETUP').length,
-        watch:snapshot.candidates.filter(row=>row.data_valid===true&&row.tier==='WATCH').length,
-        late_move:snapshot.candidates.filter(row=>row.data_valid===true&&row.tier==='LATE_MOVE').length,
-        rejected:snapshot.candidates.filter(row=>row.data_valid!==true||row.data_stale===true).length
+      // Carry the latest verified server snapshot so the dashboard can display the
+      // worker's result without starting a second full REST scan from the phone.
+      candidates,
+      latest_prices:latestPrices,
+      meta:{
+        live:snapshot.meta?.live===true,
+        paper_trading:true,real_order_execution:false,closed_candles_only:true,
+        engine:'ADAPTIVE_TRADER_SIDECAR_V1'
       },
-      top_candidates:snapshot.candidates.filter(row=>row.data_valid===true&&!row.data_stale)
+      counts:{
+        valid:candidates.filter(row=>row.data_valid===true&&!row.data_stale).length,
+        early_setup:candidates.filter(row=>row.data_valid===true&&row.tier==='EARLY_SETUP').length,
+        watch:candidates.filter(row=>row.data_valid===true&&row.tier==='WATCH').length,
+        late_move:candidates.filter(row=>row.data_valid===true&&row.tier==='LATE_MOVE').length,
+        rejected:candidates.filter(row=>row.data_valid!==true||row.data_stale===true).length
+      },
+      top_candidates:candidates.filter(row=>row.data_valid===true&&!row.data_stale)
         .slice().sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
           symbol:row.symbol,price:row.price,score:row.score,tier:row.tier,
           quote_volume_24h:row.quote_volume_24h,change_24h_pct:row.change_24h_pct,
@@ -305,6 +316,7 @@ export class AdaptiveTraderWorker{
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
     return {
+      scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,
       scan_count:Number(this.state.scan_count)||0,

@@ -14,7 +14,9 @@ export RADARX_ENV="${RADARX_ENV:-production}"
 # must never silently leave every radar idle. This does not enable order execution.
 export RADARX_RADARS_AUTOSTART=true
 export RADARX_STAGING_TEST_PUSH_ENABLED="${RADARX_STAGING_TEST_PUSH_ENABLED:-false}"
-export RADARX_ALLOWED_ORIGINS="${RADARX_ALLOWED_ORIGINS:-https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site}"
+if [ -z "${RADARX_ALLOWED_ORIGINS:-}" ]; then
+  export RADARX_ALLOWED_ORIGINS='https://appassets.androidplatform.net,https://radarx-backend.dhdtech.site,https://radarx-build-224.dhdtech.site,https://dhdtech.site'
+fi
 export RADARX_HOST="${RADARX_HOST:-0.0.0.0}"
 export RADARX_REAL_ORDER_EXECUTION=false
 export RADARX_PAPER_TRADING=true
@@ -33,7 +35,20 @@ if [ -z "${RADARX_PUSH_PROVIDER:-}" ]; then
 fi
 export RADARX_PUSH_PROVIDER
 
-export RADARX_DATA_DIR="${RADARX_DATA_DIR:-./.radarx-data}"
+# Prefer DHDTech's persistent volume when it is mounted and writable.
+# Preserve an explicit operator-selected directory; never silently relocate it.
+if [ -z "${RADARX_DATA_DIR:-}" ]; then
+  if [ -d /data ] && grep -qs " /data " /proc/mounts && [ -w /data ] && mkdir -p /data/radarx 2>/dev/null && [ -w /data/radarx ]; then
+    export RADARX_DATA_DIR=/data/radarx
+    # Migrate only missing files from the old container-local directory.
+    # Existing persistent records always win; this is idempotent across restarts.
+    if [ -d ./.radarx-data ] && [ "$(cd ./.radarx-data && pwd)" != "$(cd "$RADARX_DATA_DIR" && pwd)" ]; then
+      cp -an ./.radarx-data/. "$RADARX_DATA_DIR"/ 2>/dev/null || true
+    fi
+  else
+    export RADARX_DATA_DIR=./.radarx-data
+  fi
+fi
 mkdir -p "$RADARX_DATA_DIR"
 chmod 700 "$RADARX_DATA_DIR" 2>/dev/null || true
 
@@ -51,5 +66,5 @@ if [ -z "${RADARX_AUTH_SECRET:-}" ]; then
   export RADARX_AUTH_SECRET
 fi
 
-echo "[RADARX_DHDTECH_BOOT] build=224 host=$RADARX_HOST port=$PORT radar_autostart=$RADARX_RADARS_AUTOSTART paper_trading=$RADARX_PAPER_TRADING real_order_execution=$RADARX_REAL_ORDER_EXECUTION push_provider=$RADARX_PUSH_PROVIDER"
+echo "[RADARX_DHDTECH_BOOT] build=224 host=$RADARX_HOST port=$PORT data_dir=$RADARX_DATA_DIR radar_autostart=$RADARX_RADARS_AUTOSTART paper_trading=$RADARX_PAPER_TRADING real_order_execution=$RADARX_REAL_ORDER_EXECUTION push_provider=$RADARX_PUSH_PROVIDER"
 exec npm start

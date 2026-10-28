@@ -90,8 +90,12 @@ test('BTC-relative weakness and deep daily drawdown block early setup claims',()
   assert.equal(result.paper_candidate,false);
   assert.ok(result.reason_codes.includes('DAILY_DRAWDOWN_BLOCK'));
 
-  const relative=marketFixture({change24h:2.2,currentMove:0.6});
-  const btc=marketFixture({change24h:4.1,currentMove:2.4});
+  // Use one identical evaluation clock for both fixtures. Separate Date.now()
+  // calls can differ by a few milliseconds, making BTC's final candle appear
+  // to close after the relative fixture's scan start and causing a flaky result.
+  const comparisonNow=Date.now();
+  const relative=marketFixture({now:comparisonNow,change24h:2.2,currentMove:0.6});
+  const btc=marketFixture({now:comparisonNow,change24h:4.1,currentMove:2.4});
   const compared=scoreAdaptiveTraderCandidate({...relative,btcKlines:btc.klines});
   assert.equal(compared.data_valid,true);
   assert.ok(Number.isFinite(compared.features.relative_strength_vs_btc_pct));
