@@ -14,6 +14,7 @@ on:
       - "phase2/core/store.mjs"
       - "phase2/http/api.mjs"
       - "phase2/server.mjs"
+      - "phase2/deploy/dhdtech-entrypoint.sh"
       - "phase2/tests/adaptive-trader-*.test.mjs"
       - "phase2/tests/run-tests.mjs"
       - "android/app/src/main/assets/adaptive-trader*"
