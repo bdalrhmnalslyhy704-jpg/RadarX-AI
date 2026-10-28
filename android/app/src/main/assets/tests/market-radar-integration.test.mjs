@@ -193,22 +193,23 @@ const tradliActivity=await readFile(new URL('../../java/com/radarx/app/TradliAct
 const backgroundServiceSourceForMove=await readFile(new URL('../../java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
 assert.match(backgroundServiceSourceForMove,/fetchRadarAlertsFeed/);
 assert.match(backgroundServiceSourceForMove,/notifyNewRadarAlerts/);
-// The server, push manager, and Android fallback must all understand the exceptional
-// high-activity watch tier without turning it into an actionable entry.
+// The server, push manager, and Android fallback must agree on the exceptional
+// high-activity tier and allow only bounded, evidence-validated Pre-Move monitor alerts.
 assert.ok(backgroundServiceSourceForMove.includes('"HIGH_ACTIVITY_STRUCTURE_PENDING"'));
 assert.ok(backgroundServiceSourceForMove.includes('score >= 75.0'));
 assert.ok(backgroundServiceSourceForMove.includes('volume >= 3.0'));
 assert.ok(backgroundServiceSourceForMove.includes('trades >= 2.0'));
-assert.ok(backgroundServiceSourceForMove.includes('buy >= 0.65'));
+assert.ok(backgroundServiceSourceForMove.includes('buy >= 0.55'));
 assert.ok(backgroundServiceSourceForMove.includes('buyDelta >= 0.05'));
 assert.ok(backgroundServiceSourceForMove.includes('relative >= 0.5'));
 assert.ok(backgroundServiceSourceForMove.includes('participation >= 4'));
-assert.ok(backgroundServiceSourceForMove.includes('session < (highActivityStructurePending ? -0.75 : 0.0)'));
-assert.ok(backgroundServiceSourceForMove.includes('hour < (highActivityStructurePending ? -0.5 : 0.15)'));
-assert.ok(backgroundServiceSourceForMove.includes('(structure < 60.0 && !highActivityStructurePending)'));
-assert.match(backgroundServiceSourceForMove,/PRE_MOVE_WATCH_LOCAL_PUSH_BLOCKED_FINAL_CONFIRMATION_REQUIRED/);
-assert.doesNotMatch(backgroundServiceSourceForMove,/manager\.notify\("radarx_premove_watch"/);
-assert.doesNotMatch(backgroundServiceSourceForMove,/pollPreMoveWatchOnlyAlertsSafely\(\);/);
+assert.ok(backgroundServiceSourceForMove.includes('session >= -0.75 && session <= 5.0'));
+assert.ok(backgroundServiceSourceForMove.includes('hour >= -0.5 && hour <= 3.5'));
+assert.ok(backgroundServiceSourceForMove.includes('tickerActivityQualified'));
+assert.ok(backgroundServiceSourceForMove.includes('earlyFlowQualified'));
+assert.match(backgroundServiceSourceForMove,/PRE_MOVE_WATCH_LOCAL_NOTIFICATIONS_POSTED/);
+assert.match(backgroundServiceSourceForMove,/manager\.notify\("radarx_premove_watch", notificationId, builder\.build\(\)\)/);
+assert.match(backgroundServiceSourceForMove,/pollPreMoveWatchOnlyAlertsSafely\(\);/);
 assert.match(backgroundServiceSourceForMove,/api\/radar-alerts\?radar=ALL/);
 assert.match(backgroundServiceSourceForMove,/LIQUIDITY_ABSORPTION_RADAR/);
 assert.match(backgroundServiceSourceForMove,/KAHIR_RADAR/);
