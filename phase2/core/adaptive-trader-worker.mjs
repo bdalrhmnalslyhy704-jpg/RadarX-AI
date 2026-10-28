@@ -157,6 +157,8 @@ export class AdaptiveTraderWorker{
         analyzed:snapshot.universe?.analyzed_symbols??snapshot.candidates.length,
         valid:snapshot.universe?.valid_symbols??snapshot.candidates.filter(row=>row.data_valid).length,
         early_setup:snapshot.candidates.filter(row=>row.data_valid&&row.tier==='EARLY_SETUP').length,
+        late_move_audit:snapshot.candidates.filter(row=>row.data_valid&&row.tier==='LATE_MOVE').length,
+        selection_lanes:snapshot.universe?.selection_lane_counts||{},
         resolved_samples:this.state.learning_profile.resolved_samples,
         missed_movers:this.state.missed_movers.filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length,
         worker_interval_ms:this.intervalMs,paper_trading:true,real_order_execution:false
@@ -305,8 +307,18 @@ export class AdaptiveTraderWorker{
       top_candidates:candidates.filter(row=>row.data_valid===true&&!row.data_stale)
         .slice().sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
           symbol:row.symbol,price:row.price,score:row.score,tier:row.tier,
+          selection_lane:row.selection_lane||null,
           quote_volume_24h:row.quote_volume_24h,change_24h_pct:row.change_24h_pct,
           candle_close_time:row.candle_close_time,features:row.features,reason_codes:row.reason_codes
+        })),
+      // Keep late movers visible even when their score is below early-entry candidates.
+      // This is an audit list, never an entry list.
+      mover_audit:candidates.filter(row=>row.data_valid===true&&!row.data_stale&&row.tier==='LATE_MOVE')
+        .slice().sort((a,b)=>(Number(b.change_24h_pct)||0)-(Number(a.change_24h_pct)||0)).slice(0,15).map(row=>({
+          symbol:row.symbol,price:row.price,score:row.score,tier:'LATE_MOVE',
+          change_24h_pct:row.change_24h_pct,selection_lane:row.selection_lane||null,
+          reason_codes:row.reason_codes,paper_candidate:false,entry_eligible:false,
+          paper_trading:true,real_order_execution:false
         })),
       paper_trading:true,real_order_execution:false
     };
