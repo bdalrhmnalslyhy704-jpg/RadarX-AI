@@ -44,6 +44,7 @@ jobs:
           node --check phase2/core/store.mjs
           node --check phase2/server.mjs
           node --check android/app/src/main/assets/adaptive-trader-client.js
+          sh -n phase2/deploy/dhdtech-entrypoint.sh
       - name: Unit-test scoring, missed movers, calibration and paper risk
         run: node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs
       - name: Test read-only market API and fail-closed behavior
