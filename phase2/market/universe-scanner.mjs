@@ -2340,7 +2340,10 @@ export class MarketUniverseScanner {
       rotationOffset,
       activitySignals:tickerActivitySignals
     });
-    const preMoveConcurrency=32; // I/O-bound candle/depth fetches are bounded at 32 to keep the 50-symbol pass inside 45s.
+    // The live DHDTech acceptance measured 47.191s at 32 workers. Raise the
+    // bounded I/O fan-out slightly so the 50-symbol rotating pass can meet its
+    // 45s service objective. Request-weight/rate limits remain enforced by RestClient.
+    const preMoveConcurrency=40;
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
