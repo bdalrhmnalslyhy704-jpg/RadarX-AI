@@ -774,6 +774,46 @@ test('Pre-Move default watch floor surfaces a qualified partial setup without ma
   assert.ok(rows[0].watch_reason_codes.includes('SCORE_BELOW_ACTIONABLE_THRESHOLD'));
 });
 
+test('HYPE-like compressed buyer absorption is surfaced before the breakout as monitor-only',()=>{
+  const candidate={
+    symbol:'HYPEUSDT',last_price:79.39,price_change_24h:-3.723,quote_volume_24h:125_370_000,
+    liquidity_quality:96,data_quality:100,risk_flags:[],
+    data_status:{candle_data_valid:true,data_stale:false,stale:false,data_valid:true,volume_gate_pass:true,last_error:null},
+    pre_move_context:{
+      stage:'NO_SETUP',score:72.6,evidence_complete:true,closed_candles_only:true,
+      session_return_pct:-0.9482,one_hour_return_pct:0.2526,
+      volume_acceleration:0.267,trade_acceleration:0.5407,
+      taker_buy_ratio:0.6822,taker_buy_acceleration:0.1231,mean_close_location:0.5575,
+      relative_strength_vs_market_pct:0.1599,relative_strength_vs_btc_pct:0.1599,
+      components:{squeeze:48.68,structure:60.68,buying_pressure:99.83},
+      flow_transition_confirmed:false,price_window_valid:false,structure_confirmed:false,
+      already_moved:false,reasons:['TAKER_BUY_ACCELERATING','BUYERS_HOLDING_CANDLE_CLOSES']
+    }
+  };
+  const rows=buildPreMoveWatchCandidates([candidate]);
+  assert.equal(rows.length,1,'compressed buyer absorption must reach watch evaluation without 1.12x volume acceleration');
+  assert.equal(rows[0].symbol,'HYPEUSDT');
+  assert.equal(rows[0].pre_move_context.original_stage,'NO_SETUP');
+  assert.equal(rows[0].pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(rows[0].pre_move_context.compressed_buyer_absorption_monitor_only,true);
+  assert.equal(rows[0].pre_move_context.compressed_buyer_absorption_checks,7);
+  assert.ok(rows[0].watch_reason_codes.includes('COMPRESSED_BUYER_ABSORPTION_MONITOR_ONLY'));
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.actionable,false);
+
+  const weak={
+    ...candidate,pre_move_context:{
+      ...candidate.pre_move_context,
+      components:{...candidate.pre_move_context.components,buying_pressure:72}
+    }
+  };
+  const weakRow=buildPreMoveWatchCandidates([weak])[0];
+  assert.ok(weakRow,'weak-absorption candidate may remain a generic watch');
+  assert.notEqual(weakRow.pre_move_context.compressed_buyer_absorption_monitor_only,true,
+    'a weaker buyer-pressure score must not receive the special tier');
+});
+
 test('Pre-Move surfaces partial early-flow candidates with slightly negative one-hour return as watch-only',()=>{
   const partial={
     symbol:'SOXLBUSDT',last_price:100,price_change_24h:1.995,quote_volume_24h:42_209_579,

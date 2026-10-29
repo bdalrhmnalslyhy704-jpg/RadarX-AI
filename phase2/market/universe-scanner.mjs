@@ -1254,6 +1254,14 @@ export function buildPreMoveWatchCandidates(rows,{
     const squeeze=Number(p.components?.squeeze);
     const structure=Number(p.components?.structure);
     const buying=Number(p.components?.buying_pressure);
+    const rawRelativeBtc=p.relative_strength_vs_btc_pct;
+    const rawRelativeMarket=p.relative_strength_vs_market_pct;
+    const relativeBtc=rawRelativeBtc!==null&&rawRelativeBtc!==undefined&&Number.isFinite(Number(rawRelativeBtc))
+      ?Number(rawRelativeBtc)
+      :rawRelativeMarket!==null&&rawRelativeMarket!==undefined&&Number.isFinite(Number(rawRelativeMarket))
+        ?Number(rawRelativeMarket):NaN;
+    const quoteVolume=Number(x?.quote_volume_24h);
+    const liquidityQuality=Number(x?.liquidity_quality);
     const tickerActivity=x?.ticker_activity&&typeof x.ticker_activity==='object'?x.ticker_activity:null;
     const tickerActivityScore=Number(tickerActivity?.score);
     const tickerActivityVolumeRatio=Number(tickerActivity?.volume_acceleration_ratio);
@@ -1286,6 +1294,21 @@ export function buildPreMoveWatchCandidates(rows,{
       oneHourReturn>=-1.25&&oneHourReturn<=4.5
     ];
     const structureChecks=[squeeze>=55,structure>=60,buying>=60];
+    // HYPE-like bases can show strong buyer absorption before volume/trade acceleration.
+    // This narrow profile is revalidated by the API and push gate; it is never actionable.
+    const compressedBuyerChecks=[
+      squeeze>=45,structure>=60,buying>=90,taker>=0.65,takerDelta>=0.08,
+      closeLocation>=0.55,Number.isFinite(relativeBtc)&&relativeBtc>=-0.25
+    ].filter(Boolean).length;
+    const compressedBuyerAbsorptionEarly=ds.data_valid===true&&ds.data_stale!==true&&ds.stale!==true&&
+      quality>=95&&liquidityQuality>=85&&quoteVolume>=minQuoteVolume24h&&
+      Number.isFinite(dailyChange)&&dailyChange>=-5&&dailyChange<=5&&
+      Number.isFinite(sessionReturn)&&sessionReturn>=-1.5&&sessionReturn<=3.5&&
+      Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.5&&oneHourReturn<=2.5&&
+      score>=70&&volume>=0.25&&trades>=0.5&&
+      taker>=0.65&&takerDelta>=0.08&&closeLocation>=0.55&&
+      Number.isFinite(relativeBtc)&&relativeBtc>=-0.25&&
+      squeeze>=45&&structure>=60&&buying>=90&&compressedBuyerChecks===7;
     const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
     if(ds.candle_data_valid!==true||ds.data_stale===true||ds.last_error||
        !Number.isFinite(quality)||quality<minDataQuality||
@@ -1295,8 +1318,8 @@ export function buildPreMoveWatchCandidates(rows,{
        !Number.isFinite(sessionReturn)||sessionReturn< -1.5||sessionReturn>8||
        !Number.isFinite(oneHourReturn)||oneHourReturn< -1.25||oneHourReturn>4.5||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
-       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly)||
-       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly)||
+       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly)||
+       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly)||
        riskFlags.some(flag=>hardRisks.has(flag))) continue;
 
     const blockers=[];
@@ -1309,19 +1332,23 @@ export function buildPreMoveWatchCandidates(rows,{
         blockers.push('LIQUIDITY_UNVERIFIED');
     }
     if(p.flow_transition_confirmed!==true) {
-      if(!(volume>=1.12))blockers.push('VOLUME_ACCELERATION_NOT_CONFIRMED');
-      if(!(trades>=1.05))blockers.push('TRADE_ACCELERATION_NOT_CONFIRMED');
-      if(!(taker>=0.53&&takerDelta>=0.01))blockers.push('BUY_FLOW_NOT_CONFIRMED');
-      if(!(closeLocation>=0.54))blockers.push('BUYER_CANDLE_CLOSES_NOT_CONFIRMED');
-      blockers.push('BUY_FLOW_NOT_CONFIRMED');
+      if(compressedBuyerAbsorptionEarly) {
+        blockers.push('COMPRESSED_BUYER_ABSORPTION_MONITOR_ONLY');
+      } else {
+        if(!(volume>=1.12))blockers.push('VOLUME_ACCELERATION_NOT_CONFIRMED');
+        if(!(trades>=1.05))blockers.push('TRADE_ACCELERATION_NOT_CONFIRMED');
+        if(!(taker>=0.53&&takerDelta>=0.01))blockers.push('BUY_FLOW_NOT_CONFIRMED');
+        if(!(closeLocation>=0.54))blockers.push('BUYER_CANDLE_CLOSES_NOT_CONFIRMED');
+        blockers.push('BUY_FLOW_NOT_CONFIRMED');
+      }
     }
     if(p.price_window_valid!==true)blockers.push('PRICE_WINDOW_NOT_CONFIRMED');
     if(p.structure_gate_passed!==true&&p.structure_confirmed!==true) {
-      if(p.flow_led_expansion_confirmed!==true&&!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
+      if(!compressedBuyerAbsorptionEarly&&p.flow_led_expansion_confirmed!==true&&!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
       if(!(structure>=60))blockers.push('STRUCTURE_NOT_CONFIRMED');
       if(!(buying>=60))blockers.push('BUYING_PRESSURE_NOT_CONFIRMED');
     }
-    if(sessionReturn<0||sessionReturn>6)blockers.push('SESSION_MOVE_NOT_CONFIRMED');
+    if(!compressedBuyerAbsorptionEarly&&(sessionReturn<0||sessionReturn>6))blockers.push('SESSION_MOVE_NOT_CONFIRMED');
     if(score<62)blockers.push('SCORE_BELOW_ACTIONABLE_THRESHOLD');
     if(tickerActivityEarly)blockers.push('TICKER_ACTIVITY_ACCELERATION_MONITOR_ONLY');
     const watchReasons=[...new Set(blockers.length?blockers:['ACTIONABLE_GATE_NOT_MET'])];
@@ -1333,6 +1360,8 @@ export function buildPreMoveWatchCandidates(rows,{
         ...p,
         ticker_activity_monitor_only:tickerActivityEarly,
         ticker_activity_score:tickerActivityEarly?tickerActivityScore:null,
+        compressed_buyer_absorption_monitor_only:compressedBuyerAbsorptionEarly,
+        compressed_buyer_absorption_checks:compressedBuyerChecks,
         original_stage:p.stage||'NO_SETUP',
         stage:'WATCH_EARLY',
         watch_only:true,
@@ -1347,6 +1376,7 @@ export function buildPreMoveWatchCandidates(rows,{
   }
   return out.sort((a,b)=>
     Number(b.pre_move_context?.ticker_activity_monitor_only===true)-Number(a.pre_move_context?.ticker_activity_monitor_only===true)||
+    Number(b.pre_move_context?.compressed_buyer_absorption_monitor_only===true)-Number(a.pre_move_context?.compressed_buyer_absorption_monitor_only===true)||
     Number(b.ticker_activity?.score||0)-Number(a.ticker_activity?.score||0)||
     Number(b.pre_move_context?.score)-Number(a.pre_move_context?.score)||
     Number(a.pre_move_context?.session_return_pct)-Number(b.pre_move_context?.session_return_pct)||
