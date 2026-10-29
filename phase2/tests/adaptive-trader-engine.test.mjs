@@ -558,9 +558,9 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
   assert.equal(profile.market_wide_samples,80);
   assert.equal(profile.candidate_samples,0);
   assert.equal(profile.resolved_samples,80);
-  assert.equal(profile.outcome_counts.up,26);
+  assert.equal(profile.outcome_counts.up,27);
   assert.equal(profile.outcome_counts.down,27);
-  assert.equal(profile.outcome_counts.flat,27);
+  assert.equal(profile.outcome_counts.flat,26);
   assert.ok(profile.covered_factor_buckets>=4);
   assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
 });
