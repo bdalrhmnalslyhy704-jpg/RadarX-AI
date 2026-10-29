@@ -8,7 +8,10 @@ test('background summary exposes bounded near misses and the most common blocker
     universe:{
       discovered:50,deep_scanned:50,scanned:46,valid_data:42,observed_candle_data:48,
       watch_only:8,actionable:0,returned:0,elapsed_ms:44123,
-      eligible_spot_symbols:226,coverage_mode:'PINNED_PLUS_ROTATING_V1',rotation_cycle:5,rotation_offset:175
+      eligible_spot_symbols:226,coverage_mode:'PINNED_PLUS_ROTATING_V1',rotation_cycle:5,rotation_offset:175,
+      rotation_width:33,rotation_cursor_source:'DURABLE_STORE',rotation_cursor_persisted:true,
+      ticker_activity_signal_count:3,ticker_activity_baseline_source:'DURABLE_STORE',
+      ticker_activity_baseline_persisted:true,ticker_activity_baseline_error:null
     },
     watch_notification_diagnostics:{
       evaluated:8,eligible:0,rejected:8,
@@ -34,6 +37,13 @@ test('background summary exposes bounded near misses and the most common blocker
   };
   const summary=buildPreMoveBackgroundScanSummary({snapshot,watchAlerts:[],elapsedMs:50000});
   assert.equal(summary.deep_scanned,50);
+  assert.equal(summary.rotation_width,33);
+  assert.equal(summary.rotation_cursor_source,'DURABLE_STORE');
+  assert.equal(summary.rotation_cursor_persisted,true);
+  assert.equal(summary.ticker_activity_signal_count,3);
+  assert.equal(summary.ticker_activity_baseline_source,'DURABLE_STORE');
+  assert.equal(summary.ticker_activity_baseline_persisted,true);
+  assert.equal(summary.ticker_activity_baseline_error,null);
   assert.equal(summary.near_miss_review_count,10);
   assert.equal(summary.near_miss_samples.length,5);
   assert.equal(summary.near_miss_samples[0].symbol,'AAAUSDT');
@@ -48,6 +58,10 @@ test('background summary exposes bounded near misses and the most common blocker
   assert.equal(summary.watch_notification_top_rejections[0].score,67.5);
   assert.equal(summary.watch_notification_top_rejections[1].score,null);
   assert.equal(summary.watch_notification_top_rejections[1].data_quality,null);
+  assert.equal(summary.ticker_activity_signal_count,null,
+    'missing activity telemetry must stay unknown rather than being misreported as zero');
+  assert.equal(summary.ticker_activity_baseline_source,'UNAVAILABLE');
+  assert.equal(summary.ticker_activity_baseline_persisted,null);
 });
 
 test('background summary accepts empty or malformed optional diagnostics without inventing measurements',()=>{
