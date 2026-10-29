@@ -451,7 +451,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
     Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
   addLane(volumeLeaders,Math.ceil(selectedCount*0.20),'TOP_VOLUME');
-  addLane(extendedMovers,Math.ceil(selectedCount*0.15),'EXTENDED_MOVER_AUDIT');
+  addLane(extendedMovers,Math.ceil(selectedCount*0.30),'EXTENDED_MOVER_AUDIT');
   addLane(accelerationMovers,Math.ceil(selectedCount*0.25),'PRICE_ACCELERATION');
   addLane(emergingMovers,Math.ceil(selectedCount*0.25),'EMERGING_MOVER');
 
