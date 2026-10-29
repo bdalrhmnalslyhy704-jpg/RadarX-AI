@@ -292,6 +292,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     data_stale: false,
     as_of: new Date(evaluationNow).toISOString(),
     candle_close_time: current.closeTime,
+    candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     score,
     tier,
