@@ -5,12 +5,12 @@ const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
   const n=Number(value);return Number.isFinite(n)?n:null;
 };
-const DEFAULT_INTERVAL_MS=5*60*1000;
+const DEFAULT_INTERVAL_MS=3*60*1000;
 const SAMPLE_HORIZON_MS=4*60*60*1000;
 const HISTORY_MIN_INTERVAL_MS=15*60*1000;
-const SNAPSHOT_LIMIT=60;
-const MAX_SAMPLES=1000;
-const MAX_HISTORY=15000;
+const SNAPSHOT_LIMIT=80;
+const MAX_SAMPLES=6000;
+const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 
 function createServerPaperPortfolio(){
@@ -232,23 +232,85 @@ export class AdaptiveTraderWorker{
       sample.mark_price=price;sample.return_pct=Number(move.toFixed(3));
       sample.resolved_at=now;sample.horizon_ms=now-Number(sample.at);
     }
+
+    // Build a per-symbol index once, so thousands of market-wide observations
+    // do not turn each scan into a full-history search for every trading pair.
+    const historyBySymbol=new Map();
+    for(const row of this.state.price_history){
+      const symbol=cleanSymbol(row?.symbol);
+      if(!symbol||!Number.isFinite(Number(row?.at)))continue;
+      if(!historyBySymbol.has(symbol))historyBySymbol.set(symbol,[]);
+      historyBySymbol.get(symbol).push(row);
+    }
+    const latestTickerBySymbol=new Map((snapshot.latest_prices||[]).map(row=>
+      [cleanSymbol(row?.symbol),row]));
+    const btcDaily=finite(latestTickerBySymbol.get('BTCUSDT')?.change_24h_pct);
+    const candidateBySymbol=new Map((Array.isArray(snapshot.candidates)?snapshot.candidates:[])
+      .map(row=>[cleanSymbol(row?.symbol),row]));
     const newest=new Map();
     for(const sample of this.state.samples){
-      const old=newest.get(cleanSymbol(sample.symbol));
-      if(!old||Number(sample.at)>Number(old.at))newest.set(cleanSymbol(sample.symbol),sample);
+      const symbol=cleanSymbol(sample.symbol),old=newest.get(symbol);
+      if(!old||Number(sample.at)>Number(old.at))newest.set(symbol,sample);
     }
-    for(const candidate of snapshot.candidates){
-      if(candidate?.data_valid!==true||candidate.data_stale===true||!(Number(candidate.price)>0)||finite(candidate.score)===null)continue;
-      const symbol=cleanSymbol(candidate.symbol),old=newest.get(symbol);
+    let newMarketSamples=0,newDeepSamples=0;
+    for(const row of (Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[])){
+      const symbol=cleanSymbol(row?.symbol),price=finite(row?.price);
+      if(!symbol||!(price>0))continue;
+      const old=newest.get(symbol);
       if(old&&now-Number(old.at)<SAMPLE_HORIZON_MS)continue;
-      this.state.samples.push({
-        id:symbol+':'+String(now),symbol,price:Number(candidate.price),at:now,
-        base_score:Number(candidate.score),tier:String(candidate.tier||'NO_SETUP'),
-        features:{...(candidate.features||{})},outcome:null,mark_price:null,return_pct:null
-      });
-      newest.set(symbol,{symbol,at:now});
+
+      const historical=historyBySymbol.get(symbol)||[];
+      const findPrior=(minAgeMs,maxAgeMs)=>{
+        let best=null,bestDistance=Infinity;
+        for(const prior of historical){
+          const age=now-Number(prior.at);
+          if(age<minAgeMs||age>maxAgeMs||!(Number(prior.price)>0))continue;
+          const distance=Math.abs(age-(minAgeMs+maxAgeMs)/2);
+          if(distance<bestDistance){best=prior;bestDistance=distance;}
+        }
+        return best;
+      };
+      const prior15=findPrior(10*60*1000,30*60*1000);
+      const prior1h=findPrior(45*60*1000,75*60*1000);
+      const prior4h=findPrior(3.5*60*60*1000,4.5*60*60*1000);
+      const relative=(finite(row?.change_24h_pct)!==null&&btcDaily!==null)
+        ?Number((Number(row.change_24h_pct)-btcDaily).toFixed(3)):null;
+      const tickerFeatures={
+        change_24h_pct:finite(row?.change_24h_pct),
+        quote_volume_24h:finite(row?.quote_volume_24h),
+        price_change_15m_pct:prior15?Number(((price/Number(prior15.price)-1)*100).toFixed(3)):null,
+        price_change_1h_pct:prior1h?Number(((price/Number(prior1h.price)-1)*100).toFixed(3)):null,
+        price_change_4h_pct:prior4h?Number(((price/Number(prior4h.price)-1)*100).toFixed(3)):null,
+        relative_24h_strength_vs_btc_pct:relative,
+        move_since_previous_pct:finite(row?.move_since_previous_pct)
+      };
+      const candidate=candidateBySymbol.get(symbol);
+      const deepValid=Boolean(candidate&&candidate.data_valid===true&&candidate.data_stale!==true&&finite(candidate.score)!==null);
+      // Market-wide ticker observations learn how coins behave before, during,
+      // and after rallies even if the deeper kline batch has not visited them.
+      // Detailed candle features are captured only when they existed at baseline.
+      const features=deepValid?{...tickerFeatures,...(candidate.features||{})}:tickerFeatures;
+      const item={
+        id:symbol+':'+String(now),symbol,price,at:now,
+        base_score:deepValid?Number(candidate.score):null,
+        tier:deepValid?String(candidate.tier||'NO_SETUP'):'NOT_EVALUATED',
+        observation_type:deepValid?'DEEP_CANDIDATE':'MARKET_WIDE_TICKER',
+        quote_volume_24h:finite(row?.quote_volume_24h),
+        change_24h_pct:finite(row?.change_24h_pct),
+        selection_lane:candidate?.selection_lane||null,
+        features,outcome:null,mark_price:null,return_pct:null
+      };
+      this.state.samples.push(item);
+      newest.set(symbol,item);
+      if(deepValid)newDeepSamples++;else newMarketSamples++;
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
+    this.state.last_learning_capture={
+      at:now,new_market_wide_samples:newMarketSamples,new_deep_candidate_samples:newDeepSamples,
+      active_spot_prices:(snapshot.latest_prices||[]).length,
+      tracked_samples:this.state.samples.length,
+      resolved_samples:this.state.samples.filter(row=>row.outcome).length
+    };
   }
 
   collectPriceHistory(snapshot,now){
@@ -266,8 +328,12 @@ export class AdaptiveTraderWorker{
       const candidate=candidates.get(symbol);
       this.state.price_history.push({
         symbol,price,at:now,
+        quote_volume_24h:finite(row.quote_volume_24h),
+        change_24h_pct:finite(row.change_24h_pct),
+        move_since_previous_pct:finite(row.move_since_previous_pct),
         tier:candidate?String(candidate.tier||'NO_SETUP'):'NOT_EVALUATED',
         score:candidate&&candidate.data_valid===true?finite(candidate.score):null,
+        features:candidate&&candidate.data_valid===true&&!candidate.data_stale?{...(candidate.features||{})}:null,
         evaluated:Boolean(candidate&&candidate.data_valid===true&&!candidate.data_stale)
       });
       latest.set(symbol,{symbol,price,at:now});
@@ -278,7 +344,7 @@ export class AdaptiveTraderWorker{
   collectMissedMovers(snapshot,now){
     const events=findMissedMoverEvents({
       history:this.state.price_history,currentPrices:snapshot.latest_prices,
-      now,thresholdPct:5,maxAgeMs:6*60*60*1000
+      now,thresholdPct:3,maxAgeMs:24*60*60*1000
     });
     const ids=new Set(this.state.missed_movers.map(row=>row.id));
     for(const event of events){
@@ -366,6 +432,7 @@ export class AdaptiveTraderWorker{
       next_scan_at:this.enabled?new Date(Date.now()+this.intervalMs).toISOString():null,
       last_summary:this.state.last_summary,
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.state.samples),
+      learning_capture:this.state.last_learning_capture||null,
       paper_validation_profile:this.state.paper_validation_profile||buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio),
       server_paper_portfolio:{
         starting_balance:Number(this.state.paper_portfolio?.starting_balance)||10000,
@@ -384,8 +451,11 @@ export class AdaptiveTraderWorker{
       last_execution_result:this.lastExecutionResult,
       memory:{resolved_samples:(this.state.samples||[]).filter(row=>row.outcome).length,
         unresolved_samples:(this.state.samples||[]).filter(row=>!row.outcome).length,
+        deep_candidate_samples:(this.state.samples||[]).filter(row=>row.observation_type==='DEEP_CANDIDATE').length,
+        market_wide_samples:(this.state.samples||[]).filter(row=>row.observation_type==='MARKET_WIDE_TICKER').length,
         history_rows:(this.state.price_history||[]).length,
-        potential_missed_movers:(this.state.missed_movers||[]).filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length}
+        potential_missed_movers:(this.state.missed_movers||[]).filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length,
+        unassessed_moves:(this.state.missed_movers||[]).filter(row=>row.classification==='UNASSESSED_MOVE').length}
     };
   }
 }
