@@ -1,4 +1,4 @@
-import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
+import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
 
 const finite=value=>{
@@ -286,16 +286,20 @@ export class AdaptiveTraderWorker{
       };
       const candidate=candidateBySymbol.get(symbol);
       const deepValid=Boolean(candidate&&candidate.data_valid===true&&candidate.data_stale!==true&&finite(candidate.score)!==null);
-      // Market-wide ticker observations learn how coins behave before, during,
-      // and after rallies even if the deeper kline batch has not visited them.
-      // Detailed candle features are captured only when they existed at baseline.
+      const quoteVolume=finite(row?.quote_volume_24h);
+      // Keep low-liquidity prices in the audit history, but only train on eligible
+      // Spot pairs or deep candidates that passed the same liquidity universe gate.
+      if(!deepValid&&!(quoteVolume>=ADAPTIVE_TRADER_POLICY.minQuoteVolume24h))continue;
+      // Market-wide ticker observations learn how liquid coins behaved before,
+      // during, and after rallies even when the deeper kline batch has not visited.
       const features=deepValid?{...tickerFeatures,...(candidate.features||{})}:tickerFeatures;
       const item={
         id:symbol+':'+String(now),symbol,price,at:now,
         base_score:deepValid?Number(candidate.score):null,
         tier:deepValid?String(candidate.tier||'NO_SETUP'):'NOT_EVALUATED',
         observation_type:deepValid?'DEEP_CANDIDATE':'MARKET_WIDE_TICKER',
-        quote_volume_24h:finite(row?.quote_volume_24h),
+        training_eligible:true,
+        quote_volume_24h:quoteVolume,
         change_24h_pct:finite(row?.change_24h_pct),
         selection_lane:candidate?.selection_lane||null,
         features,outcome:null,mark_price:null,return_pct:null
