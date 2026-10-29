@@ -40,7 +40,10 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
       finite(features.close_location)!==null&&Number(features.close_location)>=0.65&&
       finite(features.relative_strength_vs_btc_pct)!==null&&Number(features.relative_strength_vs_btc_pct)>=0.25&&
       features.breakout_above_prior_high===true&&daily!==null&&daily>=-3&&daily<=7&&
-      hourly!==null&&hourly>=-2.5&&hourly<=3.5&&age<=10*60*1000;
+      hourly!==null&&hourly>=-2.5&&hourly<=3.5&&age<=10*60*1000&&
+      features.micro_5m_available===true&&finite(features.micro_5m_taker_buy_ratio)!==null&&
+      Number(features.micro_5m_taker_buy_ratio)>=0.53&&finite(features.micro_5m_volume_ratio)!==null&&
+      Number(features.micro_5m_volume_ratio)>=1.1;
     if(strictSetup) {
       return out('ENTRY_CANDIDATE','مرشّح دخول للمراجعة — ليس أمر شراء مضمونًا','REVIEW_ENTRY',3,
         'تحقّق من السعر الحالي والسيولة والسبريد والرسوم وحدّد وقف الخسارة قبل أي قرار؛ التنفيذ الحقيقي متوقف، وهذه النتيجة للمحاكاة والمراجعة فقط.',
@@ -660,11 +663,11 @@ export function buildAdaptiveLearningProfile(samples = [], { minSamples = POLICY
     buyer_flow:row=>finite(row.features.taker_buy_ratio)!==null&&Number(row.features.taker_buy_ratio)>=0.52,
     structure:row=>row.features.higher_low===true||row.features.breakout_above_prior_high===true,
     compression:row=>finite(row.features.compression_ratio)!==null&&Number(row.features.compression_ratio)<=0.8,
-    relative_strength:row=>finite(row.features.relative_strength_vs_btc_pct)!==null&&Number(row.features.relative_strength_vs_btc_pct)>=0.25,
-    short_momentum:row=>finite(row.features.recent_15m_return_pct)!==null&&Number(row.features.recent_15m_return_pct)>=0&&Number(row.features.recent_15m_return_pct)<=1.5,
-    multi_hour_trend:row=>row.features.trend_aligned===true||(finite(row.features.return_3h_pct)!==null&&Number(row.features.return_3h_pct)>0),
+    relative_strength:row=>((finite(row.features.relative_strength_vs_btc_pct)!==null&&Number(row.features.relative_strength_vs_btc_pct)>=0.25)||(finite(row.features.relative_24h_strength_vs_btc_pct)!==null&&Number(row.features.relative_24h_strength_vs_btc_pct)>=0.25)),
+    short_momentum:row=>{const value=finite(row.features.recent_15m_return_pct)??finite(row.features.price_change_15m_pct);return value!==null&&value>=0&&value<=1.5;},
+    multi_hour_trend:row=>row.features.trend_aligned===true||(finite(row.features.return_3h_pct)!==null&&Number(row.features.return_3h_pct)>0)||(finite(row.features.price_change_4h_pct)!==null&&Number(row.features.price_change_4h_pct)>0),
     five_minute_flow:row=>finite(row.features.micro_5m_taker_buy_ratio)!==null&&Number(row.features.micro_5m_taker_buy_ratio)>=0.55,
-    ticker_momentum:row=>finite(row.features.price_change_15m_pct)!==null&&Number(row.features.price_change_15m_pct)>0,
+    ticker_momentum:row=>{const value=finite(row.features.price_change_15m_pct)??finite(row.features.recent_15m_return_pct);return value!==null&&value>0;},
     daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7
   };
   const buckets={},adjustments={};
@@ -702,11 +705,11 @@ export function applyAdaptiveLearning(baseScore,features={},profile={}){
   add('buyer_flow',finite(features.taker_buy_ratio)!==null&&Number(features.taker_buy_ratio)>=0.52);
   add('structure',features.higher_low===true||features.breakout_above_prior_high===true);
   add('compression',finite(features.compression_ratio)!==null&&Number(features.compression_ratio)<=0.8);
-  add('relative_strength',finite(features.relative_strength_vs_btc_pct)!==null&&Number(features.relative_strength_vs_btc_pct)>=0.25);
-  add('short_momentum',finite(features.recent_15m_return_pct)!==null&&Number(features.recent_15m_return_pct)>=0&&Number(features.recent_15m_return_pct)<=1.5);
-  add('multi_hour_trend',features.trend_aligned===true||(finite(features.return_3h_pct)!==null&&Number(features.return_3h_pct)>0));
+  add('relative_strength',(finite(features.relative_strength_vs_btc_pct)!==null&&Number(features.relative_strength_vs_btc_pct)>=0.25)||(finite(features.relative_24h_strength_vs_btc_pct)!==null&&Number(features.relative_24h_strength_vs_btc_pct)>=0.25));
+  add('short_momentum',((finite(features.recent_15m_return_pct)??finite(features.price_change_15m_pct))!==null&&(finite(features.recent_15m_return_pct)??finite(features.price_change_15m_pct))>=0&&(finite(features.recent_15m_return_pct)??finite(features.price_change_15m_pct))<=1.5));
+  add('multi_hour_trend',features.trend_aligned===true||(finite(features.return_3h_pct)!==null&&Number(features.return_3h_pct)>0)||(finite(features.price_change_4h_pct)!==null&&Number(features.price_change_4h_pct)>0));
   add('five_minute_flow',finite(features.micro_5m_taker_buy_ratio)!==null&&Number(features.micro_5m_taker_buy_ratio)>=0.55);
-  add('ticker_momentum',finite(features.price_change_15m_pct)!==null&&Number(features.price_change_15m_pct)>0);
+  add('ticker_momentum',((finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))!==null&&(finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))>0));
   add('daily_regime',finite(features.change_24h_pct)!==null&&Number(features.change_24h_pct)>=-2&&Number(features.change_24h_pct)<=7);
   const delta=active.length?active.reduce((a,b)=>a+b,0)/active.length:0;
   return Number(clamp(score+clamp(delta,-4,4),0,100).toFixed(1));
