@@ -134,3 +134,11 @@ test('TEST_FIXTURE: Android FCM watch gate accepts trusted public Spot aliases a
   assert.match(ui,/next_step_ar/);
   assert.match(ui,/never calibrate them twice/);
 });
+
+test('TEST_FIXTURE: Android background polling backs off on HTTP 429 instead of flooding all radar endpoints',async()=>{
+  const native=await readFile(new URL('../../android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
+  assert.match(native,/backendRateLimitUntilMs\s*=\s*Math\.max\(backendRateLimitUntilMs,\s*System\.currentTimeMillis\(\)\s*\+\s*15_000L\)/);
+  assert.match(native,/BACKGROUND_SCAN_RATE_LIMIT_COOLDOWN_ACTIVE/);
+  assert.match(native,/BACKGROUND_SCAN_RATE_LIMITED_SKIP_COMPATIBILITY_FALLBACK/);
+  assert.match(native,/BACKEND_RATE_LIMITED_SKIP_REMAINING_COMPATIBILITY_ROUTES/);
+});
