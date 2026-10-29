@@ -64,7 +64,7 @@ const POLICY = Object.freeze({
   maxCandleAgeMs: 20 * 60 * 1000,
   defaultUniverseLimit: 80,
   maxUniverseLimit: 120,
-  learningMinOutcomes: 30,
+  learningMinOutcomes: 60,
   paperPositionPct: 5,
   maxPaperPositions: 3,
   takeProfitPct: 3,
@@ -84,7 +84,7 @@ const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / value
 const pct = (a, b) => Number.isFinite(a) && Number.isFinite(b) && b > 0 ? (a / b - 1) * 100 : null;
 const isLeveragedToken = symbol => /(?:UP|DOWN|BULL|BEAR)USDT$/.test(String(symbol || '').toUpperCase());
 
-function normalizeCandle(row) {
+function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
   if (!Array.isArray(row) || row.length < 11) return null;
   const values = {
     openTime: finite(row[0]), open: finite(row[1]), high: finite(row[2]),
@@ -93,13 +93,13 @@ function normalizeCandle(row) {
     takerBuyBaseVolume: finite(row[9]), takerBuyQuoteVolume: finite(row[10])
   };
   if (Object.values(values).some(v => v === null) ||
-      values.openTime <= 0 || values.closeTime !== values.openTime + 15 * 60 * 1000 - 1 ||
+      values.openTime <= 0 || values.closeTime !== values.openTime + intervalMs - 1 ||
       values.low <= 0 || values.high < values.low || values.close <= 0 ||
       values.quoteVolume < 0 || values.trades < 0) return null;
   return values;
 }
 
-export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines = null, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKlines = null, btcKlines = null, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   const cleanSymbol = String(symbol || ticker?.symbol || '').trim().toUpperCase();
   const lastPrice = finite(ticker?.lastPrice ?? ticker?.last_price);
   const quoteVolume24h = finite(ticker?.quoteVolume ?? ticker?.quote_volume_24h);
@@ -179,6 +179,38 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const compressionScore = compressionRatio === null ? 0 : clamp((1.5 - compressionRatio) / 1.2 * 100, 0, 100);
   const oneHourReturnPct = candles.length >= 5 ? pct(current.close, candles[candles.length - 5].close) : null;
   const shortReturnPct = candles.length >= 2 ? pct(current.close, candles[candles.length - 2].close) : null;
+  const return30mPct = candles.length >= 3 ? pct(current.close, candles[candles.length - 3].close) : null;
+  const return3hPct = candles.length >= 13 ? pct(current.close, candles[candles.length - 13].close) : null;
+  const sma8 = mean(candles.slice(-8).map(candle => candle.close));
+  const priorSma8 = mean(candles.slice(-16, -8).map(candle => candle.close));
+  const trendAligned = sma8 !== null && priorSma8 !== null && current.close >= sma8 && sma8 >= priorSma8;
+  const currentRangePct = current.close > 0 ? (current.high - current.low) / current.close * 100 : null;
+  const upperWickPct = current.close > 0 ? (current.high - Math.max(current.open, current.close)) / current.close * 100 : null;
+  const lowerWickPct = current.close > 0 ? (Math.min(current.open, current.close) - current.low) / current.close * 100 : null;
+  const breakoutDistancePct = priorHigh > 0 ? pct(current.close, priorHigh) : null;
+  // Independent closed 5m lens: a failed fast feed is neutral, never fabricated data.
+  const fastReceivedAt = finite(fastKlines?.receivedAt);
+  const fastEvaluationNow = fastReceivedAt !== null && fastReceivedAt <= scanStartedAt + 5 * 60 * 1000
+    ? Math.max(scanStartedAt, fastReceivedAt) : scanStartedAt;
+  const fastCandles = (Array.isArray(fastKlines?.data) ? fastKlines.data : Array.isArray(fastKlines) ? fastKlines : [])
+    .map(row => normalizeCandle(row, 5 * 60 * 1000)).filter(Boolean)
+    .filter(candle => candle.closeTime < fastEvaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
+  const fastRecent = fastCandles.slice(-12);
+  const fastContiguous = fastRecent.length===12&&fastRecent.every((candle,index)=>
+    index===0||candle.openTime-fastRecent[index-1].openTime===5*60*1000);
+  const fastLast=fastCandles[fastCandles.length-1];
+  const fastAgeMs=fastLast?fastEvaluationNow-fastLast.closeTime:null;
+  const microAvailable=Boolean(fastContiguous&&fastLast&&fastAgeMs>=0&&fastAgeMs<=10*60*1000);
+  const fastPrior=fastCandles.slice(-9,-1);
+  const fastVolumeBaseline=mean(fastPrior.map(candle=>candle.quoteVolume));
+  const fastTradeBaseline=mean(fastPrior.map(candle=>candle.trades));
+  const microVolumeRatio=microAvailable&&fastVolumeBaseline>0?fastLast.quoteVolume/fastVolumeBaseline:null;
+  const microTradeRatio=microAvailable&&fastTradeBaseline>0?fastLast.trades/fastTradeBaseline:null;
+  const microTakerBuyRatio=microAvailable&&fastLast.quoteVolume>0?fastLast.takerBuyQuoteVolume/fastLast.quoteVolume:null;
+  const microCloseLocation=microAvailable&&fastLast.high>fastLast.low
+    ?clamp((fastLast.close-fastLast.low)/(fastLast.high-fastLast.low),0,1):null;
+  const microReturnPct=microAvailable&&fastCandles.length>=2
+    ?pct(fastLast.close,fastCandles[fastCandles.length-2].close):null;
   const btcReceivedAt = finite(btcKlines?.receivedAt);
   const btcEvaluationNow = btcReceivedAt !== null && btcReceivedAt <= scanStartedAt + 5 * 60 * 1000
     ? Math.max(scanStartedAt, btcReceivedAt)
@@ -198,14 +230,17 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   const flowScore = takerBuyRatio === null ? 0 : clamp((takerBuyRatio - 0.45) / 0.25 * 100, 0, 100);
   const structureScore = breakoutAbovePriorHigh ? 95 : higherLow ? 74 : closeLocation >= 0.65 ? 56 : 32;
   const relativeStrengthScore = relativeStrengthVsBtcPct===null ? 50 : clamp((relativeStrengthVsBtcPct+2)/4*100,0,100);
+  const momentumScore = shortReturnPct===null?50:clamp((shortReturnPct+0.5)/1.5*100,0,100);
+  const trendScore = return3hPct===null?50:clamp((return3hPct+2)/6*100,0,100);
+  const candleQualityScore = upperWickPct===null||!(currentRangePct>0)?50:clamp(100-(upperWickPct/currentRangePct)*110,0,100);
+  const microVolumeScore = microVolumeRatio===null?50:clamp((microVolumeRatio-0.7)/2.0*100,0,100);
+  const microTradeScore = microTradeRatio===null?50:clamp((microTradeRatio-0.7)/1.8*100,0,100);
+  const microFlowScore = microTakerBuyRatio===null?50:clamp((microTakerBuyRatio-0.45)/0.25*100,0,100);
   const score = Number((
-    volumeScore * 0.18 +
-    tradeScore * 0.13 +
-    flowScore * 0.18 +
-    closeLocation * 100 * 0.14 +
-    structureScore * 0.19 +
-    compressionScore * 0.08 +
-    relativeStrengthScore * 0.10
+    volumeScore*0.12 + tradeScore*0.08 + flowScore*0.12 + closeLocation*100*0.08 +
+    structureScore*0.14 + compressionScore*0.08 + relativeStrengthScore*0.10 +
+    momentumScore*0.08 + trendScore*0.04 + candleQualityScore*0.02 +
+    microVolumeScore*0.06 + microTradeScore*0.04 + microFlowScore*0.04
   ).toFixed(1));
 
   const lateMove = change24hPct >= 8 || (oneHourReturnPct !== null && oneHourReturnPct >= 5);
@@ -232,6 +267,12 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
   if (compressionRatio !== null && compressionRatio <= 0.8) reasons.push('VOLATILITY_COMPRESSION');
   if (relativeStrengthVsBtcPct !== null && relativeStrengthVsBtcPct >= 0.25) reasons.push('RELATIVE_STRENGTH_VS_BTC');
   if (relativeStrengthVsBtcPct === null) reasons.push('BTC_BENCHMARK_UNAVAILABLE');
+  if (shortReturnPct !== null && shortReturnPct >= 0.15 && shortReturnPct <= 1.5) reasons.push('15M_MOMENTUM_BUILDING');
+  if (return3hPct !== null && return3hPct > 0 && trendAligned) reasons.push('MULTI_HOUR_TREND_ALIGNED');
+  if (microAvailable && microTakerBuyRatio !== null && microTakerBuyRatio >= 0.55) reasons.push('FIVE_MINUTE_BUY_FLOW_POSITIVE');
+  if (microAvailable && microVolumeRatio !== null && microVolumeRatio >= 1.4) reasons.push('FIVE_MINUTE_VOLUME_ACCELERATION');
+  if (!microAvailable) reasons.push('FIVE_MINUTE_CONFIRMATION_UNAVAILABLE');
+  if (upperWickPct !== null && currentRangePct > 0 && upperWickPct / currentRangePct >= 0.55) reasons.push('UPPER_WICK_REJECTION_RISK');
   if (change24hPct < -5) reasons.push('DAILY_DRAWDOWN_BLOCK');
   if (!noChase) reasons.push('ANTI_CHASE_BLOCK');
   if (lateMove) reasons.push('ALREADY_EXTENDED');
@@ -257,10 +298,29 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, btcKlines
       compression_ratio: compressionRatio === null ? null : Number(compressionRatio.toFixed(3)),
       compression_score: Number(compressionScore.toFixed(1)),
       hourly_return_pct: oneHourReturnPct === null ? null : Number(oneHourReturnPct.toFixed(3)),
+      return_30m_pct: return30mPct === null ? null : Number(return30mPct.toFixed(3)),
+      return_3h_pct: return3hPct === null ? null : Number(return3hPct.toFixed(3)),
+      trend_aligned: trendAligned,
+      sma8_price: sma8 === null ? null : Number(sma8.toFixed(8)),
+      previous_sma8_price: priorSma8 === null ? null : Number(priorSma8.toFixed(8)),
       btc_hourly_return_pct: btcOneHourReturnPct === null ? null : Number(btcOneHourReturnPct.toFixed(3)),
       relative_strength_vs_btc_pct: relativeStrengthVsBtcPct,
       relative_strength_score: Number(relativeStrengthScore.toFixed(1)),
       recent_15m_return_pct: shortReturnPct === null ? null : Number(shortReturnPct.toFixed(3)),
+      current_range_pct: currentRangePct === null ? null : Number(currentRangePct.toFixed(3)),
+      upper_wick_pct: upperWickPct === null ? null : Number(upperWickPct.toFixed(3)),
+      lower_wick_pct: lowerWickPct === null ? null : Number(lowerWickPct.toFixed(3)),
+      breakout_distance_pct: breakoutDistancePct === null ? null : Number(breakoutDistancePct.toFixed(3)),
+      momentum_score: Number(momentumScore.toFixed(1)),
+      trend_score: Number(trendScore.toFixed(1)),
+      candle_quality_score: Number(candleQualityScore.toFixed(1)),
+      micro_5m_available: microAvailable,
+      micro_5m_age_ms: fastAgeMs===null?null:Math.max(0,Math.trunc(fastAgeMs)),
+      micro_5m_volume_ratio: microVolumeRatio === null ? null : Number(microVolumeRatio.toFixed(3)),
+      micro_5m_trade_ratio: microTradeRatio === null ? null : Number(microTradeRatio.toFixed(3)),
+      micro_5m_taker_buy_ratio: microTakerBuyRatio === null ? null : Number(microTakerBuyRatio.toFixed(4)),
+      micro_5m_close_location: microCloseLocation === null ? null : Number(microCloseLocation.toFixed(4)),
+      micro_5m_return_pct: microReturnPct === null ? null : Number(microReturnPct.toFixed(3)),
       base_price: current.close
     },
     reason_codes: reasons,
@@ -309,11 +369,23 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     (!Array.isArray(item.permissions) || item.permissions.length === 0 || item.permissions.includes('SPOT'))
   ).map(item => String(item.symbol || '').toUpperCase()));
   const tickers = Array.isArray(tickerResult?.data) ? tickerResult.data : [];
-  const eligible = tickers.filter(row => {
+  const previousAsOf = Date.parse(String(previousSnapshot?.as_of || ''));
+  const previousSnapshotAgeMs = Number.isFinite(previousAsOf) ? Number(now) - previousAsOf : null;
+  const previousPrices = new Map((Array.isArray(previousSnapshot?.latest_prices) ? previousSnapshot.latest_prices : [])
+    .map(row => [String(row?.symbol || '').toUpperCase(), finite(row?.price)]));
+  const marketTickers = tickers.filter(row => {
     const symbol = String(row?.symbol || '').toUpperCase();
     return activeSpot.has(symbol) && symbol.endsWith('USDT') && !isLeveragedToken(symbol) &&
-      finite(row?.lastPrice) > 0 && finite(row?.quoteVolume) >= minQuoteVolume24h;
-  }).sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume));
+      finite(row?.lastPrice) > 0 && finite(row?.quoteVolume) !== null && finite(row?.priceChangePercent) !== null;
+  }).map(row => {
+    const symbol=String(row.symbol||'').toUpperCase(),price=finite(row.lastPrice);
+    const previousPrice=previousPrices.get(symbol);
+    const pulseFresh=previousSnapshotAgeMs!==null&&previousSnapshotAgeMs>=0&&previousSnapshotAgeMs<=10*60*1000;
+    return {...row,move_since_previous_pct:pulseFresh&&previousPrice>0
+      ?Number(((price/previousPrice-1)*100).toFixed(3)):null};
+  });
+  const eligible = marketTickers.filter(row => finite(row?.quoteVolume) >= minQuoteVolume24h)
+    .sort((a, b) => Number(b.quoteVolume) - Number(a.quoteVolume));
   const scanOffset = eligible.length
     ? Math.max(0, Math.trunc(Number(offset) || 0)) % eligible.length
     : 0;
@@ -370,11 +442,15 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const change=changePct(row);
     return change===null || change<8;
   });
-  addLane(volumeLeaders,Math.ceil(selectedCount*0.25),'TOP_VOLUME');
-  // Give extended coins a bounded, diagnostic-only pass before spending the
-  // remaining priority budget on early movers. Their result stays LATE_MOVE.
-  addLane(extendedMovers,Math.ceil(selectedCount*0.25),'EXTENDED_MOVER_AUDIT');
-  addLane(emergingMovers,Math.ceil(selectedCount*0.30),'EMERGING_MOVER');
+  const accelerationMovers = eligible.filter(row => {
+    const pulse=finite(row?.move_since_previous_pct),daily=changePct(row);
+    return pulse!==null&&pulse>=0.25&&pulse<4.5&&daily!==null&&daily>=-5&&daily<8&&!isLeveragedToken(row.symbol);
+  }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
+    Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
+  addLane(volumeLeaders,Math.ceil(selectedCount*0.20),'TOP_VOLUME');
+  addLane(extendedMovers,Math.ceil(selectedCount*0.15),'EXTENDED_MOVER_AUDIT');
+  addLane(accelerationMovers,Math.ceil(selectedCount*0.25),'PRICE_ACCELERATION');
+  addLane(emergingMovers,Math.ceil(selectedCount*0.25),'EMERGING_MOVER');
 
   let rotationVisited=0;
   while(selectedBySymbol.size<selectedCount && rotationVisited<eligible.length) {
@@ -395,8 +471,12 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   },{});
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
-    const result = await rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 });
-    return scoreAdaptiveTraderCandidate({ symbol: ticker.symbol, ticker, klines: result, btcKlines, now, minQuoteVolume24h });
+    const [result,fastResult] = await Promise.all([
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 }),
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 20 })
+        .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
+    ]);
+    return scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
   });
   const candidates = analyzed.map((row, index) => row && !row.error
     ? { ...row, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
@@ -433,6 +513,12 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       eligible_spot_symbols: eligible.length,
       analyzed_symbols: candidates.length,
       valid_symbols: validCount,
+      monitored_spot_symbols: marketTickers.length,
+      market_wide_price_tracking: true,
+      price_acceleration_candidates_available: accelerationMovers.length,
+      micro_5m_symbols_available: analyzed.filter(row=>row&&!row.error&&row.features?.micro_5m_available===true).length,
+      micro_5m_symbols_unavailable: Math.max(0,candidates.length-analyzed.filter(row=>row&&!row.error&&row.features?.micro_5m_available===true).length),
+      previous_snapshot_age_ms: Number.isFinite(previousSnapshotAgeMs)?Math.max(0,Math.trunc(previousSnapshotAgeMs)):null,
       requested_limit: safeLimit,
       scan_offset: scanOffset,
       scan_advance_count: rotationAdvanceCount,
@@ -444,16 +530,17 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       min_quote_volume_24h: minQuoteVolume24h,
       emerging_movers_available: emergingMovers.length,
       extended_movers_available: extendedMovers.length,
-      selection_strategy: 'MOVER_AWARE_ROTATION_V1',
+      price_acceleration_movers_available: accelerationMovers.length,
+      selection_strategy: 'MOVER_AWARE_ACCELERATION_ROTATION_V2',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },
     candidates,
-    latest_prices: eligible.map(row => ({
-      symbol: String(row.symbol),
-      price: finite(row.lastPrice),
-      quote_volume_24h: finite(row.quoteVolume),
-      change_24h_pct: finite(row.priceChangePercent)
+    // Track all active non-leveraged Spot USDT pairs even while deep-scan slots rotate.
+    latest_prices: marketTickers.map(row => ({
+      symbol:String(row.symbol),price:finite(row.lastPrice),
+      quote_volume_24h:finite(row.quoteVolume),change_24h_pct:finite(row.priceChangePercent),
+      move_since_previous_pct:finite(row.move_since_previous_pct)
     })),
     meta: {
       live: validCount > 0,
@@ -463,7 +550,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       closed_candles_only: true,
       engine: 'ADAPTIVE_TRADER_SIDECAR_V1',
       execution: 'DISABLED',
-      learning_scope: 'LOCAL_DEVICE_PAPER_OUTCOMES_ONLY',
+      learning_scope: 'SERVER_MARKET_WIDE_AND_DEEP_CANDIDATE_OUTCOMES',
       source_host: source,
       btc_benchmark_available: Boolean(btcKlines?.data),
       btc_benchmark_error: btcResult.error,
@@ -521,7 +608,8 @@ export function createAdaptiveTraderSnapshotService({
     const scanOffset = requestedOffset === null ? (rotationCursors.get(safeLimit) || 0) : requestedOffset;
     const queuedRetries = retryQueues.get(safeLimit) || [];
     const task = buildAdaptiveTraderMarketSnapshot({
-      rest, limit: safeLimit, now, offset: scanOffset, retrySymbols: queuedRetries, minQuoteVolume24h
+      rest, limit: safeLimit, now, offset: scanOffset, retrySymbols: queuedRetries,
+      previousSnapshot:hit?.snapshot||null,minQuoteVolume24h
     }).then(snapshot => {
       const eligibleCount = Number(snapshot.universe?.eligible_spot_symbols) || 0;
       const advance = Number(snapshot.universe?.scan_advance_count) || 0;
@@ -559,52 +647,69 @@ export function createAdaptiveTraderSnapshotService({
 }
 
 export function buildAdaptiveLearningProfile(samples = [], { minSamples = POLICY.learningMinOutcomes, minimumBucket = 8 } = {}) {
-  const resolved = (Array.isArray(samples) ? samples : []).filter(row =>
-    row && ['UP', 'DOWN', 'FLAT'].includes(row.outcome) && row.features && typeof row.features === 'object');
-  const positive = resolved.filter(row => row.outcome === 'UP').length;
-  const overallRate = resolved.length ? (positive + 2) / (resolved.length + 4) : 0.5;
-  const featureKeys = {
-    volume: row => finite(row.features.volume_ratio) !== null && Number(row.features.volume_ratio) >= 1.5,
-    buyer_flow: row => finite(row.features.taker_buy_ratio) !== null && Number(row.features.taker_buy_ratio) >= 0.52,
-    structure: row => row.features.higher_low === true || row.features.breakout_above_prior_high === true,
-    compression: row => finite(row.features.compression_ratio) !== null && Number(row.features.compression_ratio) <= 0.8
+  const resolved=(Array.isArray(samples)?samples:[]).filter(row=>
+    row&&['UP','DOWN','FLAT'].includes(row.outcome)&&row.features&&typeof row.features==='object');
+  const positive=resolved.filter(row=>row.outcome==='UP').length;
+  const negative=resolved.filter(row=>row.outcome==='DOWN').length;
+  const flat=resolved.filter(row=>row.outcome==='FLAT').length;
+  const overallRate=resolved.length?(positive+2)/(resolved.length+4):0.5;
+  const meanReturn=mean(resolved.map(row=>finite(row.return_pct)).filter(value=>value!==null))??0;
+  const featureKeys={
+    volume:row=>finite(row.features.volume_ratio)!==null&&Number(row.features.volume_ratio)>=1.5,
+    trade_activity:row=>finite(row.features.trade_ratio)!==null&&Number(row.features.trade_ratio)>=1.25,
+    buyer_flow:row=>finite(row.features.taker_buy_ratio)!==null&&Number(row.features.taker_buy_ratio)>=0.52,
+    structure:row=>row.features.higher_low===true||row.features.breakout_above_prior_high===true,
+    compression:row=>finite(row.features.compression_ratio)!==null&&Number(row.features.compression_ratio)<=0.8,
+    relative_strength:row=>finite(row.features.relative_strength_vs_btc_pct)!==null&&Number(row.features.relative_strength_vs_btc_pct)>=0.25,
+    short_momentum:row=>finite(row.features.recent_15m_return_pct)!==null&&Number(row.features.recent_15m_return_pct)>=0&&Number(row.features.recent_15m_return_pct)<=1.5,
+    multi_hour_trend:row=>row.features.trend_aligned===true||(finite(row.features.return_3h_pct)!==null&&Number(row.features.return_3h_pct)>0),
+    five_minute_flow:row=>finite(row.features.micro_5m_taker_buy_ratio)!==null&&Number(row.features.micro_5m_taker_buy_ratio)>=0.55,
+    ticker_momentum:row=>finite(row.features.price_change_15m_pct)!==null&&Number(row.features.price_change_15m_pct)>0,
+    daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7
   };
-  const buckets = {};
-  const adjustments = {};
-  for (const [key, matcher] of Object.entries(featureKeys)) {
-    const rows = resolved.filter(matcher);
-    const wins = rows.filter(row => row.outcome === 'UP').length;
-    const rate = (wins + 2) / (rows.length + 4);
-    buckets[key] = { samples: rows.length, wins, positive_rate_pct: Number((rate * 100).toFixed(1)) };
-    adjustments[key] = rows.length >= minimumBucket
-      ? Number(clamp((rate - overallRate) * 20, -4, 4).toFixed(2)) : 0;
+  const buckets={},adjustments={};
+  for(const [key,matcher] of Object.entries(featureKeys)){
+    const rows=resolved.filter(matcher),wins=rows.filter(row=>row.outcome==='UP').length;
+    const losses=rows.filter(row=>row.outcome==='DOWN').length,flats=rows.filter(row=>row.outcome==='FLAT').length;
+    const rate=(wins+2)/(rows.length+4);
+    const sampleReturn=mean(rows.map(row=>finite(row.return_pct)).filter(value=>value!==null));
+    buckets[key]={samples:rows.length,wins,losses,flats,positive_rate_pct:Number((rate*100).toFixed(1)),
+      mean_return_pct:sampleReturn===null?null:Number(sampleReturn.toFixed(3))};
+    const returnDelta=sampleReturn===null?0:clamp((sampleReturn-meanReturn)*0.8,-2,2);
+    const rateDelta=(rate-overallRate)*10;
+    adjustments[key]=rows.length>=minimumBucket?Number(clamp(returnDelta+rateDelta,-4,4).toFixed(2)):0;
   }
-  const ready = resolved.length >= minSamples &&
-    Object.values(buckets).filter(x => x.samples >= minimumBucket).length >= 3;
+  const coveredBuckets=Object.values(buckets).filter(row=>row.samples>=minimumBucket).length;
+  const ready=resolved.length>=minSamples&&coveredBuckets>=4;
   return {
-    ready,
-    resolved_samples: resolved.length,
-    required_samples: minSamples,
-    positive_outcome_rate_pct: Number((overallRate * 100).toFixed(1)),
-    adjustments: ready ? adjustments : { volume: 0, buyer_flow: 0, structure: 0, compression: 0 },
+    ready,resolved_samples:resolved.length,required_samples:minSamples,covered_factor_buckets:coveredBuckets,
+    positive_outcome_rate_pct:Number((overallRate*100).toFixed(1)),outcome_counts:{up:positive,down:negative,flat},
+    candidate_samples:resolved.filter(row=>row.observation_type==='DEEP_CANDIDATE').length,
+    market_wide_samples:resolved.filter(row=>row.observation_type==='MARKET_WIDE_TICKER').length,
+    adjustments:ready?adjustments:Object.fromEntries(Object.keys(featureKeys).map(key=>[key,0])),
     buckets,
-    note: ready
-      ? 'CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES'
-      : 'INSUFFICIENT_OUTCOMES_NO_LEARNING_ADJUSTMENT_APPLIED'
+    note:ready?'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES'
+      :'INSUFFICIENT_OUTCOMES_OR_FACTOR_COVERAGE_NO_LEARNING_ADJUSTMENT_APPLIED'
   };
 }
 
-export function applyAdaptiveLearning(baseScore, features = {}, profile = {}) {
-  const score = finite(baseScore);
-  if (score === null) return null;
-  if (profile?.ready !== true) return Number(clamp(score, 0, 100).toFixed(1));
-  const active = [];
-  if (finite(features.volume_ratio) !== null && Number(features.volume_ratio) >= 1.5) active.push(finite(profile.adjustments?.volume) || 0);
-  if (finite(features.taker_buy_ratio) !== null && Number(features.taker_buy_ratio) >= 0.52) active.push(finite(profile.adjustments?.buyer_flow) || 0);
-  if (features.higher_low === true || features.breakout_above_prior_high === true) active.push(finite(profile.adjustments?.structure) || 0);
-  if (finite(features.compression_ratio) !== null && Number(features.compression_ratio) <= 0.8) active.push(finite(profile.adjustments?.compression) || 0);
-  const delta = active.length ? active.reduce((a, b) => a + b, 0) / active.length : 0;
-  return Number(clamp(score + clamp(delta, -4, 4), 0, 100).toFixed(1));
+export function applyAdaptiveLearning(baseScore,features={},profile={}){
+  const score=finite(baseScore);if(score===null)return null;
+  if(profile?.ready!==true)return Number(clamp(score,0,100).toFixed(1));
+  const active=[],add=(name,condition)=>{if(condition)active.push(finite(profile.adjustments?.[name])||0);};
+  add('volume',finite(features.volume_ratio)!==null&&Number(features.volume_ratio)>=1.5);
+  add('trade_activity',finite(features.trade_ratio)!==null&&Number(features.trade_ratio)>=1.25);
+  add('buyer_flow',finite(features.taker_buy_ratio)!==null&&Number(features.taker_buy_ratio)>=0.52);
+  add('structure',features.higher_low===true||features.breakout_above_prior_high===true);
+  add('compression',finite(features.compression_ratio)!==null&&Number(features.compression_ratio)<=0.8);
+  add('relative_strength',finite(features.relative_strength_vs_btc_pct)!==null&&Number(features.relative_strength_vs_btc_pct)>=0.25);
+  add('short_momentum',finite(features.recent_15m_return_pct)!==null&&Number(features.recent_15m_return_pct)>=0&&Number(features.recent_15m_return_pct)<=1.5);
+  add('multi_hour_trend',features.trend_aligned===true||(finite(features.return_3h_pct)!==null&&Number(features.return_3h_pct)>0));
+  add('five_minute_flow',finite(features.micro_5m_taker_buy_ratio)!==null&&Number(features.micro_5m_taker_buy_ratio)>=0.55);
+  add('ticker_momentum',finite(features.price_change_15m_pct)!==null&&Number(features.price_change_15m_pct)>0);
+  add('daily_regime',finite(features.change_24h_pct)!==null&&Number(features.change_24h_pct)>=-2&&Number(features.change_24h_pct)<=7);
+  const delta=active.length?active.reduce((a,b)=>a+b,0)/active.length:0;
+  return Number(clamp(score+clamp(delta,-4,4),0,100).toFixed(1));
 }
 
 export function findMissedMoverEvents({ history = [], currentPrices = [], now = Date.now(), thresholdPct = 5, maxAgeMs = 6 * 60 * 60 * 1000 } = {}) {
