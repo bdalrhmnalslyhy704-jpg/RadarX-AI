@@ -522,6 +522,17 @@ export class MarketWideKlineCache {
     const staleSymbols = states.filter(item => item.state === 'STALE_DATA').length;
     const incompleteSymbols = states.filter(item => !item.ready &&
       item.state !== 'CANDLE_CACHE_MISSING' && item.state !== 'STALE_DATA').length;
+    const notReadySymbolSamples = states.filter(item => !item.ready).slice(0, 25).map(item => {
+      const entry = this.cache.get(item.symbol);
+      const latest = Array.isArray(entry?.candles) && entry.candles.length ? entry.candles.at(-1) : null;
+      return {
+        symbol:item.symbol,
+        state:item.state,
+        age_ms:Number.isFinite(Number(item.ageMs))?Number(item.ageMs):null,
+        closed_candles:Number.isFinite(Number(item.closedCandles))?Number(item.closedCandles):0,
+        latest_closed_time_ms:Number.isFinite(Number(latest?.closeTime))?Number(latest.closeTime):null
+      };
+    });
     const candleCount = [...this.cache.values()].reduce((sum, entry) => sum + entry.candles.length, 0);
     const restSeededSymbols = this.symbols.filter(symbol =>
       (this.cache.get(symbol)?.candles || []).some(candle => candle.source === 'BINANCE_PUBLIC_REST' ||
@@ -558,6 +569,7 @@ export class MarketWideKlineCache {
       missing_symbols: missingSymbols,
       stale_symbols: staleSymbols,
       incomplete_symbols: incompleteSymbols,
+      not_ready_symbol_samples:notReadySymbolSamples,
       cache_coverage_ready: this.symbols.length > 0 && readySymbols === this.symbols.length,
       websocket_live: websocketCoverage.live,
       websocket_subscription_complete: websocketCoverage.subscription_complete,

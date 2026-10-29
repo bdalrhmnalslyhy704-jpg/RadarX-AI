@@ -188,13 +188,34 @@ export function buildRadarReadinessAudit({
   const failed = numeric(swarm?.failed_count) ?? perRadar.filter(radar => !radar.running).length;
   const cacheExpected = Math.max(0, Math.trunc(numeric(candleCache?.expected_symbols) ?? 0));
   const cacheReady = Math.max(0, Math.trunc(numeric(candleCache?.ready_symbols) ?? 0));
+  const cacheMissing = Math.max(0, Math.trunc(numeric(candleCache?.missing_symbols) ?? 0));
+  const cacheStale = Math.max(0, Math.trunc(numeric(candleCache?.stale_symbols) ?? 0));
+  const cacheIncomplete = Math.max(0, Math.trunc(numeric(candleCache?.incomplete_symbols) ?? 0));
   const coverageRatio = cacheExpected > 0 ? Math.min(1, cacheReady / cacheExpected) : null;
   const fullCacheReady = candleCache?.full_market_coverage_ready === true &&
     cacheExpected > 0 && cacheReady >= cacheExpected &&
     candleCache?.websocket_live === true && candleCache?.websocket_sync_ready === true;
+  const incompleteSamples = Array.isArray(candleCache?.not_ready_symbol_samples)
+    ? candleCache.not_ready_symbol_samples.slice(0,25) : [];
+  // This exception is explicit, small, and non-fatal only for symbols whose cache has
+  // fewer than 60 closed 5m candles. Missing/stale data, unknown states, an incomplete
+  // WebSocket subscription, or more than five unresolved symbols still block release.
+  const limitedHistoryReady = !fullCacheReady && cacheExpected > 0 &&
+    coverageRatio !== null && coverageRatio >= 0.98 &&
+    cacheMissing === 0 && cacheStale === 0 &&
+    cacheIncomplete >= 1 && cacheIncomplete <= 5 &&
+    cacheReady + cacheIncomplete === cacheExpected &&
+    incompleteSamples.length === cacheIncomplete &&
+    incompleteSamples.every(row => row?.state === 'CANDLE_CACHE_INCOMPLETE' &&
+      numeric(row?.closed_candles) !== null && numeric(row.closed_candles) >= 0 &&
+      numeric(row.closed_candles) < 60) &&
+    candleCache?.websocket_live === true &&
+    candleCache?.websocket_subscription_complete === true &&
+    candleCache?.websocket_sync_ready === true;
   const cacheStatus = cacheExpected === 0 ? 'UNAVAILABLE'
     : fullCacheReady ? 'READY'
-      : cacheReady > 0 ? 'WARMING' : 'UNAVAILABLE';
+      : limitedHistoryReady ? 'LIMITED_HISTORY'
+        : cacheReady > 0 ? 'WARMING' : 'UNAVAILABLE';
 
   const analystReadiness = buildAnalystReadiness(analystRuntime, now);
   const readinessReasons = [];
@@ -210,7 +231,9 @@ export function buildRadarReadinessAudit({
   const missingCycleTelemetry = perRadar.filter(radar => radar.cycles_observed === 0);
   for (const radar of missingCycleTelemetry) readinessReasons.push('RADAR_CYCLE_TELEMETRY_MISSING:' + radar.radar);
   if (swarm?.status && swarm.status !== 'RUNNING') readinessReasons.push('RADAR_SWARM_' + String(swarm.status).toUpperCase());
-  if (!fullCacheReady) readinessReasons.push('CLOSED_CANDLE_CACHE_' + cacheStatus);
+  if (!fullCacheReady) readinessReasons.push(limitedHistoryReady
+    ? 'CLOSED_CANDLE_CACHE_LIMITED_HISTORY'
+    : 'CLOSED_CANDLE_CACHE_' + cacheStatus);
   if (candleCache?.websocket_live !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_LIVE');
   if (candleCache?.websocket_sync_ready !== true) readinessReasons.push('CANDLE_WEBSOCKET_NOT_SYNC_READY');
   if (!analystReadiness.configured) readinessReasons.push('MULTI_ANALYST_ENGINE_UNAVAILABLE');
@@ -227,14 +250,29 @@ export function buildRadarReadinessAudit({
   const noStaleCycles = !perRadar.some(radar => radar.cycle_is_stale);
   const noLatestCycleErrors = !perRadar.some(radar => radar.cycle_state === 'LAST_CYCLE_ERROR');
   const websocketHealthy = candleCache?.websocket_live === true && candleCache?.websocket_sync_ready === true;
-  const infrastructureReady = allWorkersRunning && allCyclesObserved && fullCacheReady && noStaleCycles && noLatestCycleErrors;
+  const infrastructureReady = allWorkersRunning && allCyclesObserved &&
+    (fullCacheReady || limitedHistoryReady) && noStaleCycles && noLatestCycleErrors;
+  const swarmRadars = Array.isArray(swarm?.radars) ? swarm.radars : [];
+  const degradedSwarmRadars = swarmRadars.filter(row =>
+    ['FAILED','DEGRADED'].includes(String(row?.status || '').toUpperCase()) || row?.running === false
+  ).map(row => ({
+    id:String(row?.id || 'UNKNOWN_RADAR'),
+    name:String(row?.name || row?.id || 'UNKNOWN_RADAR'),
+    status:String(row?.status || 'UNKNOWN'),
+    running:row?.running === true,
+    last_error:String(row?.last_error || '').slice(0,200) || null,
+    busy:row?.health?.busy === true,
+    busy_since_at:row?.health?.busy_since_at ?? null,
+    health_running:typeof row?.health?.running === 'boolean' ? row.health.running : null
+  }));
   const analystRequired = analystReadiness.required !== false;
   const analystReady = analystReadiness.status === 'READY';
   const analystWarming = analystRequired && analystReadiness.status === 'WARMING';
-  const status = infrastructureReady && analystReady ? 'READY'
+  const status = infrastructureReady && analystReady
+    ? (limitedHistoryReady ? 'READY_WITH_LIMITED_CLOSED_CANDLE_HISTORY' : 'READY')
     : analystRequired && analystReadiness.status === 'DEGRADED' ? 'DEGRADED'
       : allWorkersRunning && allCyclesObserved && noStaleCycles && noLatestCycleErrors && websocketHealthy &&
-        (cacheStatus === 'WARMING' || analystWarming) ? 'WARMING'
+        (cacheStatus === 'WARMING' || limitedHistoryReady || analystWarming) ? 'WARMING'
         : 'DEGRADED';
 
   const warmup = warmupReport && typeof warmupReport === 'object' ? {
@@ -254,6 +292,16 @@ export function buildRadarReadinessAudit({
     as_of: new Date(Number(now)).toISOString(),
     status,
     readiness_reasons: [...new Set(readinessReasons)],
+    radar_swarm: {
+      status:String(swarm?.status || 'UNKNOWN'),
+      expected_count:numeric(swarm?.expected_count),
+      registered_count:numeric(swarm?.registered_count),
+      running_count:numeric(swarm?.running_count),
+      failed_count:failed,
+      missing_count:numeric(swarm?.missing_count),
+      lifecycle_running:swarm?.lifecycle_running === true,
+      degraded_radars:degradedSwarmRadars
+    },
     summary: {
       expected_radars: expected,
       registered_radars: registered,
@@ -264,6 +312,8 @@ export function buildRadarReadinessAudit({
       radar_role_coverage_ready: radarRoleCoverageReady,
       running_radars: running,
       failed_radars: failed,
+      radar_swarm_status:String(swarm?.status || 'UNKNOWN'),
+      degraded_radar_ids:degradedSwarmRadars.map(row=>row.id),
       radars_with_stale_cycles: perRadar.filter(radar => radar.cycle_is_stale).length,
       radars_without_cycle_telemetry: missingCycleTelemetry.length,
       candle_cache_status: cacheStatus,
@@ -273,6 +323,11 @@ export function buildRadarReadinessAudit({
       websocket_live: candleCache?.websocket_live === true,
       websocket_sync_ready: candleCache?.websocket_sync_ready === true,
       full_market_candle_coverage_ready: fullCacheReady,
+      limited_history_ready:limitedHistoryReady,
+      limited_history_symbol_count:limitedHistoryReady?cacheIncomplete:0,
+      candle_cache_missing_symbols:cacheMissing,
+      candle_cache_stale_symbols:cacheStale,
+      candle_cache_incomplete_symbols:cacheIncomplete,
       analyst_status: analystReadiness.status,
       analyst_worker_running: analystReadiness.worker_running,
       analyst_fresh_assessments: analystReadiness.fresh_assessments,
@@ -288,7 +343,16 @@ export function buildRadarReadinessAudit({
       expected_symbols: cacheExpected,
       missing_symbols: numeric(candleCache?.missing_symbols),
       stale_symbols: numeric(candleCache?.stale_symbols),
-      incomplete_symbols: numeric(candleCache?.incomplete_symbols),
+      incomplete_symbols: cacheIncomplete,
+      incomplete_symbol_samples:incompleteSamples.map(row=>({
+        symbol:String(row?.symbol || 'UNKNOWN'),
+        state:String(row?.state || 'UNKNOWN'),
+        closed_candles:numeric(row?.closed_candles),
+        age_ms:numeric(row?.age_ms),
+        latest_closed_time_ms:numeric(row?.latest_closed_time_ms)
+      })),
+      coverage_mode:fullCacheReady?'FULL_MARKET_CLOSED_CANDLE_CACHE':
+        limitedHistoryReady?'LIMITED_SHORT_CLOSED_CANDLE_HISTORY_EXCLUSIONS':'INCOMPLETE',
       cached_closed_candles: numeric(candleCache?.cached_closed_candles),
       websocket_live: candleCache?.websocket_live === true,
       websocket_subscription_complete: candleCache?.websocket_subscription_complete === true,

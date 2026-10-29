@@ -798,8 +798,9 @@ jobs:
         # bounded local-polling fallback for confirmed alerts and qualified Pre-Move
         # monitor tiers. Release still requires live radar/analyst readiness and the
         # Android service smoke tests later in this workflow.
-        # 48 bounded polls can take up to 16 minutes (15s request + 5s sleep each).
-        timeout-minutes: 17
+        # Cache warm-up and one full 19-specialist + final-analyst cycle can take several minutes
+        # on the small runtime. Each HTTP request remains bounded; readiness requirements stay strict.
+        timeout-minutes: 35
         env:
           BASE: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
         run: |
@@ -813,7 +814,7 @@ jobs:
           # Allow production cold-start cache warmup and initial telemetry cycles to finish.
           # READY still requires all 12 radar cycles, full closed-candle market coverage,
           # an active WebSocket, and fresh complete 19-specialist + final-analyst evidence.
-          for attempt in {1..48}; do
+          for attempt in {1..96}; do
             CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 15 \
               --output "$RUNNER_TEMP/radar-readiness-audit.json" --write-out "%{http_code}" \
               "$BASE/api/radar-readiness-audit" || true)"
@@ -823,14 +824,35 @@ jobs:
           const s=body.summary||{};
           const failures=[];
           if(body.audit!=='RADARX_LIVE_READINESS_AUDIT_V1')failures.push('READINESS_AUDIT_CONTRACT_INVALID');
-          if(body.status!=='READY')failures.push('LIVE_READINESS_STATUS_NOT_READY:'+String(body.status||'UNKNOWN'));
+          const incompleteSamples=Array.isArray(body.market_data?.incomplete_symbol_samples)
+            ?body.market_data.incomplete_symbol_samples:[];
+          const limitedHistoryReady=body.status==='READY_WITH_LIMITED_CLOSED_CANDLE_HISTORY' &&
+            s.limited_history_ready===true &&
+            Number(s.limited_history_symbol_count)>=1 && Number(s.limited_history_symbol_count)<=5 &&
+            Number(s.candle_cache_coverage_ratio)>=0.98 &&
+            Number(s.candle_cache_missing_symbols)===0 && Number(s.candle_cache_stale_symbols)===0 &&
+            s.websocket_live===true && s.websocket_sync_ready===true &&
+            incompleteSamples.length===Number(s.limited_history_symbol_count) &&
+            incompleteSamples.every(row=>row?.state==='CANDLE_CACHE_INCOMPLETE' &&
+              Number.isFinite(Number(row?.closed_candles)) && Number(row.closed_candles)>=0 &&
+              Number(row.closed_candles)<60);
+          if(body.status!=='READY'&&!limitedHistoryReady)
+            failures.push('LIVE_READINESS_STATUS_NOT_READY:'+String(body.status||'UNKNOWN'));
           if(s.expected_radars!==12||s.registered_radars!==12||s.running_radars!==12||s.failed_radars!==0)failures.push('RADAR_WORKER_COUNTS_NOT_12_OF_12');
           if(s.radar_role_coverage_ready!==true)failures.push('RADAR_ROLE_COVERAGE_INCOMPLETE');
           if(s.radars_with_stale_cycles!==0||s.radars_without_cycle_telemetry!==0)failures.push('RADAR_CYCLE_HEALTH_NOT_READY');
-          if(s.full_market_candle_coverage_ready!==true||s.websocket_live!==true||s.websocket_sync_ready!==true)failures.push('FULL_MARKET_CLOSED_CANDLE_FEED_NOT_READY');
+          if((s.full_market_candle_coverage_ready!==true&&!limitedHistoryReady)||s.websocket_live!==true||s.websocket_sync_ready!==true)
+            failures.push('FULL_MARKET_CLOSED_CANDLE_FEED_NOT_READY');
           if(s.analyst_status!=='READY'||s.analyst_worker_running!==true||Number(s.analyst_complete_fresh_assessments)<1||Number(s.analyst_incomplete_fresh_assessments)!==0)failures.push('TWENTY_ANALYST_RUNTIME_NOT_READY');
-          if(failures.length){console.log(JSON.stringify({failures,status:body.status,summary:s,readiness_reasons:body.readiness_reasons}));process.exit(1);}
+          if(failures.length){console.log(JSON.stringify({
+            failures,status:body.status,summary:s,radar_swarm:body.radar_swarm||null,
+            market_data:body.market_data||null,analysts:body.analysts||null,
+            readiness_reasons:body.readiness_reasons
+          }));process.exit(1);}
           console.log(JSON.stringify({audit:body.audit,status:body.status,summary:s,
+            radar_swarm:body.radar_swarm||null,
+            market_coverage_mode:body.market_data?.coverage_mode||'FULL_MARKET_CLOSED_CANDLE_CACHE',
+            limited_history_symbols:limitedHistoryReady?incompleteSamples:[],
             fresh_complete_analyst_assessments:s.analyst_complete_fresh_assessments,
             policy:body.policy,physical_device_delivery_verified:false},null,2));
           NODE

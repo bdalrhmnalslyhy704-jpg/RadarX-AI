@@ -7,7 +7,9 @@ const IDS = [
   'KAHIR_RADAR','DOOMSDAY_RADAR','ALMUQAWIM_RADAR','EARLY_EXPANSION_RADAR',
   'FALCON_EYE_RADAR','COIN_HUNTER_RADAR','WHALE_ACCUMULATION_RADAR','PROFESSOR_RADAR'
 ];
-function fixture({missingCache = false, stopped = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false, websocketDown = false, analystRuntime = 'healthy', radarIds = IDS} = {}) {
+function fixture({missingCache = false, limitedHistory = false, invalidLimitedSample = false, stopped = null,
+  swarmDegraded = null, staleCycle = false, missingCycleTelemetry = false, cycleError = false,
+  websocketDown = false, analystRuntime = 'healthy', radarIds = IDS} = {}) {
   const now = 1_000_000;
   const radars = radarIds.map(radar => ({
     radar, radar_name: radar, running: radar !== stopped,
@@ -23,14 +25,34 @@ function fixture({missingCache = false, stopped = null, staleCycle = false, miss
   }));
   events.push({id:'decision-1',radar:'RADAR8',symbol:'HBARUSDT',event_type:'CANDIDATE_DECISION',
     decision_at:now-500,pipeline_latency_ms:31,accepted:false,reason_codes:['VOLUME_NOT_IMPROVING']});
-  const swarm = {status:stopped?'DEGRADED':'RUNNING',expected_count:12,registered_count:12,
-    running_count:stopped?11:12,failed_count:stopped?1:0,missing_count:0};
+  const degradedId=swarmDegraded||stopped;
+  const swarmRadars=IDS.map(id=>({
+    id,name:id,
+    status:id===stopped||id===swarmDegraded?'DEGRADED':'RUNNING',
+    running:id!==stopped,
+    last_error:id===stopped?'WORKER_HEALTH_NOT_RUNNING':
+      id===swarmDegraded?'WORKER_SCAN_STUCK:busy_ms=310000':null,
+    health:{running:id!==stopped,busy:id===swarmDegraded,busy_since_at:id===swarmDegraded?now-310000:null}
+  }));
+  const swarm = {status:degradedId?'DEGRADED':'RUNNING',expected_count:12,registered_count:12,
+    running_count:degradedId?11:12,failed_count:degradedId?1:0,missing_count:0,lifecycle_running:true,radars:swarmRadars};
+  const cacheReady=missingCache||limitedHistory?280:282;
+  const notReadySamples=limitedHistory?[
+    {symbol:'NEWLIST1USDT',state:invalidLimitedSample?'STALE_DATA':'CANDLE_CACHE_INCOMPLETE',
+      age_ms:30000,closed_candles:24,latest_closed_time_ms:now-30000},
+    {symbol:'NEWLIST2USDT',state:'CANDLE_CACHE_INCOMPLETE',age_ms:30000,closed_candles:31,latest_closed_time_ms:now-30000}
+  ]:missingCache?[
+    {symbol:'MISSING1USDT',state:'CANDLE_CACHE_MISSING',age_ms:null,closed_candles:0,latest_closed_time_ms:null},
+    {symbol:'MISSING2USDT',state:'CANDLE_CACHE_MISSING',age_ms:null,closed_candles:0,latest_closed_time_ms:null}
+  ]:[];
   const candleCache = {
-    state:'LIVE',running:true,expected_symbols:282,ready_symbols:missingCache?280:282,
-    missing_symbols:missingCache?2:0,stale_symbols:0,incomplete_symbols:missingCache?2:0,
-    cached_closed_candles:282*96,websocket_live:!websocketDown,websocket_subscription_complete:!websocketDown,
+    state:'LIVE',running:true,expected_symbols:282,ready_symbols:cacheReady,
+    missing_symbols:missingCache?2:0,stale_symbols:0,
+    incomplete_symbols:limitedHistory?2:missingCache?2:0,
+    not_ready_symbol_samples:notReadySamples,
+    cached_closed_candles:cacheReady*96,websocket_live:!websocketDown,websocket_subscription_complete:!websocketDown,
     websocket_subscribed_symbols:websocketDown?0:282,websocket_sync_ready:!websocketDown,websocket_advanced_symbols:websocketDown?0:282,
-    full_market_coverage_ready:!missingCache&&!websocketDown,last_error:websocketDown?'WS_DISCONNECTED':null
+    full_market_coverage_ready:!missingCache&&!limitedHistory&&!websocketDown,last_error:websocketDown?'WS_DISCONNECTED':null
   };
   const observedAnalystRuntime=analystRuntime==='healthy'?healthyAnalystRuntime(now):analystRuntime;
   const audit=buildRadarReadinessAudit({radars,swarm,telemetry:{events,total_recorded:events.length},candleCache,analystRuntime:observedAnalystRuntime,now});
@@ -72,13 +94,43 @@ test('live audit is DEGRADED rather than WARMING when the candle websocket is do
   assert.ok(audit.readiness_reasons.includes('CANDLE_WEBSOCKET_NOT_SYNC_READY'));
 });
 
-test('live audit remains WARMING rather than claiming full readiness while candles are missing',()=>{
+test('live audit remains WARMING rather than claiming full readiness while symbols have no cache data',()=>{
   const {audit}=fixture({missingCache:true});
   assert.equal(audit.status,'WARMING');
   assert.equal(audit.summary.candle_cache_coverage_ratio,280/282);
   assert.equal(audit.summary.full_market_candle_coverage_ready,false);
+  assert.equal(audit.summary.limited_history_ready,false);
   assert.ok(audit.readiness_reasons.includes('CLOSED_CANDLE_CACHE_WARMING'));
   assert.equal(audit.market_data.missing_symbols,2);
+  assert.equal(audit.market_data.incomplete_symbol_samples.length,2);
+  assert.ok(audit.market_data.incomplete_symbol_samples.every(row=>row.state==='CANDLE_CACHE_MISSING'));
+});
+
+test('live audit may report bounded history exclusions without pretending full market coverage',()=>{
+  const {audit}=fixture({limitedHistory:true});
+  assert.equal(audit.status,'READY_WITH_LIMITED_CLOSED_CANDLE_HISTORY');
+  assert.equal(audit.summary.full_market_candle_coverage_ready,false);
+  assert.equal(audit.summary.limited_history_ready,true);
+  assert.equal(audit.summary.limited_history_symbol_count,2);
+  assert.equal(audit.market_data.coverage_mode,'LIMITED_SHORT_CLOSED_CANDLE_HISTORY_EXCLUSIONS');
+  assert.equal(audit.market_data.incomplete_symbol_samples.length,2);
+  assert.ok(audit.market_data.incomplete_symbol_samples.every(row=>
+    row.state==='CANDLE_CACHE_INCOMPLETE'&&row.closed_candles<60));
+  assert.ok(audit.readiness_reasons.includes('CLOSED_CANDLE_CACHE_LIMITED_HISTORY'));
+});
+
+test('unknown or stale rows can never use the limited closed-candle history exception',()=>{
+  const {audit}=fixture({limitedHistory:true,invalidLimitedSample:true});
+  assert.notEqual(audit.status,'READY_WITH_LIMITED_CLOSED_CANDLE_HISTORY');
+  assert.equal(audit.summary.limited_history_ready,false);
+});
+
+test('audit identifies a degraded swarm worker and includes its bounded failure reason',()=>{
+  const {audit}=fixture({swarmDegraded:'COIN_HUNTER_RADAR'});
+  assert.equal(audit.status,'DEGRADED');
+  assert.equal(audit.radar_swarm.failed_count,1);
+  assert.deepEqual(audit.radar_swarm.degraded_radars.map(row=>row.id),['COIN_HUNTER_RADAR']);
+  assert.match(audit.radar_swarm.degraded_radars[0].last_error,/WORKER_SCAN_STUCK/);
 });
 
 test('a stopped radar fails the overall audit without weakening candle or notification gates',()=>{
