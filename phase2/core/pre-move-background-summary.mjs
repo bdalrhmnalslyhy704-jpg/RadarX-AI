@@ -73,6 +73,16 @@ export function buildPreMoveBackgroundScanSummary({snapshot={}, watchAlerts=[], 
     coverage_mode: boundedString(universe.coverage_mode, 'UNKNOWN', 60),
     rotation_cycle: Number(universe.rotation_cycle) || 0,
     rotation_offset: Number(universe.rotation_offset) || 0,
+    rotation_width: finiteOrNull(universe.rotation_width),
+    rotation_cursor_source: boundedString(universe.rotation_cursor_source, 'UNAVAILABLE', 40),
+    rotation_cursor_persisted: typeof universe.rotation_cursor_persisted === 'boolean'
+      ? universe.rotation_cursor_persisted : null,
+    ticker_activity_signal_count: finiteOrNull(universe.ticker_activity_signal_count),
+    ticker_activity_baseline_source: boundedString(universe.ticker_activity_baseline_source, 'UNAVAILABLE', 40),
+    ticker_activity_baseline_persisted: typeof universe.ticker_activity_baseline_persisted === 'boolean'
+      ? universe.ticker_activity_baseline_persisted : null,
+    ticker_activity_baseline_error: universe.ticker_activity_baseline_error
+      ? boundedString(universe.ticker_activity_baseline_error, 'UNKNOWN', 160) : null,
     watch_notification_evaluated: Number(diagnostics.evaluated) || 0,
     watch_notification_eligible: Number(diagnostics.eligible) || alerts.length,
     watch_notification_rejected: Number(diagnostics.rejected) || 0,
