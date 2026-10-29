@@ -64,7 +64,7 @@ export class AdaptiveTraderWorker{
             samples:saved.samples.slice(-MAX_SAMPLES).map(row=>({...row,observation_type:row.observation_type||'DEEP_CANDIDATE'})),
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
-            learning_profile:saved.learning_profile||buildAdaptiveLearningProfile(saved.samples),
+            learning_profile:buildAdaptiveLearningProfile(saved.samples),
             paper_portfolio:saved.paper_portfolio&&saved.paper_portfolio.mode==='PAPER_ONLY'&&saved.paper_portfolio.real_order_execution===false&&
               Array.isArray(saved.paper_portfolio.open_positions)&&Array.isArray(saved.paper_portfolio.closed_trades)
               ?{...createServerPaperPortfolio(),...saved.paper_portfolio,enabled:true,paper_trading:true,real_order_execution:false,
@@ -222,6 +222,17 @@ export class AdaptiveTraderWorker{
   }
 
   resolveSamples(snapshot,now){
+    const knownIds=new Set(this.state.samples.map(row=>String(row?.id||'')));
+    let newHistoricalSamples=0;
+    for(const row of (Array.isArray(snapshot.historical_training_samples)?snapshot.historical_training_samples:[])){
+      const id=String(row?.id||''),at=finite(row?.at),resolvedAt=finite(row?.resolved_at),move=finite(row?.return_pct);
+      if(!id||knownIds.has(id)||!['UP','DOWN','FLAT'].includes(row?.outcome)||
+        !row.features||typeof row.features!=='object'||at===null||resolvedAt===null||
+        !(finite(row.price)>0)||move===null||resolvedAt>Number(now)+5000||
+        resolvedAt-at<SAMPLE_HORIZON_MS)continue;
+      this.state.samples.push({...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true});
+      knownIds.add(id);newHistoricalSamples++;
+    }
     const prices=mapCurrentPrices(snapshot.latest_prices);
     for(const sample of this.state.samples){
       if(sample.outcome||now-Number(sample.at)<SAMPLE_HORIZON_MS)continue;
@@ -310,9 +321,11 @@ export class AdaptiveTraderWorker{
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
     this.state.last_learning_capture={
-      at:now,new_market_wide_samples:newMarketSamples,new_deep_candidate_samples:newDeepSamples,
+      at:now,new_historical_samples:newHistoricalSamples,
+      new_market_wide_samples:newMarketSamples,new_deep_candidate_samples:newDeepSamples,
       active_spot_prices:(snapshot.latest_prices||[]).length,
       tracked_samples:this.state.samples.length,
+      historical_resolved_samples:this.state.samples.filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'&&row.outcome).length,
       resolved_samples:this.state.samples.filter(row=>row.outcome).length
     };
   }
