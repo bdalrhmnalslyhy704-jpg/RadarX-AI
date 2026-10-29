@@ -971,3 +971,28 @@ test('TEST_FIXTURE: a stopped Radar 8 in staging fails closed unless live worker
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('diagnostic deployment status remains reachable when the market API request budget is exhausted',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-api-diagnostic-budget-'));
+  const store=await new DurableStore({dir}).init();
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:1}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider()});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const first=await fetch(base+'/api/unrecognized-market-route');
+    assert.equal(first.status,404);
+    const limited=await fetch(base+'/api/unrecognized-market-route');
+    assert.equal(limited.status,429);
+    const status=await fetch(base+'/api/deployment-info');
+    assert.equal(status.status,200);
+    const body=await status.json();
+    assert.equal(body.build_version,'Build 224');
+    assert.equal(body.real_order_execution,false);
+    assert.equal(body.push.provider,'none');
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
