@@ -756,6 +756,10 @@ export function createAdaptiveTraderSnapshotService({
     const activeEntry = flights.entries().next().value;
     if (activeEntry) {
       const [activeLimit, active] = activeEntry;
+      if(needsClosedCandleOutcomes){
+        try{await active;}catch{}
+        return getSnapshot({limit:safeLimit,now:Date.now(),offset:requestedOffset,pendingSamples});
+      }
       // Identical requests should share one scan. A different universe size
       // waits, then gets its own scan rather than consuming the wrong result.
       if (activeLimit === safeLimit) {
@@ -798,7 +802,7 @@ export function createAdaptiveTraderSnapshotService({
       cache.set(safeLimit, { snapshot, cachedAt });
       // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
       while (cache.size > 4) cache.delete(cache.keys().next().value);
-      return attachHistoricalTrainingSamples({ ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } },snapshot.historical_training_samples);
+      return attachClosedCandleOutcomes(attachHistoricalTrainingSamples({ ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } },snapshot.historical_training_samples),snapshot.closed_candle_outcomes);
     }).finally(() => {
       if (rest.requestDeadlineAtMs === effectiveDeadline) rest.requestDeadlineAtMs = previousDeadline;
       for (const [key, activeTask] of flights) {
