@@ -1,4 +1,4 @@
-import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
+import {buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
 
 const finite=value=>{
@@ -293,7 +293,7 @@ export class AdaptiveTraderWorker{
   }
 
   buildSummary(snapshot){
-    const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>({...row}));
+    const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>({...row,trade_decision:buildAdaptiveTraderRecommendation(row)}));
     const latestPrices=(Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[]).map(row=>({...row}));
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
@@ -312,11 +312,27 @@ export class AdaptiveTraderWorker{
         early_setup:candidates.filter(row=>row.data_valid===true&&row.tier==='EARLY_SETUP').length,
         watch:candidates.filter(row=>row.data_valid===true&&row.tier==='WATCH').length,
         late_move:candidates.filter(row=>row.data_valid===true&&row.tier==='LATE_MOVE').length,
+        entry_candidates:candidates.filter(row=>row.trade_decision?.decision==='ENTRY_CANDIDATE').length,
+        waiting_confirmation:candidates.filter(row=>row.trade_decision?.decision==='WAIT_FOR_CONFIRMATION').length,
+        avoid_chasing:candidates.filter(row=>row.trade_decision?.decision==='AVOID_CHASING').length,
+        no_setup:candidates.filter(row=>row.trade_decision?.decision==='NO_SETUP').length,
         rejected:candidates.filter(row=>row.data_valid!==true||row.data_stale===true).length
       },
+      current_recommendation:(()=>{const top=candidates.filter(row=>row.data_valid===true&&!row.data_stale)
+        .slice().sort((a,b)=>(Number(b.trade_decision?.priority)||0)-(Number(a.trade_decision?.priority)||0)||
+          (Number(b.score)||0)-(Number(a.score)||0))[0];
+        return top?{symbol:top.symbol,price:top.price,score:top.score,tier:top.tier,
+          decision:top.trade_decision?.decision||'NO_SETUP',label_ar:top.trade_decision?.label_ar||'لا توجد توصية',
+          action:top.trade_decision?.action||'NO_TRADE',reason_codes:top.trade_decision?.reason_codes||[],
+          next_step_ar:top.trade_decision?.next_step_ar||'انتظر بيانات مؤكدة',
+          entry_eligible:false,paper_trading:true,real_order_execution:false}:
+          {decision:'DATA_UNAVAILABLE',label_ar:'لا تدخل — لا توجد بيانات صالحة حديثة',action:'NO_TRADE',entry_eligible:false,paper_trading:true,real_order_execution:false};
+      })(),
       top_candidates:candidates.filter(row=>row.data_valid===true&&!row.data_stale)
-        .slice().sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
+        .slice().sort((a,b)=>(Number(b.trade_decision?.priority)||0)-(Number(a.trade_decision?.priority)||0)||
+          (Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
           symbol:row.symbol,price:row.price,score:row.score,tier:row.tier,
+          trade_decision:row.trade_decision,
           selection_lane:row.selection_lane||null,
           quote_volume_24h:row.quote_volume_24h,change_24h_pct:row.change_24h_pct,
           candle_close_time:row.candle_close_time,features:row.features,reason_codes:row.reason_codes
