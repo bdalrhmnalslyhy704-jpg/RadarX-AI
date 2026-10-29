@@ -151,6 +151,24 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
      * phone as a watch-only heads-up. This is not a confirmation or entry signal.
      * Every other watch/unconfirmed payload still fails the strict gate above.
      */
+    /**
+     * Accept equivalent labels emitted by the server's live Binance public Spot
+     * REST/WebSocket clients, while rejecting futures, replay, mock, stale or failed
+     * sources. This is only for the bounded, monitor-only FCM lane.
+     */
+    static boolean isTrustedBinancePublicSpotSource(String value) {
+        String source = value == null ? "" :
+                value.trim().toUpperCase(java.util.Locale.ROOT).replaceAll("\\s+", "_");
+        if (source.isEmpty() ||
+                source.matches("(?s).*(FUTURES|FAPI|PERPETUAL|USER_DATA|MOCK|SIMULATED|REPLAY|UNAVAILABLE|FAILED|STALE).*")) {
+            return false;
+        }
+        if (!source.contains("BINANCE") || !source.contains("PUBLIC")) return false;
+        return source.contains("_REST") || source.contains("/REST") || source.endsWith("REST") ||
+                source.contains("_WEBSOCKET") || source.contains("/WEBSOCKET") || source.endsWith("WEBSOCKET") ||
+                source.contains("_WS") || source.contains("/WS") || source.endsWith("WS");
+    }
+
     private static boolean isApprovedPreMoveWatch(java.util.Map<String, String> data) {
         if (data == null) return false;
         String event = dataValue(data, "event", "").toUpperCase(java.util.Locale.ROOT);
@@ -173,8 +191,9 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 "MONITOR_ONLY".equals(lifecycle) || "PRE_MOVE_WATCH_ONLY".equals(lifecycle);
         boolean tierOkay = "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) ||
                 "EARLY_FLOW_MONITOR".equals(tier) ||
-                "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier);
-        boolean sourceOkay = "Binance Public REST".equals(source) || "BINANCE_PUBLIC_REST".equals(source);
+                "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier) ||
+                "ACCUMULATION_PREP_MONITOR".equals(tier);
+        boolean sourceOkay = isTrustedBinancePublicSpotSource(source);
         boolean unsafeRisk = riskFlags.matches("(?s).*?(ALREADY_EXTENDED|WIDE_SPREAD|LOW_LIQUIDITY|STALE_DATA|DATA_STALE|FUTURE_DATA|BREAKOUT_TRAP|SELLING_TRAP).*");
         return "PRE_MOVE_RADAR_WATCH_ONLY".equals(event) &&
                 "RADAR_ALERT".equals(eventClass) && "RADARX_RADAR_ALERT".equals(type) &&
