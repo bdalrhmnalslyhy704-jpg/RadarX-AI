@@ -512,8 +512,9 @@ function renderCandidates(snapshot){
     displayScore(b)-displayScore(a));
   const serverRecommendation=state.serverStatus&&state.serverStatus.last_summary&&state.serverStatus.last_summary.current_recommendation;
   const topRow=rows[0]||null;
-  const recommendation=snapshot.current_recommendation||serverRecommendation||
-    (topRow&&topRow.trade_decision?{...topRow.trade_decision,symbol:topRow.symbol,price:topRow.price}:null);
+  const recommendation=snapshot.current_recommendation||
+    (topRow&&topRow.trade_decision?{...topRow.trade_decision,symbol:topRow.symbol,price:topRow.price}:null)||
+    serverRecommendation;
   let recommendationHtml='';
   if(recommendation){
     const decision=String(recommendation.decision||'NO_SETUP');
