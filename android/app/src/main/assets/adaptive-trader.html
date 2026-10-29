@@ -262,12 +262,11 @@ function money(value){const n=num(value);return n===null?'—':'$'+n.toLocaleStr
 function percent(value){const n=num(value);return n===null?'—':(n>0?'+':'')+fmt(n,2)+'%';}
 function timeText(value){const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ar',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'});}
 function profile(){
-  // Prefer the server profile even when it has zero resolved outcomes. Falling back
-  // to device-local samples here made the UI report "0/30" while the server worker
-  // used a different, more conservative learning threshold.
+  // The backend is the sole learning authority. If unavailable, show no calibration
+  // rather than promote old device-local ticker labels into completed outcomes.
   const remote=(state.serverStatus && state.serverStatus.learning_profile);
   if(remote&&typeof remote==='object')return remote;
-  return buildAdaptiveLearningProfile(state.samples);
+  return buildAdaptiveLearningProfile([]);
 }
 function displayScore(candidate){
   // Server candidates already carry their applied learning delta; never calibrate them twice on-device.
@@ -302,39 +301,6 @@ function updateLabels(snapshot){
   const missedMap=new Map([...remoteMissed,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
   el('kpiMissed').textContent=String([...missedMap.values()].filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length);
   el('candidateCaption').textContent='الترتيب لا يمثل احتمال ربح · '+(universe.scan_complete?'تغطية كاملة لهذه العينة':'لم تُحلّل كل الأزواج المؤهلة');
-}
-function resolveLearningSamples(snapshot,now){
-  const prices=priceMap(snapshot);
-  for(const sample of state.samples){
-    if(sample.outcome||now-Number(sample.at)<4*60*60*1000)continue;
-    const price=prices.get(String(sample.symbol||'').toUpperCase());
-    if(!(price>0)||!(sample.price>0))continue;
-    const move=(price/sample.price-1)*100;
-    sample.outcome=move>=2?'UP':move<=-2?'DOWN':'FLAT';
-    sample.mark_price=price;
-    sample.return_pct=Number(move.toFixed(3));
-    sample.resolved_at=now;
-    sample.horizon_ms=now-Number(sample.at);
-  }
-  const latest=new Map();
-  for(const sample of state.samples){
-    const prev=latest.get(sample.symbol);
-    if(!prev||Number(sample.at)>Number(prev.at))latest.set(sample.symbol,sample);
-  }
-  for(const candidate of snapshot.candidates||[]){
-    if(!candidate.data_valid||!(candidate.price>0)||candidate.score===null)continue;
-    const old=latest.get(candidate.symbol);
-    if(old&&now-Number(old.at)<4*60*60*1000)continue;
-    const item={
-      id:candidate.symbol+':'+String(now),
-      symbol:candidate.symbol,price:candidate.price,at:now,
-      base_score:candidate.score,tier:candidate.tier,
-      features:{...(candidate.features||{})},
-      outcome:null,mark_price:null,return_pct:null
-    };
-    state.samples.push(item);
-    latest.set(candidate.symbol,item);
-  }
 }
 function collectPriceHistory(snapshot,now){
   const candidates=new Map((snapshot.candidates||[]).map(x=>[x.symbol,x]));
@@ -390,7 +356,7 @@ function applySnapshot(snapshot){
   const now=Date.parse(snapshot.as_of)||Date.now();
   state.lastSnapshot=snapshot;
   state.lastScanAt=now;
-  resolveLearningSamples(snapshot,now);
+  // Learning outcomes are resolved and persisted by the server from closed candles only.
   collectPriceHistory(snapshot,now);
   recordMissedMovers(snapshot,now);
   runPaperPortfolio(snapshot,now);
@@ -697,7 +663,8 @@ function renderPortfolio(){
 function renderLearning(){
   const rows=state.samples.filter(row=>row.outcome);
   const model=profile();
-  const resolvedCount=Number(model.resolved_samples)||rows.length;
+  const resolvedCount=state.serverStatus&&state.serverStatus.learning_profile
+    ?Math.max(0,Number(model.resolved_samples)||0):0;
   el('learnStatus').textContent=model.ready?'المعايرة مفعّلة على الترتيب فقط':'الانتظار حتى اكتمال العينة';
   el('learnStatus').className='tag '+(model.ready?'early':'watch');
   el('learnDescription').textContent=model.ready
@@ -708,7 +675,7 @@ function renderLearning(){
   const capture=(state.serverStatus&&state.serverStatus.learning_capture)||{};
   el('learnProgress').style.width=Math.min(100,resolvedCount/requiredSamples*100)+'%';
   el('learnCount').textContent=resolvedCount+' من '+requiredSamples+' نتيجة مكتملة · صعود '+(Number(outcomes.up)||0)+' · هبوط '+(Number(outcomes.down)||0)+' · محايد '+(Number(outcomes.flat)||0)+' · معدل الإيجابي '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+
-    (state.serverStatus?' · عينات تاريخية مغلقة '+(Number(model.historical_samples)||0)+' · عينات السوق الواسعة '+(Number(model.market_wide_samples)||0)+' · عينات الفحص العميق '+(Number(model.candidate_samples)||0):'');
+    (state.serverStatus?' · تاريخي بإغلاقات مؤكدة '+(Number(model.historical_samples)||0)+' · مرشحون بنتائج إغلاق '+(Number(model.candidate_samples)||0)+' · لقطات السوق الواسعة للتدقيق فقط '+(Number(state.serverStatus.memory&&state.serverStatus.memory.market_wide_samples)||0):' · ذاكرة الخادم غير متاحة؛ لا تُحسب النتائج المحلية كتعلّم مكتمل');
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
