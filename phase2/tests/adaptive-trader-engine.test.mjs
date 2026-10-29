@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADAPTIVE_TRADER_POLICY,
   scoreAdaptiveTraderCandidate,
+  buildAdaptiveTraderRecommendation,
   buildAdaptiveLearningProfile,
   applyAdaptiveLearning,
   findMissedMoverEvents,
@@ -56,6 +57,55 @@ test('live closed-candle scoring produces a transparent candidate, never an entr
   assert.ok(['EARLY_SETUP','WATCH','NO_SETUP','LATE_MOVE'].includes(result.tier));
   assert.ok(Array.isArray(result.reason_codes));
   assert.ok(result.features.volume_ratio>1);
+});
+
+test('adaptive trader gives a strict, explained candidate verdict without enabling an order',()=>{
+  const now=Date.now();
+  const base={
+    symbol:'SETUPUSDT',price:1.25,change_24h_pct:2.1,quote_volume_24h:5_000_000,
+    score:82,tier:'EARLY_SETUP',data_valid:true,data_stale:false,closed_candles_only:true,
+    paper_candidate:true,entry_eligible:false,real_order_execution:false,
+    as_of:new Date(now).toISOString(),candle_close_time:now-60_000,candle_age_ms:60_000,
+    thresholds:{no_chase:true,late_move:false},
+    features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
+      higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
+      hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8},
+    reason_codes:['VOLUME_ACTIVITY_EXPANDING']
+  };
+  const result=buildAdaptiveTraderRecommendation(base,{now});
+  assert.equal(result.decision,'ENTRY_CANDIDATE');
+  assert.equal(result.symbol,'SETUPUSDT');
+  assert.match(result.label_ar,/مرشّح دخول للمراجعة/);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.paper_trading,true);
+  assert.ok(result.reason_codes.includes('CLOSED_CANDLE_BREAKOUT'));
+  assert.ok(result.next_step_ar.length>20);
+
+  const waiting=buildAdaptiveTraderRecommendation({...base,features:{...base.features,breakout_above_prior_high:false}},{now});
+  assert.equal(waiting.decision,'WAIT_FOR_CONFIRMATION');
+  assert.equal(waiting.entry_eligible,false);
+});
+
+test('adaptive trader explicitly rejects chasing late movers and all stale data',()=>{
+  const now=Date.now();
+  const base={
+    symbol:'LATEUSDT',price:2.5,change_24h_pct:47.41,score:91,tier:'LATE_MOVE',
+    data_valid:true,data_stale:false,closed_candles_only:true,paper_candidate:false,
+    candle_age_ms:60_000,candle_close_time:now-60_000,as_of:new Date(now).toISOString(),
+    thresholds:{no_chase:false,late_move:true},
+    features:{hourly_return_pct:12,volume_ratio:4,trade_ratio:3,taker_buy_ratio:0.7,close_location:0.9},
+    reason_codes:['ALREADY_EXTENDED']
+  };
+  const late=buildAdaptiveTraderRecommendation(base,{now});
+  assert.equal(late.decision,'AVOID_CHASING');
+  assert.equal(late.action,'AVOID');
+  assert.equal(late.entry_eligible,false);
+
+  const stale=buildAdaptiveTraderRecommendation({...base,data_stale:true,tier:'EARLY_SETUP',change_24h_pct:2},{now});
+  assert.equal(stale.decision,'DATA_UNAVAILABLE');
+  assert.equal(stale.entry_eligible,false);
+  assert.equal(stale.action,'NO_TRADE');
 });
 
 test('fresh REST responses received during a slow scan are not misclassified as future data',()=>{
