@@ -162,6 +162,28 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));
+          const capture=x.learning_capture||null;
+          const trainingEvidence={
+            resolved_samples:Number(x.memory?.resolved_samples)||0,
+            unresolved_samples:Number(x.memory?.unresolved_samples)||0,
+            historical_input_samples:Number(capture?.historical_input_samples)||0,
+            new_historical_samples:Number(capture?.new_historical_samples)||0,
+            historical_samples_available:Number(capture?.snapshot_historical_samples_available)||0,
+            new_deep_candidate_samples:Number(capture?.new_deep_candidate_samples)||0,
+            new_closed_candle_outcomes:Number(capture?.new_closed_candle_outcomes)||0
+          };
+          if(!capture||Object.values(trainingEvidence).every(value=>value===0)){
+            throw new Error('ADAPTIVE_TRADER_LEARNING_EVIDENCE_MISSING '+JSON.stringify({
+              memory:x.memory||null,learning_capture:capture
+            }));
+          }
+          console.log('ADAPTIVE_TRADER_LEARNING_PIPELINE_DIAGNOSTICS '+JSON.stringify({
+            ...trainingEvidence,historical_rejected:capture.historical_rejected||{},
+            unresolved_training_samples:Number(capture.unresolved_training_samples)||0,
+            required_samples:Number(x.learning_profile?.required_samples)||60,
+            learning_ready:x.learning_profile?.ready===true,
+            note:'A successful scan is not proof of learned calibration; this reports the actual sample pipeline.'
+          }));
           console.log('ADAPTIVE_TRADER_WORKER_AND_MEMORY_OK '+JSON.stringify({
             status:x.status,scan_count:x.scan_count,successful_scans:x.successful_scans,
             last_scan_at:x.last_scan_at,last_error:x.last_error,
