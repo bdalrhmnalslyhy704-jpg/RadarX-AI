@@ -553,6 +553,9 @@ function renderCandidates(snapshot){
         '<div class="metric"><b>'+esc(fmt(features.trade_ratio,2))+'×</b><span>عدد الصفقات</span></div>'+
         '<div class="metric"><b>'+esc(fmt((num(features.taker_buy_ratio)||0)*100,1))+'%</b><span>ضغط الشراء</span></div>'+
         '<div class="metric"><b>'+esc(percent(features.hourly_return_pct))+'</b><span>تغير ساعة</span></div>'+
+        '<div class="metric"><b>'+esc(percent(features.return_3h_pct))+'</b><span>تغير 3 ساعات</span></div>'+
+        '<div class="metric"><b>'+esc(features.micro_5m_available?fmt((num(features.micro_5m_taker_buy_ratio)||0)*100,1)+'%':'—')+'</b><span>ضغط شراء 5m</span></div>'+
+        '<div class="metric"><b>'+esc(features.micro_5m_available?fmt(features.micro_5m_volume_ratio,2)+'×':'—')+'</b><span>تسارع حجم 5m</span></div>'+
         '<div class="metric"><b>'+esc(percent(features.relative_strength_vs_btc_pct))+'</b><span>قوة مقابل BTC</span></div></div>'+
       '<div class="reasons">'+reasons+'</div>'+
       '<div class="card-foot"><span>حجم 24س: '+esc(money(candidate.quote_volume_24h))+'</span><span>شمعة: '+esc(timeText(candidate.candle_close_time))+'</span></div>'+
