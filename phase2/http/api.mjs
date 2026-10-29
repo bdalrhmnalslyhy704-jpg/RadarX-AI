@@ -172,6 +172,9 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   const buyDelta=finite(p?.taker_buy_acceleration);
   const closeLocation=finite(p?.mean_close_location);
   const relative=finite(p?.relative_strength_vs_market_pct);
+  const relativeBtc=finite(p?.relative_strength_vs_btc_pct,relative);
+  const squeeze=finite(p?.components?.squeeze);
+  const buyingPressure=finite(p?.components?.buying_pressure);
   const structure=finite(p?.components?.structure);
   const qualityOk=quality!==null&&quality>=70&&quality<=100&&liquidity!==null&&liquidity>=60&&liquidity<=100;
   const source=String(snapshot?.source||'').trim();
@@ -244,15 +247,38 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     closeLocation!==null&&closeLocation>=0.45&&relative!==null&&relative>=0.75&&
     quality!==null&&quality>=95&&liquidity!==null&&liquidity>=90&&
     structure!==null&&structure>=60&&participation>=4;
+  // Narrow monitor-only lane for a compressed, buyer-dominated base before breakout.
+  const compressedBuyerChecks=[
+    squeeze!==null&&squeeze>=45,
+    structure!==null&&structure>=60,
+    buyingPressure!==null&&buyingPressure>=90,
+    buy!==null&&buy>=0.65,
+    buyDelta!==null&&buyDelta>=0.08,
+    closeLocation!==null&&closeLocation>=0.55,
+    relativeBtc!==null&&relativeBtc>=-0.25
+  ].filter(Boolean).length;
+  const compressedBuyerAbsorptionMonitor=daily!==null&&daily>=-5&&daily<=5&&
+    session!==null&&session>=-1.5&&session<=3.5&&
+    hour!==null&&hour>=-0.5&&hour<=2.5&&
+    score!==null&&score>=70&&volume!==null&&volume>=0.25&&
+    trades!==null&&trades>=0.5&&buy!==null&&buy>=0.65&&buyDelta!==null&&buyDelta>=0.08&&
+    closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=-0.25&&
+    squeeze!==null&&squeeze>=45&&structure!==null&&structure>=60&&
+    buyingPressure!==null&&buyingPressure>=90&&compressedBuyerChecks===7&&
+    quoteVolume!==null&&quoteVolume>=750000&&quality!==null&&quality>=95&&
+    liquidity!==null&&liquidity>=85&&participation>=3;
   const watchTier=tickerActivityMonitor?'TICKER_ACTIVITY_ACCELERATION_MONITOR':
     highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
     earlyFlowMonitor?'EARLY_FLOW_MONITOR':
-    accumulationPrepMonitor?'ACCUMULATION_PREP_MONITOR':'STANDARD_WATCH_EARLY';
+    accumulationPrepMonitor?'ACCUMULATION_PREP_MONITOR':
+    compressedBuyerAbsorptionMonitor?'COMPRESSED_BUYER_ABSORPTION_MONITOR':'STANDARD_WATCH_EARLY';
   const fields={
     symbol,score,session_return_pct:session,one_hour_return_pct:hour,
     volume_acceleration:volume,trade_acceleration:trades,taker_buy_ratio:buy,
     taker_buy_acceleration:buyDelta,mean_close_location:closeLocation,
-    relative_strength_vs_market_pct:relative,structure_score:structure,
+    relative_strength_vs_market_pct:relative,relative_strength_vs_btc_pct:relativeBtc,
+    compression_score:squeeze,buying_pressure_score:buyingPressure,
+    compressed_buyer_checks:compressedBuyerChecks,structure_score:structure,
     watch_notification_tier:watchTier,
     data_valid:status?.data_valid===true,data_stale:status?.data_stale===true||status?.stale===true,
     data_quality:quality,liquidity_quality:liquidity,closed_candle_close_time:closeAt,
@@ -273,13 +299,13 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(accumulationPrepMonitor?66:(tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
+  if(score===null||score<(accumulationPrepMonitor?66:compressedBuyerAbsorptionMonitor?70:(tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<(accumulationPrepMonitor?0:highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
-     session>(accumulationPrepMonitor?3.5:highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
+  if(session===null||session<(accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
+     session>(accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<(accumulationPrepMonitor?-0.35:highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
-     hour>(accumulationPrepMonitor?1.5:highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
+  if(hour===null||hour<(accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
+     hour>(accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
   if(structure===null||(structure<(tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
@@ -324,7 +350,9 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
           ?'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION'
           :assessment.values.watch_notification_tier==='ACCUMULATION_PREP_MONITOR'
             ?'HIGH_QUALITY_VOLUME_TRADE_AND_RELATIVE_STRENGTH_PREP_WITHOUT_ENTRY_CONFIRMATION'
-            :'CONFLUENCE_BASED_EARLY_WATCH',
+            :assessment.values.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR'
+              ?'COMPRESSED_BASE_WITH_STRONG_BUYER_ABSORPTION_BEFORE_BREAKOUT'
+              :'CONFLUENCE_BASED_EARLY_WATCH',
     ticker_activity_watch_evidence:assessment.values.ticker_activity_watch_evidence,
     reason_codes:[
       ...(assessment.values.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
@@ -333,6 +361,8 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
         ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
       ...(assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
         ?['EARLY_FLOW_MONITOR','BUY_FLOW_BEFORE_PRICE_CONFIRMATION']:[]),
+      ...(assessment.values.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR'
+        ?['COMPRESSED_BUYER_ABSORPTION_MONITOR','BUYER_ABSORPTION_DURING_COMPRESSION']:[]),
       ...(Array.isArray(candidate?.watch_reason_codes)?candidate.watch_reason_codes:
         Array.isArray(p?.reasons)?p.reasons:[])
     ].map(x=>String(x).slice(0,100)).slice(0,12),
