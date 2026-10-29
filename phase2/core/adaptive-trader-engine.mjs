@@ -9,7 +9,10 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
   const score=finite(candidate?.score);
   const daily=finite(candidate?.change_24h_pct);
   const hourly=finite(features.hourly_return_pct);
-  const age=finite(candidate?.candle_age_ms);
+  const reportedAge=finite(candidate?.candle_age_ms);
+  const closeTime=finite(candidate?.candle_close_time);
+  const elapsedSinceClose=closeTime!==null?Number(now)-closeTime:null;
+  const age=reportedAge===null?elapsedSinceClose:elapsedSinceClose===null?reportedAge:Math.max(reportedAge,elapsedSinceClose);
   const out=(decision,label,action,priority,nextStep,reasonCodes=[])=>({
     decision,label_ar:label,action,priority,symbol,score,
     reason_codes:[...new Set([...reasons,...reasonCodes])].slice(0,12),
