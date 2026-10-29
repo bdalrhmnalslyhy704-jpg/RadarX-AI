@@ -21,6 +21,9 @@ export RADARX_HOST="${RADARX_HOST:-0.0.0.0}"
 export RADARX_REAL_ORDER_EXECUTION=false
 export RADARX_PAPER_TRADING=true
 export RADARX_CONFIDENCE_MODE=UNKNOWN
+# Native Android polling reads the durable feed every five seconds and may use read-only compatibility routes.
+# Leave enough shared backend budget for this routine cadence plus concurrent dashboard clients.
+export RADARX_API_RATE_LIMIT_PER_MINUTE="${RADARX_API_RATE_LIMIT_PER_MINUTE:-300}"
 
 # Push is optional for public Spot market-data monitoring. Prefer configured FCM/Web Push;
 # otherwise use the explicit no-op provider and preserve local-polling notifications.
