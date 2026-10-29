@@ -283,6 +283,15 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     assert.equal(status.learning_profile.historical_samples,1);
     assert.equal(status.learning_profile.outcome_counts.up,1);
     assert.ok(status.memory.resolved_samples>=1);
+    assert.equal(status.learning_capture.historical_input_samples,1);
+    assert.equal(status.learning_capture.new_historical_samples,1);
+    assert.equal(status.learning_capture.snapshot_historical_samples_available,0);
+    assert.equal(status.learning_capture.historical_rejected.missing_id,0);
+    assert.equal(status.learning_capture.historical_rejected.duplicate_id,0);
+    assert.equal(status.learning_capture.historical_rejected.invalid_outcome,0);
+    assert.equal(status.learning_capture.historical_rejected.horizon_too_short,0);
+    assert.equal(status.learning_capture.resolved_samples,1);
+    assert.equal(status.real_order_execution,false);
     const saved=await store.getAdaptiveTraderState();
     assert.ok(saved.samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'));
   }finally{
