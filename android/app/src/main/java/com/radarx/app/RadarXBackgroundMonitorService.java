@@ -111,8 +111,9 @@ public final class RadarXBackgroundMonitorService extends Service {
             stopping = false;
         }
 
-        RadarXPushRegistration.syncIfConfigured(getApplicationContext());
-
+        // Android requires startForeground() promptly after startForegroundService().
+        // Push token/network synchronization can block on first boot, so schedule it
+        // only after the foreground notification and recurring scan are established.
         try {
             startAsForeground();
         } catch (Throwable error) {
@@ -131,6 +132,22 @@ public final class RadarXBackgroundMonitorService extends Service {
             } catch (Throwable ignored) {
                 Log.e(TAG, "Unable to publish scheduler failure status", ignored);
             }
+        }
+
+        // Registering FCM can perform token/configuration work. Do not let that work
+        // delay the service's mandatory foreground transition or the first radar scan.
+        try {
+            Thread registrationSync = new Thread(() -> {
+                try {
+                    RadarXPushRegistration.syncIfConfigured(getApplicationContext());
+                } catch (Throwable error) {
+                    Log.w(TAG, "Push registration sync failed; monitoring continues", error);
+                }
+            }, "RadarX-Push-Registration");
+            registrationSync.setDaemon(true);
+            registrationSync.start();
+        } catch (Throwable error) {
+            Log.w(TAG, "Unable to schedule push registration sync; monitoring continues", error);
         }
         return START_STICKY;
     }
