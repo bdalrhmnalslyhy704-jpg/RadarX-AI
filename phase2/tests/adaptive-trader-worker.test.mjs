@@ -184,3 +184,54 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('server learner records eligible and below-threshold Spot pairs outside the deep-scan batch',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-market-wide-learning-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now();
+  const deep={
+    symbol:'DEEPUSDT',price:10,quote_volume_24h:2_000_000,change_24h_pct:1.5,score:63,
+    tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,entry_eligible:false,
+    paper_trading:true,real_order_execution:false,
+    features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.5,close_location:0.6,
+      recent_15m_return_pct:0.2,trend_aligned:true,relative_strength_vs_btc_pct:0.4},
+    reason_codes:['TEST_FIXTURE']
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+    universe:{eligible_spot_symbols:1,monitored_spot_symbols:3,analyzed_symbols:1,valid_symbols:1,
+      requested_limit:40,coverage_pct:100,scan_complete:true,scan_offset:0,scan_advance_count:1},
+    candidates:[deep],
+    latest_prices:[
+      {symbol:'DEEPUSDT',price:10,quote_volume_24h:2_000_000,change_24h_pct:1.5,move_since_previous_pct:0.2},
+      {symbol:'UNSCANNEDUSDT',price:2,quote_volume_24h:1_200_000,change_24h_pct:5.4,move_since_previous_pct:1.4},
+      {symbol:'LOWVOLUSDT',price:0.5,quote_volume_24h:35_000,change_24h_pct:-1.2,move_since_previous_pct:-0.4}
+    ],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    const status=worker.snapshot();
+    assert.equal(status.memory.deep_candidate_samples,1);
+    assert.equal(status.memory.market_wide_samples,2);
+    assert.equal(status.memory.history_rows,3);
+    assert.equal(status.learning_capture.new_deep_candidate_samples,1);
+    assert.equal(status.learning_capture.new_market_wide_samples,2);
+    assert.ok(status.learning_profile.required_samples>=60);
+    const saved=await store.getAdaptiveTraderState();
+    const unscanned=saved.samples.find(row=>row.symbol==='UNSCANNEDUSDT');
+    const lowVolume=saved.samples.find(row=>row.symbol==='LOWVOLUSDT');
+    assert.equal(unscanned.observation_type,'MARKET_WIDE_TICKER');
+    assert.equal(unscanned.features.change_24h_pct,5.4);
+    assert.equal(lowVolume.observation_type,'MARKET_WIDE_TICKER');
+    assert.equal(saved.samples.find(row=>row.symbol==='DEEPUSDT').observation_type,'DEEP_CANDIDATE');
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
