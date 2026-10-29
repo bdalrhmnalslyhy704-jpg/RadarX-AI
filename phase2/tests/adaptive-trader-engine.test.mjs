@@ -4,6 +4,7 @@ import {
   ADAPTIVE_TRADER_POLICY,
   scoreAdaptiveTraderCandidate,
   buildAdaptiveTraderHistoricalOutcomeSamples,
+  buildAdaptiveTraderClosedCandleOutcomeLabels,
   buildAdaptiveTraderRecommendation,
   buildAdaptiveLearningProfile,
   applyAdaptiveLearning,
@@ -112,6 +113,47 @@ test('historical learning examples use only baseline candles and label returns f
   assert.equal(relabelled.base_score,target.base_score,
     'future closes change the outcome label but cannot rewrite features from the earlier baseline');
   assert.deepEqual(relabelled.features,target.features);
+});
+
+test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
+  const now=Date.now();
+  const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
+  const baseIndex=150;
+  const baselineAt=original.data[baseIndex][6];
+  const baselinePrice=original.data[baseIndex][4];
+  const changed={
+    ...original,
+    data:original.data.map((row,index)=>{
+      if(index<=baseIndex)return row;
+      const scale=Math.pow(1.003,index-baseIndex);
+      return row.map((value,column)=>column>=1&&column<=4?Number(value)*scale:value);
+    })
+  };
+  const sample={
+    id:'LIVE:TESTUSDT:'+String(baselineAt),symbol:'TESTUSDT',
+    price:baselinePrice,at:baselineAt,closed_candle_baseline:true,
+    training_eligible:true,outcome:null
+  };
+  const outcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
+    symbol:'TESTUSDT',klines:changed,pendingSamples:[sample],now
+  });
+  assert.equal(outcomes.length,1);
+  assert.equal(outcomes[0].sample_id,sample.id);
+  assert.equal(outcomes[0].baseline_price,baselinePrice);
+  assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
+  assert.equal(outcomes[0].resolved_at-baselineAt,4*60*60*1000);
+  assert.equal(outcomes[0].outcome,'UP');
+  assert.equal(outcomes[0].outcome_source,'CLOSED_CANDLE_4H');
+
+  const wrongBaseline=buildAdaptiveTraderClosedCandleOutcomeLabels({
+    symbol:'TESTUSDT',klines:changed,pendingSamples:[{...sample,price:baselinePrice*1.01}],now
+  });
+  assert.deepEqual(wrongBaseline,[],'the current ticker or a different baseline price must not be substituted');
+
+  const premature=buildAdaptiveTraderClosedCandleOutcomeLabels({
+    symbol:'TESTUSDT',klines:changed,pendingSamples:[sample],now:baselineAt+3*60*60*1000
+  });
+  assert.deepEqual(premature,[],'a label cannot mature before four full hours and a matching closed bar');
 });
 
 test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m score',()=>{
