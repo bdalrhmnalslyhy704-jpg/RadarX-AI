@@ -431,6 +431,47 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
 });
 
 
+test('snapshot service preserves non-enumerable historical training rows on fresh and cached reads',async()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const last=klines.data[klines.data.length-1];
+  const ticker={
+    symbol:'TESTUSDT',lastPrice:String(last[4]),quoteVolume:'5000000',
+    priceChangePercent:'1.2',openPrice:String(klines.data[klines.data.length-96][1])
+  };
+  const rest={async request(path,query={}){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
+      {symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']}
+    ]},source:'https://data-api.binance.vision',receivedAt:now};
+    if(path==='/api/v3/ticker/24hr')return {data:[ticker],source:'https://data-api.binance.vision',receivedAt:now};
+    if(path==='/api/v3/klines'){
+      const data=query.symbol==='BTCUSDT'?btcKlines.data:
+        query.interval==='5m'?fastKlines.data:klines.data;
+      return {data,source:'https://data-api.binance.vision',receivedAt:now};
+    }
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:90_000});
+  const snapshot=await service({limit:20,now});
+  assert.ok(snapshot.universe.historical_training_samples_available>0,
+    'fixture must generate matured historical closed-candle labels');
+  assert.ok(Array.isArray(snapshot.historical_training_samples));
+  assert.equal(snapshot.historical_training_samples.length,
+    snapshot.universe.historical_training_samples_available,
+    'attaching closed-candle outcomes must not drop the hidden historical training payload');
+  assert.equal(Object.keys(snapshot).includes('historical_training_samples'),false,
+    'training rows remain hidden from JSON/public endpoint serialization');
+  assert.ok(Array.isArray(snapshot.closed_candle_outcomes));
+  const cached=await service({limit:20,now:now+1000});
+  assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
+  assert.equal(cached.historical_training_samples.length,snapshot.historical_training_samples.length,
+    'cache wrapper must preserve historical training rows for the worker');
+  assert.ok(Array.isArray(cached.closed_candle_outcomes),
+    'cache wrapper must preserve the second non-enumerable training payload too');
+});
+
 test('BTC benchmark failure does not disable otherwise valid Spot candidate analysis',async()=>{
   const f=marketFixture();
   const rest={
