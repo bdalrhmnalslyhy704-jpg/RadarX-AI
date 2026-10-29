@@ -668,7 +668,10 @@ jobs:
             const p=x?.pre_move_context;
             if (x?.data_status?.data_valid !== true || typeof x.data_quality!=='number' || !Number.isFinite(x.data_quality) || x.data_quality<70 || typeof x.liquidity_quality!=='number' || !Number.isFinite(x.liquidity_quality) || x.liquidity_quality<60) throw new Error('PRE_MOVE_DATA_QUALITY_GATE:'+String(x?.symbol||'UNKNOWN'));
             if (!p || p.evidence_complete !== true || p.closed_candles_only !== true || p.already_moved === true || ['ALREADY_MOVED','NO_SETUP'].includes(p.stage)) throw new Error('PRE_MOVE_EARLY_STAGE_GATE:'+String(x?.symbol||'UNKNOWN'));
-            if (p.flow_transition_confirmed !== true || p.price_window_valid !== true || p.structure_confirmed !== true) throw new Error('PRE_MOVE_QUALIFICATION_FLAGS:'+String(x.symbol));
+            const flowLed=p.flow_led_expansion_confirmed===true;
+            const structureGatePassed=p.structure_gate_passed===true||p.structure_confirmed===true;
+            if (p.flow_transition_confirmed !== true || p.price_window_valid !== true || !structureGatePassed)
+              throw new Error('PRE_MOVE_QUALIFICATION_FLAGS:'+String(x.symbol));
             for (const [key,value] of Object.entries({
               score:p.score,session_return_pct:p.session_return_pct,one_hour_return_pct:p.one_hour_return_pct,
               volume_acceleration:p.volume_acceleration,trade_acceleration:p.trade_acceleration,
@@ -676,11 +679,19 @@ jobs:
               mean_close_location:p.mean_close_location,compression:p.components?.squeeze,structure:p.components?.structure,
               buying_pressure:p.components?.buying_pressure
             })) if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(x.symbol)+':'+key);
-            if (p.volume_acceleration<1.12 || p.trade_acceleration<1.05 || p.taker_buy_ratio<0.53 ||
-                p.taker_buy_acceleration<0.01 || p.mean_close_location<0.54 ||
-                p.one_hour_return_pct<0.15 || p.one_hour_return_pct>4.5 ||
-                p.session_return_pct<0 || p.session_return_pct>6 ||
-                p.components.squeeze<55 || p.components.structure<60 || p.components.buying_pressure<60 ||
+            const flowLedThresholdFailed=flowLed&&(
+              p.volume_acceleration<1.75 || p.trade_acceleration<1.15 || p.taker_buy_ratio<0.60 ||
+              p.taker_buy_acceleration<0.05 || p.mean_close_location<0.60 ||
+              p.one_hour_return_pct< -0.75 || p.one_hour_return_pct>2.5 ||
+              p.session_return_pct<0 || p.session_return_pct>4.5 ||
+              p.components.structure<70 || p.components.buying_pressure<75);
+            const compressionThresholdFailed=!flowLed&&(
+              p.volume_acceleration<1.12 || p.trade_acceleration<1.05 || p.taker_buy_ratio<0.53 ||
+              p.taker_buy_acceleration<0.01 || p.mean_close_location<0.54 ||
+              p.one_hour_return_pct<0.15 || p.one_hour_return_pct>4.5 ||
+              p.session_return_pct<0 || p.session_return_pct>6 ||
+              p.components.squeeze<55 || p.components.structure<60 || p.components.buying_pressure<60);
+            if (flowLedThresholdFailed || compressionThresholdFailed ||
                 p.session_return_pct>9 || x.price_change_24h>20)
               throw new Error('PRE_MOVE_QUALIFICATION_THRESHOLD:'+String(x.symbol));
             
