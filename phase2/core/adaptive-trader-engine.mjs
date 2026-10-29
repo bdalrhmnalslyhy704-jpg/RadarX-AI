@@ -754,6 +754,21 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
     const previousTier = String(previous.tier || 'NOT_EVALUATED');
     const wasEvaluated = previous.evaluated === true;
     const wasOnRadar = wasEvaluated && ['EARLY_SETUP', 'WATCH'].includes(previousTier);
+    const baselineFeatures=previous.features&&typeof previous.features==='object'?previous.features:{};
+    const diagnosticReasons=Array.isArray(previous.reason_codes)&&previous.reason_codes.length
+      ?previous.reason_codes.slice(0,8).map(String)
+      :!wasEvaluated?['NOT_IN_DEEP_SCAN_BATCH_AT_BASELINE']:[];
+    if(wasEvaluated&&!diagnosticReasons.length){
+      const volume=finite(baselineFeatures.volume_ratio),trades=finite(baselineFeatures.trade_ratio);
+      const buy=finite(baselineFeatures.taker_buy_ratio),score=finite(previous.score);
+      if(volume===null||volume<1.5)diagnosticReasons.push('VOLUME_ACCELERATION_NOT_CONFIRMED');
+      if(trades===null||trades<1.25)diagnosticReasons.push('TRADE_ACCELERATION_NOT_CONFIRMED');
+      if(buy===null||buy<0.52)diagnosticReasons.push('BUY_FLOW_NOT_CONFIRMED');
+      if(baselineFeatures.higher_low!==true&&baselineFeatures.breakout_above_prior_high!==true)
+        diagnosticReasons.push('STRUCTURE_CONFIRMATION_MISSING');
+      if(score!==null&&score<68)diagnosticReasons.push('SCORE_BELOW_EARLY_SETUP_GATE');
+      if(!diagnosticReasons.length)diagnosticReasons.push('SETUP_NOT_CONFIRMED_BY_BASELINE_RULES');
+    }
     events.push({
       id: symbol + ':' + String(previous.at),
       symbol,
@@ -762,6 +777,11 @@ export function findMissedMoverEvents({ history = [], currentPrices = [], now = 
       current_price: price,
       move_pct: Number(move.toFixed(2)),
       baseline_tier: previousTier,
+      baseline_score:finite(previous.score),
+      baseline_features:baselineFeatures,
+      baseline_reason_codes:diagnosticReasons,
+      baseline_quote_volume_24h:finite(previous.quote_volume_24h),
+      baseline_change_24h_pct:finite(previous.change_24h_pct),
       baseline_was_evaluated: wasEvaluated,
       classification: !wasEvaluated ? 'UNASSESSED_MOVE' : wasOnRadar ? 'FOLLOW_UP_MOVE' : 'POTENTIAL_MISSED_MOVER',
       diagnostic_only: true,
