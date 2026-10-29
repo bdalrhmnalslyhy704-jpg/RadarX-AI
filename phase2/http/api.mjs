@@ -553,6 +553,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     }
   };
   let preMoveBackgroundInterval=null,preMoveBackgroundInitialTimer=null,preMoveBackgroundInFlight=false;
+  // User-triggered sidecar scans are globally throttled so multiple mobile clients cannot
+  // exhaust the shared public-Spot REST budget by repeatedly pressing Scan.
+  let lastAdaptiveTraderManualScanAt=0;
   async function notificationTransportSnapshot(){
     let providerStatus={provider:'unknown',enabled:false},rows=[];
     try{providerStatus=pushProvider?.status?.()||providerStatus;}catch{}
@@ -933,6 +936,36 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         });
         return send(res,200,{service:'RADARX_ADAPTIVE_TRADER_SIDECAR',...adaptiveTraderWorker.snapshot(),
           notification_transport:await notificationTransportSnapshot()});
+      }
+      if(u.pathname==='/api/adaptive-trader/scan'&&req.method==='POST'){
+        if(!adaptiveTraderWorker||typeof adaptiveTraderWorker.runOnce!=='function'||typeof adaptiveTraderWorker.snapshot!=='function'){
+          return send(res,503,{status:'UNAVAILABLE',error:'ADAPTIVE_TRADER_WORKER_UNAVAILABLE',paper_trading:true,real_order_execution:false});
+        }
+        const before=adaptiveTraderWorker.snapshot();
+        if(before.enabled!==true){
+          return send(res,503,{status:'STOPPED',error:'ADAPTIVE_TRADER_WORKER_NOT_RUNNING',worker:before,paper_trading:true,real_order_execution:false});
+        }
+        if(before.in_flight===true){
+          return send(res,202,{status:'SCANNING',message:'ADAPTIVE_TRADER_SCAN_ALREADY_IN_FLIGHT',worker:before,paper_trading:true,real_order_execution:false});
+        }
+        const now=Date.now(),cooldownMs=60_000,remaining=cooldownMs-(now-lastAdaptiveTraderManualScanAt);
+        if(lastAdaptiveTraderManualScanAt>0&&remaining>0){
+          return send(res,429,{status:'RATE_LIMITED',error:'ADAPTIVE_TRADER_SCAN_COOLDOWN',
+            retry_after_ms:remaining,worker:before,paper_trading:true,real_order_execution:false});
+        }
+        lastAdaptiveTraderManualScanAt=now;
+        // runOnce marks the worker in-flight before its first await. Respond immediately;
+        // the dashboard then polls /status for a completed, persisted learning cycle.
+        try{
+          Promise.resolve(adaptiveTraderWorker.runOnce()).catch(error=>{
+            console.warn('[ADAPTIVE_TRADER_MANUAL_SCAN_FAILED] '+String(error?.message??error).slice(0,160));
+          });
+        }catch(error){
+          return send(res,500,{status:'FAILED',error:'ADAPTIVE_TRADER_SCAN_START_FAILED',
+            reason:String(error?.message??error).slice(0,160),paper_trading:true,real_order_execution:false});
+        }
+        return send(res,202,{status:'SCAN_STARTED',requested_at:new Date(now).toISOString(),
+          worker:adaptiveTraderWorker.snapshot(),paper_trading:true,real_order_execution:false});
       }
       if(u.pathname==='/api/adaptive-trader/market-snapshot'&&req.method==='GET'){
         if(typeof adaptiveTraderSnapshotProvider!=='function')return send(res,503,{
