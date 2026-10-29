@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {MultiAnalystEngine} from '../core/multi-analyst-engine.mjs';
+import {CONFIG} from '../config.mjs';
 
 const now=Date.now();
 function kline(i,tfMs,base=100){
@@ -63,4 +64,11 @@ if(out.candidates.length===1){
   assert.equal(c.real_order_execution,false);
   assert.equal(c.confidence_score,'UNKNOWN');
 }
+assert.ok(CONFIG.multiAnalyst.discoveryPool>=32 && CONFIG.multiAnalyst.discoveryPool<=48,
+  'production market discovery must stay within the bounded 32–48 symbol scan pool');
+assert.ok(CONFIG.multiAnalyst.deepScanPool>=16 && CONFIG.multiAnalyst.deepScanPool<=18,
+  'production multi-analyst pass must not silently fall back to 12 deep-scanned symbols');
+assert.equal(CONFIG.multiAnalyst.deepConcurrency,4,
+  'deep scan uses bounded four-way concurrency for the enlarged sample');
+assert.ok(CONFIG.multiAnalyst.deepScanPool<=CONFIG.multiAnalyst.discoveryPool);
 console.log('multi-analyst.test: ok');

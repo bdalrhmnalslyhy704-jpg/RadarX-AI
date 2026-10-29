@@ -2,6 +2,7 @@ import {resolvePort,resolveHost} from './runtime.mjs';
 import {parseFcmServiceAccount} from './push/fcm-service-account.mjs';
 
 const int = (v, d) => Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : d;
+const boundedInt = (v, d, min, max) => Math.max(min, Math.min(max, int(v, d)));
 const float = (v, d) => Number.isFinite(Number(v)) ? Number(v) : d;
 const list = (v, d) => {
   const a = String(v ?? '').split(',').map(x => x.trim()).filter(Boolean);
@@ -251,10 +252,12 @@ export const CONFIG = Object.freeze({
   },
   multiAnalyst: {
     quote: 'USDT',
-    discoveryPool: int(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 24),
-    deepScanPool: int(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 12),
+    // Keep live multi-analyst coverage from being silently reduced to a tiny 12-coin sample.
+    // Four-way bounded concurrency keeps the larger rotating sample inside the existing 120s deadline.
+    discoveryPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 32, 32, 48),
+    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 16, 16, 18),
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
-    deepConcurrency: int(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 3),
+    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 4, 4, 4),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
     // A full 19-specialist + final-judge pass must be allowed to finish on the
     // 512 MB DHDTech container; the API returns background progress while it runs.
