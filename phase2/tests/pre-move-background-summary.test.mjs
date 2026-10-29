@@ -58,10 +58,9 @@ test('background summary exposes bounded near misses and the most common blocker
   assert.equal(summary.watch_notification_top_rejections[0].score,67.5);
   assert.equal(summary.watch_notification_top_rejections[1].score,null);
   assert.equal(summary.watch_notification_top_rejections[1].data_quality,null);
-  assert.equal(summary.ticker_activity_signal_count,null,
-    'missing activity telemetry must stay unknown rather than being misreported as zero');
-  assert.equal(summary.ticker_activity_baseline_source,'UNAVAILABLE');
-  assert.equal(summary.ticker_activity_baseline_persisted,null);
+  assert.equal(summary.ticker_activity_signal_count,3);
+  assert.equal(summary.ticker_activity_baseline_source,'DURABLE_STORE');
+  assert.equal(summary.ticker_activity_baseline_persisted,true);
 });
 
 test('background summary accepts empty or malformed optional diagnostics without inventing measurements',()=>{
@@ -72,6 +71,10 @@ test('background summary accepts empty or malformed optional diagnostics without
   assert.deepEqual(summary.near_miss_samples,[]);
   assert.deepEqual(summary.watch_notification_top_rejections,[]);
   assert.equal(summary.watch_notification_eligible,0);
+  assert.equal(summary.ticker_activity_signal_count,null,
+    'missing activity telemetry must stay unknown rather than being misreported as zero');
+  assert.equal(summary.ticker_activity_baseline_source,'UNAVAILABLE');
+  assert.equal(summary.ticker_activity_baseline_persisted,null);
   assert.equal(summary.paper_trading,undefined);
 });
 
