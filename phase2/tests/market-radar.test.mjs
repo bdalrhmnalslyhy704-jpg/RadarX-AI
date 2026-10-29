@@ -597,13 +597,18 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
   assert.ok(ctx.components.acceleration>=50);
 
-  const flowLedBars=b.map((row,i)=>i>=22
-    ?{...row,close:row.low+(row.high-row.low)*0.75}
-    :row);
+  const flowLedBars=b.map((row,i)=>{
+    const shift=3;
+    const shifted={...row,open:Number(row.open)-shift,high:Number(row.high)-shift,
+      low:Number(row.low)-shift,close:Number(row.close)-shift};
+    return i>=22
+      ?{...shifted,close:shifted.low+(shifted.high-shifted.low)*0.75}
+      :shifted;
+  });
   const expansionWithoutCompression=buildPreMoveContext({'15m':flowLedBars},lowChange,now,{
     last_rise:{high:106},
     metrics:{compression:4,structure:78,buying_pressure:90,whale_pressure:null}
-  },{btcReturn:-1.5});
+  },{btcReturn:0.6});
   assert.equal(expansionWithoutCompression.flow_transition_confirmed,true);
   assert.equal(expansionWithoutCompression.price_window_valid,true);
   assert.equal(expansionWithoutCompression.structure_confirmed,false,
@@ -619,7 +624,7 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   const weakBuyer=buildPreMoveContext({'15m':weakBuyerBars},lowChange,now,{
     last_rise:{high:106},
     metrics:{compression:4,structure:78,buying_pressure:90,whale_pressure:null}
-  },{btcReturn:-1.5});
+  },{btcReturn:0.6});
   assert.equal(weakBuyer.flow_led_expansion_confirmed,false,
     'large volume alone must not bypass the buyer-flow gate');
   assert.equal(weakBuyer.structure_gate_passed,false);
