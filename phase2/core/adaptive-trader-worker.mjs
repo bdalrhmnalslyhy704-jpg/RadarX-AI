@@ -472,6 +472,7 @@ export class AdaptiveTraderWorker{
         unresolved_samples:(this.state.samples||[]).filter(row=>!row.outcome).length,
         deep_candidate_samples:(this.state.samples||[]).filter(row=>row.observation_type==='DEEP_CANDIDATE').length,
         market_wide_samples:(this.state.samples||[]).filter(row=>row.observation_type==='MARKET_WIDE_TICKER').length,
+        historical_samples:(this.state.samples||[]).filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'&&row.outcome).length,
         history_rows:(this.state.price_history||[]).length,
         potential_missed_movers:(this.state.missed_movers||[]).filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length,
         unassessed_moves:(this.state.missed_movers||[]).filter(row=>row.classification==='UNASSESSED_MOVE').length}
