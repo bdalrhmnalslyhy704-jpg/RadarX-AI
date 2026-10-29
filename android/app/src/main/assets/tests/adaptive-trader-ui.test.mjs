@@ -32,7 +32,7 @@ test('adaptive trader UI has visible data coverage and paper-only status',()=>{
   assert.match(html,/kpiEligible/);
   assert.match(html,/kpiScanned/);
   assert.match(html,/coverage_pct/);
-  assert.match(html,/LIVE_MARKET_DATA_NOT_VERIFIED|DATA_UNAVAILABLE/);
+  assert.match(html,/SERVER_SCAN_RESULT_NOT_VERIFIED|ADAPTIVE_TRADER_WORKER_SCAN_FAILED|DATA_UNAVAILABLE/);
   assert.match(html,/real_order_execution/);
   assert.match(html,/لا مفاتيح API/);
   assert.match(html,/تغطية جزئية/);
