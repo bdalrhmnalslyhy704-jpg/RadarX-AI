@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts,diagnosePreMoveWatchOnlyCandidates} from '../http/api.mjs';
-import {PushManager} from '../push/index.mjs';
+import {PushManager, isTrustedBinancePublicSpotSource} from '../push/index.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
@@ -631,4 +631,23 @@ test('high-activity watch override still fails closed on weak data, low particip
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,taker_buy_ratio:0.49,volume_acceleration:1.2,trade_acceleration:1.1,relative_strength_vs_market_pct:0.2}},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,risk_flags:['ALREADY_EXTENDED']},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...strong,pre_move_context:{...strong.pre_move_context,components:{...strong.pre_move_context.components,structure:49.9}}},snapshot,now),null);
+});
+
+
+test('live public Spot source aliases are accepted but futures, unavailable and replay sources fail closed',()=>{
+  for(const source of [
+    'Binance Public REST',
+    'Binance Public REST/WS',
+    'Binance Public WebSocket',
+    'Binance Public REST with endpoint rotation/fallback',
+    'BINANCE_SPOT_PUBLIC_REST'
+  ]) assert.equal(isTrustedBinancePublicSpotSource(source),true,source);
+  for(const source of [
+    'Binance Futures Public REST',
+    'Binance Public REST unavailable',
+    'Binance Public REST failed',
+    'Mock Binance Public REST',
+    'Historical replay data',
+    'Unknown market source'
+  ]) assert.equal(isTrustedBinancePublicSpotSource(source),false,source);
 });
