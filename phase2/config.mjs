@@ -406,6 +406,6 @@ export const CONFIG = Object.freeze({
   },
   api: {
     maxBodyBytes: int(process.env.RADARX_MAX_BODY_BYTES, 64 * 1024),
-    rateLimitPerMinute: int(process.env.RADARX_API_RATE_LIMIT_PER_MINUTE, 60)
+    rateLimitPerMinute: int(process.env.RADARX_API_RATE_LIMIT_PER_MINUTE, 300)
   }
 });
