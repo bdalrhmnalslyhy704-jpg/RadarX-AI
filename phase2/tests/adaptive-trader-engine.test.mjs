@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   ADAPTIVE_TRADER_POLICY,
   scoreAdaptiveTraderCandidate,
+  buildAdaptiveTraderHistoricalOutcomeSamples,
   buildAdaptiveTraderRecommendation,
   buildAdaptiveLearningProfile,
   applyAdaptiveLearning,
@@ -61,6 +62,57 @@ function fiveMinuteFixture(now=Date.now()) {
   }
   return {data,source:'https://data-api.binance.vision',receivedAt:now-1000};
 }
+
+function longClosedCandleFixture(now=Date.now(),count=240,intervalMs=15*60*1000,initialPrice=10,drift=0.0001){
+  const data=[];let price=initialPrice;
+  for(let i=0;i<count;i++){
+    const openTime=now-(count-i)*intervalMs,open=price;
+    price=open*(1+drift);
+    const low=Math.min(open,price)*0.995,high=Math.max(open,price)*1.005;
+    const quoteVolume=300_000,trades=1800,buyRatio=0.58,baseVolume=quoteVolume/price;
+    data.push([openTime,open,high,low,price,baseVolume,openTime+intervalMs-1,
+      quoteVolume,trades,baseVolume*buyRatio,quoteVolume*buyRatio,0]);
+  }
+  return {data,source:'https://data-api.binance.vision',receivedAt:now};
+}
+
+test('historical learning examples use only baseline candles and label returns four hours later',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'HISTUSDT',klines,fastKlines,btcKlines,now,maxSamples:8
+  });
+  assert.equal(samples.length,8);
+  assert.ok(samples.every(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'));
+  assert.ok(samples.every(row=>row.outcome==='FLAT'));
+  assert.ok(samples.every(row=>row.horizon_ms===4*60*60*1000));
+  assert.ok(samples.every(row=>row.resolved_at-row.at===4*60*60*1000));
+  assert.ok(samples.every(row=>row.at<row.resolved_at&&row.training_eligible===true));
+  assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
+
+  const target=samples[0];
+  const baseIndex=klines.data.findIndex(row=>row[6]===target.at);
+  assert.ok(baseIndex>=0);
+  const revised={
+    ...klines,
+    data:klines.data.map((row,index)=>{
+      if(index<=baseIndex)return row;
+      const scale=1+0.002*(index-baseIndex);
+      return [...row,row[11]].slice(0,12).map((value,column)=>
+        column>=1&&column<=4&&Number.isFinite(Number(value))?Number(value)*scale:value);
+    })
+  };
+  const relabelled=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'HISTUSDT',klines:revised,fastKlines,btcKlines,now,maxSamples:8
+  }).find(row=>row.id===target.id);
+  assert.ok(relabelled);
+  assert.equal(relabelled.outcome,'UP');
+  assert.equal(relabelled.base_score,target.base_score,
+    'future closes change the outcome label but cannot rewrite features from the earlier baseline');
+  assert.deepEqual(relabelled.features,target.features);
+});
 
 test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m score',()=>{
   const f=marketFixture();
