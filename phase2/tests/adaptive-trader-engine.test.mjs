@@ -215,7 +215,7 @@ test('adaptive profile waits for enough labelled outcomes and never rewrites rul
   }));
   const profile=buildAdaptiveLearningProfile(sufficient);
   assert.equal(profile.ready,true);
-  assert.equal(profile.note,'CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
+  assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
   const adjusted=applyAdaptiveLearning(75,{volume_ratio:2.2,taker_buy_ratio:0.59,higher_low:true,compression_ratio:0.65},profile);
   assert.ok(adjusted>=71&&adjusted<=79);
 });
