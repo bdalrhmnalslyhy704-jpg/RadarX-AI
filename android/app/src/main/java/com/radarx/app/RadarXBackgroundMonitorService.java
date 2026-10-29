@@ -80,6 +80,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
     private volatile long lastPreMoveWatchPollAtMs = 0L;
+    // Stop retry storms when the shared backend tells us its request budget is exhausted.
+    private volatile long backendRateLimitUntilMs = 0L;
 
     @Override
     public void onCreate() {
@@ -157,6 +159,10 @@ public final class RadarXBackgroundMonitorService extends Service {
         synchronized (SCAN_LOCK) {
         if (stopping) return;
         touchHeartbeat();
+        if (System.currentTimeMillis() < backendRateLimitUntilMs) {
+            Log.d(TAG, "BACKGROUND_SCAN_RATE_LIMIT_COOLDOWN_ACTIVE");
+            return;
+        }
         try {
             long cursor = currentAlertCursor();
             String cursorId = prefs().getString("radar_alert_cursor_id", "");
@@ -212,6 +218,11 @@ public final class RadarXBackgroundMonitorService extends Service {
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 int status = connection.getResponseCode();
+                if (status == 429) {
+                    backendRateLimitUntilMs = Math.max(backendRateLimitUntilMs, System.currentTimeMillis() + 15_000L);
+                    last = new IllegalStateException("HTTP_429");
+                    break;
+                }
                 if (status == 404) {
                     last = new IllegalStateException("HTTP_404");
                     continue;
@@ -246,6 +257,11 @@ public final class RadarXBackgroundMonitorService extends Service {
             throw last == null
                 ? new IllegalStateException("DEBUG_REPLAY_TEST_FEED_UNAVAILABLE")
                 : new IllegalStateException("DEBUG_REPLAY_TEST_FEED_UNAVAILABLE", last);
+        }
+        if (last instanceof IllegalStateException && "HTTP_429".equals(last.getMessage())) {
+            // Do not turn one throttled request into eleven compatibility-route requests.
+            Log.w(TAG, "BACKGROUND_SCAN_RATE_LIMITED_SKIP_COMPATIBILITY_FALLBACK");
+            throw new IllegalStateException("BACKEND_RATE_LIMITED_SKIP_COMPATIBILITY_FALLBACK", last);
         }
         return fetchIndividualRadarAlerts(cursor, cursorId, last);
     }
@@ -376,6 +392,11 @@ public final class RadarXBackgroundMonitorService extends Service {
                 connection.setRequestProperty("Accept", "application/json");
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 int status = connection.getResponseCode();
+                if (status == 429) {
+                    backendRateLimitUntilMs = Math.max(backendRateLimitUntilMs, System.currentTimeMillis() + 15_000L);
+                    last = new IllegalStateException("HTTP_429");
+                    break;
+                }
                 if (status != 200 && status != 503) throw new IllegalStateException("HTTP_" + status + "_" + path);
                 if (status == 200) {
                     any200 = true;
@@ -404,6 +425,9 @@ public final class RadarXBackgroundMonitorService extends Service {
             } finally {
                 if (connection != null) connection.disconnect();
             }
+        }
+        if (last instanceof IllegalStateException && "HTTP_429".equals(last.getMessage())) {
+            throw new IllegalStateException("BACKEND_RATE_LIMITED_SKIP_REMAINING_COMPATIBILITY_ROUTES", last);
         }
         if (!any200) throw last == null ? new IllegalStateException("BACKEND_UNAVAILABLE") : last;
         JSONObject root = new JSONObject();
@@ -465,6 +489,9 @@ public final class RadarXBackgroundMonitorService extends Service {
             connection.setRequestProperty("Accept-Encoding", "identity");
             int status = connection.getResponseCode();
             if (status != 200) {
+                if (status == 429) {
+                    backendRateLimitUntilMs = Math.max(backendRateLimitUntilMs, System.currentTimeMillis() + 15_000L);
+                }
                 Log.w(TAG, "PRE_MOVE_WATCH_POLL_HTTP_" + status);
                 return;
             }
