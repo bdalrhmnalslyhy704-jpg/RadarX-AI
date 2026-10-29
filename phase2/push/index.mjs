@@ -469,6 +469,9 @@ export class PushManager{
       const takerDelta=firstFinite([p?.taker_buy_acceleration]);
       const closeLocation=firstFinite([p?.mean_close_location]);
       const relative=firstFinite([p?.relative_strength_vs_market_pct]);
+      const relativeBtc=firstFinite([p?.relative_strength_vs_btc_pct,relative]);
+      const squeeze=firstFinite([p?.components?.squeeze]);
+      const buyingPressure=firstFinite([p?.components?.buying_pressure]);
       const structure=firstFinite([p?.components?.structure]);
       const independentEvidence=[
         volumeRatio!==null&&volumeRatio>=1.0,
@@ -483,7 +486,8 @@ export class PushManager{
          p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
         return rejected('PRE_MOVE_WATCH_EVIDENCE_INVALID');
       const accumulationPrepTier=alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR';
-      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<(accumulationPrepTier?66:68)||
+      const compressedBuyerTier=alert?.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR';
+      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<(accumulationPrepTier?66:compressedBuyerTier?70:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -550,6 +554,25 @@ export class PushManager{
         closeLocation!==null&&closeLocation>=0.52,
         relative!==null&&relative>=0.25
       ].filter(Boolean).length;
+      const compressedBuyerChecks=[
+        squeeze!==null&&squeeze>=45,
+        structure!==null&&structure>=60,
+        buyingPressure!==null&&buyingPressure>=90,
+        taker!==null&&taker>=0.65,
+        takerDelta!==null&&takerDelta>=0.08,
+        closeLocation!==null&&closeLocation>=0.55,
+        relativeBtc!==null&&relativeBtc>=-0.25
+      ].filter(Boolean).length;
+      const compressedBuyerAbsorptionMonitor=compressedBuyerTier&&
+        dailyMove!==null&&dailyMove>=-5&&dailyMove<=5&&score!==null&&score>=70&&
+        session!==null&&session>=-1.5&&session<=3.5&&hour!==null&&hour>=-0.5&&hour<=2.5&&
+        volumeRatio!==null&&volumeRatio>=0.25&&tradeRatio!==null&&tradeRatio>=0.5&&
+        taker!==null&&taker>=0.65&&takerDelta!==null&&takerDelta>=0.08&&
+        closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=-0.25&&
+        squeeze!==null&&squeeze>=45&&structure!==null&&structure>=60&&
+        buyingPressure!==null&&buyingPressure>=90&&compressedBuyerChecks===7&&
+        quoteVolume24h!==null&&quoteVolume24h>=750000&&dataQuality!==null&&dataQuality>=95&&
+        liquidityQuality!==null&&liquidityQuality>=85&&independentEvidence>=3;
       const tickerActivityMonitor=
         alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&
         tickerActivityScore!==null&&tickerActivityScore>=10&&
@@ -563,7 +586,7 @@ export class PushManager{
         hour!==null&&hour>=-0.75&&hour<=2.5&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
         structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
-      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||accumulationPrepMonitor;
+      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||accumulationPrepMonitor||compressedBuyerAbsorptionMonitor;
       // Validate the claimed special tier before generic price-window checks so bad
       // or stale tier evidence is rejected for the right reason at the final gate.
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
@@ -574,12 +597,14 @@ export class PushManager{
         return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
       if(accumulationPrepTier&&!accumulationPrepMonitor)
         return rejected('PRE_MOVE_ACCUMULATION_PREP_TIER_UNVERIFIED');
-      if(session<(accumulationPrepMonitor?0:highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>(accumulationPrepMonitor?3.5:highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
-         hour<(accumulationPrepMonitor?-0.35:highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>(accumulationPrepMonitor?1.5:highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
+      if(compressedBuyerTier&&!compressedBuyerAbsorptionMonitor)
+        return rejected('PRE_MOVE_COMPRESSED_BUYER_TIER_UNVERIFIED');
+      if(session<(accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
+         session>(accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         hour<(accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
+         hour>(accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      const independentEvidenceFloor=tickerActivityMonitor?3:preMoveMonitorCorridor?4:3;
+      const independentEvidenceFloor=(tickerActivityMonitor||compressedBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
       const minimumMonitorStructure=accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
       if(structure===null||(structure<minimumMonitorStructure)||
          independentEvidence<independentEvidenceFloor)
@@ -698,7 +723,7 @@ export class PushManager{
     // phone notification; all other watch tiers remain feed-only.
     const qualifiedPreMoveTiers=new Set([
       'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR',
-      'ACCUMULATION_PREP_MONITOR'
+      'ACCUMULATION_PREP_MONITOR','COMPRESSED_BUYER_ABSORPTION_MONITOR'
     ]);
     const isQualifiedPreMovePush=event==='PRE_MOVE_RADAR_WATCH_ONLY'&&alert?.radar==='PRE_MOVE'&&
       qualifiedPreMoveTiers.has(String(alert?.watch_notification_tier||''));
@@ -774,7 +799,9 @@ export class PushManager{
             ?'نشاط مبكر قوي والبنية قيد التأكد — مراقبة فقط، لا دخول'
             :alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR'
               ?'تراكم مبكر بسيولة قوية وحجم وصفقات متزايدة — مراقبة فقط، لا دخول'
-              :'دلائل تدفق شراء مبكرة — مراقبة فقط، لا دخول'
+              :alert?.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR'
+                ?'ضغط شراء قوي داخل قاعدة مضغوطة قبل الاختراق — مراقبة فقط، لا دخول'
+                :'دلائل تدفق شراء مبكرة — مراقبة فقط، لا دخول'
       ].join(' • ');
 
       let response;
