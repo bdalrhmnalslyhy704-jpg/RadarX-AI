@@ -108,3 +108,31 @@ test('adaptive trader status exposes the independent background worker with read
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('manual adaptive trader scan is throttled and starts one persisted worker cycle',async()=>{
+  let calls=0;
+  const worker={
+    snapshot:()=>({status:'RUNNING',enabled:true,running:true,in_flight:false,scan_count:calls,
+      successful_scans:calls,last_error:null,paper_trading:true,real_order_execution:false}),
+    runOnce:()=>{calls++;return Promise.resolve({status:'SUCCESS'});}
+  };
+  const {dir,server,base}=await start({worker});
+  try{
+    const first=await fetch(base+'/api/adaptive-trader/scan',{method:'POST'});
+    assert.equal(first.status,202);
+    const body=await first.json();
+    assert.equal(body.status,'SCAN_STARTED');
+    assert.equal(body.paper_trading,true);
+    assert.equal(body.real_order_execution,false);
+    const second=await fetch(base+'/api/adaptive-trader/scan',{method:'POST'});
+    assert.equal(second.status,429);
+    const limited=await second.json();
+    assert.equal(limited.error,'ADAPTIVE_TRADER_SCAN_COOLDOWN');
+    assert.ok(limited.retry_after_ms>0);
+    assert.equal(calls,1);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
