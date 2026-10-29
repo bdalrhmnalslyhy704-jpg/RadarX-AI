@@ -224,11 +224,11 @@ jobs:
           }));
           NODE
 
-      - name: Audit screenshot gainers against closed Spot candles before and at the move
+      - name: Audit screenshot gainers PARTI, LSK, HYPE, GNS, and MEME against closed Binance Spot USDT candles
         timeout-minutes: 3
         run: |
           set -euo pipefail
-          URL="$BASE/api/early-mover-case-study?symbols=INITUSDT,BLURUSDT,SHELLUSDT,BMTUSDT&threshold_pct=5&window_hours=24&lead_minutes=60"
+          URL="$BASE/api/early-mover-case-study?symbols=PARTIUSDT,LSKUSDT,HYPEUSDT,GNSUSDT,MEMEUSDT&threshold_pct=5&window_hours=24&lead_minutes=60"
           TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
           OUT="$RUNNER_TEMP/early-mover-case-study.json"
           CODE="000"
@@ -242,8 +242,8 @@ jobs:
           import fs from 'node:fs';
           try {
             const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==4||
-               JSON.stringify(body.options?.symbols)!==JSON.stringify(['INITUSDT','BLURUSDT','SHELLUSDT','BMTUSDT'])) process.exit(1);
+            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==5||
+               JSON.stringify(body.options?.symbols)!==JSON.stringify(['PARTIUSDT','LSKUSDT','HYPEUSDT','GNSUSDT','MEMEUSDT'])) process.exit(1);
           } catch { process.exit(1); }
           NODE
               then
