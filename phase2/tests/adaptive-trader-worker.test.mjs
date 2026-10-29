@@ -218,17 +218,19 @@ test('server learner records eligible and below-threshold Spot pairs outside the
     assert.equal(result.status,'SUCCESS');
     const status=worker.snapshot();
     assert.equal(status.memory.deep_candidate_samples,1);
-    assert.equal(status.memory.market_wide_samples,2);
+    assert.equal(status.memory.market_wide_samples,1);
     assert.equal(status.memory.history_rows,3);
     assert.equal(status.learning_capture.new_deep_candidate_samples,1);
-    assert.equal(status.learning_capture.new_market_wide_samples,2);
+    assert.equal(status.learning_capture.new_market_wide_samples,1);
     assert.ok(status.learning_profile.required_samples>=60);
     const saved=await store.getAdaptiveTraderState();
     const unscanned=saved.samples.find(row=>row.symbol==='UNSCANNEDUSDT');
-    const lowVolume=saved.samples.find(row=>row.symbol==='LOWVOLUSDT');
+    const lowVolumeSample=saved.samples.find(row=>row.symbol==='LOWVOLUSDT');
+    const lowVolumeHistory=saved.price_history.find(row=>row.symbol==='LOWVOLUSDT');
     assert.equal(unscanned.observation_type,'MARKET_WIDE_TICKER');
     assert.equal(unscanned.features.change_24h_pct,5.4);
-    assert.equal(lowVolume.observation_type,'MARKET_WIDE_TICKER');
+    assert.equal(lowVolumeSample,undefined,'illiquid pairs are observed but do not bias ranking calibration');
+    assert.equal(lowVolumeHistory.quote_volume_24h,35_000);
     assert.equal(saved.samples.find(row=>row.symbol==='DEEPUSDT').observation_type,'DEEP_CANDIDATE');
   }finally{
     await worker.stop();
