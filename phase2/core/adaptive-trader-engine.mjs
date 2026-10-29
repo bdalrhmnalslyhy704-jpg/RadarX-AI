@@ -438,6 +438,39 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   return out;
 }
 
+export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pendingSamples=[],now=Date.now()}={}){
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
+  const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
+  const candles=rows.map(row=>normalizeCandle(row)).filter(candle=>candle&&candle.closeTime<Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
+  if(!candles.length)return [];
+  const byClose=new Map(candles.map(candle=>[candle.closeTime,candle]));
+  const out=[];
+  for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
+    if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
+       sample?.training_eligible!==true||sample?.outcome)continue;
+    const at=finite(sample?.at),baselinePrice=finite(sample?.price);
+    if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
+    const baseline=byClose.get(at),future=byClose.get(at+4*60*60*1000);
+    if(!baseline||!future||future.closeTime-baseline.closeTime!==4*60*60*1000)continue;
+    if(Math.abs(baseline.close-baselinePrice)>Math.max(1e-12,Math.abs(baseline.close)*1e-8))continue;
+    const move=(future.close/baseline.close-1)*100;
+    out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
+      baseline_price:baseline.close,mark_price:future.close,
+      outcome:move>=2?'UP':move<=-2?'DOWN':'FLAT',return_pct:Number(move.toFixed(3)),
+      resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
+      outcome_source:'CLOSED_CANDLE_4H'});
+  }
+  return out;
+}
+
+function attachClosedCandleOutcomes(snapshot,outcomes){
+  const result={...snapshot};
+  Object.defineProperty(result,'closed_candle_outcomes',{value:Array.isArray(outcomes)?outcomes:[],
+    enumerable:false,configurable:false,writable:false});
+  return result;
+}
+
 function attachHistoricalTrainingSamples(snapshot,samples){
   const result={...snapshot};
   Object.defineProperty(result,'historical_training_samples',{
@@ -462,7 +495,7 @@ async function mapLimit(items, limit, worker) {
 }
 
 export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.defaultUniverseLimit, now = Date.now(),
-  offset = 0, retrySymbols = [], previousSnapshot = null, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+  offset = 0, retrySymbols = [], previousSnapshot = null, pendingSamples = [], minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
   // BTC is only a comparative benchmark. A failure to fetch it must not block
@@ -583,6 +616,13 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return counts;
   },{});
 
+  const pendingBySymbol=new Map();
+  for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
+    const symbol=String(sample?.symbol||'').trim().toUpperCase();
+    if(!symbol)continue;
+    if(!pendingBySymbol.has(symbol))pendingBySymbol.set(symbol,[]);
+    pendingBySymbol.get(symbol).push(sample);
+  }
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const [result,fastResult] = await Promise.all([
       rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 240 }),
@@ -593,9 +633,13 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:8
     });
-    return {candidate,historicalSamples};
+    const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
+      symbol:ticker.symbol,klines:result,pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
+    });
+    return {candidate,historicalSamples,closedCandleOutcomes};
   });
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
+  const closedCandleOutcomes=analyzed.flatMap(entry=>Array.isArray(entry?.closedCandleOutcomes)?entry.closedCandleOutcomes:[]);
   const candidates = analyzed.map((entry, index) => entry?.candidate && !entry.error
     ? { ...entry.candidate, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
     : {
@@ -677,7 +721,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       historical_learning_enabled:true
     }
   };
-  return attachHistoricalTrainingSamples(snapshot,historicalTrainingSamples);
+  return attachClosedCandleOutcomes(attachHistoricalTrainingSamples(snapshot,historicalTrainingSamples),closedCandleOutcomes);
 }
 
 export function createAdaptiveTraderSnapshotService({
