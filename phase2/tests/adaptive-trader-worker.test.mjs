@@ -237,3 +237,49 @@ test('server learner records eligible and below-threshold Spot pairs outside the
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('worker ingests real closed-candle historical outcomes before collecting live samples',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-historical-outcomes-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now(),baselineAt=now-6*60*60*1000;
+  const historicalSample={
+    id:'HISTORICAL_CLOSED_CANDLE:HISTUSDT:'+String(baselineAt),
+    symbol:'HISTUSDT',price:1,at:baselineAt,base_score:72,tier:'EARLY_SETUP',
+    observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
+    quote_volume_24h:4_500_000,change_24h_pct:1.8,
+    features:{volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.59,close_location:0.72,
+      higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
+      relative_strength_vs_btc_pct:0.8,recent_15m_return_pct:0.4,micro_5m_available:true,
+      micro_5m_taker_buy_ratio:0.58,micro_5m_volume_ratio:1.5},
+    outcome:'UP',mark_price:1.035,return_pct:3.5,
+    resolved_at:baselineAt+4*60*60*1000,horizon_ms:4*60*60*1000
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+    universe:{eligible_spot_symbols:1,monitored_spot_symbols:1,analyzed_symbols:0,valid_symbols:0,
+      requested_limit:40,coverage_pct:0,scan_complete:false,scan_offset:0,scan_advance_count:1},
+    candidates:[],
+    latest_prices:[{symbol:'HISTUSDT',price:1.035,quote_volume_24h:4_500_000,change_24h_pct:3.5}],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'},
+    historical_training_samples:[historicalSample]
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    const status=worker.snapshot();
+    assert.equal(status.memory.historical_samples,1);
+    assert.equal(status.learning_capture.new_historical_samples,1);
+    assert.equal(status.learning_profile.historical_samples,1);
+    assert.equal(status.learning_profile.outcome_counts.up,1);
+    assert.ok(status.memory.resolved_samples>=1);
+    const saved=await store.getAdaptiveTraderState();
+    assert.ok(saved.samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'));
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
