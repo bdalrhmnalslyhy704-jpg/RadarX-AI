@@ -22,6 +22,17 @@ export class WebPushProvider extends PushProvider{
   status(){return{provider:'webpush',enabled:Boolean(this.subject&&this.publicKey&&this.privateKey)};}
 }
 
+/**
+ * Accept the live radar modules' aliases for the same Binance public Spot feed.
+ * Reject futures, mock/replay, stale, failed, and unavailable source labels.
+ */
+export function isTrustedBinancePublicSpotSource(value){
+  const source=String(value??'').trim().toUpperCase().replace(/\s+/g,'_');
+  if(!source||/(FUTURES|FAPI|PERPETUAL|USER_DATA|MOCK|SIMULATED|REPLAY|UNAVAILABLE|FAILED|STALE)/.test(source))return false;
+  if(!source.includes('BINANCE')||!source.includes('PUBLIC'))return false;
+  return /(?:^|[_/])REST(?:$|[_/])|(?:^|[_/])WEBSOCKET(?:$|[_/])|(?:^|[_/])WS(?:$|[_/])/.test(source);
+}
+
 const FCM_SCOPE='https://www.googleapis.com/auth/firebase.messaging';
 const FCM_TOKEN_URL='https://oauth2.googleapis.com/token';
 const FCM_API_BASE='https://fcm.googleapis.com/v1/projects/';
@@ -388,8 +399,8 @@ export class PushManager{
        alert?.data_status?.data_valid===false||alert?.data_status?.future_data_detected===true)
       return rejected('STALE_OR_INVALID_DATA');
 
-    const source=String(alert?.source||alert?.data_status?.source||'').trim().toUpperCase().replace(/\s+/g,'_');
-    if(!['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(source))
+    const source=String(alert?.source||alert?.data_status?.source||'').trim();
+    if(!isTrustedBinancePublicSpotSource(source))
       return rejected('UNTRUSTED_OR_UNKNOWN_MARKET_SOURCE');
 
     const dataQuality=firstFinite([
