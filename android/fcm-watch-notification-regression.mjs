@@ -15,7 +15,8 @@ test('Android whitelists only the bounded, Spot, non-entry Pre-Move monitor even
   for(const field of [
     'PRE_MOVE_RADAR_WATCH_ONLY','RADARX_RADAR_ALERT','PRE_MOVE_WATCH_ONLY',
     'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR',
-    'TICKER_ACTIVITY_ACCELERATION_MONITOR','SPOT','WATCH_ONLY',
+    'TICKER_ACTIVITY_ACCELERATION_MONITOR','ACCUMULATION_PREP_MONITOR',
+    'COMPRESSED_BUYER_ABSORPTION_MONITOR','SPOT','WATCH_ONLY',
     'closed_candles_only','data_valid','data_stale','future_data_detected',
     'data_quality','liquidity_quality','paper_trading','real_order_execution',
     'requires_follow_up_confirmation','symbol.matches','unsafeRisk'
