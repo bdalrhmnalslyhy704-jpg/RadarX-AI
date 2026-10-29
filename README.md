@@ -1,47 +1,43 @@
-# RadarX-AI
+# RadarX-AI — Build 224
 
-Advanced AI Crypto Market Scanner and Pre-Breakout Detection.
+Build target: **DHDTech Cloud**, backend service on port `8787`. The active deployment branch is `build224-multi-analyst-20261007`.
 
-## RadarX 5.13 Background Intelligence
+## Runtime contract
 
-RadarX now has two layers:
+- Binance Spot USDT public market-data monitoring; no live order execution.
+- `paper_trading=true`, `real_order_execution=false`.
+- Closed-candle validation, market-data freshness checks, and explicit unavailable/stale states.
+- Twelve coordinated radars plus the multi-analyst layer; the Adaptive Trader runs as an independent server-side sidecar.
+- Persistent worker memory includes market-wide observations, deep candidate observations, matured outcomes, and a missed-mover audit.
+- Smart Trader results must come from the server worker, not be described as learned merely because a browser-side scan completed.
 
-1. Foreground live radar
-   - Binance Spot WebSocket while the app is open.
-   - Existing RadarX Ultimate 5.11 + Pro Engine 5.11.
-   - Multi-symbol monitoring, deep analysis, flow, structure, trap detection, and paper trading.
+## DHDTech endpoints
 
-2. Server-side background radar
-   - Runs independently of the browser.
-   - GitHub Actions wakes the scan every 5 minutes.
-   - Binance Spot public data is validated for freshness before scoring.
-   - Candidate gates combine market regime, multi-timeframe structure, momentum, relative volume, volatility compression, VWAP, ATR, order-book imbalance, recent trade delta, relative strength, liquidity, and trap-risk filtering.
-   - Alerts are limited by score, trap risk, phase, and cooldowns.
-   - No order execution is performed.
+The configured backend hostname is `https://radarx-backend.dhdtech.site`.
 
-## Background notifications
+- `GET /api/deployment-info` — deployment contract, radar/analyst registration, and notification provider status.
+- `GET /api/adaptive-trader/status` — scan history, durable learning state, candidate summary, missed movers, and notification transport.
+- `POST /api/adaptive-trader/scan` — request one persisted worker scan. Manual requests are throttled to one per minute; active scans are not duplicated.
+- `GET /api/adaptive-trader/market-snapshot?limit=80` — read-only market snapshot. This endpoint alone does not count as a persisted learning cycle.
 
-### External channel
-The background engine publishes alerts to an ntfy topic: radarx-alert-9c4c7b3e8e6d4a5fb7c2e1d9a6f3b8c1
-Open the RadarX dashboard and use the external notification button. Subscribe to the displayed topic in the ntfy Android app.
+The web client calls the configured DHDTech backend and displays server-reported counts, errors, and results. Notification-provider configuration does **not** prove delivery to a physical phone; verify the device receipt separately.
 
-### Web Push
-Web Push is supported through /api/radarx-push and /radarx-sw-5.13.js.
-Upstash Redis / Vercel KV is used for subscriptions and optional persistent VAPID keys.
+## Learning and validation
 
-## Important execution limits
+- Live candidate observations are not considered mature outcomes until the four-hour horizon has elapsed.
+- Outcomes use the project's +2% / -2% labels, with intermediate outcomes classified as flat.
+- Historical calibration samples are calculated from available closed-candle history; missing data is not replaced with simulated prices.
+- The learner does not apply score calibration until the configured minimum resolved-sample count and factor-bucket coverage are satisfied.
+- A missed-mover record is an audit clue, not a buy signal. Already-extended moves remain excluded from entry recommendations.
 
-The background scanner is scheduled server-side, so it does not depend on an open browser tab. GitHub Actions scheduled workflows have a minimum interval of 5 minutes and can be delayed during platform load.
-For minute-level or sub-minute monitoring, use a production scheduler/service that supports that cadence.
+## Tests
 
-## Data integrity
+Run the repository test suite with Node.js 22 or newer:
 
-- Unavailable != 0
-- Current data is not backfilled into history.
-- Stale or malformed OHLC, order-book, and trade responses are rejected.
-- Scores, trap risk, and phases are heuristics and must be calibrated/backtested.
-- The system does not guarantee future price movement.
+```sh
+npm test
+```
 
-## Main entry point
+## Deployment rule
 
-https://radar-x-ai.vercel.app/
+Deploy this Build 224 branch to **DHDTech Cloud only**. Do not use Railway or Vercel as deployment targets for this build. A Git commit is not proof of a successful DHDTech deployment, a published Android APK, or a real-device notification receipt.
