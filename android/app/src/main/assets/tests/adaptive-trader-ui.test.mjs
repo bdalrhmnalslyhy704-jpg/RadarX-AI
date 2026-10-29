@@ -47,6 +47,10 @@ test('dashboard consumes the verified server worker snapshot and reports network
 
 test('server learning profile is preferred even when its resolved sample count is zero',()=>{
   assert.match(html,/if\(remote&&typeof remote==='object'\)return remote/);
+  assert.match(html,/return buildAdaptiveLearningProfile\(\[\]\)/);
+  assert.doesNotMatch(html,/resolveLearningSamples\(snapshot,now\)/);
+  assert.match(html,/const resolvedCount=state\.serverStatus&&state\.serverStatus\.learning_profile/);
+  assert.match(html,/لقطات السوق الواسعة للتدقيق فقط/);
   assert.doesNotMatch(html,/if\(remote&&\(remote\.ready===true\|\|\(Number\(remote\.resolved_samples\)\|\|0\)>0\)\)return remote/);
 });
 
