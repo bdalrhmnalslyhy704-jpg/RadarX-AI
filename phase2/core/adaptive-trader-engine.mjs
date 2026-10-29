@@ -27,7 +27,9 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
       'انتظر بيانات Binance Spot حديثة وصالحة؛ لا تعتمد على سعر قديم.',['LIVE_DATA_AND_CLOSED_CANDLE_REQUIRED']);
   }
   const late= candidate?.tier==='LATE_MOVE'||candidate?.thresholds?.late_move===true||
-    (daily!==null&&daily>=8)||(hourly!==null&&hourly>=5);
+    (daily!==null&&daily>=8)||(hourly!==null&&hourly>=5)||
+    (finite(features.recent_15m_return_pct)!==null&&Number(features.recent_15m_return_pct)>=2.5)||
+    (finite(features.micro_5m_return_pct)!==null&&Number(features.micro_5m_return_pct)>=3.0);
   if(late) {
     return out('AVOID_CHASING','تجنّب مطاردة الصعود — الحركة امتدّت بالفعل','AVOID',-1,
       'لا تشترِ بسبب الارتفاع اليومي وحده؛ انتظر قاعدة سعرية جديدة وإشارة مبكرة صالحة.',['ALREADY_EXTENDED','ANTI_CHASE']);
@@ -246,9 +248,12 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     microVolumeScore*0.06 + microTradeScore*0.04 + microFlowScore*0.04
   ).toFixed(1));
 
-  const lateMove = change24hPct >= 8 || (oneHourReturnPct !== null && oneHourReturnPct >= 5);
+  const lateMove = change24hPct >= 8 || (oneHourReturnPct !== null && oneHourReturnPct >= 5) ||
+    (shortReturnPct !== null && shortReturnPct >= 2.5) || (microReturnPct !== null && microReturnPct >= 3.0);
   const noChase = change24hPct >= -5 && !lateMove && change24hPct <= 7 &&
     (oneHourReturnPct === null || oneHourReturnPct <= 4) &&
+    (shortReturnPct === null || shortReturnPct <= 1.5) &&
+    (microReturnPct === null || microReturnPct <= 1.8) &&
     (relativeStrengthVsBtcPct === null || relativeStrengthVsBtcPct >= -0.25);
   const earlySetup = score >= 68 && volumeRatio !== null && volumeRatio >= 1.5 &&
     tradeRatio !== null && tradeRatio >= 1.25 && takerBuyRatio !== null && takerBuyRatio >= 0.52 &&
@@ -274,6 +279,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   if (return3hPct !== null && return3hPct > 0 && trendAligned) reasons.push('MULTI_HOUR_TREND_ALIGNED');
   if (microAvailable && microTakerBuyRatio !== null && microTakerBuyRatio >= 0.55) reasons.push('FIVE_MINUTE_BUY_FLOW_POSITIVE');
   if (microAvailable && microVolumeRatio !== null && microVolumeRatio >= 1.4) reasons.push('FIVE_MINUTE_VOLUME_ACCELERATION');
+  if (microReturnPct !== null && microReturnPct >= 3.0) reasons.push('FIVE_MINUTE_MOVE_EXTENDED');
   if (!microAvailable) reasons.push('FIVE_MINUTE_CONFIRMATION_UNAVAILABLE');
   if (upperWickPct !== null && currentRangePct > 0 && upperWickPct / currentRangePct >= 0.55) reasons.push('UPPER_WICK_REJECTION_RISK');
   if (change24hPct < -5) reasons.push('DAILY_DRAWDOWN_BLOCK');
