@@ -105,16 +105,18 @@ export class AdaptiveTraderWorker{
     catch(error){this.logger.warn?.('[ADAPTIVE_TRADER_STATE_PERSIST_FAILED] '+String(error?.message??error).slice(0,180));}
   }
 
-  async runOnce(){
+  async runOnce({limit:requestedLimit}={}){
     if(!this.enabled)return {status:'STOPPED',reason:'WORKER_DISABLED'};
     if(this.inFlight)return {status:'SCANNING',reason:'SCAN_ALREADY_IN_FLIGHT'};
+    const scanLimit=requestedLimit===undefined?this.scanLimit:Number(requestedLimit);
+    if(!Number.isInteger(scanLimit)||scanLimit<40||scanLimit>120)return {status:'INVALID_LIMIT',reason:'SCAN_LIMIT_MUST_BE_40_TO_120'};
     this.inFlight=true;
     const started=Date.now();
     this.state.scan_count=(Number(this.state.scan_count)||0)+1;
     this.state.last_started_at=started;
     this.state.last_error=null;
     try{
-      const snapshot=await this.snapshotProvider({limit:this.scanLimit,now:Date.now(),offset:this.state.scan_cursor});
+      const snapshot=await this.snapshotProvider({limit:scanLimit,now:Date.now(),offset:this.state.scan_cursor});
       if(!snapshot||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
          snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
          snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'||
