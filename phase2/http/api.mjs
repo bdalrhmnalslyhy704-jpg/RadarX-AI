@@ -854,10 +854,20 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     const cors=allowedOrigin(req);if(cors)res.setHeader('access-control-allow-origin',cors);
     res.setHeader('vary','Origin');res.setHeader('referrer-policy','no-referrer');res.setHeader('x-frame-options','DENY');
     if(req.method==='OPTIONS'){res.writeHead(204,{'access-control-allow-origin':cors||'null','access-control-allow-methods':'GET,PUT,POST,DELETE,OPTIONS','access-control-allow-headers':'authorization,content-type'});return res.end();}
-    const key=(req.socket.remoteAddress||'unknown')+'|'+(req.headers.authorization||'');
-    if(!rateOk(key))return send(res,429,{error:'RATE_LIMITED'});
+    const clientKey=(req.socket.remoteAddress||'unknown')+'|'+(req.headers.authorization||'');
     try{
       const u=new URL(req.url,'http://localhost');
+      // Low-cost liveness/configuration checks must not be starved by the mobile
+      // radar feed, which polls frequently and may share an ingress IP with clients.
+      const diagnosticEndpoint=req.method==='GET'&&[
+        '/', '/healthz', '/readyz', '/api/deployment-info',
+        '/api/adaptive-trader/status', '/api/pre-move-radar-status'
+      ].includes(u.pathname);
+      const rateKey=clientKey+(diagnosticEndpoint?'|DIAGNOSTIC':'|MARKET_API');
+      const rateLimit=diagnosticEndpoint
+        ?Math.max(300,Number(config.api.rateLimitPerMinute)||300)
+        :config.api.rateLimitPerMinute;
+      if(!rateOk(rateKey,rateLimit))return send(res,429,{error:'RATE_LIMITED'});
       if(u.pathname==='/'&&req.method==='GET')return send(res,200,{
         service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
         paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
