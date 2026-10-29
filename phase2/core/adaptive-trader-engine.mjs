@@ -1,3 +1,60 @@
+/**
+ * Turn numeric scoring into a plain-language, auditable decision.
+ * This is analysis-only: no recommendation from this helper can place an order.
+ */
+export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = {}) {
+  const symbol=String(candidate?.symbol||'').trim().toUpperCase();
+  const features=candidate?.features&&typeof candidate.features==='object'?candidate.features:{};
+  const reasons=Array.isArray(candidate?.reason_codes)?candidate.reason_codes.map(String):[];
+  const score=finite(candidate?.score);
+  const daily=finite(candidate?.change_24h_pct);
+  const hourly=finite(features.hourly_return_pct);
+  const age=finite(candidate?.candle_age_ms);
+  const out=(decision,label,action,priority,nextStep,reasonCodes=[])=>({
+    decision,label_ar:label,action,priority,symbol,score,
+    reason_codes:[...new Set([...reasons,...reasonCodes])].slice(0,12),
+    next_step_ar:nextStep,
+    entry_eligible:false,paper_trading:true,real_order_execution:false,
+    confidence_score:'UNKNOWN'
+  });
+  if(!/^[A-Z0-9]{5,30}$/.test(symbol)||candidate?.data_valid!==true||
+     candidate?.data_stale===true||candidate?.closed_candles_only!==true||
+     !(finite(candidate?.price)>0)||score===null||age===null||age<0||age>POLICY.maxCandleAgeMs) {
+    return out('DATA_UNAVAILABLE','لا تدخل — البيانات أو الشموع المغلقة غير مكتملة','NO_TRADE',-1,
+      'انتظر بيانات Binance Spot حديثة وصالحة؛ لا تعتمد على سعر قديم.',['LIVE_DATA_AND_CLOSED_CANDLE_REQUIRED']);
+  }
+  const late= candidate?.tier==='LATE_MOVE'||candidate?.thresholds?.late_move===true||
+    (daily!==null&&daily>=8)||(hourly!==null&&hourly>=5);
+  if(late) {
+    return out('AVOID_CHASING','تجنّب مطاردة الصعود — الحركة امتدّت بالفعل','AVOID',0,
+      'لا تشترِ بسبب الارتفاع اليومي وحده؛ انتظر قاعدة سعرية جديدة وإشارة مبكرة صالحة.',['ALREADY_EXTENDED','ANTI_CHASE']);
+  }
+  if(candidate?.tier==='EARLY_SETUP'&&candidate?.paper_candidate===true&&candidate?.thresholds?.no_chase===true) {
+    const strictSetup=score>=75&&
+      finite(features.volume_ratio)!==null&&Number(features.volume_ratio)>=1.75&&
+      finite(features.trade_ratio)!==null&&Number(features.trade_ratio)>=1.5&&
+      finite(features.taker_buy_ratio)!==null&&Number(features.taker_buy_ratio)>=0.56&&
+      finite(features.close_location)!==null&&Number(features.close_location)>=0.65&&
+      finite(features.relative_strength_vs_btc_pct)!==null&&Number(features.relative_strength_vs_btc_pct)>=0.25&&
+      features.breakout_above_prior_high===true&&daily!==null&&daily>=-3&&daily<=7&&
+      hourly!==null&&hourly>=-2.5&&hourly<=3.5&&age<=10*60*1000;
+    if(strictSetup) {
+      return out('ENTRY_CANDIDATE','مرشّح دخول للمراجعة — ليس أمر شراء مضمونًا','REVIEW_ENTRY',3,
+        'تحقّق من السعر الحالي والسيولة والسبريد والرسوم وحدّد وقف الخسارة قبل أي قرار؛ التنفيذ الحقيقي متوقف، وهذه النتيجة للمحاكاة والمراجعة فقط.',
+        ['STRICT_EARLY_SETUP','CLOSED_CANDLE_BREAKOUT','BUY_FLOW_AND_ACTIVITY_CONFIRMED']);
+    }
+    return out('WAIT_FOR_CONFIRMATION','فرصة مبكرة — انتظر تأكيدًا قبل الدخول','WAIT',2,
+      'لا تدخل الآن لمجرد ظهور المرشّح؛ انتظر إغلاق شمعة 15 دقيقة يؤكد الاختراق، مع استمرار ضغط الشراء وعدم امتداد السعر.',
+      ['EARLY_SETUP_NOT_FULLY_CONFIRMED']);
+  }
+  if(candidate?.tier==='WATCH'||(score>=52&&candidate?.tier!=='NO_SETUP')) {
+    return out('WATCH_ONLY','مراقبة فقط — شروط الدخول لم تكتمل','WAIT',1,
+      'لا تدخل بعد؛ راقب زيادة الحجم والصفقات وضغط الشراء وبنية السعر على شمعة مغلقة.');
+  }
+  return out('NO_SETUP','لا توجد فرصة دخول واضحة الآن','NO_TRADE',0,
+    'تجاوز هذه العملة في الوقت الحالي، واستمر في فحص بقية الأزواج.');
+}
+
 const POLICY = Object.freeze({
   minQuoteVolume24h: 750000,
   minClosedCandles: 12,
@@ -356,6 +413,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       real_order_execution: false,
       confidence_score: 'UNKNOWN'
     });
+  const decoratedCandidates = candidates.map(candidate => ({...candidate, trade_decision:buildAdaptiveTraderRecommendation(candidate,{now})}));
+  candidates.splice(0,candidates.length,...decoratedCandidates);
   candidates.sort((a, b) => (Number(b.score) || -1) - (Number(a.score) || -1));
   const validCount = candidates.filter(row => row.data_valid && !row.data_stale).length;
   const fetchFailedSymbols = candidates
