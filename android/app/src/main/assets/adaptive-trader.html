@@ -144,7 +144,7 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
       <h3>معايرة الترتيب</h3>
       <p id="learnDescription">تُسجَّل لقطة السعر والخصائص عند الرصد ثم تُراجع بعد مرور أربع ساعات على الأقل. لا يغيّر النظام قواعد الدخول ولا يتعلم من نتائج مستقبلية قبل ظهورها.</p>
       <div class="learning-progress"><i id="learnProgress" style="width:0%"></i></div>
-      <p id="learnCount">0 من 30 نتيجة موسومة</p>
+      <p id="learnCount">0 من 60 نتيجة موسومة</p>
     </div>
     <div class="learning-card">
       <h3>ماذا تعني نتائج التعلم؟</h3>
@@ -624,8 +624,12 @@ function renderLearning(){
   el('learnDescription').textContent=model.ready
     ?'اكتمل عدد النتائج المطلوب؛ تُطبّق تعديلات محدودة على ترتيب المرشحين فقط. قواعد الدخول والرادارات الأصلية والتنفيذ الحقيقي لا تتغير.'
     :'المنظومة تحفظ النتائج وتنتظر أمثلة حقيقية مرصودة لمدة أربع ساعات على الأقل. لن تدّعي أنها تعلمت قبل اكتمال العينة.';
-  el('learnProgress').style.width=Math.min(100,rows.length/30*100)+'%';
-  el('learnCount').textContent=resolvedCount+' من 30 نتيجة مكتملة · معدل النتائج الإيجابية '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+(state.serverStatus?' · ذاكرة خادمية منفصلة':'');
+  const requiredSamples=Math.max(1,Number(model.required_samples)||60);
+  const outcomes=model.outcome_counts||{};
+  const capture=(state.serverStatus&&state.serverStatus.learning_capture)||{};
+  el('learnProgress').style.width=Math.min(100,resolvedCount/requiredSamples*100)+'%';
+  el('learnCount').textContent=resolvedCount+' من '+requiredSamples+' نتيجة مكتملة · صعود '+(Number(outcomes.up)||0)+' · هبوط '+(Number(outcomes.down)||0)+' · محايد '+(Number(outcomes.flat)||0)+' · معدل الإيجابي '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+
+    (state.serverStatus?' · عينات السوق الواسعة '+(Number(model.market_wide_samples)||0)+' · عينات الفحص العميق '+(Number(model.candidate_samples)||0):'');
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
@@ -634,7 +638,7 @@ function renderLearning(){
   el('paperValidationProgress').style.width=Math.min(100,paperCount/100*100)+'%';
   el('serverPaperValidationText').textContent='الصفقات المغلقة: '+paperCount+'/100 · معدل الربح '+fmt(validation.win_rate_pct,1)+'% · صافي الربح '+money(validation.net_pnl_usdt)+' · أقصى تراجع محقق '+fmt(validation.max_drawdown_pct,2)+'%.';
   el('serverPaperPortfolioSummary').textContent='رصيد افتراضي '+money(serverPaper.starting_balance)+' · قيمة حالية '+money(serverPaper.equity)+' · مراكز مفتوحة '+fmt(serverPaper.open_positions,0)+' · كل النتائج خادمية ومنفصلة عن المحفظة المحلية.';
-  const labels={volume:'تسارع الحجم',buyer_flow:'ضغط الشراء',structure:'البنية السعرية',compression:'انكماش التذبذب'};
+  const labels={volume:'تسارع الحجم 15m',trade_activity:'تسارع الصفقات',buyer_flow:'ضغط الشراء 15m',structure:'البنية والاختراق',compression:'انكماش التذبذب',relative_strength:'القوة النسبية مقابل BTC',short_momentum:'زخم 15m',multi_hour_trend:'اتجاه 3h',five_minute_flow:'ضغط الشراء 5m',ticker_momentum:'نبضة السعر 15m',daily_regime:'حالة حركة 24h'};
   el('learnAdjustments').innerHTML=Object.keys(labels).map(function(key){
     const value=num(model.adjustments[key])||0;
     const bucket=model.buckets[key]||{samples:0,positive_rate_pct:0};
