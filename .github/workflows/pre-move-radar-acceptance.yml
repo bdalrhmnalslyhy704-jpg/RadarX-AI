@@ -540,7 +540,10 @@ jobs:
           if(problems.length)throw new Error(JSON.stringify({problems,summary}));
           NODE
 
-      - name: Start and poll one real Pre-Move market scan on DHDTech
+      - name: Read and poll the current Pre-Move background snapshot on DHDTech
+        # Reuse the worker's USDT:50 snapshot where fresh. If absent/stale, an ordinary
+        # GET requests a refresh without forcing a second scan in parallel with Triple Radar.
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
@@ -550,9 +553,9 @@ jobs:
           for cycle in 1 2; do
             START_TMP="$RUNNER_TEMP/pre-move-start.tmp.json"
             START_CURL_EXIT=0
-            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$URL&scan=1")" || START_CURL_EXIT=$?
+            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$URL")" || START_CURL_EXIT=$?
             if [ "$START_CURL_EXIT" -ne 0 ] || [ "$START_CODE" != "200" ]; then
-              echo "::error::Could not start DHDTech Pre-Move scan (curl=$START_CURL_EXIT HTTP=$START_CODE)"
+              echo "::error::Could not request the DHDTech Pre-Move background snapshot (curl=$START_CURL_EXIT HTTP=$START_CODE)"
               cat "$START_TMP" 2>/dev/null | head -c 2000 || true
               exit 1
             fi
@@ -644,11 +647,9 @@ jobs:
           if (u.ticker_activity_baseline_source !== 'DURABLE_STORE' || u.ticker_activity_baseline_persisted !== true)
             throw new Error('PRE_MOVE_TICKER_ACTIVITY_BASELINE_NOT_PERSISTED');
           if (u.rotation_width<1 || u.rotation_cycle<0 || u.rotation_offset<0) throw new Error('PRE_MOVE_ROTATION_METADATA_INVALID');
-          // The forced acceptance scan runs while the smart-trader worker and 20-analyst
-          // scan are also being verified on the small DHDTech instance. Keep this
-          // bounded to 50s under that deliberately concurrent load; the independent
-          // background worker below retains the strict <=45s production acceptance.
-          if (u.elapsed_ms>50000) throw new Error('PRE_MOVE_ACCEPTANCE_SCAN_LATENCY_OVER_50_SECONDS:'+u.elapsed_ms);
+          // This response is the completed background-worker scan, not a duplicate forced scan.
+          // The independent worker check below enforces the production <=45s duration.
+          if (u.elapsed_ms>45000) throw new Error('PRE_MOVE_BACKGROUND_SCAN_LATENCY_OVER_45_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_notification_candidates) || b.watch_notification_candidates.length > 3) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_CANDIDATES_INVALID');
