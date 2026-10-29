@@ -14,7 +14,7 @@ test('server paper portfolio records isolated trades and persists evidence witho
     symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2,score:76,
     tier:'EARLY_SETUP',data_valid:true,data_stale:false,closed_candles_only:true,
     paper_candidate:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
-    candle_close_time:now-60_000,as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
+    candle_close_time:now-60_000,candle_close_price:1,as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
     features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
       higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,
       hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8}
@@ -76,6 +76,7 @@ test('adaptive trader persists scan cursor across worker restarts and displays l
         selection_lane_counts:{ROTATING_COVERAGE:1}},
       candidates:[{symbol:'CURSORUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:1,
         score:61,tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,
+        candle_close_time:now-60_000,candle_close_price:1,
         features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:1.1},
         reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false}],
@@ -121,7 +122,8 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     last_started_at:now-30*60*1000,last_scan_at:now-30*60*1000,
     last_summary:null,learning_profile:null,
     samples:[{id:'TESTUSDT:old',symbol:'TESTUSDT',price:1,at:now-5*60*60*1000,
-      base_score:61,tier:'NO_SETUP',features:{volume_ratio:1.2,taker_buy_ratio:0.49,higher_low:false,compression_ratio:1.1},outcome:null}],
+      base_score:61,tier:'NO_SETUP',closed_candle_baseline:true,training_eligible:true,
+      features:{volume_ratio:1.2,taker_buy_ratio:0.49,higher_low:false,compression_ratio:1.1},outcome:null}],
     price_history:[{symbol:'TESTUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',score:42,evaluated:true}],
     missed_movers:[]
   });
@@ -131,19 +133,24 @@ test('background sidecar restores its own memory, resolves outcomes and records 
       selection_lane_counts:{EMERGING_MOVER:1,EXTENDED_MOVER_AUDIT:1,TOP_VOLUME:1}},
     candidates:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2,score:59.5,tier:'WATCH',
-        data_valid:true,data_stale:false,features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
+        data_valid:true,data_stale:false,candle_close_time:now-60_000,candle_close_price:1.07,
+        features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:1.1,relative_strength_vs_btc_pct:0.4},
         reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false},
       {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1,score:57,tier:'WATCH',
-        data_valid:true,data_stale:false,features:{volume_ratio:1.1,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.6,
+        data_valid:true,data_stale:false,candle_close_time:now-60_000,candle_close_price:89_950,
+        features:{volume_ratio:1.1,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.6,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:1.1,relative_strength_vs_btc_pct:0},
         reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false},
       {symbol:'LATEUSDT',price:1.2,quote_volume_24h:1_200_000,change_24h_pct:12.3,score:44,tier:'LATE_MOVE',
-        selection_lane:'EXTENDED_MOVER_AUDIT',data_valid:true,data_stale:false,paper_candidate:false,entry_eligible:false,
+        selection_lane:'EXTENDED_MOVER_AUDIT',data_valid:true,data_stale:false,candle_close_time:now-60_000,candle_close_price:1.19,paper_candidate:false,entry_eligible:false,
         paper_trading:true,real_order_execution:false,reason_codes:['LATE_MOVE_NO_CHASE'],
         features:{volume_ratio:2.1,trade_ratio:1.8,taker_buy_ratio:0.58,close_location:0.9,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:0.8,relative_strength_vs_btc_pct:2.0}}
     ],
+    closed_candle_outcomes:[{sample_id:'TESTUSDT:old',symbol:'TESTUSDT',
+      at:now-5*60*60*1000,baseline_price:1,mark_price:1.08,outcome:'UP',return_pct:8,
+      resolved_at:now-60*60*1000,horizon_ms:4*60*60*1000,outcome_source:'CLOSED_CANDLE_4H'}],
     latest_prices:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2},
       {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1},
@@ -192,7 +199,7 @@ test('server learner records eligible and below-threshold Spot pairs outside the
   const now=Date.now();
   const deep={
     symbol:'DEEPUSDT',price:10,quote_volume_24h:2_000_000,change_24h_pct:1.5,score:63,
-    tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,entry_eligible:false,
+    tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,candle_close_time:now-60_000,candle_close_price:10,entry_eligible:false,
     paper_trading:true,real_order_execution:false,
     features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.5,close_location:0.6,
       recent_15m_return_pct:0.2,trend_aligned:true,relative_strength_vs_btc_pct:0.4},
