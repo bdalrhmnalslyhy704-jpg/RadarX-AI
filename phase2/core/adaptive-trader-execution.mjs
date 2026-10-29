@@ -321,7 +321,9 @@ export class AdaptiveTraderExecutionController{
       .filter(row=>row&&row.side==='SELL'&&row.status==='FILLED'&&
         ['UP','DOWN','FLAT'].includes(row.outcome)&&row.entry_features&&typeof row.entry_features==='object')
       .map(row=>({outcome:row.outcome,features:row.entry_features}));
-    return buildAdaptiveLearningProfile(rows);
+    // Trade-outcome calibration keeps its original 30-outcome threshold; the
+    // broader market-wide candidate learner has a separate 60-outcome gate.
+    return buildAdaptiveLearningProfile(rows,{minSamples:30});
   }
   snapshot(){
     const tradeLearningProfile=this.tradeLearningProfile();
