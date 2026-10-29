@@ -50,6 +50,24 @@ test('offline learning placeholder uses the same 60-result threshold as the serv
   assert.ok(html.includes('Number(model.required_samples)||60'));
 });
 
+test('learning panel exposes server-side historical input and rejection diagnostics',()=>{
+  assert.match(html,/id="learningDiagnosticsText"/);
+  assert.match(html,/historical_input_samples/);
+  assert.match(html,/historical_rejected/);
+  assert.match(html,/snapshot_historical_samples_available/);
+  assert.match(html,/نتائج شموع مغلقة جديدة/);
+  assert.match(html,/لا نفترض أن المحرك يتعلّم/);
+});
+
+test('learning panel exposes server-side historical input and rejection diagnostics',()=>{
+  assert.match(html,/id="learningDiagnosticsText"/);
+  assert.match(html,/historical_input_samples/);
+  assert.match(html,/historical_rejected/);
+  assert.match(html,/snapshot_historical_samples_available/);
+  assert.match(html,/نتائج شموع مغلقة جديدة/);
+  assert.match(html,/لا نفترض أن المحرك يتعلّم/);
+});
+
 test('server learning profile is preferred even when its resolved sample count is zero',()=>{
   assert.match(html,/if\(remote&&typeof remote==='object'\)return remote/);
   assert.match(html,/return buildAdaptiveLearningProfile\(\[\]\)/);
