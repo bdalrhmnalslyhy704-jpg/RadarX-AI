@@ -283,3 +283,36 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+test('manual worker scan accepts a valid per-request universe limit and rejects unsafe values',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-worker-limit-'));
+  const store=await new DurableStore({dir}).init();
+  const seen=[];
+  const snapshotProvider=async({limit,offset=0}={})=>{
+    seen.push({limit,offset});
+    const now=Date.now();
+    return {
+      status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+      universe:{eligible_spot_symbols:100,analyzed_symbols:0,valid_symbols:0,requested_limit:limit,
+        scan_offset:offset,scan_advance_count:Math.max(1,limit),coverage_pct:0,scan_complete:false},
+      candidates:[],latest_prices:[],
+      meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+        confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+    };
+  };
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:80,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    assert.equal((await worker.runOnce({limit:20})).status,'INVALID_LIMIT');
+    assert.equal(seen.length,0,'invalid request must not fetch market data');
+    assert.equal((await worker.runOnce({limit:60})).status,'SUCCESS');
+    assert.deepEqual(seen[0],{limit:60,offset:0});
+    assert.equal(worker.snapshot().scan_limit,80,'manual per-request limit does not mutate the recurring scan limit');
+    assert.equal(worker.snapshot().real_order_execution,false);
+    assert.equal(worker.snapshot().paper_trading,true);
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
