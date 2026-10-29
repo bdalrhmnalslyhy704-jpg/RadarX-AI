@@ -575,12 +575,16 @@ jobs:
         run: |
           set -euo pipefail
           BASE="$RADARX_BACKEND_BASE_URL"
-          URL="$BASE/api/pre-move-radar?quote=USDT&limit=10"
+          # Reuse the same 50-pair snapshot maintained by the independent background
+          # worker and already verified by the exact-commit Pre-Move acceptance gate.
+          # A normal GET still starts an async refresh when the cache is empty/stale,
+          # but it avoids forcing a second competing scan during APK validation.
+          URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
           READY=false
           for cycle in 1 2; do
-            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL&scan=1" || true)"
+            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL" || true)"
             if [ "$START_CODE" != "200" ]; then
-              echo "::error::Pre-Move scan trigger returned HTTP $START_CODE"
+              echo "::error::Pre-Move snapshot request returned HTTP $START_CODE"
               cat "$RUNNER_TEMP/pre-move-start.json" 2>/dev/null || true
               exit 1
             fi
