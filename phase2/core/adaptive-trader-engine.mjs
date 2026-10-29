@@ -29,7 +29,7 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
   const late= candidate?.tier==='LATE_MOVE'||candidate?.thresholds?.late_move===true||
     (daily!==null&&daily>=8)||(hourly!==null&&hourly>=5);
   if(late) {
-    return out('AVOID_CHASING','تجنّب مطاردة الصعود — الحركة امتدّت بالفعل','AVOID',0,
+    return out('AVOID_CHASING','تجنّب مطاردة الصعود — الحركة امتدّت بالفعل','AVOID',-1,
       'لا تشترِ بسبب الارتفاع اليومي وحده؛ انتظر قاعدة سعرية جديدة وإشارة مبكرة صالحة.',['ALREADY_EXTENDED','ANTI_CHASE']);
   }
   if(candidate?.tier==='EARLY_SETUP'&&candidate?.paper_candidate===true&&candidate?.thresholds?.no_chase===true) {
