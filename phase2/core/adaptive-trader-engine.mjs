@@ -465,7 +465,15 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
 }
 
 function attachClosedCandleOutcomes(snapshot,outcomes){
+  // Both arrays are intentionally non-enumerable so the public API does not
+  // serialize large training payloads. Preserve the historical array explicitly:
+  // spreading a snapshot drops non-enumerable properties, which previously meant
+  // the worker saw historical_training_samples_available > 0 but received no rows.
   const result={...snapshot};
+  Object.defineProperty(result,'historical_training_samples',{
+    value:Array.isArray(snapshot?.historical_training_samples)?snapshot.historical_training_samples:[],
+    enumerable:false,configurable:false,writable:false
+  });
   Object.defineProperty(result,'closed_candle_outcomes',{value:Array.isArray(outcomes)?outcomes:[],
     enumerable:false,configurable:false,writable:false});
   return result;
@@ -475,6 +483,12 @@ function attachHistoricalTrainingSamples(snapshot,samples){
   const result={...snapshot};
   Object.defineProperty(result,'historical_training_samples',{
     value:Array.isArray(samples)?samples:[],enumerable:false,configurable:false,writable:false
+  });
+  // Preserve outcome labels when the other non-enumerable training payload is
+  // reattached to a cached snapshot.
+  Object.defineProperty(result,'closed_candle_outcomes',{
+    value:Array.isArray(snapshot?.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[],
+    enumerable:false,configurable:false,writable:false
   });
   return result;
 }
