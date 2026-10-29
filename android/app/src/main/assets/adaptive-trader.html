@@ -350,6 +350,11 @@ function collectPriceHistory(snapshot,now){
       symbol,price,at:now,
       tier:candidate?candidate.tier:'NOT_EVALUATED',
       score:candidate&&candidate.data_valid?candidate.score:null,
+      features:candidate&&candidate.data_valid?{...(candidate.features||{})}:null,
+      reason_codes:candidate&&candidate.data_valid?Array.isArray(candidate.reason_codes)?candidate.reason_codes.slice(0,12):[]:[],
+      selection_lane:candidate&&candidate.selection_lane||null,
+      quote_volume_24h:num(row.quote_volume_24h),
+      change_24h_pct:num(row.change_24h_pct),
       evaluated:Boolean(candidate&&candidate.data_valid)
     });
   }
@@ -600,10 +605,37 @@ function renderMissed(){
   const serverRows=Array.isArray((state.serverStatus && state.serverStatus.missed_movers))?state.serverStatus.missed_movers:[];
   const merged=new Map([...serverRows,...state.missedMovers].map(row=>[row.id||String(row.symbol)+':'+String(row.baseline_at),row]));
   const rows=[...merged.values()].sort((a,b)=>Number(b.recorded_at||Date.parse(b.baseline_at)||0)-Number(a.recorded_at||Date.parse(a.baseline_at)||0));
-  if(!rows.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة قديمة عمرها 15 دقيقة على الأقل. لا يمكن استرجاع ما فات قبل تشغيل الذاكرة.</div>';return;}
-  root.innerHTML='<div class="table-wrap"><table><thead><tr><th>العملة</th><th>التصنيف</th><th>السعر السابق</th><th>السعر الحالي</th><th>التغير</th><th>وقت خط الأساس</th></tr></thead><tbody>'+
-    rows.slice(0,200).map(function(row){return '<tr><td><b>'+esc(row.symbol)+'</b></td><td>'+esc(row.classification==='POTENTIAL_MISSED_MOVER'?'إشارة محتملة فاتتنا':row.classification==='UNASSESSED_MOVE'?'حركة لم تُحلّل':'حركة بعد مراقبة')+'</td><td>'+esc(fmt(row.baseline_price,6))+'</td><td>'+esc(fmt(row.current_price,6))+'</td><td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td></tr>';}).join('')+
-    '</tbody></table></div>';
+  if(!rows.length){root.innerHTML='<div class="empty"><b>لا توجد حركات محتملة مسجلة حتى الآن</b>تحتاج المقارنة إلى لقطة سابقة لا تقل عن 15 دقيقة. لا يمكن استرجاع حركة قبل تشغيل الذاكرة.</div>';return;}
+  const reasonLabel={
+    NOT_IN_DEEP_SCAN_BATCH_AT_BASELINE:'لم تدخل دفعة الفحص العميق عند خط الأساس',
+    VOLUME_ACCELERATION_NOT_CONFIRMED:'تسارع الحجم لم يتأكد',
+    TRADE_ACCELERATION_NOT_CONFIRMED:'تسارع عدد الصفقات لم يتأكد',
+    BUY_FLOW_NOT_CONFIRMED:'ضغط الشراء لم يتأكد',
+    STRUCTURE_CONFIRMATION_MISSING:'لم يتأكد القاع الأعلى أو الاختراق',
+    SCORE_BELOW_EARLY_SETUP_GATE:'الدرجة أقل من حد الإعداد المبكر',
+    SETUP_NOT_CONFIRMED_BY_BASELINE_RULES:'لم تكتمل شروط الإعداد وقت الرصد',
+    ALREADY_EXTENDED:'الحركة كانت ممتدة وقت الرصد',
+    ANTI_CHASE_BLOCK:'منع مطاردة الصعود',
+    FIVE_MINUTE_CONFIRMATION_UNAVAILABLE:'تأكيد 5 دقائق غير متوفر'
+  };
+  const rowsHtml=rows.slice(0,200).map(function(row){
+    const codes=Array.isArray(row.baseline_reason_codes)&&row.baseline_reason_codes.length
+      ?row.baseline_reason_codes
+      :Array.isArray(row.reason_codes)&&row.reason_codes.length?row.reason_codes:
+        [row.baseline_was_evaluated?'NO_BASELINE_REASON_CODES_RECORDED':'NOT_IN_DEEP_SCAN_BATCH_AT_BASELINE'];
+    const reasons=codes.slice(0,5).map(function(code){
+      return '<span class="reason">'+esc(reasonLabel[code]||code)+'</span>';
+    }).join('');
+    const classification=row.classification==='POTENTIAL_MISSED_MOVER'?'إشارة محتملة فاتتنا':
+      row.classification==='UNASSESSED_MOVE'?'حركة لم تُحلّل':'حركة بعد مراقبة';
+    return '<tr><td><b>'+esc(row.symbol)+'</b><div class="tiny">درجة الأساس: '+esc(fmt(row.baseline_score,1))+' · '+esc(row.baseline_tier||'NOT_EVALUATED')+'</div></td>'+
+      '<td>'+esc(classification)+'</td>'+
+      '<td>'+esc(fmt(row.baseline_price,8))+'</td><td>'+esc(fmt(row.current_price,8))+'</td>'+
+      '<td class="pos">'+esc(percent(row.move_pct))+'</td><td>'+esc(timeText(row.baseline_at))+'</td>'+
+      '<td><div class="reasons">'+reasons+'</div></td></tr>';
+  }).join('');
+  root.innerHTML='<div class="table-wrap"><table><thead><tr><th>العملة</th><th>التصنيف</th><th>السعر السابق</th><th>السعر الحالي</th><th>التغير</th><th>وقت خط الأساس</th><th>لماذا فاتتنا؟ / الأدلة المسجلة</th></tr></thead><tbody>'+
+    rowsHtml+'</tbody></table></div><p class="tiny">التدقيق يستخدم خصائص خط أساس مسجلة قبل الحركة فقط؛ العملات التي لم تدخل الفحص العميق تُوسم بذلك ولا نختلق لها أسبابًا غير مرصودة.</p>';
 }
 function renderPortfolio(){
   const portfolio=state.portfolio,closed=portfolio.closed_trades||[],open=portfolio.open_positions||[];
