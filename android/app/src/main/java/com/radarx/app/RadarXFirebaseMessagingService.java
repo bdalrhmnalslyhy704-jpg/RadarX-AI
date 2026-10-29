@@ -192,7 +192,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         boolean tierOkay = "HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) ||
                 "EARLY_FLOW_MONITOR".equals(tier) ||
                 "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier) ||
-                "ACCUMULATION_PREP_MONITOR".equals(tier);
+                "ACCUMULATION_PREP_MONITOR".equals(tier) ||
+                "COMPRESSED_BUYER_ABSORPTION_MONITOR".equals(tier);
         boolean sourceOkay = isTrustedBinancePublicSpotSource(source);
         boolean unsafeRisk = riskFlags.matches("(?s).*?(ALREADY_EXTENDED|WIDE_SPREAD|LOW_LIQUIDITY|STALE_DATA|DATA_STALE|FUTURE_DATA|BREAKOUT_TRAP|SELLING_TRAP).*");
         return "PRE_MOVE_RADAR_WATCH_ONLY".equals(event) &&
