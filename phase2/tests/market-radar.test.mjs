@@ -597,6 +597,33 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
   assert.ok(ctx.reasons.includes('NOT_EXTENDED'));
   assert.ok(ctx.components.acceleration>=50);
 
+  const flowLedBars=b.map((row,i)=>i>=22
+    ?{...row,close:row.low+(row.high-row.low)*0.75}
+    :row);
+  const expansionWithoutCompression=buildPreMoveContext({'15m':flowLedBars},lowChange,now,{
+    last_rise:{high:106},
+    metrics:{compression:4,structure:78,buying_pressure:90,whale_pressure:null}
+  },{btcReturn:-1.5});
+  assert.equal(expansionWithoutCompression.flow_transition_confirmed,true);
+  assert.equal(expansionWithoutCompression.price_window_valid,true);
+  assert.equal(expansionWithoutCompression.structure_confirmed,false,
+    'the ordinary compression-based structure gate must remain visible as false');
+  assert.equal(expansionWithoutCompression.flow_led_expansion_confirmed,true,
+    'exceptionally strong independent volume, trade and buy-flow evidence can qualify without compression');
+  assert.equal(expansionWithoutCompression.structure_gate_passed,true);
+  assert.ok(['READY','EARLY_WAKE'].includes(expansionWithoutCompression.stage),
+    'the high-confidence flow-led path must surface before a move without claiming compression');
+  const weakBuyerBars=flowLedBars.map((row,i)=>i>=22
+    ?{...row,takerBuyBaseVolume:Number(row.volume)*0.25}
+    :row);
+  const weakBuyer=buildPreMoveContext({'15m':weakBuyerBars},lowChange,now,{
+    last_rise:{high:106},
+    metrics:{compression:4,structure:78,buying_pressure:90,whale_pressure:null}
+  },{btcReturn:-1.5});
+  assert.equal(weakBuyer.flow_led_expansion_confirmed,false,
+    'large volume alone must not bypass the buyer-flow gate');
+  assert.equal(weakBuyer.structure_gate_passed,false);
+
   const lateCtx=buildPreMoveContext({'15m':b},{...lowChange,lastPrice:112},now,bottom);
   assert.equal(lateCtx.already_moved,true,'more than 9% since the Yemen morning-session start must be treated as extended');
   assert.equal(lateCtx.stage,'ALREADY_MOVED');

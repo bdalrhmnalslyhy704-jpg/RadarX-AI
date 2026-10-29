@@ -931,6 +931,21 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   const structureConfirmed=evidenceComplete&&
     Number.isFinite(squeeze)&&squeeze>=55&&Number.isFinite(structure)&&structure>=60&&
     Number.isFinite(buyPressure)&&buyPressure>=60;
+  // Alternative high-activity lane: a real expansion can leave the compression phase
+  // before the main move, so do not require a high squeeze score when independent
+  // closed-candle buyer flow, activity, price window and structure are all strong.
+  // This lane is materially stricter than normal watch: weak buyer flow, a poor close,
+  // weak structure/pressure, a negative session or an extended session cannot pass.
+  const flowLedExpansionConfirmed=evidenceComplete&&flowTransitionConfirmed&&priceWindowValid&&
+    Number.isFinite(sessionReturn)&&sessionReturn>=0&&sessionReturn<=4.5&&
+    Number.isFinite(volumeAccel)&&volumeAccel>=1.75&&
+    Number.isFinite(tradeAccel)&&tradeAccel>=1.15&&
+    Number.isFinite(lateBuy)&&lateBuy>=0.60&&
+    Number.isFinite(takerAcceleration)&&takerAcceleration>=0.05&&
+    Number.isFinite(meanCloseLocation)&&meanCloseLocation>=0.60&&
+    Number.isFinite(structure)&&structure>=70&&
+    Number.isFinite(buyPressure)&&buyPressure>=75;
+  const structureGatePassed=structureConfirmed||flowLedExpansionConfirmed;
 
   const preMoveScore=avgDefined([
     calmScore,
@@ -946,7 +961,7 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
 
   // Align the hard no-chase gate with the score's declining calmness above 9% session gain.
   const alreadyMoved=(Number.isFinite(sessionReturn)&&sessionReturn>9)||(Number(ticker?.priceChange24h)>20);
-  const earlyConditions=flowTransitionConfirmed&&priceWindowValid&&structureConfirmed&&
+  const earlyConditions=flowTransitionConfirmed&&priceWindowValid&&structureGatePassed&&
     Number.isFinite(sessionReturn)&&sessionReturn>=0&&sessionReturn<=6;
   const stage=alreadyMoved?'ALREADY_MOVED':
     !earlyConditions?'NO_SETUP':
@@ -960,7 +975,8 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
   if(Number.isFinite(tradeAccel)&&tradeAccel>=1.05) reasons.push('TRADE_COUNT_ACCELERATING');
   if(Number.isFinite(takerAcceleration)&&takerAcceleration>=0.01) reasons.push('TAKER_BUY_ACCELERATING');
   if(Number.isFinite(meanCloseLocation)&&meanCloseLocation>=0.54) reasons.push('BUYERS_HOLDING_CANDLE_CLOSES');
-  if(flowTransitionConfirmed&&priceWindowValid&&structureConfirmed) reasons.push('EARLY_FLOW_TRANSITION_CONFIRMED');
+  if(flowTransitionConfirmed&&priceWindowValid&&structureGatePassed) reasons.push('EARLY_FLOW_TRANSITION_CONFIRMED');
+  if(flowLedExpansionConfirmed) reasons.push('FLOW_LED_EXPANSION_CONFIRMED_WITHOUT_COMPRESSION');
   if(Number.isFinite(relativeReturn)&&relativeReturn>=1) reasons.push('RELATIVE_STRENGTH');
   if(Number.isFinite(squeeze)&&squeeze>=65) reasons.push('COMPRESSION');
   if(structure>=65) reasons.push('STRUCTURE_IMPROVING');
@@ -982,6 +998,8 @@ export function buildPreMoveContext(series,ticker,now,bottomContext=null,{market
     flow_transition_confirmed:flowTransitionConfirmed,
     price_window_valid:priceWindowValid,
     structure_confirmed:structureConfirmed,
+    flow_led_expansion_confirmed:flowLedExpansionConfirmed,
+    structure_gate_passed:structureGatePassed,
     missing_evidence:[...new Set(missingCoreEvidence)],
     current_price:Number.isFinite(current)?current:null,
     session_open:Number.isFinite(sessionOpen)?sessionOpen:null,
@@ -1298,8 +1316,8 @@ export function buildPreMoveWatchCandidates(rows,{
       blockers.push('BUY_FLOW_NOT_CONFIRMED');
     }
     if(p.price_window_valid!==true)blockers.push('PRICE_WINDOW_NOT_CONFIRMED');
-    if(p.structure_confirmed!==true) {
-      if(!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
+    if(p.structure_gate_passed!==true&&p.structure_confirmed!==true) {
+      if(p.flow_led_expansion_confirmed!==true&&!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
       if(!(structure>=60))blockers.push('STRUCTURE_NOT_CONFIRMED');
       if(!(buying>=60))blockers.push('BUYING_PRESSURE_NOT_CONFIRMED');
     }
@@ -2400,8 +2418,9 @@ export class MarketUniverseScanner {
       const components={...ctx.components,relative_strength:relScore};
       const score=scorePreMoveComponents(components);
       const alreadyMoved=ctx.already_moved===true;
+      const structureGatePassed=ctx.structure_gate_passed===true||ctx.structure_confirmed===true;
       const earlyConditions=ctx.evidence_complete===true&&ctx.flow_transition_confirmed===true&&
-        ctx.price_window_valid===true&&ctx.structure_confirmed===true&&
+        ctx.price_window_valid===true&&structureGatePassed&&
         Number(ctx.session_return_pct)>=0&&Number(ctx.session_return_pct)<=6;
       const stage=alreadyMoved?'ALREADY_MOVED':
         !earlyConditions?'NO_SETUP':
@@ -2451,7 +2470,8 @@ export class MarketUniverseScanner {
     const actionable=enriched.filter(x=>x.data_status?.data_valid===true&&
       x.pre_move_context.evidence_complete===true&&
       x.pre_move_context.flow_transition_confirmed===true&&x.pre_move_context.price_window_valid===true&&
-      x.pre_move_context.structure_confirmed===true&&x.pre_move_context.already_moved!==true&&
+      (x.pre_move_context.structure_gate_passed===true||x.pre_move_context.structure_confirmed===true)&&
+      x.pre_move_context.already_moved!==true&&
       !['ALREADY_MOVED','NO_SETUP'].includes(x.pre_move_context.stage)&&x.target_plan?.actionable===true);
     const watchCandidates=buildPreMoveWatchCandidates(enriched,{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
@@ -2474,7 +2494,7 @@ export class MarketUniverseScanner {
         add(Number(p.taker_buy_ratio)>=0.53&&Number(p.taker_buy_acceleration)>=0.01,'BUY_FLOW_NOT_CONFIRMED');
         add(Number(p.mean_close_location)>=0.54,'BUYER_CANDLE_CLOSES_NOT_CONFIRMED');
         add(Number(p.one_hour_return_pct)>=0.15&&Number(p.one_hour_return_pct)<=4.5,'PRICE_WINDOW_NOT_CONFIRMED');
-        add(Number(c.squeeze)>=55,'COMPRESSION_NOT_CONFIRMED');
+        add(p.flow_led_expansion_confirmed===true||Number(c.squeeze)>=55,'COMPRESSION_NOT_CONFIRMED');
         add(Number(c.structure)>=60,'STRUCTURE_NOT_CONFIRMED');
         add(Number(c.buying_pressure)>=60,'BUYING_PRESSURE_NOT_CONFIRMED');
         add(Number(p.session_return_pct)>=0&&Number(p.session_return_pct)<=6,'SESSION_MOVE_NOT_CONFIRMED');
@@ -2487,6 +2507,8 @@ export class MarketUniverseScanner {
           watch_only:true,
           alert_eligible:false,
           stage:String(p.stage||'NO_SETUP'),
+          flow_led_expansion_confirmed:p.flow_led_expansion_confirmed===true,
+          structure_gate_passed:p.structure_gate_passed===true||p.structure_confirmed===true,
           score:Number.isFinite(Number(p.score))?Number(p.score):null,
           price_change_24h:Number.isFinite(Number(x.price_change_24h))?Number(x.price_change_24h):null,
           session_return_pct:Number.isFinite(Number(p.session_return_pct))?Number(p.session_return_pct):null,

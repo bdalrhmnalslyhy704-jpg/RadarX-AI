@@ -183,7 +183,7 @@ function replayProductionPreMoveCore(symbol, candles, benchmarkRows, asOf) {
       context.evidence_complete===true &&
       context.flow_transition_confirmed===true &&
       context.price_window_valid===true &&
-      context.structure_confirmed===true &&
+      (context.structure_gate_passed===true||context.structure_confirmed===true) &&
       context.already_moved!==true;
     return {
       status:continuousTrailing24h?'CORE_CONTEXT_REPLAYED':'INCOMPLETE_TRAILING_24H_HISTORY',
@@ -204,6 +204,8 @@ function replayProductionPreMoveCore(symbol, candles, benchmarkRows, asOf) {
         stage:context.stage,score:context.score,evidence_complete:context.evidence_complete,
         flow_transition_confirmed:context.flow_transition_confirmed,
         price_window_valid:context.price_window_valid,structure_confirmed:context.structure_confirmed,
+        flow_led_expansion_confirmed:context.flow_led_expansion_confirmed===true,
+        structure_gate_passed:context.structure_gate_passed===true||context.structure_confirmed===true,
         already_moved:context.already_moved,session_return_pct:context.session_return_pct,
         one_hour_return_pct:context.one_hour_return_pct,
         volume_acceleration:context.volume_acceleration,trade_acceleration:context.trade_acceleration,
