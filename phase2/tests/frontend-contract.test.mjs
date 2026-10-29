@@ -120,3 +120,17 @@ test('TEST_FIXTURE: multi-analyst UI polls background scans and never caches tem
   assert.match(client,/progressParam=progress\?'&progress=1'/);
   assert.match(client,/timeoutMs=background\|\|progress\?15000:240000/);
 });
+
+test('TEST_FIXTURE: Android FCM watch gate accepts trusted public Spot aliases and the supported accumulation tier',async()=>{
+  const native=await readFile(new URL('../../android/app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java',import.meta.url),'utf8');
+  const push=await readFile(new URL('../../phase2/push/index.mjs',import.meta.url),'utf8');
+  const ui=await readFile(new URL('../../android/app/src/main/assets/adaptive-trader.html',import.meta.url),'utf8');
+  assert.match(native,/isTrustedBinancePublicSpotSource\(source\)/);
+  assert.match(native,/\"ACCUMULATION_PREP_MONITOR\"\.equals\(tier\)/);
+  assert.match(native,/FUTURES\|FAPI\|PERPETUAL\|USER_DATA\|MOCK\|SIMULATED\|REPLAY\|UNAVAILABLE\|FAILED\|STALE/);
+  assert.match(push,/export function isTrustedBinancePublicSpotSource\(value\)/);
+  assert.match(push,/UNTRUSTED_OR_UNKNOWN_MARKET_SOURCE/);
+  assert.match(ui,/قرار المتداول/);
+  assert.match(ui,/next_step_ar/);
+  assert.match(ui,/never calibrate them twice/);
+});
