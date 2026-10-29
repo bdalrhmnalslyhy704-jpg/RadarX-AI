@@ -109,19 +109,23 @@ test('adaptive trader status exposes the independent background worker with read
   }
 });
 
-test('manual adaptive trader scan is throttled and starts one persisted worker cycle',async()=>{
-  let calls=0;
+test('manual adaptive trader scan honors a bounded universe limit and throttles duplicate cycles',async()=>{
+  let calls=0,optionsSeen=null;
   const worker={
     snapshot:()=>({status:'RUNNING',enabled:true,running:true,in_flight:false,scan_count:calls,
-      successful_scans:calls,last_error:null,paper_trading:true,real_order_execution:false}),
-    runOnce:()=>{calls++;return Promise.resolve({status:'SUCCESS'});}
+      successful_scans:calls,last_error:null,scan_limit:80,paper_trading:true,real_order_execution:false}),
+    runOnce:options=>{calls++;optionsSeen=options;return Promise.resolve({status:'SUCCESS'});}
   };
   const {dir,server,base}=await start({worker});
   try{
-    const first=await fetch(base+'/api/adaptive-trader/scan',{method:'POST'});
+    const first=await fetch(base+'/api/adaptive-trader/scan',{
+      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({limit:60})
+    });
     assert.equal(first.status,202);
     const body=await first.json();
     assert.equal(body.status,'SCAN_STARTED');
+    assert.equal(body.requested_limit,60);
+    assert.equal(optionsSeen.limit,60);
     assert.equal(body.paper_trading,true);
     assert.equal(body.real_order_execution,false);
     const second=await fetch(base+'/api/adaptive-trader/scan',{method:'POST'});
@@ -130,6 +134,26 @@ test('manual adaptive trader scan is throttled and starts one persisted worker c
     assert.equal(limited.error,'ADAPTIVE_TRADER_SCAN_COOLDOWN');
     assert.ok(limited.retry_after_ms>0);
     assert.equal(calls,1);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('manual adaptive trader scan rejects unbounded universe limits',async()=>{
+  let calls=0;
+  const worker={
+    snapshot:()=>({status:'RUNNING',enabled:true,in_flight:false,paper_trading:true,real_order_execution:false}),
+    runOnce:()=>{calls++;return Promise.resolve({status:'SUCCESS'});}
+  };
+  const {dir,server,base}=await start({worker});
+  try{
+    const response=await fetch(base+'/api/adaptive-trader/scan',{
+      method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({limit:1000})
+    });
+    assert.equal(response.status,400);
+    assert.equal((await response.json()).error,'ADAPTIVE_TRADER_SCAN_LIMIT_MUST_BE_40_TO_120');
+    assert.equal(calls,0);
   }finally{
     await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
