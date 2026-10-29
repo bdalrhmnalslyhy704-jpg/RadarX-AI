@@ -43,6 +43,37 @@ function marketFixture({now=Date.now(),change24h=2.3,quoteVolume=5_000_000,curre
   };
 }
 
+
+function fiveMinuteFixture(now=Date.now()) {
+  const data=[];
+  let price=10;
+  for(let i=0;i<20;i++){
+    const openTime=now-(20-i)*5*60*1000;
+    const open=price;
+    price=open*(1+(i>15?0.001:0.0002));
+    const low=open*0.995,high=price*1.005;
+    const quoteVolume=i===19?240000:100000;
+    const trades=i===19?2100:1000;
+    const buyRatio=i===19?0.62:0.49;
+    const baseVolume=quoteVolume/price;
+    data.push([openTime,open,high,low,price,baseVolume,openTime+5*60*1000-1,
+      quoteVolume,trades,baseVolume*buyRatio,quoteVolume*buyRatio,0]);
+  }
+  return {data,source:'https://data-api.binance.vision',receivedAt:now-1000};
+}
+
+test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m score',()=>{
+  const f=marketFixture();
+  const result=scoreAdaptiveTraderCandidate({...f,fastKlines:fiveMinuteFixture(f.now)});
+  assert.equal(result.data_valid,true);
+  assert.equal(result.features.micro_5m_available,true);
+  assert.ok(result.features.micro_5m_volume_ratio>1.5);
+  assert.ok(result.features.micro_5m_trade_ratio>1.5);
+  assert.ok(result.features.micro_5m_taker_buy_ratio>=0.6);
+  assert.ok(result.reason_codes.includes('FIVE_MINUTE_BUY_FLOW_POSITIVE'));
+  assert.ok(result.features.return_3h_pct!==null);
+});
+
 test('live closed-candle scoring produces a transparent candidate, never an entry signal',()=>{
   const f=marketFixture();
   const result=scoreAdaptiveTraderCandidate(f);
@@ -69,7 +100,8 @@ test('adaptive trader gives a strict, explained candidate verdict without enabli
     thresholds:{no_chase:true,late_move:false},
     features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
       higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
-      hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8},
+      hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8,micro_5m_available:true,
+      micro_5m_taker_buy_ratio:0.59,micro_5m_volume_ratio:1.8},
     reason_codes:['VOLUME_ACTIVITY_EXPANDING']
   };
   const result=buildAdaptiveTraderRecommendation(base,{now});
@@ -171,7 +203,7 @@ test('adaptive profile waits for enough labelled outcomes and never rewrites rul
   assert.equal(pending.adjustments.volume,0);
   assert.equal(applyAdaptiveLearning(70,{volume_ratio:2},pending),70);
 
-  const sufficient=Array.from({length:40},(_,i)=>({
+  const sufficient=Array.from({length:80},(_,i)=>({
     outcome:i%2===0?'UP':'DOWN',
     features:{
       volume_ratio:i%3===0?2.2:0.8,
@@ -300,7 +332,8 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.equal(snapshot.candidates[0].symbol,'TESTUSDT');
   const cached=await service({limit:20,now:f.now+1000});
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
-  assert.equal(requests.filter(x=>x.path==='/api/v3/klines').length,2);
+  assert.equal(requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='15m').length,2);
+  assert.equal(requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m').length,1);
 });
 
 
@@ -362,7 +395,7 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
   }};
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ROTATION_V1');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V2');
   assert.equal(snapshot.universe.emerging_movers_available,15);
   assert.equal(snapshot.universe.extended_movers_available,9);
   assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
@@ -393,6 +426,7 @@ test('universe rotation continues after the last successful pair and retries the
       symbol,lastPrice:'10',quoteVolume:String(5_000_000-i*10_000),priceChangePercent:'2'
     })),source:'https://data-api.binance.vision',receivedAt:Date.now()};
     if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines'&&query.interval==='5m')return f.klines;
     if(path==='/api/v3/klines'){
       symbolRequests.push(query.symbol);
       const index=Number(String(query.symbol).slice(3,6));
@@ -472,4 +506,61 @@ test('concurrent universe sizes keep distinct server-cache entries',async()=>{
   const cached=await service({limit:40,now:f.now+1000});
   assert.equal(cached.universe.requested_limit,40);
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
+});
+
+
+test('market-wide ticker pulse prioritizes new short-term acceleration and tracks pairs below deep-scan liquidity gate',async()=>{
+  const f=marketFixture();
+  let pulsePrice=10;
+  const rows=[
+    ...Array.from({length:40},(_,i)=>({symbol:'REG'+String(i).padStart(3,'0')+'USDT',lastPrice:'10',
+      quoteVolume:String(5_000_000-i*20_000),priceChangePercent:'1.2',count:'1500'})),
+    {symbol:'PULSEUSDT',lastPrice:String(pulsePrice),quoteVolume:'950000',priceChangePercent:'3.1',count:'2100'},
+    {symbol:'LOWVOLUSDT',lastPrice:'0.12',quoteVolume:'15000',priceChangePercent:'0.4',count:'120'}
+  ];
+  const rest={async request(path,query={}){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:rows.map(row=>({symbol:row.symbol,status:'TRADING',
+      quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']}))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:rows.map(row=>({...row})),source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:40,now:f.now});
+  assert.ok(first.latest_prices.some(row=>row.symbol==='LOWVOLUSDT'),
+    'all active Spot pairs remain visible in price tracking even below the deep scan gate');
+  pulsePrice=10.12;
+  rows.find(row=>row.symbol==='PULSEUSDT').lastPrice=String(pulsePrice);
+  const second=await service({limit:40,now:f.now+3*60*1000});
+  assert.ok(second.universe.price_acceleration_candidates_available>=1);
+  const pulse=second.candidates.find(row=>row.symbol==='PULSEUSDT');
+  assert.ok(pulse,'a new short-term price pulse should reserve a deep-scan slot');
+  assert.equal(pulse.selection_lane,'PRICE_ACCELERATION');
+  assert.ok(second.latest_prices.find(row=>row.symbol==='PULSEUSDT').move_since_previous_pct>=1);
+});
+
+test('adaptive learning calibrates on market-wide outcomes and exposes up/down/flat counts',()=>{
+  const samples=Array.from({length:80},(_,i)=>({
+    id:'MKT'+i,observation_type:'MARKET_WIDE_TICKER',
+    outcome:i%3===0?'DOWN':i%3===1?'UP':'FLAT',
+    return_pct:i%3===0?-3:i%3===1?2.5:0.1,
+    features:{
+      price_change_15m_pct:i%2===0?0.3:-0.15,
+      price_change_4h_pct:i%4===0?2:-1,
+      relative_24h_strength_vs_btc_pct:i%3===1?1:-0.4,
+      change_24h_pct:i%5===0?10:2,
+      quote_volume_24h:1_000_000
+    }
+  }));
+  const profile=buildAdaptiveLearningProfile(samples);
+  assert.equal(profile.ready,true);
+  assert.equal(profile.market_wide_samples,80);
+  assert.equal(profile.candidate_samples,0);
+  assert.equal(profile.resolved_samples,80);
+  assert.equal(profile.outcome_counts.up,26);
+  assert.equal(profile.outcome_counts.down,27);
+  assert.equal(profile.outcome_counts.flat,27);
+  assert.ok(profile.covered_factor_buckets>=4);
+  assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
 });
