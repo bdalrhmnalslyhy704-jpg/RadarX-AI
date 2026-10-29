@@ -61,7 +61,7 @@ export class AdaptiveTraderWorker{
               ?Math.trunc(Number(saved.scan_cursor))
               :Math.max(0,Math.trunc(Number(saved.last_summary?.universe?.scan_offset)||0)+
                 Math.trunc(Number(saved.last_summary?.universe?.scan_advance_count)||0)),
-            samples:saved.samples.slice(-MAX_SAMPLES),
+            samples:saved.samples.slice(-MAX_SAMPLES).map(row=>({...row,observation_type:row.observation_type||'DEEP_CANDIDATE'})),
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
             learning_profile:saved.learning_profile||buildAdaptiveLearningProfile(saved.samples),
@@ -338,6 +338,8 @@ export class AdaptiveTraderWorker{
         tier:candidate?String(candidate.tier||'NO_SETUP'):'NOT_EVALUATED',
         score:candidate&&candidate.data_valid===true?finite(candidate.score):null,
         features:candidate&&candidate.data_valid===true&&!candidate.data_stale?{...(candidate.features||{})}:null,
+        reason_codes:candidate&&candidate.data_valid===true&&!candidate.data_stale?Array.isArray(candidate.reason_codes)?candidate.reason_codes.slice(0,12):[]:[],
+        selection_lane:candidate?.selection_lane||null,
         evaluated:Boolean(candidate&&candidate.data_valid===true&&!candidate.data_stale)
       });
       latest.set(symbol,{symbol,price,at:now});
