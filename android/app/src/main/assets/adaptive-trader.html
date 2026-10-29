@@ -664,7 +664,7 @@ function renderLearning(){
   const capture=(state.serverStatus&&state.serverStatus.learning_capture)||{};
   el('learnProgress').style.width=Math.min(100,resolvedCount/requiredSamples*100)+'%';
   el('learnCount').textContent=resolvedCount+' من '+requiredSamples+' نتيجة مكتملة · صعود '+(Number(outcomes.up)||0)+' · هبوط '+(Number(outcomes.down)||0)+' · محايد '+(Number(outcomes.flat)||0)+' · معدل الإيجابي '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+
-    (state.serverStatus?' · عينات السوق الواسعة '+(Number(model.market_wide_samples)||0)+' · عينات الفحص العميق '+(Number(model.candidate_samples)||0):'');
+    (state.serverStatus?' · عينات تاريخية مغلقة '+(Number(model.historical_samples)||0)+' · عينات السوق الواسعة '+(Number(model.market_wide_samples)||0)+' · عينات الفحص العميق '+(Number(model.candidate_samples)||0):'');
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
