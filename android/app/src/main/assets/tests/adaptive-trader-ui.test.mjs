@@ -17,12 +17,15 @@ test('standalone Arabic adaptive trader page is linked from the existing RadarX 
   assert.match(home,/openAdaptiveTraderBtn/);
 });
 
-test('market scan retries one transient timeout, then fails closed without inventing data',()=>{
-  assert.match(html,/new AbortController\(\)/);
-  assert.match(html,/70_000/);
-  assert.match(html,/if\(error&&error\.name==='AbortError'\)\{\s*if\(attempt===0\)/);
-  assert.match(html,/ADAPTIVE_TRADER_SCAN_TIMEOUT/);
-  assert.match(html,/signal:controller\.signal/);
+test('market scan requests a persisted server worker cycle and waits for real completion',()=>{
+  assert.match(html,/\/api\/adaptive-trader\/scan/);
+  assert.match(html,/method:'POST'/);
+  assert.match(html,/JSON\.stringify\(\{limit:limit\}\)/);
+  assert.match(html,/successful_scans/);
+  assert.match(html,/worker\.in_flight!==false/);
+  assert.match(html,/ADAPTIVE_TRADER_SCAN_COOLDOWN/);
+  assert.match(html,/SERVER_SCAN_RESULT_NOT_VERIFIED/);
+  assert.doesNotMatch(html,/\/api\/adaptive-trader\/market-snapshot\?limit=/);
 });
 
 test('adaptive trader UI has visible data coverage and paper-only status',()=>{
@@ -40,6 +43,11 @@ test('dashboard consumes the verified server worker snapshot and reports network
   assert.match(html,/BACKEND_NETWORK_OR_CORS_UNAVAILABLE/);
   assert.match(html,/successful_scans/);
   assert.match(html,/آخر نجاح/);
+});
+
+test('server learning profile is preferred even when its resolved sample count is zero',()=>{
+  assert.match(html,/if\(remote&&typeof remote==='object'\)return remote/);
+  assert.doesNotMatch(html,/if\(remote&&\(remote\.ready===true\|\|\(Number\(remote\.resolved_samples\)\|\|0\)>0\)\)return remote/);
 });
 
 test('dashboard shows already-extended movers in a separate audit-only list, never as entry candidates',()=>{
