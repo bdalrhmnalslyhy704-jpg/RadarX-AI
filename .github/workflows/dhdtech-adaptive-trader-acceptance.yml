@@ -59,6 +59,9 @@ jobs:
                 const scannedAt=Date.parse(String(value.last_scan_at||''));
                 const summaryAt=Date.parse(String(summary&&summary.as_of||''));
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
+                const learning=value.learning_profile||null;
+                const capture=value.learning_capture||null;
+                const universe=summary&&summary.universe||{};
                 const workerContract=value.scanner_contract==='SERVER_DRIVEN_SCAN_V2';
                 const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
                   deployment.expected_radars===12&&deployment.registered_radars===12&&
@@ -76,7 +79,24 @@ jobs:
                   system_healthy:systemHealthy,worker_contract:value.scanner_contract||null,
                   last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
-                  latest_prices:Array.isArray(prices)?prices.length:null
+                  latest_prices:Array.isArray(prices)?prices.length:null,
+                  historical_samples_available:Number(universe.historical_training_samples_available)||0,
+                  learning_profile:learning?{
+                    resolved_samples:Number(learning.resolved_samples)||0,
+                    required_samples:Number(learning.required_samples)||60,
+                    ready:learning.ready===true,
+                    historical_samples:Number(learning.historical_samples)||0
+                  }:null,
+                  learning_capture:capture?{
+                    historical_input_samples:Number(capture.historical_input_samples)||0,
+                    new_historical_samples:Number(capture.new_historical_samples)||0,
+                    historical_rejected:capture.historical_rejected||{},
+                    snapshot_historical_samples_available:Number(capture.snapshot_historical_samples_available)||0,
+                    snapshot_closed_candle_outcomes_input:Number(capture.snapshot_closed_candle_outcomes_input)||0,
+                    new_deep_candidate_samples:Number(capture.new_deep_candidate_samples)||0,
+                    resolved_samples:Number(capture.resolved_samples)||0,
+                    unresolved_training_samples:Number(capture.unresolved_training_samples)||0
+                  }:null
                 };
                 const valid=response.ok&&systemHealthy&&workerContract&&value.paper_trading===true&&value.real_order_execution===false&&
                   Number(value.successful_scans)>0&&value.last_error===null&&
