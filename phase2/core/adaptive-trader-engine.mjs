@@ -69,7 +69,7 @@ const POLICY = Object.freeze({
   maxCandleAgeMs: 20 * 60 * 1000,
   defaultUniverseLimit: 80,
   maxUniverseLimit: 120,
-  learningMinOutcomes: 60,
+  learningMinOutcomes: 30,
   paperPositionPct: 5,
   maxPaperPositions: 3,
   takeProfitPct: 3,
@@ -118,7 +118,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     ? Math.max(scanStartedAt, receivedAt)
     : scanStartedAt;
   const candles = (Array.isArray(klines?.data) ? klines.data : Array.isArray(klines) ? klines : [])
-    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < evaluationNow)
+    .map(row => normalizeCandle(row)).filter(Boolean).filter(candle => candle.closeTime < evaluationNow)
     .sort((a, b) => a.closeTime - b.closeTime);
   const source = String(klines?.source || 'BINANCE_PUBLIC_REST');
 
@@ -221,7 +221,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     ? Math.max(scanStartedAt, btcReceivedAt)
     : scanStartedAt;
   const btcCandles = (Array.isArray(btcKlines?.data) ? btcKlines.data : Array.isArray(btcKlines) ? btcKlines : [])
-    .map(normalizeCandle).filter(Boolean).filter(candle => candle.closeTime < btcEvaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
+    .map(row => normalizeCandle(row)).filter(Boolean).filter(candle => candle.closeTime < btcEvaluationNow).sort((a,b)=>a.closeTime-b.closeTime);
   const btcLast = btcCandles[btcCandles.length-1];
   const btcRecent = btcCandles.slice(-5);
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
@@ -358,7 +358,7 @@ async function mapLimit(items, limit, worker) {
 }
 
 export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.defaultUniverseLimit, now = Date.now(),
-  offset = 0, retrySymbols = [], minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+  offset = 0, retrySymbols = [], previousSnapshot = null, minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
   const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
   // BTC is only a comparative benchmark. A failure to fetch it must not block
@@ -655,7 +655,7 @@ export function createAdaptiveTraderSnapshotService({
   return getSnapshot;
 }
 
-export function buildAdaptiveLearningProfile(samples = [], { minSamples = POLICY.learningMinOutcomes, minimumBucket = 8 } = {}) {
+export function buildAdaptiveLearningProfile(samples = [], { minSamples = 60, minimumBucket = 8 } = {}) {
   const resolved=(Array.isArray(samples)?samples:[]).filter(row=>
     row&&['UP','DOWN','FLAT'].includes(row.outcome)&&row.features&&typeof row.features==='object');
   const positive=resolved.filter(row=>row.outcome==='UP').length;
