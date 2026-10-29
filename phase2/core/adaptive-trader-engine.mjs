@@ -69,7 +69,7 @@ const POLICY = Object.freeze({
   maxCandleAgeMs: 20 * 60 * 1000,
   defaultUniverseLimit: 80,
   maxUniverseLimit: 120,
-  learningMinOutcomes: 30,
+  learningMinOutcomes: 60,
   paperPositionPct: 5,
   maxPaperPositions: 3,
   takeProfitPct: 3,

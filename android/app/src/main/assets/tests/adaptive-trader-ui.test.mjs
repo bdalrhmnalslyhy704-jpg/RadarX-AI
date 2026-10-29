@@ -45,6 +45,11 @@ test('dashboard consumes the verified server worker snapshot and reports network
   assert.match(html,/آخر نجاح/);
 });
 
+test('offline learning placeholder uses the same 60-result threshold as the server',()=>{
+  assert.match(client,/minSamples\\s*=\\s*60/);
+  assert.match(html,/Number\\(model\\.required_samples\\)\\|\\|60/);
+});
+
 test('server learning profile is preferred even when its resolved sample count is zero',()=>{
   assert.match(html,/if\(remote&&typeof remote==='object'\)return remote/);
   assert.match(html,/return buildAdaptiveLearningProfile\(\[\]\)/);

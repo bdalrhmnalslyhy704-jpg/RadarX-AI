@@ -23,7 +23,7 @@ export function createPaperPortfolio(startingBalance = 10000) {
   };
 }
 
-export function buildAdaptiveLearningProfile(samples = [], { minSamples = 30, minimumBucket = 8 } = {}) {
+export function buildAdaptiveLearningProfile(samples = [], { minSamples = 60, minimumBucket = 8 } = {}) {
   const rows = (Array.isArray(samples) ? samples : []).filter(row =>
     row && ['UP', 'DOWN', 'FLAT'].includes(row.outcome) && row.features && typeof row.features === 'object');
   const wins = rows.filter(row => row.outcome === 'UP').length;

@@ -11,6 +11,9 @@ import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 // A bounded rotating deep-scan keeps the live Pre-Move request under the
 // 45-second service objective while preserving broad symbol coverage over cycles.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 40;
+// DHDTech live acceptance measured a 56.1s cycle at concurrency 40. Bound in-flight
+// candle/depth work while retaining the 40-symbol rotating coverage batch.
+export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 16;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -2411,12 +2414,11 @@ export class MarketUniverseScanner {
       pinnedFraction:preMovePinnedFraction,
       activityPriorityLimit:preMoveActivityPrioritySlots
     });
-    // The live DHDTech pass still exceeded its 45s objective at 40 workers.
-    // This scan is I/O-bound (15m candles + depth per symbol), so allow one
-    // bounded worker per discovered symbol. The shared RestClient request/weight
-    // budget remains the hard exchange limit; rotation still advances only after
-    // the full slice completes and persists.
-    const preMoveConcurrency=Math.min(50,Math.max(1,discovery.length));
+    // Live acceptance measured 56.1s at 40 concurrent pair scans. Each pair
+    // requests both 15m klines and order-book depth; too many simultaneous calls
+    // compete for the shared REST budget. Keep the 40-symbol batch, but cap
+    // in-flight pair work at 16 to reduce contention without dropping scan coverage.
+    const preMoveConcurrency=Math.min(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,Math.max(1,discovery.length));
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,

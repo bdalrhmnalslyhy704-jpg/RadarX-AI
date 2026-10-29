@@ -658,3 +658,11 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
   assert.ok(profile.covered_factor_buckets>=4);
   assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
 });
+
+
+test('adaptive learning policy, readiness gate and dashboard default agree on 60 completed closed-candle outcomes',()=>{
+  assert.equal(ADAPTIVE_TRADER_POLICY.learningMinOutcomes,60);
+  const profile=buildAdaptiveLearningProfile([]);
+  assert.equal(profile.ready,false);
+  assert.equal(profile.required_samples,60);
+});

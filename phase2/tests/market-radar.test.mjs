@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveTickerActivitySignals, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveTickerActivitySignals, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -939,11 +939,20 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
     rest,clock:()=>scanNow,
     config:{minQuoteVolume24h:750000,scanLimit:50,deepConcurrency:4}
   });
-  let seen=[];
-  scanner.scanPreMoveSymbol=async ticker=>{seen.push(ticker.symbol);return null;};
+  let seen=[],active=0,maxActive=0;
+  scanner.scanPreMoveSymbol=async ticker=>{
+    seen.push(ticker.symbol);
+    active++;
+    maxActive=Math.max(maxActive,active);
+    await new Promise(resolve=>setTimeout(resolve,2));
+    active--;
+    return null;
+  };
 
   const first=await scanner.scanPreMove({quote:'USDT',limit:50});
   const firstSymbols=new Set(seen);
+  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,16);
+  assert.equal(maxActive,16,'a 40-symbol batch must not fan out 40 simultaneous candle/depth requests');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,40);
   assert.equal(first.universe.discovered,40);
