@@ -142,3 +142,10 @@ test('TEST_FIXTURE: Android background polling backs off on HTTP 429 instead of 
   assert.match(native,/BACKGROUND_SCAN_RATE_LIMITED_SKIP_COMPATIBILITY_FALLBACK/);
   assert.match(native,/BACKEND_RATE_LIMITED_SKIP_REMAINING_COMPATIBILITY_ROUTES/);
 });
+
+test('TEST_FIXTURE: DHDTech rate limit leaves budget for the five-second native radar poll and diagnostics',async()=>{
+  const config=await readFile(new URL('../config.mjs',import.meta.url),'utf8');
+  const entry=await readFile(new URL('../deploy/dhdtech-entrypoint.sh',import.meta.url),'utf8');
+  assert.match(config,/rateLimitPerMinute:\s*int\(process\.env\.RADARX_API_RATE_LIMIT_PER_MINUTE,\s*300\)/);
+  assert.match(entry,/RADARX_API_RATE_LIMIT_PER_MINUTE=.*:-300/);
+});
