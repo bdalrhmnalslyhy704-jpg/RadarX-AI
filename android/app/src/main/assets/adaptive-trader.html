@@ -266,7 +266,11 @@ function profile(){
   if(remote&&(remote.ready===true||(Number(remote.resolved_samples)||0)>0))return remote;
   return buildAdaptiveLearningProfile(state.samples);
 }
-function displayScore(candidate){return applyAdaptiveLearning(candidate.score,candidate.features||{},profile());}
+function displayScore(candidate){
+  // Server candidates already carry their applied learning delta; never calibrate them twice on-device.
+  if(num(candidate&&candidate.base_score)!==null&&num(candidate&&candidate.learning_adjustment)!==null)return num(candidate.score);
+  return applyAdaptiveLearning(candidate.score,candidate.features||{},profile());
+}
 function addJournal(message,kind='info',at=Date.now()){
   state.journal.push({at:Number(at),message:String(message),kind});
   state.journal=state.journal.slice(-150);
@@ -503,17 +507,44 @@ async function scanMarket(){
 function renderCandidates(snapshot){
   const root=el('candidateList');
   if(!snapshot||!Array.isArray(snapshot.candidates)){root.innerHTML='<div class="empty"><b>لا توجد بيانات</b>ابدأ فحص السوق.</div>';return;}
-  const rows=snapshot.candidates.filter(row=>row.data_valid&&row.score!==null).slice().sort((a,b)=>displayScore(b)-displayScore(a));
-  if(!rows.length){root.innerHTML='<div class="empty"><b>لم تظهر إعدادات صالحة في هذا الفحص</b>هذه نتيجة حقيقية وليست نقصًا مخفيًا؛ لا نرفع الدرجات لتوليد فرص مصطنعة.</div>';return;}
-  root.innerHTML=rows.slice(0,60).map(function(candidate){
-    const learned=displayScore(candidate),tier=candidate.tier;
+  const rows=snapshot.candidates.filter(row=>row.data_valid&&row.score!==null).slice().sort((a,b)=>
+    (Number(b.trade_decision&&b.trade_decision.priority)||0)-(Number(a.trade_decision&&a.trade_decision.priority)||0)||
+    displayScore(b)-displayScore(a));
+  const serverRecommendation=state.serverStatus&&state.serverStatus.last_summary&&state.serverStatus.last_summary.current_recommendation;
+  const topRow=rows[0]||null;
+  const recommendation=snapshot.current_recommendation||serverRecommendation||
+    (topRow&&topRow.trade_decision?{...topRow.trade_decision,symbol:topRow.symbol,price:topRow.price}:null);
+  let recommendationHtml='';
+  if(recommendation){
+    const decision=String(recommendation.decision||'NO_SETUP');
+    const recClass=decision==='ENTRY_CANDIDATE'?'early':decision==='AVOID_CHASING'?'late':'';
+    const recTag=decision==='ENTRY_CANDIDATE'?'early':decision==='AVOID_CHASING'?'late':'watch';
+    const recReasons=(Array.isArray(recommendation.reason_codes)?recommendation.reason_codes:[]).slice(0,5)
+      .map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
+    recommendationHtml='<article class="candidate '+recClass+'">'+
+      '<div class="candidate-top"><div><div class="symbol">قرار المتداول · '+esc(recommendation.symbol||'لا يوجد مرشح')+'</div>'+
+      '<div class="price">'+(num(recommendation.price)!==null?esc(fmt(recommendation.price,8))+' USDT':'لا يوجد سعر موثّق')+
+      (num(recommendation.score)!==null?' · درجة '+esc(fmt(recommendation.score,1)):'')+'</div></div>'+
+      '<span class="tag '+recTag+'">'+esc(recommendation.label_ar||'لا توجد توصية مؤكدة')+'</span></div>'+
+      '<div class="tiny" style="margin-top:8px"><b>الخطوة التالية:</b> '+esc(recommendation.next_step_ar||'انتظر بيانات حديثة وصالحة.')+'</div>'+
+      '<div class="reasons" style="margin-top:8px">'+recReasons+'</div>'+
+      '<div class="tiny" style="margin-top:8px">قرار تحليلي للمراجعة والمحاكاة فقط · entry_eligible=false · التنفيذ الحقيقي متوقف.</div>'+
+      '</article>';
+  }
+  if(!rows.length){
+    root.innerHTML=recommendationHtml+'<div class="empty"><b>لم تظهر إعدادات صالحة في هذا الفحص</b>هذه نتيجة حقيقية وليست نقصًا مخفيًا؛ لا نرفع الدرجات لتوليد فرص مصطنعة.</div>';
+    return;
+  }
+  root.innerHTML=recommendationHtml+rows.slice(0,60).map(function(candidate){
+    const learned=displayScore(candidate),tier=candidate.tier,decision=candidate.trade_decision||{};
     const tierText=tier==='EARLY_SETUP'?'إعداد مبكر — ورقي فقط':tier==='WATCH'?'مراقبة':tier==='LATE_MOVE'?'حركة ممتدة — لا مطاردة':'لا إعداد كافٍ';
     const cls=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'';
     const tag=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'watch';
     const features=candidate.features||{};
-    const reasons=(candidate.reason_codes||[]).slice(0,4).map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
+    const reasons=(decision.label_ar?[decision.label_ar]:[]).concat(candidate.reason_codes||[]).slice(0,5)
+      .map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
     return '<article class="candidate '+cls+'">'+
-      '<div class="candidate-top"><div><div class="symbol">'+esc(candidate.symbol)+'</div><div class="price">'+esc(fmt(candidate.price,6))+' USDT</div></div>'+
+      '<div class="candidate-top"><div><div class="symbol">'+esc(candidate.symbol)+'</div><div class="price">'+esc(fmt(candidate.price,8))+' USDT</div></div>'+
       '<span class="tag '+tag+'">'+esc(tierText)+'</span></div>'+
       '<div class="score-row"><div class="score">'+esc(fmt(learned,1))+'<small>درجة ترتيب</small></div><div class="bar"><i style="width:'+esc(Math.max(0,Math.min(100,learned)))+'%"></i></div></div>'+
       '<div class="metrics">'+
@@ -524,7 +555,8 @@ function renderCandidates(snapshot){
         '<div class="metric"><b>'+esc(percent(features.relative_strength_vs_btc_pct))+'</b><span>قوة مقابل BTC</span></div></div>'+
       '<div class="reasons">'+reasons+'</div>'+
       '<div class="card-foot"><span>حجم 24س: '+esc(money(candidate.quote_volume_24h))+'</span><span>شمعة: '+esc(timeText(candidate.candle_close_time))+'</span></div>'+
-      '<div class="tiny" style="margin-top:8px">الدرجة الأساسية '+esc(fmt(candidate.score,1))+' · التعديل التعلمي '+esc(fmt(learned-(num(candidate.score)||0),1))+' نقطة · لا توصية دخول</div>'+
+      '<div class="tiny" style="margin-top:8px"><b>القرار:</b> '+esc(decision.label_ar||tierText)+' · '+esc(decision.next_step_ar||'لا توجد توصية مؤكدة.')+'</div>'+
+      '<div class="tiny" style="margin-top:6px">الدرجة الأساسية '+esc(fmt(candidate.base_score??candidate.score,1))+' · تعديل التعلم '+esc(fmt(candidate.learning_adjustment??(learned-(num(candidate.score)||0)),1))+' نقطة · التنفيذ الحقيقي متوقف</div>'+
       '</article>';
   }).join('');
 }
