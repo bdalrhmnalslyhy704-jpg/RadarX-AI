@@ -39,6 +39,11 @@ test('server paper portfolio records isolated trades and persists evidence witho
     assert.equal(status.last_summary.meta.real_order_execution,false);
     assert.ok(Array.isArray(status.last_summary.candidates));
     assert.ok(Array.isArray(status.last_summary.latest_prices));
+    assert.equal(status.last_summary.current_recommendation.symbol,'PAPERUSDT');
+    assert.equal(status.last_summary.current_recommendation.decision,'WAIT_FOR_CONFIRMATION');
+    assert.equal(status.last_summary.current_recommendation.entry_eligible,false);
+    assert.equal(status.last_summary.current_recommendation.real_order_execution,false);
+    assert.equal(status.last_summary.counts.waiting_confirmation,1);
     assert.equal(status.server_paper_portfolio.open_positions,1);
     assert.equal(status.server_paper_portfolio.starting_balance,10000);
     assert.equal(status.paper_validation_profile.ready,false);
