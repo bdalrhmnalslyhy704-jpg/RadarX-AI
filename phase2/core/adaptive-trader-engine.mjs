@@ -342,6 +342,109 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   };
 }
 
+/**
+ * Build matured, leak-free training examples from historical Binance Spot
+ * candles. Each feature snapshot is evaluated using only bars closed at or
+ * before its baseline timestamp; its +4h label comes from later closed bars.
+ */
+export function buildAdaptiveTraderHistoricalOutcomeSamples({
+  symbol,klines,fastKlines=null,btcKlines=null,now=Date.now(),
+  minQuoteVolume24h=POLICY.minQuoteVolume24h,maxSamples=8
+}={}){
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
+  const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
+  const candles=rows.map(raw=>({raw,candle:normalizeCandle(raw)}))
+    .filter(item=>item.candle&&item.candle.closeTime<Number(now))
+    .sort((a,b)=>a.candle.closeTime-b.candle.closeTime);
+  const fastRows=Array.isArray(fastKlines?.data)?fastKlines.data:Array.isArray(fastKlines)?fastKlines:[];
+  const fastCandles=fastRows.map(raw=>({raw,candle:normalizeCandle(raw,5*60*1000)}))
+    .filter(item=>item.candle&&item.candle.closeTime<Number(now))
+    .sort((a,b)=>a.candle.closeTime-b.candle.closeTime);
+  const btcRows=Array.isArray(btcKlines?.data)?btcKlines.data:Array.isArray(btcKlines)?btcKlines:[];
+  const btcCandles=btcRows.map(raw=>({raw,candle:normalizeCandle(raw)}))
+    .filter(item=>item.candle&&item.candle.closeTime<Number(now))
+    .sort((a,b)=>a.candle.closeTime-b.candle.closeTime);
+  const btcByClose=new Map(btcCandles.map(item=>[item.candle.closeTime,item.candle]));
+  const horizonBars=16,dayBars=96;
+  const possible=[];
+  for(let index=dayBars;index+horizonBars<candles.length;index++){
+    const sequence=candles.slice(index-dayBars,index+horizonBars+1);
+    if(sequence.length!==dayBars+horizonBars+1||
+      sequence.some((item,offset)=>offset>0&&item.candle.openTime-sequence[offset-1].candle.openTime!==15*60*1000))continue;
+    const baseline=candles[index].candle,future=candles[index+horizonBars].candle;
+    if(future.closeTime-baseline.closeTime!==4*60*60*1000)continue;
+    const volume24h=candles.slice(index-dayBars+1,index+1)
+      .reduce((sum,item)=>sum+item.candle.quoteVolume,0);
+    if(!(volume24h>=minQuoteVolume24h))continue;
+    const dailyReturn=pct(baseline.close,candles[index-dayBars].candle.close);
+    if(dailyReturn===null)continue;
+    possible.push({index,volume24h,dailyReturn,baseline,future});
+  }
+  const desired=Math.max(1,Math.min(16,Math.trunc(Number(maxSamples)||8)));
+  const selected=[];
+  // Select non-overlapping 4h outcomes, starting from the most recent matured
+  // example. This limits correlated samples from being counted as independent.
+  let newestSelectedIndex=Infinity;
+  for(let cursor=possible.length-1;cursor>=0&&selected.length<desired;cursor--){
+    const item=possible[cursor];
+    if(newestSelectedIndex!==Infinity&&newestSelectedIndex-item.index<horizonBars)continue;
+    selected.push(item);newestSelectedIndex=item.index;
+  }
+  selected.reverse();
+  const out=[];
+  for(const item of selected){
+    const {index,volume24h,dailyReturn,baseline,future}=item;
+    const evaluationNow=baseline.closeTime+1;
+    const priorDay=candles[index-dayBars].candle;
+    const btcCurrent=btcByClose.get(baseline.closeTime);
+    const btcPrior=btcByClose.get(priorDay.closeTime);
+    const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
+    const baselineRaw=candles.slice(Math.max(0,index-19),index+1).map(row=>row.raw);
+    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-150).map(row=>row.raw);
+    const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
+    const ticker={
+      symbol:cleanSymbol,lastPrice:String(baseline.close),
+      quoteVolume:String(volume24h),priceChangePercent:String(dailyReturn)
+    };
+    const candidate=scoreAdaptiveTraderCandidate({
+      symbol:cleanSymbol,ticker,
+      klines:{data:baselineRaw,source:klines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
+      fastKlines:{data:baseFastRaw,source:fastKlines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
+      btcKlines:{data:baseBtcRaw,source:btcKlines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
+      now:evaluationNow,minQuoteVolume24h
+    });
+    if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
+    const move=(future.close/baseline.close-1)*100;
+    const outcome=move>=2?'UP':move<=-2?'DOWN':'FLAT';
+    const features={
+      ...(candidate.features||{}),
+      quote_volume_24h:Number(volume24h.toFixed(2)),
+      change_24h_pct:Number(dailyReturn.toFixed(3)),
+      relative_24h_strength_vs_btc_pct:btcDailyReturn===null?null:Number((dailyReturn-btcDailyReturn).toFixed(3))
+    };
+    out.push({
+      id:'HISTORICAL_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
+      symbol:cleanSymbol,price:baseline.close,at:baseline.closeTime,
+      base_score:Number(candidate.score),tier:String(candidate.tier||'NO_SETUP'),
+      observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
+      quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
+      selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
+      mark_price:future.close,return_pct:Number(move.toFixed(3)),
+      resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime
+    });
+  }
+  return out;
+}
+
+function attachHistoricalTrainingSamples(snapshot,samples){
+  const result={...snapshot};
+  Object.defineProperty(result,'historical_training_samples',{
+    value:Array.isArray(samples)?samples:[],enumerable:false,configurable:false,writable:false
+  });
+  return result;
+}
+
 async function mapLimit(items, limit, worker) {
   const result = new Array(items.length);
   let cursor = 0;
@@ -366,7 +469,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   const [exchangeInfo, tickerResult, btcResult] = await Promise.all([
     rest.request('/api/v3/exchangeInfo'),
     rest.request('/api/v3/ticker/24hr'),
-    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 20 })
+    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 240 })
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
@@ -481,14 +584,19 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
 
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const [result,fastResult] = await Promise.all([
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 20 }),
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 20 })
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 240 }),
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 720 })
         .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
     ]);
-    return scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
+    const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
+    const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:8
+    });
+    return {candidate,historicalSamples};
   });
-  const candidates = analyzed.map((row, index) => row && !row.error
-    ? { ...row, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
+  const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
+  const candidates = analyzed.map((entry, index) => entry?.candidate && !entry.error
+    ? { ...entry.candidate, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
     : {
       symbol: selected[index]?.symbol || 'UNKNOWN',
       price: finite(selected[index]?.lastPrice),
@@ -499,7 +607,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       tier: 'DATA_UNAVAILABLE',
       score: null,
       reason_codes: ['KLINE_FETCH_FAILED'],
-      error: String(row?.error || 'KLINE_FETCH_FAILED'),
+      error: String(entry?.error || 'KLINE_FETCH_FAILED'),
       selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
       paper_trading: true,
       real_order_execution: false,
@@ -513,7 +621,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     .filter(row=>Array.isArray(row.reason_codes)&&row.reason_codes.includes('KLINE_FETCH_FAILED'))
     .map(row=>String(row.symbol||'').toUpperCase()).filter(Boolean);
   const source = String(tickerResult?.source || exchangeInfo?.source || 'BINANCE_PUBLIC_REST');
-  return {
+  const snapshot = {
     status: validCount > 0 ? 'LIVE_DATA' : 'DATA_UNAVAILABLE',
     source: 'Binance Public REST',
     as_of: new Date(Number(now)).toISOString(),
@@ -525,13 +633,14 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       monitored_spot_symbols: marketTickers.length,
       market_wide_price_tracking: true,
       price_acceleration_candidates_available: accelerationMovers.length,
-      micro_5m_symbols_available: analyzed.filter(row=>row&&!row.error&&row.features?.micro_5m_available===true).length,
-      micro_5m_symbols_unavailable: Math.max(0,candidates.length-analyzed.filter(row=>row&&!row.error&&row.features?.micro_5m_available===true).length),
+      micro_5m_symbols_available: analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length,
+      micro_5m_symbols_unavailable: Math.max(0,candidates.length-analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length),
+      historical_training_samples_available: historicalTrainingSamples.length,
       previous_snapshot_age_ms: Number.isFinite(previousSnapshotAgeMs)?Math.max(0,Math.trunc(previousSnapshotAgeMs)):null,
       requested_limit: safeLimit,
       scan_offset: scanOffset,
       scan_advance_count: rotationAdvanceCount,
-      scan_success_count: analyzed.filter(row=>row&&!row.error).length,
+      scan_success_count: analyzed.filter(row=>row?.candidate&&!row.error).length,
       fetch_failed_symbols: fetchFailedSymbols.length,
       retry_symbols_pending: fetchFailedSymbols,
       coverage_pct: eligible.length ? Number((candidates.length / eligible.length * 100).toFixed(1)) : 0,
@@ -563,9 +672,11 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       source_host: source,
       btc_benchmark_available: Boolean(btcKlines?.data),
       btc_benchmark_error: btcResult.error,
-      cache_policy: 'SERVER_PUBLIC_REST_CACHE'
+      cache_policy: 'SERVER_PUBLIC_REST_CACHE',
+      historical_learning_enabled:true
     }
   };
+  return attachHistoricalTrainingSamples(snapshot,historicalTrainingSamples);
 }
 
 export function createAdaptiveTraderSnapshotService({
@@ -588,10 +699,10 @@ export function createAdaptiveTraderSnapshotService({
     const cacheOffsetMatches = requestedOffset === null ||
       (Number.isFinite(hitOffset) && hitOffset === normalizedRequestedOffset);
     if (hit && cacheOffsetMatches && Number(now) - hit.cachedAt < ttlMs) {
-      return {
+      return attachHistoricalTrainingSamples({
         ...hit.snapshot,
         meta: { ...hit.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - hit.cachedAt) }
-      };
+      },hit.snapshot.historical_training_samples);
     }
     // One sidecar scan at a time; the REST client uses a process-shared budget
     // with the other radars. Coalescing different universe requests avoids a
@@ -641,7 +752,7 @@ export function createAdaptiveTraderSnapshotService({
       cache.set(safeLimit, { snapshot, cachedAt });
       // Only the supported dashboard tiers are used in production. Keep this cache bounded even if callers vary inputs.
       while (cache.size > 4) cache.delete(cache.keys().next().value);
-      return { ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } };
+      return attachHistoricalTrainingSamples({ ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } },snapshot.historical_training_samples);
     }).finally(() => {
       if (rest.requestDeadlineAtMs === effectiveDeadline) rest.requestDeadlineAtMs = previousDeadline;
       for (const [key, activeTask] of flights) {
