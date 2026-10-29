@@ -261,7 +261,7 @@
         await sleep(4000);
         var latest = await refreshStatus(true);
         if (latest && latest.in_flight === false &&
-            (Number(latest.successful_scans || 0) > before || latest.last_error || i >= 2)) {
+            (Number(latest.successful_scans || 0) > before || latest.last_error)) {
           finished = true;
           break;
         }
