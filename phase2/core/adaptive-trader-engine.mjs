@@ -732,10 +732,11 @@ export function createAdaptiveTraderSnapshotService({
   const rotationCursors = new Map();
   const retryQueues = new Map();
   const flightOffsets = new Map();
-  const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now(), offset } = {}) => {
+  const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now(), offset, pendingSamples = [] } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
     const requestedOffset = offset === undefined || offset === null || !Number.isFinite(Number(offset))
       ? null : Math.max(0, Math.trunc(Number(offset)));
+    const needsClosedCandleOutcomes = Array.isArray(pendingSamples) && pendingSamples.length > 0;
     const hit = cache.get(safeLimit);
     const hitEligibleCount = Number(hit?.snapshot?.universe?.eligible_spot_symbols) || 0;
     const normalizedRequestedOffset = requestedOffset === null ? null
@@ -743,7 +744,7 @@ export function createAdaptiveTraderSnapshotService({
     const hitOffset = Number(hit?.snapshot?.universe?.scan_offset);
     const cacheOffsetMatches = requestedOffset === null ||
       (Number.isFinite(hitOffset) && hitOffset === normalizedRequestedOffset);
-    if (hit && cacheOffsetMatches && Number(now) - hit.cachedAt < ttlMs) {
+    if (!needsClosedCandleOutcomes && hit && cacheOffsetMatches && Number(now) - hit.cachedAt < ttlMs) {
       return attachHistoricalTrainingSamples({
         ...hit.snapshot,
         meta: { ...hit.snapshot.meta, cache_mode: 'FRESH_SERVER_CACHE', cache_age_ms: Math.max(0, Number(now) - hit.cachedAt) }
@@ -774,7 +775,7 @@ export function createAdaptiveTraderSnapshotService({
     const queuedRetries = retryQueues.get(safeLimit) || [];
     const task = buildAdaptiveTraderMarketSnapshot({
       rest, limit: safeLimit, now, offset: scanOffset, retrySymbols: queuedRetries,
-      previousSnapshot:hit?.snapshot||null,minQuoteVolume24h
+      previousSnapshot:hit?.snapshot||null,pendingSamples,minQuoteVolume24h
     }).then(snapshot => {
       const eligibleCount = Number(snapshot.universe?.eligible_spot_symbols) || 0;
       const advance = Number(snapshot.universe?.scan_advance_count) || 0;
