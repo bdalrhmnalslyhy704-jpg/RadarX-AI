@@ -941,12 +941,26 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(!adaptiveTraderWorker||typeof adaptiveTraderWorker.runOnce!=='function'||typeof adaptiveTraderWorker.snapshot!=='function'){
           return send(res,503,{status:'UNAVAILABLE',error:'ADAPTIVE_TRADER_WORKER_UNAVAILABLE',paper_trading:true,real_order_execution:false});
         }
+        let payload;
+        try{payload=await body(req,1024);}catch(error){
+          return send(res,400,{status:'INVALID_REQUEST',error:error?.message==='BODY_TOO_LARGE'?'BODY_TOO_LARGE':'INVALID_JSON',
+            paper_trading:true,real_order_execution:false});
+        }
+        let requestedLimit;
+        if(payload.limit!==undefined){
+          requestedLimit=Number(payload.limit);
+          if(!Number.isInteger(requestedLimit)||requestedLimit<40||requestedLimit>120){
+            return send(res,400,{status:'INVALID_REQUEST',error:'ADAPTIVE_TRADER_SCAN_LIMIT_MUST_BE_40_TO_120',
+              paper_trading:true,real_order_execution:false});
+          }
+        }
         const before=adaptiveTraderWorker.snapshot();
         if(before.enabled!==true){
           return send(res,503,{status:'STOPPED',error:'ADAPTIVE_TRADER_WORKER_NOT_RUNNING',worker:before,paper_trading:true,real_order_execution:false});
         }
         if(before.in_flight===true){
-          return send(res,202,{status:'SCANNING',message:'ADAPTIVE_TRADER_SCAN_ALREADY_IN_FLIGHT',worker:before,paper_trading:true,real_order_execution:false});
+          return send(res,202,{status:'SCANNING',message:'ADAPTIVE_TRADER_SCAN_ALREADY_IN_FLIGHT',
+            requested_limit:requestedLimit??before.scan_limit??80,worker:before,paper_trading:true,real_order_execution:false});
         }
         const now=Date.now(),cooldownMs=60_000,remaining=cooldownMs-(now-lastAdaptiveTraderManualScanAt);
         if(lastAdaptiveTraderManualScanAt>0&&remaining>0){
@@ -955,9 +969,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         lastAdaptiveTraderManualScanAt=now;
         // runOnce marks the worker in-flight before its first await. Respond immediately;
-        // the dashboard then polls /status for a completed, persisted learning cycle.
+        // the dashboard polls /status for a completed, persisted learning cycle.
         try{
-          Promise.resolve(adaptiveTraderWorker.runOnce()).catch(error=>{
+          Promise.resolve(adaptiveTraderWorker.runOnce({limit:requestedLimit})).catch(error=>{
             console.warn('[ADAPTIVE_TRADER_MANUAL_SCAN_FAILED] '+String(error?.message??error).slice(0,160));
           });
         }catch(error){
@@ -965,7 +979,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             reason:String(error?.message??error).slice(0,160),paper_trading:true,real_order_execution:false});
         }
         return send(res,202,{status:'SCAN_STARTED',requested_at:new Date(now).toISOString(),
-          worker:adaptiveTraderWorker.snapshot(),paper_trading:true,real_order_execution:false});
+          requested_limit:requestedLimit??before.scan_limit??80,worker:adaptiveTraderWorker.snapshot(),
+          paper_trading:true,real_order_execution:false});
       }
       if(u.pathname==='/api/adaptive-trader/market-snapshot'&&req.method==='GET'){
         if(typeof adaptiveTraderSnapshotProvider!=='function')return send(res,503,{
