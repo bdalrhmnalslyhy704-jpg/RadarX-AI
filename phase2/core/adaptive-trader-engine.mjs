@@ -806,6 +806,7 @@ export function buildAdaptiveLearningProfile(samples = [], { minSamples = 60, mi
     positive_outcome_rate_pct:Number((overallRate*100).toFixed(1)),outcome_counts:{up:positive,down:negative,flat},
     candidate_samples:resolved.filter(row=>row.observation_type==='DEEP_CANDIDATE').length,
     market_wide_samples:resolved.filter(row=>row.observation_type==='MARKET_WIDE_TICKER').length,
+    historical_samples:resolved.filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE').length,
     adjustments:ready?adjustments:Object.fromEntries(Object.keys(featureKeys).map(key=>[key,0])),
     buckets,
     note:ready?'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES'
