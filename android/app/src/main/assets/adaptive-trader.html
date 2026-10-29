@@ -145,6 +145,7 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
       <p id="learnDescription">تُسجَّل لقطة السعر والخصائص عند الرصد ثم تُراجع بعد مرور أربع ساعات على الأقل. لا يغيّر النظام قواعد الدخول ولا يتعلم من نتائج مستقبلية قبل ظهورها.</p>
       <div class="learning-progress"><i id="learnProgress" style="width:0%"></i></div>
       <p id="learnCount">0 من 60 نتيجة موسومة</p>
+      <p id="learningDiagnosticsText" class="muted" style="font-size:10px;line-height:1.8;margin-bottom:0">تشخيص مصادر التعلّم سيظهر بعد أول دورة خادمية.</p>
     </div>
     <div class="learning-card">
       <h3>ماذا تعني نتائج التعلم؟</h3>
@@ -672,10 +673,26 @@ function renderLearning(){
     :'المنظومة تحفظ النتائج وتنتظر أمثلة حقيقية مرصودة لمدة أربع ساعات على الأقل. لن تدّعي أنها تعلمت قبل اكتمال العينة.';
   const requiredSamples=Math.max(1,Number(model.required_samples)||60);
   const outcomes=model.outcome_counts||{};
+  const hasCapture=Boolean(state.serverStatus&&state.serverStatus.learning_capture&&
+    Number.isFinite(Number(state.serverStatus.learning_capture.historical_input_samples)));
   const capture=(state.serverStatus&&state.serverStatus.learning_capture)||{};
   el('learnProgress').style.width=Math.min(100,resolvedCount/requiredSamples*100)+'%';
   el('learnCount').textContent=resolvedCount+' من '+requiredSamples+' نتيجة مكتملة · صعود '+(Number(outcomes.up)||0)+' · هبوط '+(Number(outcomes.down)||0)+' · محايد '+(Number(outcomes.flat)||0)+' · معدل الإيجابي '+fmt(model.positive_outcome_rate_pct,1)+'% (تقديري)'+
     (state.serverStatus?' · تاريخي بإغلاقات مؤكدة '+(Number(model.historical_samples)||0)+' · مرشحون بنتائج إغلاق '+(Number(model.candidate_samples)||0)+' · لقطات السوق الواسعة للتدقيق فقط '+(Number(state.serverStatus.memory&&state.serverStatus.memory.market_wide_samples)||0):' · ذاكرة الخادم غير متاحة؛ لا تُحسب النتائج المحلية كتعلّم مكتمل');
+  const rejected=capture.historical_rejected&&typeof capture.historical_rejected==='object'
+    ?Object.values(capture.historical_rejected).reduce(function(sum,value){return sum+(Number(value)||0);},0):0;
+  const available=Math.max(0,Number(capture.snapshot_historical_samples_available)||0);
+  const input= Math.max(0,Number(capture.historical_input_samples)||0);
+  const accepted=Math.max(0,Number(capture.new_historical_samples)||0);
+  const unresolved=Math.max(0,Number(capture.unresolved_training_samples)||0);
+  el('learningDiagnosticsText').textContent=!hasCapture
+    ?'تشخيص مصادر التعلّم التفصيلي غير متوفر في نسخة الخادم الحالية؛ لا نفترض أن المحرك يتعلّم من مجرد ظهور «جارٍ الفحص».'
+    :'تشخيص آخر دورة خادمية: أمثلة تاريخية مولّدة من الشموع المغلقة '+available+
+      ' · وصلت للعامل '+input+' · قُبلت جديدة '+accepted+' · رُفضت/مكررة '+rejected+
+      ' · عينات تدريب غير مكتملة +4h '+unresolved+
+      ' · نتائج شموع مغلقة جديدة '+(Number(capture.new_closed_candle_outcomes)||0)+
+      ' · عينات المرشحين الجديدة '+(Number(capture.new_deep_candidate_samples)||0)+
+      '. إن كان عدد الأمثلة المولّدة صفرًا فمشكلة المصدر/التاريخ تسبق مرحلة التعلّم؛ وإن وصلت ورُفضت فعداد الرفض يوضح السبب.';
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
