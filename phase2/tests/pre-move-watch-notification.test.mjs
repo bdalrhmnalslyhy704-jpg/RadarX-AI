@@ -252,6 +252,69 @@ test('live near-miss with 1.5x volume, 1.5x trades and strong relative strength 
   }
 });
 
+test('compressed buyer absorption qualifies as one bounded pre-breakout watch, never as entry',async()=>{
+  const now=Date.now();
+  const {candidate:base,snapshot}=fixture(now);
+  const candidate={
+    ...base,symbol:'HYPEUSDT',last_price:79.39,price_change_24h:-3.723,
+    quote_volume_24h:125_370_000,data_quality:100,liquidity_quality:96,
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,candle_data_valid:true,volume_gate_pass:true},
+    watch_only:true,alert_eligible:false,risk_flags:[],
+    pre_move_context:{
+      ...base.pre_move_context,stage:'WATCH_EARLY',watch_only:true,actionable:false,
+      evidence_complete:true,closed_candles_only:true,already_moved:false,session_close:now-5*60_000,
+      score:72.6,session_return_pct:-0.9482,one_hour_return_pct:0.2526,
+      volume_acceleration:0.267,trade_acceleration:0.5407,
+      taker_buy_ratio:0.6822,taker_buy_acceleration:0.1231,
+      mean_close_location:0.5575,relative_strength_vs_market_pct:0.1599,
+      relative_strength_vs_btc_pct:0.1599,
+      components:{squeeze:48.68,structure:60.68,buying_pressure:99.83},
+      reasons:['TAKER_BUY_ACCELERATING','BUYERS_HOLDING_CANDLE_CLOSES']
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'high buyer absorption, compression and structure warrants a bounded watch before confirmation');
+  assert.equal(alert.watch_notification_tier,'COMPRESSED_BUYER_ABSORPTION_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.paper_trading,true);
+
+  const weaker=buildPreMoveWatchOnlyAlert({
+    ...candidate,pre_move_context:{
+      ...candidate.pre_move_context,
+      components:{...candidate.pre_move_context.components,buying_pressure:72}
+    }
+  },snapshot,now);
+  assert.notEqual(weaker?.watch_notification_tier,'COMPRESSED_BUYER_ABSORPTION_MONITOR',
+    'weaker buyer absorption must not qualify this special lane');
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-compressed-buyer-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].watch_notification_tier,'COMPRESSED_BUYER_ABSORPTION_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+    const duplicate=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(duplicate.status,'DUPLICATE_SUPPRESSED');
+    assert.equal(sent.length,1,'one market event must not create repeated monitor pushes');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('EARLY_FLOW_MONITOR survives the final push gate before price confirmation, as monitor-only',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-early-flow-monitor-'));
   const store=await new DurableStore({dir}).init();
