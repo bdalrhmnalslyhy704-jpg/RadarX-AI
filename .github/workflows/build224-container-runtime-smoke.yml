@@ -163,6 +163,39 @@ jobs:
           import fs from 'node:fs';
           const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));
           const capture=x.learning_capture||null;
+          const brain=x.cognitive_brain||{};
+          const brainProfile=brain.profile||{};
+          const cognitiveEvidence={
+            method:String(brainProfile.method||brain.method||'UNKNOWN'),
+            status:String(brain.status||'UNKNOWN'),
+            resolved_samples:Number(brainProfile.resolved_samples)||0,
+            training_samples:Number(brainProfile.training_samples)||0,
+            validation_samples:Number(brainProfile.validation_samples)||0,
+            holdout_samples:Number(brainProfile.holdout_samples)||0,
+            purged_overlap_samples:Number(brainProfile.purged_overlap_samples)||0,
+            validation_evaluated:brainProfile.validation?.evaluated===true,
+            validation_beat_base_rate:brainProfile.validation?.beat_base_rate===true,
+            holdout_evaluated:brainProfile.holdout?.evaluated===true,
+            holdout_beat_base_rate:brainProfile.holdout?.beat_base_rate===true,
+            probability_ready:brainProfile.probability_ready===true,
+            validation_start_at:brainProfile.validation_start_at??null,
+            holdout_start_at:brainProfile.holdout_start_at??null,
+            max_training_outcome_resolved_at:brainProfile.max_training_outcome_resolved_at??null
+          };
+          if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'){
+            throw new Error('ADAPTIVE_TRADER_COGNITIVE_MODEL_VERSION_INVALID '+JSON.stringify(cognitiveEvidence));
+          }
+          if(cognitiveEvidence.resolved_samples>=100&&(
+            cognitiveEvidence.training_samples<60||
+            cognitiveEvidence.validation_samples<20||
+            cognitiveEvidence.holdout_samples<20||
+            !cognitiveEvidence.validation_evaluated||
+            !cognitiveEvidence.holdout_evaluated||
+            !(Number(cognitiveEvidence.max_training_outcome_resolved_at)<Number(cognitiveEvidence.validation_start_at))||
+            !(Number(cognitiveEvidence.validation_start_at)<Number(cognitiveEvidence.holdout_start_at))
+          )){
+            throw new Error('ADAPTIVE_TRADER_COGNITIVE_CHRONOLOGICAL_SPLIT_INCOMPLETE '+JSON.stringify(cognitiveEvidence));
+          }
           const trainingEvidence={
             resolved_samples:Number(x.memory?.resolved_samples)||0,
             unresolved_samples:Number(x.memory?.unresolved_samples)||0,
@@ -184,6 +217,7 @@ jobs:
             learning_ready:x.learning_profile?.ready===true,
             note:'A successful scan is not proof of learned calibration; this reports the actual sample pipeline.'
           }));
+          console.log('ADAPTIVE_TRADER_COGNITIVE_V3_CHRONOLOGICAL_DIAGNOSTICS '+JSON.stringify(cognitiveEvidence));
           console.log('ADAPTIVE_TRADER_WORKER_AND_MEMORY_OK '+JSON.stringify({
             status:x.status,scan_count:x.scan_count,successful_scans:x.successful_scans,
             last_scan_at:x.last_scan_at,last_error:x.last_error,

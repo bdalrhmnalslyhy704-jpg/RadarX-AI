@@ -99,3 +99,20 @@ test('sidecar client contains no exchange order execution endpoint or secret sto
   assert.doesNotMatch(client,/newOrder|createOrder|apiSecret|secretKey|BINANCE_API_SECRET/i);
   assert.match(client,/real_order_execution\s*!==\s*false/);
 });
+
+test('cognitive dashboard distinguishes nested validation, untouched holdout, adaptive model choice and forward drift',()=>{
+  assert.match(html,/brainProfile\.factor_evidence\|\|brainProfile\.factors/);
+  assert.match(html,/brainProfile\.validation\|\|brain\.validation/);
+  assert.match(html,/brainProfile\.model_selection\|\|brain\.model_selection/);
+  assert.match(html,/brainProfile\.regime_adaptation\|\|brain\.regime_adaptation/);
+  assert.match(html,/brain\.prequential/);
+  assert.match(html,/عينات تداخل مستبعدة/);
+  assert.match(html,/التحقق الأوسط/);
+  assert.match(html,/الامتحان الأخير نجح/);
+  assert.match(html,/أداء التوقعات المسجلة يتراجع/);
+  assert.match(html,/error_patterns/);
+  assert.match(html,/أخطاء عالية الثقة/);
+  assert.match(html,/هذا ارتباط تشخيصي وليس إثباتًا للسبب/);
+  assert.match(html,/لا يُسمح بها قبل النجاح في التحقق الأوسط والاختبار النهائي المستقل/);
+});
+

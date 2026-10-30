@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
   ADAPTIVE_TRADER_POLICY,
   scoreAdaptiveTraderCandidate,
@@ -530,7 +531,7 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
   }};
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V2');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V3');
   assert.equal(snapshot.universe.emerging_movers_available,15);
   assert.equal(snapshot.universe.extended_movers_available,9);
   assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
@@ -706,4 +707,93 @@ test('adaptive learning policy, readiness gate and dashboard default agree on 60
   const profile=buildAdaptiveLearningProfile([]);
   assert.equal(profile.ready,false);
   assert.equal(profile.required_samples,60);
+});
+
+test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bursts without paper entry',async()=>{
+  const f=marketFixture();
+  const tickers=[
+    ...Array.from({length:40},(_,i)=>({
+      symbol:'BAS'+String(i).padStart(3,'0')+'USDT',
+      lastPrice:'10',
+      quoteVolume:String(5_000_000-i*20_000),
+      priceChangePercent:'1.2',
+      count:'1500'
+    })),
+    {symbol:'SMALLPULSEUSDT',lastPrice:'10',quoteVolume:'950000',priceChangePercent:'-2',count:'1900'},
+    {symbol:'SHOCKPULSEUSDT',lastPrice:'10',quoteVolume:'940000',priceChangePercent:'-3',count:'2100'}
+  ];
+  const rest={async request(path,query={}){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers.map(row=>({...row})),source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:20,now:f.now});
+  assert.ok(first.latest_prices.some(row=>row.symbol==='SMALLPULSEUSDT'));
+  assert.ok(first.latest_prices.some(row=>row.symbol==='SHOCKPULSEUSDT'));
+
+  tickers.find(row=>row.symbol==='SMALLPULSEUSDT').lastPrice='10.02';
+  tickers.find(row=>row.symbol==='SHOCKPULSEUSDT').lastPrice='10.60';
+  const second=await service({limit:20,now:f.now+3*60*1000});
+  assert.ok(second.universe.price_acceleration_movers_available>=1);
+  assert.ok(second.universe.rapid_burst_movers_available>=1);
+
+  const small=second.candidates.find(row=>row.symbol==='SMALLPULSEUSDT');
+  assert.ok(small,'a 0.2% market-wide pulse must enter deep scan');
+  assert.equal(small.selection_lane,'PRICE_ACCELERATION');
+
+  const shock=second.candidates.find(row=>row.symbol==='SHOCKPULSEUSDT');
+  assert.ok(shock,'a 6% market-wide pulse must enter the audit lane');
+  assert.equal(shock.selection_lane,'SHOCK_MOVE_AUDIT');
+  assert.equal(shock.shock_move_audit_only,true);
+  assert.equal(shock.tier,'LATE_MOVE');
+  assert.equal(shock.paper_candidate,false);
+  assert.equal(shock.entry_eligible,false);
+  assert.ok(shock.reason_codes.includes('SHARP_MARKET_PULSE_AUDIT_ONLY'));
+  assert.ok(shock.reason_codes.includes('ALREADY_EXTENDED'));
+  assert.equal(shock.trade_decision.decision,'AVOID_CHASING');
+  assert.equal(shock.real_order_execution,false);
+});
+
+test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const rows=[];
+  for(let i=0;i<48;i++){
+    const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
+    const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+      symbol,klines,fastKlines,btcKlines,now,maxSamples:8
+    });
+    assert.equal(samples.length,8,symbol+' should retain eight independent 4h labels');
+    for(let j=1;j<samples.length;j++){
+      assert.ok(samples[j].at-samples[j-1].at>=4*60*60*1000,
+        symbol+' must not contribute overlapping 4h outcome windows');
+    }
+    rows.push(...samples);
+  }
+  const uniqueTimes=new Set(rows.map(row=>row.at));
+  assert.ok(uniqueTimes.size>=100,'different symbols should populate distinct chronological time blocks');
+
+  const profile=buildCognitiveLearningProfile(rows);
+  assert.ok(profile.training_samples>=60,'historical training split must be populated: '+JSON.stringify({
+    resolved:profile.resolved_samples,training:profile.training_samples,validation:profile.validation_samples,
+    holdout:profile.holdout_samples,purged:profile.purged_overlap_samples,
+    unique_times:uniqueTimes.size,validation_start:profile.validation_start_at,
+    holdout_start:profile.holdout_start_at,training_end:profile.max_training_outcome_resolved_at
+  }));
+  assert.ok(profile.validation_samples>=20,'middle validation must contain enough matured observations');
+  assert.ok(profile.holdout_samples>=20,'untouched holdout must contain enough matured observations');
+  assert.equal(profile.validation.evaluated,true);
+  assert.equal(profile.holdout.evaluated,true);
+  assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
+  assert.ok(profile.validation_start_at<profile.holdout_start_at);
+  // This constant-trend fixture has no predictive variation, so it must not
+  // unlock probabilities merely because the chronology is now large enough.
+  assert.equal(profile.probability_ready,false);
 });

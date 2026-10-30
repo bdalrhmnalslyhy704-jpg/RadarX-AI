@@ -344,3 +344,50 @@ test('manual worker scan accepts a valid per-request universe limit and rejects 
   }
 });
 
+test('cognitive journal freezes the first forecast for a closed candle and blocks backfilled forecasts',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-cognitive-journal-freeze-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now();
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+    candidates:[],latest_prices:[],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,logger:{info(){},warn(){}}});
+  try{
+    const first={
+      symbol:'FREEZEUSDT',price:1,candle_close_price:1,candle_close_time:now-60_000,
+      base_score:62,score:62,tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,
+      features:{volume_ratio:1.6,taker_buy_ratio:0.58,higher_low:true},
+      cognitive_assessment:{version:3,decision:'WATCH_AND_REASSESS',summary_ar:'الأدلة محدودة',
+        reason_codes:['FIRST_FORECAST'],hypotheses:[],contradictions:[],predicted_up_probability:61,
+        confidence_label:'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT'}
+    };
+    worker.recordCognitiveAssessment(first,now);
+    worker.recordCognitiveAssessment({
+      ...first,score:96,base_score:96,
+      features:{volume_ratio:9.8,taker_buy_ratio:0.82,higher_low:true},
+      cognitive_assessment:{version:3,decision:'EARLY_SETUP_REVIEW',summary_ar:'تغير التقييم لاحقًا',
+        reason_codes:['LATER_MODEL'],hypotheses:[],contradictions:[],predicted_up_probability:96,
+        confidence_label:'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT'}
+    },now+60_000);
+    assert.equal(worker.state.cognitive_journal.length,1);
+    assert.equal(worker.state.cognitive_journal[0].predicted_up_probability,61);
+    assert.equal(worker.state.cognitive_journal[0].features.volume_ratio,1.6);
+    assert.equal(worker.state.cognitive_journal[0].decision,'WATCH_AND_REASSESS');
+    assert.equal(worker.state.cognitive_journal[0].last_seen_at,now+60_000);
+    assert.equal(worker.state.cognitive_journal[0].model_version,3);
+
+    worker.state.cognitive_profile={max_training_outcome_resolved_at:now+120_000};
+    worker.recordCognitiveAssessment({
+      ...first,candle_close_time:now+120_000
+    },now+180_000);
+    assert.equal(worker.state.cognitive_journal.length,1,
+      'a baseline at or before the model training cutoff cannot be registered as a fresh forecast');
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
