@@ -1183,10 +1183,18 @@ export function rankPreMoveTickerRows(tickers,symbols,{
     })
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
   const take=Math.max(1,Math.trunc(Number(limit)||30));
-  if(ranked.length<=take)return ranked;
-  // Keep only the highest-ranked 20% pinned. Reserve a second, bounded lane
-  // for unusually strong live ticker-activity bursts so alphabetical rotation
-  // cannot delay every fast-emerging pair until its next full-market turn.
+  const makeResult=(rows,rotationAdvance=0)=>{
+    const result=rows.slice(0,take).map(row=>({
+      ...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)
+    }));
+    // Non-enumerable metadata keeps the cursor diagnostic out of market rows/API payloads.
+    Object.defineProperty(result,'rotation_advance_count',{value:rotationAdvance,enumerable:false});
+    return result;
+  };
+  if(ranked.length<=take)return makeResult(ranked,0);
+  // Keep only the highest-ranked 10–20% pinned. Reserve a bounded lane for
+  // unusually strong live ticker-activity bursts so alphabetical rotation cannot
+  // delay fast-emerging pairs until their next full-market turn.
   const pinnedShare=Number.isFinite(Number(pinnedFraction))
     ?Math.max(0.05,Math.min(0.50,Number(pinnedFraction))):0.20;
   const pinnedCount=Math.min(Math.ceil(take*pinnedShare),ranked.length);
@@ -1208,19 +1216,24 @@ export function rankPreMoveTickerRows(tickers,symbols,{
       a.symbol.localeCompare(b.symbol))
     .slice(0,activityPrioritySlots);
   const activitySymbols=new Set(activityPriority.map(x=>x.symbol));
-  // Rotation order stays independent of changing volume/trade ranks. Activity
-  // priority rows temporarily borrow slots from the rotated lane; when their burst
-  // fades, the normal deterministic alphabetic coverage resumes automatically.
-  const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)&&!activitySymbols.has(x.symbol))
-    .sort((a,b)=>a.symbol.localeCompare(b.symbol));
-  const rotateCount=Math.min(take-pinned.length-activityPriority.length,rotating.length);
-  if(rotateCount<=0)return [...pinned,...activityPriority].slice(0,take)
-    .map(row=>({...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)}));
-  const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
+  const rotateCount=Math.min(take-pinned.length-activityPriority.length,
+    Math.max(0,ranked.length-pinned.length-activityPriority.length));
+  if(rotateCount<=0)return makeResult([...pinned,...activityPriority],0);
+  // Rotate over one stable alphabetical market ring, including pinned and
+  // activity-priority symbols. Skip symbols already selected in this cycle, but
+  // count every visited position so changing burst membership cannot reset or
+  // overlap the next cursor slice.
+  const rotationRing=[...ranked].sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  const offset=((Math.trunc(Number(rotationOffset)||0)%rotationRing.length)+rotationRing.length)%rotationRing.length;
   const rotatingRows=[];
-  for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
-  return [...pinned,...activityPriority,...rotatingRows].slice(0,take)
-    .map(row=>({...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)}));
+  let rotationAdvance=0;
+  while(rotatingRows.length<rotateCount&&rotationAdvance<rotationRing.length){
+    const row=rotationRing[(offset+rotationAdvance)%rotationRing.length];
+    rotationAdvance++;
+    if(pinnedSymbols.has(row.symbol)||activitySymbols.has(row.symbol))continue;
+    rotatingRows.push(row);
+  }
+  return makeResult([...pinned,...activityPriority,...rotatingRows],rotationAdvance);
 }
 
 /**
