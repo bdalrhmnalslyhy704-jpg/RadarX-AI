@@ -992,7 +992,8 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
   assert.equal(first.universe.per_cycle_scan_cap,40);
   assert.equal(first.universe.discovered,40);
   assert.equal(first.universe.deep_scanned,40);
-  assert.equal(first.universe.rotation_width,28);
+  assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
+  assert.equal(first.universe.rotation_width,36,'unused activity-priority slots must return to the fair rotating lane');
   assert.equal(seen.length,40);
 
   seen=[];
