@@ -26,7 +26,8 @@ const FEATURE_NAMES = Object.freeze([
   'relative_x_trend',
   'compression_x_structure',
   'volume_x_buyer_x_structure',
-  'trade_x_buyer'
+  'trade_x_buyer',
+  'volume_buyer_structure_confluence'
 ]);
 
 const FACTORS = Object.freeze([
@@ -88,6 +89,7 @@ function normalizedFeatures(features = {}) {
   const close = closeRaw === null ? 0 : clamp((closeRaw - 0.5) * 2, -1, 1);
   const wickRatio = wickRaw !== null && rangeRaw !== null && rangeRaw > 0 ? wickRaw / rangeRaw : null;
   const wickPenalty = wickRatio === null ? 0 : -clamp((wickRatio - 0.35) / 0.35, 0, 2);
+  const coreConfluence = volRaw !== null && volRaw >= 1.5 && buyerRaw !== null && buyerRaw >= 0.52 && structure === 1 ? 1 : 0;
 
   return [
     volume,
@@ -106,7 +108,8 @@ function normalizedFeatures(features = {}) {
     relative * trend,
     compression * structure,
     volume * buyer * structure,
-    trades * buyer
+    trades * buyer,
+    coreConfluence
   ];
 }
 
