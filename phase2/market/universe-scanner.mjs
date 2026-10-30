@@ -1183,6 +1183,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
     })
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
   const take=Math.max(1,Math.trunc(Number(limit)||30));
+  let activitySymbols=new Set();
   const makeResult=(rows,rotationAdvance=0)=>{
     const result=rows.slice(0,take).map(row=>({
       ...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)
@@ -1215,7 +1216,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
       Number(b.ticker_activity?.trade_acceleration_ratio)-Number(a.ticker_activity?.trade_acceleration_ratio)||
       a.symbol.localeCompare(b.symbol))
     .slice(0,activityPrioritySlots);
-  const activitySymbols=new Set(activityPriority.map(x=>x.symbol));
+  activitySymbols=new Set(activityPriority.map(x=>x.symbol));
   const rotateCount=Math.min(take-pinned.length-activityPriority.length,
     Math.max(0,ranked.length-pinned.length-activityPriority.length));
   if(rotateCount<=0)return makeResult([...pinned,...activityPriority],0);
