@@ -1061,6 +1061,11 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.universe.rotation_cursor_persisted,true);
   assert.equal(result.universe.rotation_sequence,'COMPLETED_SCAN_CURSOR_V1');
   assert.equal(result.universe.rotation_cycle,0);
+  assert.equal(result.universe.rotation_offset,0);
+  const firstCursor=cursorRows.get('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT');
+  assert.equal(firstCursor.version,2);
+  assert.equal(firstCursor.next_rotation_offset,result.universe.rotation_offset+result.universe.rotation_width,
+    'the persisted cursor advances by the actual rotating width selected in this completed cycle');
   assert.equal(cursorRows.size,2,'a completed scan persists both the rotation cursor and ticker activity baseline');
   assert.ok(cursorRows.has('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT'));
   assert.ok(cursorRows.has('RADARX:PRE_MOVE_TICKER_ACTIVITY_BASELINE:V1:USDT'));
@@ -1074,6 +1079,10 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(afterRestart.universe.rotation_cursor_persisted,true);
   assert.equal(afterRestart.universe.rotation_cycle,1,
     'a new scanner instance must continue from persisted progress instead of repeating cycle zero');
+  assert.equal(afterRestart.universe.rotation_offset,firstCursor.next_rotation_offset,
+    'a restart resumes the cumulative market offset rather than multiplying the cycle by a possibly changed lane width');
+  assert.equal(cursorRows.get('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT').next_rotation_offset,
+    afterRestart.universe.rotation_offset+afterRestart.universe.rotation_width);
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
   assert.equal(result.watch_candidates.length,0,'already-extended symbols must not leak into the watch-only list');
   const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);
