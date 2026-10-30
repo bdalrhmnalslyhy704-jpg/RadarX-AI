@@ -163,6 +163,43 @@ test('Pre-Move ticker activity acceleration ignores absent, stale, or future bas
   assert.equal(buildPreMoveTickerActivitySignals(current,future,180000).size,0,'future baseline timestamps must fail closed');
 });
 
+test('Pre-Move stable-ring cursor skips a temporary activity-priority symbol without repeating the rotating slice',()=>{
+  const ordinary=Array.from({length:60},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const burst={symbol:'ABURSTUSDT',baseAsset:'ABURST',quoteAsset:'USDT',status:'TRADING'};
+  const symbols=[...ordinary,burst];
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol==='ABURSTUSDT'?100000:5000000+i*1000),
+    count:x.symbol==='ABURSTUSDT'?1000:50000+i*100,
+    priceChangePercent:'2'
+  }));
+  const activitySignals=new Map([['ABURSTUSDT',{
+    score:15,volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.8,
+    observed_at:180000,baseline_age_ms:60000
+  }]]);
+  const first=rankPreMoveTickerRows(rows,symbols,{
+    minQuoteVolume24h:750000,limit:24,rotationOffset:0,activitySignals,pinnedFraction:0.20
+  });
+  assert.equal(first[5].symbol,'ABURSTUSDT');
+  const firstRotation=first.slice(6).map(row=>row.symbol);
+  assert.equal(firstRotation.length,18);
+  assert.equal(first.rotation_advance_count,19,
+    'the cursor counts the temporary burst symbol it skips in the stable alphabetical ring');
+
+  // The burst vanishes from the priority lane. Its row returns to the stable ring,
+  // but the cursor resumes after the position already visited in the prior cycle.
+  const second=rankPreMoveTickerRows(rows,symbols,{
+    minQuoteVolume24h:750000,limit:24,rotationOffset:first.rotation_advance_count,pinnedFraction:0.20
+  });
+  const secondRotation=second.slice(5).map(row=>row.symbol);
+  assert.equal(secondRotation[0],'C018USDT');
+  assert.equal(firstRotation.some(symbol=>secondRotation.includes(symbol)),false,
+    'a fading activity burst must not make the market cursor repeat previously scanned rows');
+});
+
 test('Pre-Move discovery pins 20%, reserves activity-priority slots, and rotates the rest across the eligible market',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
