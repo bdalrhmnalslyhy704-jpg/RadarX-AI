@@ -234,7 +234,7 @@ test('Pre-Move activity-priority lane deep-scans up to eight independent acceler
     observed_at:180000,baseline_age_ms:60000
   }]));
   const picked=rankPreMoveTickerRows(rows,allSymbols,{
-    minQuoteVolume24h:750000,limit:40,rotationOffset:0,activitySignals
+    minQuoteVolume24h:750000,limit:40,rotationOffset:0,activitySignals,pinnedFraction:0.10
   });
   assert.equal(picked.length,40);
   const priority=picked.filter(row=>row.ticker_activity_priority_selected===true);
