@@ -670,9 +670,14 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
       ...(selected[index]?.selection_lane==='SHOCK_MOVE_AUDIT'?{
         shock_move_audit_only:true,
+        // A sharp inter-snapshot jump is diagnostic evidence, not an early setup.
+        // Force the shared decision helper to return AVOID_CHASING even when
+        // the last closed candle's own features still look constructive.
+        tier:'LATE_MOVE',
         paper_candidate:false,
         entry_eligible:false,
-        reason_codes:[...new Set([...(entry.candidate.reason_codes||[]),'SHARP_MARKET_PULSE_AUDIT_ONLY'])].slice(0,12)
+        reason_codes:[...new Set([...(entry.candidate.reason_codes||[]),
+          'SHARP_MARKET_PULSE_AUDIT_ONLY','ALREADY_EXTENDED','ANTI_CHASE_BLOCK'])].slice(0,12)
       }:{})
     }
     : {
