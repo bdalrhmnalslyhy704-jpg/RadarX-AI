@@ -9,6 +9,7 @@ import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {pushSubscription} from './fixtures.mjs';
+import {buildPreMoveWatchCandidates} from '../market/universe-scanner.mjs';
 
 function fixture(now=Date.now()){
   const p={
@@ -713,4 +714,217 @@ test('live public Spot source aliases are accepted but futures, unavailable and 
     'Historical replay data',
     'Unknown market source'
   ]) assert.equal(isTrustedBinancePublicSpotSource(source),false,source);
+});
+
+
+test('NIL-like participation surge becomes a bounded phone watch when the old 1h ceiling was too tight',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'NILUSDT',price_change_24h:-3.94,quote_volume_24h:5_840_696,
+    data_quality:96,liquidity_quality:82,
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,stale:false,future_data_detected:false},
+    pre_move_context:{
+      ...base.pre_move_context,score:63.9,session_return_pct:-1.0537,one_hour_return_pct:3.6255,
+      volume_acceleration:2.4838,trade_acceleration:2.3913,taker_buy_ratio:0.5231,
+      taker_buy_acceleration:0.1009,mean_close_location:0.7936,
+      relative_strength_vs_market_pct:-1.4456,relative_strength_vs_btc_pct:-1.4456,
+      session_close:now-60_000,
+      components:{squeeze:60,structure:80.2,buying_pressure:73.2}
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'qualified participation surge should not be hidden by the old 2.5% 1h ceiling');
+  assert.equal(alert.watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-nil-participation-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent[0].watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('PUNDIX/SOLV-like strong buyer absorption can notify below the normal volume floor as WATCH ONLY',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const cases=[
+    {
+      symbol:'PUNDIXUSDT',daily:-1.0913,quote:509_262,session:3.6383,hour:2.8986,
+      score:76.4,volume:0.7415,trades:1.0442,taker:0.7955,delta:0.3023,
+      close:0.8431,relative:2.3077,structure:74.0,buying:100
+    },
+    {
+      symbol:'SOLVUSDT',daily:-4.4919,quote:548_093,session:-2.5104,hour:1.9093,
+      score:60.4,volume:0.7399,trades:0.9340,taker:0.6160,delta:0.2379,
+      close:0.5811,relative:-3.2672,structure:76.8,buying:100
+    }
+  ];
+  for(const row of cases){
+    const candidate={
+      ...base,symbol:row.symbol,price_change_24h:row.daily,quote_volume_24h:row.quote,
+      data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      pre_move_context:{
+        ...base.pre_move_context,score:row.score,session_return_pct:row.session,
+        one_hour_return_pct:row.hour,volume_acceleration:row.volume,trade_acceleration:row.trades,
+        taker_buy_ratio:row.taker,taker_buy_acceleration:row.delta,mean_close_location:row.close,
+        relative_strength_vs_market_pct:row.relative,relative_strength_vs_btc_pct:row.relative,
+        session_close:now-60_000,
+        components:{squeeze:50,structure:row.structure,buying_pressure:row.buying}
+      }
+    };
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert, row.symbol+' should survive the strict low-volume watch-only corridor');
+    assert.equal(alert.watch_notification_tier,'STRONG_BUYER_ABSORPTION_MONITOR');
+    assert.equal(alert.low_volume_watch_only,true);
+    assert.equal(alert.data_status.data_valid,false);
+    assert.equal(alert.entry_eligible,false);
+    assert.equal(alert.paper_trading,true);
+    assert.equal(alert.real_order_execution,false);
+
+    const dir=await mkdtemp(join(tmpdir(),'radarx-strong-buyer-watch-'));
+    const store=await new DurableStore({dir}).init();
+    try{
+      await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+      await store.upsertSubscription('u1',pushSubscription());
+      const sent=[];
+      const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+        sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+      }};
+      const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+      const result=await manager.notifyRadarWatchOnlyAlert(alert);
+      assert.equal(result.status,'SENT',row.symbol+': '+JSON.stringify(result));
+      assert.equal(result.sent_count,1);
+      assert.equal(sent[0].watch_notification_tier,'STRONG_BUYER_ABSORPTION_MONITOR');
+      assert.equal(sent[0].watch_only,true);
+      assert.equal(sent[0].entry_eligible,false);
+      assert.equal(sent[0].low_volume_watch_only,true);
+      assert.equal(sent[0].real_order_execution,false);
+    }finally{await rm(dir,{recursive:true,force:true});}
+  }
+});
+
+test('low-volume monitor cannot bypass stale candles, weak buyer flow, or poor liquidity',()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'LOWFLOWUSDT',price_change_24h:1.2,quote_volume_24h:510_000,
+    data_quality:90,liquidity_quality:72,
+    data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+    pre_move_context:{
+      ...base.pre_move_context,score:76,session_return_pct:2,one_hour_return_pct:2.4,
+      volume_acceleration:0.75,trade_acceleration:1.0,taker_buy_ratio:0.52,
+      taker_buy_acceleration:0.02,mean_close_location:0.60,
+      relative_strength_vs_market_pct:1,relative_strength_vs_btc_pct:1,
+      session_close:now-60_000,
+      components:{squeeze:50,structure:70,buying_pressure:75}
+    }
+  };
+  assert.equal(buildPreMoveWatchOnlyAlert(candidate,snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...candidate,liquidity_quality:59},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...candidate,data_status:{...candidate.data_status,data_stale:true}},snapshot,now),null);
+});
+
+
+test('market scanner retains PUNDIX and SOLV-like strong-buyer low-volume near misses for the bounded watch lane',()=>{
+  const now=Date.now();
+  const rows=[
+    {
+      symbol:'PUNDIXUSDT',last_price:0.0997,price_change_24h:-1.0913,
+      quote_volume_24h:509262,data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      risk_flags:[],
+      pre_move_context:{
+        stage:'NO_SETUP',evidence_complete:true,closed_candles_only:true,already_moved:false,
+        session_close:now-60_000,score:76.4,session_return_pct:3.6383,one_hour_return_pct:2.8986,
+        volume_acceleration:0.7415,trade_acceleration:1.0442,taker_buy_ratio:0.7955,
+        taker_buy_acceleration:0.3023,mean_close_location:0.8431,
+        relative_strength_vs_market_pct:2.3077,relative_strength_vs_btc_pct:2.3077,
+        components:{squeeze:50,structure:74,buying_pressure:100}
+      }
+    },
+    {
+      symbol:'SOLVUSDT',last_price:0.004699,price_change_24h:-4.4919,
+      quote_volume_24h:548093,data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      risk_flags:[],
+      pre_move_context:{
+        stage:'NO_SETUP',evidence_complete:true,closed_candles_only:true,already_moved:false,
+        session_close:now-60_000,score:60.4,session_return_pct:-2.5104,one_hour_return_pct:1.9093,
+        volume_acceleration:0.7399,trade_acceleration:0.9340,taker_buy_ratio:0.6160,
+        taker_buy_acceleration:0.2379,mean_close_location:0.5811,
+        relative_strength_vs_market_pct:-3.2672,relative_strength_vs_btc_pct:-3.2672,
+        components:{squeeze:50,structure:76.8,buying_pressure:100}
+      }
+    }
+  ];
+  const candidates=buildPreMoveWatchCandidates(rows,{
+    minQuoteVolume24h:750000,minLiquidityQuality:60,minDataQuality:70
+  });
+  assert.deepEqual(candidates.map(x=>x.symbol).sort(),['PUNDIXUSDT','SOLVUSDT']);
+  assert.ok(candidates.every(x=>x.watch_only===true&&x.alert_eligible===false));
+  assert.ok(candidates.every(x=>x.pre_move_context.strong_buyer_absorption_monitor_only===true));
+  assert.ok(candidates.every(x=>x.data_status.data_valid===false));
+});
+
+
+test('SOXSB-like bStock Spot pair is labelled as tokenized security in the bounded monitor-only push',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'SOXSBUSDT',asset_class:'TOKENIZED_SECURITY',tokenized_security:true,
+    last_price:50.84,price_change_24h:2.4,quote_volume_24h:3_620_000,
+    data_quality:96,liquidity_quality:90,
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,stale:false,future_data_detected:false},
+    risk_flags:[],
+    pre_move_context:{
+      ...base.pre_move_context,stage:'WATCH_EARLY',watch_only:true,actionable:false,
+      evidence_complete:true,closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:70,session_return_pct:1.0,one_hour_return_pct:1.1,
+      volume_acceleration:1.6,trade_acceleration:1.5,taker_buy_ratio:0.56,
+      taker_buy_acceleration:0.08,mean_close_location:0.60,
+      relative_strength_vs_market_pct:0.8,relative_strength_vs_btc_pct:0.8,
+      components:{squeeze:55,structure:70,buying_pressure:75}
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.asset_class,'TOKENIZED_SECURITY');
+  assert.equal(alert.tokenized_security,true);
+  assert.equal(alert.watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-bstock-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].asset_class,'TOKENIZED_SECURITY');
+    assert.equal(sent[0].tokenized_security,true);
+    assert.match(sent[0].message,/أصل مُرمّز/);
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });

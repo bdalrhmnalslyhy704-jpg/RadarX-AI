@@ -76,11 +76,22 @@ test('GET /api/early-mover-case-study returns bounded closed-candle diagnostics 
     const invalid=await fetch(base+'/api/early-mover-case-study?symbols=SOXLB');
     assert.equal(invalid.status,400);
     const historicalAsOf=new Date(candles[980].closeTime).toISOString();
-    const allowed=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT,SYNUSDT&threshold_pct=5&lead_minutes=60&as_of='+encodeURIComponent(historicalAsOf));
-    assert.equal(allowed.status,200);
-    const historicalReport=await allowed.json();
-    assert.equal(historicalReport.as_of,historicalAsOf);
-    assert.ok(calls.some(call=>call.symbol==='HUMAUSDT'&&call.options.endTime===Date.parse(historicalAsOf)));
+    const screenshotSymbols=[
+      'PARTIUSDT','BEAMXUSDT','SOXSBUSDT','SOPHUSDT','SOLVUSDT','SKDDBUSDT',
+      'LSKUSDT','NILUSDT','PUNDIXUSDT','UVXYBUSDT','KERNELUSDT','SQQQBUSDT','BREVUSDT'
+    ];
+    const screenshotAudit=await fetch(base+'/api/early-mover-case-study?symbols='+screenshotSymbols.join(',')+'&threshold_pct=5&window_hours=24&lead_minutes=60&as_of='+encodeURIComponent(historicalAsOf));
+    assert.equal(screenshotAudit.status,200);
+    const screenshotReport=await screenshotAudit.json();
+    assert.equal(screenshotReport.report,'RADARX_EARLY_MOVER_CASE_STUDY_V1');
+    assert.deepEqual(screenshotReport.options.symbols,screenshotSymbols);
+    assert.equal(screenshotReport.results.length,13);
+    assert.equal(screenshotReport.as_of,historicalAsOf);
+    assert.ok(screenshotReport.results.every(row=>row.no_future_data_used===true));
+    assert.ok(calls.some(call=>call.symbol==='SOXSBUSDT'));
+    assert.ok(calls.some(call=>call.symbol==='SQQQBUSDT'));
+    assert.ok(calls.some(call=>call.symbol==='PARTIUSDT'&&call.options.endTime===Date.parse(historicalAsOf)));
+
     const invalidTimestamp=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT&as_of=2099-01-01T00%3A00%3A00Z');
     assert.equal(invalidTimestamp.status,400);
   }finally{

@@ -267,11 +267,64 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     buyingPressure!==null&&buyingPressure>=90&&compressedBuyerChecks===7&&
     quoteVolume!==null&&quoteVolume>=750000&&quality!==null&&quality>=95&&
     liquidity!==null&&liquidity>=85&&participation>=3;
+  const participationSurgeChecks=[
+    volume!==null&&volume>=1.25,
+    trades!==null&&trades>=1.20,
+    buy!==null&&buy>=0.50,
+    buyDelta!==null&&buyDelta>=0.05,
+    closeLocation!==null&&closeLocation>=0.54,
+    structure!==null&&structure>=55,
+    buyingPressure!==null&&buyingPressure>=60
+  ].filter(Boolean).length;
+  // Broader, bounded participation lane: catches NIL-like moves where the 1h
+  // return has already crossed the old 2.5% watch ceiling, while keeping a
+  // buyer-flow, structure, liquidity and data-quality floor.
+  const participationSurgeMonitor=daily!==null&&daily>=-8&&daily<=8&&
+    score!==null&&score>=58&&
+    session!==null&&session>=-3&&session<=6&&
+    hour!==null&&hour>=-2&&hour<=4.5&&
+    volume!==null&&volume>=1.25&&trades!==null&&trades>=1.20&&
+    buy!==null&&buy>=0.50&&buyDelta!==null&&buyDelta>=0.05&&
+    closeLocation!==null&&closeLocation>=0.54&&
+    structure!==null&&structure>=55&&buyingPressure!==null&&buyingPressure>=60&&
+    quoteVolume!==null&&quoteVolume>=300000&&
+    quality!==null&&quality>=85&&liquidity!==null&&liquidity>=65&&
+    participationSurgeChecks>=6;
+  const strongBuyerChecks=[
+    volume!==null&&volume>=0.50,
+    trades!==null&&trades>=0.75,
+    buy!==null&&buy>=0.60,
+    buyDelta!==null&&buyDelta>=0.05,
+    closeLocation!==null&&closeLocation>=0.55,
+    relativeBtc!==null&&relativeBtc>=-3.5,
+    structure!==null&&structure>=55,
+    buyingPressure!==null&&buyingPressure>=75
+  ].filter(Boolean).length;
+  // Distinct buyer-absorption lane catches PUNDIX/SOLV-like bases before the
+  // old $750k quote-volume floor is reached. It is WATCH ONLY, never an entry.
+  const strongBuyerAbsorptionMonitor=daily!==null&&daily>=-8&&daily<=8&&
+    score!==null&&score>=58&&
+    session!==null&&session>=-3&&session<=6&&
+    hour!==null&&hour>=-2&&hour<=4.5&&
+    volume!==null&&volume>=0.50&&trades!==null&&trades>=0.75&&
+    buy!==null&&buy>=0.60&&buyDelta!==null&&buyDelta>=0.05&&
+    closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=-3.5&&
+    structure!==null&&structure>=55&&buyingPressure!==null&&buyingPressure>=75&&
+    quoteVolume!==null&&quoteVolume>=300000&&
+    quality!==null&&quality>=85&&liquidity!==null&&liquidity>=65&&
+    strongBuyerChecks>=7;
   const watchTier=tickerActivityMonitor?'TICKER_ACTIVITY_ACCELERATION_MONITOR':
+    participationSurgeMonitor?'PARTICIPATION_SURGE_MONITOR':
+    strongBuyerAbsorptionMonitor?'STRONG_BUYER_ABSORPTION_MONITOR':
     highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
     earlyFlowMonitor?'EARLY_FLOW_MONITOR':
     accumulationPrepMonitor?'ACCUMULATION_PREP_MONITOR':
     compressedBuyerAbsorptionMonitor?'COMPRESSED_BUYER_ABSORPTION_MONITOR':'STANDARD_WATCH_EARLY';
+  const lowVolumeWatchOnly=(participationSurgeMonitor||strongBuyerAbsorptionMonitor)&&
+    status?.candle_data_valid===true&&status?.volume_gate_pass===false&&
+    status?.data_stale!==true&&status?.stale!==true&&status?.future_data_detected!==true&&
+    !status?.last_error&&quoteVolume!==null&&quoteVolume>=300000&&quoteVolume<750000;
+  const statusDataValid=status?.data_valid===true||lowVolumeWatchOnly;
   const fields={
     symbol,score,session_return_pct:session,one_hour_return_pct:hour,
     volume_acceleration:volume,trade_acceleration:trades,taker_buy_ratio:buy,
@@ -280,7 +333,8 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     compression_score:squeeze,buying_pressure_score:buyingPressure,
     compressed_buyer_checks:compressedBuyerChecks,structure_score:structure,
     watch_notification_tier:watchTier,
-    data_valid:status?.data_valid===true,data_stale:status?.data_stale===true||status?.stale===true,
+    data_valid:statusDataValid,low_volume_watch_only:lowVolumeWatchOnly,
+    data_stale:status?.data_stale===true||status?.stale===true,
     data_quality:quality,liquidity_quality:liquidity,closed_candle_close_time:closeAt,
     candle_age_ms:closeAt===null?null:Number(now)-closeAt,participation,risks
   };
@@ -294,27 +348,40 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
      p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
      p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
     return fail('NOT_QUALIFIED_WATCH_EARLY_STAGE');
-  if(status?.data_valid!==true||status?.data_stale===true||status?.stale===true||
+  if(!statusDataValid||status?.data_stale===true||status?.stale===true||
      status?.future_data_detected===true||candidate?.data_stale===true||!qualityOk)
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(accumulationPrepMonitor?66:compressedBuyerAbsorptionMonitor?70:(tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
+  if(score===null||score<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?58:
+    accumulationPrepMonitor?66:compressedBuyerAbsorptionMonitor?70:
+    (tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<(accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
-     session>(accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
+  if(session===null||session<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
+      accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:
+      highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
+     session>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
+      accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:
+      highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<(accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
-     hour>(accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
+  if(hour===null||hour<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
+      accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:
+      highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
+     hour>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
+      accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
+      highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||(structure<(tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
+  if(structure===null||(structure<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?55:
+      tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
     return fail('RISK_FLAG_BLOCK');
   if(participation<(accumulationPrepMonitor?4:3))return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
-  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,quoteVolume,closeAt,risks,watch_notification_tier:watchTier,
+  return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,quoteVolume,closeAt,risks,
+    data_valid:status?.data_valid===true,low_volume_watch_only:lowVolumeWatchOnly,
+    watch_notification_tier:watchTier,
     ticker_activity_watch_evidence:tickerActivityMonitor?{
       score:tickerActivityScore,volume_acceleration_ratio:tickerActivityVolumeRatio,
       trade_acceleration_ratio:tickerActivityTradeRatio,observed_at:tickerActivityObservedAt,
@@ -333,18 +400,31 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     decision_band:'WATCH_EARLY',
     radar:'PRE_MOVE',
     radar_name:'رادار ما قبل الحركة',
-    symbol,market:'SPOT',direction:'UP_BIAS',price,price_change_24h:daily,
+    symbol,market:'SPOT',
+    asset_class:candidate?.asset_class==='TOKENIZED_SECURITY'||candidate?.tokenized_security===true?'TOKENIZED_SECURITY':'CRYPTO',
+    tokenized_security:candidate?.asset_class==='TOKENIZED_SECURITY'||candidate?.tokenized_security===true,
+    direction:'UP_BIAS',price,price_change_24h:daily,
     quote_volume_24h:quoteVolume,
     data_quality:quality,liquidity_quality:liquidity,
     source:'Binance Public REST',data_stale:false,
-    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST',close_time:closeAt},
+    data_status:{
+      data_valid:assessment.values.data_valid,
+      candle_data_valid:assessment.values.low_volume_watch_only||assessment.values.data_valid,
+      volume_gate_pass:!assessment.values.low_volume_watch_only,
+      data_stale:false,stale:false,future_data_detected:false,source:'Binance Public REST',close_time:closeAt
+    },
+    low_volume_watch_only:assessment.values.low_volume_watch_only===true,
     detected_at:Number(now),detected_candle_close_time:closeAt,closed_candles_only:true,
     pre_move_context:p,
     watch_only:true,entry_eligible:false,
     watch_notification_tier:assessment.values.watch_notification_tier,
     watch_review_reason:assessment.values.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
       ?'FRESH_MARKET_WIDE_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
-      :assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
+      :assessment.values.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR'
+        ?'STRONG_VOLUME_TRADE_AND_BUYER_FLOW_WITHIN_EXPANDED_EARLY_WATCH_WINDOW'
+        :assessment.values.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR'
+          ?'STRONG_BUYER_ABSORPTION_AND_STRUCTURE_BELOW_STANDARD_VOLUME_FLOOR'
+          :assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
         :assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
           ?'BUY_FLOW_AND_ACTIVITY_BEFORE_PRICE_CONFIRMATION'
@@ -357,6 +437,10 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
     reason_codes:[
       ...(assessment.values.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
         ?['TICKER_ACTIVITY_ACCELERATION_MONITOR','MARKET_WIDE_VOLUME_AND_TRADE_ACCELERATION']:[]),
+      ...(assessment.values.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR'
+        ?['PARTICIPATION_SURGE_MONITOR','BUYER_FLOW_CONFIRMED_EARLY_ACTIVITY']:[]),
+      ...(assessment.values.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR'
+        ?['STRONG_BUYER_ABSORPTION_MONITOR','LOW_VOLUME_WATCH_ONLY']:[]),
       ...(assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
       ...(assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
@@ -1817,8 +1901,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const defaults=['HUMAUSDT','SYNUSDT','REZUSDT','ANIMEUSDT','PARTIUSDT','HAEDALUSDT'];
         const symbolsRaw=String(u.searchParams.get('symbols')||defaults.join(','));
         const symbols=[...new Set(symbolsRaw.split(',').map(x=>x.trim().toUpperCase()).filter(Boolean))];
-        if(!symbols.length||symbols.length>8||symbols.some(x=>!/^[A-Z0-9]{2,20}USDT$/.test(x)))
-          return send(res,400,{error:'INVALID_SYMBOLS',message:'Use 1-8 Binance Spot USDT symbols separated by commas.',...denied});
+        if(!symbols.length||symbols.length>16||symbols.some(x=>!/^[A-Z0-9]{2,20}USDT$/.test(x)))
+          return send(res,400,{error:'INVALID_SYMBOLS',message:'Use 1-16 Binance Spot USDT symbols separated by commas.',...denied});
         const thresholdPct=Number(u.searchParams.get('threshold_pct')||5);
         const windowHours=Number(u.searchParams.get('window_hours')||24);
         const leadMinutes=Number(u.searchParams.get('lead_minutes')||60);

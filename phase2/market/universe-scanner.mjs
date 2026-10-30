@@ -6,7 +6,7 @@ import {
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
 import {finiteNumberOr} from '../core/finite-number.mjs';
-import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
+import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSecurityCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
 // A bounded rotating deep-scan keeps the live Pre-Move request under the
 // 45-second service objective while preserving broad symbol coverage over cycles.
@@ -1157,7 +1157,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
     .filter(Boolean)
-    .filter(x=>allowed.has(x.symbol)&&(x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol))&&(x.quoteVolume24h>0||x.tradeCount24h>0))
+    .filter(x=>allowed.has(x.symbol)&&(x.symbol==='BTCUSDT'||isSpotMonitorCandidateSymbol(x.symbol))&&(x.quoteVolume24h>0||x.tradeCount24h>0))
     .map(x=>{
       const change=Math.abs(x.priceChange24h);
       // A modestly active coin is more useful than a dead flat coin, but late movers
@@ -1175,6 +1175,8 @@ export function rankPreMoveTickerRows(tickers,symbols,{
         calm*0.25+
         clamp(basePosition)*0.20;
       return {...x,
+        asset_class:isTokenizedSecurityCandidateSymbol(x.symbol)?'TOKENIZED_SECURITY':'CRYPTO',
+        tokenized_security:isTokenizedSecurityCandidateSymbol(x.symbol),
         pre_move_discovery_score:baseScore+activityScore,
         pre_move_base_discovery_score:baseScore,
         pre_move_activity_score:activityScore,
@@ -1328,17 +1330,35 @@ export function buildPreMoveWatchCandidates(rows,{
       taker>=0.65&&takerDelta>=0.08&&closeLocation>=0.55&&
       Number.isFinite(relativeBtc)&&relativeBtc>=-0.25&&
       squeeze>=45&&structure>=60&&buying>=90&&compressedBuyerChecks===7;
+    const strongBuyerChecks=[
+      volume>=0.50,trades>=0.75,taker>=0.60,takerDelta>=0.05,
+      closeLocation>=0.55,Number.isFinite(relativeBtc)&&relativeBtc>=-3.5,
+      structure>=55,buying>=75
+    ].filter(Boolean).length;
+    // Preserve a very narrow low-volume watch lane for measured buyer absorption.
+    // It cannot pass an actionable/entry gate and cannot override stale data or risk flags.
+    const strongBuyerAbsorptionEarly=ds.candle_data_valid===true&&
+      ds.volume_gate_pass===false&&ds.data_stale!==true&&ds.stale!==true&&
+      ds.future_data_detected!==true&&!ds.last_error&&
+      quality>=85&&liquidityQuality>=65&&quoteVolume>=300000&&quoteVolume<minQuoteVolume24h&&
+      Number.isFinite(dailyChange)&&dailyChange>=-8&&dailyChange<=8&&
+      Number.isFinite(sessionReturn)&&sessionReturn>=-3&&sessionReturn<=6&&
+      Number.isFinite(oneHourReturn)&&oneHourReturn>=-2&&oneHourReturn<=4.5&&
+      score>=58&&volume>=0.50&&trades>=0.75&&
+      taker>=0.60&&takerDelta>=0.05&&closeLocation>=0.55&&
+      Number.isFinite(relativeBtc)&&relativeBtc>=-3.5&&
+      structure>=55&&buying>=75&&strongBuyerChecks>=7;
     const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
     if(ds.candle_data_valid!==true||ds.data_stale===true||ds.last_error||
        !Number.isFinite(quality)||quality<minDataQuality||
        p.evidence_complete!==true||p.closed_candles_only!==true||
        p.already_moved===true||p.stage==='ALREADY_MOVED'||
        !Number.isFinite(score)||score<minScore||
-       !Number.isFinite(sessionReturn)||sessionReturn< -1.5||sessionReturn>8||
-       !Number.isFinite(oneHourReturn)||oneHourReturn< -1.25||oneHourReturn>4.5||
+       !Number.isFinite(sessionReturn)||(!strongBuyerAbsorptionEarly&&!compressedBuyerAbsorptionEarly&&sessionReturn< -1.5)||sessionReturn>(strongBuyerAbsorptionEarly?6:8)||
+       !Number.isFinite(oneHourReturn)||(!strongBuyerAbsorptionEarly&&(oneHourReturn< -1.25||oneHourReturn>4.5))||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
-       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly)||
-       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly)||
+       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
+       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
        riskFlags.some(flag=>hardRisks.has(flag))) continue;
 
     const blockers=[];
@@ -1353,6 +1373,8 @@ export function buildPreMoveWatchCandidates(rows,{
     if(p.flow_transition_confirmed!==true) {
       if(compressedBuyerAbsorptionEarly) {
         blockers.push('COMPRESSED_BUYER_ABSORPTION_MONITOR_ONLY');
+      } else if(strongBuyerAbsorptionEarly) {
+        blockers.push('STRONG_BUYER_ABSORPTION_MONITOR_ONLY');
       } else {
         if(!(volume>=1.12))blockers.push('VOLUME_ACCELERATION_NOT_CONFIRMED');
         if(!(trades>=1.05))blockers.push('TRADE_ACCELERATION_NOT_CONFIRMED');
@@ -1367,7 +1389,7 @@ export function buildPreMoveWatchCandidates(rows,{
       if(!(structure>=60))blockers.push('STRUCTURE_NOT_CONFIRMED');
       if(!(buying>=60))blockers.push('BUYING_PRESSURE_NOT_CONFIRMED');
     }
-    if(!compressedBuyerAbsorptionEarly&&(sessionReturn<0||sessionReturn>6))blockers.push('SESSION_MOVE_NOT_CONFIRMED');
+    if(!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly&&(sessionReturn<0||sessionReturn>6))blockers.push('SESSION_MOVE_NOT_CONFIRMED');
     if(score<62)blockers.push('SCORE_BELOW_ACTIONABLE_THRESHOLD');
     if(tickerActivityEarly)blockers.push('TICKER_ACTIVITY_ACCELERATION_MONITOR_ONLY');
     const watchReasons=[...new Set(blockers.length?blockers:['ACTIONABLE_GATE_NOT_MET'])];
@@ -1381,6 +1403,8 @@ export function buildPreMoveWatchCandidates(rows,{
         ticker_activity_score:tickerActivityEarly?tickerActivityScore:null,
         compressed_buyer_absorption_monitor_only:compressedBuyerAbsorptionEarly,
         compressed_buyer_absorption_checks:compressedBuyerChecks,
+        strong_buyer_absorption_monitor_only:strongBuyerAbsorptionEarly,
+        strong_buyer_absorption_checks:strongBuyerChecks,
         original_stage:p.stage||'NO_SETUP',
         stage:'WATCH_EARLY',
         watch_only:true,
@@ -1396,6 +1420,7 @@ export function buildPreMoveWatchCandidates(rows,{
   return out.sort((a,b)=>
     Number(b.pre_move_context?.ticker_activity_monitor_only===true)-Number(a.pre_move_context?.ticker_activity_monitor_only===true)||
     Number(b.pre_move_context?.compressed_buyer_absorption_monitor_only===true)-Number(a.pre_move_context?.compressed_buyer_absorption_monitor_only===true)||
+    Number(b.pre_move_context?.strong_buyer_absorption_monitor_only===true)-Number(a.pre_move_context?.strong_buyer_absorption_monitor_only===true)||
     Number(b.ticker_activity?.score||0)-Number(a.ticker_activity?.score||0)||
     Number(b.pre_move_context?.score)-Number(a.pre_move_context?.score)||
     Number(a.pre_move_context?.session_return_pct)-Number(b.pre_move_context?.session_return_pct)||
@@ -2304,6 +2329,8 @@ export class MarketUniverseScanner {
       ?Math.max(0,completedAt-Number(last15.closeTime)):Math.max(0,completedAt-startedAt);
     return {
       symbol,rank,
+      asset_class:ticker?.asset_class==='TOKENIZED_SECURITY'||isTokenizedSecurityCandidateSymbol(symbol)?'TOKENIZED_SECURITY':'CRYPTO',
+      tokenized_security:ticker?.tokenized_security===true||isTokenizedSecurityCandidateSymbol(symbol),
       last_price:Number.isFinite(Number(ticker?.lastPrice))?Number(ticker.lastPrice):null,
       price_change_24h:Number(ticker?.priceChange24h),
       high_price_24h:Number.isFinite(Number(ticker?.highPrice24h))?Number(ticker.highPrice24h):null,
