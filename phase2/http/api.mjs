@@ -422,7 +422,7 @@ export function buildPreMoveWatchOnlyAlerts(candidates,snapshot,now=Date.now(),l
   return out;
 }
 
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null,storageInfo=null}= {}){
   const counters=new Map();
   const nativePushTestLastAt=new Map();
   let missedMoverAuditCache={at:0,cycles:0,report:null};
@@ -934,7 +934,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             review_bridge_installed:pushManager?.__radarAnalystReviewBridgeInstalled===true
           },
           market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,
-          confidence_score:'UNKNOWN',push:await notificationTransportSnapshot()
+          confidence_score:'UNKNOWN',push:await notificationTransportSnapshot(),
+          storage:storageInfo&&typeof storageInfo==='object'?{
+            persistent:storageInfo.persistent===true,
+            directory:storageInfo.directory??null,
+            mount_path:storageInfo.mount_path??null,
+            filesystem:storageInfo.filesystem??null,
+            source:String(storageInfo.source||'UNKNOWN')
+          }:{
+            persistent:false,directory:null,mount_path:null,filesystem:null,source:'NOT_CONFIGURED'
+          }
         });
       }
       if(u.pathname==='/api/adaptive-trader/status'&&req.method==='GET'){
