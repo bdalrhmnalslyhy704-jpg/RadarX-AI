@@ -41,6 +41,8 @@ jobs:
             const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let lastError='No status response yet';
             let lastObserved=null;
+            let manualScanAttempted=false;
+            let manualScanRequestedAt=null;
             while(Date.now()<deadline){
               try{
                 const [response,deploymentResponse]=await Promise.all([
@@ -54,6 +56,35 @@ jobs:
                   })
                 ]);
                 const [value,deployment]=await Promise.all([response.json(),deploymentResponse.json()]);
+                const currentScanAt=Date.parse(String(value.last_scan_at||''));
+                const currentScanFresh=Number.isFinite(currentScanAt)&&currentScanAt<=Date.now()+5000&&
+                  Date.now()-currentScanAt<=8*60*1000&&value.last_error===null;
+                // If the worker has no recent successful scan, request one through
+                // its read-only server endpoint. Never start a duplicate while in flight.
+                if(response.ok&&!currentScanFresh&&!manualScanAttempted&&
+                   value.enabled===true&&value.in_flight!==true){
+                  manualScanAttempted=true;
+                  const requestedAt=Date.now();
+                  const scanResponse=await fetch(url.origin+'/api/adaptive-trader/scan',{
+                    method:'POST',
+                    headers:{Accept:'application/json','Content-Type':'application/json','Cache-Control':'no-cache'},
+                    body:JSON.stringify({limit:40}),
+                    signal:AbortSignal.timeout(8000)
+                  });
+                  const scanBody=await scanResponse.json().catch(()=>({}));
+                  if(scanResponse.status===202||scanResponse.status===200){
+                    manualScanRequestedAt=requestedAt;
+                    core.info('DHDTECH_MANUAL_READ_ONLY_SCAN_REQUESTED '+JSON.stringify({
+                      http:scanResponse.status,status:scanBody.status||null,
+                      requested_limit:scanBody.requested_limit||40
+                    }));
+                  }else{
+                    core.warning('DHDTECH_MANUAL_READ_ONLY_SCAN_NOT_STARTED '+JSON.stringify({
+                      http:scanResponse.status,status:scanBody.status||null,
+                      error:scanBody.error||null
+                    }));
+                  }
+                }
                 const summary=value.last_summary;
                 const meta=summary&&summary.meta;
                 const scannedAt=Date.parse(String(value.last_scan_at||''));
@@ -123,6 +154,7 @@ jobs:
                     method:String(cognitiveProfile.method||cognitive.method||'unknown'),
                     ranking_ready:cognitiveProfile.ranking_ready===true,
                     probability_ready:cognitiveProfile.probability_ready===true,
+                    learning_status:String(cognitive.status||'LEARNING'),
                     resolved_samples:Number(cognitiveProfile.resolved_samples)||0,
                     training_samples:Number(cognitiveProfile.training_samples)||0,
                     validation_samples:Number(cognitiveProfile.validation_samples)||0,
@@ -136,17 +168,24 @@ jobs:
                     early_setup_reviews:Number(cognitiveCapture.early_setup_reviews)||0
                   }:null
                 };
-                const valid=response.ok&&systemHealthy&&workerContract&&value.paper_trading===true&&value.real_order_execution===false&&
-                  Number(value.successful_scans)>0&&value.last_error===null&&
-                  Number.isFinite(scannedAt)&&scannedAt>=started&&
+                const scanFresh=Number.isFinite(scannedAt)&&scannedAt<=Date.now()+5000&&
+                  Date.now()-scannedAt<=8*60*1000&&
+                  (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
+                const cognitiveV3=cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
+                  cognitiveProfile.identifier_features_used===false;
+                const probabilityClaimSafe=cognitiveProfile.probability_ready!==true||
+                  (cognitiveProfile.validation?.evaluated===true&&cognitiveProfile.validation?.beat_base_rate===true&&
+                   cognitiveProfile.holdout?.evaluated===true&&cognitiveProfile.holdout?.beat_base_rate===true);
+                const valid=response.ok&&systemHealthy&&workerContract&&value.enabled===true&&value.running===true&&
+                  value.in_flight!==true&&value.paper_trading===true&&value.real_order_execution===false&&
+                  Number(value.successful_scans)>0&&value.last_error===null&&scanFresh&&
                   summary&&summary.status==='LIVE_DATA'&&Number.isFinite(summaryAt)&&
-                  summaryAt>=started&&meta&&meta.live===true&&
+                  Date.now()-summaryAt>=0&&Date.now()-summaryAt<=8*60*1000&&meta&&meta.live===true&&
                   meta.paper_trading===true&&meta.real_order_execution===false&&
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveSplitReady&&
-                  cognitiveProfile.identifier_features_used===false&&
+                  cognitive&&cognitiveV3&&probabilityClaimSafe&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
@@ -165,7 +204,11 @@ jobs:
                     state:'success',context:'dhdtech-adaptive-trader-live',
                     description:description.slice(0,140),target_url:url.origin+'/api/adaptive-trader/status'
                   });
-                  core.info('DHDTECH_ADAPTIVE_TRADER_LIVE_OK '+JSON.stringify(lastObserved));
+                  core.info('DHDTECH_ADAPTIVE_TRADER_LIVE_OK '+JSON.stringify({
+                    ...lastObserved,
+                    cognitive_model_may_still_be_learning:cognitiveProfile.probability_ready!==true,
+                    chronological_split_ready:cognitiveSplitReady
+                  }));
                   return;
                 }
                 lastError='Live worker schema or scan evidence is not ready';
