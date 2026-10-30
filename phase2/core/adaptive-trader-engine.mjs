@@ -615,9 +615,11 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
     Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
   addLane(volumeLeaders,Math.ceil(selectedCount*0.15),'TOP_VOLUME');
-  addLane(emergingMovers,Math.ceil(selectedCount*0.15),'EMERGING_MOVER');
+  // Short-term price pulses outrank the broad daily-mover bucket so a coin
+  // cannot be consumed by the latter before its acceleration is deep-scanned.
   addLane(accelerationMovers,Math.ceil(selectedCount*0.20),'PRICE_ACCELERATION');
   addLane(burstMovers,Math.ceil(selectedCount*0.10),'SHOCK_MOVE_AUDIT');
+  addLane(emergingMovers,Math.ceil(selectedCount*0.15),'EMERGING_MOVER');
   addLane(extendedMovers,Math.ceil(selectedCount*0.25),'EXTENDED_MOVER_AUDIT');
 
   let rotationVisited=0;
