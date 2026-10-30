@@ -2104,7 +2104,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const eventId=String(u.searchParams.get('event_id')||'').trim();
         if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(installationId))
           return send(res,400,{error:'INVALID_INSTALLATION_ID'});
-        if(eventId.length>256||/[\\x00-\\x1F\\x7F]/.test(eventId))
+        if(eventId.length>256)
           return send(res,400,{error:'INVALID_FCM_EVENT_ID'});
         if(config.push?.provider!=='fcm'||!pushProvider?.status?.().enabled)
           return send(res,503,{error:'FCM_PUSH_NOT_ENABLED',provider:pushProvider?.status?.().provider||'none'});
