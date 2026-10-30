@@ -384,13 +384,20 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   }
   const desired=Math.max(1,Math.min(16,Math.trunc(Number(maxSamples)||8)));
   const selected=[];
-  // Select non-overlapping 4h outcomes, starting from the most recent matured
-  // example. This limits correlated samples from being counted as independent.
-  let newestSelectedIndex=Infinity;
+  // Give each symbol a deterministic phase on the 4h sampling grid. This keeps
+  // that symbol's own outcomes non-overlapping, while preventing every market
+  // pair from contributing labels at the exact same eight timestamps. The hash
+  // only stratifies historical sampling; it is never a model feature.
+  let phaseHash=2166136261;
+  for(const char of cleanSymbol){
+    phaseHash^=char.charCodeAt(0);
+    phaseHash=Math.imul(phaseHash,16777619)>>>0;
+  }
+  const samplingPhase=phaseHash%horizonBars;
   for(let cursor=possible.length-1;cursor>=0&&selected.length<desired;cursor--){
     const item=possible[cursor];
-    if(newestSelectedIndex!==Infinity&&newestSelectedIndex-item.index<horizonBars)continue;
-    selected.push(item);newestSelectedIndex=item.index;
+    if(item.index%horizonBars!==samplingPhase)continue;
+    selected.push(item);
   }
   selected.reverse();
   const out=[];
