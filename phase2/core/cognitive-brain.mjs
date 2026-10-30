@@ -1,5 +1,5 @@
 /**
- * RadarX Build 224 — Cognitive Agent V2
+ * RadarX Build 224 — Cognitive Agent V3
  *
  * An interpretable, feedback-driven research model. It learns relationships
  * between market evidence and matured closed-candle outcomes, checks itself
