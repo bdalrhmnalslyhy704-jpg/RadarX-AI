@@ -1214,11 +1214,13 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)&&!activitySymbols.has(x.symbol))
     .sort((a,b)=>a.symbol.localeCompare(b.symbol));
   const rotateCount=Math.min(take-pinned.length-activityPriority.length,rotating.length);
-  if(rotateCount<=0)return [...pinned,...activityPriority].slice(0,take);
+  if(rotateCount<=0)return [...pinned,...activityPriority].slice(0,take)
+    .map(row=>({...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)}));
   const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
   const rotatingRows=[];
   for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
-  return [...pinned,...activityPriority,...rotatingRows].slice(0,take);
+  return [...pinned,...activityPriority,...rotatingRows].slice(0,take)
+    .map(row=>({...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)}));
 }
 
 /**
@@ -2401,7 +2403,7 @@ export class MarketUniverseScanner {
       this._preMoveRotationCycle=rotationCycle+1;
     }
     const preMovePinnedFraction=0.10;
-    const preMoveActivityPrioritySlots=3;
+    const preMoveActivityPrioritySlots=8;
     const rotatingWidth=Math.max(1,discoveryLimit-
       Math.ceil(discoveryLimit*preMovePinnedFraction)-
       Math.min(preMoveActivityPrioritySlots,Math.floor(discoveryLimit*0.20)));
@@ -2584,7 +2586,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,pinned_fraction:preMovePinnedFraction,activity_priority_slots:preMoveActivityPrioritySlots,ticker_activity_priority_selected:discovery.filter(x=>x.ticker_activity_priority_selected===true).length,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit
