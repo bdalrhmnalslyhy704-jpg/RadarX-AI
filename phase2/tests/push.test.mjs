@@ -69,6 +69,7 @@ test('TEST_FIXTURE: qualified early-track gate sends a strict monitor-only notif
     assert.equal(sent[0].real_order_execution,false);
     assert.equal(sent[0].notification_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
     assert.equal(sent[0].notification_gate_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
+    assert.equal(sent[0].notification_gate_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
     assert.equal(sent[0].signal_type,'WATCH_ONLY');
     assert.equal(sent[0].direction,'NONE');
     assert.equal(sent[0].notification_gate_eligible,false);
