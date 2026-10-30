@@ -61,6 +61,11 @@ jobs:
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
                 const learning=value.learning_profile||null;
                 const capture=value.learning_capture||null;
+                const cognitive=summary&&summary.cognitive_brain||
+                  value.cognitive_brain&&value.cognitive_brain.profile?value.cognitive_brain:
+                  value.cognitive_brain||null;
+                const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
+                const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const universe=summary&&summary.universe||{};
                 const workerContract=value.scanner_contract==='SERVER_DRIVEN_SCAN_V2';
                 const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
@@ -103,6 +108,17 @@ jobs:
                     new_deep_candidate_samples:Number(capture.new_deep_candidate_samples)||0,
                     resolved_samples:Number(capture.resolved_samples)||0,
                     unresolved_training_samples:Number(capture.unresolved_training_samples)||0
+                  }:null,
+                  cognitive_brain:cognitive?{
+                    method:String(cognitiveProfile.method||cognitive.method||'unknown'),
+                    ranking_ready:cognitiveProfile.ranking_ready===true,
+                    probability_ready:cognitiveProfile.probability_ready===true,
+                    resolved_samples:Number(cognitiveProfile.resolved_samples)||0,
+                    training_samples:Number(cognitiveProfile.training_samples)||0,
+                    holdout_samples:Number(cognitiveProfile.holdout_samples)||0,
+                    journal_records:Number(cognitive.journal_records??cognitive.journal_rows)||0,
+                    journal_resolved:Number(cognitiveCapture.journal_resolved??cognitive.resolved_journal_rows)||0,
+                    early_setup_reviews:Number(cognitiveCapture.early_setup_reviews)||0
                   }:null
                 };
                 const valid=response.ok&&systemHealthy&&workerContract&&value.paper_trading===true&&value.real_order_execution===false&&
@@ -113,7 +129,12 @@ jobs:
                   meta.paper_trading===true&&meta.real_order_execution===false&&
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
-                  Array.isArray(prices)&&prices.length>0&&historyRows>0;
+                  Array.isArray(prices)&&prices.length>0&&historyRows>0&&
+                  cognitive&&
+                  cognitiveProfile.method==='BAYESIAN_FACTOR_EVIDENCE_WITH_CHRONOLOGICAL_HOLDOUT_V1'&&
+                  Number(cognitiveProfile.resolved_samples)>=0&&
+                  Number(cognitiveProfile.training_samples)>=0&&
+                  Number(cognitiveProfile.holdout_samples)>=0;
                 if(valid){
                   const description='Live DHDTech scan verified; '+candidates.length+' analyzed, '+historyRows+' history rows.';
                   await github.rest.repos.createCommitStatus({
