@@ -163,6 +163,43 @@ test('Pre-Move ticker activity acceleration ignores absent, stale, or future bas
   assert.equal(buildPreMoveTickerActivitySignals(current,future,180000).size,0,'future baseline timestamps must fail closed');
 });
 
+test('Pre-Move stable-ring cursor skips a temporary activity-priority symbol without repeating the rotating slice',()=>{
+  const ordinary=Array.from({length:60},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const burst={symbol:'ABURSTUSDT',baseAsset:'ABURST',quoteAsset:'USDT',status:'TRADING'};
+  const symbols=[...ordinary,burst];
+  const rows=symbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol==='ABURSTUSDT'?100000:5000000+i*1000),
+    count:x.symbol==='ABURSTUSDT'?1000:50000+i*100,
+    priceChangePercent:'2'
+  }));
+  const activitySignals=new Map([['ABURSTUSDT',{
+    score:15,volume_acceleration_ratio:2.4,trade_acceleration_ratio:1.8,
+    observed_at:180000,baseline_age_ms:60000
+  }]]);
+  const first=rankPreMoveTickerRows(rows,symbols,{
+    minQuoteVolume24h:750000,limit:24,rotationOffset:0,activitySignals,pinnedFraction:0.20
+  });
+  assert.equal(first[5].symbol,'ABURSTUSDT');
+  const firstRotation=first.slice(6).map(row=>row.symbol);
+  assert.equal(firstRotation.length,18);
+  assert.equal(first.rotation_advance_count,19,
+    'the cursor counts the temporary burst symbol it skips in the stable alphabetical ring');
+
+  // The burst vanishes from the priority lane. Its row returns to the stable ring,
+  // but the cursor resumes after the position already visited in the prior cycle.
+  const second=rankPreMoveTickerRows(rows,symbols,{
+    minQuoteVolume24h:750000,limit:24,rotationOffset:first.rotation_advance_count,pinnedFraction:0.20
+  });
+  const secondRotation=second.slice(5).map(row=>row.symbol);
+  assert.equal(secondRotation[0],'C018USDT');
+  assert.equal(firstRotation.some(symbol=>secondRotation.includes(symbol)),false,
+    'a fading activity burst must not make the market cursor repeat previously scanned rows');
+});
+
 test('Pre-Move discovery pins 20%, reserves activity-priority slots, and rotates the rest across the eligible market',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
@@ -214,6 +251,37 @@ test('Pre-Move discovery pulls a measured ticker-activity burst ahead of the alp
   assert.equal(picked[5].pre_move_activity_score,15);
 });
 
+test('Pre-Move activity-priority lane deep-scans up to eight independent acceleration bursts',()=>{
+  const symbols=Array.from({length:80},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const bursts=Array.from({length:10},(_,i)=>({
+    symbol:'BURST'+String(i).padStart(2,'0')+'USDT',baseAsset:'BURST'+String(i).padStart(2,'0'),
+    quoteAsset:'USDT',status:'TRADING'
+  }));
+  const allSymbols=[...symbols,...bursts];
+  const rows=allSymbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol.startsWith('BURST')?100000:5000000+i*1000),
+    count:x.symbol.startsWith('BURST')?1000:50000+i*100,priceChangePercent:'2'
+  }));
+  const activitySignals=new Map(bursts.map((x,i)=>[x.symbol,{
+    score:18-i*0.1,volume_acceleration_ratio:2.4-i*0.01,trade_acceleration_ratio:1.8-i*0.01,
+    observed_at:180000,baseline_age_ms:60000
+  }]));
+  const picked=rankPreMoveTickerRows(rows,allSymbols,{
+    minQuoteVolume24h:750000,limit:40,rotationOffset:0,activitySignals,pinnedFraction:0.10
+  });
+  assert.equal(picked.length,40);
+  const priority=picked.filter(row=>row.ticker_activity_priority_selected===true);
+  assert.equal(priority.length,8,'the bounded Pre-Move lane must reserve eight slots for measured activity bursts');
+  assert.ok(picked.slice(4,12).every(row=>row.ticker_activity_priority_selected===true),
+    'activity bursts must be examined directly after the stable pinned cohort');
+  assert.equal(picked[12].ticker_activity_priority_selected,false,
+    'the remaining slots must continue the fair rotating market scan');
+});
+
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
@@ -242,8 +310,9 @@ test('Pre-Move rotation remains fair when non-pinned market scores change betwee
 
 test('Pre-Move discovery excludes stablecoin and tokenized-equity pairs while retaining BTC context',()=>{
   const symbols=[
-    ['RLUSDUSDT','RLUSD'],['AAPLBUSDT','AAPLB'],['BTCUSDT','BTC'],
-    ['EARLYUSDT','EARLY'],['MIDUSDT','MID']
+    ['RLUSDUSDT','RLUSD'],['AAPLBUSDT','AAPLB'],['APPBUSDT','APPB'],['BSPBUSDT','BSPB'],
+    ['GEVBUSDT','GEVB'],['SKDDBUSDT','SKDDB'],['SKUUBUSDT','SKUUB'],['SOXSBUSDT','SOXSB'],
+    ['BTCUSDT','BTC'],['EARLYUSDT','EARLY'],['MIDUSDT','MID']
   ].map(([symbol,baseAsset])=>({symbol,baseAsset,quoteAsset:'USDT',status:'TRADING'}));
   const rows=symbols.map((x,i)=>({
     symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
@@ -256,6 +325,9 @@ test('Pre-Move discovery excludes stablecoin and tokenized-equity pairs while re
   assert.equal(pickedSymbols.has('MIDUSDT'),true);
   assert.equal(pickedSymbols.has('RLUSDUSDT'),false,'stablecoins must not consume deep-scan slots');
   assert.equal(pickedSymbols.has('AAPLBUSDT'),false,'tokenized equity pairs must not consume deep-scan slots');
+  for(const symbol of ['APPBUSDT','BSPBUSDT','GEVBUSDT','SKDDBUSDT','SKUUBUSDT','SOXSBUSDT']){
+    assert.equal(pickedSymbols.has(symbol),false,symbol+' is a tokenized bStocks instrument, not a crypto-altcoin candidate');
+  }
 });
 
 test('Pre-Move discovery includes active low-volume Spot pairs for rotating screening',()=>{
@@ -957,7 +1029,8 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
   assert.equal(first.universe.per_cycle_scan_cap,40);
   assert.equal(first.universe.discovered,40);
   assert.equal(first.universe.deep_scanned,40);
-  assert.equal(first.universe.rotation_width,33);
+  assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
+  assert.equal(first.universe.rotation_width,36,'unused activity-priority slots must return to the fair rotating lane');
   assert.equal(seen.length,40);
 
   seen=[];
@@ -1025,6 +1098,11 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(result.universe.rotation_cursor_persisted,true);
   assert.equal(result.universe.rotation_sequence,'COMPLETED_SCAN_CURSOR_V1');
   assert.equal(result.universe.rotation_cycle,0);
+  assert.equal(result.universe.rotation_offset,0);
+  const firstCursor=cursorRows.get('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT');
+  assert.equal(firstCursor.version,2);
+  assert.equal(firstCursor.next_rotation_offset,result.universe.rotation_offset+result.universe.rotation_advance_count,
+    'the persisted cursor advances by every stable-ring position visited, including pinned and priority skips');
   assert.equal(cursorRows.size,2,'a completed scan persists both the rotation cursor and ticker activity baseline');
   assert.ok(cursorRows.has('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT'));
   assert.ok(cursorRows.has('RADARX:PRE_MOVE_TICKER_ACTIVITY_BASELINE:V1:USDT'));
@@ -1038,6 +1116,10 @@ test('Pre-Move scan removes already-extended coins before limiting actionable re
   assert.equal(afterRestart.universe.rotation_cursor_persisted,true);
   assert.equal(afterRestart.universe.rotation_cycle,1,
     'a new scanner instance must continue from persisted progress instead of repeating cycle zero');
+  assert.equal(afterRestart.universe.rotation_offset,firstCursor.next_rotation_offset,
+    'a restart resumes the cumulative market offset rather than multiplying the cycle by a possibly changed lane width');
+  assert.equal(cursorRows.get('RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT').next_rotation_offset,
+    afterRestart.universe.rotation_offset+afterRestart.universe.rotation_advance_count);
   assert.equal(result.candidates.length,0,'no already-extended symbol should be promoted as a Pre-Move candidate');
   assert.equal(result.watch_candidates.length,0,'already-extended symbols must not leak into the watch-only list');
   const scannedTimeframes=rest.calls.filter(x=>x.type==='klines').map(x=>x.tf);

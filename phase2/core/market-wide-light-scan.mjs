@@ -26,7 +26,9 @@ const NON_DIRECTIONAL_BASE_ASSETS = new Set([
   'BTC','ETH','BNB',
   // Wrapped majors and tokenized equities remain in market coverage, but do not
   // consume scarce pre-move scanning slots intended for directional crypto assets.
-  'WBTC','WBETH','AAPLB','AMZNB','COINB','CRCLB','GOOGLB','MSTRB','MSFTB','NVDAB','QQQB','SOXLB','SPXLB','TSLAB'
+  'WBTC','WBETH','AAPLB','AMZNB','COINB','CRCLB','GOOGLB','MSTRB','MSFTB','NVDAB','QQQB','SOXLB','SPXLB','TSLAB',
+  // Additional Binance bStocks pairs; tokenized securities/ETFs are not crypto altcoins.
+  'APPB','BSPB','GEVB','SKDDB','SKUUB','SOXSB'
 ]);
 
 export function isDirectionalCandidateSymbol(value) {

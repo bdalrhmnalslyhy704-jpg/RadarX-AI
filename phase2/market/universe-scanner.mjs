@@ -1183,16 +1183,25 @@ export function rankPreMoveTickerRows(tickers,symbols,{
     })
     .sort((a,b)=>b.pre_move_discovery_score-a.pre_move_discovery_score||b.quoteVolume24h-a.quoteVolume24h||a.symbol.localeCompare(b.symbol));
   const take=Math.max(1,Math.trunc(Number(limit)||30));
-  if(ranked.length<=take)return ranked;
-  // Keep only the highest-ranked 20% pinned. Reserve a second, bounded lane
-  // for unusually strong live ticker-activity bursts so alphabetical rotation
-  // cannot delay every fast-emerging pair until its next full-market turn.
+  let activitySymbols=new Set();
+  const makeResult=(rows,rotationAdvance=0)=>{
+    const result=rows.slice(0,take).map(row=>({
+      ...row,ticker_activity_priority_selected:activitySymbols.has(row.symbol)
+    }));
+    // Non-enumerable metadata keeps the cursor diagnostic out of market rows/API payloads.
+    Object.defineProperty(result,'rotation_advance_count',{value:rotationAdvance,enumerable:false});
+    return result;
+  };
+  if(ranked.length<=take)return makeResult(ranked,0);
+  // Keep only the highest-ranked 10–20% pinned. Reserve a bounded lane for
+  // unusually strong live ticker-activity bursts so alphabetical rotation cannot
+  // delay fast-emerging pairs until their next full-market turn.
   const pinnedShare=Number.isFinite(Number(pinnedFraction))
     ?Math.max(0.05,Math.min(0.50,Number(pinnedFraction))):0.20;
   const pinnedCount=Math.min(Math.ceil(take*pinnedShare),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
   const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
-  const defaultActivityPrioritySlots=Math.min(5,Math.floor(take*0.20));
+  const defaultActivityPrioritySlots=Math.min(8,Math.floor(take*0.20));
   const requestedActivitySlots=activityPriorityLimit==null
     ?defaultActivityPrioritySlots
     :Math.max(0,Math.trunc(Number(activityPriorityLimit)||0));
@@ -1207,18 +1216,25 @@ export function rankPreMoveTickerRows(tickers,symbols,{
       Number(b.ticker_activity?.trade_acceleration_ratio)-Number(a.ticker_activity?.trade_acceleration_ratio)||
       a.symbol.localeCompare(b.symbol))
     .slice(0,activityPrioritySlots);
-  const activitySymbols=new Set(activityPriority.map(x=>x.symbol));
-  // Rotation order stays independent of changing volume/trade ranks. Activity
-  // priority rows temporarily borrow slots from the rotated lane; when their burst
-  // fades, the normal deterministic alphabetic coverage resumes automatically.
-  const rotating=ranked.filter(x=>!pinnedSymbols.has(x.symbol)&&!activitySymbols.has(x.symbol))
-    .sort((a,b)=>a.symbol.localeCompare(b.symbol));
-  const rotateCount=Math.min(take-pinned.length-activityPriority.length,rotating.length);
-  if(rotateCount<=0)return [...pinned,...activityPriority].slice(0,take);
-  const offset=((Math.trunc(Number(rotationOffset)||0)%rotating.length)+rotating.length)%rotating.length;
+  activitySymbols=new Set(activityPriority.map(x=>x.symbol));
+  const rotateCount=Math.min(take-pinned.length-activityPriority.length,
+    Math.max(0,ranked.length-pinned.length-activityPriority.length));
+  if(rotateCount<=0)return makeResult([...pinned,...activityPriority],0);
+  // Rotate over one stable alphabetical market ring, including pinned and
+  // activity-priority symbols. Skip symbols already selected in this cycle, but
+  // count every visited position so changing burst membership cannot reset or
+  // overlap the next cursor slice.
+  const rotationRing=[...ranked].sort((a,b)=>a.symbol.localeCompare(b.symbol));
+  const offset=((Math.trunc(Number(rotationOffset)||0)%rotationRing.length)+rotationRing.length)%rotationRing.length;
   const rotatingRows=[];
-  for(let i=0;i<rotateCount;i++)rotatingRows.push(rotating[(offset+i)%rotating.length]);
-  return [...pinned,...activityPriority,...rotatingRows].slice(0,take);
+  let rotationAdvance=0;
+  while(rotatingRows.length<rotateCount&&rotationAdvance<rotationRing.length){
+    const row=rotationRing[(offset+rotationAdvance)%rotationRing.length];
+    rotationAdvance++;
+    if(pinnedSymbols.has(row.symbol)||activitySymbols.has(row.symbol))continue;
+    rotatingRows.push(row);
+  }
+  return makeResult([...pinned,...activityPriority,...rotatingRows],rotationAdvance);
 }
 
 /**
@@ -1807,6 +1823,8 @@ export class MarketUniverseScanner {
     // Serialize Pre-Move scans across limits: the same REST client/request map is shared,
     // so different concurrent limits must not reset its in-flight request cache mid-scan.
     this._preMoveScanTails = new Map();
+    this._preMoveRotationCycle = 0;
+    this._preMoveRotationOffset = 0;
   }
 
   async requestOnce(path, query = {}) {
@@ -2382,6 +2400,7 @@ export class MarketUniverseScanner {
     const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(20,normalizedLimit));
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
+    let rotationCursorOffset=0;
     let rotationCursorSource='PROCESS_MEMORY_FALLBACK';
     const rotationStoreReady=typeof this.rotationStateStore?.getDedupKey==='function' &&
       typeof this.rotationStateStore?.putDedupKey==='function';
@@ -2390,30 +2409,48 @@ export class MarketUniverseScanner {
         const saved=await this.rotationStateStore.getDedupKey(rotationKey);
         const next=Number(saved?.next_cycle);
         rotationCycle=Number.isSafeInteger(next)&&next>=0?next:0;
+        const savedOffset=Number(saved?.next_rotation_offset);
+        // Migrate the original cycle-only cursor once. Build 224's previous
+        // fixed rotation lane used 40 deep slots, 4 pinned rows and 3 burst rows.
+        const legacyWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.10)-3);
+        rotationCursorOffset=Number.isSafeInteger(savedOffset)&&savedOffset>=0
+          ?savedOffset:rotationCycle*legacyWidth;
         rotationCursorSource='DURABLE_STORE';
       }catch{
         rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
-        this._preMoveRotationCycle=rotationCycle+1;
+        rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
         rotationCursorSource='PROCESS_MEMORY_FALLBACK';
       }
     }else{
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
-      this._preMoveRotationCycle=rotationCycle+1;
+      rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
     }
     const preMovePinnedFraction=0.10;
-    const preMoveActivityPrioritySlots=3;
-    const rotatingWidth=Math.max(1,discoveryLimit-
-      Math.ceil(discoveryLimit*preMovePinnedFraction)-
-      Math.min(preMoveActivityPrioritySlots,Math.floor(discoveryLimit*0.20)));
-    const rotationOffset=(rotationCycle*rotatingWidth);
-    const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
+    const preMoveActivityPrioritySlots=8;
+    const discoveryOptions={
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       limit:discoveryLimit,
-      rotationOffset,
       activitySignals:tickerActivitySignals,
       pinnedFraction:preMovePinnedFraction,
       activityPriorityLimit:preMoveActivityPrioritySlots
+    };
+    // Determine the real size of the rotating lane before selecting its offset.
+    // Activity priority slots are a maximum, not a fixed reservation: when fewer
+    // genuine bursts exist, their unused slots return to fair market rotation.
+    const discoveryProbe=rankPreMoveTickerRows(tickerResponse.data,universe,{
+      ...discoveryOptions,rotationOffset:0
     });
+    const pinnedCount=Math.min(Math.ceil(discoveryLimit*preMovePinnedFraction),discoveryProbe.length);
+    const activityPrioritySelected=discoveryProbe.filter(row=>row.ticker_activity_priority_selected===true).length;
+    const rotatingWidth=Math.max(1,discoveryProbe.length-pinnedCount-activityPrioritySelected);
+    // Keep a cumulative offset: the activity lane can consume a different number
+    // of rows each cycle, so multiplying cycle number by today's width can overlap
+    // yesterday's rotating slice or skip symbols.
+    const rotationOffset=rotationCursorOffset;
+    const discovery=rotationOffset===0?discoveryProbe:rankPreMoveTickerRows(
+      tickerResponse.data,universe,{...discoveryOptions,rotationOffset}
+    );
+    const rotationAdvanceCount=Math.max(0,Math.trunc(Number(discovery.rotation_advance_count)||0));
     // Live acceptance measured 51.6s at concurrency 16 and 56.1s at 40.
     // Each pair requests 15m klines and order-book depth. Use a bounded middle
     // concurrency of 24 while preserving the complete 40-symbol rotation batch.
@@ -2572,19 +2609,25 @@ export class MarketUniverseScanner {
         // Advance only after a completed scan. An interrupted scan retries the same
         // slice instead of silently skipping coverage on the next worker start.
         await this.rotationStateStore.putDedupKey(rotationKey,{
-          next_cycle:rotationCycle+1,version:1,updated_at:this.clock()
+          next_cycle:rotationCycle+1,
+          next_rotation_offset:rotationOffset+rotationAdvanceCount,
+          version:2,updated_at:this.clock()
         });
         rotationCursorPersisted=true;
       }catch(error){
         throw new Error('PRE_MOVE_ROTATION_CURSOR_PERSIST_FAILED:'+String(error?.message||error).slice(0,160));
       }
+    }else{
+      // Do not move the in-memory cursor before a scan completes successfully.
+      this._preMoveRotationCycle=rotationCycle+1;
+      this._preMoveRotationOffset=rotationOffset+rotationAdvanceCount;
     }
     return {
       meta:{live:observed.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_advance_count:rotationAdvanceCount,pinned_fraction:preMovePinnedFraction,activity_priority_slots:preMoveActivityPrioritySlots,ticker_activity_priority_selected:discovery.filter(x=>x.ticker_activity_priority_selected===true).length,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit
