@@ -2,10 +2,34 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
-const [service,push]=await Promise.all([
+const [service,push,mainActivity,registration,dashboard]=await Promise.all([
   readFile(new URL('./app/src/main/java/com/radarx/app/RadarXFirebaseMessagingService.java',import.meta.url),'utf8'),
-  readFile(new URL('../phase2/push/index.mjs',import.meta.url),'utf8')
+  readFile(new URL('../phase2/push/index.mjs',import.meta.url),'utf8'),
+  readFile(new URL('./app/src/main/java/com/radarx/app/MainActivity.java',import.meta.url),'utf8'),
+  readFile(new URL('./app/src/main/java/com/radarx/app/RadarXPushRegistration.java',import.meta.url),'utf8'),
+  readFile(new URL('./app/src/main/assets/index.html',import.meta.url),'utf8')
 ]);
+
+
+test('Android dashboard exposes registration status and device-receipt verification without exposing FCM credentials',()=>{
+  assert.ok(mainActivity.includes('getPushStatus()'));
+  assert.ok(mainActivity.includes('syncPushRegistration()'));
+  assert.ok(mainActivity.includes('refreshPushStatus()'));
+  assert.ok(mainActivity.includes('requestPushTest()'));
+  assert.ok(dashboard.includes('fcmDiagnosticsCard'));
+  assert.ok(dashboard.includes('fcmRefreshButton'));
+  assert.ok(dashboard.includes('fcmTestButton'));
+  assert.ok(dashboard.includes('DEVICE_RECEIPT_VERIFIED'));
+  assert.ok(registration.includes('/api/push/device/status?'));
+  assert.ok(registration.includes('/api/push/device/test'));
+  assert.ok(registration.includes('registration_state'));
+  assert.ok(registration.includes('delivery_verified'));
+  const statusMethod=registration.slice(registration.indexOf('static String statusJson('),registration.indexOf('static void refreshServerStatus('));
+  assert.ok(statusMethod.includes('firebase_configured'));
+  assert.ok(statusMethod.includes('registered'));
+  assert.ok(!statusMethod.includes('fcm_token'));
+  assert.ok(!statusMethod.includes('token"'));
+});
 
 test('Android whitelists only the bounded, Spot, non-entry Pre-Move monitor event',()=>{
   const start=service.indexOf('private static boolean isApprovedPreMoveWatch(');
