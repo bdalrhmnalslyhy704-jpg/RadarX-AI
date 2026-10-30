@@ -445,6 +445,39 @@ export class DurableStore {
   }
   async putAdaptiveTraderState(value){
     if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('ADAPTIVE_TRADER_STATE_INVALID');
+    const journalRows=(Array.isArray(value.cognitive_journal)?value.cognitive_journal:[])
+      .filter(row=>row&&typeof row==='object'&&!Array.isArray(row)).slice(-3000).map(row=>{
+        const number=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
+        const safeSymbol=String(row.symbol||'').toUpperCase();
+        const features=row.features&&typeof row.features==='object'&&!Array.isArray(row.features)?row.features:{};
+        return {
+          id:String(row.id||'').slice(0,80),
+          symbol:/^[A-Z0-9]{5,30}$/.test(safeSymbol)?safeSymbol:'',
+          at:number(row.at),price:number(row.price),base_score:number(row.base_score),
+          ranked_score:number(row.ranked_score),cognitive_rank_score:number(row.cognitive_rank_score),
+          tier:String(row.tier||'').slice(0,40),decision:String(row.decision||'').slice(0,48),
+          summary_ar:String(row.summary_ar||'').slice(0,320),
+          reason_codes:(Array.isArray(row.reason_codes)?row.reason_codes:[]).slice(0,10).map(x=>String(x).slice(0,80)),
+          hypotheses:(Array.isArray(row.hypotheses)?row.hypotheses:[]).slice(0,6).map(item=>({
+            key:String(item?.key||'').slice(0,60),label_ar:String(item?.label_ar||'').slice(0,100),
+            supported:item?.supported===true,evidence:number(item?.evidence),required:number(item?.required)
+          })),
+          contradictions:(Array.isArray(row.contradictions)?row.contradictions:[]).slice(0,6).map(x=>String(x).slice(0,140)),
+          evidence_domains:number(row.evidence_domains),
+          predicted_up_probability:number(row.predicted_up_probability),
+          confidence_label:String(row.confidence_label||'UNKNOWN').slice(0,60),
+          features,
+          data_valid:row.data_valid===true,data_stale:row.data_stale===true,
+          closed_candles_only:row.closed_candles_only===true,
+          entry_eligible:false,paper_trading:true,real_order_execution:false,
+          first_seen_at:number(row.first_seen_at),last_seen_at:number(row.last_seen_at),
+          outcome:['UP','DOWN','FLAT'].includes(row.outcome)?row.outcome:null,
+          return_pct:number(row.return_pct),resolved_at:number(row.resolved_at),
+          outcome_source:String(row.outcome_source||'').slice(0,80)
+        };
+      }).filter(row=>row.id&&row.symbol&&row.at!==null&&row.at>0);
+    const cognitiveCapture=value.cognitive_capture&&typeof value.cognitive_capture==='object'&&!Array.isArray(value.cognitive_capture)
+      ?value.cognitive_capture:null;
     const safe={
       version:1,
       updated_at:Date.now(),
@@ -458,6 +491,8 @@ export class DurableStore {
       last_error:value.last_error==null?null:String(value.last_error).slice(0,240),
       last_summary:value.last_summary&&typeof value.last_summary==='object'?value.last_summary:null,
       learning_profile:value.learning_profile&&typeof value.learning_profile==='object'?value.learning_profile:null,
+      cognitive_journal:journalRows,
+      cognitive_capture:cognitiveCapture,
       samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-1000):[],
       price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-15000):[],
       missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[],
