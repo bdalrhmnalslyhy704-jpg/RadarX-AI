@@ -98,10 +98,14 @@ assert.match(firebase, /boolean lifecycleConflicts = !lifecycleState\.isEmpty\(\
   'Firebase must reject a lifecycle that conflicts with a strict-looking gate');
 assert.match(firebase, /boolean finalConfirmation = !lifecycleConflicts && \(/,
   'Firebase must require an internally consistent final confirmation state');
-assert.match(firebase, /if \(!explicitTest && !approvedPreMoveWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
-  'Firebase keeps the original strict last-mile gate for every message outside the explicit Pre-Move allow-list');
+assert.match(firebase, /if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
+  'Firebase keeps the original strict last-mile gate for every message outside the explicit Pre-Move and verified early-track allow-lists');
 assert.match(firebase, /private static boolean isApprovedPreMoveWatch\(/,
-  'Firebase permits monitor-only delivery only through a dedicated allow-list helper');
+  'Firebase permits Pre-Move monitor-only delivery only through a dedicated allow-list helper');
+assert.match(firebase, /private static boolean isApprovedRadarEarlyTrackWatch\(/,
+  'Firebase permits early-track monitor-only delivery only through a separate evidence-validated allow-list');
+assert.match(firebase, /FCM_RADAR_EARLY_TRACK_WATCH_NOTIFICATION_POSTED/,
+  'the native service records successful early-track monitor notification delivery');
 assert.match(firebase, /"PRE_MOVE_RADAR_WATCH_ONLY".equals\(event\)/,
   'the monitor bypass is bound to the exact Pre-Move event rather than generic watch events');
 assert.match(firebase, /"PRE_MOVE_WATCH_ONLY".equals\(mode\)/,
