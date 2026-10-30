@@ -92,7 +92,7 @@ test('TEST_FIXTURE: qualified early-track gate sends a strict monitor-only notif
     assert.equal(sent[1].entry_eligible,false);
     const rejected=await manager.notifyRadarAlert({radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,eligible:true,entry_eligible:false});
     assert.deepEqual(rejected,[]);
-    assert.equal(sent.length,1,'an unrelated invalid radar must not create an additional push');
+    assert.equal(sent.length,2,'an unrelated invalid radar must not create an additional push');
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 test('TEST_FIXTURE: early-track push fails closed for missing live data or an extended daily move',async()=>{
