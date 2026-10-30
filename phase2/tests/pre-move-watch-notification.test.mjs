@@ -879,3 +879,52 @@ test('market scanner retains PUNDIX and SOLV-like strong-buyer low-volume near m
   assert.ok(candidates.every(x=>x.pre_move_context.strong_buyer_absorption_monitor_only===true));
   assert.ok(candidates.every(x=>x.data_status.data_valid===false));
 });
+
+
+test('SOXSB-like bStock Spot pair is labelled as tokenized security in the bounded monitor-only push',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'SOXSBUSDT',asset_class:'TOKENIZED_SECURITY',tokenized_security:true,
+    last_price:50.84,price_change_24h:2.4,quote_volume_24h:3_620_000,
+    data_quality:96,liquidity_quality:90,
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,stale:false,future_data_detected:false},
+    risk_flags:[],
+    pre_move_context:{
+      ...base.pre_move_context,stage:'WATCH_EARLY',watch_only:true,actionable:false,
+      evidence_complete:true,closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:70,session_return_pct:1.0,one_hour_return_pct:1.1,
+      volume_acceleration:1.6,trade_acceleration:1.5,taker_buy_ratio:0.56,
+      taker_buy_acceleration:0.08,mean_close_location:0.60,
+      relative_strength_vs_market_pct:0.8,relative_strength_vs_btc_pct:0.8,
+      components:{squeeze:55,structure:70,buying_pressure:75}
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert);
+  assert.equal(alert.asset_class,'TOKENIZED_SECURITY');
+  assert.equal(alert.tokenized_security,true);
+  assert.equal(alert.watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-bstock-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].asset_class,'TOKENIZED_SECURITY');
+    assert.equal(sent[0].tokenized_security,true);
+    assert.match(sent[0].message,/أصل مُرمّز/);
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
