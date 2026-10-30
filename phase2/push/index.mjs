@@ -694,7 +694,11 @@ export class PushManager{
          domains===null||domains<3)
         return rejected('EARLY_TRACK_GATE_NOT_QUALIFIED');
       const dailyMove=firstFinite([alert?.price_change_24h]);
-      const verifiedClosedData=alert?.data_status?.data_valid===true||alert?.data_valid===true;
+      const verifiedClosedData=alert?.data_status?.data_valid===true||alert?.data_valid===true||
+         (alert?.closed_candles_only===true&&alert?.data_stale!==true&&
+          alert?.data_status?.stale!==true&&alert?.data_status?.data_stale!==true&&
+          alert?.data_status?.future_data_detected!==true&&
+          isTrustedBinancePublicSpotSource(source));
       if(!verifiedClosedData||dailyMove===null||dailyMove < -5||dailyMove > 7)
         return rejected('EARLY_TRACK_DATA_OR_ANTI_CHASE_GATE');
     }else{
