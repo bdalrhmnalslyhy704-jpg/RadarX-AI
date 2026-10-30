@@ -1192,7 +1192,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   const pinnedCount=Math.min(Math.ceil(take*pinnedShare),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
   const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
-  const defaultActivityPrioritySlots=Math.min(5,Math.floor(take*0.20));
+  const defaultActivityPrioritySlots=Math.min(8,Math.floor(take*0.20));
   const requestedActivitySlots=activityPriorityLimit==null
     ?defaultActivityPrioritySlots
     :Math.max(0,Math.trunc(Number(activityPriorityLimit)||0));
