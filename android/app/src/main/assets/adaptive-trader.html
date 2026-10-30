@@ -532,7 +532,7 @@ function renderCandidates(snapshot){
   if(!snapshot||!Array.isArray(snapshot.candidates)){root.innerHTML='<div class="empty"><b>لا توجد بيانات</b>ابدأ فحص السوق.</div>';return;}
   const rows=snapshot.candidates.filter(row=>row.data_valid&&row.score!==null).slice().sort((a,b)=>
     (Number(b.trade_decision&&b.trade_decision.priority)||0)-(Number(a.trade_decision&&a.trade_decision.priority)||0)||
-    displayScore(b)-displayScore(a));
+    (Number(b.cognitive_rank_score)||0)-(Number(a.cognitive_rank_score)||0)||displayScore(b)-displayScore(a));
   const serverRecommendation=state.serverStatus&&state.serverStatus.last_summary&&state.serverStatus.last_summary.current_recommendation;
   const topRow=rows[0]||null;
   const recommendation=snapshot.current_recommendation||
@@ -566,6 +566,7 @@ function renderCandidates(snapshot){
     const tag=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'watch';
     const features=candidate.features||{};
     const brain=candidate.cognitive_assessment||{};
+    const cognitiveRank=num(candidate.cognitive_rank_score);
     const brainProbability=brain.predicted_up_probability===null||brain.predicted_up_probability===undefined
       ?'احتمال الصعود غير معتمد':'احتمال اختباري '+fmt(brain.predicted_up_probability,1)+'%';
     const brainLine=brain.summary_ar
@@ -588,7 +589,7 @@ function renderCandidates(snapshot){
       '<div class="reasons">'+reasons+'</div>'+
       '<div class="card-foot"><span>حجم 24س: '+esc(money(candidate.quote_volume_24h))+'</span><span>شمعة: '+esc(timeText(candidate.candle_close_time))+'</span></div>'+
       '<div class="tiny" style="margin-top:8px"><b>القرار:</b> '+esc(decision.label_ar||tierText)+' · '+esc(decision.next_step_ar||'لا توجد توصية مؤكدة.')+'</div>'+
-      '<div class="tiny" style="margin-top:6px">الدرجة الأساسية '+esc(fmt(candidate.base_score??candidate.score,1))+' · تعديل التعلم '+esc(fmt(candidate.learning_adjustment??(learned-(num(candidate.score)||0)),1))+' نقطة · التنفيذ الحقيقي متوقف</div>'+
+      '<div class="tiny" style="margin-top:6px">الدرجة الأساسية '+esc(fmt(candidate.base_score??candidate.score,1))+' · تعديل التعلم '+esc(fmt(candidate.learning_adjustment??(learned-(num(candidate.score)||0)),1))+' نقطة · ترتيب العقل '+esc(cognitiveRank===null?'غير مفعّل':fmt(cognitiveRank,1))+' · التنفيذ الحقيقي متوقف</div>'+
       brainLine+
       '</article>';
   }).join('');
