@@ -1,21 +1,31 @@
 /**
- * Cognitive research layer for the isolated Build 224 Adaptive Trader.
+ * RadarX Build 224 — Cognitive Agent V2
  *
- * This is an auditable decision-support model, not consciousness or a human brain.
- * It forms multiple evidence hypotheses, learns from matured closed-candle outcomes,
- * and only exposes probabilities after a chronological holdout beats a base-rate model.
- * It never creates exchange orders and never writes to radar configuration.
+ * An interpretable, feedback-driven research model. It learns relationships
+ * between market evidence and matured closed-candle outcomes, checks itself
+ * against a purged chronological holdout, and exposes counterfactual evidence.
+ * It is not consciousness, does not claim human-level reasoning, and cannot
+ * create exchange orders or change radar configuration.
  */
 
-const finite = value => {
-  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)));
-const logistic = value => 1 / (1 + Math.exp(-clamp(value, -8, 8)));
+const MIN_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
+const FEATURE_NAMES = Object.freeze([
+  'volume_expansion',
+  'trade_expansion',
+  'buyer_pressure',
+  'price_structure',
+  'volatility_compression',
+  'relative_strength',
+  'short_momentum',
+  'multi_hour_trend',
+  'micro_buy_pressure',
+  'close_location',
+  'upper_wick_rejection',
+  'volume_x_buyer',
+  'structure_x_buyer',
+  'relative_x_trend',
+  'compression_x_structure'
+]);
 
 const FACTORS = Object.freeze([
   { key: 'volume_expansion', label_ar: 'تسارع حجم التداول', test: f => finite(f.volume_ratio) !== null && Number(f.volume_ratio) >= 1.5 },
@@ -34,8 +44,66 @@ const FACTORS = Object.freeze([
     finite(f.micro_5m_taker_buy_ratio) !== null && Number(f.micro_5m_taker_buy_ratio) >= 0.55 }
 ]);
 
+const finite = value => {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)));
+const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
+const betaRate = (sum, count) => (sum + 2) / (count + 4);
+const targetOf = row => row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5;
+
 function factorValues(features = {}) {
   return Object.fromEntries(FACTORS.map(factor => [factor.key, Boolean(factor.test(features || {}))]));
+}
+
+function normalizedFeatures(features = {}) {
+  const f = features || {};
+  const volRaw = finite(f.volume_ratio);
+  const tradeRaw = finite(f.trade_ratio);
+  const buyerRaw = finite(f.taker_buy_ratio);
+  const compressionRaw = finite(f.compression_ratio);
+  const relativeRaw = finite(f.relative_strength_vs_btc_pct);
+  const momentumRaw = finite(f.recent_15m_return_pct) ?? finite(f.price_change_15m_pct);
+  const microRaw = finite(f.micro_5m_taker_buy_ratio);
+  const closeRaw = finite(f.close_location);
+  const rangeRaw = finite(f.current_range_pct);
+  const wickRaw = finite(f.upper_wick_pct);
+
+  const volume = volRaw === null ? 0 : clamp(Math.log(clamp(volRaw, 0.05, 20)) / Math.log(2), -2, 2);
+  const trades = tradeRaw === null ? 0 : clamp(Math.log(clamp(tradeRaw, 0.05, 20)) / Math.log(2), -2, 2);
+  const buyer = buyerRaw === null ? 0 : clamp((buyerRaw - 0.5) / 0.1, -2, 2);
+  const structure = f.higher_low === true || f.breakout_above_prior_high === true ? 1 : 0;
+  const compression = compressionRaw === null ? 0 : clamp((1 - compressionRaw) / 0.4, -2, 2);
+  const relative = relativeRaw === null ? 0 : clamp(relativeRaw / 1.5, -2, 2);
+  const momentum = momentumRaw === null ? 0 : clamp(momentumRaw / 1.5, -2, 2);
+  const trend = f.trend_aligned === true || (finite(f.return_3h_pct) !== null && Number(f.return_3h_pct) > 0) ? 1 : 0;
+  const micro = f.micro_5m_available === true && microRaw !== null
+    ? clamp((microRaw - 0.5) / 0.1, -2, 2) : 0;
+  const close = closeRaw === null ? 0 : clamp((closeRaw - 0.5) * 2, -1, 1);
+  const wickRatio = wickRaw !== null && rangeRaw !== null && rangeRaw > 0 ? wickRaw / rangeRaw : null;
+  const wickPenalty = wickRatio === null ? 0 : -clamp((wickRatio - 0.35) / 0.35, 0, 2);
+
+  return [
+    volume,
+    trades,
+    buyer,
+    structure,
+    compression,
+    relative,
+    momentum,
+    trend,
+    micro,
+    close,
+    wickPenalty,
+    volume * buyer,
+    structure * buyer,
+    relative * trend,
+    compression * structure
+  ];
 }
 
 function validResolvedSamples(samples) {
@@ -43,138 +111,210 @@ function validResolvedSamples(samples) {
   return (Array.isArray(samples) ? samples : [])
     .filter(row => {
       if (!row || row.training_eligible !== true ||
+          (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
           !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
           !row.features || typeof row.features !== 'object') return false;
       const id = String(row.id || '');
-      if (!id || seen.has(id)) return false;
       const at = finite(row.at);
-      if (at === null || at <= 0) return false;
+      const resolvedAt = finite(row.resolved_at);
+      const horizon = finite(row.horizon_ms);
+      if (!id || seen.has(id) || at === null || at <= 0 ||
+          resolvedAt === null || resolvedAt - at < MIN_OUTCOME_HORIZON_MS ||
+          (horizon !== null && horizon < MIN_OUTCOME_HORIZON_MS)) return false;
       seen.add(id);
       return true;
     })
-    .map(row => ({ ...row, at: Number(row.at), factors: factorValues(row.features) }))
+    .map(row => ({
+      ...row,
+      at: Number(row.at),
+      resolved_at: Number(row.resolved_at),
+      target: targetOf(row),
+      vector: normalizedFeatures(row.features)
+    }))
     .sort((a, b) => a.at - b.at || String(a.id).localeCompare(String(b.id)));
 }
 
-function betaRate(wins, count) {
-  // Beta(2,2) smoothing prevents tiny buckets from appearing certain.
-  return (wins + 2) / (count + 4);
-}
+function fitLogisticModel(training, { l2 = 0.18, iterations = 700, learningRate = 0.12 } = {}) {
+  const targets = training.map(row => row.target);
+  const baseRate = betaRate(targets.reduce((sum, value) => sum + value, 0), targets.length);
+  const weights = Array(FEATURE_NAMES.length).fill(0);
+  let intercept = logit(baseRate);
+  const n = Math.max(1, training.length);
 
-function fitProfile(training, { minimumBucket = 8 } = {}) {
-  const up = training.filter(row => row.outcome === 'UP').length;
-  const baseRate = betaRate(up, training.length);
-  const baseLogit = logit(baseRate);
-  const factors = {};
-  let covered = 0;
-  for (const factor of FACTORS) {
-    const rows = training.filter(row => row.factors[factor.key]);
-    const wins = rows.filter(row => row.outcome === 'UP').length;
-    const posterior = betaRate(wins, rows.length);
-    const shrink = rows.length / (rows.length + 20);
-    const logOddsLift = clamp((logit(posterior) - baseLogit) * shrink, -0.45, 0.45);
-    const scoreAdjustment = rows.length >= minimumBucket
-      ? clamp((posterior - baseRate) * 12 * shrink, -1.5, 1.5) : 0;
-    if (rows.length >= minimumBucket) covered++;
-    factors[factor.key] = {
-      label_ar: factor.label_ar,
-      samples: rows.length,
-      up: wins,
-      down: rows.filter(row => row.outcome === 'DOWN').length,
-      flat: rows.filter(row => row.outcome === 'FLAT').length,
-      posterior_up_rate_pct: Number((posterior * 100).toFixed(1)),
-      log_odds_lift: Number(logOddsLift.toFixed(4)),
-      ranking_adjustment: Number(scoreAdjustment.toFixed(2)),
-      evidence_ready: rows.length >= minimumBucket
-    };
+  // Deterministic full-batch gradient descent: reproducible tests and no random seed.
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    const gradients = Array(FEATURE_NAMES.length).fill(0);
+    let interceptGradient = 0;
+    for (const row of training) {
+      let linear = intercept;
+      for (let i = 0; i < weights.length; i++) linear += weights[i] * row.vector[i];
+      const error = logistic(linear) - row.target;
+      interceptGradient += error;
+      for (let i = 0; i < weights.length; i++) gradients[i] += error * row.vector[i];
+    }
+    intercept -= learningRate * interceptGradient / n;
+    for (let i = 0; i < weights.length; i++) {
+      const gradient = gradients[i] / n + l2 * weights[i];
+      weights[i] = clamp(weights[i] - learningRate * gradient, -4, 4);
+    }
   }
-  return { base_rate: baseRate, base_logit: baseLogit, factors, covered_factor_buckets: covered };
+  return { intercept, weights, base_rate: baseRate, feature_names: [...FEATURE_NAMES], l2 };
 }
 
 function predictFromFit(features, fit) {
-  let value = fit.base_logit;
-  const flags = factorValues(features);
+  if (!fit || !Array.isArray(fit.weights) || fit.weights.length !== FEATURE_NAMES.length) return null;
+  const vector = normalizedFeatures(features);
+  let value = Number(fit.intercept) || 0;
+  for (let i = 0; i < fit.weights.length; i++) value += Number(fit.weights[i] || 0) * vector[i];
+  return clamp(logistic(value), 0.02, 0.98);
+}
+
+function factorEvidence(training, { minimumBucket = 8 } = {}) {
+  const output = {};
+  let covered = 0;
   for (const factor of FACTORS) {
-    if (flags[factor.key]) value += Number(fit.factors[factor.key]?.log_odds_lift) || 0;
+    const active = training.filter(row => factor.test(row.features || {}));
+    const inactive = training.filter(row => !factor.test(row.features || {}));
+    const activeMean = active.length ? mean(active.map(row => row.target)) : null;
+    const inactiveMean = inactive.length ? mean(inactive.map(row => row.target)) : null;
+    const ready = active.length >= minimumBucket && inactive.length >= minimumBucket;
+    if (ready) covered++;
+    output[factor.key] = {
+      label_ar: factor.label_ar,
+      present_samples: active.length,
+      absent_samples: inactive.length,
+      present_up_rate_pct: activeMean === null ? null : Number((activeMean * 100).toFixed(1)),
+      absent_up_rate_pct: inactiveMean === null ? null : Number((inactiveMean * 100).toFixed(1)),
+      lift_percentage_points: activeMean === null || inactiveMean === null
+        ? null : Number(((activeMean - inactiveMean) * 100).toFixed(1)),
+      evidence_ready: ready
+    };
   }
-  return clamp(logistic(value), 0.03, 0.97);
+  return { factors: output, covered_factor_buckets: covered };
 }
 
 function evaluateHoldout(rows, fit) {
   if (rows.length < 20) return {
     sample_count: rows.length, evaluated: false, model_brier_score: null,
-    base_rate_brier_score: null, accuracy_at_50_pct: null,
-    reason: 'HOLDOUT_REQUIRES_20_OUTCOMES'
+    base_rate_brier_score: null, accuracy_directional_pct: null,
+    beat_base_rate: false, reason: 'HOLDOUT_REQUIRES_20_OUTCOMES'
   };
   const base = fit.base_rate;
-  const actuals = rows.map(row => row.outcome === 'UP' ? 1 : 0);
   const predictions = rows.map(row => predictFromFit(row.features, fit));
-  const modelBrier = mean(predictions.map((p, index) => (p - actuals[index]) ** 2));
-  const baselineBrier = mean(actuals.map(actual => (base - actual) ** 2));
-  const accuracy = mean(predictions.map((p, index) => (p >= 0.5 ? 1 : 0) === actuals[index] ? 1 : 0));
+  const targets = rows.map(row => row.target);
+  const modelBrier = mean(predictions.map((p, index) => (p - targets[index]) ** 2));
+  const baselineBrier = mean(targets.map(target => (base - target) ** 2));
+  const directional = rows.filter(row => row.outcome !== 'FLAT');
+  const accuracy = directional.length
+    ? mean(directional.map((row, index) => {
+      const prediction = predictions[rows.indexOf(row)] >= 0.5;
+      return prediction === (row.outcome === 'UP') ? 1 : 0;
+    })) : null;
   return {
     sample_count: rows.length,
     evaluated: true,
-    model_brier_score: Number(modelBrier.toFixed(4)),
-    base_rate_brier_score: Number(baselineBrier.toFixed(4)),
-    accuracy_at_50_pct: Number((accuracy * 100).toFixed(1)),
-    beat_base_rate: modelBrier + 0.005 < baselineBrier
+    model_brier_score: Number(modelBrier.toFixed(5)),
+    base_rate_brier_score: Number(baselineBrier.toFixed(5)),
+    accuracy_directional_pct: accuracy === null ? null : Number((accuracy * 100).toFixed(1)),
+    beat_base_rate: modelBrier + 0.002 < baselineBrier,
+    improvement_vs_base_rate: Number((baselineBrier - modelBrier).toFixed(5))
   };
 }
 
 /**
- * Uses a chronological split: earlier resolved examples fit the model; the latest
- * 20% are kept out of fitting and used only for the model-vs-base-rate check.
+ * Fits on earlier examples only. Later examples are isolated as a holdout.
+ * Any training label that resolves at or after the first holdout timestamp is
+ * purged, preventing the +4h outcome window from leaking into holdout features.
  */
 export function buildCognitiveLearningProfile(samples = [], {
-  minTrainingSamples = 60, minimumBucket = 8, minimumHoldoutSamples = 20
+  minTrainingSamples = 60, minimumBucket = 8, minimumHoldoutSamples = 20,
+  holdoutFraction = 0.2, l2 = 0.18
 } = {}) {
   const resolved = validResolvedSamples(samples);
-  const holdoutCount = resolved.length >= minTrainingSamples + minimumHoldoutSamples
-    ? Math.max(minimumHoldoutSamples, Math.floor(resolved.length * 0.2)) : 0;
-  const training = holdoutCount ? resolved.slice(0, -holdoutCount) : resolved;
-  const holdout = holdoutCount ? resolved.slice(-holdoutCount) : [];
-  const fit = fitProfile(training, { minimumBucket });
-  const rankingReady = training.length >= minTrainingSamples && fit.covered_factor_buckets >= 4;
-  const holdoutMetrics = evaluateHoldout(holdout, fit);
+  const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
+  const enoughForHoldout = resolved.length >= minTrainingSamples + minimumHoldoutSamples && uniqueTimes.length >= 2;
+  const splitIndex = enoughForHoldout
+    ? Math.max(1, Math.min(uniqueTimes.length - 1, Math.floor(uniqueTimes.length * (1 - holdoutFraction))))
+    : uniqueTimes.length;
+  const holdoutStartAt = enoughForHoldout ? uniqueTimes[splitIndex] : null;
+  const holdout = holdoutStartAt === null ? [] : resolved.filter(row => row.at >= holdoutStartAt);
+  const beforeCutoff = holdoutStartAt === null ? resolved : resolved.filter(row => row.at < holdoutStartAt);
+  const training = holdoutStartAt === null ? resolved : beforeCutoff.filter(row => row.resolved_at < holdoutStartAt);
+  const purged = holdoutStartAt === null ? [] : beforeCutoff.filter(row => row.resolved_at >= holdoutStartAt);
+  const fitted = fitLogisticModel(training, { l2 });
+  const evidence = factorEvidence(training, { minimumBucket });
+  const rankingReady = training.length >= minTrainingSamples && evidence.covered_factor_buckets >= 4;
+  const holdoutMetrics = evaluateHoldout(holdout, fitted);
   const probabilityReady = rankingReady && holdoutMetrics.evaluated === true &&
     holdoutMetrics.beat_base_rate === true;
+  const outcomes = {
+    up: training.filter(row => row.outcome === 'UP').length,
+    down: training.filter(row => row.outcome === 'DOWN').length,
+    flat: training.filter(row => row.outcome === 'FLAT').length
+  };
   return {
-    method: 'BAYESIAN_FACTOR_EVIDENCE_WITH_CHRONOLOGICAL_HOLDOUT_V1',
+    method: 'REGULARIZED_INTERACTION_MODEL_WITH_PURGED_CHRONOLOGICAL_HOLDOUT_V2',
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
     ready: rankingReady,
     resolved_samples: resolved.length,
     training_samples: training.length,
     holdout_samples: holdout.length,
+    purged_overlap_samples: purged.length,
     required_training_samples: minTrainingSamples,
     required_factor_buckets: 4,
-    covered_factor_buckets: fit.covered_factor_buckets,
-    outcome_counts: {
-      up: training.filter(row => row.outcome === 'UP').length,
-      down: training.filter(row => row.outcome === 'DOWN').length,
-      flat: training.filter(row => row.outcome === 'FLAT').length
-    },
-    training_positive_rate_pct: Number((fit.base_rate * 100).toFixed(1)),
+    covered_factor_buckets: evidence.covered_factor_buckets,
+    holdout_start_at: holdoutStartAt,
+    max_training_outcome_resolved_at: training.length ? Math.max(...training.map(row => row.resolved_at)) : null,
+    outcome_counts: outcomes,
+    training_positive_rate_pct: Number((fitted.base_rate * 100).toFixed(1)),
     holdout: holdoutMetrics,
-    factors: fit.factors,
+    factor_evidence: evidence.factors,
+    feature_names: [...FEATURE_NAMES],
+    identifier_features_used: false,
     note: probabilityReady
-      ? 'PROBABILITY_MODEL_BEAT_CHRONOLOGICAL_BASE_RATE_HOLDOUT'
+      ? 'MODEL_BEAT_PURGED_CHRONOLOGICAL_HOLDOUT_BASE_RATE'
       : rankingReady
         ? 'RANKING_EVIDENCE_READY_BUT_PROBABILITY_NOT_VALIDATED_OUT_OF_SAMPLE'
         : 'INSUFFICIENT_MATURED_CLOSED_CANDLE_OUTCOMES_OR_FACTOR_COVERAGE',
-    _fit: fit
+    _fit: fitted
   };
 }
 
 export function applyCognitiveRankAdjustment(baseScore, features = {}, profile = {}) {
   const score = finite(baseScore);
-  if (score === null || profile?.ranking_ready !== true || !profile?._fit?.factors) return null;
-  const active = FACTORS.filter(factor => factor.test(features || {}))
-    .map(factor => Number(profile._fit.factors[factor.key]?.ranking_adjustment) || 0);
-  if (!active.length) return Number(clamp(score, 0, 100).toFixed(1));
-  const meanAdjustment = active.reduce((sum, value) => sum + value, 0) / active.length;
-  return Number(clamp(score + clamp(meanAdjustment, -2, 2), 0, 100).toFixed(1));
+  if (score === null || profile?.probability_ready !== true || !profile?._fit) return null;
+  const probability = predictFromFit(features, profile._fit);
+  if (probability === null) return null;
+  const adjustment = clamp((probability - Number(profile._fit.base_rate)) * 12, -3, 3);
+  return Number(clamp(score + adjustment, 0, 100).toFixed(1));
+}
+
+function counterfactualEvidence(features, fit) {
+  const baseline = predictFromFit(features, fit);
+  if (baseline === null) return [];
+  const variants = [
+    ['BUYER_PRESSURE', { taker_buy_ratio: 0.5 }],
+    ['VOLUME_EXPANSION', { volume_ratio: 1 }],
+    ['TRADE_EXPANSION', { trade_ratio: 1 }],
+    ['PRICE_STRUCTURE', { higher_low: false, breakout_above_prior_high: false }],
+    ['VOLATILITY_COMPRESSION', { compression_ratio: 1 }],
+    ['RELATIVE_STRENGTH', { relative_strength_vs_btc_pct: 0 }],
+    ['MULTI_HOUR_TREND', { trend_aligned: false, return_3h_pct: 0 }],
+    ['MICRO_BUY_PRESSURE', { micro_5m_available: false, micro_5m_taker_buy_ratio: null }]
+  ];
+  return variants.map(([key, changes]) => {
+    const altered = { ...features, ...changes };
+    const alternative = predictFromFit(altered, fit);
+    return {
+      factor: key,
+      probability_without_factor_pct: alternative === null ? null : Number((alternative * 100).toFixed(1)),
+      contribution_percentage_points: alternative === null
+        ? null : Number(((baseline - alternative) * 100).toFixed(1))
+    };
+  }).filter(row => row.contribution_percentage_points !== null)
+    .sort((a, b) => Math.abs(b.contribution_percentage_points) - Math.abs(a.contribution_percentage_points))
+    .slice(0, 6);
 }
 
 export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now()) {
@@ -192,7 +332,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     price !== null && price > 0 && score !== null && candleAge !== null &&
     candleAge >= 0 && candleAge <= 20 * 60 * 1000;
   const base = {
-    version: 1,
+    version: 2,
     symbol,
     assessed_at: Number(now),
     entry_eligible: false,
@@ -204,7 +344,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     ...base, decision: 'DATA_UNAVAILABLE',
     summary_ar: 'لا يمكن إصدار حكم؛ بيانات السعر أو الشمعة المغلقة غير مكتملة أو قديمة.',
     reason_codes: ['FRESH_VALID_CLOSED_CANDLE_REQUIRED'],
-    hypotheses: [], contradictions: ['البيانات غير صالحة للتحليل'],
+    hypotheses: [], contradictions: [], counterfactual_evidence: [],
     predicted_up_probability: null, confidence_label: 'UNKNOWN'
   };
 
@@ -214,10 +354,8 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     dailyLate || (hourly !== null && hourly >= 5) ||
     (recent15 !== null && recent15 >= 2.5) || (micro5 !== null && micro5 >= 3);
   const volume = finite(features.volume_ratio);
-  const trades = finite(features.trade_ratio);
   const buyer = finite(features.taker_buy_ratio);
   const relative = finite(features.relative_strength_vs_btc_pct);
-  const compression = finite(features.compression_ratio);
   const upperWick = finite(features.upper_wick_pct);
   const range = finite(features.current_range_pct);
   const contradictions = [];
@@ -227,20 +365,20 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     contradictions.push('ضعف نسبي واضح مقابل BTC');
   if (upperWick !== null && range !== null && range > 0 && upperWick / range > 0.55)
     contradictions.push('ذيل علوي كبير قد يدل على رفض الأسعار الأعلى');
-  if (daily !== null && daily < -5) contradictions.push('ضغط هبوطي يومي مرتفع');
+  if (daily !== null && daily < -5)
+    contradictions.push('ضغط هبوطي يومي مرتفع');
 
   const activityEvidence = [flags.volume_expansion, flags.trade_expansion, flags.buyer_flow].filter(Boolean).length;
-  const structureEvidence = flags.price_structure ? 1 : 0;
   const supportingDomains = Object.values(flags).filter(Boolean).length;
   const hypotheses = [
-    { key: 'BUYER_ACCUMULATION', label_ar: 'تراكم وضغط شراء', supported: activityEvidence >= 2 && flags.buyer_flow,
-      evidence: activityEvidence, required: 2 },
+    { key: 'BUYER_ACCUMULATION', label_ar: 'تراكم وضغط شراء',
+      supported: activityEvidence >= 2 && flags.buyer_flow, evidence: activityEvidence, required: 2 },
     { key: 'VOLATILITY_COMPRESSION', label_ar: 'قاعدة هادئة وانكماش تذبذب',
-      supported: flags.volatility_compression, evidence: compression === null ? 0 : 1, required: 1 },
+      supported: flags.volatility_compression, evidence: flags.volatility_compression ? 1 : 0, required: 1 },
     { key: 'PRICE_STRUCTURE', label_ar: 'تحسن بنية السعر',
-      supported: flags.price_structure, evidence: structureEvidence, required: 1 },
+      supported: flags.price_structure, evidence: flags.price_structure ? 1 : 0, required: 1 },
     { key: 'RELATIVE_STRENGTH', label_ar: 'تفوق نسبي على BTC',
-      supported: flags.relative_strength, evidence: relative === null ? 0 : 1, required: 1 },
+      supported: flags.relative_strength, evidence: flags.relative_strength ? 1 : 0, required: 1 },
     { key: 'MULTI_TIMEFRAME_TREND', label_ar: 'اتجاه متوافق على أكثر من إطار',
       supported: flags.multi_hour_trend && flags.short_momentum,
       evidence: [flags.multi_hour_trend, flags.short_momentum].filter(Boolean).length, required: 2 }
@@ -249,7 +387,6 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     (hourly === null || hourly <= 3.5) &&
     (recent15 === null || recent15 <= 1.5) &&
     (micro5 === null || micro5 <= 1.8);
-  const contradictionsCount = contradictions.length;
   const predicted = profile?.probability_ready === true
     ? predictFromFit(features, profile._fit) : null;
   const reasons = [];
@@ -260,22 +397,26 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   if (flags.volatility_compression) reasons.push('VOLATILITY_COMPRESSION');
   if (flags.relative_strength) reasons.push('RELATIVE_STRENGTH_VS_BTC');
   if (!noChase) reasons.push('ANTI_CHASE_REVIEW_REQUIRED');
-  if (contradictionsCount) reasons.push('CONTRADICTORY_EVIDENCE_PRESENT');
+  if (contradictions.length) reasons.push('CONTRADICTORY_EVIDENCE_PRESENT');
 
   let decision = 'NO_SETUP';
   let summary = 'الأدلة الحالية لا تكفي لتصنيف فرصة مبكرة؛ يواصل المراقبة ولا يفتح أي صفقة.';
   if (late || !noChase) {
     decision = 'AVOID_CHASING';
-    summary = 'الحركة ممتدة؛ يتجنب مطاردة السعر وينتظر قاعدة وإشارة جديدة.';
-  } else if (activityEvidence >= 2 && flags.price_structure && supportingDomains >= 4 && contradictionsCount === 0) {
+    summary = 'الحركة امتدت؛ يتجنب مطاردة السعر وينتظر قاعدة وإشارة جديدة.';
+  } else if (activityEvidence >= 2 && flags.price_structure && supportingDomains >= 4 &&
+      contradictions.length === 0 && (predicted === null || predicted >= 0.55)) {
     decision = 'EARLY_SETUP_REVIEW';
-    summary = 'تجمّعت أدلة مبكرة مستقلة؛ تُرفع للمراجعة والمحاكاة فقط وليست أمر شراء.';
-  } else if (supportingDomains >= 2 || contradictionsCount > 0) {
+    summary = predicted === null
+      ? 'تجمعت أدلة مبكرة مستقلة؛ المراجعة والمحاكاة فقط حتى يثبت النموذج تعلمه خارج العينة.'
+      : 'الأدلة المبكرة متوافقة، والنموذج المتعلم يدعمها في اختبار زمني مستقل؛ مراجعة ومحاكاة فقط.';
+  } else if (supportingDomains >= 2 || contradictions.length > 0 || (predicted !== null && predicted < 0.48)) {
     decision = 'WATCH_AND_REASSESS';
-    summary = contradictionsCount
-      ? 'توجد أدلة متعارضة؛ يخفض الثقة ويعيد الفحص بعد شمعة مغلقة جديدة.'
-      : 'ظهرت بعض العلامات، لكنها لا تكفي؛ يستمر في المراقبة دون دخول.';
+    summary = contradictions.length
+      ? 'الأدلة متعارضة؛ يخفض الثقة ويعيد الفحص بعد شمعة مغلقة جديدة.'
+      : 'بعض الأدلة موجودة لكنّها لا تكفي؛ ينتظر معلومات جديدة ولا يتعجل.';
   }
+  const counterfactuals = predicted === null ? [] : counterfactualEvidence(features, profile._fit);
   return {
     ...base,
     decision,
@@ -287,8 +428,10 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,
     predicted_up_probability: predicted === null ? null : Number((predicted * 100).toFixed(1)),
-    confidence_label: predicted === null ? 'UNKNOWN' : 'VALIDATED_ON_CHRONOLOGICAL_HOLDOUT',
+    confidence_label: predicted === null ? 'UNKNOWN' : 'VALIDATED_ON_PURGED_CHRONOLOGICAL_HOLDOUT',
     learning_samples: Number(profile?.resolved_samples) || 0,
+    counterfactual_evidence: counterfactuals,
+    entry_eligible: false,
     paper_trading: true,
     real_order_execution: false
   };
