@@ -50,6 +50,17 @@ test('explicit RADARX_DATA_DIR remains supported and is marked durable only insi
   assert.equal(ephemeral.persistent,false);
 });
 
+test('a stale explicit directory inside the container is overridden by a real mounted data volume',()=>{
+  const value=resolveDurableStorage({
+    env:{RADARX_DATA_DIR:'/app/.radarx-data'},cwd:'/app',
+    mountsContent:'/dev/vdb1 /data ext4 rw,relatime 0 0\\noverlay / overlay rw 0 0'
+  });
+  assert.equal(value.directory,'/data/.radarx-data');
+  assert.equal(value.persistent,true);
+  assert.equal(value.mount_path,'/data');
+  assert.equal(value.source,'AUTO_DETECTED_MOUNT');
+});
+
 test('container writable layer is not misreported as persistent when no data volume is mounted',()=>{
   const value=resolveDurableStorage({
     env:{},cwd:'/app',
