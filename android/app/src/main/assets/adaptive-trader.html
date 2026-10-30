@@ -743,10 +743,18 @@ function renderLearning(){
     :prequential.status==='FORWARD_MONITORING_STABLE'
       ?'مراقبة أمامية: لم يظهر تراجع حاد في نافذة التوقعات الأخيرة.'
       :'مراقبة التوقعات الأمامية تنتظر عينات مكتملة كافية.';
+  const recentErrorPatterns=Array.isArray(prequential.recent_window&&prequential.recent_window.error_patterns)
+    ?prequential.recent_window.error_patterns:[];
+  const leadingError=recentErrorPatterns[0]||null;
+  const errorReviewText=leadingError
+    ?'أكثر علامة ارتبطت بأخطاء التوقع في النافذة الحديثة: '+leadingError.reason_code+
+      ' · '+leadingError.sample_count+' سجلات · Brier '+fmt(leadingError.brier_score,3)+
+      ' · أخطاء عالية الثقة '+leadingError.high_confidence_errors+'. هذا ارتباط تشخيصي وليس إثباتًا للسبب.'
+    :'لا توجد مجموعة أخطاء متكررة كافية لتشخيصها بعد.';
   el('cognitiveSummary').innerHTML=
     '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' تدريب · '+esc(Math.max(0,Number(brainProfile.validation_samples)||0))+' تحقق · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' اختبار نهائي.</p><div class="tiny">عينات تداخل مستبعدة: '+esc(Number(brainProfile.purged_overlap_samples)||0)+' · عوامل مغطاة: '+esc(covered)+' · قرارات مبكرة للمراجعة: '+esc(Number(brainCapture.early_setup_reviews)||0)+'</div></div>'+
     '<div class="learning-card"><h3>اختيار النموذج والتكيّف</h3><p>'+esc(selectedModel)+' · '+esc(adaptationText)+'</p><div class="tiny">'+esc(validationText)+'</div></div>'+
-    '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div></div>';
+    '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null&&Number.isFinite(Number(prequential.recent_window.brier_score))?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div><div class="tiny">'+esc(errorReviewText)+'</div></div>';
   const recentBrain=Array.isArray(brain.recent_journal)?brain.recent_journal:[];
   el('cognitiveJournal').innerHTML=recentBrain.length?recentBrain.slice(0,12).map(function(row){
     const outcome=['UP','DOWN','FLAT'].includes(row.outcome)?(' · النتيجة '+row.outcome+' '+percent(row.return_pct)):' · تنتظر إغلاق أفق التقييم';

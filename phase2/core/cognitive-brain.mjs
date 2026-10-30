@@ -465,7 +465,11 @@ export function buildCognitivePrequentialProfile(journal = [], {
     .sort((a, b) => Number(a.at) - Number(b.at) || String(a.id).localeCompare(String(b.id)));
 
   const score = subset => {
-    if (!subset.length) return { sample_count: 0, brier_score: null, log_loss: null, directional_accuracy_pct: null };
+    if (!subset.length) return {
+      sample_count: 0, brier_score: null, log_loss: null,
+      directional_accuracy_pct: null, high_confidence_error_count: 0,
+      high_confidence_error_rate_pct: null, error_patterns: []
+    };
     const brier = mean(subset.map(row => (row.prediction - row.target) ** 2));
     const logLoss = mean(subset.map(row =>
       -(row.target * Math.log(row.prediction) + (1 - row.target) * Math.log(1 - row.prediction))));
@@ -473,11 +477,45 @@ export function buildCognitivePrequentialProfile(journal = [], {
     const accuracy = directional.length
       ? mean(directional.map(row => (row.prediction >= 0.5) === (row.outcome === 'UP') ? 1 : 0))
       : null;
+    const confident = directional.filter(row => row.prediction >= 0.8 || row.prediction <= 0.2);
+    const confidentErrors = confident.filter(row =>
+      (row.prediction >= 0.8 && row.outcome === 'DOWN') ||
+      (row.prediction <= 0.2 && row.outcome === 'UP'));
+    const reasons = new Map();
+    for (const row of subset) {
+      for (const reason of new Set(Array.isArray(row.reason_codes) ? row.reason_codes.map(String) : [])) {
+        if (!reasons.has(reason)) reasons.set(reason, []);
+        reasons.get(reason).push(row);
+      }
+    }
+    const errorPatterns = [...reasons.entries()].map(([reasonCode, group]) => {
+      const groupBrier = mean(group.map(row => (row.prediction - row.target) ** 2));
+      const groupConfident = group.filter(row => row.outcome !== 'FLAT' &&
+        (row.prediction >= 0.8 || row.prediction <= 0.2));
+      const groupConfidentErrors = groupConfident.filter(row =>
+        (row.prediction >= 0.8 && row.outcome === 'DOWN') ||
+        (row.prediction <= 0.2 && row.outcome === 'UP'));
+      return {
+        reason_code: reasonCode,
+        sample_count: group.length,
+        brier_score: Number(groupBrier.toFixed(5)),
+        high_confidence_errors: groupConfidentErrors.length,
+        high_confidence_error_rate_pct: groupConfident.length
+          ? Number((groupConfidentErrors.length / groupConfident.length * 100).toFixed(1)) : null
+      };
+    }).filter(row => row.sample_count >= 3)
+      .sort((left, right) => right.brier_score - left.brier_score ||
+        right.high_confidence_errors - left.high_confidence_errors)
+      .slice(0, 8);
     return {
       sample_count: subset.length,
       brier_score: Number(brier.toFixed(5)),
       log_loss: Number(logLoss.toFixed(5)),
-      directional_accuracy_pct: accuracy === null ? null : Number((accuracy * 100).toFixed(1))
+      directional_accuracy_pct: accuracy === null ? null : Number((accuracy * 100).toFixed(1)),
+      high_confidence_error_count: confidentErrors.length,
+      high_confidence_error_rate_pct: confident.length
+        ? Number((confidentErrors.length / confident.length * 100).toFixed(1)) : null,
+      error_patterns: errorPatterns
     };
   };
 

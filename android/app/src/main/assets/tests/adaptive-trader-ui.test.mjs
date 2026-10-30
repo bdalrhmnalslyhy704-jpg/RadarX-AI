@@ -110,6 +110,9 @@ test('cognitive dashboard distinguishes nested validation, untouched holdout, ad
   assert.match(html,/التحقق الأوسط/);
   assert.match(html,/الامتحان الأخير نجح/);
   assert.match(html,/أداء التوقعات المسجلة يتراجع/);
+  assert.match(html,/error_patterns/);
+  assert.match(html,/أخطاء عالية الثقة/);
+  assert.match(html,/هذا ارتباط تشخيصي وليس إثباتًا للسبب/);
   assert.match(html,/لا يُسمح بها قبل النجاح في التحقق الأوسط والاختبار النهائي المستقل/);
 });
 

@@ -358,6 +358,7 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
       trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
+      reason_codes: index < 30 ? ['VOLUME_EXPANSION'] : ['BUYER_FLOW_SUPPORT'],
       predicted_up_probability: predicted
     };
   });
@@ -372,5 +373,8 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
   assert.equal(audit.drift_detected, true);
   assert.equal(audit.reassessment_required, true);
   assert.equal(audit.status, 'FORWARD_PERFORMANCE_DEGRADING');
+  assert.equal(audit.recent_window.high_confidence_error_count, 30);
+  assert.equal(audit.recent_window.error_patterns[0].reason_code, 'BUYER_FLOW_SUPPORT');
+  assert.equal(audit.recent_window.error_patterns[0].high_confidence_errors, 30);
 });
 
