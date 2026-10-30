@@ -693,6 +693,10 @@ export class PushManager{
          capture===null||capture<captureFloor||eyeQuality===null||eyeQuality<qualityFloor||
          domains===null||domains<3)
         return rejected('EARLY_TRACK_GATE_NOT_QUALIFIED');
+      const dailyMove=firstFinite([alert?.price_change_24h]);
+      const verifiedClosedData=alert?.data_status?.data_valid===true||alert?.data_valid===true;
+      if(!verifiedClosedData||dailyMove===null||dailyMove < -5||dailyMove > 7)
+        return rejected('EARLY_TRACK_DATA_OR_ANTI_CHASE_GATE');
     }else{
       return rejected('WATCH_ONLY_EVENT_UNSUPPORTED');
     }
@@ -727,7 +731,12 @@ export class PushManager{
     ]);
     const isQualifiedPreMovePush=event==='PRE_MOVE_RADAR_WATCH_ONLY'&&alert?.radar==='PRE_MOVE'&&
       qualifiedPreMoveTiers.has(String(alert?.watch_notification_tier||''));
-    if(!isQualifiedPreMovePush){
+    const isQualifiedRadarEarlyTrackPush=event==='RADAR_WATCH_ONLY_EARLY_TRACK'&&
+      alert?.notification_gate?.eligible===true&&alert?.notification_gate?.watch_only===true&&
+      alert?.market==='SPOT'&&alert?.watch_only===true&&alert?.entry_eligible===false;
+    const monitorNotificationMode=isQualifiedRadarEarlyTrackPush
+      ?'RADAR_EARLY_TRACK_WATCH_ONLY':'PRE_MOVE_WATCH_ONLY';
+    if(!isQualifiedPreMovePush&&!isQualifiedRadarEarlyTrackPush){
       const notifications=[];
       for(const sub of recipients){
         const audit={
@@ -781,17 +790,17 @@ export class PushManager{
       const push=radarPayload({
         ...alert,
         market:'SPOT',direction:'NONE',signal_type:'WATCH_ONLY',
-        notification_mode:'PRE_MOVE_WATCH_ONLY',
+        notification_mode:monitorNotificationMode,
         notification_gate:{...(alert?.notification_gate||{}),eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
         watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
       },processedAt,'PRE_MOVE_WATCH_ONLY');
-      push.notification_mode='PRE_MOVE_WATCH_ONLY';
+      push.notification_mode=monitorNotificationMode;
       push.signal_type='WATCH_ONLY';
       push.watch_only=true;
       push.entry_eligible=false;
       push.watch_notification_tier=alert?.watch_notification_tier||null;
       push.requires_follow_up_confirmation=true;
-      push.title='RadarX • مراقبة مبكرة • '+symbol;
+      push.title=(isQualifiedRadarEarlyTrackPush?radarTitle(alert):'RadarX')+' • مراقبة مبكرة • '+symbol;
       push.message=[symbol,
         alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
           ?'تسارع موثق في الحجم والصفقات وضغط الشراء — مراقبة فقط، لا دخول'
@@ -817,7 +826,7 @@ export class PushManager{
         status,provider:providerStatus.provider||'unknown',attempted_at:processedAt,
         reason:response?.reason??null,http_status:response?.httpStatus??null,attempted:true,
         watch_only:true,entry_eligible:false,signal_type:'WATCH_ONLY',
-        notification_mode:'PRE_MOVE_WATCH_ONLY',
+        notification_mode:monitorNotificationMode,
         paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
         data_quality:dataQuality,liquidity_quality:liquidityQuality,
         watch_notification_tier:alert?.watch_notification_tier||null,
@@ -832,7 +841,7 @@ export class PushManager{
       status:deliveryStatus,reason:sentCount===0?(firstFailure||'PUSH_DELIVERY_FAILED'):null,
       attempted:true,notifications,sent_count:sentCount,attempted_count:recipients.length,
       watch_only:true,entry_eligible:false,signal_type:'WATCH_ONLY',
-      notification_mode:'PRE_MOVE_WATCH_ONLY',paper_trading:true,real_order_execution:false
+      notification_mode:monitorNotificationMode,paper_trading:true,real_order_execution:false
     };
   }
 
