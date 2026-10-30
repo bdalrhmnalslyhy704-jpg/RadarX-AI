@@ -1,5 +1,6 @@
 import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
+import {buildCognitiveLearningProfile,assessCognitiveCandidate} from './cognitive-brain.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -12,6 +13,7 @@ const SNAPSHOT_LIMIT=80;
 const MAX_SAMPLES=6000;
 const MAX_HISTORY=60000;
 const MAX_MISSED=500;
+const MAX_COGNITIVE_JOURNAL=3000;
 
 function createServerPaperPortfolio(){
   const portfolio=createPaperPortfolio(10000);
@@ -24,6 +26,7 @@ function emptyState(){
     version:1,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
+    cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
     paper_portfolio:paperPortfolio,
     paper_validation_profile:buildAdaptiveTraderPaperValidationProfile(paperPortfolio),
     samples:[],price_history:[],missed_movers:[]
@@ -79,6 +82,8 @@ export class AdaptiveTraderWorker{
             }),
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
+            cognitive_journal:Array.isArray(saved.cognitive_journal)?saved.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL):[],
+            cognitive_capture:saved.cognitive_capture&&typeof saved.cognitive_capture==='object'?saved.cognitive_capture:null,
             learning_profile:buildAdaptiveLearningProfile(saved.samples.filter(row=>
               row&&row.training_eligible===true&&(row.historical_baseline===true||row.closed_candle_baseline===true))),
             paper_portfolio:saved.paper_portfolio&&saved.paper_portfolio.mode==='PAPER_ONLY'&&saved.paper_portfolio.real_order_execution===false&&
@@ -88,6 +93,7 @@ export class AdaptiveTraderWorker{
               :createServerPaperPortfolio()
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
+          this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
@@ -167,14 +173,23 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
+      this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
+      const cognitiveAssessments=[];
       const adaptiveCandidates=snapshot.candidates.map(candidate=>{
         const baseScore=finite(candidate?.score);
         const learnedScore=applyAdaptiveLearning(baseScore,candidate?.features||{},this.state.learning_profile);
-        return baseScore===null||learnedScore===null?candidate:{
+        const ranked=baseScore===null||learnedScore===null?candidate:{
           ...candidate,base_score:baseScore,score:learnedScore,
           learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
         };
+        const cognitive=assessCognitiveCandidate(ranked,this.state.cognitive_profile,now);
+        const enriched={...ranked,cognitive_assessment:cognitive};
+        this.recordCognitiveAssessment(enriched,now);
+        cognitiveAssessments.push(enriched);
+        return enriched;
       }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+      this.refreshCognitiveOutcomeLinks();
+      this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
       const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
       this.recordServerPaperPortfolio(executionSnapshot,now);
       this.lastExecutionResult=null;
@@ -217,7 +232,82 @@ export class AdaptiveTraderWorker{
     }finally{this.inFlight=false;}
   }
 
-  recordServerPaperPortfolio(snapshot,now){
+  
+  recordCognitiveAssessment(candidate,now){
+    const symbol=cleanSymbol(candidate?.symbol);
+    const closeAt=finite(candidate?.candle_close_time??candidate?.candle_close_time_ms??candidate?.closed_candle_close_time);
+    if(!symbol||closeAt===null||closeAt<=0||closeAt>Number(now)+5000)return;
+    const id=symbol+':'+String(Math.trunc(closeAt));
+    const assessment=candidate?.cognitive_assessment||{};
+    const existing=(this.state.cognitive_journal||[]).find(row=>row.id===id);
+    const row={
+      id,symbol,at:Math.trunc(closeAt),
+      price:finite(candidate?.candle_close_price)??finite(candidate?.price),
+      base_score:finite(candidate?.base_score??candidate?.score),
+      ranked_score:finite(candidate?.score),tier:String(candidate?.tier||'NO_SETUP'),
+      decision:String(assessment.decision||'DATA_UNAVAILABLE'),
+      summary_ar:String(assessment.summary_ar||''),
+      reason_codes:Array.isArray(assessment.reason_codes)?assessment.reason_codes.slice(0,10):[],
+      hypotheses:Array.isArray(assessment.hypotheses)?assessment.hypotheses.slice(0,6):[],
+      contradictions:Array.isArray(assessment.contradictions)?assessment.contradictions.slice(0,6):[],
+      evidence_domains:finite(assessment.evidence_domains),
+      features:candidate?.features&&typeof candidate.features==='object'?{...candidate.features}:{},
+      data_valid:candidate?.data_valid===true,data_stale:candidate?.data_stale===true,
+      closed_candles_only:candidate?.closed_candles_only===true,
+      entry_eligible:false,paper_trading:true,real_order_execution:false,
+      first_seen_at:existing?.first_seen_at??Number(now),last_seen_at:Number(now),
+      outcome:existing?.outcome??null,return_pct:existing?.return_pct??null,
+      resolved_at:existing?.resolved_at??null,outcome_source:existing?.outcome_source??null
+    };
+    if(existing){
+      const index=this.state.cognitive_journal.findIndex(item=>item.id===id);
+      if(index>=0)this.state.cognitive_journal[index]=row;
+    }else this.state.cognitive_journal.push(row);
+    this.state.cognitive_journal=this.state.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL);
+  }
+
+  refreshCognitiveOutcomeLinks(){
+    const byId=new Map(this.trainingSamples().map(sample=>[String(sample.id||''),sample]));
+    for(const row of this.state.cognitive_journal||[]){
+      const sample=byId.get(String(row.id||''));
+      if(!sample||!sample.outcome)continue;
+      row.outcome=sample.outcome;
+      row.return_pct=finite(sample.return_pct);
+      row.resolved_at=finite(sample.resolved_at);
+      row.outcome_source=String(sample.outcome_source||'CLOSED_CANDLE_OUTCOME');
+    }
+  }
+
+  buildCognitiveCapture(candidates,now){
+    const rows=Array.isArray(candidates)?candidates:[];
+    const decisions={};
+    let valid=0,invalid=0,reviewable=0,contradictory=0;
+    for(const row of rows){
+      const brain=row?.cognitive_assessment||{};
+      const decision=String(brain.decision||'DATA_UNAVAILABLE');
+      decisions[decision]=(decisions[decision]||0)+1;
+      if(decision==='DATA_UNAVAILABLE')invalid++;else valid++;
+      if(decision==='EARLY_SETUP_REVIEW')reviewable++;
+      if(Array.isArray(brain.contradictions)&&brain.contradictions.length)contradictory++;
+    }
+    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples());
+    const journal=this.state.cognitive_journal||[];
+    return {
+      at:Number(now),assessed_candidates:rows.length,valid_data_candidates:valid,
+      invalid_data_candidates:invalid,early_setup_reviews:reviewable,
+      candidates_with_contradictions:contradictory,decision_counts:decisions,
+      journal_records:journal.length,
+      journal_resolved:journal.filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
+      journal_pending:journal.filter(row=>!['UP','DOWN','FLAT'].includes(row.outcome)).length,
+      ranking_ready:profile.ranking_ready===true,
+      probability_ready:profile.probability_ready===true,
+      training_samples:Number(profile.training_samples)||0,
+      holdout_samples:Number(profile.holdout_samples)||0,
+      holdout:profile.holdout||null,method:profile.method
+    };
+  }
+
+recordServerPaperPortfolio(snapshot,now){
     const portfolio=this.state.paper_portfolio;
     if(!portfolio||portfolio.mode!=='PAPER_ONLY'||portfolio.real_order_execution!==false){
       this.state.paper_portfolio=createServerPaperPortfolio();
@@ -455,6 +545,16 @@ export class AdaptiveTraderWorker{
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
       universe:{...(snapshot.universe||{})},
+      cognitive_brain:{
+        method:this.state.cognitive_profile?.method||'BAYESIAN_FACTOR_EVIDENCE_WITH_CHRONOLOGICAL_HOLDOUT_V1',
+        ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
+        probability_ready:this.state.cognitive_profile?.probability_ready===true,
+        resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
+        training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
+        holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
+        holdout:this.state.cognitive_profile?.holdout||null,
+        capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length
+      },
       // Carry the latest verified server snapshot so the dashboard can display the
       // worker's result without starting a second full REST scan from the phone.
       candidates,
@@ -480,6 +580,7 @@ export class AdaptiveTraderWorker{
           (Number(b.score)||0)-(Number(a.score)||0))[0];
         return top?{symbol:top.symbol,price:top.price,score:top.score,tier:top.tier,
           decision:top.trade_decision?.decision||'NO_SETUP',label_ar:top.trade_decision?.label_ar||'لا توجد توصية',
+          cognitive_assessment:top.cognitive_assessment||null,
           action:top.trade_decision?.action||'NO_TRADE',reason_codes:top.trade_decision?.reason_codes||[],
           next_step_ar:top.trade_decision?.next_step_ar||'انتظر بيانات مؤكدة',
           entry_eligible:false,paper_trading:true,real_order_execution:false}:
@@ -490,6 +591,7 @@ export class AdaptiveTraderWorker{
           (Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
           symbol:row.symbol,price:row.price,score:row.score,tier:row.tier,
           trade_decision:row.trade_decision,
+          cognitive_assessment:row.cognitive_assessment||null,
           selection_lane:row.selection_lane||null,
           quote_volume_24h:row.quote_volume_24h,change_24h_pct:row.change_24h_pct,
           candle_close_time:row.candle_close_time,features:row.features,reason_codes:row.reason_codes
@@ -524,6 +626,15 @@ export class AdaptiveTraderWorker{
       last_summary:this.state.last_summary,
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.trainingSamples()),
       learning_capture:this.state.last_learning_capture||null,
+      cognitive_brain:{
+        method:this.state.cognitive_profile?.method||'BAYESIAN_FACTOR_EVIDENCE_WITH_CHRONOLOGICAL_HOLDOUT_V1',
+        status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
+          this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
+        profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
+        capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
+        resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
+        recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse()
+      },
       paper_validation_profile:this.state.paper_validation_profile||buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio),
       server_paper_portfolio:{
         starting_balance:Number(this.state.paper_portfolio?.starting_balance)||10000,
