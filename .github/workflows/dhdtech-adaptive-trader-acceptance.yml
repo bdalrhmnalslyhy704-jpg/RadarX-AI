@@ -65,6 +65,17 @@ jobs:
                   (summary&&summary.cognitive_brain)||null;
                 const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
+                const cognitiveSplitReady=Boolean(
+                  cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
+                  Number(cognitiveProfile.resolved_samples)>=100&&
+                  Number(cognitiveProfile.training_samples)>=60&&
+                  Number(cognitiveProfile.validation_samples)>=20&&
+                  Number(cognitiveProfile.holdout_samples)>=20&&
+                  cognitiveProfile.validation?.evaluated===true&&
+                  cognitiveProfile.holdout?.evaluated===true&&
+                  Number(cognitiveProfile.max_training_outcome_resolved_at)<Number(cognitiveProfile.validation_start_at)&&
+                  Number(cognitiveProfile.validation_start_at)<Number(cognitiveProfile.holdout_start_at)
+                );
                 const universe=summary&&summary.universe||{};
                 const workerContract=value.scanner_contract==='SERVER_DRIVEN_SCAN_V2';
                 const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
@@ -114,7 +125,11 @@ jobs:
                     probability_ready:cognitiveProfile.probability_ready===true,
                     resolved_samples:Number(cognitiveProfile.resolved_samples)||0,
                     training_samples:Number(cognitiveProfile.training_samples)||0,
+                    validation_samples:Number(cognitiveProfile.validation_samples)||0,
                     holdout_samples:Number(cognitiveProfile.holdout_samples)||0,
+                    validation_evaluated:cognitiveProfile.validation?.evaluated===true,
+                    holdout_evaluated:cognitiveProfile.holdout?.evaluated===true,
+                    chronological_split_ready:cognitiveSplitReady,
                     purged_overlap_samples:Number(cognitiveProfile.purged_overlap_samples)||0,
                     journal_records:Number(cognitive.journal_records??cognitive.journal_rows)||0,
                     journal_resolved:Number(cognitiveCapture.journal_resolved??cognitive.resolved_journal_rows)||0,
@@ -130,8 +145,7 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&
-                  cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
+                  cognitive&&cognitiveSplitReady&&
                   cognitiveProfile.identifier_features_used===false&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
