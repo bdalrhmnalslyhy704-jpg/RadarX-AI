@@ -95,6 +95,10 @@ header{
 .rx-health-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}
 .rx-h{padding:8px 9px;border:1px solid #234b63;border-radius:12px;font-size:10px;background:#08131d;display:flex;justify-content:space-between;gap:7px}
 .rx-h b{font-size:10px}.rx-h i{font-style:normal;color:#91a9ba}.rx-h.live{border-color:#267b61}.rx-h.live b{color:#63e6b4}.rx-h.off b{color:#ffd27c}.rx-h.err{border-color:#703844}.rx-h.err b{color:#ff8998}
+.rx-push-card{margin:10px 0 15px;padding:13px;border:1px solid rgba(80,221,255,.18);border-radius:18px;background:linear-gradient(145deg,rgba(8,32,43,.9),rgba(11,17,30,.92))}
+.rx-push-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.rx-push-head b{font-size:13px}.rx-push-state{font-size:10px;color:#ffd27c;font-weight:900}.rx-push-copy{font-size:10px;line-height:1.8;color:#9fb4c8;margin:7px 0}
+.rx-push-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.rx-push-actions button{min-height:40px;border:1px solid rgba(110,205,255,.18);border-radius:11px;background:#17253a;color:#e7f8ff;font:inherit;font-size:10px;font-weight:900}.rx-push-actions button.primary{background:linear-gradient(135deg,#55e0ff,#7d72ff);color:#04101a}
+.rx-push-details{margin-top:7px;color:#7f97ad;font-size:9px;line-height:1.7}
 footer{padding:20px 4px;text-align:center;color:#738aa2;font-size:10px}
 @media(max-width:560px){
   .rx-actions{grid-template-columns:1fr 1fr}.rx-action.primary{grid-column:1/-1}
@@ -121,7 +125,16 @@ footer{padding:20px 4px;text-align:center;color:#738aa2;font-size:10px}
   <div class="rx-stat"><b>20</b><span>محللو X‑FACTOR</span></div>
   <div class="rx-stat"><b>4+</b><span>مجالات Falcon</span></div>
   <div class="rx-stat"><b>0</b><span>تنفيذ حقيقي</span></div>
-</div>\n<section id="appError" hidden style="padding:14px;border:1px solid #914553;border-radius:16px;background:#0b151b">
+</div>
+<section class="rx-push-card" id="fcmDiagnosticsCard">
+  <div class="rx-push-head"><b>📲 حالة إشعارات هذا الهاتف</b><span class="rx-push-state" id="fcmStateText">جارٍ التحقق</span></div>
+  <p class="rx-push-copy" id="fcmStateDescription">يفحص التطبيق صلاحية الإشعارات وتسجيل جهاز FCM. لا نعتبر قبول الخادم للرسالة دليلًا على وصولها للهاتف.</p>
+  <div class="rx-push-actions">
+    <button type="button" id="fcmRefreshButton">تحديث حالة التسجيل</button>
+    <button type="button" class="primary" id="fcmTestButton">إرسال إشعار اختبار</button>
+  </div>
+  <div class="rx-push-details" id="fcmDetailText">يعمل هذا الفحص داخل تطبيق Android بعد السماح بالإشعارات وفتح التطبيق.</div>
+</section>\n<section id="appError" hidden style="padding:14px;border:1px solid #914553;border-radius:16px;background:#0b151b">
 <strong>تعذر تشغيل RadarX</strong>
 <p style="color:#8fa8b2">تعذر تحميل الواجهة. أعد المحاولة.</p>
 <button id="retryApp" type="button">إعادة المحاولة</button>
@@ -179,6 +192,101 @@ footer{padding:20px 4px;text-align:center;color:#738aa2;font-size:10px}
   window.addEventListener('pageshow',restore);
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',restore,{once:true});
   else restore();
+})();
+</script>
+<script>
+(function(){
+  const stateText=document.getElementById('fcmStateText');
+  const description=document.getElementById('fcmStateDescription');
+  const detail=document.getElementById('fcmDetailText');
+  const refreshButton=document.getElementById('fcmRefreshButton');
+  const testButton=document.getElementById('fcmTestButton');
+  if(!stateText||!description||!detail||!refreshButton||!testButton)return;
+  const native=window.RadarXNative;
+  const registrationLabels={
+    REGISTERED:'الهاتف مسجّل لدى FCM',
+    NOTIFICATION_PERMISSION_REQUIRED:'إذن الإشعارات مطلوب',
+    FIREBASE_NOT_CONFIGURED:'إعداد Firebase غير متوفر',
+    FETCHING_FCM_TOKEN:'جارٍ جلب رمز FCM',
+    FCM_TOKEN_FETCH_FAILED:'تعذّر جلب رمز FCM',
+    REGISTERING_DEVICE:'جارٍ تسجيل الهاتف',
+    FCM_PROVIDER_NOT_READY:'خدمة FCM غير جاهزة',
+    DEVICE_NOT_REGISTERED:'هذا الهاتف غير مسجل في الخادم',
+    REGISTRATION_RETRIES_EXHAUSTED:'فشل التسجيل بعد محاولات',
+    STATUS_CHECK_FAILED:'تعذّر قراءة حالة الخادم',
+    STATUS_ENDPOINT_UNAVAILABLE:'واجهة حالة الجهاز غير متاحة'
+  };
+  const testLabels={
+    NOT_TESTED:'لم يُرسل اختبار بعد',
+    TEST_SENT_TO_FCM:'قبلت FCM طلب الاختبار؛ ننتظر تأكيد الهاتف',
+    DEVICE_RECEIPT_VERIFIED:'وصل إشعار الاختبار وأكّد التطبيق استلامه',
+    NO_ACTIVE_FCM_DEVICE:'لا يوجد هاتف مسجّل لإرسال الاختبار',
+    NOTIFICATION_PERMISSION_REQUIRED:'اسمح بالإشعارات أولًا',
+    FIREBASE_NOT_CONFIGURED:'Firebase غير مهيأ في هذا التطبيق',
+    TEST_RATE_LIMITED:'تم تجاوز حد الاختبارات المؤقت',
+    TEST_REQUEST_FAILED:'تعذّر إرسال طلب الاختبار'
+  };
+  let pollCount=0,pollHandle=null;
+  function state(){
+    try{return JSON.parse(native.getPushStatus());}catch(e){return null;}
+  }
+  function render(){
+    if(!native||typeof native.getPushStatus!=='function'){
+      stateText.textContent='يتطلب تطبيق Android';
+      description.textContent='لوحة تسجيل FCM والاختبار متاحة في نسخة Android المثبتة، وليست في المتصفح.';
+      detail.textContent='لم يتم العثور على الجسر الأصلي للتطبيق.';
+      testButton.disabled=true;
+      return;
+    }
+    const value=state();
+    if(!value){
+      stateText.textContent='حالة غير متاحة';
+      description.textContent='تعذّر قراءة حالة التسجيل المحلية.';
+      return;
+    }
+    const registration=String(value.registration_state||'NOT_CHECKED');
+    const test=String(value.test_state||'NOT_TESTED');
+    const delivered=value.delivery_verified===true||test==='DEVICE_RECEIPT_VERIFIED';
+    stateText.textContent=delivered?'تم تأكيد الوصول':value.registered?'الهاتف مسجّل':registrationLabels[registration]||'التسجيل يحتاج فحصًا';
+    description.textContent=delivered
+      ?'وصلت رسالة اختبار FCM إلى خدمة التطبيق وتم إرسال إيصالها إلى الخادم.'
+      :value.registered
+        ?(testLabels[test]||'التسجيل قائم؛ لم يثبت وصول رسالة اختبار بعد.')
+        :registrationLabels[registration]||'افحص صلاحية الإشعارات واتصال الإنترنت وإعداد Firebase.';
+    detail.textContent='التسجيل: '+registration+' · الاختبار: '+test+
+      ' · صلاحية الإشعارات: '+(value.notifications_allowed?'مسموحة':'غير ممنوحة')+
+      ' · Firebase: '+(value.firebase_configured?'مهيأ':'غير مهيأ')+
+      ' · آخر تحديث: '+(Number(value.registration_updated_at)>0?new Date(Number(value.registration_updated_at)).toLocaleTimeString('ar'):'—');
+    testButton.disabled=!value.registered;
+  }
+  function refresh(){
+    if(native&&typeof native.syncPushRegistration==='function'){
+      native.syncPushRegistration();
+      if(typeof native.refreshPushStatus==='function')native.refreshPushStatus();
+    }
+    setTimeout(render,1200);
+    setTimeout(render,3500);
+  }
+  refreshButton.addEventListener('click',refresh);
+  testButton.addEventListener('click',function(){
+    if(!native||typeof native.requestPushTest!=='function')return;
+    testButton.disabled=true;
+    testButton.textContent='جارٍ إرسال الاختبار…';
+    native.requestPushTest();
+    pollCount=0;
+    if(pollHandle)clearInterval(pollHandle);
+    pollHandle=setInterval(function(){
+      pollCount++;
+      if(typeof native.refreshPushStatus==='function')native.refreshPushStatus();
+      setTimeout(render,700);
+      if(pollCount>=12){
+        clearInterval(pollHandle);pollHandle=null;
+        testButton.textContent='إعادة اختبار الإشعار';render();
+      }
+    },2500);
+  });
+  refresh();
+  setInterval(render,3000);
 })();
 </script>
 <script>
