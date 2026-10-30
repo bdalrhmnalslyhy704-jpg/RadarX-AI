@@ -14,7 +14,7 @@ test('server paper portfolio records isolated trades and persists evidence witho
     symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2,score:76,
     tier:'EARLY_SETUP',data_valid:true,data_stale:false,closed_candles_only:true,
     paper_candidate:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
-    candle_close_time:now-60_000,candle_close_price:1,as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
+    candle_close_time:now-60_000,candle_close_price:1,candle_age_ms:60_000,as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
     features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
       higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,
       hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8}
@@ -44,6 +44,13 @@ test('server paper portfolio records isolated trades and persists evidence witho
     assert.equal(status.last_summary.current_recommendation.entry_eligible,false);
     assert.equal(status.last_summary.current_recommendation.real_order_execution,false);
     assert.equal(status.last_summary.counts.waiting_confirmation,1);
+    assert.equal(status.last_summary.candidates[0].cognitive_assessment.decision,'EARLY_SETUP_REVIEW');
+    assert.equal(status.last_summary.candidates[0].cognitive_assessment.entry_eligible,false);
+    assert.equal(status.last_summary.candidates[0].cognitive_rank_score,76);
+    assert.equal(status.cognitive_brain.journal_records,1);
+    assert.equal(status.cognitive_brain.ranking_ready,false);
+    assert.equal(status.cognitive_brain.probability_ready,false);
+    assert.equal(status.cognitive_brain.recent_journal[0].symbol,'PAPERUSDT');
     assert.equal(status.server_paper_portfolio.open_positions,1);
     assert.equal(status.server_paper_portfolio.starting_balance,10000);
     assert.equal(status.paper_validation_profile.ready,false);
@@ -54,6 +61,9 @@ test('server paper portfolio records isolated trades and persists evidence witho
     assert.equal(saved.paper_portfolio.real_order_execution,false);
     assert.equal(saved.paper_portfolio.open_positions.length,1);
     assert.equal(saved.paper_portfolio.open_positions[0].symbol,'PAPERUSDT');
+    assert.equal(saved.cognitive_journal.length,1);
+    assert.equal(saved.cognitive_journal[0].symbol,'PAPERUSDT');
+    assert.equal(saved.cognitive_journal[0].entry_eligible,false);
   }finally{
     await worker.stop();
     await rm(dir,{recursive:true,force:true});
@@ -176,6 +186,8 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     assert.equal(status.last_summary.mover_audit[0].paper_candidate,false);
     assert.equal(status.memory.resolved_samples,1);
     assert.ok(status.missed_movers.some(row=>row.symbol==='TESTUSDT'&&row.classification==='POTENTIAL_MISSED_MOVER'));
+    assert.ok(status.cognitive_brain.missed_mover_feedback.some(row=>row.symbol==='TESTUSDT'&&
+      row.classification==='POTENTIAL_MISSED_MOVER'&&row.no_future_data_used_for_baseline===true));
     assert.equal(status.real_order_execution,false);
     assert.equal(status.paper_trading,true);
 
