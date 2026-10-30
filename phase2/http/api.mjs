@@ -567,13 +567,24 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       :provider==='webpush'
         ?active.filter(row=>(row.provider||'webpush')==='webpush')
         :[];
+    let receipts=[];
+    try{
+      const recent=await store.readRecent?.('notifications',5000);
+      if(Array.isArray(recent))receipts=recent;
+    }catch{}
+    const fcmIds=new Set(active.filter(row=>row.provider==='fcm').map(row=>String(row.id||'')));
+    const receivedRows=receipts.filter(row=>row?.event==='FCM_DEVICE_RECEIPT'&&
+      row?.provider==='fcm'&&row?.status==='RECEIVED'&&fcmIds.has(String(row?.subscription_id||'')));
+    const latestReceipt=receivedRows.reduce((latest,row)=>
+      Math.max(latest,Number(row?.server_received_at_ms)||0),0);
     return {
       provider,enabled:providerStatus.enabled===true,
       active_subscriptions:active.length,
       provider_subscriptions:providerRows.length,
       fcm_devices:active.filter(row=>row.provider==='fcm').length,
       webpush_subscriptions:active.filter(row=>(row.provider||'webpush')==='webpush').length,
-      physical_device_delivery_verified:false
+      physical_device_delivery_verified:latestReceipt>0,
+      last_device_receipt_at:latestReceipt?new Date(latestReceipt).toISOString():null
     };
   }
   function preMoveBackgroundWorkerSnapshot(){
