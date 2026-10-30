@@ -8,6 +8,7 @@ import {BinanceStreamClient} from './market/binance-ws.mjs';
 import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
 import {MarketWideKlineCache} from './market/market-wide-kline-cache.mjs';
 import {DurableStore} from './core/store.mjs';
+import {resolveDurableStorage} from './core/persistent-storage.mjs';
 import {SignalDeduplicator} from './core/dedup.mjs';
 import {SignalService} from './core/signal-service.mjs';
 import {createPushProvider,PushManager} from './push/index.mjs';
@@ -50,8 +51,18 @@ export async function startServer({
     assertReadOnlyStagingConfig(config);
   }
   const onRailway=Boolean(process.env.RAILWAY_SERVICE_ID||process.env.RAILWAY_ENVIRONMENT);
-  const archiveDir=process.env.RADARX_DATA_DIR||(onRailway?'/data/.radarx-data':'./.radarx-data');
-  const store=await new DurableStore({dir:archiveDir}).init({legacyDir:onRailway?'./.radarx-data':null});
+  const mountTable=await readFile('/proc/mounts','utf8').catch(()=> '');
+  const durableStorage=resolveDurableStorage({env:process.env,mountsContent:mountTable});
+  const archiveDir=durableStorage.directory;
+  const legacyDir=resolve(archiveDir)===resolve('./.radarx-data')?null:'./.radarx-data';
+  const store=await new DurableStore({dir:archiveDir}).init({legacyDir});
+  const archiveStorageInfo={
+    persistent:durableStorage.persistent===true,
+    directory:durableStorage.absolute_directory,
+    mount_path:durableStorage.mount_path,
+    filesystem:durableStorage.filesystem,
+    source:durableStorage.source
+  };
   logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
   }));
@@ -61,16 +72,7 @@ export async function startServer({
   }));
   const archiveState=await store.getPreExpansionOutcomes().catch(()=>({}));
   const archiveRecords=Array.isArray(archiveState?.records)?archiveState.records:[];
-  let archiveVolumeMounted=null;
-  if(onRailway){
-    try{
-      const mounts=await readFile('/proc/mounts','utf8');
-      archiveVolumeMounted=mounts.split('\n').some(line=>{
-        const mountPoint=line.split(' ')[1]?.replace(/\\040/g,' ');
-        return mountPoint==='/data'||mountPoint?.startsWith('/data/');
-      });
-    }catch{archiveVolumeMounted=false;}
-  }
+  const archiveVolumeMounted=durableStorage.persistent===true;
   // Stream the exact JSON array representation into SHA-256. Building both a
   // second 5,000-row mapped array and one giant JSON string briefly duplicated
   // the whole outcome ledger in memory during startup.
@@ -112,8 +114,9 @@ export async function startServer({
     build_version:'Build 224',build_commit:runtimeBuildCommit,
     build_branch:runtimeBuildBranch,service_id:process.env.RAILWAY_SERVICE_ID||null,
     deployment_id:process.env.RAILWAY_DEPLOYMENT_ID||null,store_dir:store.dir,
-    outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:onRailway?'/data':null,
-    volume_mount_detected:archiveVolumeMounted,persisted_signal_count:archiveRecords.length,
+    outcome_store_file:store.files.preExpansionOutcomes,volume_mount_path:durableStorage.mount_path,
+    volume_mount_detected:archiveVolumeMounted,storage_source:durableStorage.source,
+    persisted_signal_count:archiveRecords.length,
     oldest_signal_id:archiveAnchor?.signal_id||null,oldest_signal_detected_at:archiveAnchor?.detected_at||null,
     latest_signal_id:archiveLatest?.signal_id||null,latest_signal_detected_at:archiveLatest?.detected_at||null,
     horizon_counts:archiveHorizonCounts,
@@ -242,7 +245,7 @@ export async function startServer({
     ...analystReviewBridge,expected_specialists:19,expected_final_analyst:1,
     mode:'NON_BLOCKING_REVIEW_ONLY',paper_trading:true,real_order_execution:false
   }));
-  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker,adaptiveTraderSnapshotProvider,adaptiveTraderWorker});
+  const api=createApiServer({config,store,monitor,pushProvider:provider,pushManager:push,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,symbolDeepAnalyzer,multiAnalystRadar,earlyExpansionRadar,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,marketRadarRest,radarSwarm,radarSignalOutcomeWorker,adaptiveTraderSnapshotProvider,adaptiveTraderWorker,storageInfo:archiveStorageInfo});
   await new Promise((resolveStart,reject)=>api.listen(config.port,config.host,resolveStart).on('error',reject));
   logger.info('RadarX Phase 2 API listening on http://'+config.host+':'+config.port);
   const safeStart=(name,instance)=>{
