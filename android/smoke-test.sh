@@ -60,6 +60,28 @@ capture_screenshot() {
   test -s "${output}"
 }
 
+wait_for_activity_manager() {
+  PHASE="wait for Android ActivityManager service"
+  local service_status=""
+  for attempt in $(seq 1 45); do
+    service_status="$(timeout 8s adb shell service check activity 2>/dev/null | tr -d '\\r' || true)"
+    if printf '%s' "$service_status" | grep -Eiq 'activity: *found|found'; then
+      if timeout 8s adb shell dumpsys activity activities >/dev/null 2>&1; then
+        echo "Android ActivityManager is ready (probe $attempt/45)."
+        return 0
+      fi
+    fi
+    if (( attempt % 5 == 0 )); then
+      echo "Waiting for Android ActivityManager service (probe $attempt/45): ${service_status:-not-found}"
+    fi
+    sleep 2
+  done
+  echo "::error::Android emulator reported boot complete, but ActivityManager never became callable."
+  timeout 8s adb shell service list 2>&1 | grep -i activity || true
+  timeout 8s adb shell getprop sys.boot_completed 2>&1 || true
+  return 1
+}
+
 start_app_and_wait_ready() {
   PHASE="force-stop before clean launch"
   if [[ -n "${APP_LOGCAT_PID:-}" ]]; then
@@ -94,6 +116,7 @@ start_app_and_wait_ready() {
     return 1
   fi
 
+  wait_for_activity_manager
   PHASE="launch MainActivity without blocking for WebView idle"
   local start_output
   start_output="$(timeout 45s adb shell am start -n com.radarx.app/.MainActivity 2>&1)" || {
