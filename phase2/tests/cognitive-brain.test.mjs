@@ -355,6 +355,7 @@ test('prequential audit scores only immutable, matured V2 forecasts and detects 
     const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
     return {
       id: 'FORWARD-' + index, model_version: 2, at,
+      trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
       predicted_up_probability: predicted
@@ -362,6 +363,8 @@ test('prequential audit scores only immutable, matured V2 forecasts and detects 
   });
   journal.push({ ...journal[0], id: 'OLD-V1', model_version: 1 });
   journal.push({ ...journal[0], id: 'UNRESOLVED', outcome: null });
+  journal.push({ ...journal[0], id: 'LOOKAHEAD', trained_through_at: journal[0].at + 1 });
+  journal.push({ ...journal[0], id: 'NO-CUTOFF', trained_through_at: null });
   const audit = buildCognitivePrequentialProfile(journal, { minimumWindowSamples: 20, windowSize: 30 });
   assert.equal(audit.resolved_forecasts, 60);
   assert.equal(audit.previous_window.sample_count, 30);

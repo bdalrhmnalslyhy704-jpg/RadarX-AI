@@ -663,6 +663,7 @@ recordServerPaperPortfolio(snapshot,now){
         status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
         recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse(),

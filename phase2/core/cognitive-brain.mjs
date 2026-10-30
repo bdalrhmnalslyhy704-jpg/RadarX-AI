@@ -454,7 +454,9 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
       ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
-      Number(row.resolved_at) - Number(row.at) >= MIN_OUTCOME_HORIZON_MS)
+      finite(row.trained_through_at) !== null &&
+      Number(row.trained_through_at) < Number(row.at) &&
+      Number(row.resolved_at) - Number(row.at) === MIN_OUTCOME_HORIZON_MS)
     .map(row => ({
       ...row,
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
@@ -654,7 +656,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,
     predicted_up_probability: predicted === null ? null : Number((predicted * 100).toFixed(1)),
-    confidence_label: predicted === null ? 'UNKNOWN' : 'VALIDATED_ON_PURGED_CHRONOLOGICAL_HOLDOUT',
+    confidence_label: predicted === null ? 'UNKNOWN' : 'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT',
     learning_samples: Number(profile?.resolved_samples) || 0,
     counterfactual_evidence: counterfactuals,
     entry_eligible: false,
