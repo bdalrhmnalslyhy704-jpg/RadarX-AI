@@ -169,7 +169,7 @@ export function buildCognitiveLearningProfile(samples = [], {
 
 export function applyCognitiveRankAdjustment(baseScore, features = {}, profile = {}) {
   const score = finite(baseScore);
-  if (score === null || profile?.ranking_ready !== true || !profile?._fit?.factors) return score;
+  if (score === null || profile?.ranking_ready !== true || !profile?._fit?.factors) return null;
   const active = FACTORS.filter(factor => factor.test(features || {}))
     .map(factor => Number(profile._fit.factors[factor.key]?.ranking_adjustment) || 0);
   if (!active.length) return Number(clamp(score, 0, 100).toFixed(1));
