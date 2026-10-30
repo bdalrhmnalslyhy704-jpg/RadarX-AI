@@ -1353,7 +1353,7 @@ export function buildPreMoveWatchCandidates(rows,{
        p.already_moved===true||p.stage==='ALREADY_MOVED'||
        !Number.isFinite(score)||score<minScore||
        !Number.isFinite(sessionReturn)||(!strongBuyerAbsorptionEarly&&!compressedBuyerAbsorptionEarly&&sessionReturn< -1.5)||sessionReturn>(strongBuyerAbsorptionEarly?6:8)||
-       !Number.isFinite(oneHourReturn)||(!strongBuyerAbsorptionEarly&&!oneHourReturn>=-1.25)||oneHourReturn>(strongBuyerAbsorptionEarly?4.5:4.5)||
+       !Number.isFinite(oneHourReturn)||(!strongBuyerAbsorptionEarly&&(oneHourReturn< -1.25||oneHourReturn>4.5))||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
        (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
        (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
