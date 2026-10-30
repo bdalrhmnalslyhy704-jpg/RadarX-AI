@@ -714,3 +714,125 @@ test('live public Spot source aliases are accepted but futures, unavailable and 
     'Unknown market source'
   ]) assert.equal(isTrustedBinancePublicSpotSource(source),false,source);
 });
+
+
+test('NIL-like participation surge becomes a bounded phone watch when the old 1h ceiling was too tight',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'NILUSDT',price_change_24h:-3.94,quote_volume_24h:5_840_696,
+    data_quality:96,liquidity_quality:82,
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,stale:false,future_data_detected:false},
+    pre_move_context:{
+      ...base.pre_move_context,score:63.9,session_return_pct:-1.0537,one_hour_return_pct:3.6255,
+      volume_acceleration:2.4838,trade_acceleration:2.3913,taker_buy_ratio:0.5231,
+      taker_buy_acceleration:0.1009,mean_close_location:0.7936,
+      relative_strength_vs_market_pct:-1.4456,relative_strength_vs_btc_pct:-1.4456,
+      session_close:now-60_000,
+      components:{squeeze:60,structure:80.2,buying_pressure:73.2}
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'qualified participation surge should not be hidden by the old 2.5% 1h ceiling');
+  assert.equal(alert.watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.real_order_execution,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-nil-participation-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent[0].watch_notification_tier,'PARTICIPATION_SURGE_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('PUNDIX/SOLV-like strong buyer absorption can notify below the normal volume floor as WATCH ONLY',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const cases=[
+    {
+      symbol:'PUNDIXUSDT',daily:-1.0913,quote:509_262,session:3.6383,hour:2.8986,
+      score:76.4,volume:0.7415,trades:1.0442,taker:0.7955,delta:0.3023,
+      close:0.8431,relative:2.3077,structure:74.0,buying:100
+    },
+    {
+      symbol:'SOLVUSDT',daily:-4.4919,quote:548_093,session:-2.5104,hour:1.9093,
+      score:60.4,volume:0.7399,trades:0.9340,taker:0.6160,delta:0.2379,
+      close:0.5811,relative:-3.2672,structure:76.8,buying:100
+    }
+  ];
+  for(const row of cases){
+    const candidate={
+      ...base,symbol:row.symbol,price_change_24h:row.daily,quote_volume_24h:row.quote,
+      data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      pre_move_context:{
+        ...base.pre_move_context,score:row.score,session_return_pct:row.session,
+        one_hour_return_pct:row.hour,volume_acceleration:row.volume,trade_acceleration:row.trades,
+        taker_buy_ratio:row.taker,taker_buy_acceleration:row.delta,mean_close_location:row.close,
+        relative_strength_vs_market_pct:row.relative,relative_strength_vs_btc_pct:row.relative,
+        session_close:now-60_000,
+        components:{squeeze:50,structure:row.structure,buying_pressure:row.buying}
+      }
+    };
+    const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+    assert.ok(alert, row.symbol+' should survive the strict low-volume watch-only corridor');
+    assert.equal(alert.watch_notification_tier,'STRONG_BUYER_ABSORPTION_MONITOR');
+    assert.equal(alert.low_volume_watch_only,true);
+    assert.equal(alert.data_status.data_valid,false);
+    assert.equal(alert.entry_eligible,false);
+    assert.equal(alert.paper_trading,true);
+    assert.equal(alert.real_order_execution,false);
+
+    const dir=await mkdtemp(join(tmpdir(),'radarx-strong-buyer-watch-'));
+    const store=await new DurableStore({dir}).init();
+    try{
+      await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+      await store.upsertSubscription('u1',pushSubscription());
+      const sent=[];
+      const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+        sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+      }};
+      const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+      const result=await manager.notifyRadarWatchOnlyAlert(alert);
+      assert.equal(result.status,'SENT',row.symbol+': '+JSON.stringify(result));
+      assert.equal(result.sent_count,1);
+      assert.equal(sent[0].watch_notification_tier,'STRONG_BUYER_ABSORPTION_MONITOR');
+      assert.equal(sent[0].watch_only,true);
+      assert.equal(sent[0].entry_eligible,false);
+      assert.equal(sent[0].low_volume_watch_only,'true');
+      assert.equal(sent[0].real_order_execution,'false');
+    }finally{await rm(dir,{recursive:true,force:true});}
+  }
+});
+
+test('low-volume monitor cannot bypass stale candles, weak buyer flow, or poor liquidity',()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'LOWFLOWUSDT',price_change_24h:1.2,quote_volume_24h:510_000,
+    data_quality:90,liquidity_quality:72,
+    data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+    pre_move_context:{
+      ...base.pre_move_context,score:76,session_return_pct:2,one_hour_return_pct:2.4,
+      volume_acceleration:0.75,trade_acceleration:1.0,taker_buy_ratio:0.52,
+      taker_buy_acceleration:0.02,mean_close_location:0.60,
+      relative_strength_vs_market_pct:1,relative_strength_vs_btc_pct:1,
+      session_close:now-60_000,
+      components:{squeeze:50,structure:70,buying_pressure:75}
+    }
+  };
+  assert.equal(buildPreMoveWatchOnlyAlert(candidate,snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...candidate,liquidity_quality:59},snapshot,now),null);
+  assert.equal(buildPreMoveWatchOnlyAlert({...candidate,data_status:{...candidate.data_status,data_stale:true}},snapshot,now),null);
+});
