@@ -2236,9 +2236,15 @@ export class MarketUniverseScanner {
     let scanError=null;
     // 200 closed 15m candles provide 50 hours for the required 48-hour aggregate while reducing payload and JSON work for every rotated pair.
     const limit15m=Math.max(200,Math.min(300,Math.trunc(Number(options.fifteenMinuteKlines)||200)));
+    // Order-book depth is required only for pairs that already pass the hard
+    // Spot quote-volume gate. Lower-volume pairs still receive closed-candle
+    // discovery and near-miss analysis, but cannot be alerted or enter anyway.
+    // Avoid spending one public REST request on each known-ineligible pair.
+    const volumeGatePass=Number.isFinite(Number(ticker?.quoteVolume24h))&&
+      Number(ticker.quoteVolume24h)>=this.config.minQuoteVolume24h;
     const requests=await Promise.allSettled([
       this.fetchSeries(symbol,'15m',limit15m),
-      this.fetchDepth(symbol, 20)
+      volumeGatePass?this.fetchDepth(symbol,20):Promise.resolve(null)
     ]);
     const normalized=(result,tf)=>{
       const fetchedAt=Number(result?.receivedAt)||this.clock();
@@ -2296,7 +2302,6 @@ export class MarketUniverseScanner {
       preMoveContext={...preMoveContext,missing_evidence:[...(preMoveContext.missing_evidence||[]),'PRE_MOVE_CONTEXT_FAILED']};
     }
     const candlesValid=v1.valid&&v15.valid&&hourlyCoverageValid&&!future&&!stale;
-    const volumeGatePass=Number.isFinite(Number(ticker?.quoteVolume24h))&&Number(ticker.quoteVolume24h)>=this.config.minQuoteVolume24h;
     const dataValid=candlesValid&&!scanError&&volumeGatePass&&liquidity?.allowed===true&&
       Number(liquidity?.quality)>=this.config.minLiquidityQuality&&dataQuality>=this.config.minDataQuality;
     const source=combineSource([sources.exchangeInfo,sources.ticker,...klinesSources,depthSource]);
