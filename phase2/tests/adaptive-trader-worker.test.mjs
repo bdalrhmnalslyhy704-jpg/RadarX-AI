@@ -360,17 +360,17 @@ test('cognitive journal freezes the first forecast for a closed candle and block
       symbol:'FREEZEUSDT',price:1,candle_close_price:1,candle_close_time:now-60_000,
       base_score:62,score:62,tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,
       features:{volume_ratio:1.6,taker_buy_ratio:0.58,higher_low:true},
-      cognitive_assessment:{version:2,decision:'WATCH_AND_REASSESS',summary_ar:'الأدلة محدودة',
+      cognitive_assessment:{version:3,decision:'WATCH_AND_REASSESS',summary_ar:'الأدلة محدودة',
         reason_codes:['FIRST_FORECAST'],hypotheses:[],contradictions:[],predicted_up_probability:61,
-        confidence_label:'VALIDATED_ON_PURGED_CHRONOLOGICAL_HOLDOUT'}
+        confidence_label:'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT'}
     };
     worker.recordCognitiveAssessment(first,now);
     worker.recordCognitiveAssessment({
       ...first,score:96,base_score:96,
       features:{volume_ratio:9.8,taker_buy_ratio:0.82,higher_low:true},
-      cognitive_assessment:{version:2,decision:'EARLY_SETUP_REVIEW',summary_ar:'تغير التقييم لاحقًا',
+      cognitive_assessment:{version:3,decision:'EARLY_SETUP_REVIEW',summary_ar:'تغير التقييم لاحقًا',
         reason_codes:['LATER_MODEL'],hypotheses:[],contradictions:[],predicted_up_probability:96,
-        confidence_label:'VALIDATED_ON_PURGED_CHRONOLOGICAL_HOLDOUT'}
+        confidence_label:'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT'}
     },now+60_000);
     assert.equal(worker.state.cognitive_journal.length,1);
     assert.equal(worker.state.cognitive_journal[0].predicted_up_probability,61);
