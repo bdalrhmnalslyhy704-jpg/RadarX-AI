@@ -940,9 +940,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             directory:storageInfo.directory??null,
             mount_path:storageInfo.mount_path??null,
             filesystem:storageInfo.filesystem??null,
-            source:String(storageInfo.source||'UNKNOWN')
+            source:String(storageInfo.source||'UNKNOWN'),
+            detected_mounts:Array.isArray(storageInfo.detected_mounts)?storageInfo.detected_mounts.slice(0,40):[]
           }:{
-            persistent:false,directory:null,mount_path:null,filesystem:null,source:'NOT_CONFIGURED'
+            persistent:false,directory:null,mount_path:null,filesystem:null,source:'NOT_CONFIGURED',detected_mounts:[]
           }
         });
       }
