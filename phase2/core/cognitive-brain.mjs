@@ -114,7 +114,8 @@ function normalizedFeatures(features = {}) {
 }
 
 function validResolvedSamples(samples) {
-  const seen = new Set();
+  const seenIds = new Set();
+  const seenBaselines = new Set();
   return (Array.isArray(samples) ? samples : [])
     .filter(row => {
       if (!row || row.training_eligible !== true ||
@@ -122,13 +123,22 @@ function validResolvedSamples(samples) {
           !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
           !row.features || typeof row.features !== 'object') return false;
       const id = String(row.id || '');
+      const symbol = String(row.symbol || '').trim().toUpperCase();
       const at = finite(row.at);
       const resolvedAt = finite(row.resolved_at);
       const horizon = finite(row.horizon_ms);
-      if (!id || seen.has(id) || at === null || at <= 0 ||
-          resolvedAt === null || resolvedAt - at < MIN_OUTCOME_HORIZON_MS ||
-          (horizon !== null && horizon < MIN_OUTCOME_HORIZON_MS)) return false;
-      seen.add(id);
+      const expectedSource = row.historical_baseline === true
+        ? 'HISTORICAL_CLOSED_CANDLE' : 'CLOSED_CANDLE_4H';
+      if (!id || !symbol || at === null || at <= 0 ||
+          resolvedAt === null || resolvedAt - at !== MIN_OUTCOME_HORIZON_MS ||
+          horizon !== MIN_OUTCOME_HORIZON_MS ||
+          row.outcome_source !== expectedSource) return false;
+      const baselineKey = symbol + ':' + String(Math.trunc(at));
+      // A live observation and a later historical backfill can describe the
+      // exact same pair/candle under different IDs. Count that market event once.
+      if (seenIds.has(id) || seenBaselines.has(baselineKey)) return false;
+      seenIds.add(id);
+      seenBaselines.add(baselineKey);
       return true;
     })
     .map(row => ({

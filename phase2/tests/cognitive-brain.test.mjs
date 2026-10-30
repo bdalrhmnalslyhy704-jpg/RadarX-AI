@@ -110,6 +110,7 @@ function behavioralSamples({ seed = 0, reverse = false, count = 240 } = {}) {
       at,
       resolved_at: at + FOUR_HOURS,
       horizon_ms: FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H',
       training_eligible: true,
       closed_candle_baseline: true,
       outcome,
@@ -133,6 +134,24 @@ test('learner rejects unresolved, duplicate and non-training observations', () =
   assert.equal(profile.resolved_samples, 1);
   assert.equal(profile.probability_ready, false);
   assert.equal(profile.identifier_features_used, false);
+});
+
+test('live and historical copies of the same symbol/candle count as one training event', () => {
+  const live = sample(12, 'UP');
+  const backfill = {
+    ...live,
+    id: 'HISTORICAL_CLOSED_CANDLE:MEMORYUSDT:' + String(live.at),
+    closed_candle_baseline: false,
+    historical_baseline: true,
+    outcome_source: 'HISTORICAL_CLOSED_CANDLE',
+    outcome: 'DOWN',
+    return_pct: -2.5
+  };
+  const invalidSource = { ...sample(13, 'UP'), outcome_source: 'LIVE_TICKER_PRICE' };
+  const profile = buildCognitiveLearningProfile([live, backfill, invalidSource]);
+  assert.equal(profile.resolved_samples, 1);
+  assert.equal(profile.outcome_counts.up, 1);
+  assert.equal(profile.outcome_counts.down, 0);
 });
 
 test('nested chronological validation purges labels crossing both validation and untouched test boundaries', () => {
