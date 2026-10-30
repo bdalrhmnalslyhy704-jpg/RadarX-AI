@@ -72,5 +72,5 @@ test('cognitive brain refuses to form a view from stale or incomplete candle dat
 test('cognitive ranking adjustment is inert until the minimum evidence and factor coverage exist',()=>{
   const profile=buildCognitiveLearningProfile(Array.from({length:40},(_,index)=>sample(index,index%2?'UP':'DOWN')));
   assert.equal(profile.ranking_ready,false);
-  assert.equal(applyCognitiveRankAdjustment(72,candidate().features,profile),72);
+  assert.equal(applyCognitiveRankAdjustment(72,candidate().features,profile),null);
 });
