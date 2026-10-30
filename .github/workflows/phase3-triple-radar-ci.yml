@@ -200,6 +200,6 @@ jobs:
         # A bounded local ADB loop repairs transient "device offline" boot states.
         timeout-minutes: 40
         env:
-          RADARX_EMULATOR_API_LEVEL: "29"
+          RADARX_EMULATOR_API_LEVEL: "30"
           RADARX_APK_PATH: android/app/build/outputs/apk/debug/app-debug.apk
         run: bash android/run-emulator-smoke.sh
