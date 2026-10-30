@@ -26,8 +26,26 @@ test('Android whitelists only the bounded, Spot, non-entry Pre-Move monitor even
   assert.match(helper,/dataQuality >= 70\.0 && liquidityQuality >= 60\.0 && price > 0\.0/);
 });
 
+test('Android allows only the dedicated verified Radar early-track monitor-only FCM lane',()=>{
+  const start=service.indexOf('private static boolean isApprovedRadarEarlyTrackWatch(');
+  const end=service.indexOf('private static double numericValue(',start);
+  assert.ok(start>=0&&end>start,'the FCM early-track allow-list helper exists');
+  const helper=service.slice(start,end);
+  for(const field of [
+    'RADAR_WATCH_ONLY_EARLY_TRACK','RADAR_ALERT','RADARX_RADAR_ALERT',
+    'RADAR_EARLY_TRACK_WATCH_ONLY','SPOT','WATCH_ONLY','closed_candles_only',
+    'data_valid','data_stale','future_data_detected','data_quality','liquidity_quality',
+    'price_change_24h','paper_trading','real_order_execution','requires_follow_up_confirmation',
+    'symbol.matches','isTrustedBinancePublicSpotSource','unsafeRisk'
+  ]) assert.ok(helper.includes(field),'early-track FCM allow-list requires '+field);
+  assert.match(helper,/dailyMove >= -5\.0 && dailyMove <= 7\.0/);
+  assert.match(helper,/entry_eligible", "true"\)\)/);
+  assert.match(helper,/notification_gate_eligible", "true"\)\)/);
+  assert.match(helper,/dataQuality >= 70\.0 && liquidityQuality >= 60\.0 && price > 0\.0/);
+});
+
 test('All other unconfirmed or generic watch events still pass through the original strict suppression gate',()=>{
-  assert.match(service,/if \(!explicitTest && !approvedPreMoveWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|\s*!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation\)\)/);
+  assert.match(service,/if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|\s*!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation\)\)/);
   assert.ok(service.includes('FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED'));
   assert.ok(service.includes('FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED'));
 });
