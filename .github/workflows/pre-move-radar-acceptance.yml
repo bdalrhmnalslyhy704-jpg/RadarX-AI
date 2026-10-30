@@ -142,6 +142,13 @@ jobs:
           const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/deployment-info.json','utf8'));
           if (b.build_version !== 'Build 224') throw new Error('BUILD_VERSION_NOT_224');
           if (b.paper_trading !== true || b.real_order_execution !== false) throw new Error('READ_ONLY_POLICY_INVALID');
+          const storage=b.storage||{};
+          console.log('DHDTECH_DURABLE_STORAGE_STATUS '+JSON.stringify({
+            persistent:storage.persistent===true,directory:storage.directory||null,
+            mount_path:storage.mount_path||null,filesystem:storage.filesystem||null,
+            source:storage.source||'UNKNOWN'
+          }));
+          if(storage.persistent!==true) throw new Error('DHDTECH_PERSISTENT_STORAGE_NOT_MOUNTED:'+JSON.stringify(storage));
           const push=b.push||{};
           console.log('DHDTECH_PUSH_PROVIDER_STATUS '+JSON.stringify({
             provider:String(push.provider||'unknown'),enabled:push.enabled===true,
