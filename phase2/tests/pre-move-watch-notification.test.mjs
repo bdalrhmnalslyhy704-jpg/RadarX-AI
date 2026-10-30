@@ -9,6 +9,7 @@ import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {pushSubscription} from './fixtures.mjs';
+import {buildPreMoveWatchCandidates} from '../market/universe-scanner.mjs';
 
 function fixture(now=Date.now()){
   const p={
@@ -835,4 +836,46 @@ test('low-volume monitor cannot bypass stale candles, weak buyer flow, or poor l
   assert.equal(buildPreMoveWatchOnlyAlert(candidate,snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...candidate,liquidity_quality:59},snapshot,now),null);
   assert.equal(buildPreMoveWatchOnlyAlert({...candidate,data_status:{...candidate.data_status,data_stale:true}},snapshot,now),null);
+});
+
+
+test('market scanner retains PUNDIX and SOLV-like strong-buyer low-volume near misses for the bounded watch lane',()=>{
+  const now=Date.now();
+  const rows=[
+    {
+      symbol:'PUNDIXUSDT',last_price:0.0997,price_change_24h:-1.0913,
+      quote_volume_24h:509262,data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      risk_flags:[],
+      pre_move_context:{
+        stage:'NO_SETUP',evidence_complete:true,closed_candles_only:true,already_moved:false,
+        session_close:now-60_000,score:76.4,session_return_pct:3.6383,one_hour_return_pct:2.8986,
+        volume_acceleration:0.7415,trade_acceleration:1.0442,taker_buy_ratio:0.7955,
+        taker_buy_acceleration:0.3023,mean_close_location:0.8431,
+        relative_strength_vs_market_pct:2.3077,relative_strength_vs_btc_pct:2.3077,
+        components:{squeeze:50,structure:74,buying_pressure:100}
+      }
+    },
+    {
+      symbol:'SOLVUSDT',last_price:0.004699,price_change_24h:-4.4919,
+      quote_volume_24h:548093,data_quality:94,liquidity_quality:72,
+      data_status:{data_valid:false,candle_data_valid:true,volume_gate_pass:false,data_stale:false,stale:false,future_data_detected:false},
+      risk_flags:[],
+      pre_move_context:{
+        stage:'NO_SETUP',evidence_complete:true,closed_candles_only:true,already_moved:false,
+        session_close:now-60_000,score:60.4,session_return_pct:-2.5104,one_hour_return_pct:1.9093,
+        volume_acceleration:0.7399,trade_acceleration:0.9340,taker_buy_ratio:0.6160,
+        taker_buy_acceleration:0.2379,mean_close_location:0.5811,
+        relative_strength_vs_market_pct:-3.2672,relative_strength_vs_btc_pct:-3.2672,
+        components:{squeeze:50,structure:76.8,buying_pressure:100}
+      }
+    }
+  ];
+  const candidates=buildPreMoveWatchCandidates(rows,{
+    minQuoteVolume24h:750000,minLiquidityQuality:60,minDataQuality:70
+  });
+  assert.deepEqual(candidates.map(x=>x.symbol).sort(),['PUNDIXUSDT','SOLVUSDT']);
+  assert.ok(candidates.every(x=>x.watch_only===true&&x.alert_eligible===false));
+  assert.ok(candidates.every(x=>x.pre_move_context.strong_buyer_absorption_monitor_only===true));
+  assert.ok(candidates.every(x=>x.data_status.data_valid===false));
 });
