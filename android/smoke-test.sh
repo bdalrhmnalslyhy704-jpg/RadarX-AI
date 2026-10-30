@@ -312,7 +312,7 @@ sleep 3
 
 PHASE="verify offline UI and continuous background service"
 OFFLINE_ACTIVITY_STATE="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
-if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(^|[[:space:]])(mResumedActivity|ResumedActivity):[[:space:]]*.*com\\.radarx\\.app/\\.MainActivity' >/dev/null; then
+if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null; then
   echo "::error::RadarX MainActivity did not remain resumed after network loss"
   printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
   exit 1
