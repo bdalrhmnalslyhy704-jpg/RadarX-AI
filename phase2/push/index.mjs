@@ -77,7 +77,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','low_volume_watch_only','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -395,8 +395,11 @@ export class PushManager{
     if(alert?.market&&String(alert.market).toUpperCase()!=='SPOT')return rejected('SPOT_ONLY');
     if(alert?.real_order_execution===true||alert?.paper_trading===false)return rejected('READ_ONLY_POLICY_REQUIRED');
     if(alert?.closed_candles_only!==true)return rejected('CLOSED_CANDLE_EVIDENCE_REQUIRED');
+    const watchTierClaim=String(alert?.watch_notification_tier||'').toUpperCase();
+    const lowVolumeWatchClaim=alert?.low_volume_watch_only===true&&
+      ['PARTICIPATION_SURGE_MONITOR','STRONG_BUYER_ABSORPTION_MONITOR'].includes(watchTierClaim);
     if(alert?.data_stale===true||alert?.data_status?.stale===true||alert?.data_status?.data_stale===true||
-       alert?.data_status?.data_valid===false||alert?.data_status?.future_data_detected===true)
+       (alert?.data_status?.data_valid===false&&!lowVolumeWatchClaim)||alert?.data_status?.future_data_detected===true)
       return rejected('STALE_OR_INVALID_DATA');
 
     const source=String(alert?.source||alert?.data_status?.source||'').trim();
@@ -432,6 +435,16 @@ export class PushManager{
       alert?.micro_data_validated===true&&alert?.closed_candles_only===true&&
       alert?.low_liquidity_burst_bypass!==true&&quoteVolume24h!==null&&quoteVolume24h>=750000&&
       dataQuality===null&&liquidityQuality===null;
+    const lowVolumeWatch=lowVolumeWatchClaim&&
+      alert?.data_status?.candle_data_valid===true&&
+      alert?.data_status?.volume_gate_pass===false&&
+      alert?.data_status?.data_stale!==true&&alert?.data_status?.stale!==true&&
+      alert?.data_status?.future_data_detected!==true&&
+      quoteVolume24h!==null&&quoteVolume24h>=300000&&quoteVolume24h<750000&&
+      dataQuality!==null&&dataQuality>=85&&
+      liquidityQuality!==null&&liquidityQuality>=65;
+    if(lowVolumeWatchClaim&&!lowVolumeWatch)
+      return rejected('LOW_VOLUME_WATCH_EVIDENCE_INVALID');
     if(alert?.low_liquidity_burst_bypass===true||risks.includes('LOW_LIQUIDITY_WATCH_ONLY'))
       return rejected('LOW_LIQUIDITY_WATCH_ONLY');
     if(!microValidatedEarlyFlow&&(dataQuality===null||dataQuality<70||dataQuality>100))
@@ -481,13 +494,16 @@ export class PushManager{
         closeLocation!==null&&closeLocation>=0.54,
         relative!==null&&relative>=0.5
       ].filter(Boolean).length;
-      if(alert?.radar!=='PRE_MOVE'||alert?.data_status?.data_valid!==true||
+      if(alert?.radar!=='PRE_MOVE'||(alert?.data_status?.data_valid!==true&&!lowVolumeWatch)||
          p?.stage!=='WATCH_EARLY'||p?.watch_only!==true||p?.actionable!==false||
          p?.evidence_complete!==true||p?.closed_candles_only!==true||p?.already_moved===true)
         return rejected('PRE_MOVE_WATCH_EVIDENCE_INVALID');
       const accumulationPrepTier=alert?.watch_notification_tier==='ACCUMULATION_PREP_MONITOR';
       const compressedBuyerTier=alert?.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR';
-      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||score<(accumulationPrepTier?66:compressedBuyerTier?70:68)||
+      const participationSurgeTier=alert?.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR';
+      const strongBuyerTier=alert?.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR';
+      if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||
+         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -586,7 +602,46 @@ export class PushManager{
         hour!==null&&hour>=-0.75&&hour<=2.5&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
         structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
-      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||accumulationPrepMonitor||compressedBuyerAbsorptionMonitor;
+      const participationSurgeChecks=[
+        volumeRatio!==null&&volumeRatio>=1.25,
+        tradeRatio!==null&&tradeRatio>=1.20,
+        taker!==null&&taker>=0.50,
+        takerDelta!==null&&takerDelta>=0.05,
+        closeLocation!==null&&closeLocation>=0.54,
+        structure!==null&&structure>=55,
+        buyingPressure!==null&&buyingPressure>=60
+      ].filter(Boolean).length;
+      const participationSurgeMonitor=participationSurgeTier&&
+        dailyMove!==null&&dailyMove>=-8&&dailyMove<=8&&score!==null&&score>=58&&
+        session!==null&&session>=-3&&session<=6&&hour!==null&&hour>=-2&&hour<=4.5&&
+        volumeRatio!==null&&volumeRatio>=1.25&&tradeRatio!==null&&tradeRatio>=1.20&&
+        taker!==null&&taker>=0.50&&takerDelta!==null&&takerDelta>=0.05&&
+        closeLocation!==null&&closeLocation>=0.54&&structure!==null&&structure>=55&&
+        buyingPressure!==null&&buyingPressure>=60&&quoteVolume24h!==null&&quoteVolume24h>=300000&&
+        dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=65&&
+        participationSurgeChecks>=6;
+      const strongBuyerChecks=[
+        volumeRatio!==null&&volumeRatio>=0.50,
+        tradeRatio!==null&&tradeRatio>=0.75,
+        taker!==null&&taker>=0.60,
+        takerDelta!==null&&takerDelta>=0.05,
+        closeLocation!==null&&closeLocation>=0.55,
+        relativeBtc!==null&&relativeBtc>=-3.5,
+        structure!==null&&structure>=55,
+        buyingPressure!==null&&buyingPressure>=75
+      ].filter(Boolean).length;
+      const strongBuyerAbsorptionMonitor=strongBuyerTier&&
+        dailyMove!==null&&dailyMove>=-8&&dailyMove<=8&&score!==null&&score>=58&&
+        session!==null&&session>=-3&&session<=6&&hour!==null&&hour>=-2&&hour<=4.5&&
+        volumeRatio!==null&&volumeRatio>=0.50&&tradeRatio!==null&&tradeRatio>=0.75&&
+        taker!==null&&taker>=0.60&&takerDelta!==null&&takerDelta>=0.05&&
+        closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=-3.5&&
+        structure!==null&&structure>=55&&buyingPressure!==null&&buyingPressure>=75&&
+        quoteVolume24h!==null&&quoteVolume24h>=300000&&
+        dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=65&&
+        strongBuyerChecks>=7;
+      const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||
+        accumulationPrepMonitor||compressedBuyerAbsorptionMonitor||participationSurgeMonitor||strongBuyerAbsorptionMonitor;
       // Validate the claimed special tier before generic price-window checks so bad
       // or stale tier evidence is rejected for the right reason at the final gate.
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
@@ -595,17 +650,31 @@ export class PushManager{
         return rejected('PRE_MOVE_EARLY_FLOW_TIER_UNVERIFIED');
       if(alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&!tickerActivityMonitor)
         return rejected('PRE_MOVE_TICKER_ACTIVITY_TIER_UNVERIFIED');
+      if(participationSurgeTier&&!participationSurgeMonitor)
+        return rejected('PRE_MOVE_PARTICIPATION_SURGE_TIER_UNVERIFIED');
+      if(strongBuyerTier&&!strongBuyerAbsorptionMonitor)
+        return rejected('PRE_MOVE_STRONG_BUYER_TIER_UNVERIFIED');
       if(accumulationPrepTier&&!accumulationPrepMonitor)
         return rejected('PRE_MOVE_ACCUMULATION_PREP_TIER_UNVERIFIED');
       if(compressedBuyerTier&&!compressedBuyerAbsorptionMonitor)
         return rejected('PRE_MOVE_COMPRESSED_BUYER_TIER_UNVERIFIED');
-      if(session<(accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>(accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
-         hour<(accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>(accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
+      if(session<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
+           accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:
+           highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
+         session>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
+           accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:
+           highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
+         hour<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
+           accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:
+           highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
+         hour>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
+           accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
+           highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      const independentEvidenceFloor=(tickerActivityMonitor||compressedBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
-      const minimumMonitorStructure=accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
+      const independentEvidenceFloor=(tickerActivityMonitor||compressedBuyerAbsorptionMonitor||
+        participationSurgeMonitor||strongBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
+      const minimumMonitorStructure=(participationSurgeMonitor||strongBuyerAbsorptionMonitor)?55:
+        accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
       if(structure===null||(structure<minimumMonitorStructure)||
          independentEvidence<independentEvidenceFloor)
         return rejected('PRE_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
