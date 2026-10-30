@@ -803,6 +803,9 @@ export class PushManager{
       push.signal_type='WATCH_ONLY';
       push.direction='NONE';
       push.notification_gate_eligible=false;
+      push.data_quality=dataQuality;
+      push.liquidity_quality=liquidityQuality;
+      push.price_change_24h=firstFinite([alert?.price_change_24h]);
       push.watch_only=true;
       push.entry_eligible=false;
       if(isQualifiedRadarEarlyTrackPush)push.data_valid=true;
