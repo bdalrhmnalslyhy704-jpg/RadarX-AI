@@ -749,8 +749,11 @@ test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bu
   assert.ok(shock,'a 6% market-wide pulse must enter the audit lane');
   assert.equal(shock.selection_lane,'SHOCK_MOVE_AUDIT');
   assert.equal(shock.shock_move_audit_only,true);
+  assert.equal(shock.tier,'LATE_MOVE');
   assert.equal(shock.paper_candidate,false);
   assert.equal(shock.entry_eligible,false);
   assert.ok(shock.reason_codes.includes('SHARP_MARKET_PULSE_AUDIT_ONLY'));
+  assert.ok(shock.reason_codes.includes('ALREADY_EXTENDED'));
+  assert.equal(shock.trade_decision.decision,'AVOID_CHASING');
   assert.equal(shock.real_order_execution,false);
 });
