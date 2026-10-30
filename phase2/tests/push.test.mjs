@@ -68,6 +68,13 @@ test('TEST_FIXTURE: qualified early-track gate sends a strict monitor-only notif
     assert.equal(sent[0].entry_eligible,false);
     assert.equal(sent[0].real_order_execution,false);
     assert.equal(sent[0].notification_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
+    assert.equal(sent[0].notification_gate_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
+    assert.equal(sent[0].signal_type,'WATCH_ONLY');
+    assert.equal(sent[0].direction,'NONE');
+    assert.equal(sent[0].notification_gate_eligible,false);
+    assert.equal(sent[0].data_valid,true);
+    assert.equal(sent[0].data_quality,88);
+    assert.equal(sent[0].liquidity_quality,78);
     const legacyLive=await manager.notifyRadarAlert({
       radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',symbol:'LIVEFLAGUSDT',market:'SPOT',direction:'UP',
       price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,
