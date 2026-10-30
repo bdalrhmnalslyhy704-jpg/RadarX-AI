@@ -2404,18 +2404,26 @@ export class MarketUniverseScanner {
     }
     const preMovePinnedFraction=0.10;
     const preMoveActivityPrioritySlots=8;
-    const rotatingWidth=Math.max(1,discoveryLimit-
-      Math.ceil(discoveryLimit*preMovePinnedFraction)-
-      Math.min(preMoveActivityPrioritySlots,Math.floor(discoveryLimit*0.20)));
-    const rotationOffset=(rotationCycle*rotatingWidth);
-    const discovery=rankPreMoveTickerRows(tickerResponse.data,universe,{
+    const discoveryOptions={
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       limit:discoveryLimit,
-      rotationOffset,
       activitySignals:tickerActivitySignals,
       pinnedFraction:preMovePinnedFraction,
       activityPriorityLimit:preMoveActivityPrioritySlots
+    };
+    // Determine the real size of the rotating lane before selecting its offset.
+    // Activity priority slots are a maximum, not a fixed reservation: when fewer
+    // genuine bursts exist, their unused slots return to fair market rotation.
+    const discoveryProbe=rankPreMoveTickerRows(tickerResponse.data,universe,{
+      ...discoveryOptions,rotationOffset:0
     });
+    const pinnedCount=Math.min(Math.ceil(discoveryLimit*preMovePinnedFraction),discoveryProbe.length);
+    const activityPrioritySelected=discoveryProbe.filter(row=>row.ticker_activity_priority_selected===true).length;
+    const rotatingWidth=Math.max(1,discoveryProbe.length-pinnedCount-activityPrioritySelected);
+    const rotationOffset=(rotationCycle*rotatingWidth);
+    const discovery=rotationOffset===0?discoveryProbe:rankPreMoveTickerRows(
+      tickerResponse.data,universe,{...discoveryOptions,rotationOffset}
+    );
     // Live acceptance measured 51.6s at concurrency 16 and 56.1s at 40.
     // Each pair requests 15m klines and order-book depth. Use a bounded middle
     // concurrency of 24 while preserving the complete 40-symbol rotation batch.
