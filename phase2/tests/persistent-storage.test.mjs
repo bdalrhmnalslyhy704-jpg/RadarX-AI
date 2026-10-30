@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {resolve} from 'node:path';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {DurableStore} from '../core/store.mjs';
 import {parseMountTable,resolveDurableStorage} from '../core/persistent-storage.mjs';
 
 test('mount table parser decodes escaped mount paths and excludes container pseudo-filesystems',()=>{
@@ -74,4 +77,30 @@ test('configured DHDTech mount path is used only when it exists in the mount tab
   });
   assert.equal(missing.directory,'./.radarx-data');
   assert.equal(missing.persistent,false);
+});
+
+test('FCM device registry survives reopening DurableStore when its directory is on the mounted volume',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'radarx-persistent-device-registry-'));
+  const volume=join(root,'volume');
+  const installationId='123e4567-e89b-42d3-a456-426614174000';
+  const token='FCM_TEST_TOKEN_'+('x'.repeat(180));
+  try{
+    const selected=resolveDurableStorage({
+      env:{RADARX_DATA_MOUNT_PATH:volume},cwd:root,
+      mountsContent:'/dev/vdb1 '+volume+' ext4 rw,relatime 0 0'
+    });
+    assert.equal(selected.persistent,true);
+    const first=await new DurableStore({dir:selected.directory}).init();
+    const created=await first.upsertFcmDevice(installationId,token);
+    assert.equal(created.provider,'fcm');
+
+    const afterRestart=await new DurableStore({dir:selected.directory}).init();
+    const device=await afterRestart.getFcmDevice(installationId);
+    assert.ok(device);
+    assert.equal(device.installation_id,installationId);
+    assert.equal(device.fcm_token,token);
+    assert.equal(device.disabled,false);
+  }finally{
+    await rm(root,{recursive:true,force:true});
+  }
 });
