@@ -781,7 +781,12 @@ test('historical sample phases give the cognitive learner enough distinct time b
   assert.ok(uniqueTimes.size>=100,'different symbols should populate distinct chronological time blocks');
 
   const profile=buildCognitiveLearningProfile(rows);
-  assert.ok(profile.training_samples>=60,'historical training split must be populated');
+  assert.ok(profile.training_samples>=60,'historical training split must be populated: '+JSON.stringify({
+    resolved:profile.resolved_samples,training:profile.training_samples,validation:profile.validation_samples,
+    holdout:profile.holdout_samples,purged:profile.purged_overlap_samples,
+    unique_times:uniqueTimes.size,validation_start:profile.validation_start_at,
+    holdout_start:profile.holdout_start_at,training_end:profile.max_training_outcome_resolved_at
+  }));
   assert.ok(profile.validation_samples>=20,'middle validation must contain enough matured observations');
   assert.ok(profile.holdout_samples>=20,'untouched holdout must contain enough matured observations');
   assert.equal(profile.validation.evaluated,true);
