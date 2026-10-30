@@ -258,7 +258,7 @@ export class AdaptiveTraderWorker{
     const assessment=candidate?.cognitive_assessment||{};
     const profile=this.state.cognitive_profile||{};
     const row={
-      id,symbol,model_version:Number(assessment.version)||2,at:Math.trunc(closeAt),
+      id,symbol,model_version:Number(assessment.version)||3,at:Math.trunc(closeAt),
       price:finite(candidate?.candle_close_price)??finite(candidate?.price),
       base_score:finite(candidate?.base_score??candidate?.score),
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),

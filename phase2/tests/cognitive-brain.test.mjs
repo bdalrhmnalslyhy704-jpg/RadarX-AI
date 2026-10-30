@@ -345,7 +345,7 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
 });
 
-test('prequential audit scores only immutable, matured V2 forecasts and detects sustained degradation', () => {
+test('prequential audit scores only immutable, matured V3 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
     const predictionIsCorrect = index < 30;
@@ -354,7 +354,7 @@ test('prequential audit scores only immutable, matured V2 forecasts and detects 
       : (outcome === 'UP' ? 10 : 90);
     const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
     return {
-      id: 'FORWARD-' + index, model_version: 2, at,
+      id: 'FORWARD-' + index, model_version: 3, at,
       trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,

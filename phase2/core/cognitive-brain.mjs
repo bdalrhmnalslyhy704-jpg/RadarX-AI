@@ -448,7 +448,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
   minimumWindowSamples = 20, windowSize = 40
 } = {}) {
   const rows = (Array.isArray(journal) ? journal : [])
-    .filter(row => row && Number(row.model_version) === 2 &&
+    .filter(row => row && Number(row.model_version) === 3 &&
       finite(row.predicted_up_probability) !== null &&
       Number(row.predicted_up_probability) >= 0 && Number(row.predicted_up_probability) <= 100 &&
       ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
@@ -493,7 +493,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
     degradation >= 0.08 &&
     recentMetrics.brier_score >= previousMetrics.brier_score * 1.5;
   return {
-    method: 'IMMUTABLE_FORWARD_FORECAST_PREQUENTIAL_AUDIT_V1',
+    method: 'IMMUTABLE_FORWARD_FORECAST_PREQUENTIAL_AUDIT_V2',
     status: !enough ? 'INSUFFICIENT_FORWARD_PREDICTIONS' :
       driftDetected ? 'FORWARD_PERFORMANCE_DEGRADING' : 'FORWARD_MONITORING_STABLE',
     resolved_forecasts: rows.length,
@@ -505,7 +505,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
     reassessment_required: driftDetected,
     note: driftDetected
       ? 'RECENT_IMMUTABLE_FORECASTS_DEGRADED_VS_PRIOR_WINDOW'
-      : 'ONLY_FIRST_RECORDED_MODEL_V2_FORECAST_PER_CLOSED_CANDLE_IS_SCORED'
+      : 'ONLY_FIRST_RECORDED_MODEL_V3_FORECAST_PER_CLOSED_CANDLE_IS_SCORED'
   };
 }
 
@@ -560,7 +560,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     price !== null && price > 0 && score !== null && candleAge !== null &&
     candleAge >= 0 && candleAge <= 20 * 60 * 1000;
   const base = {
-    version: 2,
+    version: 3,
     symbol,
     assessed_at: Number(now),
     entry_eligible: false,
