@@ -15,7 +15,7 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-worker-status-')),store=await new DurableStore({dir}).init();
   const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
-  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),storageInfo:{persistent:true,directory:'/data/.radarx-data',mount_path:'/data',filesystem:'ext4',source:'AUTO_DETECTED_MOUNT'}});
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),storageInfo:{persistent:true,directory:'/data/.radarx-data',mount_path:'/data',filesystem:'ext4',source:'AUTO_DETECTED_MOUNT',detected_mounts:['/data','/etc/hosts']}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
     assert.equal(typeof server.startPreMoveWatchWorker,'function');
@@ -40,7 +40,7 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
     assert.equal(deployment.push.active_subscriptions,0);
     assert.equal(deployment.push.fcm_devices,0);
     assert.equal(Object.hasOwn(deployment.push,'fcm_token'),false);
-    assert.deepEqual(deployment.storage,{persistent:true,directory:'/data/.radarx-data',mount_path:'/data',filesystem:'ext4',source:'AUTO_DETECTED_MOUNT'});
+    assert.deepEqual(deployment.storage,{persistent:true,directory:'/data/.radarx-data',mount_path:'/data',filesystem:'ext4',source:'AUTO_DETECTED_MOUNT',detected_mounts:['/data','/etc/hosts']});
   }finally{
     server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
