@@ -438,6 +438,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
+      outcome_source:'HISTORICAL_CLOSED_CANDLE',
       mark_price:future.close,return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime
     });
