@@ -951,8 +951,8 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
 
   const first=await scanner.scanPreMove({quote:'USDT',limit:50});
   const firstSymbols=new Set(seen);
-  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,16);
-  assert.equal(maxActive,16,'a 40-symbol batch must not fan out 40 simultaneous candle/depth requests');
+  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,24);
+  assert.equal(maxActive,24,'a 40-symbol batch must use bounded concurrency, not a 40-way REST burst');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,40);
   assert.equal(first.universe.discovered,40);
