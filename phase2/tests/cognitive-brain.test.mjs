@@ -177,7 +177,7 @@ test('the learner changes its conclusion when the same evidence leads to opposit
   const reversedProbability = assessCognitiveCandidate(candidate(), reversed, BASE_TIME + 20_000)
     .predicted_up_probability;
   assert.ok(normalProbability > reversedProbability + 25,
-    'same pattern must receive a different estimate after the learned outcome relationship reverses');
+    'same pattern must receive a different estimate after the learned outcome relationship reverses; normal=' + normalProbability + ', reversed=' + reversedProbability);
   assert.ok(applyCognitiveRankAdjustment(70, evidence, normal) >
     applyCognitiveRankAdjustment(70, evidence, reversed));
 });
