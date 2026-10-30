@@ -698,6 +698,7 @@ export class PushManager{
          (alert?.closed_candles_only===true&&alert?.data_stale!==true&&
           alert?.data_status?.stale!==true&&alert?.data_status?.data_stale!==true&&
           alert?.data_status?.future_data_detected!==true&&
+          alert?.data_valid!==false&&alert?.data_status?.data_valid!==false&&
           isTrustedBinancePublicSpotSource(source));
       if(!verifiedClosedData||dailyMove===null||dailyMove < -5||dailyMove > 7)
         return rejected('EARLY_TRACK_DATA_OR_ANTI_CHASE_GATE');
