@@ -9,7 +9,7 @@ test('mount table parser decodes escaped mount paths and excludes container pseu
     'overlay / overlay rw,relatime 0 0',
     'tmpfs /tmp tmpfs rw,nosuid,nodev 0 0',
     '/dev/vdc1 /mnt/radar\\040disk xfs rw,relatime 0 0'
-  ].join('\\n');
+  ].join('\n');
   assert.deepEqual(parseMountTable(mounts),[
     {mount_path:'/data',filesystem:'ext4'},
     {mount_path:'/mnt/radar disk',filesystem:'xfs'}
@@ -19,7 +19,7 @@ test('mount table parser decodes escaped mount paths and excludes container pseu
 test('DHDTech-style mounted /data disk is selected automatically for durable RadarX storage',()=>{
   const value=resolveDurableStorage({
     env:{},cwd:'/app',
-    mountsContent:'/dev/vdb1 /data ext4 rw,relatime 0 0\\noverlay / overlay rw 0 0'
+    mountsContent:'/dev/vdb1 /data ext4 rw,relatime 0 0\noverlay / overlay rw 0 0'
   });
   assert.equal(value.directory,'/data/.radarx-data');
   assert.equal(value.absolute_directory,'/data/.radarx-data');
@@ -50,7 +50,7 @@ test('explicit RADARX_DATA_DIR remains supported and is marked durable only insi
 test('container writable layer is not misreported as persistent when no data volume is mounted',()=>{
   const value=resolveDurableStorage({
     env:{},cwd:'/app',
-    mountsContent:'overlay / overlay rw 0 0\\ntmpfs /tmp tmpfs rw 0 0'
+    mountsContent:'overlay / overlay rw 0 0\ntmpfs /tmp tmpfs rw 0 0'
   });
   assert.equal(value.directory,'./.radarx-data');
   assert.equal(value.persistent,false);
