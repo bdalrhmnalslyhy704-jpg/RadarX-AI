@@ -49,7 +49,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
         boolean finalConfirmation = !lifecycleConflicts && ("CONFIRMED".equals(lifecycleState) ||
                 "CONFIRMED".equals(signalType) || "STRICT_NOTIFICATION".equals(notificationGateMode));
         boolean approvedPreMoveWatch = isApprovedPreMoveWatch(message.getData());
-        if (!explicitTest && !approvedPreMoveWatch &&
+        boolean approvedRadarEarlyTrackWatch = isApprovedRadarEarlyTrackWatch(message.getData());
+        if (!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&
                 (watchOnly || watchEvent || !risingDirection || !entryEligible ||
                 !notificationGateEligible || followUpRequired || lifecycleConflicts || !finalConfirmation)) {
             Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
@@ -135,7 +136,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             try {
                 manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
                 Log.i(TAG, explicitTest ? "FCM_TEST_NOTIFICATION_POSTED" :
-                        (approvedPreMoveWatch ? "FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED"));
+                        (approvedRadarEarlyTrackWatch ? "FCM_RADAR_EARLY_TRACK_WATCH_NOTIFICATION_POSTED" :
+                         (approvedPreMoveWatch ? "FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED")));
                 if (!eventId.isEmpty()) {
                     RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
                 }
@@ -213,6 +215,56 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 "true".equalsIgnoreCase(dataValue(data, "paper_trading", "false")) &&
                 "false".equalsIgnoreCase(dataValue(data, "real_order_execution", "true")) &&
                 symbol.matches("[A-Z0-9]{2,20}USDT") && sourceOkay && tierOkay &&
+                !Double.isNaN(dataQuality) && !Double.isInfinite(dataQuality) &&
+                !Double.isNaN(liquidityQuality) && !Double.isInfinite(liquidityQuality) &&
+                !Double.isNaN(price) && !Double.isInfinite(price) &&
+                dataQuality >= 70.0 && liquidityQuality >= 60.0 && price > 0.0 &&
+                lifecycleOkay && !unsafeRisk;
+    }
+
+    /**
+     * Permit only the backend's separately validated early-track watch lane.
+     * It remains a non-entry monitor notice, not a confirmation or trade signal.
+     */
+    private static boolean isApprovedRadarEarlyTrackWatch(java.util.Map<String, String> data) {
+        if (data == null) return false;
+        String event = dataValue(data, "event", "").toUpperCase(java.util.Locale.ROOT);
+        String eventClass = dataValue(data, "event_class", "").toUpperCase(java.util.Locale.ROOT);
+        String type = dataValue(data, "type", "").toUpperCase(java.util.Locale.ROOT);
+        String mode = dataValue(data, "notification_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String gateMode = dataValue(data, "notification_gate_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String symbol = dataValue(data, "symbol", "").toUpperCase(java.util.Locale.ROOT);
+        String source = dataValue(data, "source", "").trim();
+        String direction = dataValue(data, "direction", "").toUpperCase(java.util.Locale.ROOT);
+        String lifecycle = dataValue(data, "signal_lifecycle_state", "").toUpperCase(java.util.Locale.ROOT);
+        String riskFlags = dataValue(data, "risk_flags", "").toUpperCase(java.util.Locale.ROOT);
+        double dataQuality = numericValue(data, "data_quality");
+        double liquidityQuality = numericValue(data, "liquidity_quality");
+        double price = numericValue(data, "price");
+        double dailyMove = numericValue(data, "price_change_24h");
+        boolean lifecycleOkay = lifecycle.isEmpty() ||
+                "EARLY_SETUP".equals(lifecycle) || "EARLY_SETUP_REVIEW".equals(lifecycle) ||
+                "WATCH_EARLY".equals(lifecycle) || "MONITOR".equals(lifecycle) ||
+                "MONITOR_ONLY".equals(lifecycle) || "WATCH_ONLY".equals(lifecycle);
+        boolean unsafeRisk = riskFlags.matches("(?s).*?(ALREADY_EXTENDED|WIDE_SPREAD|LOW_LIQUIDITY|STALE_DATA|DATA_STALE|FUTURE_DATA|BREAKOUT_TRAP|SELLING_TRAP).*");
+        return "RADAR_WATCH_ONLY_EARLY_TRACK".equals(event) &&
+                "RADAR_ALERT".equals(eventClass) && "RADARX_RADAR_ALERT".equals(type) &&
+                "RADAR_EARLY_TRACK_WATCH_ONLY".equals(mode) &&
+                "RADAR_EARLY_TRACK_WATCH_ONLY".equals(gateMode) &&
+                "WATCH_ONLY".equals(dataValue(data, "signal_type", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "SPOT".equals(dataValue(data, "market", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "NONE".equals(direction) && "true".equalsIgnoreCase(dataValue(data, "watch_only", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "entry_eligible", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "notification_gate_eligible", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "requires_follow_up_confirmation", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "closed_candles_only", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "data_valid", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "data_stale", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "future_data_detected", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "paper_trading", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "real_order_execution", "true")) &&
+                symbol.matches("[A-Z0-9]{2,20}USDT") && isTrustedBinancePublicSpotSource(source) &&
+                !Double.isNaN(dailyMove) && dailyMove >= -5.0 && dailyMove <= 7.0 &&
                 !Double.isNaN(dataQuality) && !Double.isInfinite(dataQuality) &&
                 !Double.isNaN(liquidityQuality) && !Double.isInfinite(liquidityQuality) &&
                 !Double.isNaN(price) && !Double.isInfinite(price) &&
