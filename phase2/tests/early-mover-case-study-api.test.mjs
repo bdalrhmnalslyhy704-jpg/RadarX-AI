@@ -81,6 +81,21 @@ test('GET /api/early-mover-case-study returns bounded closed-candle diagnostics 
     const historicalReport=await allowed.json();
     assert.equal(historicalReport.as_of,historicalAsOf);
     assert.ok(calls.some(call=>call.symbol==='HUMAUSDT'&&call.options.endTime===Date.parse(historicalAsOf)));
+
+    const screenshotSymbols=[
+      'PARTIUSDT','BEAMXUSDT','SOXSBUSDT','SOPHUSDT','SOLVUSDT','SKDDBUSDT',
+      'LSKUSDT','NILUSDT','PUNDIXUSDT','UVXYBUSDT','KERNELUSDT','SQQQBUSDT','BREVUSDT'
+    ];
+    const screenshotAudit=await fetch(base+'/api/early-mover-case-study?symbols='+screenshotSymbols.join(',')+'&threshold_pct=5&window_hours=24&lead_minutes=60');
+    assert.equal(screenshotAudit.status,200);
+    const screenshotReport=await screenshotAudit.json();
+    assert.equal(screenshotReport.report,'RADARX_EARLY_MOVER_CASE_STUDY_V1');
+    assert.deepEqual(screenshotReport.options.symbols,screenshotSymbols);
+    assert.equal(screenshotReport.results.length,13);
+    assert.ok(screenshotReport.results.every(row=>row.no_future_data_used===true));
+    assert.ok(calls.some(call=>call.symbol==='SOXSBUSDT'));
+    assert.ok(calls.some(call=>call.symbol==='SQQQBUSDT'));
+
     const invalidTimestamp=await fetch(base+'/api/early-mover-case-study?symbols=HUMAUSDT&as_of=2099-01-01T00%3A00%3A00Z');
     assert.equal(invalidTimestamp.status,400);
   }finally{
