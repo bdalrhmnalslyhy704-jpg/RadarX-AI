@@ -799,9 +799,13 @@ export class PushManager{
         watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
       },processedAt,'PRE_MOVE_WATCH_ONLY');
       push.notification_mode=monitorNotificationMode;
+      push.notification_gate_mode=monitorNotificationMode;
       push.signal_type='WATCH_ONLY';
+      push.direction='NONE';
+      push.notification_gate_eligible=false;
       push.watch_only=true;
       push.entry_eligible=false;
+      if(isQualifiedRadarEarlyTrackPush)push.data_valid=true;
       push.watch_notification_tier=alert?.watch_notification_tier||null;
       push.requires_follow_up_confirmation=true;
       push.title=(isQualifiedRadarEarlyTrackPush?radarTitle(alert):'RadarX')+' • مراقبة مبكرة • '+symbol;
