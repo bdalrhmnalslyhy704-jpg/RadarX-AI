@@ -223,3 +223,51 @@ test('FCM device receipt acknowledges only a recent SENT event for the registere
     await new Promise(resolve=>server.close(resolve));
   }
 });
+
+test('device status reports registration separately from a verified phone receipt',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-fcm-device-status-'));
+  const store=await new DurableStore({dir}).init();
+  const config={environment:'production',push:{provider:'fcm'},auth:{secret:'',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const provider={status:()=>({provider:'fcm',enabled:true})};
+  const server=createApiServer({config,store,monitor:{health:()=>({running:true})},pushProvider:provider});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const device=await store.upsertFcmDevice(INSTALLATION_ID,TOKEN);
+    const statusUrl=base+'/api/push/device/status?installation_id='+INSTALLATION_ID;
+    const before=await fetch(statusUrl);
+    assert.equal(before.status,200);
+    const beforeBody=await before.json();
+    assert.equal(beforeBody.registered,true);
+    assert.equal(beforeBody.delivery_verified,false);
+    assert.equal(beforeBody.pending_device_receipt,false);
+    assert.equal(JSON.stringify(beforeBody).includes(TOKEN),false);
+
+    const eventId='FCM-TEST-DEVICE-RECEIPT-224';
+    await store.appendNotificationAudit({event:'TEST_PUSH_ONLY',event_class:'TEST_PUSH_ONLY',
+      subscription_id:device.id,status:'SENT',provider:'fcm',attempted_at:Date.now(),
+      event_id:eventId,paper_trading:true,real_order_execution:false});
+    const pending=await fetch(statusUrl+'&event_id='+eventId);
+    const pendingBody=await pending.json();
+    assert.equal(pendingBody.registered,true);
+    assert.equal(pendingBody.delivery_verified,false);
+    assert.equal(pendingBody.pending_device_receipt,true);
+    assert.equal(pendingBody.last_sent_event_id,eventId);
+
+    await store.appendNotificationAudit({event:'FCM_DEVICE_RECEIPT',event_class:'TEST_PUSH_ONLY',
+      provider:'fcm',subscription_id:device.id,installation_id:INSTALLATION_ID,
+      event_id:eventId,status:'RECEIVED',server_received_at_ms:Date.now(),
+      paper_trading:true,real_order_execution:false});
+    const received=await fetch(statusUrl+'&event_id='+eventId);
+    const receivedBody=await received.json();
+    assert.equal(receivedBody.registered,true);
+    assert.equal(receivedBody.delivery_verified,true);
+    assert.equal(receivedBody.receipt_event_id,eventId);
+    assert.ok(receivedBody.last_received_at>0);
+    assert.equal(JSON.stringify(receivedBody).includes(TOKEN),false);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+  }
+});
+
