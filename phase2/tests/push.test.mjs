@@ -68,6 +68,21 @@ test('TEST_FIXTURE: qualified early-track gate sends a strict monitor-only notif
     assert.equal(sent[0].entry_eligible,false);
     assert.equal(sent[0].real_order_execution,false);
     assert.equal(sent[0].notification_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
+    const legacyLive=await manager.notifyRadarAlert({
+      radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',symbol:'LIVEFLAGUSDT',market:'SPOT',direction:'UP',
+      price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,
+      source:'Binance Public REST',
+      data_status:{status:'LIVE_DATA',source:'Binance Public REST',stale:false,data_stale:false,future_data_detected:false},
+      closed_candles_only:true,detected_candle_close_time:now-1000,risk_flags:[],
+      notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+        score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD'],
+        falcon_eye:{quality:70,capture:76,independent_domains:3,early_window:true}}
+    });
+    assert.equal(legacyLive.length,1);
+    assert.equal(legacyLive[0].status,'SENT',JSON.stringify(legacyLive[0]));
+    assert.equal(sent.length,2);
+    assert.equal(sent[1].watch_only,true);
+    assert.equal(sent[1].entry_eligible,false);
     const rejected=await manager.notifyRadarAlert({radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,eligible:true,entry_eligible:false});
     assert.deepEqual(rejected,[]);
     assert.equal(sent.length,1,'an unrelated invalid radar must not create an additional push');
