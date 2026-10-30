@@ -37,16 +37,22 @@ export function resolveDurableStorage({env=process.env,mountsContent='',cwd=proc
   const candidates=[requestedMount,'/data','/app/data','/mnt/data','/mnt/persistent','/persistent']
     .map(x=>String(x||'').trim())
     .filter((x,i,a)=>x&&a.indexOf(x)===i);
+  const findBackingMount=directory=>{
+    const absolute=resolve(cwd,directory);
+    return mounts
+      .filter(entry=>absolute===entry.mount_path||absolute.startsWith(entry.mount_path+sep))
+      .sort((a,b)=>b.mount_path.length-a.mount_path.length)[0]||null;
+  };
+  const explicitMount=explicitDir?findBackingMount(explicitDir):null;
   const selectedMount=candidates.find(path=>mountSet.has(resolve(cwd,path)))||null;
-  const directory=explicitDir||(
-    isRailway?'/data/.radarx-data':
+  // A stale RADARX_DATA_DIR pointing into the writable image must never override
+  // a real mounted disk. Keep an explicit directory only when it is itself backed
+  // by a detected mount, or when no mounted volume is available at all.
+  const directory=explicitDir&&explicitMount?explicitDir:
     selectedMount?join(selectedMount,'.radarx-data'):
-    './.radarx-data'
-  );
+    explicitDir|| (isRailway?'/data/.radarx-data':'./.radarx-data');
   const absoluteDirectory=resolve(cwd,directory);
-  const backingMount=mounts
-    .filter(entry=>absoluteDirectory===entry.mount_path||absoluteDirectory.startsWith(entry.mount_path+sep))
-    .sort((a,b)=>b.mount_path.length-a.mount_path.length)[0]||null;
+  const backingMount=findBackingMount(directory);
   const persistent=Boolean(backingMount);
   const source=explicitDir?'ENV_CONFIGURED_DIRECTORY':
     isRailway?'RAILWAY_DEFAULT_DIRECTORY':
