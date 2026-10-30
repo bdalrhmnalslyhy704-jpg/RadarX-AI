@@ -1809,6 +1809,8 @@ export class MarketUniverseScanner {
     // Serialize Pre-Move scans across limits: the same REST client/request map is shared,
     // so different concurrent limits must not reset its in-flight request cache mid-scan.
     this._preMoveScanTails = new Map();
+    this._preMoveRotationCycle = 0;
+    this._preMoveRotationOffset = 0;
   }
 
   async requestOnce(path, query = {}) {
@@ -2384,6 +2386,7 @@ export class MarketUniverseScanner {
     const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(20,normalizedLimit));
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
+    let rotationCursorOffset=0;
     let rotationCursorSource='PROCESS_MEMORY_FALLBACK';
     const rotationStoreReady=typeof this.rotationStateStore?.getDedupKey==='function' &&
       typeof this.rotationStateStore?.putDedupKey==='function';
@@ -2392,15 +2395,21 @@ export class MarketUniverseScanner {
         const saved=await this.rotationStateStore.getDedupKey(rotationKey);
         const next=Number(saved?.next_cycle);
         rotationCycle=Number.isSafeInteger(next)&&next>=0?next:0;
+        const savedOffset=Number(saved?.next_rotation_offset);
+        // Migrate the original cycle-only cursor once. Build 224's previous
+        // fixed rotation lane used 40 deep slots, 4 pinned rows and 3 burst rows.
+        const legacyWidth=Math.max(1,discoveryLimit-Math.ceil(discoveryLimit*0.10)-3);
+        rotationCursorOffset=Number.isSafeInteger(savedOffset)&&savedOffset>=0
+          ?savedOffset:rotationCycle*legacyWidth;
         rotationCursorSource='DURABLE_STORE';
       }catch{
         rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
-        this._preMoveRotationCycle=rotationCycle+1;
+        rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
         rotationCursorSource='PROCESS_MEMORY_FALLBACK';
       }
     }else{
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
-      this._preMoveRotationCycle=rotationCycle+1;
+      rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
     }
     const preMovePinnedFraction=0.10;
     const preMoveActivityPrioritySlots=8;
@@ -2420,7 +2429,10 @@ export class MarketUniverseScanner {
     const pinnedCount=Math.min(Math.ceil(discoveryLimit*preMovePinnedFraction),discoveryProbe.length);
     const activityPrioritySelected=discoveryProbe.filter(row=>row.ticker_activity_priority_selected===true).length;
     const rotatingWidth=Math.max(1,discoveryProbe.length-pinnedCount-activityPrioritySelected);
-    const rotationOffset=(rotationCycle*rotatingWidth);
+    // Keep a cumulative offset: the activity lane can consume a different number
+    // of rows each cycle, so multiplying cycle number by today's width can overlap
+    // yesterday's rotating slice or skip symbols.
+    const rotationOffset=rotationCursorOffset;
     const discovery=rotationOffset===0?discoveryProbe:rankPreMoveTickerRows(
       tickerResponse.data,universe,{...discoveryOptions,rotationOffset}
     );
@@ -2582,12 +2594,18 @@ export class MarketUniverseScanner {
         // Advance only after a completed scan. An interrupted scan retries the same
         // slice instead of silently skipping coverage on the next worker start.
         await this.rotationStateStore.putDedupKey(rotationKey,{
-          next_cycle:rotationCycle+1,version:1,updated_at:this.clock()
+          next_cycle:rotationCycle+1,
+          next_rotation_offset:rotationOffset+rotatingWidth,
+          version:2,updated_at:this.clock()
         });
         rotationCursorPersisted=true;
       }catch(error){
         throw new Error('PRE_MOVE_ROTATION_CURSOR_PERSIST_FAILED:'+String(error?.message||error).slice(0,160));
       }
+    }else{
+      // Do not move the in-memory cursor before a scan completes successfully.
+      this._preMoveRotationCycle=rotationCycle+1;
+      this._preMoveRotationOffset=rotationOffset+rotatingWidth;
     }
     return {
       meta:{live:observed.length>0,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',radar:'PRE_MOVE'},
