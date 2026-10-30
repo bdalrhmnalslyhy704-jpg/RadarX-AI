@@ -2086,6 +2086,43 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         return send(res,201,{ok:true,provider:'fcm',registered:true,installation_id:registration.installation_id,subscription_id:registration.id});
       }
+      if(u.pathname==='/api/push/device/status'&&req.method==='GET'){
+        const statusRateKey='fcm-status|'+(req.socket.remoteAddress||'unknown');
+        if(!rateOk(statusRateKey,30))return send(res,429,{error:'FCM_STATUS_RATE_LIMITED'});
+        const installationId=String(u.searchParams.get('installation_id')||'').trim();
+        const eventId=String(u.searchParams.get('event_id')||'').trim();
+        if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(installationId))
+          return send(res,400,{error:'INVALID_INSTALLATION_ID'});
+        if(eventId.length>256||/[\\x00-\\x1F\\x7F]/.test(eventId))
+          return send(res,400,{error:'INVALID_FCM_EVENT_ID'});
+        if(config.push?.provider!=='fcm'||!pushProvider?.status?.().enabled)
+          return send(res,503,{error:'FCM_PUSH_NOT_ENABLED',provider:pushProvider?.status?.().provider||'none'});
+        const device=await store.getFcmDevice?.(installationId);
+        if(!device||device.disabled===true)
+          return send(res,200,{provider:'fcm',registered:false,delivery_verified:false,
+            reason:'NO_ACTIVE_FCM_DEVICE',paper_trading:true,real_order_execution:false});
+        const notifications=await store.readRecent?.('notifications',5000)||[];
+        const sentRows=notifications.filter(row=>row?.subscription_id===device.id&&
+          row?.provider==='fcm'&&row?.status==='SENT'&&row?.event!=='FCM_DEVICE_RECEIPT')
+          .sort((a,b)=>Number(b?.attempted_at||b?.processed_at||0)-Number(a?.attempted_at||a?.processed_at||0));
+        const latestSent=sentRows[0]||null;
+        const matchesEvent=(row,id)=>{
+          const ids=[row?.event_id,row?.signal_id,row?.alert_id].filter(value=>value!==null&&value!==undefined).map(String);
+          return ids.includes(String(id||''));
+        };
+        const targetEventId=eventId||latestSent?.event_id||latestSent?.signal_id||latestSent?.alert_id||'';
+        const receipt=targetEventId?notifications.find(row=>row?.event==='FCM_DEVICE_RECEIPT'&&
+          row?.provider==='fcm'&&row?.subscription_id===device.id&&matchesEvent(row,targetEventId)):null;
+        return send(res,200,{
+          provider:'fcm',registered:true,delivery_verified:Boolean(receipt),
+          last_sent_at:latestSent?.attempted_at??null,last_sent_event_id:
+            latestSent?.event_id??latestSent?.signal_id??latestSent?.alert_id??null,
+          last_received_at:receipt?.server_received_at_ms??null,
+          receipt_event_id:receipt?.event_id??null,
+          pending_device_receipt:Boolean(latestSent&&!receipt),
+          paper_trading:true,real_order_execution:false
+        });
+      }
       if(u.pathname.startsWith('/api/push/device/')&&req.method==='DELETE'){
         const installationId=decodeURIComponent(u.pathname.slice('/api/push/device/'.length));
         if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(installationId))
