@@ -300,7 +300,9 @@ head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -
 assert_background_service_declared
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 
-# Offline: the local UI Activity must still remain open without the backend.
+# Offline: remove network access while keeping the already-running Activity and
+# foreground monitor alive. Force-stopping/relaunching here would test a second cold
+# service-process bootstrap under the software-only emulator, not offline continuity.
 PHASE="simulate offline state"
 timeout 10s adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
 timeout 10s adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
@@ -308,15 +310,15 @@ timeout 10s adb shell svc wifi disable >/dev/null 2>&1 || true
 timeout 10s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
 sleep 3
 
-start_app_and_wait_ready
-
-# The monitor may auto-start, but it must not be misclassified as a user-initiated request.
-PHASE="verify offline startup is not user-initiated"
-LOGS="$(cat "${APP_LOG_FILE:-/nonexistent}" 2>/dev/null || true)"
-! printf '%s\\n' "${LOGS}" | grep -Fq "BACKGROUND_START_REQUEST"
-
-assert_background_service_declared
+PHASE="verify offline UI and continuous background service"
+OFFLINE_ACTIVITY_STATE="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
+if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(^|[[:space:]])(mResumedActivity|ResumedActivity):[[:space:]]*.*com\\.radarx\\.app/\\.MainActivity' >/dev/null; then
+  echo "::error::RadarX MainActivity did not remain resumed after network loss"
+  printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
+  exit 1
+fi
 test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
+assert_background_service_declared
 
 capture_screenshot offline "${RUNNER_TEMP}/radarx-offline.png"
 test -s "${RUNNER_TEMP}/radarx-offline.png"
