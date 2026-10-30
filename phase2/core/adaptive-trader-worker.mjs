@@ -1,6 +1,6 @@
 import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
-import {buildCognitiveLearningProfile,assessCognitiveCandidate} from './cognitive-brain.mjs';
+import {buildCognitiveLearningProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -182,8 +182,11 @@ export class AdaptiveTraderWorker{
           ...candidate,base_score:baseScore,score:learnedScore,
           learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
         };
+        const cognitiveRankScore=applyCognitiveRankAdjustment(learnedScore??baseScore,candidate?.features||{},this.state.cognitive_profile);
         const cognitive=assessCognitiveCandidate(ranked,this.state.cognitive_profile,now);
-        const enriched={...ranked,cognitive_assessment:cognitive};
+        const enriched={...ranked,cognitive_rank_score:cognitiveRankScore,
+          cognitive_rank_adjustment:baseScore===null||cognitiveRankScore===null?0:Number((cognitiveRankScore-(learnedScore??baseScore)).toFixed(2)),
+          cognitive_assessment:cognitive};
         this.recordCognitiveAssessment(enriched,now);
         cognitiveAssessments.push(enriched);
         return enriched;
@@ -244,7 +247,7 @@ export class AdaptiveTraderWorker{
       id,symbol,at:Math.trunc(closeAt),
       price:finite(candidate?.candle_close_price)??finite(candidate?.price),
       base_score:finite(candidate?.base_score??candidate?.score),
-      ranked_score:finite(candidate?.score),tier:String(candidate?.tier||'NO_SETUP'),
+      ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),tier:String(candidate?.tier||'NO_SETUP'),
       decision:String(assessment.decision||'DATA_UNAVAILABLE'),
       summary_ar:String(assessment.summary_ar||''),
       reason_codes:Array.isArray(assessment.reason_codes)?assessment.reason_codes.slice(0,10):[],
@@ -579,6 +582,7 @@ recordServerPaperPortfolio(snapshot,now){
       },
       current_recommendation:(()=>{const top=candidates.filter(row=>row.data_valid===true&&!row.data_stale)
         .slice().sort((a,b)=>(Number(b.trade_decision?.priority)||0)-(Number(a.trade_decision?.priority)||0)||
+          (Number(b.cognitive_rank_score)||0)-(Number(a.cognitive_rank_score)||0)||
           (Number(b.score)||0)-(Number(a.score)||0))[0];
         return top?{symbol:top.symbol,price:top.price,score:top.score,tier:top.tier,
           decision:top.trade_decision?.decision||'NO_SETUP',label_ar:top.trade_decision?.label_ar||'لا توجد توصية',
@@ -590,8 +594,9 @@ recordServerPaperPortfolio(snapshot,now){
       })(),
       top_candidates:candidates.filter(row=>row.data_valid===true&&!row.data_stale)
         .slice().sort((a,b)=>(Number(b.trade_decision?.priority)||0)-(Number(a.trade_decision?.priority)||0)||
+          (Number(b.cognitive_rank_score)||0)-(Number(a.cognitive_rank_score)||0)||
           (Number(b.score)||0)-(Number(a.score)||0)).slice(0,20).map(row=>({
-          symbol:row.symbol,price:row.price,score:row.score,tier:row.tier,
+          symbol:row.symbol,price:row.price,score:row.score,cognitive_rank_score:row.cognitive_rank_score,tier:row.tier,
           trade_decision:row.trade_decision,
           cognitive_assessment:row.cognitive_assessment||null,
           selection_lane:row.selection_lane||null,
