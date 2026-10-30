@@ -61,9 +61,8 @@ jobs:
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
                 const learning=value.learning_profile||null;
                 const capture=value.learning_capture||null;
-                const cognitive=summary&&summary.cognitive_brain||
-                  value.cognitive_brain&&value.cognitive_brain.profile?value.cognitive_brain:
-                  value.cognitive_brain||null;
+                const cognitive=(summary&&summary.cognitive_brain)||
+                  (value&&value.cognitive_brain)||null;
                 const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const universe=summary&&summary.universe||{};
