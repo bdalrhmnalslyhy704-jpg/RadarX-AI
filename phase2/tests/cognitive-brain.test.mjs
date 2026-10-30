@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCognitiveLearningProfile,
+  buildCognitivePrequentialProfile,
   assessCognitiveCandidate,
   applyCognitiveRankAdjustment
 } from '../core/cognitive-brain.mjs';
@@ -17,6 +18,7 @@ function sample(index, outcome, features = {}) {
     at,
     resolved_at: at + FOUR_HOURS,
     horizon_ms: FOUR_HOURS,
+    outcome_source: 'CLOSED_CANDLE_4H',
     training_eligible: true,
     closed_candle_baseline: true,
     outcome,
@@ -133,17 +135,20 @@ test('learner rejects unresolved, duplicate and non-training observations', () =
   assert.equal(profile.identifier_features_used, false);
 });
 
-test('chronological validation purges training labels that overlap the holdout window', () => {
-  const rows = Array.from({ length: 100 }, (_, index) =>
+test('nested chronological validation purges labels crossing both validation and untouched test boundaries', () => {
+  const rows = Array.from({ length: 200 }, (_, index) =>
     sample(index, index % 2 === 0 ? 'UP' : 'DOWN'));
   const profile = buildCognitiveLearningProfile(rows);
-  assert.equal(profile.resolved_samples, 100);
-  assert.equal(profile.holdout_samples, 20);
-  assert.equal(profile.training_samples, 64);
-  assert.equal(profile.purged_overlap_samples, 16);
-  assert.ok(profile.max_training_outcome_resolved_at < profile.holdout_start_at);
+  assert.equal(profile.resolved_samples, 200);
+  assert.equal(profile.training_samples, 104);
+  assert.equal(profile.validation_samples, 24);
+  assert.equal(profile.holdout_samples, 40);
+  assert.equal(profile.purged_overlap_samples, 32);
+  assert.equal(profile.validation_purged_samples, 16);
+  assert.ok(profile.max_training_outcome_resolved_at < profile.validation_start_at);
+  assert.ok(profile.validation_start_at < profile.holdout_start_at);
   assert.equal(profile.holdout.evaluated, true);
-  assert.equal(profile.method, 'REGULARIZED_INTERACTION_MODEL_WITH_PURGED_CHRONOLOGICAL_HOLDOUT_V2');
+  assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3');
 });
 
 test('the model generalizes from market evidence to unseen pair identifiers across repeated datasets', () => {
@@ -218,3 +223,132 @@ test('ranking adjustment stays disabled until independent holdout validation suc
   assert.equal(profile.probability_ready, false);
   assert.equal(applyCognitiveRankAdjustment(72, candidate().features, profile), null);
 });
+
+function regimeDriftSamples({ count = 360, changeAt = 96 } = {}) {
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    const signal = i % 4 < 2;
+    const features = {
+      volume_ratio: signal ? 2.2 : 0.8,
+      trade_ratio: signal ? 1.7 : 0.85,
+      taker_buy_ratio: signal ? 0.62 : 0.44,
+      close_location: signal ? 0.78 : 0.35,
+      higher_low: signal,
+      breakout_above_prior_high: false,
+      compression_ratio: signal ? 0.68 : 1.12,
+      relative_strength_vs_btc_pct: signal ? 0.9 : -0.45,
+      recent_15m_return_pct: signal ? 0.7 : -0.2,
+      return_3h_pct: signal ? 1.1 : -0.4,
+      trend_aligned: signal,
+      micro_5m_available: true,
+      micro_5m_taker_buy_ratio: signal ? 0.61 : 0.43
+    };
+    const oldRegimeUp = signal;
+    const newRegimeUp = !signal;
+    const up = i < changeAt ? oldRegimeUp : newRegimeUp;
+    const outcome = i % 8 === 0 ? 'FLAT' : up ? 'UP' : 'DOWN';
+    const at = BASE_TIME + i * 5 * 60 * 60 * 1000;
+    rows.push({
+      id: 'DRIFT-' + i,
+      symbol: 'DRIFT' + String(i % 19).padStart(2, '0') + 'USDT',
+      at,
+      resolved_at: at + FOUR_HOURS,
+      horizon_ms: FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H',
+      training_eligible: true,
+      closed_candle_baseline: true,
+      outcome,
+      return_pct: outcome === 'UP' ? 2.8 : outcome === 'DOWN' ? -2.6 : 0,
+      features
+    });
+  }
+  return rows;
+}
+
+function noSignalSamples({ count = 320 } = {}) {
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    const block = Math.floor(i / 8);
+    const combo = i % 8;
+    const features = {
+      volume_ratio: combo & 1 ? 2.2 : 0.8,
+      trade_ratio: combo & 2 ? 1.7 : 0.85,
+      taker_buy_ratio: combo & 4 ? 0.62 : 0.44,
+      close_location: combo & 1 ? 0.78 : 0.35,
+      higher_low: Boolean(combo & 1),
+      breakout_above_prior_high: false,
+      compression_ratio: combo & 2 ? 0.68 : 1.12,
+      relative_strength_vs_btc_pct: combo & 4 ? 0.9 : -0.45,
+      recent_15m_return_pct: combo & 1 ? 0.7 : -0.2,
+      return_3h_pct: combo & 2 ? 1.1 : -0.4,
+      trend_aligned: Boolean(combo & 2),
+      micro_5m_available: true,
+      micro_5m_taker_buy_ratio: combo & 4 ? 0.61 : 0.43
+    };
+    const outcome = block % 2 === 0 ? 'UP' : 'DOWN';
+    const at = BASE_TIME + i * 5 * 60 * 60 * 1000;
+    rows.push({
+      id: 'NO-SIGNAL-' + i,
+      symbol: 'IDENTITY' + String(block).padStart(2, '0') + 'USDT',
+      at,
+      resolved_at: at + FOUR_HOURS,
+      horizon_ms: FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H',
+      training_eligible: true,
+      closed_candle_baseline: true,
+      outcome,
+      return_pct: outcome === 'UP' ? 2.2 : -2.2,
+      features
+    });
+  }
+  return rows;
+}
+
+test('recent challenger adapts to a reversed market relationship only after middle-window validation', () => {
+  const profile = buildCognitiveLearningProfile(regimeDriftSamples());
+  assert.equal(profile.probability_ready, true);
+  assert.equal(profile.model_selection.selected_model, 'RECENT_WINDOW');
+  assert.equal(profile.regime_adaptation.status, 'RECENT_WINDOW_SELECTED');
+  assert.ok(profile.model_selection.recent_validation_brier_score <
+    profile.model_selection.global_validation_brier_score);
+  const sameEvidence = candidate().features;
+  const prediction = assessCognitiveCandidate(candidate(), profile, BASE_TIME + 999_999)
+    .predicted_up_probability;
+  assert.ok(prediction < 50,
+    'the current regime reverses the earlier evidence relationship, so the same evidence must now be judged bearish');
+});
+
+test('the model refuses to claim learning when labels are unrelated to market evidence', () => {
+  const profile = buildCognitiveLearningProfile(noSignalSamples());
+  assert.equal(profile.identifier_features_used, false);
+  assert.equal(profile.probability_ready, false,
+    'a model that memorizes alternating pair identities must not pass evidence-only validation');
+  assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
+});
+
+test('prequential audit scores only immutable, matured V2 forecasts and detects sustained degradation', () => {
+  const journal = Array.from({ length: 60 }, (_, index) => {
+    const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
+    const predictionIsCorrect = index < 30;
+    const predicted = predictionIsCorrect
+      ? (outcome === 'UP' ? 90 : 10)
+      : (outcome === 'UP' ? 10 : 90);
+    const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
+    return {
+      id: 'FORWARD-' + index, model_version: 2, at,
+      resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H', outcome,
+      predicted_up_probability: predicted
+    };
+  });
+  journal.push({ ...journal[0], id: 'OLD-V1', model_version: 1 });
+  journal.push({ ...journal[0], id: 'UNRESOLVED', outcome: null });
+  const audit = buildCognitivePrequentialProfile(journal, { minimumWindowSamples: 20, windowSize: 30 });
+  assert.equal(audit.resolved_forecasts, 60);
+  assert.equal(audit.previous_window.sample_count, 30);
+  assert.equal(audit.recent_window.sample_count, 30);
+  assert.equal(audit.drift_detected, true);
+  assert.equal(audit.reassessment_required, true);
+  assert.equal(audit.status, 'FORWARD_PERFORMANCE_DEGRADING');
+});
+

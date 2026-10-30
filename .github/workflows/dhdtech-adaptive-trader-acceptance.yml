@@ -131,14 +131,17 @@ jobs:
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
                   cognitive&&
-                  cognitiveProfile.method==='REGULARIZED_INTERACTION_MODEL_WITH_PURGED_CHRONOLOGICAL_HOLDOUT_V2'&&
+                  cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
                   cognitiveProfile.identifier_features_used===false&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
+                  Number(cognitiveProfile.validation_samples)>=0&&
                   Number(cognitiveProfile.holdout_samples)>=0&&
                   Number(cognitiveProfile.purged_overlap_samples)>=0&&
-                  (cognitiveProfile.holdout_start_at===null||cognitiveProfile.max_training_outcome_resolved_at===null||
-                    Number(cognitiveProfile.max_training_outcome_resolved_at)<Number(cognitiveProfile.holdout_start_at))&&
+                  (cognitiveProfile.validation_start_at===null||cognitiveProfile.max_training_outcome_resolved_at===null||
+                    Number(cognitiveProfile.max_training_outcome_resolved_at)<Number(cognitiveProfile.validation_start_at))&&
+                  (cognitiveProfile.validation_start_at===null||cognitiveProfile.holdout_start_at===null||
+                    Number(cognitiveProfile.validation_start_at)<Number(cognitiveProfile.holdout_start_at))&&
                   (cognitiveProfile.probability_ready!==true||
                     (cognitiveProfile.holdout&&cognitiveProfile.holdout.evaluated===true&&cognitiveProfile.holdout.beat_base_rate===true));
                 if(valid){

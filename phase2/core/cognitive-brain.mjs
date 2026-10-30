@@ -203,88 +203,297 @@ function factorEvidence(training, { minimumBucket = 8 } = {}) {
 function evaluateHoldout(rows, fit) {
   if (rows.length < 20) return {
     sample_count: rows.length, evaluated: false, model_brier_score: null,
-    base_rate_brier_score: null, accuracy_directional_pct: null,
-    beat_base_rate: false, reason: 'HOLDOUT_REQUIRES_20_OUTCOMES'
+    base_rate_brier_score: null, log_loss: null, accuracy_directional_pct: null,
+    expected_calibration_error: null, beat_base_rate: false,
+    reason: 'HOLDOUT_REQUIRES_20_OUTCOMES'
   };
   const base = fit.base_rate;
   const predictions = rows.map(row => predictFromFit(row.features, fit));
   const targets = rows.map(row => row.target);
   const modelBrier = mean(predictions.map((p, index) => (p - targets[index]) ** 2));
   const baselineBrier = mean(targets.map(target => (base - target) ** 2));
-  const directional = rows.filter(row => row.outcome !== 'FLAT');
-  const accuracy = directional.length
-    ? mean(directional.map((row, index) => {
-      const prediction = predictions[rows.indexOf(row)] >= 0.5;
-      return prediction === (row.outcome === 'UP') ? 1 : 0;
-    })) : null;
+  const logLoss = mean(predictions.map((p, index) => {
+    const probability = clamp(p, 0.001, 0.999);
+    const target = targets[index];
+    return -(target * Math.log(probability) + (1 - target) * Math.log(1 - probability));
+  }));
+  let directionalCorrect = 0, directionalCount = 0;
+  for (let index = 0; index < rows.length; index++) {
+    if (rows[index].outcome === 'FLAT') continue;
+    directionalCount++;
+    if ((predictions[index] >= 0.5) === (rows[index].outcome === 'UP')) directionalCorrect++;
+  }
+  let calibrationError = 0;
+  const bins = Array.from({ length: 10 }, () => ({ count: 0, predicted: 0, observed: 0 }));
+  for (let index = 0; index < rows.length; index++) {
+    const bin = bins[Math.min(9, Math.floor(predictions[index] * 10))];
+    bin.count++;
+    bin.predicted += predictions[index];
+    bin.observed += targets[index];
+  }
+  for (const bin of bins) {
+    if (!bin.count) continue;
+    calibrationError += (bin.count / rows.length) *
+      Math.abs(bin.predicted / bin.count - bin.observed / bin.count);
+  }
   return {
     sample_count: rows.length,
     evaluated: true,
     model_brier_score: Number(modelBrier.toFixed(5)),
     base_rate_brier_score: Number(baselineBrier.toFixed(5)),
-    accuracy_directional_pct: accuracy === null ? null : Number((accuracy * 100).toFixed(1)),
+    log_loss: Number(logLoss.toFixed(5)),
+    accuracy_directional_pct: directionalCount
+      ? Number((directionalCorrect / directionalCount * 100).toFixed(1)) : null,
+    expected_calibration_error: Number(calibrationError.toFixed(5)),
     beat_base_rate: modelBrier + 0.002 < baselineBrier,
     improvement_vs_base_rate: Number((baselineBrier - modelBrier).toFixed(5))
   };
 }
 
 /**
- * Fits on earlier examples only. Later examples are isolated as a holdout.
- * Any training label that resolves at or after the first holdout timestamp is
- * purged, preventing the +4h outcome window from leaking into holdout features.
+ * Uses three chronological blocks. The middle block chooses between the
+ * all-history model and a recent-window challenger; the final block is never
+ * used for model selection. Labels whose four-hour outcome crosses either
+ * boundary are purged from the earlier block.
  */
 export function buildCognitiveLearningProfile(samples = [], {
-  minTrainingSamples = 60, minimumBucket = 8, minimumHoldoutSamples = 20,
-  holdoutFraction = 0.2, l2 = 0.08
+  minTrainingSamples = 60, minimumBucket = 8,
+  minimumValidationSamples = 20, minimumHoldoutSamples = 20,
+  validationFraction = 0.2, holdoutFraction = 0.2,
+  recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08
 } = {}) {
   const resolved = validResolvedSamples(samples);
   const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
-  const enoughForHoldout = resolved.length >= minTrainingSamples + minimumHoldoutSamples && uniqueTimes.length >= 2;
-  const splitIndex = enoughForHoldout
-    ? Math.max(1, Math.min(uniqueTimes.length - 1, Math.floor(uniqueTimes.length * (1 - holdoutFraction))))
-    : uniqueTimes.length;
-  const holdoutStartAt = enoughForHoldout ? uniqueTimes[splitIndex] : null;
-  const holdout = holdoutStartAt === null ? [] : resolved.filter(row => row.at >= holdoutStartAt);
-  const beforeCutoff = holdoutStartAt === null ? resolved : resolved.filter(row => row.at < holdoutStartAt);
-  const training = holdoutStartAt === null ? resolved : beforeCutoff.filter(row => row.resolved_at < holdoutStartAt);
-  const purged = holdoutStartAt === null ? [] : beforeCutoff.filter(row => row.resolved_at >= holdoutStartAt);
-  const fitted = fitLogisticModel(training, { l2 });
-  const evidence = factorEvidence(training, { minimumBucket });
-  const rankingReady = training.length >= minTrainingSamples && evidence.covered_factor_buckets >= 4;
-  const holdoutMetrics = evaluateHoldout(holdout, fitted);
-  const probabilityReady = rankingReady && holdoutMetrics.evaluated === true &&
-    holdoutMetrics.beat_base_rate === true;
+  const holdoutCount = Math.max(minimumHoldoutSamples, Math.floor(uniqueTimes.length * holdoutFraction));
+  const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * validationFraction));
+  const trainingEndIndex = uniqueTimes.length - holdoutCount - validationCount;
+  const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0;
+
+  if (!canSplit) {
+    const fit = fitLogisticModel(resolved, { l2 });
+    const evidence = factorEvidence(resolved, { minimumBucket });
+    return {
+      method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+      ranking_ready: false, probability_ready: false, ready: false,
+      resolved_samples: resolved.length, training_samples: resolved.length,
+      fit_samples: resolved.length, validation_samples: 0, holdout_samples: 0,
+      purged_overlap_samples: 0, validation_purged_samples: 0,
+      required_training_samples: minTrainingSamples,
+      required_validation_samples: minimumValidationSamples,
+      required_holdout_samples: minimumHoldoutSamples,
+      required_factor_buckets: 4, covered_factor_buckets: evidence.covered_factor_buckets,
+      validation_start_at: null, holdout_start_at: null,
+      max_training_outcome_resolved_at: resolved.length
+        ? Math.max(...resolved.map(row => row.resolved_at)) : null,
+      outcome_counts: {
+        up: resolved.filter(row => row.outcome === 'UP').length,
+        down: resolved.filter(row => row.outcome === 'DOWN').length,
+        flat: resolved.filter(row => row.outcome === 'FLAT').length
+      },
+      training_positive_rate_pct: Number((fit.base_rate * 100).toFixed(1)),
+      validation: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
+      holdout: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
+      model_selection: {
+        selected_model: 'NONE',
+        reason: 'INSUFFICIENT_CHRONOLOGICAL_DATA',
+        global_validation_brier_score: null,
+        recent_validation_brier_score: null
+      },
+      regime_adaptation: { status: 'INSUFFICIENT_DATA', recent_window_samples: 0 },
+      factor_evidence: evidence.factors,
+      feature_names: [...FEATURE_NAMES],
+      identifier_features_used: false,
+      note: 'INSUFFICIENT_CHRONOLOGICAL_DATA_FOR_NESTED_VALIDATION',
+      _fit: fit
+    };
+  }
+
+  const validationStartAt = uniqueTimes[trainingEndIndex];
+  const holdoutStartAt = uniqueTimes[uniqueTimes.length - holdoutCount];
+  const trainingPool = resolved.filter(row => row.at < validationStartAt);
+  const training = trainingPool.filter(row => row.resolved_at < validationStartAt);
+  const purgedTraining = trainingPool.length - training.length;
+  const validationPool = resolved.filter(row => row.at >= validationStartAt && row.at < holdoutStartAt);
+  const validation = validationPool.filter(row => row.resolved_at < holdoutStartAt);
+  const purgedValidation = validationPool.length - validation.length;
+  const holdout = resolved.filter(row => row.at >= holdoutStartAt);
+  const globalFit = fitLogisticModel(training, { l2 });
+  const globalValidation = evaluateHoldout(validation, globalFit);
+
+  const trainingTimes = [...new Set(training.map(row => row.at))].sort((a, b) => a - b);
+  const recentStartIndex = Math.max(0,
+    Math.min(trainingTimes.length - 1, Math.floor(trainingTimes.length * (1 - recentWindowFraction))));
+  const recentStartAt = trainingTimes[recentStartIndex] ?? null;
+  const recentTraining = recentStartAt === null
+    ? [] : training.filter(row => row.at >= recentStartAt);
+  const recentFit = recentTraining.length >= minTrainingSamples
+    ? fitLogisticModel(recentTraining, { l2 }) : null;
+  const recentValidation = recentFit ? evaluateHoldout(validation, recentFit) : {
+    evaluated: false, reason: 'RECENT_WINDOW_REQUIRES_MINIMUM_TRAINING_SAMPLES',
+    sample_count: validation.length, model_brier_score: null, base_rate_brier_score: null,
+    beat_base_rate: false
+  };
+
+  let selectedModel = 'GLOBAL_HISTORY';
+  let selectedFit = globalFit;
+  let selectedTraining = training;
+  let selectedValidation = globalValidation;
+  let selectionReason = globalValidation.beat_base_rate
+    ? 'GLOBAL_MODEL_VALIDATED_ON_MIDDLE_WINDOW'
+    : 'NO_CHALLENGER_VALIDATED_ON_MIDDLE_WINDOW';
+
+  const recentWins = recentValidation.evaluated === true &&
+    recentValidation.beat_base_rate === true &&
+    (globalValidation.beat_base_rate !== true ||
+      recentValidation.model_brier_score + recentSelectionMargin < globalValidation.model_brier_score);
+  if (recentWins) {
+    selectedModel = 'RECENT_WINDOW';
+    selectedFit = recentFit;
+    selectedTraining = recentTraining;
+    selectedValidation = recentValidation;
+    selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
+  }
+
+  const holdoutMetrics = evaluateHoldout(holdout, selectedFit);
+  const evidence = factorEvidence(selectedTraining, { minimumBucket });
+  const rankingReady = training.length >= minTrainingSamples &&
+    validation.length >= minimumValidationSamples &&
+    holdout.length >= minimumHoldoutSamples &&
+    evidence.covered_factor_buckets >= 4;
+  const probabilityReady = rankingReady &&
+    selectedValidation.evaluated === true && selectedValidation.beat_base_rate === true &&
+    holdoutMetrics.evaluated === true && holdoutMetrics.beat_base_rate === true;
   const outcomes = {
     up: training.filter(row => row.outcome === 'UP').length,
     down: training.filter(row => row.outcome === 'DOWN').length,
     flat: training.filter(row => row.outcome === 'FLAT').length
   };
+  const selectedMaxResolvedAt = selectedTraining.length
+    ? Math.max(...selectedTraining.map(row => row.resolved_at)) : null;
+  const recentGain = globalValidation.evaluated && recentValidation.evaluated
+    ? Number((globalValidation.model_brier_score - recentValidation.model_brier_score).toFixed(5))
+    : null;
+
   return {
-    method: 'REGULARIZED_INTERACTION_MODEL_WITH_PURGED_CHRONOLOGICAL_HOLDOUT_V2',
+    method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
     ready: rankingReady,
     resolved_samples: resolved.length,
     training_samples: training.length,
+    fit_samples: selectedTraining.length,
+    validation_samples: validation.length,
     holdout_samples: holdout.length,
-    purged_overlap_samples: purged.length,
+    purged_overlap_samples: purgedTraining + purgedValidation,
+    validation_purged_samples: purgedValidation,
     required_training_samples: minTrainingSamples,
+    required_validation_samples: minimumValidationSamples,
+    required_holdout_samples: minimumHoldoutSamples,
     required_factor_buckets: 4,
     covered_factor_buckets: evidence.covered_factor_buckets,
+    validation_start_at: validationStartAt,
     holdout_start_at: holdoutStartAt,
-    max_training_outcome_resolved_at: training.length ? Math.max(...training.map(row => row.resolved_at)) : null,
+    max_training_outcome_resolved_at: selectedMaxResolvedAt,
     outcome_counts: outcomes,
-    training_positive_rate_pct: Number((fitted.base_rate * 100).toFixed(1)),
+    training_positive_rate_pct: Number((selectedFit.base_rate * 100).toFixed(1)),
+    validation: selectedValidation,
     holdout: holdoutMetrics,
+    model_selection: {
+      selected_model: selectedModel,
+      reason: selectionReason,
+      recent_window_samples: recentTraining.length,
+      global_validation_brier_score: globalValidation.model_brier_score,
+      global_validation_base_rate_brier_score: globalValidation.base_rate_brier_score,
+      global_validation_beats_base_rate: globalValidation.beat_base_rate === true,
+      recent_validation_brier_score: recentValidation.model_brier_score ?? null,
+      recent_validation_base_rate_brier_score: recentValidation.base_rate_brier_score ?? null,
+      recent_validation_beats_base_rate: recentValidation.beat_base_rate === true,
+      recent_validation_gain: recentGain
+    },
+    regime_adaptation: {
+      status: recentWins ? 'RECENT_WINDOW_SELECTED' :
+        globalValidation.beat_base_rate ? 'GLOBAL_HISTORY_RETAINED' : 'NO_VALIDATED_MODEL',
+      recent_window_samples: recentTraining.length,
+      validation_improvement: recentGain,
+      validated_on_middle_window: selectedValidation.beat_base_rate === true
+    },
     factor_evidence: evidence.factors,
     feature_names: [...FEATURE_NAMES],
     identifier_features_used: false,
     note: probabilityReady
-      ? 'MODEL_BEAT_PURGED_CHRONOLOGICAL_HOLDOUT_BASE_RATE'
+      ? 'SELECTED_MODEL_BEAT_VALIDATION_AND_UNTOUCHED_CHRONOLOGICAL_HOLDOUT_BASE_RATES'
       : rankingReady
-        ? 'RANKING_EVIDENCE_READY_BUT_PROBABILITY_NOT_VALIDATED_OUT_OF_SAMPLE'
-        : 'INSUFFICIENT_MATURED_CLOSED_CANDLE_OUTCOMES_OR_FACTOR_COVERAGE',
-    _fit: fitted
+        ? 'RANKING_EVIDENCE_READY_BUT_NESTED_VALIDATION_NOT_PASSED'
+        : 'INSUFFICIENT_MATURED_OUTCOMES_OR_FACTOR_COVERAGE_AFTER_PURGING',
+    _fit: selectedFit
+  };
+}
+
+/**
+ * Scores only immutable, matured forecasts produced before their outcomes
+ * were known. This is the live prequential check, separate from historical
+ * train/validation/test splits.
+ */
+export function buildCognitivePrequentialProfile(journal = [], {
+  minimumWindowSamples = 20, windowSize = 40
+} = {}) {
+  const rows = (Array.isArray(journal) ? journal : [])
+    .filter(row => row && Number(row.model_version) === 2 &&
+      finite(row.predicted_up_probability) !== null &&
+      Number(row.predicted_up_probability) >= 0 && Number(row.predicted_up_probability) <= 100 &&
+      ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
+      ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source) &&
+      finite(row.at) !== null && finite(row.resolved_at) !== null &&
+      Number(row.resolved_at) - Number(row.at) >= MIN_OUTCOME_HORIZON_MS)
+    .map(row => ({
+      ...row,
+      prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
+      target: row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
+    }))
+    .sort((a, b) => Number(a.at) - Number(b.at) || String(a.id).localeCompare(String(b.id)));
+
+  const score = subset => {
+    if (!subset.length) return { sample_count: 0, brier_score: null, log_loss: null, directional_accuracy_pct: null };
+    const brier = mean(subset.map(row => (row.prediction - row.target) ** 2));
+    const logLoss = mean(subset.map(row =>
+      -(row.target * Math.log(row.prediction) + (1 - row.target) * Math.log(1 - row.prediction))));
+    const directional = subset.filter(row => row.outcome !== 'FLAT');
+    const accuracy = directional.length
+      ? mean(directional.map(row => (row.prediction >= 0.5) === (row.outcome === 'UP') ? 1 : 0))
+      : null;
+    return {
+      sample_count: subset.length,
+      brier_score: Number(brier.toFixed(5)),
+      log_loss: Number(logLoss.toFixed(5)),
+      directional_accuracy_pct: accuracy === null ? null : Number((accuracy * 100).toFixed(1))
+    };
+  };
+
+  const recent = rows.slice(-Math.max(minimumWindowSamples, windowSize));
+  const previousEnd = Math.max(0, rows.length - recent.length);
+  const previous = rows.slice(Math.max(0, previousEnd - Math.max(minimumWindowSamples, windowSize)), previousEnd);
+  const recentMetrics = score(recent);
+  const previousMetrics = score(previous);
+  const enough = recent.length >= minimumWindowSamples && previous.length >= minimumWindowSamples;
+  const degradation = enough
+    ? Number((recentMetrics.brier_score - previousMetrics.brier_score).toFixed(5)) : null;
+  const driftDetected = enough &&
+    degradation >= 0.08 &&
+    recentMetrics.brier_score >= previousMetrics.brier_score * 1.5;
+  return {
+    method: 'IMMUTABLE_FORWARD_FORECAST_PREQUENTIAL_AUDIT_V1',
+    status: !enough ? 'INSUFFICIENT_FORWARD_PREDICTIONS' :
+      driftDetected ? 'FORWARD_PERFORMANCE_DEGRADING' : 'FORWARD_MONITORING_STABLE',
+    resolved_forecasts: rows.length,
+    minimum_window_samples: minimumWindowSamples,
+    previous_window: previousMetrics,
+    recent_window: recentMetrics,
+    brier_degradation: degradation,
+    drift_detected: driftDetected,
+    reassessment_required: driftDetected,
+    note: driftDetected
+      ? 'RECENT_IMMUTABLE_FORECASTS_DEGRADED_VS_PRIOR_WINDOW'
+      : 'ONLY_FIRST_RECORDED_MODEL_V2_FORECAST_PER_CLOSED_CANDLE_IS_SCORED'
   };
 }
 
