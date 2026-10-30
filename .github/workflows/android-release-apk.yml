@@ -570,98 +570,45 @@ jobs:
               *) echo "::error::Triple backend returned HTTP $code for $path"; cat "$RUNNER_TEMP/radar-check.json"; exit 1 ;;
             esac
           done
-      - name: Verify Pre-Move Radar public contract on DHDTech
-        timeout-minutes: 15
+      - name: Verify Pre-Move background worker and exact-commit acceptance
+        timeout-minutes: 4
         run: |
           set -euo pipefail
           BASE="$RADARX_BACKEND_BASE_URL"
-          # Reuse the same 50-pair snapshot maintained by the independent background
-          # worker and already verified by the exact-commit Pre-Move acceptance gate.
-          # A normal GET still starts an async refresh when the cache is empty/stale,
-          # but it avoids forcing a second competing scan during APK validation.
-          URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
-          READY=false
-          for cycle in 1 2; do
-            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-start.json" -w "%{http_code}" "$URL" || true)"
-            if [ "$START_CODE" != "200" ]; then
-              echo "::error::Pre-Move snapshot request returned HTTP $START_CODE"
-              cat "$RUNNER_TEMP/pre-move-start.json" 2>/dev/null || true
-              exit 1
-            fi
-            for attempt in $(seq 1 36); do
-              CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$RUNNER_TEMP/pre-move-radar.json" -w "%{http_code}" "$URL" || true)"
-              if [ "$CODE" != "200" ]; then
-                echo "::error::Pre-Move Radar polling returned HTTP $CODE"
-                cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
-                break
-              fi
-              STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log(b.status||'unknown')")"
-              if [ "$STATE" = "ready" ]; then
-                READY=true
-                break 2
-              fi
-              if [ "$STATE" = "error" ]; then
-                echo "::warning::Pre-Move scan failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log((b.reason||b.error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
-                break
-              fi
-              sleep 10
-            done
-            if [ "$cycle" -lt 2 ]; then sleep 20; fi
-          done
-          if [ "$READY" != "true" ]; then
-            echo "::error::Pre-Move Radar did not complete a valid live scan before the release gate timeout."
-            cat "$RUNNER_TEMP/pre-move-radar.json" 2>/dev/null || true
+          CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 20 -o "$RUNNER_TEMP/pre-move-worker-status.json" -w "%{http_code}" "$BASE/api/pre-move-radar-status")"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Pre-Move background worker status returned HTTP $CODE"
+            cat "$RUNNER_TEMP/pre-move-worker-status.json"
             exit 1
           fi
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));
-          if (body.status !== 'ready') throw new Error('PRE_MOVE_RESPONSE_NOT_READY');
-          if (body.meta?.radar !== 'PRE_MOVE') throw new Error('PRE_MOVE_RADAR_ID_INVALID');
-          if (body.meta?.paper_trading !== true || body.meta?.real_order_execution !== false) throw new Error('PRE_MOVE_RADAR_POLICY_INVALID');
-          if (body.meta?.live !== true) throw new Error('PRE_MOVE_RADAR_NO_LIVE_DATA');
-          if (body.source !== 'Binance Public REST') throw new Error('PRE_MOVE_RADAR_SOURCE_INVALID');
-          if (body.session?.timezone !== 'Asia/Aden' || body.session?.window !== '04:00 local → latest closed candle') throw new Error('PRE_MOVE_RADAR_SESSION_INVALID');
-          if (!Array.isArray(body.candidates) || !body.universe || !Number.isFinite(body.universe.scanned)) throw new Error('PRE_MOVE_RADAR_RESULT_SHAPE_INVALID');
-          if (!Array.isArray(body.watch_notification_candidates) || body.watch_notification_candidates.length > 3) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_CANDIDATES_INVALID');
-          for (const row of body.watch_notification_candidates) {
-            if (row?.event !== 'PRE_MOVE_RADAR_WATCH_ONLY' || row?.watch_only !== true || row?.entry_eligible !== false || row?.potential_label !== 'WATCH_EARLY' || row?.market !== 'SPOT' || row?.closed_candles_only !== true || row?.paper_trading !== true || row?.real_order_execution !== false || row?.source !== 'Binance Public REST' || row?.data_status?.data_valid !== true || row?.data_status?.data_stale !== false || !Number.isFinite(row?.data_quality) || row.data_quality < 70 || !Number.isFinite(row?.liquidity_quality) || row.liquidity_quality < 60) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_GATE:'+String(row?.symbol||'UNKNOWN'));
+          const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-worker-status.json','utf8'));
+          const worker=body.worker||{};
+          const summary=body.last_background_scan||worker.last_summary||null;
+          const at=Date.parse(worker.last_scan_at||'');
+          const age=Number.isFinite(at)?Math.max(0,Date.now()-at):null;
+          const duration=Number(worker.last_duration_ms);
+          if (body.scanner_ready!==true || worker.enabled!==true ||
+              Number(worker.successful_scans)<1 || worker.last_scan_status!=='READY' ||
+              worker.last_error!==null || !summary || age===null || age>180000 ||
+              !Number.isFinite(duration) || duration>45000 ||
+              body.paper_trading!==true || body.real_order_execution!==false) {
+            throw new Error('PRE_MOVE_BACKGROUND_WORKER_NOT_ACCEPTABLE:'+JSON.stringify({
+              status:body.status,scanner_ready:body.scanner_ready,enabled:worker.enabled,
+              successful_scans:worker.successful_scans,last_scan_status:worker.last_scan_status,
+              last_error:worker.last_error,last_scan_at:worker.last_scan_at,age_ms:age,
+              duration_ms:duration,has_summary:Boolean(summary),
+              paper_trading:body.paper_trading,real_order_execution:body.real_order_execution
+            }));
           }
-          const u=body.universe;
-          if (![u.scanned,u.deep_scanned,u.valid_data,u.evidence_incomplete_excluded,u.extended_excluded,u.no_setup_excluded,u.eligible_spot_symbols,u.discovered,u.actionable,u.returned,u.elapsed_ms,u.rotation_cycle,u.rotation_offset,u.rotation_width].every(Number.isFinite)) throw new Error('PRE_MOVE_RADAR_BACKEND_BUILD_OUTDATED');
-          if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 || u.discovered<1 || u.deep_scanned!==u.discovered) throw new Error('PRE_MOVE_RADAR_NO_VALID_LIVE_DATA');
-          if (u.coverage_mode!=='PINNED_PLUS_ROTATING_V1') throw new Error('PRE_MOVE_RADAR_UNIVERSE_ROTATION_NOT_DEPLOYED');
-          if (u.rotation_width<1 || u.rotation_cycle<0 || u.rotation_offset<0) throw new Error('PRE_MOVE_RADAR_ROTATION_METADATA_INVALID');
-          // The forced scan runs while the 12-radar swarm and market-wide worker are being
-          // checked on the small DHDTech instance. The independent worker remains
-          // subject to the strict <=45s production scan SLO in its separate step.
-          if (u.elapsed_ms>50000) throw new Error('PRE_MOVE_FORCED_ACCEPTANCE_SCAN_LATENCY_OVER_50_SECONDS:'+u.elapsed_ms);
-          for (const row of body.candidates) {
-            if (row?.data_status?.data_valid !== true || !Number.isFinite(row.data_quality) || row.data_quality<70 || !Number.isFinite(row.liquidity_quality) || row.liquidity_quality<60 || !row?.pre_move_context || !Number.isFinite(row.pre_move_context.score) || !Number.isFinite(row.pre_move_context.session_return_pct) || row.pre_move_context.closed_candles_only !== true || row.pre_move_context.evidence_complete !== true || ['ALREADY_MOVED','NO_SETUP'].includes(row.pre_move_context.stage) || row.pre_move_context.already_moved === true) {
-              throw new Error('PRE_MOVE_RADAR_INVALID_CANDIDATE:' + String(row?.symbol || 'UNKNOWN'));
-            }
-            const p=row.pre_move_context;
-            if (p.flow_transition_confirmed !== true || p.price_window_valid !== true || (p.structure_gate_passed !== true && p.structure_confirmed !== true)) throw new Error('PRE_MOVE_QUALIFICATION_FLAGS:'+String(row.symbol));
-            for (const [key,value] of Object.entries({one_hour_return_pct:p.one_hour_return_pct,volume_acceleration:p.volume_acceleration,trade_acceleration:p.trade_acceleration,taker_buy_ratio:p.taker_buy_ratio,taker_buy_acceleration:p.taker_buy_acceleration,mean_close_location:p.mean_close_location,compression:p.components?.squeeze,structure:p.components?.structure,buying_pressure:p.components?.buying_pressure})) {
-              if (!Number.isFinite(value)) throw new Error('PRE_MOVE_REQUIRED_EVIDENCE:'+String(row.symbol)+':'+key);
-            }
-            const flowLed=p.flow_led_expansion_confirmed===true;
-            const flowLedThresholdFailed=flowLed&&(
-              p.volume_acceleration<1.75 || p.trade_acceleration<1.15 || p.taker_buy_ratio<0.60 ||
-              p.taker_buy_acceleration<0.05 || p.mean_close_location<0.60 ||
-              p.one_hour_return_pct< -0.75 || p.one_hour_return_pct>2.5 ||
-              p.session_return_pct<0 || p.session_return_pct>4.5 ||
-              p.components?.structure<70 || p.components?.buying_pressure<75);
-            const compressedThresholdFailed=!flowLed&&(
-              p.volume_acceleration<1.12 || p.trade_acceleration<1.05 || p.taker_buy_ratio<0.53 ||
-              p.taker_buy_acceleration<0.01 || p.mean_close_location<0.54 ||
-              p.one_hour_return_pct<0.15 || p.one_hour_return_pct>4.5 ||
-              p.session_return_pct<0 || p.session_return_pct>6 ||
-              p.components?.squeeze<55 || p.components?.structure<60 || p.components?.buying_pressure<60);
-            if (flowLedThresholdFailed || compressedThresholdFailed || row.price_change_24h>20)
-              throw new Error('PRE_MOVE_QUALIFICATION_THRESHOLD:'+String(row.symbol));
-          }
-          console.log(JSON.stringify({radar:body.meta.radar,live:body.meta.live,session:body.session,universe:{scanned:u.scanned,deep_scanned:u.deep_scanned,valid_data:u.valid_data,returned:u.returned,actionable:u.actionable,eligible_spot_symbols:u.eligible_spot_symbols,discovered:u.discovered,coverage_mode:u.coverage_mode,rotation_cycle:u.rotation_cycle,rotation_offset:u.rotation_offset,rotation_width:u.rotation_width,elapsed_ms:u.elapsed_ms,evidence_incomplete_excluded:u.evidence_incomplete_excluded,extended_excluded:u.extended_excluded,no_setup_excluded:u.no_setup_excluded},candidates:body.candidates.map(x=>({symbol:x.symbol,score:x.pre_move_context.score,stage:x.pre_move_context.stage,session_return_pct:x.pre_move_context.session_return_pct,one_hour_return_pct:x.pre_move_context.one_hour_return_pct,volume_acceleration:x.pre_move_context.volume_acceleration,trade_acceleration:x.pre_move_context.trade_acceleration,taker_buy_ratio:x.pre_move_context.taker_buy_ratio,taker_buy_acceleration:x.pre_move_context.taker_buy_acceleration,mean_close_location:x.pre_move_context.mean_close_location,flow_transition_confirmed:x.pre_move_context.flow_transition_confirmed,price_window_valid:x.pre_move_context.price_window_valid,structure_confirmed:x.pre_move_context.structure_confirmed,liquidity_quality:x.liquidity_quality,data_quality:x.data_quality})),watch_notification_candidates:(body.watch_notification_candidates||[]).map(x=>({symbol:x.symbol,score:x.pre_move_context?.score,event:x.event,watch_only:x.watch_only,entry_eligible:x.entry_eligible,data_quality:x.data_quality,liquidity_quality:x.liquidity_quality})),paper_trading:body.meta.paper_trading,real_order_execution:body.meta.real_order_execution}));
+          console.log(JSON.stringify({
+            status:body.status,scanner_ready:body.scanner_ready,enabled:worker.enabled,
+            successful_scans:worker.successful_scans,last_scan_status:worker.last_scan_status,
+            last_scan_at:worker.last_scan_at,age_ms:age,duration_ms:duration,
+            summary,notification_transport:body.notification_transport||null,
+            paper_trading:body.paper_trading,real_order_execution:body.real_order_execution
+          }));
           NODE
       - name: Verify Coin Hunter public contract
         timeout-minutes: 3
