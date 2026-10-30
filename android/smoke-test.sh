@@ -67,8 +67,19 @@ start_app_and_wait_ready() {
     wait "${APP_LOGCAT_PID}" 2>/dev/null || true
     APP_LOGCAT_PID=""
   fi
-  timeout 20s adb shell am force-stop com.radarx.app || true
-  timeout 15s adb logcat -c
+  if ! timeout 40s adb shell am force-stop com.radarx.app; then
+    echo "::warning::ADB force-stop timed out; reconnecting once before retry."
+    timeout 8s adb reconnect offline >/dev/null 2>&1 || true
+    timeout 20s adb wait-for-device
+    timeout 40s adb shell am force-stop com.radarx.app
+  fi
+  PHASE="clear Android log buffers"
+  if ! timeout 30s adb logcat -c; then
+    echo "::warning::ADB logcat clear timed out; reconnecting once before retry."
+    timeout 8s adb reconnect offline >/dev/null 2>&1 || true
+    timeout 20s adb wait-for-device
+    timeout 30s adb logcat -c
+  fi
 
   # Capture startup logs continuously. Repeated short adb logcat dumps can time
   # out on a cold software-rendered emulator and hide healthy Activity markers.
