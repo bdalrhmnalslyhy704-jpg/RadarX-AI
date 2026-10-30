@@ -649,8 +649,8 @@ jobs:
           // This response is the completed background-worker scan, not a duplicate forced scan.
           // The independent worker check below enforces the production <=45s duration.
           // Keep the 40-symbol scan under the 60s worker cadence with 10s headroom on the small DHDTech runtime.
-  // 45s remains the optimization target; 50s is the hard acceptance ceiling for bounded live-market variance.
-  if (u.elapsed_ms>50000) throw new Error('PRE_MOVE_BACKGROUND_SCAN_LATENCY_OVER_50_SECONDS:'+u.elapsed_ms);
+          // 45s remains the optimization target; 50s is the hard acceptance ceiling for bounded live-market variance.
+          if (u.elapsed_ms>50000) throw new Error('PRE_MOVE_BACKGROUND_SCAN_LATENCY_OVER_50_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_candidates)) throw new Error('PRE_MOVE_WATCH_CANDIDATES_MISSING');
           if (!Array.isArray(b.watch_notification_candidates) || b.watch_notification_candidates.length > 3) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_CANDIDATES_INVALID');
