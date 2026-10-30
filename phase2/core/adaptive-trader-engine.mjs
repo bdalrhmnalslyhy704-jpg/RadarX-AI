@@ -557,7 +557,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   // trader recognize missed rallies without treating them as new entries.
   const emergingMovers = eligible.filter(row => {
     const change = changePct(row);
-    return change !== null && change >= 0.25 && change < 8;
+    return change !== null && change >= 0.15 && change < 4.5;
   }).sort((a,b) => {
     const rank = row => clamp(100 - Math.abs((changePct(row) ?? -100) - 4.0) * 15, 0, 100);
     return rank(b)-rank(a) ||
@@ -604,13 +604,21 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   });
   const accelerationMovers = eligible.filter(row => {
     const pulse=finite(row?.move_since_previous_pct),daily=changePct(row);
-    return pulse!==null&&pulse>=0.25&&pulse<4.5&&daily!==null&&daily>=-5&&daily<8&&!isLeveragedToken(row.symbol);
+    return pulse!==null&&pulse>=0.12&&pulse<4.5&&daily!==null&&daily>=-5&&daily<8&&!isLeveragedToken(row.symbol);
   }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
     Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
-  addLane(volumeLeaders,Math.ceil(selectedCount*0.20),'TOP_VOLUME');
-  addLane(extendedMovers,Math.ceil(selectedCount*0.30),'EXTENDED_MOVER_AUDIT');
-  addLane(accelerationMovers,Math.ceil(selectedCount*0.25),'PRICE_ACCELERATION');
-  addLane(emergingMovers,Math.ceil(selectedCount*0.25),'EMERGING_MOVER');
+  // A large very-short-term pulse used to fall outside the acceleration lane.
+  // It is now deep-scanned as an audit-only event, never as an automatic entry.
+  const burstMovers = eligible.filter(row => {
+    const pulse=finite(row?.move_since_previous_pct);
+    return pulse!==null&&pulse>=4.5;
+  }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
+    Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
+  addLane(volumeLeaders,Math.ceil(selectedCount*0.15),'TOP_VOLUME');
+  addLane(emergingMovers,Math.ceil(selectedCount*0.15),'EMERGING_MOVER');
+  addLane(accelerationMovers,Math.ceil(selectedCount*0.20),'PRICE_ACCELERATION');
+  addLane(burstMovers,Math.ceil(selectedCount*0.10),'SHOCK_MOVE_AUDIT');
+  addLane(extendedMovers,Math.ceil(selectedCount*0.25),'EXTENDED_MOVER_AUDIT');
 
   let rotationVisited=0;
   while(selectedBySymbol.size<selectedCount && rotationVisited<eligible.length) {
@@ -655,7 +663,16 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
   const closedCandleOutcomes=analyzed.flatMap(entry=>Array.isArray(entry?.closedCandleOutcomes)?entry.closedCandleOutcomes:[]);
   const candidates = analyzed.map((entry, index) => entry?.candidate && !entry.error
-    ? { ...entry.candidate, selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE' }
+    ? {
+      ...entry.candidate,
+      selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
+      ...(selected[index]?.selection_lane==='SHOCK_MOVE_AUDIT'?{
+        shock_move_audit_only:true,
+        paper_candidate:false,
+        entry_eligible:false,
+        reason_codes:[...new Set([...(entry.candidate.reason_codes||[]),'SHARP_MARKET_PULSE_AUDIT_ONLY'])].slice(0,12)
+      }:{})
+    }
     : {
       symbol: selected[index]?.symbol || 'UNKNOWN',
       price: finite(selected[index]?.lastPrice),
@@ -708,7 +725,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       emerging_movers_available: emergingMovers.length,
       extended_movers_available: extendedMovers.length,
       price_acceleration_movers_available: accelerationMovers.length,
-      selection_strategy: 'MOVER_AWARE_ACCELERATION_ROTATION_V2',
+      rapid_burst_movers_available: burstMovers.length,
+      selection_strategy: 'MOVER_AWARE_ACCELERATION_ROTATION_V3',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },
