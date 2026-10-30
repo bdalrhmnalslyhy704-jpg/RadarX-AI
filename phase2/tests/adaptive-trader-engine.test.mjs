@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
   ADAPTIVE_TRADER_POLICY,
   scoreAdaptiveTraderCandidate,
@@ -756,4 +757,38 @@ test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bu
   assert.ok(shock.reason_codes.includes('ALREADY_EXTENDED'));
   assert.equal(shock.trade_decision.decision,'AVOID_CHASING');
   assert.equal(shock.real_order_execution,false);
+});
+
+test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const rows=[];
+  for(let i=0;i<48;i++){
+    const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
+    const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+      symbol,klines,fastKlines,btcKlines,now,maxSamples:8
+    });
+    assert.equal(samples.length,8,symbol+' should retain eight independent 4h labels');
+    for(let j=1;j<samples.length;j++){
+      assert.ok(samples[j].at-samples[j-1].at>=4*60*60*1000,
+        symbol+' must not contribute overlapping 4h outcome windows');
+    }
+    rows.push(...samples);
+  }
+  const uniqueTimes=new Set(rows.map(row=>row.at));
+  assert.ok(uniqueTimes.size>=100,'different symbols should populate distinct chronological time blocks');
+
+  const profile=buildCognitiveLearningProfile(rows);
+  assert.ok(profile.training_samples>=60,'historical training split must be populated');
+  assert.ok(profile.validation_samples>=20,'middle validation must contain enough matured observations');
+  assert.ok(profile.holdout_samples>=20,'untouched holdout must contain enough matured observations');
+  assert.equal(profile.validation.evaluated,true);
+  assert.equal(profile.holdout.evaluated,true);
+  assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
+  assert.ok(profile.validation_start_at<profile.holdout_start_at);
+  // This constant-trend fixture has no predictive variation, so it must not
+  // unlock probabilities merely because the chronology is now large enough.
+  assert.equal(profile.probability_ready,false);
 });
