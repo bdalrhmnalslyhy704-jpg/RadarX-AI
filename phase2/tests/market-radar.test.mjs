@@ -214,6 +214,37 @@ test('Pre-Move discovery pulls a measured ticker-activity burst ahead of the alp
   assert.equal(picked[5].pre_move_activity_score,15);
 });
 
+test('Pre-Move activity-priority lane deep-scans up to eight independent acceleration bursts',()=>{
+  const symbols=Array.from({length:80},(_,i)=>({
+    symbol:'C'+String(i).padStart(3,'0')+'USDT',
+    baseAsset:'C'+String(i).padStart(3,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const bursts=Array.from({length:10},(_,i)=>({
+    symbol:'BURST'+String(i).padStart(2,'0')+'USDT',baseAsset:'BURST'+String(i).padStart(2,'0'),
+    quoteAsset:'USDT',status:'TRADING'
+  }));
+  const allSymbols=[...symbols,...bursts];
+  const rows=allSymbols.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol.startsWith('BURST')?100000:5000000+i*1000),
+    count:x.symbol.startsWith('BURST')?1000:50000+i*100,priceChangePercent:'2'
+  }));
+  const activitySignals=new Map(bursts.map((x,i)=>[x.symbol,{
+    score:18-i*0.1,volume_acceleration_ratio:2.4-i*0.01,trade_acceleration_ratio:1.8-i*0.01,
+    observed_at:180000,baseline_age_ms:60000
+  }]));
+  const picked=rankPreMoveTickerRows(rows,allSymbols,{
+    minQuoteVolume24h:750000,limit:40,rotationOffset:0,activitySignals
+  });
+  assert.equal(picked.length,40);
+  const priority=picked.filter(row=>row.ticker_activity_priority_selected===true);
+  assert.equal(priority.length,8,'the bounded Pre-Move lane must reserve eight slots for measured activity bursts');
+  assert.ok(picked.slice(4,12).every(row=>row.ticker_activity_priority_selected===true),
+    'activity bursts must be examined directly after the stable pinned cohort');
+  assert.equal(picked[12].ticker_activity_priority_selected,false,
+    'the remaining slots must continue the fair rotating market scan');
+});
+
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
@@ -242,8 +273,9 @@ test('Pre-Move rotation remains fair when non-pinned market scores change betwee
 
 test('Pre-Move discovery excludes stablecoin and tokenized-equity pairs while retaining BTC context',()=>{
   const symbols=[
-    ['RLUSDUSDT','RLUSD'],['AAPLBUSDT','AAPLB'],['BTCUSDT','BTC'],
-    ['EARLYUSDT','EARLY'],['MIDUSDT','MID']
+    ['RLUSDUSDT','RLUSD'],['AAPLBUSDT','AAPLB'],['APPBUSDT','APPB'],['BSPBUSDT','BSPB'],
+    ['GEVBUSDT','GEVB'],['SKDDBUSDT','SKDDB'],['SKUUBUSDT','SKUUB'],['SOXSBUSDT','SOXSB'],
+    ['BTCUSDT','BTC'],['EARLYUSDT','EARLY'],['MIDUSDT','MID']
   ].map(([symbol,baseAsset])=>({symbol,baseAsset,quoteAsset:'USDT',status:'TRADING'}));
   const rows=symbols.map((x,i)=>({
     symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
@@ -256,6 +288,9 @@ test('Pre-Move discovery excludes stablecoin and tokenized-equity pairs while re
   assert.equal(pickedSymbols.has('MIDUSDT'),true);
   assert.equal(pickedSymbols.has('RLUSDUSDT'),false,'stablecoins must not consume deep-scan slots');
   assert.equal(pickedSymbols.has('AAPLBUSDT'),false,'tokenized equity pairs must not consume deep-scan slots');
+  for(const symbol of ['APPBUSDT','BSPBUSDT','GEVBUSDT','SKDDBUSDT','SKUUBUSDT','SOXSBUSDT']){
+    assert.equal(pickedSymbols.has(symbol),false,symbol+' is a tokenized bStocks instrument, not a crypto-altcoin candidate');
+  }
 });
 
 test('Pre-Move discovery includes active low-volume Spot pairs for rotating screening',()=>{
@@ -957,7 +992,7 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
   assert.equal(first.universe.per_cycle_scan_cap,40);
   assert.equal(first.universe.discovered,40);
   assert.equal(first.universe.deep_scanned,40);
-  assert.equal(first.universe.rotation_width,33);
+  assert.equal(first.universe.rotation_width,28);
   assert.equal(seen.length,40);
 
   seen=[];
