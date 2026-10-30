@@ -160,6 +160,8 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
   </div>
   <div class="section-title"><h2>دفتر الفرضيات والنتائج</h2><span class="tiny">ملاحظات مستقلة عن قرارات الرادارات</span></div>
   <div id="cognitiveJournal" class="log-list"><div class="empty">تظهر الفرضيات بعد أول دورة تحليل.</div></div>
+  <div class="section-title"><h2>مراجعة العملات التي فاتته</h2><span class="tiny">تدقيق لاحق لا يستخدم معلومات المستقبل عند خط الأساس</span></div>
+  <div id="cognitiveMissedMovers" class="log-list"><div class="empty">لا توجد حركات مسجلة للمراجعة بعد.</div></div>
   <div class="section-title"><h2>بوابة الجاهزية قبل الأموال الحقيقية</h2><span id="paperValidationStatus" class="tag watch">المحاكاة قيد التجميع</span></div>
   <div class="learning-grid">
     <div class="learning-card">
@@ -733,6 +735,20 @@ function renderLearning(){
     const reasons=(Array.isArray(row.reason_codes)?row.reason_codes:[]).slice(0,4).map(code=>'<span class="reason">'+esc(code)+'</span>').join('');
     return '<article class="log-entry"><div class="log-meta"><b>'+esc(row.symbol)+'</b><span>'+esc(row.decision||'غير مصنف')+' · '+esc(timeText(row.at))+'</span></div><div>'+esc(row.summary_ar||'لا يوجد تفسير محفوظ')+'</div><div class="tiny">'+esc(probability)+esc(outcome)+' · أدلة مستقلة '+esc(row.evidence_domains??'—')+'</div><div class="reasons">'+reasons+'</div></article>';
   }).join(''):'<div class="empty">لا توجد سجلات شموع جديدة بعد. يجب أن ينجح فحص الخادم أولًا حتى يبدأ دفتر الفرضيات.</div>';
+  const missed=Array.isArray(brain.missed_mover_feedback)?brain.missed_mover_feedback:[];
+  const missedLabels={
+    POTENTIAL_MISSED_MOVER:'فرصة محتملة فاتت بوابة التحليل',
+    FOLLOW_UP_MOVE:'كانت مراقبة ثم تحركت لاحقًا',
+    UNASSESSED_MOVE:'لم تدخل الفحص العميق عند خط الأساس'
+  };
+  el('cognitiveMissedMovers').innerHTML=missed.length?missed.slice(0,12).map(function(row){
+    const reasons=(Array.isArray(row.baseline_reason_codes)?row.baseline_reason_codes:[])
+      .slice(0,5).map(code=>'<span class="reason">'+esc(code)+'</span>').join('');
+    const safeBaseline=row.no_future_data_used_for_baseline===true?' · خط الأساس لا يستخدم معلومات لاحقة':'';
+    return '<article class="log-entry"><div class="log-meta"><b>'+esc(row.symbol)+'</b><span>'+esc(missedLabels[row.classification]||row.classification||'تدقيق')+'</span></div>'+
+      '<div class="tiny">الحركة اللاحقة المرصودة '+esc(percent(row.move_pct))+' · مستوى خط الأساس '+esc(row.baseline_tier||'غير مقيم')+esc(safeBaseline)+'</div>'+
+      '<div class="reasons">'+reasons+'</div></article>';
+  }).join(''):'<div class="empty">لا توجد حركات مسجلة للمراجعة بعد؛ يحتاج التدقيق إلى لقطات سعر محفوظة سابقة.</div>';
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
