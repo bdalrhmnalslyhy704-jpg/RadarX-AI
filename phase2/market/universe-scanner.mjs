@@ -6,7 +6,7 @@ import {
 import {listActiveStrategies, normalizeStrategyResult} from '../../phase1/strategy-registry.mjs';
 import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit} from '../core/data-quality.mjs';
 import {finiteNumberOr} from '../core/finite-number.mjs';
-import {isDirectionalCandidateSymbol} from '../core/market-wide-light-scan.mjs';
+import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSecurityCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
 // A bounded rotating deep-scan keeps the live Pre-Move request under the
 // 45-second service objective while preserving broad symbol coverage over cycles.
@@ -1157,7 +1157,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   const ranked=(Array.isArray(tickers)?tickers:[])
     .map(x=>normalizeTickerRow(x,symbols[0]?.quoteAsset||'USDT'))
     .filter(Boolean)
-    .filter(x=>allowed.has(x.symbol)&&(x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol))&&(x.quoteVolume24h>0||x.tradeCount24h>0))
+    .filter(x=>allowed.has(x.symbol)&&(x.symbol==='BTCUSDT'||isSpotMonitorCandidateSymbol(x.symbol))&&(x.quoteVolume24h>0||x.tradeCount24h>0))
     .map(x=>{
       const change=Math.abs(x.priceChange24h);
       // A modestly active coin is more useful than a dead flat coin, but late movers
@@ -1175,6 +1175,8 @@ export function rankPreMoveTickerRows(tickers,symbols,{
         calm*0.25+
         clamp(basePosition)*0.20;
       return {...x,
+        asset_class:isTokenizedSecurityCandidateSymbol(x.symbol)?'TOKENIZED_SECURITY':'CRYPTO',
+        tokenized_security:isTokenizedSecurityCandidateSymbol(x.symbol),
         pre_move_discovery_score:baseScore+activityScore,
         pre_move_base_discovery_score:baseScore,
         pre_move_activity_score:activityScore,
@@ -2327,6 +2329,8 @@ export class MarketUniverseScanner {
       ?Math.max(0,completedAt-Number(last15.closeTime)):Math.max(0,completedAt-startedAt);
     return {
       symbol,rank,
+      asset_class:ticker?.asset_class==='TOKENIZED_SECURITY'||isTokenizedSecurityCandidateSymbol(symbol)?'TOKENIZED_SECURITY':'CRYPTO',
+      tokenized_security:ticker?.tokenized_security===true||isTokenizedSecurityCandidateSymbol(symbol),
       last_price:Number.isFinite(Number(ticker?.lastPrice))?Number(ticker.lastPrice):null,
       price_change_24h:Number(ticker?.priceChange24h),
       high_price_24h:Number.isFinite(Number(ticker?.highPrice24h))?Number(ticker.highPrice24h):null,
