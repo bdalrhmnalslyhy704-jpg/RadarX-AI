@@ -61,7 +61,8 @@ export async function startServer({
     directory:durableStorage.absolute_directory,
     mount_path:durableStorage.mount_path,
     filesystem:durableStorage.filesystem,
-    source:durableStorage.source
+    source:durableStorage.source,
+    detected_mounts:durableStorage.detected_mounts
   };
   logger.info?.('[RADARX_ARCHIVE_TEMP_CLEANUP] '+JSON.stringify({
     build_version:'Build 224',store_dir:store.dir,...(store.tempCleanup||{deleted_files:0,freed_bytes:0,failed_files:0})
