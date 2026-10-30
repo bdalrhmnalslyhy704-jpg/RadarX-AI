@@ -46,7 +46,7 @@ test('server paper portfolio records isolated trades and persists evidence witho
     assert.equal(status.last_summary.counts.waiting_confirmation,1);
     assert.equal(status.last_summary.candidates[0].cognitive_assessment.decision,'EARLY_SETUP_REVIEW');
     assert.equal(status.last_summary.candidates[0].cognitive_assessment.entry_eligible,false);
-    assert.equal(status.last_summary.candidates[0].cognitive_rank_score,76);
+    assert.equal(status.last_summary.candidates[0].cognitive_rank_score,null);
     assert.equal(status.cognitive_brain.journal_rows,1);
     assert.equal(status.cognitive_brain.profile.ranking_ready,false);
     assert.equal(status.cognitive_brain.profile.probability_ready,false);
