@@ -9,7 +9,7 @@ test('background summary exposes bounded near misses and the most common blocker
       discovered:50,deep_scanned:50,scanned:46,valid_data:42,observed_candle_data:48,
       watch_only:8,actionable:0,returned:0,elapsed_ms:44123,
       eligible_spot_symbols:226,coverage_mode:'PINNED_PLUS_ROTATING_V1',rotation_cycle:5,rotation_offset:175,
-      rotation_width:28,pinned_fraction:0.10,activity_priority_slots:8,ticker_activity_priority_selected:8,
+      rotation_width:28,rotation_advance_count:36,pinned_fraction:0.10,activity_priority_slots:8,ticker_activity_priority_selected:8,
       rotation_cursor_source:'DURABLE_STORE',rotation_cursor_persisted:true,
       ticker_activity_signal_count:3,ticker_activity_baseline_source:'DURABLE_STORE',
       ticker_activity_baseline_persisted:true,ticker_activity_baseline_error:null
@@ -39,6 +39,7 @@ test('background summary exposes bounded near misses and the most common blocker
   const summary=buildPreMoveBackgroundScanSummary({snapshot,watchAlerts:[],elapsedMs:50000});
   assert.equal(summary.deep_scanned,50);
   assert.equal(summary.rotation_width,28);
+  assert.equal(summary.rotation_advance_count,36);
   assert.equal(summary.pinned_fraction,0.10);
   assert.equal(summary.activity_priority_slots,8);
   assert.equal(summary.ticker_activity_priority_selected,8);
@@ -77,6 +78,7 @@ test('background summary accepts empty or malformed optional diagnostics without
   assert.equal(summary.watch_notification_eligible,0);
   assert.equal(summary.ticker_activity_signal_count,null,
     'missing activity telemetry must stay unknown rather than being misreported as zero');
+  assert.equal(summary.rotation_advance_count,null);
   assert.equal(summary.pinned_fraction,null);
   assert.equal(summary.activity_priority_slots,null);
   assert.equal(summary.ticker_activity_priority_selected,null);
