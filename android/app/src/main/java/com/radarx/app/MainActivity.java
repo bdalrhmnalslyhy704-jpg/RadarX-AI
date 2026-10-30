@@ -425,6 +425,27 @@ public final class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getPushStatus() {
+            return RadarXPushRegistration.statusJson(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void syncPushRegistration() {
+            RadarXPushRegistration.syncIfConfigured(MainActivity.this);
+            RadarXPushRegistration.refreshServerStatus(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void refreshPushStatus() {
+            RadarXPushRegistration.refreshServerStatus(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void requestPushTest() {
+            RadarXPushRegistration.requestTestPush(MainActivity.this);
+        }
+
+        @JavascriptInterface
         public void openTradli() {
             runOnUiThread(() -> {
                 try {
