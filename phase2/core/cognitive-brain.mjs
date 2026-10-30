@@ -24,7 +24,9 @@ const FEATURE_NAMES = Object.freeze([
   'volume_x_buyer',
   'structure_x_buyer',
   'relative_x_trend',
-  'compression_x_structure'
+  'compression_x_structure',
+  'volume_x_buyer_x_structure',
+  'trade_x_buyer'
 ]);
 
 const FACTORS = Object.freeze([
@@ -102,7 +104,9 @@ function normalizedFeatures(features = {}) {
     volume * buyer,
     structure * buyer,
     relative * trend,
-    compression * structure
+    compression * structure,
+    volume * buyer * structure,
+    trades * buyer
   ];
 }
 
@@ -134,7 +138,7 @@ function validResolvedSamples(samples) {
     .sort((a, b) => a.at - b.at || String(a.id).localeCompare(String(b.id)));
 }
 
-function fitLogisticModel(training, { l2 = 0.18, iterations = 700, learningRate = 0.12 } = {}) {
+function fitLogisticModel(training, { l2 = 0.08, iterations = 900, learningRate = 0.12 } = {}) {
   const targets = training.map(row => row.target);
   const baseRate = betaRate(targets.reduce((sum, value) => sum + value, 0), targets.length);
   const weights = Array(FEATURE_NAMES.length).fill(0);
@@ -228,7 +232,7 @@ function evaluateHoldout(rows, fit) {
  */
 export function buildCognitiveLearningProfile(samples = [], {
   minTrainingSamples = 60, minimumBucket = 8, minimumHoldoutSamples = 20,
-  holdoutFraction = 0.2, l2 = 0.18
+  holdoutFraction = 0.2, l2 = 0.08
 } = {}) {
   const resolved = validResolvedSamples(samples);
   const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
