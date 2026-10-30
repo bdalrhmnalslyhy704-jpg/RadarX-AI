@@ -62,6 +62,7 @@ const phase2=[
   'phase2/tests/elite-trajectory-engine.test.mjs',
   'phase2/tests/elite-sniper-selection.test.mjs',
   'phase2/tests/market-radar.test.mjs',
+  'phase2/tests/persistent-storage.test.mjs',
   'phase2/tests/monitor-phone-independence.test.mjs',
   'phase2/tests/monitor.test.mjs',
   'phase2/tests/policy.test.mjs',
