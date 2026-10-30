@@ -399,9 +399,8 @@ jobs:
           NODE
 
       - name: Verify one live scan from the 20-analyst center on DHDTech
-        # 24 polls with up to 25s per HTTP call plus bounded backoff; align the step
-        # timeout with that window so a live scan cannot be killed by its own test.
-        timeout-minutes: 14
+        # A bounded deep batch uses a longer poll window for slower DHDTech/REST cycles.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           BASE_URL="$BASE/api/multi-analyst?quote=USDT&limit=10"
@@ -444,12 +443,12 @@ jobs:
           POLL_TMP="$RUNNER_TEMP/multi-analyst.poll.tmp.json"
           POLL_JSON="$RUNNER_TEMP/multi-analyst.json"
           READY=false
-          for attempt in $(seq 1 24); do
+          for attempt in $(seq 1 36); do
             rm -f "$POLL_TMP"
             CURL_EXIT=0
             CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$POLL_TMP" -w "%{http_code}" "$POLL_URL")" || CURL_EXIT=$?
             if [ "$CURL_EXIT" -ne 0 ]; then
-              echo "::warning::DHDTech analyst poll transport failed (curl=$CURL_EXIT HTTP=${CODE:-unknown}) on attempt $attempt/24."
+              echo "::warning::DHDTech analyst poll transport failed (curl=$CURL_EXIT HTTP=${CODE:-unknown}) on attempt $attempt/36."
               rm -f "$POLL_TMP"
               sleep 5
               continue
@@ -465,7 +464,7 @@ jobs:
           } catch { process.exit(1); }
           NODE
                 then
-                  echo "::warning::DHDTech analyst poll returned incomplete JSON on attempt $attempt/24; retrying without treating it as completed."
+                  echo "::warning::DHDTech analyst poll returned incomplete JSON on attempt $attempt/36; retrying without treating it as completed."
                   rm -f "$POLL_TMP"
                   sleep 5
                   continue
@@ -488,7 +487,7 @@ jobs:
                 rm -f "$POLL_TMP"
                 ;;
               502|503|504|000)
-                echo "::warning::DHDTech analyst progress poll transient HTTP $CODE on attempt $attempt/24."
+                echo "::warning::DHDTech analyst progress poll transient HTTP $CODE on attempt $attempt/36."
                 rm -f "$POLL_TMP"
                 ;;
               *)

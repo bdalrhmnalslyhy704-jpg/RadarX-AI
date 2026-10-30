@@ -36,11 +36,12 @@ assert.equal(nextContinuousScanDelayMs(60000,12500),47500);
 assert.equal(nextContinuousScanDelayMs(60000,60000),0);
 assert.equal(nextContinuousScanDelayMs(60000,93000),0);
 assert.equal(nextContinuousScanDelayMs(1000,0),15000);
-// The default 20-analyst deep pool is bounded for the small production container.
+// The 20-analyst pass stays bounded for the small production container.
 {
   const engine=new MultiAnalystEngine({rest:{request:async()=>({data:[]})}});
-  assert.equal(engine.config.deepScanPool,12);
-  assert.equal(engine.config.deepConcurrency,3);
+  assert.equal(engine.config.deepScanPool,8);
+  assert.equal(engine.config.deepConcurrency,2);
+  assert.equal(engine.config.scanTimeoutMs,180000);
 }
 
 assert.equal(isMomentumLiquidityEligible(1_000_000,2.5),true);

@@ -252,16 +252,17 @@ export const CONFIG = Object.freeze({
   },
   multiAnalyst: {
     quote: 'USDT',
-    // Keep live multi-analyst coverage from being silently reduced to a tiny 12-coin sample.
-    // Four-way bounded concurrency keeps the larger rotating sample inside the existing 120s deadline.
+    // Keep broad 32–48 symbol discovery rotating, but bound expensive deep analysis per cycle.
+    // Every selected row still passes all 19 specialists plus the final analyst; the smaller
+    // deep batch avoids starving the other RadarX workers on the 512 MB DHDTech container.
     discoveryPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 32, 32, 48),
-    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 16, 16, 18),
+    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 8, 6, 8),
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
-    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 4, 4, 4),
+    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 2, 2, 2),
     deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
-    // A full 19-specialist + final-judge pass must be allowed to finish on the
-    // 512 MB DHDTech container; the API returns background progress while it runs.
-    scanTimeoutMs: int(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 120000),
+    // Leave room for slower public REST responses while keeping the background
+    // scan bounded and the UI non-blocking.
+    scanTimeoutMs: int(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 180000),
     minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
     universeRefreshMs: int(process.env.RADARX_MULTI_ANALYST_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),

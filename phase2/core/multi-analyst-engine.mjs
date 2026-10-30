@@ -1149,10 +1149,10 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:28,deepScanPool:12,returnLimit:8,deepConcurrency:3,deepKlines:220,
+      quote:'USDT',discoveryPool:28,deepScanPool:8,returnLimit:8,deepConcurrency:2,deepKlines:220,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,
-      scanTimeoutMs:120000,
+      scanTimeoutMs:180000,
       radarReviewMaxQueue:200,radarReviewSlotsPerCycle:4,radarReviewQueueTtlMs:300000,
       radarReviewRetryCooldownMs:60000,radarReviewAssessmentTtlMs:180000,...config
     };
