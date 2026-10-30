@@ -58,9 +58,10 @@ The proposed DHDTech acceptance workflow and API regression test now request all
 
 1. Added `PARTICIPATION_SURGE_MONITOR`: catches a NIL-like early activity burst with separate participation, closed-candle, quality, liquidity, session and one-hour limits. It is a watch-only message, not an entry.
 2. Added `STRONG_BUYER_ABSORPTION_MONITOR`: allows a narrow 300k–750k USDT quote-volume exception only when multiple independent closed-candle buyer/structure checks are strong. The API marks it `low_volume_watch_only=true` and keeps `data_valid=false`; this is not a bypass of the data-valid/entry gate.
-3. Applied equivalent independent validation inside PushManager, so a client cannot forge the tier marker to get a push. Stale/future data, poor quality, poor measured liquidity, weak buyer flow and hard risk flags still reject.
-4. Added regression tests for NIL-like participation, PUNDIX/SOLV-like low-volume buyer absorption, scanner retention of these near-misses, and negative cases for stale/weak/low-liquidity data.
-5. Expanded the retrospective case-study endpoint from 8 to 16 requested symbols and changed production acceptance to audit all 13 screenshot pairs.
+3. Applied equivalent independent validation inside PushManager, so a client cannot forge the tier marker to get a push. Stale/future data, poor quality, poor measured liquidity, weak buyer flow and hard risk flags still reject. The new tiers were also added to the final phone-push allowlist; before that last step, eligible observations would remain `WATCH_ONLY_FEED_ONLY`.
+4. Added a separate Pre-Move Spot monitoring class for the known bStocks base assets in the screenshots. They remain separate from crypto-altcoin ranking, but the Pre-Move rotation includes them as `asset_class=TOKENIZED_SECURITY`; the label is carried into watch alerts and phone payloads.
+5. Added regression tests for NIL-like participation, PUNDIX/SOLV-like low-volume buyer absorption, scanner retention, tokenized-security labeling and push delivery, plus negative cases for stale/weak/low-liquidity data.
+6. Expanded the retrospective case-study endpoint from 8 to 16 requested symbols and changed production acceptance to audit all 13 screenshot pairs.
 
 ## Acceptance gates before calling this fixed or publishing an APK
 
