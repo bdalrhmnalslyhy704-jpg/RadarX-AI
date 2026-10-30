@@ -530,7 +530,7 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
   }};
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V2');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V3');
   assert.equal(snapshot.universe.emerging_movers_available,15);
   assert.equal(snapshot.universe.extended_movers_available,9);
   assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
@@ -706,4 +706,51 @@ test('adaptive learning policy, readiness gate and dashboard default agree on 60
   const profile=buildAdaptiveLearningProfile([]);
   assert.equal(profile.ready,false);
   assert.equal(profile.required_samples,60);
+});
+
+test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bursts without paper entry',async()=>{
+  const f=marketFixture();
+  const tickers=[
+    ...Array.from({length:40},(_,i)=>({
+      symbol:'BAS'+String(i).padStart(3,'0')+'USDT',
+      lastPrice:'10',
+      quoteVolume:String(5_000_000-i*20_000),
+      priceChangePercent:'1.2',
+      count:'1500'
+    })),
+    {symbol:'SMALLPULSEUSDT',lastPrice:'10',quoteVolume:'950000',priceChangePercent:'-2',count:'1900'},
+    {symbol:'SHOCKPULSEUSDT',lastPrice:'10',quoteVolume:'940000',priceChangePercent:'-3',count:'2100'}
+  ];
+  const rest={async request(path,query={}){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers.map(row=>({...row})),source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:20,now:f.now});
+  assert.ok(first.latest_prices.some(row=>row.symbol==='SMALLPULSEUSDT'));
+  assert.ok(first.latest_prices.some(row=>row.symbol==='SHOCKPULSEUSDT'));
+
+  tickers.find(row=>row.symbol==='SMALLPULSEUSDT').lastPrice='10.02';
+  tickers.find(row=>row.symbol==='SHOCKPULSEUSDT').lastPrice='10.60';
+  const second=await service({limit:20,now:f.now+3*60*1000});
+  assert.ok(second.universe.price_acceleration_movers_available>=1);
+  assert.ok(second.universe.rapid_burst_movers_available>=1);
+
+  const small=second.candidates.find(row=>row.symbol==='SMALLPULSEUSDT');
+  assert.ok(small,'a 0.2% market-wide pulse must enter deep scan');
+  assert.equal(small.selection_lane,'PRICE_ACCELERATION');
+
+  const shock=second.candidates.find(row=>row.symbol==='SHOCKPULSEUSDT');
+  assert.ok(shock,'a 6% market-wide pulse must enter the audit lane');
+  assert.equal(shock.selection_lane,'SHOCK_MOVE_AUDIT');
+  assert.equal(shock.shock_move_audit_only,true);
+  assert.equal(shock.paper_candidate,false);
+  assert.equal(shock.entry_eligible,false);
+  assert.ok(shock.reason_codes.includes('SHARP_MARKET_PULSE_AUDIT_ONLY'));
+  assert.equal(shock.real_order_execution,false);
 });
