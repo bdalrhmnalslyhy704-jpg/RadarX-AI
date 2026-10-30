@@ -91,6 +91,7 @@ const phase2=[
   'phase2/tests/market-wide-light-scan.test.mjs',
   'phase2/tests/market-wide-shadow-experiment.test.mjs',
   'phase2/tests/unified-feature-engine.test.mjs',
+  'phase2/tests/cognitive-brain.test.mjs',
   'phase2/tests/adaptive-trader-engine.test.mjs',
   'phase2/tests/adaptive-trader-api.test.mjs',
   'phase2/tests/adaptive-trader-worker.test.mjs',
