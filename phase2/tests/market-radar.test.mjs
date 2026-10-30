@@ -814,10 +814,25 @@ test('Pre-Move deep scan keeps a low-volume symbol non-actionable and records th
     quoteVolume24h:18000,tradeCount24h:420,quoteAsset:'USDT'
   },1,{});
   assert.equal(result.data_status.volume_gate_pass,false);
-  assert.equal(rest.calls.find(call=>call.type==='depth')?.limit,20,
-    'the broad Pre-Move pass should fetch only the 20 closest book levels, sufficient for near-spread liquidity checks');
+  assert.equal(rest.calls.some(call=>call.type==='depth'),false,
+    'pairs below the hard quote-volume gate still get candle discovery but do not spend a REST call on book depth they cannot use for alert eligibility');
   assert.equal(result.data_status.data_valid,false,'broad discovery must not weaken the minimum-volume gate for alert-eligible results');
+  assert.ok(result.data_status.candle_data_valid,'low-volume pairs still retain valid closed-candle evidence for discovery and near-miss diagnostics');
   assert.ok(result.reason_codes.includes('BELOW_MIN_QUOTE_VOLUME'));
+  assert.ok(result.reason_codes.includes('LIQUIDITY_DATA_UNAVAILABLE'));
+
+  const eligibleRest=makeRest();
+  const eligibleScanner=new MarketUniverseScanner({
+    rest:eligibleRest,
+    config:{minQuoteVolume24h:750000,minDataQuality:70,minLiquidityQuality:60,deepKlines:160},
+    strategyEvaluator:evaluator
+  });
+  await eligibleScanner.scanPreMoveSymbol({
+    symbol:'BTCUSDT',lastPrice:100,priceChange24h:1,highPrice24h:102,lowPrice24h:98,
+    quoteVolume24h:1_800_000,tradeCount24h:420,quoteAsset:'USDT'
+  },1,{});
+  assert.equal(eligibleRest.calls.find(call=>call.type==='depth')?.limit,20,
+    'pairs above the hard quote-volume gate retain measured 20-level order-book validation');
 });
 
 test('Pre-Move default watch floor surfaces a qualified partial setup without making it actionable',()=>{
