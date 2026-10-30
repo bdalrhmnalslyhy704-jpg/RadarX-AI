@@ -25,16 +25,32 @@ const NON_DIRECTIONAL_BASE_ASSETS = new Set([
   // Benchmark pairs stay available for market context but never consume altcoin-pump candidate slots.
   'BTC','ETH','BNB',
   // Wrapped majors and tokenized equities remain in market coverage, but do not
-  // consume scarce pre-move scanning slots intended for directional crypto assets.
+  // consume scarce crypto-altcoin slots in the directional-only scanners.
   'WBTC','WBETH','AAPLB','AMZNB','COINB','CRCLB','GOOGLB','MSTRB','MSFTB','NVDAB','QQQB','SOXLB','SPXLB','TSLAB',
   // Additional Binance bStocks pairs; tokenized securities/ETFs are not crypto altcoins.
-  'APPB','BSPB','GEVB','SKDDB','SKUUB','SOXSB'
+  'APPB','BSPB','GEVB','SKDDB','SKUUB','SOXSB','SQQQB','UVXYB'
+]);
+const TOKENIZED_SECURITY_BASE_ASSETS = new Set([
+  'AAPLB','AMZNB','COINB','CRCLB','GOOGLB','MSTRB','MSFTB','NVDAB','QQQB',
+  'SOXLB','SPXLB','TSLAB','APPB','BSPB','GEVB','SKDDB','SKUUB','SOXSB','SQQQB','UVXYB'
 ]);
 
 export function isDirectionalCandidateSymbol(value) {
   const symbol = String(value || '').trim().toUpperCase();
   if (!symbol.endsWith('USDT') || symbol.length <= 4) return true;
   return !NON_DIRECTIONAL_BASE_ASSETS.has(symbol.slice(0, -4));
+}
+
+/** Tokenized securities are tracked as a separate Spot asset class, not crypto altcoins. */
+export function isTokenizedSecurityCandidateSymbol(value) {
+  const symbol=String(value||'').trim().toUpperCase();
+  if(!symbol.endsWith('USDT')||symbol.length<=4)return false;
+  return TOKENIZED_SECURITY_BASE_ASSETS.has(symbol.slice(0,-4));
+}
+
+/** Pre-Move may monitor verified bStocks separately while other radars keep their crypto-only filters. */
+export function isSpotMonitorCandidateSymbol(value) {
+  return isDirectionalCandidateSymbol(value)||isTokenizedSecurityCandidateSymbol(value);
 }
 
 export const MARKET_WIDE_LIGHT_SCAN_DEFAULTS = Object.freeze({
