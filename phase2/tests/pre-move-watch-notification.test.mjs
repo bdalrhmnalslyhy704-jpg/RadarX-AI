@@ -812,7 +812,7 @@ test('PUNDIX/SOLV-like strong buyer absorption can notify below the normal volum
       assert.equal(sent[0].watch_notification_tier,'STRONG_BUYER_ABSORPTION_MONITOR');
       assert.equal(sent[0].watch_only,true);
       assert.equal(sent[0].entry_eligible,false);
-      assert.equal(sent[0].low_volume_watch_only,'true');
+      assert.equal(sent[0].low_volume_watch_only,true);
       assert.equal(sent[0].real_order_execution,'false');
     }finally{await rm(dir,{recursive:true,force:true});}
   }
