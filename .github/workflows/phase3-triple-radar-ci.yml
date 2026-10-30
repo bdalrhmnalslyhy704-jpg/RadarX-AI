@@ -63,6 +63,10 @@ jobs:
         run: node android/app/src/main/assets/tests/market-radar-integration.test.mjs
         timeout-minutes: 5
 
+      - name: Verify FCM registration and physical device receipt diagnostics
+        run: node android/fcm-watch-notification-regression.mjs
+        timeout-minutes: 5
+
       - name: Audit critical vulnerabilities
         run: npm audit --audit-level=critical
         timeout-minutes: 5
