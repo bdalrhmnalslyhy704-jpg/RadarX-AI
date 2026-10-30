@@ -42,7 +42,7 @@ test('TEST_FIXTURE: low data quality prevents push attempt',async()=>{
 });
 
 
-test('TEST_FIXTURE: qualified early-track gates remain feed-only until final confirmation',async()=>{
+test('TEST_FIXTURE: qualified early-track gate sends a strict monitor-only notification',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-early-watch-push-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
@@ -54,6 +54,7 @@ test('TEST_FIXTURE: qualified early-track gates remain feed-only until final con
     const out=await manager.notifyRadarAlert({
       radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',symbol:'EARLYUSDT',market:'SPOT',direction:'UP',
       price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,source:'BINANCE_PUBLIC_REST',
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false},
       closed_candles_only:true,detected_candle_close_time:now-1000,risk_flags:[],
       notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
         score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD'],
@@ -61,13 +62,44 @@ test('TEST_FIXTURE: qualified early-track gates remain feed-only until final con
       signal_lifecycle:{state:'EARLY_SETUP',label:'إعداد مبكر',transition:'EARLY_EVIDENCE_CONVERGED',reason_codes:['RELATED_EARLY_EVIDENCE']}
     });
     assert.equal(out.length,1);
-    assert.equal(out[0].status,'WATCH_ONLY_FEED_ONLY');
-    assert.equal(sent.length,0);
+    assert.equal(out[0].status,'SENT',JSON.stringify(out[0]));
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(sent[0].notification_mode,'RADAR_EARLY_TRACK_WATCH_ONLY');
     const rejected=await manager.notifyRadarAlert({radar:'FALCON_EYE_RADAR',symbol:'NOENTRYUSDT',data_quality:95,eligible:true,entry_eligible:false});
     assert.deepEqual(rejected,[]);
     assert.equal(sent.length,0);
   }finally{await rm(dir,{recursive:true,force:true});}
-});test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evidence',async()=>{
+});
+test('TEST_FIXTURE: early-track push fails closed for missing live data or an extended daily move',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-early-track-invalid-data-')),store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT'};}};
+    const manager=new PushManager({provider,store});
+    const now=Date.now();
+    const base={
+      radar:'STRONG_MOVE_RADAR',symbol:'UNSAFEUSDT',market:'SPOT',direction:'UP',
+      price:1.23,price_change_24h:2.1,data_quality:88,liquidity_quality:78,source:'BINANCE_PUBLIC_REST',
+      data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false},
+      closed_candles_only:true,detected_candle_close_time:now-1000,risk_flags:[],
+      notification_gate:{eligible:true,watch_only:true,requires_follow_up_confirmation:true,mode:'RADAR_WATCH_ONLY_EARLY_TRACK',
+        score:76,data_quality:88,liquidity_quality:78,failures:['SCORE_BELOW_STRICT_THRESHOLD'],
+        falcon_eye:{quality:70,capture:76,independent_domains:3,early_window:true}}
+    };
+    const missingData=await manager.notifyRadarAlert({...base,symbol:'NODATAUSDT',data_status:{data_valid:false}});
+    const extended=await manager.notifyRadarAlert({...base,symbol:'EXTENDEDUSDT',price_change_24h:9});
+    assert.deepEqual(missingData,[]);
+    assert.deepEqual(extended,[]);
+    assert.equal(calls,0);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: Radar 8 early-flow watch stays feed-only even with valid evidence',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-verified-watch-push-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70});
   await store.upsertSubscription('u1',pushSubscription());
