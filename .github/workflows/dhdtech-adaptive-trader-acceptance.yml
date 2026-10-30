@@ -61,8 +61,8 @@ jobs:
                 const historyRows=Number(value.memory&&value.memory.history_rows)||0;
                 const learning=value.learning_profile||null;
                 const capture=value.learning_capture||null;
-                const cognitive=(summary&&summary.cognitive_brain)||
-                  (value&&value.cognitive_brain)||null;
+                const cognitive=(value&&value.cognitive_brain)||
+                  (summary&&summary.cognitive_brain)||null;
                 const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const universe=summary&&summary.universe||{};
@@ -115,6 +115,7 @@ jobs:
                     resolved_samples:Number(cognitiveProfile.resolved_samples)||0,
                     training_samples:Number(cognitiveProfile.training_samples)||0,
                     holdout_samples:Number(cognitiveProfile.holdout_samples)||0,
+                    purged_overlap_samples:Number(cognitiveProfile.purged_overlap_samples)||0,
                     journal_records:Number(cognitive.journal_records??cognitive.journal_rows)||0,
                     journal_resolved:Number(cognitiveCapture.journal_resolved??cognitive.resolved_journal_rows)||0,
                     early_setup_reviews:Number(cognitiveCapture.early_setup_reviews)||0
@@ -130,10 +131,16 @@ jobs:
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
                   cognitive&&
-                  cognitiveProfile.method==='BAYESIAN_FACTOR_EVIDENCE_WITH_CHRONOLOGICAL_HOLDOUT_V1'&&
+                  cognitiveProfile.method==='REGULARIZED_INTERACTION_MODEL_WITH_PURGED_CHRONOLOGICAL_HOLDOUT_V2'&&
+                  cognitiveProfile.identifier_features_used===false&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
-                  Number(cognitiveProfile.holdout_samples)>=0;
+                  Number(cognitiveProfile.holdout_samples)>=0&&
+                  Number(cognitiveProfile.purged_overlap_samples)>=0&&
+                  (cognitiveProfile.holdout_start_at===null||cognitiveProfile.max_training_outcome_resolved_at===null||
+                    Number(cognitiveProfile.max_training_outcome_resolved_at)<Number(cognitiveProfile.holdout_start_at))&&
+                  (cognitiveProfile.probability_ready!==true||
+                    (cognitiveProfile.holdout&&cognitiveProfile.holdout.evaluated===true&&cognitiveProfile.holdout.beat_base_rate===true));
                 if(valid){
                   const description='Live DHDTech scan verified; '+candidates.length+' analyzed, '+historyRows+' history rows.';
                   await github.rest.repos.createCommitStatus({
