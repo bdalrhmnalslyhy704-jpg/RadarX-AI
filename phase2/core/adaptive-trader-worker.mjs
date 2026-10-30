@@ -558,7 +558,13 @@ recordServerPaperPortfolio(snapshot,now){
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
         holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
         holdout:this.state.cognitive_profile?.holdout||null,
-        capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length
+        capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
+        missed_mover_feedback:(this.state.missed_movers||[]).slice(0,30).map(row=>({
+          id:row.id,symbol:row.symbol,classification:row.classification,move_pct:row.move_pct,
+          baseline_at:row.baseline_at,baseline_tier:row.baseline_tier,
+          baseline_reason_codes:Array.isArray(row.baseline_reason_codes)?row.baseline_reason_codes.slice(0,8):[],
+          no_future_data_used_for_baseline:row.no_future_data_used_for_baseline===true
+        }))
       },
       // Carry the latest verified server snapshot so the dashboard can display the
       // worker's result without starting a second full REST scan from the phone.
@@ -640,7 +646,13 @@ recordServerPaperPortfolio(snapshot,now){
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
-        recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse()
+        recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse(),
+        missed_mover_feedback:(this.state.missed_movers||[]).slice(0,30).map(row=>({
+          id:row.id,symbol:row.symbol,classification:row.classification,move_pct:row.move_pct,
+          baseline_at:row.baseline_at,baseline_tier:row.baseline_tier,
+          baseline_reason_codes:Array.isArray(row.baseline_reason_codes)?row.baseline_reason_codes.slice(0,8):[],
+          no_future_data_used_for_baseline:row.no_future_data_used_for_baseline===true
+        }))
       },
       paper_validation_profile:this.state.paper_validation_profile||buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio),
       server_paper_portfolio:{
