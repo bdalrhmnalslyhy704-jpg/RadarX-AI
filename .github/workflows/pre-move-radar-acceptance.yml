@@ -146,7 +146,7 @@ jobs:
           console.log('DHDTECH_DURABLE_STORAGE_STATUS '+JSON.stringify({
             persistent:storage.persistent===true,directory:storage.directory||null,
             mount_path:storage.mount_path||null,filesystem:storage.filesystem||null,
-            source:storage.source||'UNKNOWN'
+            source:storage.source||'UNKNOWN',detected_mounts:storage.detected_mounts||[]
           }));
           if(storage.persistent!==true) throw new Error('DHDTECH_PERSISTENT_STORAGE_NOT_MOUNTED:'+JSON.stringify(storage));
           const push=b.push||{};
