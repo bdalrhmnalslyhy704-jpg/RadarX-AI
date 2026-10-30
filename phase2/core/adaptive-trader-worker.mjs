@@ -251,6 +251,8 @@ export class AdaptiveTraderWorker{
       hypotheses:Array.isArray(assessment.hypotheses)?assessment.hypotheses.slice(0,6):[],
       contradictions:Array.isArray(assessment.contradictions)?assessment.contradictions.slice(0,6):[],
       evidence_domains:finite(assessment.evidence_domains),
+      predicted_up_probability:finite(assessment.predicted_up_probability),
+      confidence_label:String(assessment.confidence_label||'UNKNOWN'),
       features:candidate?.features&&typeof candidate.features==='object'?{...candidate.features}:{},
       data_valid:candidate?.data_valid===true,data_stale:candidate?.data_stale===true,
       closed_candles_only:candidate?.closed_candles_only===true,
