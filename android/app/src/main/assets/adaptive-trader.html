@@ -153,6 +153,13 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
     </div>
   </div>
   <div class="adjustments" id="learnAdjustments"></div>
+  <div class="section-title"><h2>العقل التحليلي والفرضيات المتنافسة</h2><span id="cognitiveStatus" class="tag watch">في مرحلة التعلّم</span></div>
+  <div class="learning-grid" id="cognitiveSummary">
+    <div class="learning-card"><h3>حالة المعرفة</h3><p>تظهر بعد أول دورة تحليل خادمية.</p></div>
+    <div class="learning-card"><h3>اختبار خارج العينة</h3><p>لن يعرض احتمال صعود قبل اجتياز المقارنة الزمنية.</p></div>
+  </div>
+  <div class="section-title"><h2>دفتر الفرضيات والنتائج</h2><span class="tiny">ملاحظات مستقلة عن قرارات الرادارات</span></div>
+  <div id="cognitiveJournal" class="log-list"><div class="empty">تظهر الفرضيات بعد أول دورة تحليل.</div></div>
   <div class="section-title"><h2>بوابة الجاهزية قبل الأموال الحقيقية</h2><span id="paperValidationStatus" class="tag watch">المحاكاة قيد التجميع</span></div>
   <div class="learning-grid">
     <div class="learning-card">
@@ -558,6 +565,11 @@ function renderCandidates(snapshot){
     const cls=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'';
     const tag=tier==='EARLY_SETUP'?'early':tier==='LATE_MOVE'?'late':'watch';
     const features=candidate.features||{};
+    const brain=candidate.cognitive_assessment||{};
+    const brainProbability=brain.predicted_up_probability===null||brain.predicted_up_probability===undefined
+      ?'احتمال الصعود غير معتمد':'احتمال اختباري '+fmt(brain.predicted_up_probability,1)+'%';
+    const brainLine=brain.summary_ar
+      ?'<div class="tiny" style="margin-top:6px"><b>تحليل العقل:</b> '+esc(brain.summary_ar)+' · '+esc(brainProbability)+'</div>':'';
     const reasons=(decision.label_ar?[decision.label_ar]:[]).concat(candidate.reason_codes||[]).slice(0,5)
       .map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
     return '<article class="candidate '+cls+'">'+
@@ -577,6 +589,7 @@ function renderCandidates(snapshot){
       '<div class="card-foot"><span>حجم 24س: '+esc(money(candidate.quote_volume_24h))+'</span><span>شمعة: '+esc(timeText(candidate.candle_close_time))+'</span></div>'+
       '<div class="tiny" style="margin-top:8px"><b>القرار:</b> '+esc(decision.label_ar||tierText)+' · '+esc(decision.next_step_ar||'لا توجد توصية مؤكدة.')+'</div>'+
       '<div class="tiny" style="margin-top:6px">الدرجة الأساسية '+esc(fmt(candidate.base_score??candidate.score,1))+' · تعديل التعلم '+esc(fmt(candidate.learning_adjustment??(learned-(num(candidate.score)||0)),1))+' نقطة · التنفيذ الحقيقي متوقف</div>'+
+      brainLine+
       '</article>';
   }).join('');
 }
@@ -693,6 +706,32 @@ function renderLearning(){
       ' · نتائج شموع مغلقة جديدة '+(Number(capture.new_closed_candle_outcomes)||0)+
       ' · عينات المرشحين الجديدة '+(Number(capture.new_deep_candidate_samples)||0)+
       '. إن كان عدد الأمثلة المولّدة صفرًا فمشكلة المصدر/التاريخ تسبق مرحلة التعلّم؛ وإن وصلت ورُفضت فعداد الرفض يوضح السبب.';
+  const brain=(state.serverStatus&&state.serverStatus.cognitive_brain)||{};
+  const brainProfile=brain.profile||{};
+  const brainCapture=brain.capture||{};
+  const holdout=brainProfile.holdout||brainCapture.holdout||{};
+  const brainReady=brainProfile.ranking_ready===true;
+  const probabilityReady=brainProfile.probability_ready===true;
+  el('cognitiveStatus').textContent=probabilityReady?'اجتاز اختبارًا زمنيًا':brainReady?'ترتيب تجريبي فقط':'يجمع الأدلة';
+  el('cognitiveStatus').className='tag '+(probabilityReady?'early':'watch');
+  const factors=brainProfile.factors||{};
+  const covered=Object.values(factors).filter(row=>row&&row.evidence_ready===true).length;
+  const records=Math.max(0,Number(brain.journal_rows)||0);
+  const resolvedJournal=Math.max(0,Number(brain.resolved_journal_rows)||0);
+  const probabilityText=probabilityReady&&Number.isFinite(Number(holdout.model_brier_score))
+    ?'اجتاز مقارنة زمنيّة: Brier '+fmt(holdout.model_brier_score,3)+' مقابل خط الأساس '+fmt(holdout.base_rate_brier_score,3)
+    :'لا توجد احتمالات صعود معتمدة بعد؛ يجب أن يتفوق النموذج على خط الأساس في بيانات لاحقة لم تدخل التدريب.';
+  el('cognitiveSummary').innerHTML=
+    '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' عينة تدريب · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' عينة اختبار زمني.</p><div class="tiny">عوامل لها تغطية كافية: '+esc(covered)+' · قرارات مبكرة للمراجعة في آخر دورة: '+esc(Number(brainCapture.early_setup_reviews)||0)+' · بيانات غير صالحة: '+esc(Number(brainCapture.invalid_data_candidates)||0)+'</div></div>'+
+    '<div class="learning-card"><h3>التحقق من التوقعات</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+'. لا تُستخدم بيانات الاختبار في بناء معاملات التدريب، ولا تعني النتيجة ضمانًا للربح.</div></div>';
+  const recentBrain=Array.isArray(brain.recent_journal)?brain.recent_journal:[];
+  el('cognitiveJournal').innerHTML=recentBrain.length?recentBrain.slice(0,12).map(function(row){
+    const outcome=['UP','DOWN','FLAT'].includes(row.outcome)?(' · النتيجة '+row.outcome+' '+percent(row.return_pct)):' · تنتظر إغلاق أفق التقييم';
+    const probability=row.predicted_up_probability===null||row.predicted_up_probability===undefined
+      ?'احتمال الصعود غير معتمد':'احتمال اختباري '+fmt(row.predicted_up_probability,1)+'%';
+    const reasons=(Array.isArray(row.reason_codes)?row.reason_codes:[]).slice(0,4).map(code=>'<span class="reason">'+esc(code)+'</span>').join('');
+    return '<article class="log-entry"><div class="log-meta"><b>'+esc(row.symbol)+'</b><span>'+esc(row.decision||'غير مصنف')+' · '+esc(timeText(row.at))+'</span></div><div>'+esc(row.summary_ar||'لا يوجد تفسير محفوظ')+'</div><div class="tiny">'+esc(probability)+esc(outcome)+' · أدلة مستقلة '+esc(row.evidence_domains??'—')+'</div><div class="reasons">'+reasons+'</div></article>';
+  }).join(''):'<div class="empty">لا توجد سجلات شموع جديدة بعد. يجب أن ينجح فحص الخادم أولًا حتى يبدأ دفتر الفرضيات.</div>';
   const validation=(state.serverStatus && state.serverStatus.paper_validation_profile)||{};
   const serverPaper=(state.serverStatus && state.serverStatus.server_paper_portfolio)||{};
   const paperCount=Math.max(0,Number(validation.resolved_paper_trades)||0);
