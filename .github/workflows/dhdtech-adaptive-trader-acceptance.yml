@@ -72,6 +72,7 @@ jobs:
                   deployment.paper_trading===true&&deployment.real_order_execution===false;
                 const candidates=summary&&summary.candidates;
                 const prices=summary&&summary.latest_prices;
+                const push=deployment.push&&typeof deployment.push==='object'?deployment.push:{};
                 lastObserved={
                   http:response.status,status:value.status,scan_count:value.scan_count,
                   successful_scans:value.successful_scans,last_error:value.last_error,
@@ -80,6 +81,12 @@ jobs:
                   last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
                   latest_prices:Array.isArray(prices)?prices.length:null,
+                  push:{provider:String(push.provider||'unknown'),enabled:push.enabled===true,
+                    active_subscriptions:Number(push.active_subscriptions)||0,
+                    provider_subscriptions:Number(push.provider_subscriptions)||0,
+                    fcm_devices:Number(push.fcm_devices)||0,
+                    webpush_subscriptions:Number(push.webpush_subscriptions)||0,
+                    physical_device_delivery_verified:push.physical_device_delivery_verified===true},
                   historical_samples_available:Number(universe.historical_training_samples_available)||0,
                   learning_profile:learning?{
                     resolved_samples:Number(learning.resolved_samples)||0,
