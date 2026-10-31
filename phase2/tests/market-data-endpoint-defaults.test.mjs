@@ -45,16 +45,12 @@ test('the public Spot REST fallback list includes all official Binance endpoints
   ]);
 });
 
-test('Pre-Move REST uses only two official mirrors and rotates the last successful host first',()=>{
-  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,0),[
-    'https://data-api.binance.vision','https://api-gcp.binance.com'
-  ]);
-  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,4),[
-    'https://api2.binance.com','https://api3.binance.com'
-  ]);
-  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,6),[
-    'https://api4.binance.com','https://data-api.binance.vision'
-  ]);
+test('fast Spot scanners always prefer Binance public-data mirrors regardless of the last successful host',()=>{
+  const preferred=['https://data-api.binance.vision','https://api-gcp.binance.com'];
+  for(const previousIndex of [0,1,4,6]){
+    assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,previousIndex),preferred);
+    assert.deepEqual(resolveFastPublicSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,previousIndex),preferred);
+  }
 });
 
 test('Pre-Move mirror selection rejects unapproved hosts and supplements a single official host',()=>{
