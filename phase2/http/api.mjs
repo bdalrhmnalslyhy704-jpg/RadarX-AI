@@ -628,9 +628,20 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         maxRequestsPerMinute: Math.max(1, Number(marketRadarRestClient.maxRequestsPerMinute) || 240)
       })
     : marketRadarRestClient;
+  // Keep Pre-Move rotation state off the shared dedup.json write queue. The
+  // latter also serves high-volume radar/archive persistence and can otherwise
+  // hold a bounded market scan open after its REST deadline has fired.
+  const preMoveRotationStateStore = store &&
+    typeof store.getPreMoveState === 'function' &&
+    typeof store.putPreMoveState === 'function'
+    ? {
+        getDedupKey: key => store.getPreMoveState(key),
+        putDedupKey: (key,value) => store.putPreMoveState(key,value)
+      }
+    : store;
   const preMoveRadarScanner = preMoveRestClient ? new MarketUniverseScanner({
     rest: preMoveRestClient,
-    rotationStateStore: store,
+    rotationStateStore: preMoveRotationStateStore,
     config: config.marketRadar ?? {}
   }) : null;
   const marketRadarResponseCache=new Map();
