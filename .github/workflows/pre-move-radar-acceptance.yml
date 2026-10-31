@@ -158,10 +158,12 @@ jobs:
 
       - name: Require exact-commit DHDTech Adaptive Trader live acceptance
         uses: actions/github-script@v7
-        timeout-minutes: 5
+        timeout-minutes: 15
         with:
           script: |
-            const deadline = Date.now() + 4 * 60 * 1000;
+            // Adaptive live acceptance may use its full 12-minute market scan window.
+            // Keep a bounded two-minute margin so Pre-Move does not fail before it finishes.
+            const deadline = Date.now() + 14 * 60 * 1000;
             const contextName = 'dhdtech-adaptive-trader-live';
             while (Date.now() < deadline) {
               const { data } = await github.rest.repos.listCommitStatusesForRef({
