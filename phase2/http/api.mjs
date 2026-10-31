@@ -1658,6 +1658,42 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             }
           }
           if(runNow){
+            // Release probes must not hold one ingress request open for a full market
+            // scan. DHDTech ingress can return 504 while the Node worker is still
+            // processing, leaving the caller unable to distinguish a started scan
+            // from an empty/stale snapshot. The explicit background=1 contract queues
+            // exactly one tick and returns 202 immediately; later GETs read health.
+            if(String(u.searchParams.get('background')||'')==='1'){
+              const current=earlyExpansionRadar.health?.()||{};
+              if(current.running!==true||typeof earlyExpansionRadar.tick!=='function'){
+                const reason=current.running!==true?'RADAR8_MONITOR_NOT_RUNNING':'RADAR8_TICK_UNAVAILABLE';
+                const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+                return send(res,503,{...snapshot,status:'not_ready',error:reason,monitoring:current,
+                  scan:{requested:true,completed:false,last_completed_at:current.last_scan_completed_at??null,error:reason},
+                  meta:{...(snapshot.meta||{}),live:false,radar:'EARLY_EXPANSION_RADAR',
+                    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+              }
+              let queued=false;
+              if(current.busy!==true){
+                queued=true;
+                setImmediate(()=>{
+                  try{
+                    const pending=earlyExpansionRadar.tick();
+                    Promise.resolve(pending).catch(error=>{
+                      try{earlyExpansionRadar.noteError?.(error,'api-background-scan');}catch{}
+                    });
+                  }catch(error){
+                    try{earlyExpansionRadar.noteError?.(error,'api-background-scan');}catch{}
+                  }
+                });
+              }
+              const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+              return send(res,202,{...snapshot,status:'warming',monitoring:current,
+                scan:{requested:true,completed:false,last_completed_at:current.last_scan_completed_at??null,
+                  error:queued?'SCAN_STARTED':'SCAN_IN_PROGRESS'},
+                meta:{...(snapshot.meta||{}),live:true,radar:'EARLY_EXPANSION_RADAR',
+                  paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+            }
             const requestStartedAt=Date.now();
             const priorCompletedAt=Number(before.last_scan_completed_at)||0;
             const configuredScanTimeout=Math.max(1000,Math.trunc(Number(config.earlyExpansionRadar?.scanTimeoutMs)||90000));
