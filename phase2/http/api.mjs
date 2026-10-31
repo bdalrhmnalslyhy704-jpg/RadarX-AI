@@ -592,15 +592,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // Use the known public market-data mirror first and one official Binance fallback,
   // with a bounded per-host timeout. Failed sources remain fail-closed; live candle
   // freshness, order-book liquidity, and the alert gate are not weakened.
+  // Use the full official Binance Spot REST mirror list for Pre-Move as well.
+  // DHDTech can receive HTTP 451 from more than one hostname; limiting this
+  // strict scanner to data-api + api1 caused it to fail before discovering a
+  // single symbol even while the main 20-analyst client could reach api-gcp.
+  // Per-host attempts remain capped at 3.5s and the scan keeps its 45s deadline.
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
-    ? [...new Set([
-        marketRadarRestClient.baseUrls.find(url => /data-api\.binance\.vision/i.test(String(url))),
-        marketRadarRestClient.baseUrls.find(url => /^https:\/\/api1\.binance\.com(?:\/|$)/i.test(String(url)))
-      ].filter(Boolean))]
+    ? [...new Set(marketRadarRestClient.baseUrls
+        .map(value=>String(value??'').trim().replace(/\\/+$/,''))
+        .filter(url=>/^https:\/\/(?:data-api\\.binance\\.vision|api(?:-gcp)?\\.binance\\.com|api[1-4]\\.binance\\.com)$/i.test(url)))]
     : [];
   if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
     preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
   }
+  console.info?.('[PRE_MOVE_REST_FALLBACKS] '+JSON.stringify({
+    count:preMoveBaseUrls.length,
+    hosts:preMoveBaseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
+  }));
   const preMoveRestClient = marketRadarRestClient && preMoveBaseUrls.length
     ? new RestClient({
         baseUrls: preMoveBaseUrls,
