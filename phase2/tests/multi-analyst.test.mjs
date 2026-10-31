@@ -66,9 +66,9 @@ if(out.candidates.length===1){
 }
 assert.ok(CONFIG.multiAnalyst.discoveryPool>=32 && CONFIG.multiAnalyst.discoveryPool<=48,
   'production market discovery must stay within the bounded 32–48 symbol scan pool');
-assert.ok(CONFIG.multiAnalyst.deepScanPool>=6 && CONFIG.multiAnalyst.deepScanPool<=8,
-  'production deep analysis must stay bounded to protect the constrained DHDTech container');
-assert.equal(CONFIG.multiAnalyst.deepConcurrency,2,
-  '20-analyst deep analysis uses bounded two-way concurrency on the constrained host');
+assert.equal(CONFIG.multiAnalyst.deepScanPool,2,
+  'production deep analysis is capped at two symbols per cycle on the constrained DHDTech container');
+assert.equal(CONFIG.multiAnalyst.deepConcurrency,1,
+  'each deep symbol is reviewed sequentially by all 19 specialists plus the final analyst on the 512 MB host');
 assert.ok(CONFIG.multiAnalyst.deepScanPool<=CONFIG.multiAnalyst.discoveryPool);
 console.log('multi-analyst.test: ok');
