@@ -8,12 +8,12 @@ import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit
 import {finiteNumberOr} from '../core/finite-number.mjs';
 import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSecurityCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
-// A bounded rotating deep-scan keeps the live Pre-Move request under the
-// 45-second service objective while preserving broad symbol coverage over cycles.
-export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 40;
-// DHDTech measured 51.6s at concurrency 16 and 56.1s at 40. An intermediate
-// bounded fan-out aims to reduce serial waves without recreating the 40-way burst.
-export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 24;
+// Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
+// envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
+export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 32;
+// Live measurements showed no speed gain from large fan-out. Sixteen workers
+// reduce simultaneous candle/depth payloads while keeping network utilization high.
+export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 16;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -2383,7 +2383,23 @@ export class MarketUniverseScanner {
     const key=`pre-move:${normalizedQuote}:${normalizedLimit}`;
     return this._coalesceScan(key,()=>{
       const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
-      const flight=previous.catch(()=>{}).then(()=>this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit}));
+      const flight=previous.catch(()=>{}).then(async()=>{
+        // The Pre-Move RestClient is dedicated to this worker. Give its outbound
+        // calls one absolute deadline so a stalled Binance response cannot leave
+        // the background worker and its API snapshot in SCANNING forever.
+        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||55_000);
+        const timeoutMs=Math.max(15_000,Math.min(90_000,configuredTimeout));
+        const previousDeadline=this.rest.requestDeadlineAtMs;
+        const nextDeadline=Date.now()+timeoutMs;
+        const priorDeadline=Number(previousDeadline);
+        this.rest.requestDeadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
+          ?Math.min(priorDeadline,nextDeadline):nextDeadline;
+        try {
+          return await this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit});
+        } finally {
+          this.rest.requestDeadlineAtMs=previousDeadline;
+        }
+      });
       const tail=flight.then(()=>undefined,()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
       return flight.finally(()=>{
