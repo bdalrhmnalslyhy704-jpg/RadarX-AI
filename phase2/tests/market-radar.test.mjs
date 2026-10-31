@@ -500,15 +500,15 @@ test('24h ticker discovery uses compact Binance MINI data and derives the rollin
   assert.equal(snapshot.data[1].priceChangePercent,2.1,'keep an explicit percentage when a source provides one');
 });
 
-test('REST adapters with internal Binance host failover are not retried through the entire mirror list',async()=>{
+test('deep candle requests with internal Binance host failover are not retried through the entire mirror list',async()=>{
   let calls=0;
   const rest={
     baseUrls:['https://spot-a.test','https://spot-b.test','https://spot-c.test'],
     async request(){calls++;throw new Error('REST_REQUEST_TIMEOUT');}
   };
   const scanner=new MarketUniverseScanner({rest,config:{retryAttempts:2,retryBaseMs:1},sleepFn:async()=>{}});
-  await assert.rejects(()=>scanner.ticker24h(),/REST_REQUEST_TIMEOUT/);
-  assert.equal(calls,1,'the RestClient already tried each configured host before returning the error');
+  await assert.rejects(()=>scanner.requestOnce('/api/v3/klines',{symbol:'BTCUSDT',interval:'15m'}),/REST_REQUEST_TIMEOUT/);
+  assert.equal(calls,1,'deep candle requests still use one internal multi-host pass without a second full sweep');
 });
 
 test('market scanner deduplicates symbols and only deep-scans selected rows',async()=>{
