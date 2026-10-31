@@ -11,6 +11,42 @@ test('TEST_FIXTURE: configured REST timeouts cannot hold a live scan for a minut
   assert.equal(shortClient.timeoutMs,25,'smaller caller-defined timeouts remain effective');
 });
 
+
+test('TEST_FIXTURE: unqualified exchangeInfo requests are restricted to active Spot symbols',async()=>{
+  let captured=null;
+  const client=new RestClient({
+    baseUrls:['https://spot-exchange-info.test'],
+    minIntervalMs:0,
+    fetchImpl:async url=>{
+      captured=new URL(url);
+      return {status:200,ok:true,headers:new Map(),json:async()=>({symbols:[]})};
+    }
+  });
+  await client.request('/api/v3/exchangeInfo');
+  assert.equal(captured.pathname,'/api/v3/exchangeInfo');
+  assert.equal(captured.searchParams.get('permissions'),'SPOT');
+  assert.equal(captured.searchParams.get('symbolStatus'),'TRADING');
+  const health=client.health();
+  assert.equal(health.last_request_phase,'COMPLETE');
+  assert.equal(health.last_request_http_status,200);
+  assert.equal(health.last_request_path,'/api/v3/exchangeInfo');
+});
+
+test('TEST_FIXTURE: explicit exchangeInfo filters remain caller-controlled',async()=>{
+  let captured=null;
+  const client=new RestClient({
+    baseUrls:['https://spot-exchange-info-explicit.test'],
+    minIntervalMs:0,
+    fetchImpl:async url=>{
+      captured=new URL(url);
+      return {status:200,ok:true,headers:new Map(),json:async()=>({symbols:[]})};
+    }
+  });
+  await client.request('/api/v3/exchangeInfo',{permissions:'MARGIN'});
+  assert.equal(captured.searchParams.get('permissions'),'MARGIN');
+  assert.equal(captured.searchParams.has('symbolStatus'),false);
+});
+
 test('TEST_FIXTURE: each REST client keeps its independent conservative request cap',async()=>{
   const client=new RestClient({baseUrls:['https://rest-default-budget.test'],fetchImpl:async()=>({status:200,ok:true,headers:new Map(),json:async()=>({})})});
   assert.equal(client.maxRequestsPerMinute,240);
