@@ -2498,9 +2498,9 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    // Keep a ten-symbol rotating batch with four concurrent symbol pairs. On the
-    // 512MB DHDTech runtime, shorter batches finish within the 45s worker window;
-    // the durable cursor and ticker-activity lane preserve wider-market coverage.
+    // Preserve the public ten-symbol hard cap, while allowing low-memory hosted
+    // runtimes to use a nine-symbol rotating batch for the 45s background-worker SLA.
+    // The durable cursor and ticker-activity lane preserve wider-market coverage.
     const configuredCycleLimit=Math.max(1,Math.min(
       PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
       Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE)
