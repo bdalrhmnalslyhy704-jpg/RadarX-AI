@@ -420,7 +420,7 @@ jobs:
           # its first real Spot-USDT scan before validating the contract.
           VERIFIED=false
           for attempt in $(seq 1 18); do
-            RADAR8="$(curl --location --connect-timeout 10 --max-time 75 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1" || true)"
+            RADAR8="$(curl --location --connect-timeout 10 --max-time 110 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1" || true)"
             if [ "$RADAR8" = "200" ] && node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));

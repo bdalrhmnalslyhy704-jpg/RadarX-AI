@@ -943,6 +943,43 @@ test('TEST_FIXTURE: forced Radar 8 scan self-recovers a stopped production worke
   }
 });
 
+test('TEST_FIXTURE: forced Radar 8 scan waits for an already-running cycle instead of returning an empty stale snapshot',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-await-active-')),store=await new DurableStore({dir}).init();
+  let running=true,busy=true,ticks=0,scans=0,lastCompletedAt=Date.now()-10000;
+  const radar={
+    health:()=>({running,busy,last_scan_at:lastCompletedAt,last_scan_completed_at:lastCompletedAt,
+      last_scan_duration_ms:10,scans,last_error:null,universe_total:506,
+      coverage:{expected_total:506,received_total:506,coverage_ratio:1}}),
+    start(){running=true;},
+    async tick(){ticks++;return false;},
+    snapshot(){return{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
+      as_of:new Date().toISOString(),quote:'USDT',
+      universe:{expected_total:506,received_total:506,coverage_ratio:1,eligible_total:225},
+      candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};}
+  };
+  setTimeout(()=>{busy=false;scans++;lastCompletedAt=Date.now();},30);
+  const config={environment:'production',radarControl:{autostart:null},earlyExpansionRadar:{scanTimeoutMs:1500},
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),earlyExpansionRadar:radar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/early-expansion-radar?quote=USDT&limit=100&scan=1');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(ticks,0,'must coalesce with the already-running background scan');
+    assert.equal(body.monitoring.busy,false);
+    assert.equal(body.monitoring.scans,1);
+    assert.equal(body.scan.requested,true);
+    assert.equal(body.scan.completed,true);
+    assert.equal(body.meta.live,true);
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: a stopped Radar 8 in staging fails closed unless live workers were explicitly opted in',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-staging-guard-')),store=await new DurableStore({dir}).init();
   let starts=0,ticks=0;

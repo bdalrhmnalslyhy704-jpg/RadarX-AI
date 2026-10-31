@@ -1644,19 +1644,52 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
                 meta:{live:false,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
             }
           }
-          if(runNow&&before.busy!==true&&typeof earlyExpansionRadar.tick==='function'){
-            const completed=await earlyExpansionRadar.tick();
-            if(completed!==true){
-              const current=earlyExpansionRadar.health?.()||{};
-              if(current.running!==true||current.last_scan_completed_at==null||current.last_error){
-                const reason=String(current.last_error||(!current.running?'RADAR8_MONITOR_NOT_RUNNING':'RADAR8_SCAN_NOT_COMPLETED'));
-                const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
-                return send(res,503,{...snapshot,status:'not_ready',error:reason,monitoring:current,
-                  scan:{requested:true,completed:false,error:reason},
-                  meta:{...(snapshot.meta||{}),live:current.running===true,radar:'EARLY_EXPANSION_RADAR',
-                    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+          if(runNow){
+            const requestStartedAt=Date.now();
+            const priorCompletedAt=Number(before.last_scan_completed_at)||0;
+            const configuredScanTimeout=Math.max(1000,Math.trunc(Number(config.earlyExpansionRadar?.scanTimeoutMs)||90000));
+            const waitBudgetMs=Math.min(110000,Math.max(5000,configuredScanTimeout+5000));
+            const waitForActiveScan=async baseline=>{
+              const deadline=Date.now()+waitBudgetMs;
+              let current=earlyExpansionRadar.health?.()||{};
+              while(Date.now()<deadline){
+                const completedAt=Number(current.last_scan_completed_at)||0;
+                if(completedAt>baseline&&current.last_error==null)return current;
+                if(current.busy!==true)return current;
+                await new Promise(resolve=>setTimeout(resolve,250));
+                current=earlyExpansionRadar.health?.()||{};
               }
+              return current;
+            };
+            let current=before;
+            let completedForRequest=false;
+            if(current.busy===true){
+              current=await waitForActiveScan(priorCompletedAt);
+              const completedAt=Number(current.last_scan_completed_at)||0;
+              completedForRequest=completedAt>priorCompletedAt&&current.last_error==null;
             }
+            if(!completedForRequest&&current.busy!==true&&typeof earlyExpansionRadar.tick==='function'){
+              const tickResult=await earlyExpansionRadar.tick();
+              current=earlyExpansionRadar.health?.()||{};
+              if(tickResult!==true&&current.busy===true){
+                current=await waitForActiveScan(priorCompletedAt);
+              }
+              const completedAt=Number(current.last_scan_completed_at)||0;
+              completedForRequest=completedAt>priorCompletedAt&&completedAt<=Date.now()+5000&&
+                Date.now()-completedAt<=waitBudgetMs&&current.last_error==null&&current.running===true;
+            }
+            if(!completedForRequest){
+              const reason=String(current.last_error||
+                (current.busy===true?'RADAR8_SCAN_BUSY_TIMEOUT':
+                  current.running!==true?'RADAR8_MONITOR_NOT_RUNNING':'RADAR8_SCAN_NOT_COMPLETED'));
+              const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
+              return send(res,503,{...snapshot,status:'not_ready',error:reason,monitoring:current,
+                scan:{requested:true,completed:false,last_completed_at:current.last_scan_completed_at??null,error:reason,
+                  wait_duration_ms:Math.max(0,Date.now()-requestStartedAt)},
+                meta:{...(snapshot.meta||{}),live:current.running===true,radar:'EARLY_EXPANSION_RADAR',
+                  paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});
+            }
+            before=current;
           }
           const snapshot=earlyExpansionRadar.snapshot?.(limit,quote)||{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',candidates:[]};
           const health=earlyExpansionRadar.health?.()||{running:false};
