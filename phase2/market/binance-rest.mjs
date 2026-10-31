@@ -2,16 +2,29 @@ import {normalizeEpochMs} from '../core/data-quality.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function awaitBeforeDeadline(promise, deadlineAtMs, onTimeout) {
+function awaitBeforeDeadline(promise, deadlineAtMs, onTimeout, signal=null) {
   const deadline=Number(deadlineAtMs);
   if(!Number.isFinite(deadline)||deadline<=0)return promise;
   const remaining=deadline-Date.now();
   if(remaining<=0)return Promise.reject(onTimeout());
   return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>reject(onTimeout()),remaining);
+    let settled=false,timer=null;
+    const cleanup=()=>{
+      if(timer!==null)clearTimeout(timer);
+      signal?.removeEventListener?.('abort',onAbort);
+    };
+    const finish=(error,value)=>{
+      if(settled)return;
+      settled=true;cleanup();
+      error?reject(error):resolve(value);
+    };
+    const onAbort=()=>finish(onTimeout());
+    timer=setTimeout(()=>finish(onTimeout()),remaining);
+    if(signal?.aborted===true)onAbort();
+    else signal?.addEventListener?.('abort',onAbort,{once:true});
     Promise.resolve(promise).then(
-      value=>{clearTimeout(timer);resolve(value);},
-      error=>{clearTimeout(timer);reject(error);}
+      value=>finish(null,value),
+      error=>finish(error)
     );
   });
 }
@@ -475,19 +488,41 @@ export class RestClient {
       return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
     }
     if(SHARED.inflight.has(key)){
+      const sharedTask=SHARED.inflight.get(key);
+      // A coalesced public request is useful only while its owner is responsive.
+      // Bound the wait independently from the enclosing scan deadline. If a
+      // peer's response body/parser stalls, evict only that exact in-flight
+      // promise and let this caller perform its own official-mirror fallback.
+      const sharedWaitDeadline=Date.now()+Math.max(250,Math.trunc(this.timeoutMs*2));
+      const scanDeadline=Number(this.requestDeadlineAtMs);
+      const waitDeadline=Number.isFinite(scanDeadline)&&scanDeadline>0
+        ?Math.min(sharedWaitDeadline,scanDeadline):sharedWaitDeadline;
       try{
-        const shared=await awaitBeforeDeadline(SHARED.inflight.get(key),this.requestDeadlineAtMs,()=>{
-          const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
-          error.name='ScanDeadlineError';
+        const shared=await awaitBeforeDeadline(sharedTask,waitDeadline,()=>{
+          const scanAborted=this.requestAbortSignal?.aborted===true||
+            (Number.isFinite(scanDeadline)&&scanDeadline>0&&Date.now()>=scanDeadline);
+          const error=new Error(scanAborted?'MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED':
+            'REST_SHARED_INFLIGHT_TIMEOUT path='+path+' timeout_ms='+Math.max(250,Math.trunc(this.timeoutMs*2)));
+          error.name=scanAborted?'ScanDeadlineError':'RestTimeoutError';
           this.lastError=error.message;
           this.state='ERROR';
           return error;
-        });
+        },this.requestAbortSignal);
         return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:Date.now()},null);
       }catch(error){
         this.lastError=String(error?.message??error);
-        if(error?.name==='ScanDeadlineError')this.state='ERROR';
-        throw error;
+        if(error?.name==='ScanDeadlineError'){
+          this.state='ERROR';
+          throw error;
+        }
+        if(error?.name!=='RestTimeoutError'&&this.requestAbortSignal?.aborted!==true)throw error;
+        if(SHARED.inflight.get(key)===sharedTask)SHARED.inflight.delete(key);
+        if(this.requestAbortSignal?.aborted===true){
+          const aborted=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
+          aborted.name='ScanDeadlineError';this.lastError=aborted.message;this.state='ERROR';throw aborted;
+        }
+        // Continue below with a fresh bounded request rather than inheriting a
+        // permanently pending promise from another RestClient instance.
       }
     }
 
