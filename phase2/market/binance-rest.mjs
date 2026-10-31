@@ -549,7 +549,7 @@ export class RestClient {
           );
           if(ttl>0 && cacheableKlines) {
             const cacheNow=Date.now();
-            const expiresAt=sharedResponseCacheExpiresAt(path,query,result,cacheNow);
+            const expiresAt=sharedResponseCacheExpiresAt(path,requestQuery,result,cacheNow);
             if(expiresAt>cacheNow) cacheSharedValue(key,{expiresAt,value:result},cacheNow);
           }
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
