@@ -84,6 +84,36 @@ test('TEST_FIXTURE: open Kline cache entries expire before the candle can be mis
   ),receivedAt+12_000,'already-closed candles may use the interval TTL');
 });
 
+test('TEST_FIXTURE: whole-scan abort interrupts a shared Binance cooldown wait',async()=>{
+  const cooldownClient=new RestClient({
+    baseUrls:['https://shared-cooldown-setter.test'],
+    fetchImpl:async()=>({status:429,ok:false,headers:new Map([['retry-after','0.5']]),json:async()=>({})}),
+    timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  await assert.rejects(
+    ()=>cooldownClient.request('/api/v3/klines',{symbol:'COOLDOWNSETTERUSDT',interval:'1m'}),
+    error=>error instanceof RestRateLimitError
+  );
+  let calls=0;
+  const client=new RestClient({
+    baseUrls:['https://shared-cooldown-waiter.test'],
+    fetchImpl:async()=>{calls++;return{status:200,ok:true,headers:new Map(),json:async()=>({ok:true})};},
+    timeoutMs:1000,minIntervalMs:0,maxRequestsPerMinute:100
+  });
+  const controller=new AbortController();
+  client.requestAbortSignal=controller.signal;
+  const startedAt=Date.now();
+  const pending=client.request('/api/v3/klines',{symbol:'COOLDOWNWAITERUSDT',interval:'1m'});
+  setTimeout(()=>controller.abort(),25);
+  await assert.rejects(
+    pending,
+    error=>error?.name==='ScanDeadlineError'&&/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/.test(error.message)
+  );
+  assert.ok(Date.now()-startedAt<180,'a cancelled scan must not sleep out the remaining exchange cooldown');
+  assert.equal(calls,0,'an aborted scan must not send REST after leaving the cooldown wait');
+  assert.match(client.health().last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
+});
+
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
   let calls=0;
   const fetchImpl=async()=>{calls++;return{status:429,headers:new Map([['retry-after','0.001']]),ok:false,json:async()=>({})};};

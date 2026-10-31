@@ -118,9 +118,56 @@ function waitUntilMs(entries, now, requiredWeight) {
   return Math.max(0, (entries[0]?.at ?? now) + 60000 - now);
 }
 
-async function waitSharedBudget(path, query = {}) {
+function scanDeadlineFailure(onDeadline) {
+  if (typeof onDeadline === 'function') onDeadline();
+  const error = new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
+  error.name = 'ScanDeadlineError';
+  throw error;
+}
+
+// Every wait inside a bounded radar request observes the enclosing scan's
+// deadline and abort signal. This includes Binance's process-wide cooldown,
+// request-weight queue, and per-client spacing waits, not just fetch() itself.
+async function waitWithinRestWindow(ms, {deadlineAtMs=null, signal=null, onDeadline=null}={}) {
+  const requestedMs=Math.max(0,Number(ms)||0);
+  const deadline=Number(deadlineAtMs);
+  const hasDeadline=Number.isFinite(deadline)&&deadline>0;
+  const assertActive=()=>{
+    if(signal?.aborted===true||(hasDeadline&&Date.now()>=deadline))scanDeadlineFailure(onDeadline);
+  };
+  assertActive();
+  if(requestedMs===0)return;
+  const remaining=hasDeadline?Math.max(0,deadline-Date.now()):Infinity;
+  if(remaining<=0)scanDeadlineFailure(onDeadline);
+  const waitMs=Math.min(requestedMs,remaining);
+  const deadlineTruncated=waitMs<requestedMs;
+  await new Promise((resolve,reject)=>{
+    let settled=false,timer=null;
+    const cleanup=()=>{
+      if(timer!==null)clearTimeout(timer);
+      signal?.removeEventListener?.('abort',abort);
+    };
+    const finish=(error=null)=>{
+      if(settled)return;
+      settled=true;cleanup();
+      error?reject(error):resolve();
+    };
+    const abort=()=>{
+      try{scanDeadlineFailure(onDeadline);}catch(error){finish(error);}
+    };
+    timer=setTimeout(()=>finish(),Math.max(1,waitMs));
+    if(signal?.aborted===true)abort();
+    else signal?.addEventListener?.('abort',abort,{once:true});
+  });
+  if(deadlineTruncated||signal?.aborted===true||(hasDeadline&&Date.now()>=deadline))scanDeadlineFailure(onDeadline);
+}
+
+async function waitSharedBudget(path, query = {}, controls = {}) {
   const weight = estimateBinanceRequestWeight(path, query);
   for (;;) {
+    if(controls.signal?.aborted===true ||
+      (Number.isFinite(Number(controls.deadlineAtMs))&&Number(controls.deadlineAtMs)>0&&Date.now()>=Number(controls.deadlineAtMs)))
+      scanDeadlineFailure(controls.onDeadline);
     // Serialize only the budget decision and reservation. Never sleep while
     // owning the global queue: a heavy request awaiting weight headroom must not
     // head-of-line block a light request that can safely use the remaining budget.
@@ -131,6 +178,9 @@ async function waitSharedBudget(path, query = {}) {
     let reservedAt = null;
     try {
       await previous;
+      if(controls.signal?.aborted===true ||
+        (Number.isFinite(Number(controls.deadlineAtMs))&&Number(controls.deadlineAtMs)>0&&Date.now()>=Number(controls.deadlineAtMs)))
+        scanDeadlineFailure(controls.onDeadline);
       const now = Date.now();
       const cooldown = SHARED.rateLimitedUntil - now;
       if (cooldown > MAX_INLINE_RATE_LIMIT_WAIT_MS) {
@@ -159,14 +209,8 @@ async function waitSharedBudget(path, query = {}) {
       release();
     }
     if (reservedAt !== null) return reservedAt;
-    // Long weight/count waits are deferred, just like exchange Retry-After bans.
-    // Otherwise a continuous crowd of background radars can hold one scan open
-    // for many minutes without producing a final result.
     const boundedWaitMs = assertSharedBudgetWaitBound(waitMs);
-    // Re-enter the atomic reservation path after sleeping. The budget may have
-    // changed while this request was waiting, so never assume the old reservation
-    // is still valid.
-    await sleep(Math.max(1, boundedWaitMs));
+    await waitWithinRestWindow(Math.max(1,boundedWaitMs),controls);
   }
 }
 
@@ -320,16 +364,20 @@ export class RestClient {
     binance_reported_used_weight_1m:SHARED.observedUsedWeight1m,
     binance_reported_used_weight_at:SHARED.observedUsedWeightAt
   };}
-  async waitBudget(path, query = {}){
-    let now=Date.now();
+  async waitBudget(path, query = {}, controls = {}){
+    const waitControls={
+      deadlineAtMs:controls.deadlineAtMs??this.requestDeadlineAtMs,
+      signal:controls.signal??this.requestAbortSignal,
+      onDeadline:controls.onDeadline
+    };
     const cooldownUntil=Math.max(this.rateLimitedUntil||0,SHARED.rateLimitedUntil||0);
-    const cooldownMs=cooldownUntil-now;
+    const cooldownMs=cooldownUntil-Date.now();
     if(cooldownMs>MAX_INLINE_RATE_LIMIT_WAIT_MS){
       this.state='RATE_LIMITED';
       this.lastError='BINANCE_RATE_LIMIT_WAIT_DEFERRED retry_ms='+Math.ceil(cooldownMs);
       throw new RestRateLimitError(cooldownMs);
     }
-    if(cooldownMs>0) await sleep(cooldownMs);
+    if(cooldownMs>0) await waitWithinRestWindow(cooldownMs,waitControls);
     const cutoff=Date.now()-60000;
     this.usedAt=this.usedAt.filter(x=>x>cutoff);
     if(this.usedAt.length>=this.maxRequestsPerMinute) {
@@ -340,12 +388,11 @@ export class RestClient {
         this.lastError='REST_BUDGET_WAIT_DEFERRED retry_ms='+Math.ceil(waitMs);
         throw error;
       }
-      await sleep(waitMs);
+      await waitWithinRestWindow(waitMs,waitControls);
     }
-    now=Date.now();
-    const gap=now-this.lastRequestAt;
-    if(gap<this.minIntervalMs) await sleep(this.minIntervalMs-gap);
-    await waitSharedBudget(path, query);
+    const gap=Date.now()-this.lastRequestAt;
+    if(gap<this.minIntervalMs)await waitWithinRestWindow(this.minIntervalMs-gap,waitControls);
+    await waitSharedBudget(path,query,waitControls);
   }
   async request(path,query={}) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
@@ -386,7 +433,7 @@ export class RestClient {
     const task=(async()=>{
       let error=null;
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
-        await this.waitBudget(path, query);
+        await this.waitBudget(path, query, {deadlineAtMs:this.requestDeadlineAtMs,signal:this.requestAbortSignal,onDeadline:assertRequestDeadline});
         assertRequestDeadline();
         const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
         const qs=new URLSearchParams(normalizedQuery(query));
