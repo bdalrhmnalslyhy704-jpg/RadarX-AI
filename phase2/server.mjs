@@ -186,8 +186,25 @@ export async function startServer({
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  const multiAnalystRestUrls=[...publicSpotRestUrls];
-  const multiAnalystRest=new RestClient({...config.rest,baseUrls:multiAnalystRestUrls});
+  // Keep the 20-analyst discovery client independent from other radar
+  // exchangeInfo in-flight requests. A slow shared exchangeInfo fetch used to
+  // hold the forced analyst scan until its full 180s deadline before any pair
+  // was discovered. Start with api-gcp and use the remaining official Spot
+  // mirrors, each with a short per-host timeout; candle/depth quality gates and
+  // the 19-specialist + final-analyst pipeline remain unchanged.
+  const multiAnalystRestUrls=publicSpotRestUrls.filter(url=>{
+    try{return new URL(url).host.toLowerCase()!=='data-api.binance.vision';}
+    catch{return false;}
+  });
+  logger.info?.('[MULTI_ANALYST_REST_FALLBACKS] '+JSON.stringify({
+    count:multiAnalystRestUrls.length,
+    hosts:multiAnalystRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
+  }));
+  const multiAnalystRest=new RestClient({
+    ...config.rest,
+    baseUrls:multiAnalystRestUrls.length?multiAnalystRestUrls:publicSpotRestUrls,
+    timeoutMs:Math.min(3500,Number(config.rest?.timeoutMs)||3500)
+  });
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const marketWideKlineCache=new MarketWideKlineCache({
