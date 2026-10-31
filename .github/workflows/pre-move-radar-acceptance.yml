@@ -622,7 +622,24 @@ jobs:
           if (!wd || !Number.isFinite(wd.evaluated) || !Number.isFinite(wd.eligible) || !Number.isFinite(wd.rejected) || !wd.rejection_counts || !Array.isArray(wd.samples)) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_DIAGNOSTICS_MISSING');
           if (wd.evaluated !== (Array.isArray(b.watch_candidates)?b.watch_candidates.length:0) || wd.eligible < b.watch_notification_candidates.length || wd.rejected + wd.eligible !== wd.evaluated) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_DIAGNOSTICS_INCONSISTENT');
           for (const x of b.watch_notification_candidates) {
-            if (x?.event !== 'PRE_MOVE_RADAR_WATCH_ONLY' || x?.watch_only !== true || x?.entry_eligible !== false || x?.potential_label !== 'WATCH_EARLY' || x?.market !== 'SPOT' || x?.closed_candles_only !== true || x?.paper_trading !== true || x?.real_order_execution !== false || x?.source !== 'Binance Public REST' || x?.data_status?.data_valid !== true || x?.data_status?.data_stale !== false || !Number.isFinite(x?.data_quality) || x.data_quality < 70 || !Number.isFinite(x?.liquidity_quality) || x.liquidity_quality < 60) throw new Error('PRE_MOVE_WATCH_NOTIFICATION_GATE:'+String(x?.symbol||'UNKNOWN'));
+            // Low-volume absorption is a documented WATCH-ONLY lane: candles and
+            // liquidity must be valid, but the global $750k entry-volume gate is
+            // deliberately not bypassed. The candidate remains entry_eligible=false.
+            const lowVolumeWatchOnly=x?.low_volume_watch_only===true &&
+              x?.data_status?.candle_data_valid===true &&
+              x?.data_status?.volume_gate_pass===false &&
+              Number.isFinite(x?.quote_volume_24h) &&
+              x.quote_volume_24h>=300000 && x.quote_volume_24h<750000;
+            const marketDataValid=x?.data_status?.data_valid===true || lowVolumeWatchOnly;
+            if (x?.event !== 'PRE_MOVE_RADAR_WATCH_ONLY' || x?.watch_only !== true ||
+                x?.entry_eligible !== false || x?.potential_label !== 'WATCH_EARLY' ||
+                x?.market !== 'SPOT' || x?.closed_candles_only !== true ||
+                x?.paper_trading !== true || x?.real_order_execution !== false ||
+                x?.source !== 'Binance Public REST' || !marketDataValid ||
+                x?.data_status?.data_stale !== false ||
+                !Number.isFinite(x?.data_quality) || x.data_quality<70 ||
+                !Number.isFinite(x?.liquidity_quality) || x.liquidity_quality<60)
+              throw new Error('PRE_MOVE_WATCH_NOTIFICATION_GATE:'+String(x?.symbol||'UNKNOWN'));
           }
           if (!Array.isArray(b.near_miss_audit)) throw new Error('PRE_MOVE_NEAR_MISS_AUDIT_MISSING');
           for (const x of b.near_miss_audit) {
