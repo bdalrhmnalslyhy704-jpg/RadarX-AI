@@ -26,12 +26,12 @@ export function resolvePublicSpotRestUrls(env=process.env, additionalUrls=[]){
     .filter(value=>value.startsWith('https://')) )];
 }
 
-// Pre-Move has a hard 45s whole-cycle deadline. A seven-host sequential
-// fallback waterfall for both exchangeInfo and 24h ticker discovery can consume
-// the full budget before a single symbol is examined. Keep this one latency-
-// sensitive scanner on two official mirrors, rotated from the last successful
-// host where possible. All other RadarX clients retain the complete mirror list.
-export function resolvePreMoveSpotRestUrls(urls=[], currentBaseIndex=0){
+// Pre-Move and the 20-analyst discovery engine run under hard whole-scan deadlines.
+// A seven-host sequential waterfall for exchangeInfo and 24h ticker discovery can
+// consume minutes before a single symbol is examined. Keep these latency-sensitive
+// scanners on two official mirrors, rotated from the last successful host where
+// possible. All other RadarX clients retain the complete mirror list.
+export function resolveFastPublicSpotRestUrls(urls=[], currentBaseIndex=0){
   const input=Array.isArray(urls)
     ?urls.map(value=>String(value??'').trim().replace(/\/+$/,''))
     :[];
@@ -50,6 +50,9 @@ export function resolvePreMoveSpotRestUrls(urls=[], currentBaseIndex=0){
   const start=preferredIndex>=0?preferredIndex:0;
   return [ordered[start%ordered.length],ordered[(start+1)%ordered.length]];
 }
+
+// Backwards-compatible name for callers that specifically refer to Pre-Move.
+export const resolvePreMoveSpotRestUrls = resolveFastPublicSpotRestUrls;
 
 export const DEFAULT_PUBLIC_SPOT_WS_URLS = Object.freeze([
   'wss://data-stream.binance.vision/stream',
