@@ -6,6 +6,84 @@ import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
 import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
 
+
+test('TEST_FIXTURE: a stalled market snapshot releases the worker latch and the next scan can recover',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-scan-timeout-'));
+  const store=await new DurableStore({dir}).init();
+  let calls=0;
+  const snapshotProvider=async()=>{
+    calls++;
+    if(calls===1)return new Promise(()=>{});
+    const now=Date.now();
+    return {
+      status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+      universe:{eligible_spot_symbols:1,analyzed_symbols:0,valid_symbols:0,requested_limit:40,
+        scan_offset:0,scan_advance_count:0,coverage_pct:0,scan_complete:false},
+      candidates:[],latest_prices:[],
+      meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+        confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+    };
+  };
+  const worker=new AdaptiveTraderWorker({
+    store,snapshotProvider,intervalMs:60_000,scanLimit:40,scanTimeoutMs:300,persistTimeoutMs:500,
+    logger:{info(){},warn(){}}
+  });
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const failed=await worker.runOnce();
+    assert.equal(failed.status,'FAILED');
+    assert.match(failed.error,/ADAPTIVE_TRADER_STAGE_TIMEOUT:stage=MARKET_SNAPSHOT/);
+    assert.equal(worker.snapshot().in_flight,false,'timeout must never leave the worker busy');
+    assert.equal(worker.snapshot().last_stage_timeout.stage,'MARKET_SNAPSHOT');
+    const recovered=await worker.runOnce();
+    assert.equal(recovered.status,'SUCCESS');
+    assert.equal(worker.snapshot().in_flight,false);
+    assert.equal(worker.snapshot().successful_scans,1);
+    assert.equal(calls,2);
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('TEST_FIXTURE: a stalled persistence write cannot permanently lock the adaptive trader',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-persist-timeout-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now();
+  let blockNextWrite=false;
+  const originalWrite=store.putAdaptiveTraderState.bind(store);
+  store.putAdaptiveTraderState=async value=>{
+    if(blockNextWrite){blockNextWrite=false;return new Promise(()=>{});}
+    return originalWrite(value);
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(Date.now()).toISOString(),
+    universe:{eligible_spot_symbols:1,analyzed_symbols:0,valid_symbols:0,requested_limit:40,
+      scan_offset:0,scan_advance_count:0,coverage_pct:0,scan_complete:false},
+    candidates:[],latest_prices:[],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+  });
+  const worker=new AdaptiveTraderWorker({
+    store,snapshotProvider,intervalMs:60_000,scanLimit:40,scanTimeoutMs:1000,persistTimeoutMs:250,
+    logger:{info(){},warn(){}}
+  });
+  try{
+    await worker.start({initialDelayMs:60_000});
+    blockNextWrite=true;
+    const failed=await worker.runOnce();
+    assert.equal(failed.status,'FAILED');
+    assert.match(failed.error,/ADAPTIVE_TRADER_STAGE_TIMEOUT:stage=STATE_PERSIST/);
+    assert.equal(worker.snapshot().in_flight,false,'persistence timeout must release the worker latch');
+    const recovered=await worker.runOnce();
+    assert.equal(recovered.status,'SUCCESS');
+    assert.equal(worker.snapshot().in_flight,false);
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('server paper portfolio records isolated trades and persists evidence without live orders',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-paper-'));
   const store=await new DurableStore({dir}).init();
