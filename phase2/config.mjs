@@ -258,12 +258,13 @@ export const CONFIG = Object.freeze({
     // Every selected row still passes all 19 specialists plus the final analyst; the smaller
     // deep batch avoids starving the other RadarX workers on the 512 MB DHDTech container.
     discoveryPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 32, 32, 48),
-    // Keep all 20 analysts enabled, but analyze a smaller rotating batch on the
-    // 512 MB DHDTech service so a slow REST cycle cannot starve the twelve radars.
-    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 4, 4, 6),
+    // Every selected pair still runs all 19 specialists plus the final analyst.
+    // Two sequential deep scans protect the 512 MB DHDTech worker and leave REST
+    // capacity for the twelve radars and independent Pre-Move monitor.
+    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 2, 2, 2),
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
-    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 2, 1, 2),
-    deepKlines: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 160, 120, 180),
+    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 1, 1, 1),
+    deepKlines: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 120, 120, 120),
     // The full 19-specialist + final review reads three closed-candle timeframes.
     // Allow the measured DHDTech/Spot shared-REST cycle up to the bounded 180s ceiling.
     scanTimeoutMs: boundedInt(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 180000, 90000, 180000),

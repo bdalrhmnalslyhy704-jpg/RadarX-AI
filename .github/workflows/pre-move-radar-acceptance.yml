@@ -480,6 +480,10 @@ jobs:
             deep_scan_pool:u.deep_scan_pool,
             attempted_analyses:d.attempted_analyses,
             successful_analyses:d.successful_analyses,
+            specialist_complete_symbols:d.specialist_complete_symbols,
+            final_analyst_complete_symbols:d.final_analyst_complete_symbols,
+            fully_analysed_symbols:d.fully_analysed_symbols,
+            analysts_per_fully_analysed_symbol:d.analysts_per_fully_analysed_symbol,
             gate_rejected:d.gate_rejected,
             failed_analyses:d.failed_analyses,
             scan_failure_count:d.scan_failure_count||0,
@@ -498,6 +502,8 @@ jobs:
           if(!(Number(u.scanned)>0))problems.push('MULTI_ANALYST_ZERO_ROWS_SCANNED');
           if(!(Number(d.attempted_analyses)>0))problems.push('MULTI_ANALYST_LAB_NOT_ENTERED');
           if(!(Number(d.successful_analyses)>0))problems.push('MULTI_ANALYST_DATA_GATE_HAS_NO_VALID_ROWS');
+          if(!(Number(d.fully_analysed_symbols)>0)||Number(d.analysts_per_fully_analysed_symbol)!==20)
+            problems.push('MULTI_ANALYST_FULL_20_ANALYST_REVIEW_NOT_CONFIRMED');
           if(!b.result_counts||!['candidates','watchlist','lab_results'].every(key=>Number.isFinite(Number(b.result_counts[key]))))
             problems.push('MULTI_ANALYST_SUMMARY_COUNTS_MISSING');
           if(problems.length)throw new Error(JSON.stringify({problems,summary}));

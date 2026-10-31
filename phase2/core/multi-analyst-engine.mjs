@@ -1062,7 +1062,10 @@ const finalVerdict=(analysts,features,dataValid,market={},memory=null,calibratio
 export function nextContinuousScanDelayMs(intervalMs, elapsedMs=0){
   const interval=Math.max(15000,Number(intervalMs)||60000);
   const elapsed=Number(elapsedMs);
-  return Math.max(0,interval-(Number.isFinite(elapsed)?Math.max(0,elapsed):0));
+  // If a cycle overruns its cadence, leave a short REST/CPU recovery window.
+  // Immediate restart after a slow cycle kept the 512 MB service busy
+  // continuously and starved the other independent radars.
+  return Math.max(15000,interval-(Number.isFinite(elapsed)?Math.max(0,elapsed):0));
 }
 
 /**
@@ -1149,7 +1152,7 @@ export class MultiAnalystEngine {
     if(!rest||typeof rest.request!=='function')throw new Error('REST_CLIENT_REQUIRED');
     this.clock=clock;
     this.config={
-      quote:'USDT',discoveryPool:28,deepScanPool:8,returnLimit:8,deepConcurrency:2,deepKlines:220,
+      quote:'USDT',discoveryPool:28,deepScanPool:2,returnLimit:8,deepConcurrency:1,deepKlines:120,
       minQuoteVolume24h:300000,minDataQuality:70,minLiquidityQuality:60,
       ttlMs:45000,universeRefreshMs:30*60*1000,continuousIntervalMs:60000,continuousWarmupMs:8000,
       scanTimeoutMs:180000,
@@ -1651,6 +1654,12 @@ export class MultiAnalystEngine {
       for(const item of live)this._recordLatestAssessment(item,assessmentAt);
       const validLive=live.filter(x=>x?.data_status?.data_valid===true);
       const gateRejected=live.filter(x=>x?.data_status?.data_valid!==true);
+      const fullyAnalysed=live.filter(x=>
+        x?.analyst_execution?.specialists_complete===true&&
+        x?.analyst_execution?.final_analyst_complete===true&&
+        x?.analyst_execution?.analysis_failed!==true&&
+        Array.isArray(x?.analysts)&&x.analysts.length===19
+      );
 
       for(const item of live){
         try{
@@ -1733,8 +1742,12 @@ export class MultiAnalystEngine {
           duration_ms:Math.max(0,this.clock()-startedAt),
           deep_concurrency:this.config.deepConcurrency,
           deep_klines:this.config.deepKlines,
-          attempted_analyses:selected.length,
+          attempted_analyses:deepSelected.length,
           successful_analyses:validLive.length,
+          specialist_complete_symbols:live.filter(x=>x?.analyst_execution?.specialists_complete===true).length,
+          final_analyst_complete_symbols:live.filter(x=>x?.analyst_execution?.final_analyst_complete===true).length,
+          fully_analysed_symbols:fullyAnalysed.length,
+          analysts_per_fully_analysed_symbol:fullyAnalysed.length?20:0,
           gate_rejected:gateRejected.length,
           failed_analyses:scanErrors.length,
           scan_errors:scanErrors.slice(0,20),

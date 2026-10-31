@@ -33,14 +33,16 @@ import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandi
 // time spent scanning and never scheduling a negative delay after a slow cycle.
 assert.equal(nextContinuousScanDelayMs(60000,0),60000);
 assert.equal(nextContinuousScanDelayMs(60000,12500),47500);
-assert.equal(nextContinuousScanDelayMs(60000,60000),0);
-assert.equal(nextContinuousScanDelayMs(60000,93000),0);
+assert.equal(nextContinuousScanDelayMs(60000,60000),15000);
+assert.equal(nextContinuousScanDelayMs(60000,93000),15000);
+assert.equal(nextContinuousScanDelayMs(90000,150000),15000);
 assert.equal(nextContinuousScanDelayMs(1000,0),15000);
 // The 20-analyst pass stays bounded for the small production container.
 {
   const engine=new MultiAnalystEngine({rest:{request:async()=>({data:[]})}});
-  assert.equal(engine.config.deepScanPool,8);
-  assert.equal(engine.config.deepConcurrency,2);
+  assert.equal(engine.config.deepScanPool,2);
+  assert.equal(engine.config.deepConcurrency,1);
+  assert.equal(engine.config.deepKlines,120);
   assert.equal(engine.config.scanTimeoutMs,180000);
 }
 
