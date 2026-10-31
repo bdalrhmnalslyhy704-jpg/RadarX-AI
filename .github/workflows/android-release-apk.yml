@@ -419,8 +419,20 @@ jobs:
           # zero market coverage. Give a fresh DHDTech deploy time to complete
           # its first real Spot-USDT scan before validating the contract.
           VERIFIED=false
+          RADAR8_SCAN_REQUESTED_AT_MS="$(date +%s%3N)"
+          export RADAR8_SCAN_REQUESTED_AT_MS
           for attempt in $(seq 1 18); do
-            RADAR8="$(curl --location --connect-timeout 10 --max-time 110 --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1" || true)"
+            if [ "$attempt" -eq 1 ]; then
+              # Trigger exactly one fresh scan. Later polls read the snapshot only,
+              # so the acceptance loop does not repeatedly restart Radar 8.
+              RADAR8_URL="$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1"
+              RADAR8_MAX_TIME=110
+              export RADAR8_SCAN_TRIGGERED=true
+            else
+              RADAR8_URL="$BASE/api/early-expansion-radar?quote=USDT&limit=100"
+              RADAR8_MAX_TIME=20
+            fi
+            RADAR8="$(curl --location --connect-timeout 10 --max-time "$RADAR8_MAX_TIME" --silent --show-error -o "$RADAR8_JSON" -w "%{http_code}" "$RADAR8_URL" || true)"
             if [ "$RADAR8" = "200" ] && node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const body = JSON.parse(fs.readFileSync(process.env.RADAR8_JSON, 'utf8'));
@@ -445,10 +457,12 @@ jobs:
           if (!(Number(body.universe?.received_total) > 0)) problems.push('RADAR8_RECEIVED_TICKERS_EMPTY');
           if (!(Number(body.universe?.coverage_ratio) >= 0.95)) problems.push('RADAR8_COVERAGE_BELOW_95_PERCENT');
           if (!(Number(body.monitoring?.last_scan_at) > 0)) problems.push('RADAR8_HAS_NOT_COMPLETED_A_SCAN');
-          if (body.scan?.requested !== true) problems.push('RADAR8_LIVE_SCAN_NOT_REQUESTED');
+          if (process.env.RADAR8_SCAN_TRIGGERED !== 'true') problems.push('RADAR8_LIVE_SCAN_NOT_REQUESTED');
           if (body.scan?.completed !== true) problems.push('RADAR8_LIVE_SCAN_NOT_COMPLETED');
           if (!(Number(body.monitoring?.scans) > 0)) problems.push('RADAR8_SUCCESSFUL_SCAN_COUNT_EMPTY');
           if (!(Number(body.monitoring?.last_scan_completed_at) > 0)) problems.push('RADAR8_NO_SUCCESSFUL_SCAN_TIMESTAMP');
+          if (Number(body.monitoring?.last_scan_completed_at) < Number(process.env.RADAR8_SCAN_REQUESTED_AT_MS || 0) - 1000)
+            problems.push('RADAR8_SCAN_COMPLETED_BEFORE_RELEASE_PROBE');
           if (Number(body.scan?.last_completed_at) !== Number(body.monitoring?.last_scan_completed_at))
             problems.push('RADAR8_SCAN_COMPLETION_TIMESTAMP_MISMATCH');
           const scanAgeMs = Date.now() - Number(body.monitoring?.last_scan_completed_at);
