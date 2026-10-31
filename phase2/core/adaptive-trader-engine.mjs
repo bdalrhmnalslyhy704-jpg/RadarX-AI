@@ -835,12 +835,15 @@ export function createAdaptiveTraderSnapshotService({
       const sameRequest=activeLimit===safeLimit&&
         (requestedOffset===null||flightOffsets.get(activeLimit)===requestedOffset);
       const outcome=await waitForFlight(activeLimit,active);
+      if(needsClosedCandleOutcomes){
+        // Maturing labels are independent of the coalesced market scan result;
+        // retry the requested outcome attachment even when that flight failed.
+        return getSnapshot({limit:safeLimit,now:Date.now(),offset:requestedOffset,pendingSamples});
+      }
       if(sameRequest&&outcome.kind==='DONE')return outcome.value;
       if(sameRequest&&outcome.kind==='ERROR')throw outcome.error;
-      // Different callers and requests with matured closed-candle outcomes must
-      // wait for the current flight, but never forever. If it exceeded its
-      // deadline, waitForFlight aborts and evicts only that exact flight before
-      // this request is allowed to establish a fresh one.
+      // Different callers and requests must wait for the current flight, but
+      // never forever. A stale flight is aborted and evicted before retry.
       return getSnapshot({limit:safeLimit,now:Date.now(),offset:requestedOffset,pendingSamples});
     }
     const previousDeadline = Number(rest.requestDeadlineAtMs) > 0 ? Number(rest.requestDeadlineAtMs) : null;
