@@ -427,7 +427,7 @@ jobs:
             if [ "$attempt" -eq 1 ]; then
               # Trigger exactly one fresh scan. Later polls read the snapshot only,
               # so the acceptance loop does not repeatedly restart Radar 8.
-              RADAR8_URL="$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1"
+              RADAR8_URL="$BASE/api/early-expansion-radar?quote=USDT&limit=100&scan=1&background=1"
               RADAR8_MAX_TIME=110
               export RADAR8_SCAN_TRIGGERED=true
             else
