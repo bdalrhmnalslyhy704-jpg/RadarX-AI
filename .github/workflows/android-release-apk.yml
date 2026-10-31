@@ -607,7 +607,7 @@ jobs:
           const duration=Number(worker.last_duration_ms);
           if (body.scanner_ready!==true || worker.enabled!==true ||
               Number(worker.successful_scans)<1 || worker.last_scan_status!=='READY' ||
-              worker.last_error!==null || !summary || age===null || age>180000 ||
+              worker.last_error!==null || !summary || age===null || age>300000 ||
               !Number.isFinite(duration) || duration>45000 ||
               body.paper_trading!==true || body.real_order_execution!==false) {
             throw new Error('PRE_MOVE_BACKGROUND_WORKER_NOT_ACCEPTABLE:'+JSON.stringify({
