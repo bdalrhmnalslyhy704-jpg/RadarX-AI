@@ -533,7 +533,11 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       last_error:stats.last_error||null,
       last_failed_at:stats.last_failed_at||null,
       next_scan_at:stats.next_scan_at||null,
-      active_scan_started_at:stats.active_scan_started_at||null
+      active_scan_started_at:stats.active_scan_started_at||null,
+      active_request_id:stats.active_request_id||null,
+      last_request_id:stats.last_request_id||null,
+      last_request_status:stats.last_request_status||null,
+      last_request_error:stats.last_request_error||null
     };
   }
   function multiAnalystWarmingBody({quote,requestId,reason='SCAN_IN_PROGRESS'}={}){
@@ -1768,6 +1772,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             if(multiAnalystRadar.busy){
               return send(res,202,multiAnalystWarmingBody({quote,requestId,reason:'SCAN_IN_PROGRESS'}));
             }
+            const monitor=multiAnalystMonitoringSnapshot();
+            // A failed exact request must be reported even when an older successful
+            // snapshot remains cached. Never launch a replacement forced scan from
+            // every progress poll after the original request has already failed.
+            if(requestId&&monitor.last_request_id===requestId&&monitor.last_request_status==='FAILED'){
+              return send(res,200,multiAnalystFailureBody({
+                quote,requestId,error:monitor.last_request_error||monitor.last_error||'MULTI_ANALYST_SCAN_FAILED'
+              }));
+            }
             const completedSnapshot=multiAnalystRadar.getCached({quote});
             if(completedSnapshot){
               const forced=u.searchParams.get('scan')==='1';
@@ -1818,8 +1831,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
               }
               return send(res,200,{...completedSnapshot,radar:'MULTI_ANALYST',scan:completedScan,monitoring,meta:completedMeta});
             }
-            const monitor=multiAnalystMonitoringSnapshot();
-            if(monitor.last_error&&!monitor.last_scan_successful){
+            if(monitor.last_error&&!monitor.last_scan_successful&&!requestId){
               return send(res,200,multiAnalystFailureBody({quote,requestId,error:monitor.last_error}));
             }
             try{
