@@ -9,6 +9,23 @@ const list = (v, d) => {
   return a.length ? a : d;
 };
 
+export const DEFAULT_PUBLIC_SPOT_REST_URLS = Object.freeze([
+  'https://data-api.binance.vision',
+  'https://api-gcp.binance.com',
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+  'https://api4.binance.com'
+]);
+export function resolvePublicSpotRestUrls(env=process.env, additionalUrls=[]){
+  const configured=String(env.BINANCE_REST_URLS??'').split(',').map(x=>x.trim()).filter(Boolean);
+  const extra=Array.isArray(additionalUrls)?additionalUrls:[];
+  return [...new Set([...DEFAULT_PUBLIC_SPOT_REST_URLS,...configured,...extra]
+    .map(value=>String(value??'').trim().replace(/\\/+$/,''))
+    .filter(value=>value.startsWith('https://')) )];
+}
+
 export const DEFAULT_PUBLIC_SPOT_WS_URLS = Object.freeze([
   'wss://data-stream.binance.vision/stream',
   'wss://stream.binance.com:9443/stream'
