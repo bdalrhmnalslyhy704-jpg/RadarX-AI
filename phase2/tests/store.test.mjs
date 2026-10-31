@@ -464,3 +464,28 @@ test('Radar 8 watch-only traces persist in their bounded diagnostic archive and 
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('Pre-Move durable cursor writes bypass the shared radar archive queue and migrate old Build 224 state',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-state-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    const key='RADARX:PRE_MOVE_ROTATION_CURSOR:V1:USDT';
+    const legacy={next_cycle:7,next_rotation_offset:63,version:2};
+    await store.putDedupKey(key,legacy);
+    assert.deepEqual(await store.getPreMoveState(key),legacy,'existing Build 224 cursor state must remain readable');
+
+    // Simulate the main store queue being pinned by a large archive operation.
+    // Pre-Move's small independent state file must still make progress.
+    store.queue=new Promise(()=>{});
+    const next={next_cycle:8,next_rotation_offset:72,version:2};
+    await Promise.race([
+      store.putPreMoveState(key,next),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('PRE_MOVE_STATE_QUEUE_NOT_ISOLATED')),500))
+    ]);
+    assert.deepEqual(await store.getPreMoveState(key),next);
+    assert.deepEqual(await store.getDedupKey(key),legacy,'legacy shared dedup state is left intact');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
