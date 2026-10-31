@@ -5,7 +5,7 @@ import test from 'node:test';
 delete process.env.BINANCE_WS_URLS;
 delete process.env.BINANCE_REST_URLS;
 
-const {CONFIG,DEFAULT_PUBLIC_SPOT_REST_URLS,resolvePublicSpotRestUrls,resolvePreMoveSpotRestUrls} = await import('../config.mjs?market-data-endpoint-defaults');
+const {CONFIG,DEFAULT_PUBLIC_SPOT_REST_URLS,resolvePublicSpotRestUrls,resolvePreMoveSpotRestUrls,resolveFastPublicSpotRestUrls} = await import('../config.mjs?market-data-endpoint-defaults');
 
 test('default Spot WebSocket endpoints use the official public market-data stream', () => {
   assert.deepEqual(CONFIG.websocket.urls, [
@@ -65,6 +65,21 @@ test('Pre-Move mirror selection rejects unapproved hosts and supplements a singl
   ]);
   assert.deepEqual(resolvePreMoveSpotRestUrls(['https://unapproved.example'],0),[]);
   assert.deepEqual(resolvePreMoveSpotRestUrls([],0),[]);
+});
+
+test('Multi-Analyst and Pre-Move share the same bounded two-mirror official REST policy',()=>{
+  for(const [urls,index] of [
+    [DEFAULT_PUBLIC_SPOT_REST_URLS,0],
+    [DEFAULT_PUBLIC_SPOT_REST_URLS,4],
+    [DEFAULT_PUBLIC_SPOT_REST_URLS,6],
+    [['https://unapproved.example','https://api-gcp.binance.com'],1],
+    [[],0]
+  ]){
+    assert.deepEqual(
+      resolveFastPublicSpotRestUrls(urls,index),
+      resolvePreMoveSpotRestUrls(urls,index)
+    );
+  }
 });
 
 test('deployment endpoint overrides remain honored', async () => {
