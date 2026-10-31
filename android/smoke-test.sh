@@ -284,10 +284,41 @@ assert_background_service_declared() {
   fi
 }
 
+install_apk_with_recovery() {
+  local label="$1"
+  local apk_path="$2"
+  shift 2
+  local rc=0
+  for attempt in 1 2; do
+    echo "Installing ${label} on the booted Android emulator (attempt ${attempt}/2)."
+    if timeout 120s adb install "$@" "${apk_path}"; then
+      echo "ANDROID_APK_INSTALL_OK label=${label} attempt=${attempt}"
+      return 0
+    else
+      rc=$?
+      echo "::warning::ADB install for ${label} did not complete on attempt ${attempt} (exit ${rc})."
+    fi
+    if [[ "${attempt}" -lt 2 ]]; then
+      timeout 8s adb reconnect offline >/dev/null 2>&1 || true
+      timeout 8s adb kill-server >/dev/null 2>&1 || true
+      timeout 8s adb start-server >/dev/null 2>&1 || true
+      timeout 30s adb wait-for-device
+      for probe in $(seq 1 6); do
+        if timeout 8s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' | grep -Fxq '1'; then
+          break
+        fi
+        sleep 3
+      done
+    fi
+  done
+  echo "::error::Could not install ${label} after two bounded ADB attempts (last exit ${rc})."
+  return 1
+}
+
 PHASE="wait for Android emulator device"
 timeout 60s adb wait-for-device
-PHASE="install debug APK"
-timeout 45s adb install -r "${APK}"
+PHASE="install signed Release APK"
+install_apk_with_recovery "signed Release APK" "${APK}" -r
 
 # Online: the Activity must remain open and auto-start the foreground monitor.
 start_app_and_wait_ready
@@ -361,7 +392,7 @@ if [[ "$REPLAY_APK" != "$APK" ]]; then
   fi
   timeout 15s adb shell am force-stop com.radarx.app >/dev/null 2>&1 || true
   timeout 20s adb uninstall com.radarx.app
-  timeout 60s adb install "$REPLAY_APK"
+  install_apk_with_recovery "Debug replay APK" "$REPLAY_APK"
   echo "Signed Release APK passed the UI/offline/service phase; installed Debug APK for test-only replay."
 fi
 
