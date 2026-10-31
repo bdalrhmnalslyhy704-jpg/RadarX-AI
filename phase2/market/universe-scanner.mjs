@@ -1900,7 +1900,7 @@ export class MarketUniverseScanner {
       const last=Number(row?.lastPrice);
       const priceChangePercent=Number.isFinite(explicit)
         ?explicit
-        :open>0&&last>0?(last/open-1)*100:null;
+        :open>0&&last>0?Math.round((last/open-1)*100*1e8)/1e8:null;
       return {...row,priceChangePercent};
     }):r.data;
     return { data, source: r.source, receivedAt: this.clock() };
