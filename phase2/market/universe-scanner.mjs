@@ -10,7 +10,7 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 
 // Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
 // envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
-export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 32;
+export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 20;
 // Live measurements showed no speed gain from large fan-out. Sixteen workers
 // reduce simultaneous candle/depth payloads while keeping network utilization high.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 16;
@@ -2387,8 +2387,8 @@ export class MarketUniverseScanner {
         // The Pre-Move RestClient is dedicated to this worker. Give its outbound
         // calls one absolute deadline so a stalled Binance response cannot leave
         // the background worker and its API snapshot in SCANNING forever.
-        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||55_000);
-        const timeoutMs=Math.max(15_000,Math.min(90_000,configuredTimeout));
+        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||50_000);
+        const timeoutMs=Math.max(15_000,Math.min(50_000,configuredTimeout));
         const previousDeadline=this.rest.requestDeadlineAtMs;
         const nextDeadline=Date.now()+timeoutMs;
         const priorDeadline=Number(previousDeadline);
