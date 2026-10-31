@@ -1804,7 +1804,8 @@ export async function boundedMap(items, concurrency, worker) {
 
 function shouldRetry(error) {
   const m = String(error?.message || error || '');
-  return /TIMEOUT|429|418|502|503|504|NETWORK|FETCH|UNAVAILABLE|ECONN|ENOTFOUND|ETIMEDOUT/.test(m);
+  // A single bounded retry handles transient Binance HTTP 451 responses.
+  return /TIMEOUT|429|418|451|502|503|504|NETWORK|FETCH|UNAVAILABLE|ECONN|ENOTFOUND|ETIMEDOUT/.test(m);
 }
 
 export async function withRetry(task, {
@@ -1856,14 +1857,15 @@ export class MarketUniverseScanner {
     this._preMoveRotationOffset = 0;
   }
 
-  // RestClient already iterates every configured Binance mirror internally.
-  // Repeating a whole multi-host sweep here multiplies a slow 24h ticker request
-  // by (fallback hosts × retry attempts) and can consume the complete analyst
-  // scan deadline before a single symbol is reviewed. Keep retries only for
-  // lightweight test/custom REST adapters that expose no internal host list.
-  restRetryAttempts() {
-    return Array.isArray(this.rest?.baseUrls) && this.rest.baseUrls.length > 1
-      ? 0 : Math.max(0,Math.trunc(Number(this.config.retryAttempts)||0));
+  // RestClient already tries every configured Binance mirror within one request.
+  // Allow at most ONE second sweep for the small discovery endpoints only. Deep
+  // candle/depth requests retain their single multi-host pass to avoid load bursts.
+  restRetryAttempts(path) {
+    const multiHost = Array.isArray(this.rest?.baseUrls) && this.rest.baseUrls.length > 1;
+    const configured = Math.max(0,Math.trunc(Number(this.config.retryAttempts)||0));
+    if (!multiHost) return configured;
+    const discoveryPath = path === '/api/v3/exchangeInfo' || path === '/api/v3/ticker/24hr';
+    return discoveryPath ? Math.min(1,configured) : 0;
   }
 
   async requestOnce(path, query = {}) {
@@ -1872,7 +1874,7 @@ export class MarketUniverseScanner {
     const promise = withRetry(
       () => this.rest.request(path, query),
       {
-        attempts: this.restRetryAttempts(),
+        attempts: this.restRetryAttempts(path),
         baseMs: this.config.retryBaseMs,
         maxBackoffMs: this.config.maxBackoffMs,
         sleepFn: this.sleepFn
