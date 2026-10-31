@@ -153,8 +153,10 @@ export async function startServer({
   const adaptiveTraderExecutionController=new AdaptiveTraderExecutionController({store,env:process.env,logger});
   const adaptiveTraderIntervalMs=Math.max(60_000,Math.min(600_000,
     Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_INTERVAL_MS)||180_000)));
-  const adaptiveTraderScanLimit=Math.max(40,Math.min(120,
-    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_SCAN_LIMIT)||80)));
+  // A 40-symbol rotating deep batch is more reliable on the free 512 MB service;
+  // market-wide ticker capture still observes the full eligible Spot universe.
+  const adaptiveTraderScanLimit=Math.max(40,Math.min(60,
+    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_SCAN_LIMIT)||40)));
   const adaptiveTraderWorker=new AdaptiveTraderWorker({
     store,snapshotProvider:adaptiveTraderSnapshotProvider,executionController:adaptiveTraderExecutionController,logger,
     intervalMs:adaptiveTraderIntervalMs,scanLimit:adaptiveTraderScanLimit

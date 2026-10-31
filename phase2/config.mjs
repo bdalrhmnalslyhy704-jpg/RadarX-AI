@@ -256,13 +256,15 @@ export const CONFIG = Object.freeze({
     // Every selected row still passes all 19 specialists plus the final analyst; the smaller
     // deep batch avoids starving the other RadarX workers on the 512 MB DHDTech container.
     discoveryPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DISCOVERY_POOL, 32, 32, 48),
-    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 8, 6, 8),
+    // Keep all 20 analysts enabled, but analyze a smaller rotating batch on the
+    // 512 MB DHDTech service so a slow REST cycle cannot starve the twelve radars.
+    deepScanPool: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_SCAN_POOL, 4, 4, 6),
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
-    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 2, 2, 2),
-    deepKlines: int(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 220),
-    // Leave room for slower public REST responses while keeping the background
-    // scan bounded and the UI non-blocking.
-    scanTimeoutMs: int(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 180000),
+    deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 2, 1, 2),
+    deepKlines: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 160, 120, 180),
+    // Ignore overly aggressive <90s overrides: four-hour closed-candle data and
+    // the full 19-specialist + final review need a bounded but realistic budget.
+    scanTimeoutMs: boundedInt(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 120000, 90000, 180000),
     minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
     universeRefreshMs: int(process.env.RADARX_MULTI_ANALYST_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),

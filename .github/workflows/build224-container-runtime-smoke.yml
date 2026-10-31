@@ -185,15 +185,17 @@ jobs:
           if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'){
             throw new Error('ADAPTIVE_TRADER_COGNITIVE_MODEL_VERSION_INVALID '+JSON.stringify(cognitiveEvidence));
           }
-          if(cognitiveEvidence.resolved_samples>=100&&(
-            cognitiveEvidence.training_samples<60||
-            cognitiveEvidence.validation_samples<20||
-            cognitiveEvidence.holdout_samples<20||
-            !cognitiveEvidence.validation_evaluated||
-            !cognitiveEvidence.holdout_evaluated||
-            !(Number(cognitiveEvidence.max_training_outcome_resolved_at)<Number(cognitiveEvidence.validation_start_at))||
-            !(Number(cognitiveEvidence.validation_start_at)<Number(cognitiveEvidence.holdout_start_at))
-          )){
+          const chronologicalSplitSafe=
+            cognitiveEvidence.training_samples>=60&&
+            cognitiveEvidence.validation_samples>=1&&
+            cognitiveEvidence.holdout_samples>=20&&
+            Number(cognitiveEvidence.max_training_outcome_resolved_at)<Number(cognitiveEvidence.validation_start_at)&&
+            Number(cognitiveEvidence.validation_start_at)<Number(cognitiveEvidence.holdout_start_at);
+          const probabilityGateSafe=!cognitiveEvidence.probability_ready||
+            (cognitiveEvidence.validation_samples>=20&&cognitiveEvidence.holdout_samples>=20&&
+             cognitiveEvidence.validation_evaluated&&cognitiveEvidence.validation_beat_base_rate&&
+             cognitiveEvidence.holdout_evaluated&&cognitiveEvidence.holdout_beat_base_rate);
+          if(cognitiveEvidence.resolved_samples>=100&&(!chronologicalSplitSafe||!probabilityGateSafe)){
             throw new Error('ADAPTIVE_TRADER_COGNITIVE_CHRONOLOGICAL_SPLIT_INCOMPLETE '+JSON.stringify(cognitiveEvidence));
           }
           const trainingEvidence={
