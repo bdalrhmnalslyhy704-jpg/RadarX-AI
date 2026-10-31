@@ -239,6 +239,36 @@ test('TEST_FIXTURE: full-market batch ticker snapshot is multiplexed across rada
 });
 
 
+test('TEST_FIXTURE: HTTP 451 diagnostics preserve every official host and Binance location message',async()=>{
+  const hosts=['https://restricted-a.test','https://restricted-b.test'];
+  const seen=[];
+  const client=new RestClient({
+    baseUrls:hosts,
+    minIntervalMs:0,
+    maxRequestsPerMinute:100,
+    fetchImpl:async url=>{
+      const host=new URL(url).host;
+      seen.push(host);
+      return {
+        status:451,ok:false,headers:new Map(),
+        clone:()=>({text:async()=>JSON.stringify({
+          code:0,msg:"Service unavailable from a restricted location according to Binance Eligibility"
+        })})
+      };
+    }
+  });
+  await assert.rejects(
+    ()=>client.request('/api/v3/exchangeInfo'),
+    error=>{
+      assert.match(error.message,/HTTP_451 path=\/api\/v3\/exchangeInfo host=restricted-b\.test/);
+      assert.match(error.message,/host=restricted-a\.test/);
+      assert.match(error.message,/Service unavailable from a restricted location/);
+      return true;
+    }
+  );
+  assert.deepEqual(seen,['restricted-a.test','restricted-b.test']);
+});
+
 test('TEST_FIXTURE: REST timeout errors identify the timed-out endpoint and fallback host',async()=>{
   let attempts=0;
   const baseUrls=['https://timeout-a.test','https://timeout-b.test'];
