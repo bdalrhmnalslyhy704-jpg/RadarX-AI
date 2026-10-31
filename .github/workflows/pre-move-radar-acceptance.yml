@@ -186,182 +186,6 @@ jobs:
             }
             core.setFailed('Timed out waiting for exact-commit DHDTech Adaptive Trader live acceptance.');
 
-      - name: Audit all 13 screenshot gainers against closed Binance Spot USDT candles
-        # Historical replay is supporting evidence, not a reason to block the live Pre-Move release gate.
-        continue-on-error: true
-        timeout-minutes: 2
-        run: |
-          set -euo pipefail
-          URL="$BASE/api/early-mover-case-study?symbols=PARTIUSDT,BEAMXUSDT,SOXSBUSDT,SOPHUSDT,SOLVUSDT,SKDDBUSDT,LSKUSDT,NILUSDT,PUNDIXUSDT,UVXYBUSDT,KERNELUSDT,SQQQBUSDT,BREVUSDT&threshold_pct=5&window_hours=24&lead_minutes=60"
-          TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
-          OUT="$RUNNER_TEMP/early-mover-case-study.json"
-          CODE="000"
-          READY=false
-          for attempt in $(seq 1 5); do
-            rm -f "$TMP"
-            CURL_EXIT=0
-            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 35 -o "$TMP" -w "%{http_code}" "$URL")" || CURL_EXIT=$?
-            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ]; then
-              if node --input-type=module - "$TMP" <<'NODE'
-          import fs from 'node:fs';
-          try {
-            const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==13||
-               JSON.stringify(body.options?.symbols)!==JSON.stringify(['PARTIUSDT','BEAMXUSDT','SOXSBUSDT','SOPHUSDT','SOLVUSDT','SKDDBUSDT','LSKUSDT','NILUSDT','PUNDIXUSDT','UVXYBUSDT','KERNELUSDT','SQQQBUSDT','BREVUSDT'])) process.exit(1);
-          } catch { process.exit(1); }
-          NODE
-              then
-                mv "$TMP" "$OUT"
-                READY=true
-                break
-              fi
-              echo "::warning::Early-mover case-study response was not complete JSON on attempt $attempt/5."
-            else
-              case "$CODE" in
-                000|404|429|502|503|504)
-                  echo "::warning::Early-mover historical endpoint not ready (curl=$CURL_EXIT HTTP=$CODE) on attempt $attempt/5."
-                  ;;
-                *)
-                  echo "::error::Early-mover case-study API returned unexpected HTTP $CODE."
-                  cat "$TMP" 2>/dev/null | head -c 3000 || true
-                  exit 1
-                  ;;
-              esac
-            fi
-            rm -f "$TMP"
-            if [ "$attempt" -lt 5 ]; then sleep 10; fi
-          done
-          if [ "$READY" != "true" ]; then
-            echo "::error::DHDTech did not expose a complete early-mover case study after rollout retries."
-            cat "$TMP" 2>/dev/null | head -c 3000 || true
-            exit 1
-          fi
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/early-mover-case-study.json','utf8'));
-          if(b.source!=='BINANCE_SPOT_PUBLIC_REST'||b.policy?.paper_trading!==true||b.policy?.real_order_execution!==false)
-            throw new Error('EARLY_MOVER_CASE_STUDY_POLICY_OR_SOURCE_INVALID');
-          const keys=[
-            'return_15m_pct','return_1h_pct','return_24h_pct',
-            'quote_volume_ratio_15m_vs_prior_2h','trade_count_ratio_15m_vs_prior_2h',
-            'taker_buy_share_15m','compression_ratio_20_vs_previous_20',
-            'range_1h_pct','distance_below_prior_1h_high_pct',
-            'close_location_pct','three_higher_lows','relative_strength_vs_btc_1h_pct'
-          ];
-          const replaySummary=replay=>{
-            if(!replay||typeof replay!=='object')return null;
-            return {
-              status:replay.status,as_of:replay.as_of,no_future_data_used:replay.no_future_data_used,
-              latest_closed_candle_at:replay.latest_closed_candle_at,history:replay.history,
-              core:replay.core?{
-                stage:replay.core.stage,score:replay.core.score,
-                evidence_complete:replay.core.evidence_complete,
-                flow_transition_confirmed:replay.core.flow_transition_confirmed,
-                price_window_valid:replay.core.price_window_valid,
-                structure_confirmed:replay.core.structure_confirmed,
-                already_moved:replay.core.already_moved,
-                session_return_pct:replay.core.session_return_pct,
-                one_hour_return_pct:replay.core.one_hour_return_pct,
-                volume_acceleration:replay.core.volume_acceleration,
-                trade_acceleration:replay.core.trade_acceleration,
-                taker_buy_ratio:replay.core.taker_buy_ratio,
-                taker_buy_acceleration:replay.core.taker_buy_acceleration,
-                mean_close_location:replay.core.mean_close_location,
-                relative_strength_vs_market_pct:replay.core.relative_strength_vs_market_pct,
-                relative_strength_vs_btc_pct:replay.core.relative_strength_vs_btc_pct,
-                components:replay.core.components?{
-                  squeeze:replay.core.components.squeeze,
-                  structure:replay.core.components.structure,
-                  buying_pressure:replay.core.components.buying_pressure,
-                  acceleration:replay.core.components.acceleration,
-                  relative_strength:replay.core.components.relative_strength
-                }:null,
-                missing_evidence:replay.core.missing_evidence
-              }:null,
-              core_setup_gate_passed:replay.core_setup_gate_passed,
-              full_alert_reconstruction:replay.full_alert_reconstruction||replay.full_alert_reconstruction===false?replay.full_alert_reconstruction:replay.full_alert_reconstruction??null,
-              limitation:replay.limitation||null,reason:replay.reason||null
-            };
-          };
-          const rows=b.results.map(r=>{
-            if(r.no_future_data_used!==true)throw new Error('EARLY_MOVER_FUTURE_DATA_GUARD_FAILED:'+r.symbol);
-            if(['MARKET_DATA_FETCH_FAILED','INSUFFICIENT_CLOSED_CANDLES'].includes(r.status))
-              throw new Error('EARLY_MOVER_HISTORY_UNAVAILABLE:'+r.symbol+':'+r.status+':'+String(r.reason||r.error||''));
-            const features=f=>f?Object.fromEntries(keys.map(k=>[k,f[k]??null])):null;
-            const replayRows=[
-              r.pre_move?.production_pre_move_replay,
-              r.at_crossing?.production_pre_move_replay,
-              ...(Array.isArray(r.lead_snapshots_before_crossing)?r.lead_snapshots_before_crossing.map(x=>x.production_pre_move_replay):[]),
-              ...(Array.isArray(r.intraday_runup?.lead_snapshots_before_runup)?r.intraday_runup.lead_snapshots_before_runup.map(x=>x.production_pre_move_replay):[])
-            ].filter(Boolean);
-            for(const replay of replayRows){
-              if(replay.no_future_data_used!==true)throw new Error('PRODUCTION_DETECTOR_REPLAY_USED_FUTURE_DATA:'+r.symbol);
-              if(replay.as_of&&replay.latest_closed_candle_at&&Date.parse(replay.latest_closed_candle_at)>Date.parse(replay.as_of))
-                throw new Error('PRODUCTION_DETECTOR_REPLAY_CANDLE_AFTER_AS_OF:'+r.symbol);
-            }
-            return {
-              symbol:r.symbol,status:r.status,closed_candles:r.closed_candles,
-              first_crossing_at:r.crossing?.observed_at??null,
-              price_before_move:r.pre_move?.price??null,
-              minutes_before_crossing:r.pre_move?.minutes_before_crossing??null,
-              price_at_crossing:r.crossing?.price??null,
-              price_24h_reference:r.crossing?.price_24h_before_crossing??null,
-              trailing_24h_return_at_crossing_pct:r.crossing?.trailing_24h_return_pct??null,
-              change_from_watch_snapshot_to_crossing_pct:r.crossing?.move_from_pre_move_snapshot_pct??r.pre_move?.price_change_from_pre_move_to_crossing_pct??null,
-              features_before:features(r.pre_move?.features),
-              factors_before:r.pre_move?.early_evidence?.checks??null,
-              features_at_crossing:features(r.at_crossing?.features),
-              factors_at_crossing:r.at_crossing?.early_evidence?.checks??null,
-              production_detector_replay_before:replaySummary(r.pre_move?.production_pre_move_replay),
-              production_detector_replay_at_crossing:replaySummary(r.at_crossing?.production_pre_move_replay),
-              intraday_runup_status:r.intraday_runup?.status??null,
-              intraday_runup_definition:r.intraday_runup?.definition??null,
-              runup_reference_candle_at:r.intraday_runup?.baseline?.observed_at??null,
-              runup_reference_candle_close:r.intraday_runup?.baseline?.candle_close??null,
-              runup_reference_low:r.intraday_runup?.baseline?.reference_low??null,
-              runup_at:r.intraday_runup?.runup?.observed_at??null,
-              runup_price:r.intraday_runup?.runup?.price??null,
-              runup_from_reference_low_pct:r.intraday_runup?.runup?.return_from_reference_low_pct??null,
-              runup_from_reference_close_pct:r.intraday_runup?.runup?.return_from_baseline_close_pct??null,
-              snapshots_before_runup:(r.intraday_runup?.lead_snapshots_before_runup??[]).map(x=>({
-                lead_minutes:x.requested_lead_minutes,status:x.status,observed_at:x.observed_at,
-                price:x.price,change_to_runup_pct:x.price_change_to_runup_pct,
-                production_detector_replay:replaySummary(x.production_pre_move_replay)
-              })),
-              snapshots_before_crossing:(r.lead_snapshots_before_crossing??[]).map(x=>({
-                lead_minutes:x.requested_lead_minutes,status:x.status,observed_at:x.observed_at,
-                price:x.price,change_to_crossing_pct:x.price_change_to_crossing_pct,
-                production_detector_replay:replaySummary(x.production_pre_move_replay)
-              })),
-              runup_retrospective_outcome:{
-                latest_at:r.intraday_runup?.retrospective_outcome?.latest_observed_at??null,
-                latest_price:r.intraday_runup?.retrospective_outcome?.latest_price??null,
-                return_from_runup_to_latest_pct:r.intraday_runup?.retrospective_outcome?.return_from_runup_to_latest_pct??null,
-                max_favorable_pct:r.intraday_runup?.retrospective_outcome?.max_favorable_pct_since_runup??null,
-                max_adverse_pct:r.intraday_runup?.retrospective_outcome?.max_adverse_pct_since_runup??null,
-                basis:r.intraday_runup?.retrospective_outcome?.basis??null
-              },
-              orderbook_history_status:r.orderbook_history_status
-            };
-          });
-          console.log('EARLY_MOVER_RETROSPECTIVE_AUDIT '+JSON.stringify({
-            threshold_pct:b.options.threshold_pct,
-            threshold_measure:b.threshold_measure,
-            window_hours:b.options.window_hours,
-            lead_minutes:b.options.lead_minutes,
-            benchmark:b.benchmark,
-            results:rows,
-            production_detector_replay:{
-              movers_replayed:rows.filter(row=>row.production_detector_replay_before||row.snapshots_before_crossing?.some(x=>x.production_detector_replay)).length,
-              core_ready_at_least_15m_before_crossing:rows.filter(row=>
-                row.snapshots_before_crossing?.some(x=>Number(x.lead_minutes)>=15&&x.production_detector_replay?.core_setup_gate_passed===true)
-              ).map(row=>row.symbol),
-              interpretation:'Core setup replay only; a passing stage does not prove a live notification or phone push was sent.'
-            },
-            limitation:'Retrospective closed-candle replay, not a validated forecast. Historical order-book depth and the live ticker-activity baseline are unavailable.'
-          }));
-          NODE
-
       - name: Verify one live scan from the 20-analyst center on DHDTech
         # A bounded deep batch uses a longer poll window for slower DHDTech/REST cycles.
         timeout-minutes: 20
@@ -772,6 +596,185 @@ jobs:
             cat "$RUNNER_TEMP/pre-move-worker-status.json" 2>/dev/null || true
             exit 1
           fi
+
+      # This is retrospective, best-effort evidence. Run it only after all live
+      # market scans and the independent Pre-Move worker are verified so its
+      # historical candle reads cannot contend with real-time discovery.
+      - name: Audit all 13 screenshot gainers against closed Binance Spot USDT candles
+        # Historical replay is supporting evidence, not a reason to block the live Pre-Move release gate.
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          URL="$BASE/api/early-mover-case-study?symbols=PARTIUSDT,BEAMXUSDT,SOXSBUSDT,SOPHUSDT,SOLVUSDT,SKDDBUSDT,LSKUSDT,NILUSDT,PUNDIXUSDT,UVXYBUSDT,KERNELUSDT,SQQQBUSDT,BREVUSDT&threshold_pct=5&window_hours=24&lead_minutes=60"
+          TMP="$RUNNER_TEMP/early-mover-case-study.tmp.json"
+          OUT="$RUNNER_TEMP/early-mover-case-study.json"
+          CODE="000"
+          READY=false
+          for attempt in $(seq 1 5); do
+            rm -f "$TMP"
+            CURL_EXIT=0
+            CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 35 -o "$TMP" -w "%{http_code}" "$URL")" || CURL_EXIT=$?
+            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ]; then
+              if node --input-type=module - "$TMP" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const body=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            if(body?.report!=='RADARX_EARLY_MOVER_CASE_STUDY_V1'||!Array.isArray(body.results)||body.results.length!==13||
+               JSON.stringify(body.options?.symbols)!==JSON.stringify(['PARTIUSDT','BEAMXUSDT','SOXSBUSDT','SOPHUSDT','SOLVUSDT','SKDDBUSDT','LSKUSDT','NILUSDT','PUNDIXUSDT','UVXYBUSDT','KERNELUSDT','SQQQBUSDT','BREVUSDT'])) process.exit(1);
+          } catch { process.exit(1); }
+          NODE
+              then
+                mv "$TMP" "$OUT"
+                READY=true
+                break
+              fi
+              echo "::warning::Early-mover case-study response was not complete JSON on attempt $attempt/5."
+            else
+              case "$CODE" in
+                000|404|429|502|503|504)
+                  echo "::warning::Early-mover historical endpoint not ready (curl=$CURL_EXIT HTTP=$CODE) on attempt $attempt/5."
+                  ;;
+                *)
+                  echo "::error::Early-mover case-study API returned unexpected HTTP $CODE."
+                  cat "$TMP" 2>/dev/null | head -c 3000 || true
+                  exit 1
+                  ;;
+              esac
+            fi
+            rm -f "$TMP"
+            if [ "$attempt" -lt 5 ]; then sleep 10; fi
+          done
+          if [ "$READY" != "true" ]; then
+            echo "::error::DHDTech did not expose a complete early-mover case study after rollout retries."
+            cat "$TMP" 2>/dev/null | head -c 3000 || true
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/early-mover-case-study.json','utf8'));
+          if(b.source!=='BINANCE_SPOT_PUBLIC_REST'||b.policy?.paper_trading!==true||b.policy?.real_order_execution!==false)
+            throw new Error('EARLY_MOVER_CASE_STUDY_POLICY_OR_SOURCE_INVALID');
+          const keys=[
+            'return_15m_pct','return_1h_pct','return_24h_pct',
+            'quote_volume_ratio_15m_vs_prior_2h','trade_count_ratio_15m_vs_prior_2h',
+            'taker_buy_share_15m','compression_ratio_20_vs_previous_20',
+            'range_1h_pct','distance_below_prior_1h_high_pct',
+            'close_location_pct','three_higher_lows','relative_strength_vs_btc_1h_pct'
+          ];
+          const replaySummary=replay=>{
+            if(!replay||typeof replay!=='object')return null;
+            return {
+              status:replay.status,as_of:replay.as_of,no_future_data_used:replay.no_future_data_used,
+              latest_closed_candle_at:replay.latest_closed_candle_at,history:replay.history,
+              core:replay.core?{
+                stage:replay.core.stage,score:replay.core.score,
+                evidence_complete:replay.core.evidence_complete,
+                flow_transition_confirmed:replay.core.flow_transition_confirmed,
+                price_window_valid:replay.core.price_window_valid,
+                structure_confirmed:replay.core.structure_confirmed,
+                already_moved:replay.core.already_moved,
+                session_return_pct:replay.core.session_return_pct,
+                one_hour_return_pct:replay.core.one_hour_return_pct,
+                volume_acceleration:replay.core.volume_acceleration,
+                trade_acceleration:replay.core.trade_acceleration,
+                taker_buy_ratio:replay.core.taker_buy_ratio,
+                taker_buy_acceleration:replay.core.taker_buy_acceleration,
+                mean_close_location:replay.core.mean_close_location,
+                relative_strength_vs_market_pct:replay.core.relative_strength_vs_market_pct,
+                relative_strength_vs_btc_pct:replay.core.relative_strength_vs_btc_pct,
+                components:replay.core.components?{
+                  squeeze:replay.core.components.squeeze,
+                  structure:replay.core.components.structure,
+                  buying_pressure:replay.core.components.buying_pressure,
+                  acceleration:replay.core.components.acceleration,
+                  relative_strength:replay.core.components.relative_strength
+                }:null,
+                missing_evidence:replay.core.missing_evidence
+              }:null,
+              core_setup_gate_passed:replay.core_setup_gate_passed,
+              full_alert_reconstruction:replay.full_alert_reconstruction||replay.full_alert_reconstruction===false?replay.full_alert_reconstruction:replay.full_alert_reconstruction??null,
+              limitation:replay.limitation||null,reason:replay.reason||null
+            };
+          };
+          const rows=b.results.map(r=>{
+            if(r.no_future_data_used!==true)throw new Error('EARLY_MOVER_FUTURE_DATA_GUARD_FAILED:'+r.symbol);
+            if(['MARKET_DATA_FETCH_FAILED','INSUFFICIENT_CLOSED_CANDLES'].includes(r.status))
+              throw new Error('EARLY_MOVER_HISTORY_UNAVAILABLE:'+r.symbol+':'+r.status+':'+String(r.reason||r.error||''));
+            const features=f=>f?Object.fromEntries(keys.map(k=>[k,f[k]??null])):null;
+            const replayRows=[
+              r.pre_move?.production_pre_move_replay,
+              r.at_crossing?.production_pre_move_replay,
+              ...(Array.isArray(r.lead_snapshots_before_crossing)?r.lead_snapshots_before_crossing.map(x=>x.production_pre_move_replay):[]),
+              ...(Array.isArray(r.intraday_runup?.lead_snapshots_before_runup)?r.intraday_runup.lead_snapshots_before_runup.map(x=>x.production_pre_move_replay):[])
+            ].filter(Boolean);
+            for(const replay of replayRows){
+              if(replay.no_future_data_used!==true)throw new Error('PRODUCTION_DETECTOR_REPLAY_USED_FUTURE_DATA:'+r.symbol);
+              if(replay.as_of&&replay.latest_closed_candle_at&&Date.parse(replay.latest_closed_candle_at)>Date.parse(replay.as_of))
+                throw new Error('PRODUCTION_DETECTOR_REPLAY_CANDLE_AFTER_AS_OF:'+r.symbol);
+            }
+            return {
+              symbol:r.symbol,status:r.status,closed_candles:r.closed_candles,
+              first_crossing_at:r.crossing?.observed_at??null,
+              price_before_move:r.pre_move?.price??null,
+              minutes_before_crossing:r.pre_move?.minutes_before_crossing??null,
+              price_at_crossing:r.crossing?.price??null,
+              price_24h_reference:r.crossing?.price_24h_before_crossing??null,
+              trailing_24h_return_at_crossing_pct:r.crossing?.trailing_24h_return_pct??null,
+              change_from_watch_snapshot_to_crossing_pct:r.crossing?.move_from_pre_move_snapshot_pct??r.pre_move?.price_change_from_pre_move_to_crossing_pct??null,
+              features_before:features(r.pre_move?.features),
+              factors_before:r.pre_move?.early_evidence?.checks??null,
+              features_at_crossing:features(r.at_crossing?.features),
+              factors_at_crossing:r.at_crossing?.early_evidence?.checks??null,
+              production_detector_replay_before:replaySummary(r.pre_move?.production_pre_move_replay),
+              production_detector_replay_at_crossing:replaySummary(r.at_crossing?.production_pre_move_replay),
+              intraday_runup_status:r.intraday_runup?.status??null,
+              intraday_runup_definition:r.intraday_runup?.definition??null,
+              runup_reference_candle_at:r.intraday_runup?.baseline?.observed_at??null,
+              runup_reference_candle_close:r.intraday_runup?.baseline?.candle_close??null,
+              runup_reference_low:r.intraday_runup?.baseline?.reference_low??null,
+              runup_at:r.intraday_runup?.runup?.observed_at??null,
+              runup_price:r.intraday_runup?.runup?.price??null,
+              runup_from_reference_low_pct:r.intraday_runup?.runup?.return_from_reference_low_pct??null,
+              runup_from_reference_close_pct:r.intraday_runup?.runup?.return_from_baseline_close_pct??null,
+              snapshots_before_runup:(r.intraday_runup?.lead_snapshots_before_runup??[]).map(x=>({
+                lead_minutes:x.requested_lead_minutes,status:x.status,observed_at:x.observed_at,
+                price:x.price,change_to_runup_pct:x.price_change_to_runup_pct,
+                production_detector_replay:replaySummary(x.production_pre_move_replay)
+              })),
+              snapshots_before_crossing:(r.lead_snapshots_before_crossing??[]).map(x=>({
+                lead_minutes:x.requested_lead_minutes,status:x.status,observed_at:x.observed_at,
+                price:x.price,change_to_crossing_pct:x.price_change_to_crossing_pct,
+                production_detector_replay:replaySummary(x.production_pre_move_replay)
+              })),
+              runup_retrospective_outcome:{
+                latest_at:r.intraday_runup?.retrospective_outcome?.latest_observed_at??null,
+                latest_price:r.intraday_runup?.retrospective_outcome?.latest_price??null,
+                return_from_runup_to_latest_pct:r.intraday_runup?.retrospective_outcome?.return_from_runup_to_latest_pct??null,
+                max_favorable_pct:r.intraday_runup?.retrospective_outcome?.max_favorable_pct_since_runup??null,
+                max_adverse_pct:r.intraday_runup?.retrospective_outcome?.max_adverse_pct_since_runup??null,
+                basis:r.intraday_runup?.retrospective_outcome?.basis??null
+              },
+              orderbook_history_status:r.orderbook_history_status
+            };
+          });
+          console.log('EARLY_MOVER_RETROSPECTIVE_AUDIT '+JSON.stringify({
+            threshold_pct:b.options.threshold_pct,
+            threshold_measure:b.threshold_measure,
+            window_hours:b.options.window_hours,
+            lead_minutes:b.options.lead_minutes,
+            benchmark:b.benchmark,
+            results:rows,
+            production_detector_replay:{
+              movers_replayed:rows.filter(row=>row.production_detector_replay_before||row.snapshots_before_crossing?.some(x=>x.production_detector_replay)).length,
+              core_ready_at_least_15m_before_crossing:rows.filter(row=>
+                row.snapshots_before_crossing?.some(x=>Number(x.lead_minutes)>=15&&x.production_detector_replay?.core_setup_gate_passed===true)
+              ).map(row=>row.symbol),
+              interpretation:'Core setup replay only; a passing stage does not prove a live notification or phone push was sent.'
+            },
+            limitation:'Retrospective closed-candle replay, not a validated forecast. Historical order-book depth and the live ticker-activity baseline are unavailable.'
+          }));
+          NODE
 
       - name: Upload DHDTech live acceptance evidence
         if: always()
