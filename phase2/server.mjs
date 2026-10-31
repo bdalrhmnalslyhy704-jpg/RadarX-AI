@@ -129,10 +129,20 @@ export async function startServer({
   // followed by every official REST base endpoint. Hosting regions may return
   // HTTP 451 from one hostname while another official endpoint remains reachable.
   const publicSpotRestUrls=resolvePublicSpotRestUrls(process.env,config.rest.baseUrls??config.rest.urls??[]);
+  const radarRestUrls=resolveFastPublicSpotRestUrls(publicSpotRestUrls,0);
+  const activeSpotRestUrls=radarRestUrls.length?radarRestUrls:publicSpotRestUrls;
   logger.info?.('[BINANCE_SPOT_REST_FALLBACKS] '+JSON.stringify({
-    count:publicSpotRestUrls.length,hosts:publicSpotRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
+    configured_official_hosts:publicSpotRestUrls.length,
+    configured_hosts:publicSpotRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
   }));
-  const rest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  logger.info?.('[RADAR_FAST_SPOT_REST_FALLBACKS] '+JSON.stringify({
+    count:activeSpotRestUrls.length,
+    hosts:activeSpotRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
+    policy:'FIXED_PUBLIC_DATA_PRIMARY_THEN_GCP_BACKUP',
+    sequential_mirror_limit:2
+  }));
+  const createRadarRest=()=>new RestClient({...config.rest,baseUrls:activeSpotRestUrls});
+  const rest=createRadarRest();
   // Outcome work is deliberately bounded: at most two public-Spot kline requests
   // per minute, using stored alerts and real closed candles only.
   const radarSignalOutcomeWorker=new RadarSignalOutcomeWorker({store,rest,logger,pollMs:60_000,maxRestCalls:2});
@@ -141,10 +151,10 @@ export async function startServer({
   const push=new PushManager({provider,store,deduplicator:dedup,retryBaseMs:config.monitoring.pushRetryMs});
   const service=new SignalService({deduplicator:dedup,store,pushManager:push,config});
   const monitor=monitorFactory({config,rest,signalService:service,store,pushManager:push,logger});
-  const marketRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const marketRadarRest=createRadarRest();
   // The Adaptive Trader uses an independent read-only scanner and its own short-lived snapshot cache.
   // It does not feed, configure, or modify any of the twelve existing radar decisions.
-  const adaptiveTraderRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const adaptiveTraderRest=createRadarRest();
   const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
   const adaptiveTraderExecutionController=new AdaptiveTraderExecutionController({store,env:process.env,logger});
   const adaptiveTraderIntervalMs=Math.max(60_000,Math.min(600_000,
@@ -158,7 +168,8 @@ export async function startServer({
     intervalMs:adaptiveTraderIntervalMs,scanLimit:adaptiveTraderScanLimit
   });
   const moveConfig={...(config.moveRadar||{})};
-  const moveScanner=new MarketUniverseScanner({rest,rotationStateStore:store,config:{
+  const moveRadarRest=createRadarRest();
+  const moveScanner=new MarketUniverseScanner({rest:moveRadarRest,rotationStateStore:store,config:{
     minQuoteVolume24h:moveConfig.minQuoteVolume24h,
     minDataQuality:moveConfig.minDataQuality,
     minLiquidityQuality:moveConfig.minLiquidityQuality,
@@ -166,56 +177,44 @@ export async function startServer({
     deepConcurrency:moveConfig.deepConcurrency
   }});
   const moveSentinel=new EarlyMoveSentinel({
-    rest,store,pushManager:push,config:moveConfig,logger,
+    rest:moveRadarRest,store,pushManager:push,config:moveConfig,logger,
     scannerFactory:()=>moveScanner,
     tickerWsFactory:opts=>new BinanceAllMarketTickerClient(opts)
   });
-  const strongRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const strongRadarRest=createRadarRest();
   const strongMoveRadar=new StrongMoveRadar({rest:strongRadarRest,store,pushManager:push,config:config.strongMoveRadar||{},logger});
-  const rotationRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const rotationRadarRest=createRadarRest();
   const rotationLagRadar=new RotationLagRadar({rest:rotationRadarRest,store,pushManager:push,config:config.rotationRadar||{},logger});
-  const liquidityRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const liquidityRadarRest=createRadarRest();
   const liquidityAbsorptionRadar=new LiquidityAbsorptionRadar({rest:liquidityRadarRest,store,pushManager:push,config:config.liquidityAbsorptionRadar||{},logger});
-  const kahirRadarRest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
+  const kahirRadarRest=createRadarRest();
   const kahirRadar=new KahirRadar({rest:kahirRadarRest,store,pushManager:push,config:config.kahirRadar||{},logger});
   // The deep symbol scanner gets its own REST client so background radar traffic cannot
   // race its endpoint selection. Prefer Binance's market-data-only mirror first; it is
   // explicitly documented to serve depth, klines and 24h ticker without authentication.
-  const deepRestUrls=[...publicSpotRestUrls];
-  const deepScanRest=new RestClient({...config.rest,baseUrls:deepRestUrls});
+  const deepScanRest=createRadarRest();
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
-  const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
-  const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  // The 20-analyst discovery engine and Pre-Move share the same bounded
-  // two-host official Spot pool. A seven-host sequential waterfall for the
-  // full-market ticker can consume the 180s scan deadline before symbol discovery.
-  // Start with the most recently successful shared Spot host, then one official
-  // fallback. The other twelve-radar engines retain the complete seven-host pool.
-  // Closed-candle, liquidity and all analyst quality gates remain unchanged.
-  const multiAnalystRestUrls=resolveFastPublicSpotRestUrls(
-    publicSpotRestUrls,
-    rest.currentBaseIndex
-  );
-  // Match the successful shared Spot clients: 3.5s was too short for some DHDTech-to-Binance routes,
-  // so every official mirror could time out before a slower reachable mirror returned live data.
-  const multiAnalystTimeoutMs=Math.min(9000,Number(config.rest?.timeoutMs)||9000);
-  const multiAnalystRest=new RestClient({
-    ...config.rest,
-    baseUrls:multiAnalystRestUrls.length?multiAnalystRestUrls:publicSpotRestUrls,
-    timeoutMs:multiAnalystTimeoutMs
-  });
+  const professorRadarRest=createRadarRest();
+  const professorRadar=new ProfessorRadar({rest:professorRadarRest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
+  const doomsdayRadarRest=createRadarRest();
+  const doomsdayRadar=new DoomsdayRadar({rest:doomsdayRadarRest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
+  // All public-Spot radar workers share the same deterministic two-host policy.
+  // Never rotate a stale api1..api4 success back to the front of a later scan:
+  // those mirrors can return regional HTTP 451 while the public-data mirrors work.
+  // All candle-integrity, closed-candle, liquidity and analyst decision gates remain unchanged.
+  const multiAnalystRest=createRadarRest();
   logger.info?.('[MULTI_ANALYST_REST_FALLBACKS] '+JSON.stringify({
     count:multiAnalystRest.baseUrls.length,
     hosts:multiAnalystRest.baseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
     timeout_ms:multiAnalystRest.timeoutMs,
     max_sequential_mirrors:2,
-    preferred_from_host_index:Number.isInteger(rest.currentBaseIndex)?rest.currentBaseIndex:null,
     isolated_from_shared_exchange_info:true
   }));
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
-  const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
+  const alMuqawimRadarRest=createRadarRest();
+  const alMuqawimRadar=new AlMuqawimRadar({rest:alMuqawimRadarRest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const marketWideKlineCache=new MarketWideKlineCache({
-    rest,
+    rest:createRadarRest(),
     urls:config.websocket.urls,
     initialBackoffMs:config.websocket.initialBackoffMs,
     maxBackoffMs:config.websocket.maxBackoffMs,
@@ -225,16 +224,16 @@ export async function startServer({
     maxCandlesPerSymbol:120,
     logger
   });
-  const earlyExpansionRadar=new EarlyExpansionRadar({rest,store,pushManager:push,marketWideKlineCache,config:config.earlyExpansionRadar||{},logger});
-  const coinHunterUrls=[...publicSpotRestUrls];
-  const coinHunterRest=new RestClient({...config.rest,baseUrls:coinHunterUrls});
+  const earlyExpansionRadarRest=createRadarRest();
+  const earlyExpansionRadar=new EarlyExpansionRadar({rest:earlyExpansionRadarRest,store,pushManager:push,marketWideKlineCache,config:config.earlyExpansionRadar||{},logger});
+  const coinHunterRest=createRadarRest();
   const coinHunterRadar=new CoinHunterRadar({rest:coinHunterRest,store,pushManager:push,config:config.coinHunterRadar||{},logger});
-  const whaleAccumulationUrls=[...publicSpotRestUrls];
-  const whaleAccumulationRest=new RestClient({...config.rest,baseUrls:whaleAccumulationUrls});
+  const whaleAccumulationRest=createRadarRest();
   const whaleAccumulationRadar=new WhaleAccumulationRadar({rest:whaleAccumulationRest,store,pushManager:push,config:config.whaleAccumulationRadar||{},logger});
   // Falcon Eye uses public Binance Spot + public Futures market data. No API keys are required.
   const falconFuturesRest=new RestClient({...config.rest,baseUrls:['https://fapi.binance.com']});
-  const falconEyeRadar=new FalconEyeRadar({rest, futuresRest:falconFuturesRest, store, pushManager:push, config:config.falconEyeRadar||{}, logger});
+  const falconSpotRest=createRadarRest();
+  const falconEyeRadar=new FalconEyeRadar({rest:falconSpotRest, futuresRest:falconFuturesRest, store, pushManager:push, config:config.falconEyeRadar||{}, logger});
   const radarSwarm=new RadarSwarmCoordinator({expectedCount:12,startupSpacingMs:config.radarSwarm?.startupSpacingMs??700,logger,runners:[
     {id:'RADAR1',name:'المدمر',instance:moveSentinel},
     {id:'RADAR2',name:'ملك الظلام',instance:strongMoveRadar},
