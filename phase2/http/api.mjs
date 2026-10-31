@@ -16,7 +16,7 @@ import {buildRadarMissedMoverAuditReport} from '../core/radar-missed-mover-audit
 import {buildEarlyMoverCaseStudy} from '../core/missed-mover-case-study.mjs';
 import {buildPreMoveBackgroundScanSummary} from '../core/pre-move-background-summary.mjs';
 import {buildPreMoveNotificationDeliveryState} from '../core/pre-move-background-summary.mjs';
-import {resolvePreMoveSpotRestUrls} from '../config.mjs';
+import {resolveFastPublicSpotRestUrls} from '../config.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -601,7 +601,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // Radars keep the complete official mirror list and all market-data gates remain strict.
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls) &&
     marketRadarRestClient.baseUrls.length>0
-    ?resolvePreMoveSpotRestUrls(
+    ?resolveFastPublicSpotRestUrls(
       marketRadarRestClient.baseUrls,
       marketRadarRestClient.currentBaseIndex
     )
