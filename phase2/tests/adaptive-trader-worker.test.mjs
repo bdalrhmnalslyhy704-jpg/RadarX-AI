@@ -7,6 +7,28 @@ import {DurableStore} from '../core/store.mjs';
 import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
 
 
+
+test('TEST_FIXTURE: adaptive trader persistence bypasses a stalled main radar archive queue',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-independent-store-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    // Simulate a radar archive operation holding the shared main queue.
+    store.queue=new Promise(()=>{});
+    const saved=await Promise.race([
+      store.putAdaptiveTraderState({version:1,scan_count:7,successful_scans:5,
+        samples:[],price_history:[],missed_movers:[],cognitive_journal:[]}),
+      new Promise((_,reject)=>setTimeout(()=>reject(new Error('ADAPTIVE_TRADER_WRITE_BLOCKED_BY_RADAR_QUEUE')),1000))
+    ]);
+    assert.equal(saved.scan_count,7);
+    assert.equal(saved.successful_scans,5);
+    const persisted=await store.getAdaptiveTraderState();
+    assert.equal(persisted.scan_count,7);
+    assert.equal(persisted.successful_scans,5);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: a stalled market snapshot releases the worker latch and the next scan can recover',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-scan-timeout-'));
   const store=await new DurableStore({dir}).init();
