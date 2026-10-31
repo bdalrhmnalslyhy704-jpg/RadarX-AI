@@ -98,6 +98,38 @@ const evaluator = () => ({
   }
 });
 
+test('multi-host market discovery retries exactly once after a transient HTTP 451',async()=>{
+  let calls=0;
+  const rest={
+    baseUrls:Array.from({length:7},(_,i)=>'https://spot-mirror-'+i+'.test'),
+    async request(path){
+      calls++;
+      assert.equal(path,'/api/v3/exchangeInfo');
+      if(calls===1)throw new Error('HTTP_451');
+      return {data:exchangeInfo(),source:'https://spot-mirror-2.test'};
+    }
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,config:{retryAttempts:2,retryBaseMs:1,maxBackoffMs:1},sleepFn:async()=>{}
+  });
+  const result=await scanner.exchangeInfo();
+  assert.equal(result.data.symbols.length,8);
+  assert.equal(calls,2,'one request sweep plus one bounded retry only');
+});
+
+test('multi-host market discovery does not loop on persistent HTTP 451',async()=>{
+  let calls=0;
+  const rest={
+    baseUrls:['https://spot-mirror-a.test','https://spot-mirror-b.test'],
+    async request(){calls++;throw new Error('HTTP_451');}
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,config:{retryAttempts:3,retryBaseMs:1,maxBackoffMs:1},sleepFn:async()=>{}
+  });
+  await assert.rejects(()=>scanner.exchangeInfo(),/HTTP_451/);
+  assert.equal(calls,2,'persistent HTTP 451 receives one extra discovery sweep, not an open retry loop');
+});
+
 test('exchangeInfo filters Spot + TRADING + USDT and rejects invalid symbols',()=>{
   const rows=buildSpotUniverse(exchangeInfo(),'USDT');
   assert.deepEqual(rows.map(x=>x.symbol),['BTCUSDT','ETHUSDT','LOWUSDT']);
