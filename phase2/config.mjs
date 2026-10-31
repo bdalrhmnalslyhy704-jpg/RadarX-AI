@@ -165,6 +165,10 @@ export const CONFIG = Object.freeze({
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     maxTriggerAgeMs: 30 * 60 * 1000,
     retryAttempts: 1,
+    // Keep the full Spot ticker universe rotating while limiting the expensive
+    // closed-candle + order-book lane to nine pairs per 60s cycle. The API still
+    // reports the hard maximum of ten and advances its durable cursor after each cycle.
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 9, 8, 10),
     // Pre-Move background surveillance continues when no Android page is open.
     preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
