@@ -5,7 +5,7 @@ import test from 'node:test';
 delete process.env.BINANCE_WS_URLS;
 delete process.env.BINANCE_REST_URLS;
 
-const {CONFIG,DEFAULT_PUBLIC_SPOT_REST_URLS,resolvePublicSpotRestUrls} = await import('../config.mjs?market-data-endpoint-defaults');
+const {CONFIG,DEFAULT_PUBLIC_SPOT_REST_URLS,resolvePublicSpotRestUrls,resolvePreMoveSpotRestUrls} = await import('../config.mjs?market-data-endpoint-defaults');
 
 test('default Spot WebSocket endpoints use the official public market-data stream', () => {
   assert.deepEqual(CONFIG.websocket.urls, [
@@ -42,6 +42,29 @@ test('the public Spot REST fallback list includes all official Binance endpoints
     ...DEFAULT_PUBLIC_SPOT_REST_URLS,
     'https://custom-market-data.example',
     'https://extra-market-data.example'
+  ]);
+});
+
+test('Pre-Move REST uses only two official mirrors and rotates the last successful host first',()=>{
+  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,0),[
+    'https://data-api.binance.vision','https://api-gcp.binance.com'
+  ]);
+  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,4),[
+    'https://api2.binance.com','https://api3.binance.com'
+  ]);
+  assert.deepEqual(resolvePreMoveSpotRestUrls(DEFAULT_PUBLIC_SPOT_REST_URLS,6),[
+    'https://api4.binance.com','https://data-api.binance.vision'
+  ]);
+});
+
+test('Pre-Move mirror selection rejects unapproved hosts and supplements a single official host',()=>{
+  assert.deepEqual(resolvePreMoveSpotRestUrls([
+    'https://unapproved.example','https://api-gcp.binance.com','https://api-gcp.binance.com'
+  ],1),[
+    'https://api-gcp.binance.com','https://data-api.binance.vision'
+  ]);
+  assert.deepEqual(resolvePreMoveSpotRestUrls(['https://unapproved.example'],0),[
+    'https://data-api.binance.vision','https://api-gcp.binance.com'
   ]);
 });
 
