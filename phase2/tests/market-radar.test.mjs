@@ -1046,7 +1046,7 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
 });
 
 test('Pre-Move scan applies a bounded REST deadline and restores the previous client deadline',async()=>{
-  const rest={requestDeadlineAtMs:null};
+  const rest={requestDeadlineAtMs:null,async request(){return {data:[]};}};
   const scanner=new MarketUniverseScanner({rest});
   let observedDeadline=null;
   scanner._scanPreMove=async()=>{
