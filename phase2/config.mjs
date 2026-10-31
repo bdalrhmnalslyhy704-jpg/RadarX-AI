@@ -264,9 +264,9 @@ export const CONFIG = Object.freeze({
     returnLimit: int(process.env.RADARX_MULTI_ANALYST_RETURN_LIMIT, 10),
     deepConcurrency: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_CONCURRENCY, 2, 1, 2),
     deepKlines: boundedInt(process.env.RADARX_MULTI_ANALYST_DEEP_KLINES, 160, 120, 180),
-    // Ignore overly aggressive <90s overrides: four-hour closed-candle data and
-    // the full 19-specialist + final review need a bounded but realistic budget.
-    scanTimeoutMs: boundedInt(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 120000, 90000, 180000),
+    // The full 19-specialist + final review reads three closed-candle timeframes.
+    // Allow the measured DHDTech/Spot shared-REST cycle up to the bounded 180s ceiling.
+    scanTimeoutMs: boundedInt(process.env.RADARX_MULTI_ANALYST_SCAN_TIMEOUT_MS, 180000, 90000, 180000),
     minQuoteVolume24h: int(process.env.RADARX_MULTI_ANALYST_MIN_QUOTE_VOLUME_24H, 300000),
     universeRefreshMs: int(process.env.RADARX_MULTI_ANALYST_UNIVERSE_REFRESH_MS, 30 * 60 * 1000),
     minDataQuality: int(process.env.RADARX_MIN_DATA_QUALITY, 70),
