@@ -432,6 +432,45 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
 });
 
 
+
+
+test('TEST_FIXTURE: a timed-out adaptive-trader snapshot flight is evicted so the next market scan can recover',async()=>{
+  const f=marketFixture();
+  let exchangeInfoCalls=0;
+  const rest={
+    requestAbortSignal:null,requestDeadlineAtMs:null,
+    async request(path,query={}){
+      if(path==='/api/v3/exchangeInfo'){
+        exchangeInfoCalls++;
+        if(exchangeInfoCalls===1){
+          // Model a fetch/body promise that ignores abort and never settles.
+          return new Promise(()=>{});
+        }
+        return {data:{symbols:[
+          {symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']}
+        ]},source:'https://data-api.binance.vision',receivedAt:f.now};
+      }
+      if(path==='/api/v3/ticker/24hr')return {data:[{...f.ticker,quoteVolume:'5000000'}],
+        source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines')return {data:f.klines.data,
+        source:'https://data-api.binance.vision',receivedAt:f.now};
+      throw new Error('UNEXPECTED_REQUEST '+path);
+    }
+  };
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:250});
+  // Keep the abandoned promise observed; the fake first exchangeInfo call will
+  // intentionally stay pending even after its flight has been evicted.
+  const abandoned=service({limit:20,now:f.now});
+  await Promise.resolve();
+  const recovered=await service({limit:20,now:f.now+1000});
+  assert.equal(exchangeInfoCalls,2,'a new call must start after the stale flight deadline');
+  assert.equal(recovered.status,'LIVE_DATA');
+  assert.equal(recovered.candidates[0].symbol,'TESTUSDT');
+  assert.equal(rest.requestAbortSignal,null,'the recovered flight must restore the prior request signal');
+  assert.equal(rest.requestDeadlineAtMs,null,'the recovered flight must restore the prior request deadline');
+  void abandoned;
+});
+
 test('snapshot service preserves non-enumerable historical training rows on fresh and cached reads',async()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
