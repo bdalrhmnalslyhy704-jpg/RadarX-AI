@@ -195,7 +195,9 @@ export async function startServer({
   // Candle/depth quality gates and the 19-specialist + final-analyst pipeline
   // remain unchanged.
   const multiAnalystRestUrls=[...publicSpotRestUrls];
-  const multiAnalystTimeoutMs=Math.min(3500,Number(config.rest?.timeoutMs)||3500);
+  // Match the successful shared Spot clients: 3.5s was too short for some DHDTech-to-Binance routes,
+  // so every official mirror could time out before a slower reachable mirror returned live data.
+  const multiAnalystTimeoutMs=Math.min(9000,Number(config.rest?.timeoutMs)||9000);
   const multiAnalystRest=new RestClient({
     ...config.rest,
     baseUrls:multiAnalystRestUrls.length?multiAnalystRestUrls:publicSpotRestUrls,
