@@ -67,9 +67,9 @@ export class AdaptiveTraderWorker{
     this.scanLimit=Math.max(40,Math.min(120,Math.trunc(Number(scanLimit)||SNAPSHOT_LIMIT)));
     // The market snapshot service has its own 60s REST deadline. The worker adds
     // an outer guard so a stalled fetch/store promise can never pin inFlight forever.
-    this.scanTimeoutMs=Math.max(15_000,Math.min(120_000,Math.trunc(Number(scanTimeoutMs)||75_000)));
-    this.executionTimeoutMs=Math.max(1_000,Math.min(60_000,Math.trunc(Number(executionTimeoutMs)||15_000)));
-    this.persistTimeoutMs=Math.max(1_000,Math.min(30_000,Math.trunc(Number(persistTimeoutMs)||12_000)));
+    this.scanTimeoutMs=Math.max(250,Math.min(120_000,Math.trunc(Number(scanTimeoutMs)||75_000)));
+    this.executionTimeoutMs=Math.max(100,Math.min(60_000,Math.trunc(Number(executionTimeoutMs)||15_000)));
+    this.persistTimeoutMs=Math.max(100,Math.min(30_000,Math.trunc(Number(persistTimeoutMs)||12_000)));
     this.state=emptyState();this.enabled=false;this.inFlight=false;
     this.activeScanStartedAt=null;this.activeScanDeadlineAt=null;this.lastStageTimeout=null;
     this.interval=null;this.initialTimer=null;this.starting=null;
