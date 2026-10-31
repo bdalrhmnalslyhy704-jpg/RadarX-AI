@@ -493,7 +493,7 @@ export class RestClient {
       // Bound the wait independently from the enclosing scan deadline. If a
       // peer's response body/parser stalls, evict only that exact in-flight
       // promise and let this caller perform its own official-mirror fallback.
-      const sharedWaitDeadline=Date.now()+Math.max(250,Math.trunc(this.timeoutMs*2));
+      const sharedWaitDeadline=Date.now()+Math.max(250,Math.min(4000,Math.trunc(this.timeoutMs*2)));
       const scanDeadline=Number(this.requestDeadlineAtMs);
       const waitDeadline=Number.isFinite(scanDeadline)&&scanDeadline>0
         ?Math.min(sharedWaitDeadline,scanDeadline):sharedWaitDeadline;
@@ -502,7 +502,7 @@ export class RestClient {
           const scanAborted=this.requestAbortSignal?.aborted===true||
             (Number.isFinite(scanDeadline)&&scanDeadline>0&&Date.now()>=scanDeadline);
           const error=new Error(scanAborted?'MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED':
-            'REST_SHARED_INFLIGHT_TIMEOUT path='+path+' timeout_ms='+Math.max(250,Math.trunc(this.timeoutMs*2)));
+            'REST_SHARED_INFLIGHT_TIMEOUT path='+path+' timeout_ms='+Math.max(250,Math.min(4000,Math.trunc(this.timeoutMs*2))));
           error.name=scanAborted?'ScanDeadlineError':'RestTimeoutError';
           this.lastError=error.message;
           this.state='ERROR';
