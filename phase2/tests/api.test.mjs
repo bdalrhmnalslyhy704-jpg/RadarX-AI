@@ -987,6 +987,74 @@ test('TEST_FIXTURE: forced Radar 8 scan self-recovers a stopped production worke
   }
 });
 
+test('TEST_FIXTURE: Radar 8 background release scan returns 202 immediately and can be polled to verified completion',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-background-release-')),store=await new DurableStore({dir}).init();
+  let running=true,busy=false,tickCalls=0,completedAt=null,releaseScan,scanPromise=null;
+  const scanGate=new Promise(resolve=>{releaseScan=resolve;});
+  const radar={
+    health:()=>({running,busy,last_scan_at:completedAt,last_scan_completed_at:completedAt,
+      last_scan_duration_ms:completedAt?25:null,scans:completedAt?1:0,last_error:null,universe_total:506,
+      coverage:{expected_total:506,received_total:506,eligible_total:225,coverage_ratio:1}}),
+    start(){running=true;},
+    tick(){
+      tickCalls++;busy=true;
+      scanPromise=scanGate.then(()=>{busy=false;completedAt=Date.now();return true;});
+      return scanPromise;
+    },
+    noteError(){},
+    snapshot(){return{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
+      as_of:completedAt?new Date(completedAt).toISOString():null,quote:'USDT',
+      universe:{expected_total:506,received_total:506,coverage_ratio:1,eligible_total:225},
+      candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});}
+  };
+  const config={environment:'production',radarControl:{autostart:null},
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),earlyExpansionRadar:radar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const startedAt=Date.now();
+    const startResponse=await fetch(base+'/api/early-expansion-radar?quote=USDT&limit=100&scan=1&background=1');
+    assert.ok(Date.now()-startedAt<1000,'background scan enqueue must not wait for the market cycle');
+    assert.equal(startResponse.status,202);
+    const startBody=await startResponse.json();
+    assert.equal(startBody.status,'warming');
+    assert.equal(startBody.scan.error,'SCAN_STARTED');
+    assert.equal(startBody.scan.completed,false);
+    assert.equal(tickCalls,0,'the scan is queued after the HTTP response can be sent');
+
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(tickCalls,1);
+    assert.equal(busy,true);
+
+    const progressResponse=await fetch(base+'/api/early-expansion-radar?quote=USDT&limit=100');
+    assert.equal(progressResponse.status,200);
+    const progressBody=await progressResponse.json();
+    assert.equal(progressBody.scan.completed,false);
+    assert.equal(progressBody.monitoring.busy,true);
+    assert.equal(tickCalls,1,'polling must not duplicate the active scan');
+
+    releaseScan();
+    await scanPromise;
+    const finalResponse=await fetch(base+'/api/early-expansion-radar?quote=USDT&limit=100');
+    assert.equal(finalResponse.status,200);
+    const finalBody=await finalResponse.json();
+    assert.equal(finalBody.scan.completed,true);
+    assert.equal(finalBody.monitoring.busy,false);
+    assert.equal(finalBody.monitoring.last_scan_completed_at,completedAt);
+    assert.equal(finalBody.meta.live,true);
+    assert.equal(finalBody.meta.paper_trading,true);
+    assert.equal(finalBody.meta.real_order_execution,false);
+    assert.equal(tickCalls,1);
+  }finally{
+    releaseScan?.();
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: forced Radar 8 scan waits for an already-running cycle instead of returning an empty stale snapshot',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar8-await-active-')),store=await new DurableStore({dir}).init();
   let running=true,busy=true,ticks=0,scans=0,lastCompletedAt=Date.now()-10000;
