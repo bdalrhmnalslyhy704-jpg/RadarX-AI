@@ -572,9 +572,12 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   function multiAnalystFailureBody({quote,requestId,error}={}){
     const message=String(error||'MULTI_ANALYST_SCAN_FAILED').slice(0,240);
     const base=multiAnalystWarmingBody({quote,requestId,reason:'SCAN_FAILED'});
+    let restHealth=null;
+    try{restHealth=multiAnalystRadar?.scanner?.rest?.health?.()||null;}catch{}
     return {...base,status:'not_ready',error:message,
       diagnostics:{...base.diagnostics,scan_failure_count:Math.max(1,Number(base.diagnostics.scan_failure_count)||0),
-        last_scan_error:message,scan_errors:[{stage:'MULTI_ANALYST_SCAN',error:message}]},
+        last_scan_error:message,scan_errors:[{stage:'MULTI_ANALYST_SCAN',error:message}],
+        rest_health:restHealth},
       scan:{...base.scan,requested:true,completed:false,error:message,last_error:message},
       meta:{...base.meta,analysis_mode:'SCAN_FAILED',analyst_readiness:'FAILED'}};
   }
