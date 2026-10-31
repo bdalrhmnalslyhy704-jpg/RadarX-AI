@@ -599,10 +599,13 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // can exhaust the cycle before discovery begins. Use two official Spot mirrors,
   // rotating the last successful shared client host to the front. The other
   // Radars keep the complete official mirror list and all market-data gates remain strict.
-  const preMoveBaseUrls = resolvePreMoveSpotRestUrls(
-    marketRadarRestClient?.baseUrls,
-    marketRadarRestClient?.currentBaseIndex
-  );
+  const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls) &&
+    marketRadarRestClient.baseUrls.length>0
+    ?resolvePreMoveSpotRestUrls(
+      marketRadarRestClient.baseUrls,
+      marketRadarRestClient.currentBaseIndex
+    )
+    :[];
   console.info?.('[PRE_MOVE_REST_FALLBACKS] '+JSON.stringify({
     count:preMoveBaseUrls.length,
     hosts:preMoveBaseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
