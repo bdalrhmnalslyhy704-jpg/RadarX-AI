@@ -176,7 +176,7 @@ async function readBoundedOutcomeLedger(path,recordLimit){
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
@@ -216,6 +216,14 @@ export class DurableStore {
   async schedulerEventsLock(fn){
     const p=this.schedulerEventsQueue.then(fn);
     this.schedulerEventsQueue=p.catch(()=>{});
+    return p;
+  }
+  // The adaptive trader writes only its own bounded state file. Keep this queue
+  // independent from the twelve-radar scan-journey/archive queue so a large
+  // radar archive write cannot pin the learner's inFlight cycle.
+  async adaptiveTraderStateLock(fn){
+    const p=this.adaptiveTraderStateQueue.then(fn);
+    this.adaptiveTraderStateQueue=p.catch(()=>{});
     return p;
   }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
@@ -539,7 +547,7 @@ export class DurableStore {
         };
       })()
     };
-    return this.lock(async()=>{
+    return this.adaptiveTraderStateLock(async()=>{
       await this.writeJson(this.files.adaptiveTraderState,safe);
       return safe;
     });
