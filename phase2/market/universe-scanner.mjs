@@ -22,10 +22,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // Production may use a slightly smaller rotating deep batch to stay below
-  // the 45s background-worker SLA on low-memory hosted containers. The public
-  // hard cap remains ten; unit/test adapters keep the default ten-symbol batch.
-  preMoveCycleScanLimit: 10,
+  // Keep the low-memory hosted worker's closed-candle + order-book batch
+  // bounded to six pairs per cycle. The durable cursor rotates the full universe;
+  // the public hard cap remains ten for compatibility with the API contract.
+  preMoveCycleScanLimit: 6,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2508,8 +2508,8 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    // Preserve the public ten-symbol hard cap, while allowing low-memory hosted
-    // runtimes to use a nine-symbol rotating batch for the 45s background-worker SLA.
+    // Preserve the public ten-symbol hard cap, while the hosted worker deep-scans
+    // six pairs per cycle to finish within its 45s deadline on the small CPU tier.
     // The durable cursor and ticker-activity lane preserve wider-market coverage.
     const configuredCycleLimit=Math.max(1,Math.min(
       PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
