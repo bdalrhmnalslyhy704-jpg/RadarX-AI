@@ -599,8 +599,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // Per-host attempts remain capped at 3.5s and the scan keeps its 45s deadline.
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
     ? [...new Set(marketRadarRestClient.baseUrls
-        .map(value=>String(value??'').trim().replace(/\\/+$/,''))
-        .filter(url=>/^https:\/\/(?:data-api\\.binance\\.vision|api(?:-gcp)?\\.binance\\.com|api[1-4]\\.binance\\.com)$/i.test(url)))]
+        .map(value=>String(value??'').trim().replace(/\/+$/,''))
+        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url)))]
     : [];
   if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
     preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
