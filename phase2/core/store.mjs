@@ -176,9 +176,9 @@ async function readBoundedOutcomeLedger(path,recordLimit){
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
-    this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
+    this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),preMoveState:join(dir,'pre-move-state.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),adaptiveTraderState:join(dir,'adaptive-trader-state.json'),adaptiveTraderExecutionState:join(dir,'adaptive-trader-execution-state.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init({legacyDir=null}={}){
@@ -224,6 +224,12 @@ export class DurableStore {
   async adaptiveTraderStateLock(fn){
     const p=this.adaptiveTraderStateQueue.then(fn);
     this.adaptiveTraderStateQueue=p.catch(()=>{});
+    return p;
+  }
+  // Pre-Move's durable cursor and ticker baseline must not queue behind large radar archives.
+  async preMoveStateLock(fn){
+    const p=this.preMoveStateQueue.then(fn);
+    this.preMoveStateQueue=p.catch(()=>{});
     return p;
   }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
@@ -377,6 +383,20 @@ export class DurableStore {
     await this.writeJson(this.files.settings,a);return a[userId];});}
   async getDedupKey(k){const a=await this.readJson(this.files.dedup);return a[k]||null;}
   async putDedupKey(k,v){return this.lock(async()=>{const a=await this.readJson(this.files.dedup);a[k]=v;await this.writeJson(this.files.dedup,a);});}
+  async getPreMoveState(k){
+    const state=await this.readJson(this.files.preMoveState);
+    if(Object.prototype.hasOwnProperty.call(state,k))return state[k]??null;
+    // Read old Build 224 state once for a safe compatibility migration.
+    return this.getDedupKey(k);
+  }
+  async putPreMoveState(k,v){
+    return this.preMoveStateLock(async()=>{
+      const state=await this.readJson(this.files.preMoveState);
+      state[k]=v;
+      await this.writeJson(this.files.preMoveState,state);
+      return state[k];
+    });
+  }
   async getSignalSnapshot(symbol){const key=String(symbol||'').trim().toUpperCase();if(!key)return null;const a=await this.readJson(this.files.signalSnapshots);return a[key]||null;}
   async putSignalSnapshot(symbol,snapshot){const key=String(symbol||'').trim().toUpperCase();if(!key)throw new Error('INVALID_SIGNAL_SNAPSHOT_SYMBOL');return this.lock(async()=>{const a=await this.readJson(this.files.signalSnapshots);a[key]={...snapshot,symbol:key,updated_at:Date.now()};await this.writeJson(this.files.signalSnapshots,a);return a[key];});}
   async getPredictionCalibration(symbol){
