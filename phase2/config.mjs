@@ -38,17 +38,25 @@ export function resolveFastPublicSpotRestUrls(urls=[], currentBaseIndex=0){
   const official=new Set(DEFAULT_PUBLIC_SPOT_REST_URLS);
   const ordered=[...new Set(input.filter(value=>official.has(value)))];
   // An injected/custom Rest adapter may intentionally expose no baseUrls (for
-  // example a fixture or a host-managed proxy). Do not replace such a client
+  // example a fixture or a host-managed proxy). Do not replace such an adapter
   // with a new global-fetch Binance client; let the caller keep its adapter.
   if(ordered.length===0)return [];
-  for(const value of DEFAULT_PUBLIC_SPOT_REST_URLS){
-    if(!ordered.includes(value))ordered.push(value);
+  // Always try Binance's public market-data mirrors first. A previous successful
+  // request on api1..api4 must not pin every new scan to a mirror that can return
+  // HTTP 451 from the DHDTech runtime's region. currentBaseIndex is retained for
+  // API compatibility but deliberately does not change this priority.
+  const preferred=DEFAULT_PUBLIC_SPOT_REST_URLS.slice(0,2);
+  const selected=preferred.filter(value=>ordered.includes(value));
+  for(const value of ordered){
+    if(!selected.includes(value))selected.push(value);
   }
-  const index=Number(currentBaseIndex);
-  const preferred=Number.isInteger(index)&&index>=0?input[index]:null;
-  const preferredIndex=preferred?ordered.indexOf(preferred):-1;
-  const start=preferredIndex>=0?preferredIndex:0;
-  return [ordered[start%ordered.length],ordered[(start+1)%ordered.length]];
+  // Preserve a single explicitly supplied official mirror, then add the other
+  // documented public-data mirror as its bounded fallback.
+  if(selected.length===1){
+    const backup=preferred.find(value=>value!==selected[0]);
+    if(backup)selected.push(backup);
+  }
+  return selected.slice(0,2);
 }
 
 // Backwards-compatible name for callers that specifically refer to Pre-Move.
