@@ -664,6 +664,50 @@ test('TEST_FIXTURE: forced multi-analyst scan failures expose the actual error i
 });
 
 
+test('TEST_FIXTURE: exact failed analyst request is returned instead of restarting against an older cache',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-stale-cache-failure-')),store=await new DurableStore({dir}).init();
+  let scanCalls=0;
+  const cached={
+    status:'complete',radar:'MULTI_ANALYST',as_of:'2026-10-23T20:00:00.000Z',
+    universe:{quote:'USDT',eligible_spot_symbols:500,discovery_pool:10,deep_scan_pool:2,scanned:2,returned:1},
+    summary:{strong_candidates:0,candidates:0,qualified:0,watch:0,rejected:2},
+    candidates:[],watchlist:[],lab_results:[],
+    meta:{live:true,paper_trading:true,real_order_execution:false,analysis_mode:'FORCED_SCAN',request_id:'older-request'}
+  };
+  const multiAnalystRadar={
+    config:{quote:'USDT',returnLimit:1,minQuoteVolume24h:300000,universeRefreshMs:1800000,deepConcurrency:1,deepKlines:120,continuousIntervalMs:60000},
+    running:true,busy:null,
+    monitorStats:{
+      scan_count:7,last_scan_at:'2026-10-23T20:00:00.000Z',
+      last_error:'HTTP_451 host=api-gcp.binance.com',last_scan_successful:false,
+      active_scan_started_at:null,last_request_id:'failed-request',last_request_status:'FAILED',
+      last_request_error:'HTTP_451 host=api-gcp.binance.com'
+    },
+    getCached(){return cached;},
+    scan(){scanCalls++;throw new Error('FAILED_REQUEST_MUST_NOT_BE_RETRIED');},
+    radarReviewQueueSnapshot(){return{pending_count:0,max_queue:200};}
+  };
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},api:{maxBodyBytes:65536,rateLimitPerMinute:100}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),multiAnalystRadar});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+
+      '/api/multi-analyst?quote=USDT&limit=1&scan=1&progress=1&summary=1&_ts=failed-request');
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.status,'not_ready');
+    assert.equal(body.error,'HTTP_451 host=api-gcp.binance.com');
+    assert.equal(body.scan.completed,false);
+    assert.equal(body.meta.analysis_mode,'SCAN_FAILED');
+    assert.equal(body.meta.request_id,'failed-request');
+    assert.equal(scanCalls,0,'a progress poll must not start another scan after this exact request has failed');
+  }finally{
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the dedicated scanner client is omitted',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-fallback-api-')),store=await new DurableStore({dir}).init();
   const marketRest={
