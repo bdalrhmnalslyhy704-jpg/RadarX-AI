@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,sharedResponseCacheTtlMs,sharedResponseCacheExpiresAt,assertSharedBudgetWaitBound} from '../market/binance-rest.mjs';
+import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,sharedResponseCacheTtlMs,sharedResponseCacheExpiresAt,assertSharedBudgetWaitBound,calculateSharedBudgetWait} from '../market/binance-rest.mjs';
 import {CONFIG} from '../config.mjs';
 
 
@@ -28,6 +28,35 @@ test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data
   assert.equal(estimateBinanceRequestWeight('/api/v3/ticker/bookTicker',{symbol:'BTCUSDT'}),2);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:100}),5);
   assert.equal(estimateBinanceRequestWeight('/api/v3/depth',{symbol:'BTCUSDT',limit:500}),25);
+});
+
+test('TEST_FIXTURE: discovery requests retain reserved slots when general radar traffic is saturated',()=>{
+  const now=10_000_000;
+  const general=Array.from({length:540},(_,i)=>({at:now-1000+i,weight:5,discovery:false}));
+  const ordinary=calculateSharedBudgetWait('/api/v3/klines',{symbol:'BTCUSDT',interval:'15m'},general,now);
+  const discovery=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},general,now);
+  assert.ok(ordinary.waitMs>0,'ordinary candle requests must preserve discovery capacity');
+  assert.equal(discovery.discovery,true);
+  assert.equal(discovery.waitMs,0,'full-market discovery may use the reserved request slots');
+});
+
+test('TEST_FIXTURE: discovery weight reserve cannot exceed Binance global request weight',()=>{
+  const now=10_000_000;
+  const general=Array.from({length:100},(_,i)=>({at:now-1000+i,weight:35,discovery:false}));
+  const ordinary=calculateSharedBudgetWait('/api/v3/klines',{symbol:'BTCUSDT',interval:'15m'},general,now);
+  const discovery=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},general,now);
+  assert.ok(ordinary.waitMs>0,'ordinary traffic cannot use reserved discovery weight');
+  assert.equal(discovery.waitMs,0,'discovery may use reserve below total global weight');
+  const globalNearLimit=[...general,{at:now-10,weight:490,discovery:true}];
+  assert.ok(calculateSharedBudgetWait('/api/v3/ticker/24hr',{},globalNearLimit,now).waitMs>0,
+    'discovery waits when it would exceed the global request-weight ceiling');
+});
+
+test('TEST_FIXTURE: discovery reserve cannot exceed Binance global request count',()=>{
+  const now=10_000_000;
+  const entries=Array.from({length:600},(_,i)=>({at:now-1000+i,weight:1,discovery:i>=540}));
+  assert.ok(calculateSharedBudgetWait('/api/v3/exchangeInfo',{},entries,now).waitMs>0,
+    'priority discovery remains under the overall 600 requests/minute ceiling');
 });
 
 test('TEST_FIXTURE: crowded shared request budget defers long waits instead of pinning scans',()=>{
