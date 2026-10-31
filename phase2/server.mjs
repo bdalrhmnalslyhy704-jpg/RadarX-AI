@@ -189,11 +189,13 @@ export async function startServer({
   // Keep the 20-analyst discovery client independent from other radar
   // exchangeInfo in-flight requests. A slow shared exchangeInfo fetch used to
   // hold the forced analyst scan until its full 180s deadline before any pair
-  // was discovered. Start with api-gcp and use the remaining official Spot
-  // mirrors, each with a short per-host timeout; candle/depth quality gates and
-  // the 19-specialist + final-analyst pipeline remain unchanged.
+  // was discovered. Retain data-api (the mirror that may be region-reachable
+  // from DHDTech), omit only the generic api.binance.com host to keep this
+  // request key isolated, and bound each official Spot host attempt.
+  // Candle/depth quality gates and the 19-specialist + final-analyst pipeline
+  // remain unchanged.
   const multiAnalystRestUrls=publicSpotRestUrls.filter(url=>{
-    try{return new URL(url).host.toLowerCase()!=='data-api.binance.vision';}
+    try{return new URL(url).host.toLowerCase()!=='api.binance.com';}
     catch{return false;}
   });
   logger.info?.('[MULTI_ANALYST_REST_FALLBACKS] '+JSON.stringify({
