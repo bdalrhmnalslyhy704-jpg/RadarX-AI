@@ -1078,6 +1078,44 @@ test('Pre-Move scan caps each cycle at 10 symbols and rotates broad coverage',as
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
+test('DHDTech can run a nine-pair background batch while preserving the public ten-pair hard cap',async()=>{
+  const scanNow=stablePreMoveTestTime();
+  const alpha=n=>{
+    let value=n,out='';
+    do{out=String.fromCharCode(65+(value%26))+out;value=Math.floor(value/26)-1;}while(value>=0);
+    return out;
+  };
+  const names=Array.from({length:30},(_,i)=>'PAIR'+alpha(i)+'USDT');
+  const exchangeRows=names.map(symbol=>({
+    symbol,baseAsset:symbol.slice(0,-4),quoteAsset:'USDT',status:'TRADING',
+    isSpotTradingAllowed:true,permissions:['SPOT']
+  }));
+  const tickerRows=names.map((symbol,i)=>({
+    symbol,lastPrice:'1',highPrice:'1.1',lowPrice:'0.9',
+    quoteVolume:String(2_000_000+i*1000),count:50_000+i,priceChangePercent:'1'
+  }));
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:exchangeRows},source:'TEST'};
+      if(path==='/api/v3/ticker/24hr')return {data:tickerRows,source:'TEST'};
+      throw new Error('UNEXPECTED_PATH:'+path);
+    },
+    async klines(){throw new Error('DEEP_SCAN_SHOULD_USE_STUB');},
+    async depth(){throw new Error('DEEP_SCAN_SHOULD_USE_STUB');}
+  };
+  const scanner=new MarketUniverseScanner({
+    rest,clock:()=>scanNow,
+    config:{minQuoteVolume24h:750000,preMoveCycleScanLimit:9}
+  });
+  const seen=[];
+  scanner.scanPreMoveSymbol=async ticker=>{seen.push(ticker.symbol);return null;};
+  const result=await scanner.scanPreMove({quote:'USDT',limit:50});
+  assert.equal(result.universe.per_cycle_scan_cap,10,'the externally reported hard cap remains ten');
+  assert.equal(result.universe.discovered,9,'the hosted background worker uses a slightly smaller latency-safe rotating batch');
+  assert.equal(result.universe.deep_scanned,9);
+  assert.equal(seen.length,9);
+});
+
 test('Pre-Move scan applies one abortable REST deadline and restores prior client controls',async()=>{
   const previousSignal=new AbortController().signal;
   const rest={requestDeadlineAtMs:null,requestAbortSignal:previousSignal,async request(){return {data:[]};}};
