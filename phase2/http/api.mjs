@@ -592,22 +592,25 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // Use the known public market-data mirror first and one official Binance fallback,
   // with a bounded per-host timeout. Failed sources remain fail-closed; live candle
   // freshness, order-book liquidity, and the alert gate are not weakened.
-  // Use the full official Binance Spot REST mirror list for Pre-Move as well.
-  // DHDTech can receive HTTP 451 from more than one hostname; limiting this
-  // strict scanner to data-api + api1 caused it to fail before discovering a
-  // single symbol even while the main 20-analyst client could reach api-gcp.
-  // Per-host attempts remain capped at 3.5s and the scan keeps its 45s deadline.
+  // Share the same six official Spot mirrors as the isolated 20-analyst
+  // client. This makes exchangeInfo cache/in-flight keys identical between
+  // the two independent scanners, so a successful universe fetch is reused
+  // instead of each worker repeating a slow regional fallback sweep.
+  // Keep data-api (which is reachable in some DHDTech regions) and omit only
+  // the generic api.binance.com hostname. Per-host timeout stays at 3.5s.
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
     ? [...new Set(marketRadarRestClient.baseUrls
         .map(value=>String(value??'').trim().replace(/\/+$/,''))
-        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url)))]
+        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url))
+        .filter(url=>!/^https:\/\/api\.binance\.com$/i.test(url)))]
     : [];
   if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
     preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
   }
   console.info?.('[PRE_MOVE_REST_FALLBACKS] '+JSON.stringify({
     count:preMoveBaseUrls.length,
-    hosts:preMoveBaseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
+    hosts:preMoveBaseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
+    shares_analyst_universe_cache:true
   }));
   const preMoveRestClient = marketRadarRestClient && preMoveBaseUrls.length
     ? new RestClient({
