@@ -252,6 +252,29 @@ test('TEST_FIXTURE: whole-scan abort interrupts a shared Binance cooldown wait',
   assert.match(client.health().last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
 });
 
+
+test('TEST_FIXTURE: Binance HTTP 451 is classified as regional restriction without probing more mirrors',async()=>{
+  let calls=0;
+  const client=new RestClient({
+    baseUrls:['https://data-api.binance.vision','https://api-gcp.binance.com','https://api.binance.com'],
+    timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{
+      calls++;
+      return {
+        status:451,ok:false,
+        headers:new Map(),
+        clone(){return {text:async()=> 'Service unavailable from a restricted location according to Binance eligibility terms'}},
+        text:async()=> 'Service unavailable from a restricted location'
+      };
+    }
+  });
+  await assert.rejects(client.request('/api/v3/ticker/24hr'),error=>
+    error?.name==='RestRegionRestrictedError'&&error?.status===451&&
+    String(error.message).includes('BINANCE_REGION_RESTRICTED'));
+  assert.equal(calls,1,'do not retry other hostnames after Binance explicitly reports region restriction');
+  assert.equal(client.health().state,'REGION_RESTRICTED');
+});
+
 test('TEST_FIXTURE: HTTP 429 records rate limit and retry-after without spamming fallback',async()=>{
   let calls=0;
   const fetchImpl=async()=>{calls++;return{status:429,headers:new Map([['retry-after','0.001']]),ok:false,json:async()=>({})};};
