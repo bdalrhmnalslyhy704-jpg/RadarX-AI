@@ -59,6 +59,15 @@ const SHARED = {
 // otherwise one heavy request can block lighter requests that still fit the budget.
 const SHARED_MAX_REQUESTS_PER_MINUTE = 600;
 const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
+// Reserve part of the existing process-wide ceiling for Spot universe discovery.
+// This does not raise Binance's overall limits; it prevents the radar fleet's
+// Kline/depth traffic from consuming every discovery slot first.
+const SHARED_DISCOVERY_RESERVED_REQUESTS_PER_MINUTE = 60;
+const SHARED_DISCOVERY_RESERVED_WEIGHT_PER_MINUTE = 600;
+const SHARED_GENERAL_MAX_REQUESTS_PER_MINUTE =
+  SHARED_MAX_REQUESTS_PER_MINUTE-SHARED_DISCOVERY_RESERVED_REQUESTS_PER_MINUTE;
+const SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE =
+  SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE-SHARED_DISCOVERY_RESERVED_WEIGHT_PER_MINUTE;
 const SHARED_MIN_INTERVAL_MS = 100;
 // Long exchange cooldowns must defer a scan, not block its busy latch for hours.
 const MAX_INLINE_RATE_LIMIT_WAIT_MS = 1500;
@@ -107,15 +116,49 @@ export function estimateBinanceRequestWeight(path, query = {}) {
   return 1;
 }
 
-function waitUntilMs(entries, now, requiredWeight) {
-  let remaining = entries.reduce((sum, item) => sum + item.weight, 0);
+function waitUntilMs(entries, now, requiredWeight, maxWeight=SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE) {
+  let remaining = entries.reduce((sum, item) => sum + (Number(item?.weight)||0), 0);
   for (const item of entries) {
-    remaining -= item.weight;
-    if (remaining + requiredWeight <= SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE) {
-      return Math.max(0, item.at + 60000 - now);
+    remaining -= Number(item?.weight)||0;
+    if (remaining + requiredWeight <= maxWeight) {
+      return Math.max(0, (Number(item?.at)||now) + 60000 - now);
     }
   }
-  return Math.max(0, (entries[0]?.at ?? now) + 60000 - now);
+  return Math.max(0, (Number(entries[0]?.at)||now) + 60000 - now);
+}
+
+function waitUntilCountMs(entries, now, maxCount) {
+  if(entries.length<maxCount)return 0;
+  const index=entries.length-maxCount;
+  return Math.max(0,(Number(entries[index]?.at)||now)+60000-now);
+}
+
+function isMarketDiscoveryRequest(path,query={}) {
+  return path==='/api/v3/exchangeInfo' ||
+    (path==='/api/v3/ticker/24hr'&&query.symbol==null&&query.symbols==null);
+}
+
+// Pure policy helper for deterministic coverage of the shared Binance budget.
+export function calculateSharedBudgetWait(path,query={},usedAt=[],now=Date.now()) {
+  const active=(Array.isArray(usedAt)?usedAt:[])
+    .filter(item=>Number.isFinite(Number(item?.at))&&Number(item.at)>now-60000)
+    .sort((a,b)=>Number(a.at)-Number(b.at));
+  const discovery=isMarketDiscoveryRequest(path,query);
+  const general=active.filter(item=>item?.discovery!==true);
+  const weight=estimateBinanceRequestWeight(path,query);
+  const totalWeight=active.reduce((sum,item)=>sum+(Number(item?.weight)||0),0);
+  const generalWeight=general.reduce((sum,item)=>sum+(Number(item?.weight)||0),0);
+  const totalRequestWait=active.length>=SHARED_MAX_REQUESTS_PER_MINUTE
+    ?waitUntilCountMs(active,now,SHARED_MAX_REQUESTS_PER_MINUTE):0;
+  const generalRequestWait=!discovery&&general.length>=SHARED_GENERAL_MAX_REQUESTS_PER_MINUTE
+    ?waitUntilCountMs(general,now,SHARED_GENERAL_MAX_REQUESTS_PER_MINUTE):0;
+  const totalWeightWait=totalWeight+weight>SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE
+    ?waitUntilMs(active,now,weight,SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE):0;
+  const generalWeightWait=!discovery&&generalWeight+weight>SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE
+    ?waitUntilMs(general,now,weight,SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE):0;
+  const requestWaitMs=Math.max(totalRequestWait,generalRequestWait);
+  const weightWaitMs=Math.max(totalWeightWait,generalWeightWait);
+  return {discovery,requestWaitMs,weightWaitMs,waitMs:Math.max(requestWaitMs,weightWaitMs)};
 }
 
 function scanDeadlineFailure(onDeadline) {
@@ -190,19 +233,13 @@ async function waitSharedBudget(path, query = {}, controls = {}) {
         waitMs = cooldown;
       } else {
         SHARED.usedAt = SHARED.usedAt.filter(item => item.at > now - 60000);
-        const usedWeight = SHARED.usedAt.reduce((sum, item) => sum + item.weight, 0);
-        const requestWait = SHARED.usedAt.length >= SHARED_MAX_REQUESTS_PER_MINUTE
-          ? Math.max(0, SHARED.usedAt[0].at + 60000 - now)
-          : 0;
-        const weightWait = usedWeight + weight > SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE
-          ? waitUntilMs(SHARED.usedAt, now, weight)
-          : 0;
+        const budget=calculateSharedBudgetWait(path,query,SHARED.usedAt,now);
         const spacingWait = Math.max(0, SHARED.lastRequestAt + SHARED_MIN_INTERVAL_MS - now);
-        waitMs = Math.max(requestWait, weightWait, spacingWait);
+        waitMs = Math.max(budget.waitMs, spacingWait);
         if (waitMs === 0) {
           reservedAt = Date.now();
           SHARED.lastRequestAt = reservedAt;
-          SHARED.usedAt.push({ at: reservedAt, weight });
+          SHARED.usedAt.push({ at: reservedAt, weight, discovery:budget.discovery });
         }
       }
     } finally {
