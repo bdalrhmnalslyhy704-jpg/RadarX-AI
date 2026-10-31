@@ -406,29 +406,6 @@ test('TEST_FIXTURE: expired analyst scan deadline blocks outbound REST requests 
   assert.match(client.health().last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
 });
 
-test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',async()=>{
-  let calls=0;
-  const fetchImpl=async()=>{
-    calls++;
-    return{status:429,headers:new Map([['retry-after','86400']]),ok:false,json:async()=>({})};
-  };
-  const client=new RestClient({baseUrls:['https://long-cooldown.test'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
-  await assert.rejects(
-    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'1m'}),
-    error=>error instanceof RestRateLimitError&&error.retryMs>=86_000_000
-  );
-  const started=Date.now();
-  await assert.rejects(
-    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'5m'}),
-    error=>error instanceof RestRateLimitError&&error.retryMs>80_000_000
-  );
-  assert.ok(Date.now()-started<250,'long server cooldown must defer to the next scan instead of sleeping inside it');
-  assert.equal(calls,1,'while the shared ban is active no extra request should be sent');
-  assert.ok(client.health().rate_limited_until>Date.now()+80_000_000);
-});
-
-
-
 test('TEST_FIXTURE: a stalled shared market-data response cannot block another radar forever',async()=>{
   let firstStarted=false,secondCalls=0;
   const first=new RestClient({
@@ -485,4 +462,25 @@ test('TEST_FIXTURE: scan abort while joining a shared request removes the wait i
   assert.ok(Date.now()-startedAt<150,'cancelled radar must not remain attached to the stale shared request');
   assert.equal(secondCalls,0,'aborted waiter must not launch a replacement request');
   void stale;
+});
+
+test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',async()=>{
+  let calls=0;
+  const fetchImpl=async()=>{
+    calls++;
+    return{status:429,headers:new Map([['retry-after','86400']]),ok:false,json:async()=>({})};
+  };
+  const client=new RestClient({baseUrls:['https://long-cooldown.test'],fetchImpl,timeoutMs:100,minIntervalMs:0,maxRequestsPerMinute:100});
+  await assert.rejects(
+    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'1m'}),
+    error=>error instanceof RestRateLimitError&&error.retryMs>=86_000_000
+  );
+  const started=Date.now();
+  await assert.rejects(
+    ()=>client.request('/api/v3/klines',{symbol:'COOLDOWNTESTUSDT',interval:'5m'}),
+    error=>error instanceof RestRateLimitError&&error.retryMs>80_000_000
+  );
+  assert.ok(Date.now()-started<250,'long server cooldown must defer to the next scan instead of sleeping inside it');
+  assert.equal(calls,1,'while the shared ban is active no extra request should be sent');
+  assert.ok(client.health().rate_limited_until>Date.now()+80_000_000);
 });
