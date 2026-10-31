@@ -2428,9 +2428,17 @@ export class MarketUniverseScanner {
         const abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
         this.rest.requestDeadlineAtMs=deadlineAtMs;
         this.rest.requestAbortSignal=controller.signal;
-        const deadlineError=()=>{
-          const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED');
+        const deadlineError=(cause=null)=>{
+          const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
+            ?cause.scan_progress:null;
+          const detail=progress
+            ?' stage='+String(progress.stage||'UNKNOWN')+
+              ' symbols='+String(Number(progress.symbols_completed)||0)+'/'+String(Number(progress.symbols_total)||0)+
+              (progress.last_completed_symbol?' last='+String(progress.last_completed_symbol):'')
+            :'';
+          const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED'+detail);
           error.name='ScanDeadlineError';
+          if(progress)error.scan_progress={...progress};
           return error;
         };
         try {
@@ -2441,7 +2449,7 @@ export class MarketUniverseScanner {
           if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
           return result;
         } catch(error) {
-          if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
+          if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError(error);
           throw error;
         } finally {
           clearTimeout(abortTimer);
