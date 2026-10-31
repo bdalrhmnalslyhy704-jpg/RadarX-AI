@@ -426,3 +426,63 @@ test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',a
   assert.equal(calls,1,'while the shared ban is active no extra request should be sent');
   assert.ok(client.health().rate_limited_until>Date.now()+80_000_000);
 });
+
+
+
+test('TEST_FIXTURE: a stalled shared market-data response cannot block another radar forever',async()=>{
+  let firstStarted=false,secondCalls=0;
+  const first=new RestClient({
+    baseUrls:['https://shared-stalled-ticker.test'],timeoutMs:40,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{
+      firstStarted=true;
+      return {status:200,ok:true,headers:new Map(),json:()=>new Promise(()=>{})};
+    }
+  });
+  const second=new RestClient({
+    baseUrls:['https://shared-stalled-ticker.test'],timeoutMs:40,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{
+      secondCalls++;
+      return {status:200,ok:true,headers:new Map(),json:async()=>({symbols:['BTCUSDT'],source:'RECOVERED_FRESH_REQUEST'})};
+    }
+  });
+  const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
+  for(let attempt=0;attempt<20&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
+  assert.equal(firstStarted,true,'first radar must own the initial in-flight request');
+  const recovered=await second.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
+  assert.equal(secondCalls,1,'the waiting radar should issue a fresh request after the bounded coalescing wait');
+  assert.deepEqual(recovered.data,{symbols:['BTCUSDT'],source:'RECOVERED_FRESH_REQUEST'});
+  // The original mock body intentionally never resolves. It must not retain the
+  // shared in-flight cache slot after its own caller has moved on to newer data.
+  assert.equal(second.health().last_request_phase,'COMPLETE');
+  assert.equal(second.health().state,'LIVE');
+  void stale;
+});
+
+test('TEST_FIXTURE: scan abort while joining a shared request removes the wait immediately',async()=>{
+  let firstStarted=false,secondCalls=0;
+  const first=new RestClient({
+    baseUrls:['https://shared-aborted-ticker.test'],timeoutMs:500,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{
+      firstStarted=true;
+      return {status:200,ok:true,headers:new Map(),json:()=>new Promise(()=>{})};
+    }
+  });
+  const second=new RestClient({
+    baseUrls:['https://shared-aborted-ticker.test'],timeoutMs:500,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async()=>{
+      secondCalls++;
+      return {status:200,ok:true,headers:new Map(),json:async()=>({ok:true})};
+    }
+  });
+  const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDABORTUSDT'});
+  for(let attempt=0;attempt<20&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
+  const controller=new AbortController();
+  second.requestAbortSignal=controller.signal;
+  const startedAt=Date.now();
+  const pending=second.request('/api/v3/ticker/24hr',{symbol:'SHAREDABORTUSDT'});
+  setTimeout(()=>controller.abort(),20);
+  await assert.rejects(pending,error=>error?.name==='ScanDeadlineError');
+  assert.ok(Date.now()-startedAt<150,'cancelled radar must not remain attached to the stale shared request');
+  assert.equal(secondCalls,0,'aborted waiter must not launch a replacement request');
+  void stale;
+});
