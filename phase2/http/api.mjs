@@ -592,17 +592,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   // Use the known public market-data mirror first and one official Binance fallback,
   // with a bounded per-host timeout. Failed sources remain fail-closed; live candle
   // freshness, order-book liquidity, and the alert gate are not weakened.
-  // Share the same six official Spot mirrors as the isolated 20-analyst
-  // client. This makes exchangeInfo cache/in-flight keys identical between
-  // the two independent scanners, so a successful universe fetch is reused
-  // instead of each worker repeating a slow regional fallback sweep.
-  // Keep data-api (which is reachable in some DHDTech regions) and omit only
-  // the generic api.binance.com hostname. Per-host timeout stays at 3.5s.
+  // Share all seven official Spot mirrors with the 20-analyst scanner.
+  // Identical order makes exchangeInfo cache/in-flight keys identical between
+  // the scanners, avoiding duplicate regional fallback sweeps.
+  // Keep the bounded 3.5s per-host timeout and strict data-quality gates.
   const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
     ? [...new Set(marketRadarRestClient.baseUrls
         .map(value=>String(value??'').trim().replace(/\/+$/,''))
-        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url))
-        .filter(url=>!/^https:\/\/api\.binance\.com$/i.test(url)))]
+        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url)))]
     : [];
   if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
     preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
