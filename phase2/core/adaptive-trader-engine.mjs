@@ -776,9 +776,38 @@ export function createAdaptiveTraderSnapshotService({
 } = {}) {
   const cache = new Map();
   const flights = new Map();
+  const flightMeta = new Map();
   const rotationCursors = new Map();
   const retryQueues = new Map();
   const flightOffsets = new Map();
+  const flightTimeoutMs=Math.max(250,Math.min(60_000,Math.trunc(Number(scanTimeoutMs)||60_000)));
+  const evictFlight=(limit,task)=>{
+    if(flights.get(limit)!==task)return false;
+    const meta=flightMeta.get(limit);
+    try{meta?.controller?.abort();}catch{}
+    if(meta&&rest.requestAbortSignal===meta.controller.signal)
+      rest.requestAbortSignal=meta.previousAbortSignal??null;
+    if(meta&&rest.requestDeadlineAtMs===meta.effectiveDeadline)
+      rest.requestDeadlineAtMs=meta.previousDeadline??null;
+    flights.delete(limit);flightOffsets.delete(limit);flightMeta.delete(limit);
+    return true;
+  };
+  const waitForFlight=async(limit,task)=>{
+    const meta=flightMeta.get(limit);
+    const fallbackDeadline=Date.now()+flightTimeoutMs+1000;
+    const deadline=Number(meta?.deadlineAtMs)||fallbackDeadline;
+    const waitMs=Math.max(250,deadline-Date.now()+1000);
+    let timer=null;
+    const result=await Promise.race([
+      Promise.resolve(task).then(value=>({kind:'DONE',value}),error=>({kind:'ERROR',error})),
+      new Promise(resolve=>{timer=setTimeout(()=>resolve({kind:'TIMEOUT'}),waitMs);})
+    ]);
+    if(timer!==null)clearTimeout(timer);
+    if(result.kind==='TIMEOUT'){
+      evictFlight(limit,task);
+    }
+    return result;
+  };
   const getSnapshot = async ({ limit = POLICY.defaultUniverseLimit, now = Date.now(), offset, pendingSamples = [] } = {}) => {
     const safeLimit = clamp(Math.trunc(Number(limit) || POLICY.defaultUniverseLimit), 20, POLICY.maxUniverseLimit);
     const requestedOffset = offset === undefined || offset === null || !Number.isFinite(Number(offset))
@@ -803,25 +832,26 @@ export function createAdaptiveTraderSnapshotService({
     const activeEntry = flights.entries().next().value;
     if (activeEntry) {
       const [activeLimit, active] = activeEntry;
-      if(needsClosedCandleOutcomes){
-        try{await active;}catch{}
-        return getSnapshot({limit:safeLimit,now:Date.now(),offset:requestedOffset,pendingSamples});
-      }
-      // Identical requests should share one scan. A different universe size
-      // waits, then gets its own scan rather than consuming the wrong result.
-      if (activeLimit === safeLimit) {
-        const activeOffset = flightOffsets.get(activeLimit);
-        if (requestedOffset === null || activeOffset === requestedOffset) return active;
-        try { await active; } catch {}
-        return getSnapshot({ limit: safeLimit, now: Date.now(), offset: requestedOffset });
-      }
-      try { await active; } catch {}
-      return getSnapshot({ limit: safeLimit, now: Date.now(), offset: requestedOffset });
+      const sameRequest=activeLimit===safeLimit&&
+        (requestedOffset===null||flightOffsets.get(activeLimit)===requestedOffset);
+      const outcome=await waitForFlight(activeLimit,active);
+      if(sameRequest&&outcome.kind==='DONE')return outcome.value;
+      if(sameRequest&&outcome.kind==='ERROR')throw outcome.error;
+      // Different callers and requests with matured closed-candle outcomes must
+      // wait for the current flight, but never forever. If it exceeded its
+      // deadline, waitForFlight aborts and evicts only that exact flight before
+      // this request is allowed to establish a fresh one.
+      return getSnapshot({limit:safeLimit,now:Date.now(),offset:requestedOffset,pendingSamples});
     }
     const previousDeadline = Number(rest.requestDeadlineAtMs) > 0 ? Number(rest.requestDeadlineAtMs) : null;
-    const deadline = Date.now() + Math.max(5_000, Math.min(60_000, Math.trunc(Number(scanTimeoutMs) || 45_000)));
+    const previousAbortSignal=rest.requestAbortSignal??null;
+    const controller=new AbortController();
+    const deadline = Date.now()+flightTimeoutMs;
     rest.requestDeadlineAtMs = previousDeadline === null ? deadline : Math.min(previousDeadline, deadline);
+    rest.requestAbortSignal=controller.signal;
     const effectiveDeadline = rest.requestDeadlineAtMs;
+    const flight={controller,previousDeadline,previousAbortSignal,effectiveDeadline,
+      deadlineAtMs:effectiveDeadline};
     const scanOffset = requestedOffset === null ? (rotationCursors.get(safeLimit) || 0) : requestedOffset;
     const queuedRetries = retryQueues.get(safeLimit) || [];
     const task = buildAdaptiveTraderMarketSnapshot({
@@ -851,13 +881,16 @@ export function createAdaptiveTraderSnapshotService({
       while (cache.size > 4) cache.delete(cache.keys().next().value);
       return attachClosedCandleOutcomes(attachHistoricalTrainingSamples({ ...snapshot, meta: { ...snapshot.meta, cache_mode: 'FRESH_SCAN', cache_age_ms: 0 } },snapshot.historical_training_samples),snapshot.closed_candle_outcomes);
     }).finally(() => {
+      if (rest.requestAbortSignal === controller.signal) rest.requestAbortSignal=previousAbortSignal;
       if (rest.requestDeadlineAtMs === effectiveDeadline) rest.requestDeadlineAtMs = previousDeadline;
-      for (const [key, activeTask] of flights) {
-        if (activeTask === task) { flights.delete(key); flightOffsets.delete(key); }
+      if(flights.get(safeLimit)===task){
+        flights.delete(safeLimit);flightOffsets.delete(safeLimit);
+        if(flightMeta.get(safeLimit)===flight)flightMeta.delete(safeLimit);
       }
     });
     flights.set(safeLimit, task);
     flightOffsets.set(safeLimit, scanOffset);
+    flightMeta.set(safeLimit,flight);
     return task;
   };
   return getSnapshot;
