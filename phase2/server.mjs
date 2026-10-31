@@ -2,7 +2,7 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
-import {CONFIG,resolvePublicSpotRestUrls} from './config.mjs';
+import {CONFIG,resolvePublicSpotRestUrls,resolveFastPublicSpotRestUrls} from './config.mjs';
 import {RestClient} from './market/binance-rest.mjs';
 import {BinanceStreamClient} from './market/binance-ws.mjs';
 import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
@@ -186,15 +186,16 @@ export async function startServer({
   const symbolDeepAnalyzer=new SymbolDeepAnalyzer({rest:deepScanRest,config:config.symbolDeepScan||{}});
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
-  // Keep the 20-analyst discovery client independent from other radar
-  // Use every configured official Binance Spot REST mirror for discovery.
-  // Hosting-region egress can change which hostname returns HTTP 451; keeping
-  // all seven mirrors gives the 20-analyst client one extra independent route.
-  // Pre-Move uses the identical ordered list, so exchangeInfo cache/in-flight
-  // responses remain shared between the two scanners.
-  // Candle/depth quality gates and the 19-specialist + final-analyst pipeline
-  // remain unchanged.
-  const multiAnalystRestUrls=[...publicSpotRestUrls];
+  // The 20-analyst discovery engine and Pre-Move share the same bounded
+  // two-host official Spot pool. A seven-host sequential waterfall for the
+  // full-market ticker can consume the 180s scan deadline before symbol discovery.
+  // Start with the most recently successful shared Spot host, then one official
+  // fallback. The other twelve-radar engines retain the complete seven-host pool.
+  // Closed-candle, liquidity and all analyst quality gates remain unchanged.
+  const multiAnalystRestUrls=resolveFastPublicSpotRestUrls(
+    publicSpotRestUrls,
+    rest.currentBaseIndex
+  );
   // Match the successful shared Spot clients: 3.5s was too short for some DHDTech-to-Binance routes,
   // so every official mirror could time out before a slower reachable mirror returned live data.
   const multiAnalystTimeoutMs=Math.min(9000,Number(config.rest?.timeoutMs)||9000);
@@ -207,6 +208,8 @@ export async function startServer({
     count:multiAnalystRest.baseUrls.length,
     hosts:multiAnalystRest.baseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
     timeout_ms:multiAnalystRest.timeoutMs,
+    max_sequential_mirrors:2,
+    preferred_from_host_index:Number.isInteger(rest.currentBaseIndex)?rest.currentBaseIndex:null,
     isolated_from_shared_exchange_info:true
   }));
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
