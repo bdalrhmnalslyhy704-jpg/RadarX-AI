@@ -378,6 +378,8 @@ export class RestClient {
     this.minIntervalMs=minIntervalMs; this.maxRequestsPerMinute=maxRequestsPerMinute;
     this.usedAt=[]; this.lastRequestAt=0; this.currentBaseIndex=0;
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
+    this.lastRequestPath=null;this.lastRequestUrl=null;this.lastRequestPhase=null;
+    this.lastRequestHttpStatus=null;this.lastRequestStartedAt=null;this.lastRequestDurationMs=null;
     // Set only for a bounded top-level radar scan; null means ordinary REST use.
     this.requestDeadlineAtMs=null;
     // A bounded radar cycle may cancel all its own in-flight REST work together.
@@ -390,6 +392,9 @@ export class RestClient {
   }
   health(){return {
     state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
+    last_request_path:this.lastRequestPath,last_request_url:this.lastRequestUrl,
+    last_request_phase:this.lastRequestPhase,last_request_http_status:this.lastRequestHttpStatus,
+    last_request_started_at:this.lastRequestStartedAt,last_request_duration_ms:this.lastRequestDurationMs,
     rate_limited_until:Math.max(this.rateLimitedUntil||0,SHARED.rateLimitedUntil||0)||null,
     current_base_url:this.baseUrls[this.currentBaseIndex]??null,
     shared_queue_depth:SHARED.inflight.size,
@@ -433,19 +438,38 @@ export class RestClient {
   }
   async request(path,query={}) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
+    const startedAt=Date.now();
+    // RadarX consumes public Spot data only. Binance exchangeInfo defaults to
+    // symbols with several permission classes; explicitly request active Spot
+    // symbols at the source so every scanner receives the smallest safe universe.
+    const requestQuery=path==='/api/v3/exchangeInfo'&&
+      query&&typeof query==='object'&&Object.keys(query).length===0
+      ?{permissions:'SPOT',symbolStatus:'TRADING'}:query;
+    this.lastRequestPath=path;
+    this.lastRequestUrl=null;
+    this.lastRequestPhase='CACHE_LOOKUP';
+    this.lastRequestHttpStatus=null;
+    this.lastRequestStartedAt=startedAt;
+    this.lastRequestDurationMs=null;
     const assertRequestDeadline=()=>{
       const deadline=Number(this.requestDeadlineAtMs);
       const externallyAborted=this.requestAbortSignal?.aborted===true;
       if(!externallyAborted&&(!Number.isFinite(deadline)||deadline<=0||Date.now()<deadline))return;
-      const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
+      const previous=String(this.lastError||'').replace(/\\s+/g,' ').slice(0,180);
+      const host=this.lastRequestUrl?new URL(this.lastRequestUrl).host:
+        (this.baseUrls[this.currentBaseIndex]?new URL(this.baseUrls[this.currentBaseIndex]).host:'UNKNOWN');
+      const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED'+
+        ':phase='+String(this.lastRequestPhase||'UNKNOWN')+
+        ':path='+path+':host='+host+
+        (previous&&previous!=='MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED'?':last_error='+previous:''));
       error.name='ScanDeadlineError';
       this.lastError=error.message;
       this.state='ERROR';
       throw error;
     };
     assertRequestDeadline();
-    const key=cacheKey(this.baseUrls,path,query);
-    const ttl=sharedResponseCacheTtlMs(path,query);
+    const key=cacheKey(this.baseUrls,path,requestQuery);
+    const ttl=sharedResponseCacheTtlMs(path,requestQuery);
     const hit=cachedValue(key);
     if(hit){
       return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
@@ -471,11 +495,13 @@ export class RestClient {
       let error=null;
       const attemptFailures=[];
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
-        await this.waitBudget(path, query, {deadlineAtMs:this.requestDeadlineAtMs,signal:this.requestAbortSignal,onDeadline:assertRequestDeadline});
+        this.lastRequestPhase='WAIT_BUDGET';
+        await this.waitBudget(path, requestQuery, {deadlineAtMs:this.requestDeadlineAtMs,signal:this.requestAbortSignal,onDeadline:assertRequestDeadline});
         assertRequestDeadline();
         const idx=(this.currentBaseIndex+attempt)%this.baseUrls.length;
-        const qs=new URLSearchParams(normalizedQuery(query));
+        const qs=new URLSearchParams(normalizedQuery(requestQuery));
         const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
+        this.lastRequestUrl=url;this.lastRequestPhase='FETCH';
         const ac=new AbortController();
         const parentSignal=this.requestAbortSignal;
         const abortFromParent=()=>{if(!ac.signal.aborted)ac.abort();};
@@ -490,6 +516,7 @@ export class RestClient {
         this.state='REQUESTING';
         try{
           const r=await this.fetchImpl(url,{method:'GET',signal:ac.signal,headers:{Accept:'application/json'}});
+          this.lastRequestHttpStatus=Number(r.status)||null;this.lastRequestPhase='READ_RESPONSE';
           if(r.status===429||r.status===418){
             const wait=retryAfterMs(r.headers)??Math.min(60000,1500*(2**attempt));
             SHARED.rateLimitedUntil=Math.max(SHARED.rateLimitedUntil,Date.now()+wait);
@@ -509,6 +536,7 @@ export class RestClient {
               (responseDetail?' response='+responseDetail:''));
           }
           recordObservedUsedWeight(r.headers);
+          this.lastRequestPhase='PARSE_JSON';
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
           // Do not retain malformed/seconds-based Kline payloads in the short
@@ -526,6 +554,7 @@ export class RestClient {
           }
           this.currentBaseIndex=idx; this.lastSuccessAt=Date.now();
           this.lastError=null; this.state='LIVE';
+          this.lastRequestPhase='COMPLETE';this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
           return result;
         }catch(e){
           const timedOut=ac.signal.aborted||e?.name==='AbortError';
@@ -539,6 +568,8 @@ export class RestClient {
           if(scanAborted)error.name='ScanDeadlineError';
           else if(timedOut)error.name='RestTimeoutError';
           const message=String(error?.message??error).slice(0,260);
+          this.lastRequestPhase='ATTEMPT_FAILED';
+          this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
           attemptFailures.push(message);
           this.lastError=message;
           if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') break;
@@ -561,6 +592,8 @@ export class RestClient {
       return annotateClientSuccess(this,{data:result.data,source:result.source,receivedAt:Date.now()},null);
     }catch(error){
       this.state=error?.name==='RestRateLimitError'?'RATE_LIMITED':'ERROR';
+      this.lastError=String(error?.message??error).slice(0,1500);
+      this.lastRequestPhase='FAILED';this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
       throw error;
     }finally{
       if(SHARED.inflight.get(key)===task) SHARED.inflight.delete(key);
