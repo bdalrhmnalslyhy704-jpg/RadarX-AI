@@ -47,6 +47,15 @@ export class RestRateLimitError extends Error {
   }
 }
 
+export class RestRegionRestrictedError extends Error {
+  constructor(message='BINANCE_REGION_RESTRICTED:HTTP_451') {
+    super(message);
+    this.name='RestRegionRestrictedError';
+    this.code='BINANCE_REGION_RESTRICTED';
+    this.status=451;
+  }
+}
+
 /*
  * All RadarX RestClient instances share this broker.
  * The app intentionally creates separate clients so each radar can fail independently,
@@ -567,8 +576,10 @@ export class RestClient {
               }
             }catch{}
             const host=new URL(url).host;
-            throw new Error('HTTP_'+r.status+' path='+path+' host='+host+
-              (responseDetail?' response='+responseDetail:''));
+            const message='HTTP_'+r.status+' path='+path+' host='+host+
+              (responseDetail?' response='+responseDetail:'');
+            if(r.status===451)throw new RestRegionRestrictedError('BINANCE_REGION_RESTRICTED:'+message);
+            throw new Error(message);
           }
           recordObservedUsedWeight(r.headers);
           this.lastRequestPhase='PARSE_JSON';
@@ -607,7 +618,7 @@ export class RestClient {
           this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
           attemptFailures.push(message);
           this.lastError=message;
-          if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') break;
+          if(error?.name==='RestRateLimitError'||error?.name==='RestRegionRestrictedError'||error?.name==='ScanDeadlineError') break;
         }finally{
           clearTimeout(tm);
           parentSignal?.removeEventListener('abort',abortFromParent);
@@ -626,7 +637,8 @@ export class RestClient {
       const result=await task;
       return annotateClientSuccess(this,{data:result.data,source:result.source,receivedAt:Date.now()},null);
     }catch(error){
-      this.state=error?.name==='RestRateLimitError'?'RATE_LIMITED':'ERROR';
+      this.state=error?.name==='RestRateLimitError'?'RATE_LIMITED':
+        error?.name==='RestRegionRestrictedError'?'REGION_RESTRICTED':'ERROR';
       this.lastError=String(error?.message??error).slice(0,1500);
       this.lastRequestPhase='FAILED';this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
       throw error;
