@@ -1852,13 +1852,23 @@ export class MarketUniverseScanner {
     this._preMoveRotationOffset = 0;
   }
 
+  // RestClient already iterates every configured Binance mirror internally.
+  // Repeating a whole multi-host sweep here multiplies a slow 24h ticker request
+  // by (fallback hosts × retry attempts) and can consume the complete analyst
+  // scan deadline before a single symbol is reviewed. Keep retries only for
+  // lightweight test/custom REST adapters that expose no internal host list.
+  restRetryAttempts() {
+    return Array.isArray(this.rest?.baseUrls) && this.rest.baseUrls.length > 1
+      ? 0 : Math.max(0,Math.trunc(Number(this.config.retryAttempts)||0));
+  }
+
   async requestOnce(path, query = {}) {
     const key = path + '?' + new URLSearchParams(query).toString();
     if (this._requests.has(key)) return this._requests.get(key);
     const promise = withRetry(
       () => this.rest.request(path, query),
       {
-        attempts: this.config.retryAttempts,
+        attempts: this.restRetryAttempts(),
         baseMs: this.config.retryBaseMs,
         maxBackoffMs: this.config.maxBackoffMs,
         sleepFn: this.sleepFn
@@ -1879,8 +1889,21 @@ export class MarketUniverseScanner {
   }
 
   async ticker24h() {
-    const r = await this.requestOnce('/api/v3/ticker/24hr');
-    return { data: r.data, source: r.source, receivedAt: this.clock() };
+    // MINI preserves open/high/low/last prices, base/quote volume, timestamps,
+    // and trade count while omitting large ancillary FULL fields. Compute the
+    // standard rolling 24h percent from the same open/last prices when MINI
+    // does not supply priceChangePercent.
+    const r = await this.requestOnce('/api/v3/ticker/24hr',{type:'MINI'});
+    const data=Array.isArray(r.data)?r.data.map(row=>{
+      const explicit=Number(row?.priceChangePercent);
+      const open=Number(row?.openPrice);
+      const last=Number(row?.lastPrice);
+      const priceChangePercent=Number.isFinite(explicit)
+        ?explicit
+        :open>0&&last>0?(last/open-1)*100:null;
+      return {...row,priceChangePercent};
+    }):r.data;
+    return { data, source: r.source, receivedAt: this.clock() };
   }
 
   async fetchSeries(symbol, interval, limit = this.config.deepKlines) {
@@ -1888,7 +1911,7 @@ export class MarketUniverseScanner {
     return withRetry(
       () => this.rest.klines(symbol, interval, { limit: safeLimit }),
       {
-        attempts: this.config.retryAttempts,
+        attempts: this.restRetryAttempts(),
         baseMs: this.config.retryBaseMs,
         maxBackoffMs: this.config.maxBackoffMs,
         sleepFn: this.sleepFn
@@ -1901,7 +1924,7 @@ export class MarketUniverseScanner {
     return withRetry(
       () => this.rest.depth(symbol, safeLimit),
       {
-        attempts: this.config.retryAttempts,
+        attempts: this.restRetryAttempts(),
         baseMs: this.config.retryBaseMs,
         maxBackoffMs: this.config.maxBackoffMs,
         sleepFn: this.sleepFn
