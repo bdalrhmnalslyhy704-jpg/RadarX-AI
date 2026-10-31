@@ -1005,7 +1005,7 @@ test('TEST_FIXTURE: Radar 8 background release scan returns 202 immediately and 
     snapshot(){return{schema_version:'RADAR8_V2',radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',
       as_of:completedAt?new Date(completedAt).toISOString():null,quote:'USDT',
       universe:{expected_total:506,received_total:506,coverage_ratio:1,eligible_total:225},
-      candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});}
+      candidates:[],meta:{live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};}
   };
   const config={environment:'production',radarControl:{autostart:null},
     auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
