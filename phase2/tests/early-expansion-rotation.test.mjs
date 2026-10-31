@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {RestClient} from '../market/binance-rest.mjs';
 import {EarlyExpansionRadar,EARLY_EXPANSION_RADAR_DEFAULTS,nextEarlyExpansionPollDelayMs,isMarketWideCachePoolReady,isMarketWideCacheFallbackPoolReady,adaptiveRadar8MicroConcurrency,adaptiveRadar8DeepConcurrency,adaptiveRadar8DeepCandidateTarget,fetchRadar8MarketContext,assessContinuationConfirmation,buildActivityShockWatchAlert,buildDirectionalDeepPendingQueue,selectUnderfloorFastShockCandidates,isEarlyExpansionCandidateAlertEligible,ensureRadar8ScoreContainer,isConfirmedEarlyFlowWatchCandidate,buildEarlyFlowWatchAlert,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const now=1_900_000_000_000;
@@ -1533,4 +1534,42 @@ test('Radar 8 stop cancels a pending scan and clears the latch before watchdog r
   assert.equal(radar.busy,false);
   assert.equal(radar.busySinceAtMs,null);
   assert.equal(radar.running,false);
+});
+
+
+
+test('TEST_FIXTURE: Radar 8 scan deadline aborts its underlying Binance request and releases the cycle latch',async()=>{
+  let capturedSignal=null,started=false;
+  const rest=new RestClient({
+    baseUrls:['https://radar8-cycle-deadline.test'],
+    timeoutMs:1000,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async(_url,{signal})=>new Promise((_resolve,reject)=>{
+      capturedSignal=signal;started=true;
+      const abort=()=>reject(Object.assign(new Error('The operation was aborted'),{name:'AbortError'}));
+      if(signal.aborted)abort();
+      else signal.addEventListener('abort',abort,{once:true});
+    })
+  });
+  const radar=makeRadar({scanTimeoutMs:80});
+  radar.rest=rest;
+  radar.running=true;
+  radar.journeyStateHydrated=true;
+  radar.scheduler.hydrate=async()=>{};
+  radar.scheduler.flush=async()=>{};
+  radar.refreshUniverse=async()=>{
+    radar.universe=['BTCUSDT'];
+    radar.universeAt=Date.now();
+  };
+  try{
+    const result=await radar.tick();
+    assert.equal(result,false);
+    assert.equal(started,true,'Radar 8 must enter the market ticker request');
+    assert.equal(capturedSignal?.aborted,true,'deadline must abort the actual REST request');
+    assert.equal(rest.requestAbortSignal,null,'cycle signal must be restored after the scan');
+    assert.equal(rest.requestDeadlineAtMs,null,'cycle deadline must be restored after the scan');
+    assert.equal(radar.busy,false,'a cancelled scan must release the Radar 8 busy latch');
+    assert.match(String(radar.lastError),/RADAR8_SCAN_DEADLINE_EXCEEDED:stage=TICKER_ROWS/);
+  }finally{
+    await radar.stop();
+  }
 });
