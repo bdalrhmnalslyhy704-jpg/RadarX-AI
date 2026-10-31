@@ -333,79 +333,62 @@ jobs:
           if(problems.length)throw new Error(JSON.stringify({problems,summary}));
           NODE
 
-      - name: Read and poll the current Pre-Move background snapshot on DHDTech
-        # Reuse the worker's USDT:50 snapshot where fresh. If absent/stale, an ordinary
-        # GET requests a refresh without forcing a second scan in parallel with Triple Radar.
-        timeout-minutes: 5
+      - name: Wait for one completed Pre-Move background scan on DHDTech
+        # Poll the independent worker first; avoid repeatedly triggering or reading
+        # the snapshot endpoint while its background scan is still running.
+        timeout-minutes: 4
         run: |
           set -euo pipefail
+          STATUS_URL="$BASE/api/pre-move-radar-status"
+          STATUS_JSON="$RUNNER_TEMP/pre-move-worker-status.json"
           URL="$BASE/api/pre-move-radar?quote=USDT&limit=50"
-          PRE_TMP="$RUNNER_TEMP/pre-move-radar.poll.tmp.json"
           PRE_JSON="$RUNNER_TEMP/pre-move-radar.json"
           READY=false
-          for cycle in 1 2; do
-            START_TMP="$RUNNER_TEMP/pre-move-start.tmp.json"
-            START_CURL_EXIT=0
-            START_CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$START_TMP" -w "%{http_code}" "$URL")" || START_CURL_EXIT=$?
-            if [ "$START_CURL_EXIT" -ne 0 ] || [ "$START_CODE" != "200" ]; then
-              echo "::error::Could not request the DHDTech Pre-Move background snapshot (curl=$START_CURL_EXIT HTTP=$START_CODE)"
-              cat "$START_TMP" 2>/dev/null | head -c 2000 || true
-              exit 1
-            fi
-            for attempt in $(seq 1 36); do
-              rm -f "$PRE_TMP"
-              CURL_EXIT=0
-              CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 20 -o "$PRE_TMP" -w "%{http_code}" "$URL")" || CURL_EXIT=$?
-              if [ "$CURL_EXIT" -ne 0 ]; then
-                echo "::warning::DHDTech Pre-Move poll transport failed (curl=$CURL_EXIT HTTP=${CODE:-unknown}) on cycle $cycle attempt $attempt/36."
-                rm -f "$PRE_TMP"
-                sleep 5
-                continue
-              fi
-              case "$CODE" in
-                200)
-                  if ! node --input-type=module - "$PRE_TMP" <<'NODE'
+          for attempt in $(seq 1 30); do
+            rm -f "$STATUS_JSON"
+            CURL_EXIT=0
+            CODE="$(curl --location --silent --show-error --connect-timeout 5 --max-time 10 -o "$STATUS_JSON" -w "%{http_code}" "$STATUS_URL")" || CURL_EXIT=$?
+            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ]; then
+              STATE="$(node --input-type=module - "$STATUS_JSON" <<'NODE'
           import fs from 'node:fs';
-          try {
-            const body=fs.readFileSync(process.argv[2],'utf8');
-            const parsed=JSON.parse(body);
-            if(!parsed || typeof parsed!=='object' || Array.isArray(parsed)) process.exit(1);
-          } catch { process.exit(1); }
+          const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const w=x.worker||{},s=x.last_background_scan||w.last_summary||{};
+          console.log(JSON.stringify({status:x.status,last_scan_status:w.last_scan_status,
+            successful_scans:w.successful_scans,running:w.running,elapsed_ms:s.elapsed_ms,
+            scanned:s.scanned,valid_data:s.valid_data,discovered:s.discovered,last_error:w.last_error}));
           NODE
-                  then
-                    echo "::warning::DHDTech Pre-Move poll returned incomplete JSON on cycle $cycle attempt $attempt/36; retrying."
-                    rm -f "$PRE_TMP"
-                    sleep 5
-                    continue
-                  fi
-                  mv "$PRE_TMP" "$PRE_JSON"
-                  STATE="$(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log(b.status||'unknown')")"
-                  if [ "$STATE" = "ready" ]; then
-                    READY=true
-                    break 2
-                  fi
-                  if [ "$STATE" = "error" ]; then
-                    echo "::warning::Pre-Move scan attempt failed: $(node --input-type=module -e "import fs from 'node:fs';const b=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-radar.json','utf8'));console.log((b.reason||b.error||'unknown').replace(/[^A-Za-z0-9_:.-]/g,''))")"
-                    break
-                  fi
-                  ;;
-                202|429|502|503|504)
-                  echo "::warning::DHDTech Pre-Move poll transient HTTP $CODE on cycle $cycle attempt $attempt/36."
-                  rm -f "$PRE_TMP"
-                  ;;
-                *)
-                  echo "::error::DHDTech Pre-Move poll returned non-retryable HTTP $CODE."
-                  cat "$PRE_TMP" 2>/dev/null | head -c 2000 || true
-                  exit 1
-                  ;;
-              esac
-              sleep 5
-            done
-            if [ "$cycle" -lt 2 ] && [ "$READY" != "true" ]; then sleep 10; fi
+              )"
+              echo "PRE_MOVE_WORKER_POLL attempt=$attempt $STATE"
+              if node --input-type=module - "$STATUS_JSON" <<'NODE'
+          import fs from 'node:fs';
+          const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const w=x.worker||{},s=x.last_background_scan||w.last_summary||{};
+          const ready=x.scanner_ready===true&&w.enabled===true&&
+            Number(w.successful_scans)>=1&&w.last_scan_status==='READY'&&
+            Number(s.elapsed_ms)>0&&Number(s.elapsed_ms)<=45000&&
+            Number(s.scanned)>0&&Number(s.valid_data)>0&&Number(s.discovered)>0;
+          process.exit(ready?0:10);
+          NODE
+              then
+                READY=true
+                break
+              fi
+            else
+              echo "::warning::DHDTech Pre-Move worker status unavailable (curl=$CURL_EXIT HTTP=$CODE) on attempt $attempt/30."
+              cat "$STATUS_JSON" 2>/dev/null | head -c 1000 || true
+            fi
+            if [ "$attempt" -lt 30 ]; then sleep 5; fi
           done
           if [ "$READY" != "true" ]; then
-            echo "::error::DHDTech did not complete a live Pre-Move scan within the acceptance window."
-            cat "$PRE_JSON" 2>/dev/null | head -c 8000 || true
+            echo "::error::Pre-Move background worker did not finish one fresh valid scan within 150 seconds."
+            cat "$STATUS_JSON" 2>/dev/null || true
+            exit 1
+          fi
+          SNAPSHOT_CURL_EXIT=0
+          CODE="$(curl --location --silent --show-error --connect-timeout 5 --max-time 20 -o "$PRE_JSON" -w "%{http_code}" "$URL")" || SNAPSHOT_CURL_EXIT=$?
+          if [ "$SNAPSHOT_CURL_EXIT" -ne 0 ] || [ "$CODE" != "200" ]; then
+            echo "::error::Completed Pre-Move worker snapshot fetch failed (curl=$SNAPSHOT_CURL_EXIT HTTP=$CODE)."
+            cat "$PRE_JSON" 2>/dev/null | head -c 2000 || true
             exit 1
           fi
           node --input-type=module <<'NODE'
