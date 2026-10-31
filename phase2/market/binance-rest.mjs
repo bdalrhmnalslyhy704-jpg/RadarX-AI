@@ -432,6 +432,7 @@ export class RestClient {
 
     const task=(async()=>{
       let error=null;
+      const attemptFailures=[];
       for(let attempt=0;attempt<this.baseUrls.length;attempt++){
         await this.waitBudget(path, query, {deadlineAtMs:this.requestDeadlineAtMs,signal:this.requestAbortSignal,onDeadline:assertRequestDeadline});
         assertRequestDeadline();
@@ -458,7 +459,18 @@ export class RestClient {
             this.rateLimitedUntil=Date.now()+wait; this.state='RATE_LIMITED';
             throw new RestRateLimitError(wait);
           }
-          if(!r.ok) throw new Error('HTTP_'+r.status);
+          if(!r.ok){
+            let responseDetail='';
+            try{
+              const responseCopy=typeof r.clone==='function'?r.clone():null;
+              if(responseCopy&&typeof responseCopy.text==='function'){
+                responseDetail=String(await responseCopy.text()).replace(/[\\r\\n\\t]+/g,' ').slice(0,180);
+              }
+            }catch{}
+            const host=new URL(url).host;
+            throw new Error('HTTP_'+r.status+' path='+path+' host='+host+
+              (responseDetail?' response='+responseDetail:''));
+          }
           recordObservedUsedWeight(r.headers);
           const data=await r.json();
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
@@ -489,7 +501,9 @@ export class RestClient {
               :e;
           if(scanAborted)error.name='ScanDeadlineError';
           else if(timedOut)error.name='RestTimeoutError';
-          this.lastError=String(error?.message??error);
+          const message=String(error?.message??error).slice(0,260);
+          attemptFailures.push(message);
+          this.lastError=message;
           if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') break;
         }finally{
           clearTimeout(tm);
@@ -497,6 +511,10 @@ export class RestClient {
         }
       }
       if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') throw error;
+      if(error&&attemptFailures.length){
+        error.message=(String(error.message||'REST_REQUEST_FAILED')+
+          ' attempts=['+attemptFailures.join(' | ')+']').slice(0,1500);
+      }
       throw error??new Error('REST_REQUEST_FAILED');
     })();
 
