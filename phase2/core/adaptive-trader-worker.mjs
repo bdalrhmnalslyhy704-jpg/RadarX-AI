@@ -71,7 +71,7 @@ export class AdaptiveTraderWorker{
     this.executionTimeoutMs=Math.max(100,Math.min(60_000,Math.trunc(Number(executionTimeoutMs)||15_000)));
     this.persistTimeoutMs=Math.max(100,Math.min(30_000,Math.trunc(Number(persistTimeoutMs)||12_000)));
     this.state=emptyState();this.enabled=false;this.inFlight=false;
-    this.activeScanStartedAt=null;this.activeScanDeadlineAt=null;this.lastStageTimeout=null;
+    this.activeScanStartedAt=null;this.activeScanDeadlineAt=null;this.activeScanStage=null;this.lastStageTimeout=null;
     this.interval=null;this.initialTimer=null;this.starting=null;
   }
 
@@ -166,6 +166,7 @@ export class AdaptiveTraderWorker{
     const started=Date.now();
     this.activeScanStartedAt=started;
     this.activeScanDeadlineAt=started+this.scanTimeoutMs;
+    this.activeScanStage='PENDING_SAMPLE_SELECTION';
     this.lastStageTimeout=null;
     this.state.scan_count=(Number(this.state.scan_count)||0)+1;
     this.state.last_started_at=started;
@@ -178,6 +179,7 @@ export class AdaptiveTraderWorker{
         scanStartedAt-Number(sample.at)<=48*60*60*1000
       ).map(sample=>({id:sample.id,symbol:sample.symbol,price:sample.price,at:sample.at,
         closed_candle_baseline:true,training_eligible:true}));
+      this.activeScanStage='MARKET_SNAPSHOT';
       const snapshot=await withStageTimeout(
         this.snapshotProvider({limit:scanLimit,now:scanStartedAt,offset:this.state.scan_cursor,pendingSamples}),
         this.scanTimeoutMs,'MARKET_SNAPSHOT'
@@ -196,6 +198,7 @@ export class AdaptiveTraderWorker{
       if(eligibleCount>0&&Number.isFinite(scanOffset)&&Number.isFinite(advanceCount)){
         this.state.scan_cursor=(Math.max(0,Math.trunc(scanOffset))+Math.max(0,Math.trunc(advanceCount)))%eligibleCount;
       }
+      this.activeScanStage='UPDATE_LEARNING_MEMORY';
       this.resolveSamples(snapshot,now);
       this.collectPriceHistory(snapshot,now);
       this.collectMissedMovers(snapshot,now);
@@ -229,6 +232,7 @@ export class AdaptiveTraderWorker{
       this.recordServerPaperPortfolio(executionSnapshot,now);
       this.lastExecutionResult=null;
       if(this.executionController){
+        this.activeScanStage='PAPER_EXECUTION_REVIEW';
         try{
           this.lastExecutionResult=await withStageTimeout(this.executionController.processSnapshot(executionSnapshot,{
             learningProfile:this.state.learning_profile,
@@ -239,7 +243,9 @@ export class AdaptiveTraderWorker{
           this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
         }
       }
+      this.activeScanStage='BUILD_SCAN_SUMMARY';
       this.state.last_summary=this.buildSummary({...snapshot,candidates:adaptiveCandidates});
+      this.activeScanStage='STATE_PERSIST';
       await withStageTimeout(this.persist(),this.persistTimeoutMs,'STATE_PERSIST');
       this.logger.info?.('[ADAPTIVE_TRADER_SCAN_COMPLETE] '+JSON.stringify({
         as_of:snapshot.as_of,scan_count:this.state.scan_count,
@@ -256,6 +262,7 @@ export class AdaptiveTraderWorker{
       }));
       return {status:'SUCCESS',as_of:snapshot.as_of,summary:this.state.last_summary};
     }catch(error){
+      this.activeScanStage='FAILURE_HANDLING';
       this.state.last_error=String(error?.message??error).slice(0,240);
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       if(error?.name==='AdaptiveTraderStageTimeoutError'){
@@ -276,6 +283,7 @@ export class AdaptiveTraderWorker{
       // Never await here. Every exit path, including a rejected/timed-out store
       // operation, must release the worker latch for the next interval.
       this.inFlight=false;
+      this.activeScanStage=null;
       this.activeScanStartedAt=null;
       this.activeScanDeadlineAt=null;
     }
@@ -693,6 +701,7 @@ recordServerPaperPortfolio(snapshot,now){
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,
       active_scan_deadline_at:this.activeScanDeadlineAt?new Date(this.activeScanDeadlineAt).toISOString():null,
+      active_scan_stage:this.activeScanStage,
       scan_timeout_ms:this.scanTimeoutMs,persist_timeout_ms:this.persistTimeoutMs,
       last_stage_timeout:this.lastStageTimeout,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,scan_cursor:Number(this.state.scan_cursor)||0,
