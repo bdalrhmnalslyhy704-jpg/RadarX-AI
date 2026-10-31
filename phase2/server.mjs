@@ -187,17 +187,14 @@ export async function startServer({
   const professorRadar=new ProfessorRadar({rest,store,pushManager:push,deepAnalyzer:symbolDeepAnalyzer,config:config.professorRadar||{},logger});
   const doomsdayRadar=new DoomsdayRadar({rest,store,pushManager:push,config:config.doomsdayRadar||{},logger});
   // Keep the 20-analyst discovery client independent from other radar
-  // exchangeInfo in-flight requests. A slow shared exchangeInfo fetch used to
-  // hold the forced analyst scan until its full 180s deadline before any pair
-  // was discovered. Retain data-api (the mirror that may be region-reachable
-  // from DHDTech), omit only the generic api.binance.com host to keep this
-  // request key isolated, and bound each official Spot host attempt.
+  // Use every configured official Binance Spot REST mirror for discovery.
+  // Hosting-region egress can change which hostname returns HTTP 451; keeping
+  // all seven mirrors gives the 20-analyst client one extra independent route.
+  // Pre-Move uses the identical ordered list, so exchangeInfo cache/in-flight
+  // responses remain shared between the two scanners.
   // Candle/depth quality gates and the 19-specialist + final-analyst pipeline
   // remain unchanged.
-  const multiAnalystRestUrls=publicSpotRestUrls.filter(url=>{
-    try{return new URL(url).host.toLowerCase()!=='api.binance.com';}
-    catch{return false;}
-  });
+  const multiAnalystRestUrls=[...publicSpotRestUrls];
   const multiAnalystTimeoutMs=Math.min(3500,Number(config.rest?.timeoutMs)||3500);
   const multiAnalystRest=new RestClient({
     ...config.rest,
