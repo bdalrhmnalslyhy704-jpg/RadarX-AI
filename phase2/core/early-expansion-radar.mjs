@@ -2728,6 +2728,15 @@ export class EarlyExpansionRadar{
     const scanWallStartedAt=Date.now();
     const scanTimeoutMs=Math.max(100,Math.trunc(Number(this.config.scanTimeoutMs)||90000));
     const scanDeadlineAtMs=scanWallStartedAt+scanTimeoutMs;
+    const cycleAbortController=new AbortController();
+    const previousRestDeadlineAtMs=this.rest.requestDeadlineAtMs;
+    const previousRestAbortSignal=this.rest.requestAbortSignal;
+    // Every REST request issued by this cycle observes the same wall-clock
+    // deadline and cancellation signal. An outer Promise.race alone is not
+    // enough: it would release busy=true while leaving the underlying shared
+    // Binance fetch pinned for every other radar.
+    this.rest.requestDeadlineAtMs=scanDeadlineAtMs;
+    this.rest.requestAbortSignal=cycleAbortController.signal;
     let cycleTimedOut=false;
     const cycleError=(code,stage)=>{
       const elapsedMs=Math.max(0,Date.now()-scanWallStartedAt);
@@ -2737,14 +2746,21 @@ export class EarlyExpansionRadar{
     };
     let cancelCycle;
     const cancelled=new Promise((_,reject)=>{
-      cancelCycle=()=>reject(cycleError('RADAR8_SCAN_CANCELLED','STOP_OR_RESTART'));
+      cancelCycle=()=>{
+        if(!cycleAbortController.signal.aborted)cycleAbortController.abort();
+        reject(cycleError('RADAR8_SCAN_CANCELLED','STOP_OR_RESTART'));
+      };
     });
     void cancelled.catch(()=>{});
     this.activeCycleCancel=cancelCycle;
     const assertCycleActive=stage=>{
-      if(cycleGeneration!==this.scanGeneration||!this.running)throw cycleError('RADAR8_SCAN_CANCELLED',stage);
+      if(cycleGeneration!==this.scanGeneration||!this.running){
+        if(!cycleAbortController.signal.aborted)cycleAbortController.abort();
+        throw cycleError('RADAR8_SCAN_CANCELLED',stage);
+      }
       if(Date.now()>=scanDeadlineAtMs){
         cycleTimedOut=true;
+        if(!cycleAbortController.signal.aborted)cycleAbortController.abort();
         throw cycleError('RADAR8_SCAN_DEADLINE_EXCEEDED',stage);
       }
     };
@@ -2754,6 +2770,7 @@ export class EarlyExpansionRadar{
       const deadline=new Promise((_,reject)=>{
         timer=setTimeout(()=>{
           cycleTimedOut=true;
+          if(!cycleAbortController.signal.aborted)cycleAbortController.abort();
           reject(cycleError('RADAR8_SCAN_DEADLINE_EXCEEDED',stage));
         },Math.max(1,scanDeadlineAtMs-Date.now()));
       });
@@ -3880,6 +3897,13 @@ export class EarlyExpansionRadar{
       this.lastResult={...emptyEarlyExpansionSnapshot(this.config,quote,this.lastError),schema_version:'RADAR8_V2',as_of:new Date(scanStartedAt).toISOString()};
       return false;
     }finally{
+      // Restore the shared REST client context only when this is still the
+      // generation that owns it; stop/restart cannot let an old cycle overwrite
+      // a newer cycle's abort signal or deadline.
+      if(this.rest.requestAbortSignal===cycleAbortController.signal){
+        this.rest.requestAbortSignal=previousRestAbortSignal??null;
+        this.rest.requestDeadlineAtMs=previousRestDeadlineAtMs??null;
+      }
       // Release the cycle latch before scheduling archive writes. A slow queued
       // durable-store append must never prevent future background scan cycles.
       if(cycleGeneration===this.scanGeneration){this.busy=false;this.busySinceAtMs=null;}
