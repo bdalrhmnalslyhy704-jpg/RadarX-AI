@@ -15,6 +15,22 @@ const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 const MAX_COGNITIVE_JOURNAL=3000;
 
+function withStageTimeout(pending,timeoutMs,stage){
+  const limit=Math.max(1,Math.trunc(Number(timeoutMs)||1));
+  let timer=null;
+  const timeout=new Promise((_,reject)=>{
+    timer=setTimeout(()=>{
+      const error=new Error('ADAPTIVE_TRADER_STAGE_TIMEOUT:stage='+String(stage||'UNKNOWN')+
+        ':limit_ms='+limit);
+      error.name='AdaptiveTraderStageTimeoutError';
+      reject(error);
+    },limit);
+  });
+  return Promise.race([Promise.resolve(pending),timeout]).finally(()=>{
+    if(timer!==null)clearTimeout(timer);
+  });
+}
+
 function createServerPaperPortfolio(){
   const portfolio=createPaperPortfolio(10000);
   portfolio.enabled=true;
@@ -41,14 +57,21 @@ function mapCurrentPrices(rows){
 }
 
 export class AdaptiveTraderWorker{
-  constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT,executionController=null}={}){
+  constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT,
+    executionController=null,scanTimeoutMs=75_000,executionTimeoutMs=15_000,persistTimeoutMs=12_000}={}){
     if(!store||typeof store.getAdaptiveTraderState!=='function'||typeof store.putAdaptiveTraderState!=='function')
       throw new Error('ADAPTIVE_TRADER_DURABLE_STORE_UNAVAILABLE');
     if(typeof snapshotProvider!=='function')throw new Error('ADAPTIVE_TRADER_SNAPSHOT_PROVIDER_UNAVAILABLE');
     this.store=store;this.snapshotProvider=snapshotProvider;this.logger=logger;this.executionController=executionController;this.lastExecutionResult=null;
     this.intervalMs=Math.max(60_000,Math.min(10*60_000,Math.trunc(Number(intervalMs)||DEFAULT_INTERVAL_MS)));
     this.scanLimit=Math.max(40,Math.min(120,Math.trunc(Number(scanLimit)||SNAPSHOT_LIMIT)));
+    // The market snapshot service has its own 60s REST deadline. The worker adds
+    // an outer guard so a stalled fetch/store promise can never pin inFlight forever.
+    this.scanTimeoutMs=Math.max(15_000,Math.min(120_000,Math.trunc(Number(scanTimeoutMs)||75_000)));
+    this.executionTimeoutMs=Math.max(1_000,Math.min(60_000,Math.trunc(Number(executionTimeoutMs)||15_000)));
+    this.persistTimeoutMs=Math.max(1_000,Math.min(30_000,Math.trunc(Number(persistTimeoutMs)||12_000)));
     this.state=emptyState();this.enabled=false;this.inFlight=false;
+    this.activeScanStartedAt=null;this.activeScanDeadlineAt=null;this.lastStageTimeout=null;
     this.interval=null;this.initialTimer=null;this.starting=null;
   }
 
@@ -141,6 +164,9 @@ export class AdaptiveTraderWorker{
     if(!Number.isInteger(scanLimit)||scanLimit<40||scanLimit>120)return {status:'INVALID_LIMIT',reason:'SCAN_LIMIT_MUST_BE_40_TO_120'};
     this.inFlight=true;
     const started=Date.now();
+    this.activeScanStartedAt=started;
+    this.activeScanDeadlineAt=started+this.scanTimeoutMs;
+    this.lastStageTimeout=null;
     this.state.scan_count=(Number(this.state.scan_count)||0)+1;
     this.state.last_started_at=started;
     this.state.last_error=null;
@@ -152,7 +178,10 @@ export class AdaptiveTraderWorker{
         scanStartedAt-Number(sample.at)<=48*60*60*1000
       ).map(sample=>({id:sample.id,symbol:sample.symbol,price:sample.price,at:sample.at,
         closed_candle_baseline:true,training_eligible:true}));
-      const snapshot=await this.snapshotProvider({limit:scanLimit,now:scanStartedAt,offset:this.state.scan_cursor,pendingSamples});
+      const snapshot=await withStageTimeout(
+        this.snapshotProvider({limit:scanLimit,now:scanStartedAt,offset:this.state.scan_cursor,pendingSamples}),
+        this.scanTimeoutMs,'MARKET_SNAPSHOT'
+      );
       if(!snapshot||snapshot.status!=='LIVE_DATA'||snapshot.meta?.live!==true||
          snapshot.meta?.paper_trading!==true||snapshot.meta?.real_order_execution!==false||
          snapshot.meta?.closed_candles_only!==true||snapshot.meta?.engine!=='ADAPTIVE_TRADER_SIDECAR_V1'||
@@ -201,17 +230,17 @@ export class AdaptiveTraderWorker{
       this.lastExecutionResult=null;
       if(this.executionController){
         try{
-          this.lastExecutionResult=await this.executionController.processSnapshot(executionSnapshot,{
+          this.lastExecutionResult=await withStageTimeout(this.executionController.processSnapshot(executionSnapshot,{
             learningProfile:this.state.learning_profile,
             paperValidationProfile:this.state.paper_validation_profile
-          });
+          }),this.executionTimeoutMs,'PAPER_EXECUTION_REVIEW');
         }catch(error){
           this.lastExecutionResult={status:'EXECUTION_CONTROLLER_ERROR',error:String(error?.message??error).slice(0,180)};
           this.logger.warn?.('[ADAPTIVE_TRADER_EXECUTION_CONTROLLER_FAILED] '+this.lastExecutionResult.error);
         }
       }
       this.state.last_summary=this.buildSummary({...snapshot,candidates:adaptiveCandidates});
-      await this.persist();
+      await withStageTimeout(this.persist(),this.persistTimeoutMs,'STATE_PERSIST');
       this.logger.info?.('[ADAPTIVE_TRADER_SCAN_COMPLETE] '+JSON.stringify({
         as_of:snapshot.as_of,scan_count:this.state.scan_count,
         eligible:snapshot.universe?.eligible_spot_symbols??null,
@@ -229,13 +258,27 @@ export class AdaptiveTraderWorker{
     }catch(error){
       this.state.last_error=String(error?.message??error).slice(0,240);
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
-      await this.persist();
+      if(error?.name==='AdaptiveTraderStageTimeoutError'){
+        this.lastStageTimeout={stage:String(error?.message||'').match(/stage=([^:]+)/)?.[1]||'UNKNOWN',
+          at:new Date().toISOString(),limit_ms:this.scanTimeoutMs};
+      }
+      try{
+        await withStageTimeout(this.persist(),this.persistTimeoutMs,'FAILURE_STATE_PERSIST');
+      }catch(persistError){
+        this.logger.warn?.('[ADAPTIVE_TRADER_TIMEOUT_STATE_PERSIST_FAILED] '+String(persistError?.message??persistError).slice(0,180));
+      }
       this.logger.warn?.('[ADAPTIVE_TRADER_SCAN_FAILED] '+JSON.stringify({
         scan_count:this.state.scan_count,error:this.state.last_error,
         paper_trading:true,real_order_execution:false
       }));
       return {status:'FAILED',error:this.state.last_error};
-    }finally{this.inFlight=false;}
+    }finally{
+      // Never await here. Every exit path, including a rejected/timed-out store
+      // operation, must release the worker latch for the next interval.
+      this.inFlight=false;
+      this.activeScanStartedAt=null;
+      this.activeScanDeadlineAt=null;
+    }
   }
 
   
@@ -648,6 +691,10 @@ recordServerPaperPortfolio(snapshot,now){
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
+      active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,
+      active_scan_deadline_at:this.activeScanDeadlineAt?new Date(this.activeScanDeadlineAt).toISOString():null,
+      scan_timeout_ms:this.scanTimeoutMs,persist_timeout_ms:this.persistTimeoutMs,
+      last_stage_timeout:this.lastStageTimeout,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,scan_cursor:Number(this.state.scan_cursor)||0,
       scan_count:Number(this.state.scan_count)||0,
       successful_scans:Number(this.state.successful_scans)||0,
