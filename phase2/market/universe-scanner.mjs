@@ -10,7 +10,7 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 
 // Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
 // envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
-export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 20;
+export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 16;
 // Live measurements showed no speed gain from large fan-out. Sixteen workers
 // reduce simultaneous candle/depth payloads while keeping network utilization high.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 16;

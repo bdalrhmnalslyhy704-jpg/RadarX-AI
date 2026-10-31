@@ -1028,20 +1028,20 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
   assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,16);
   assert.equal(maxActive,16,'a 20-symbol batch must use bounded concurrency, not a 32-way REST burst');
   assert.equal(first.universe.requested,50);
-  assert.equal(first.universe.per_cycle_scan_cap,20);
-  assert.equal(first.universe.discovered,20);
-  assert.equal(first.universe.deep_scanned,20);
+  assert.equal(first.universe.per_cycle_scan_cap,16);
+  assert.equal(first.universe.discovered,16);
+  assert.equal(first.universe.deep_scanned,16);
   assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
-  assert.equal(first.universe.rotation_width,18,'unused activity-priority slots must return to the fair rotating lane');
-  assert.equal(seen.length,20);
+  assert.equal(first.universe.rotation_width,14,'unused activity-priority slots must return to the fair rotating lane');
+  assert.equal(seen.length,16);
 
   seen=[];
   const second=await scanner.scanPreMove({quote:'USDT',limit:50});
   assert.equal(second.universe.rotation_cycle,1);
-  assert.equal(second.universe.discovered,20);
-  assert.equal(second.universe.deep_scanned,20);
+  assert.equal(second.universe.discovered,16);
+  assert.equal(second.universe.deep_scanned,16);
   const newlyCovered=seen.filter(symbol=>!firstSymbols.has(symbol));
-  assert.ok(newlyCovered.length>=15,
+  assert.ok(newlyCovered.length>=12,
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
