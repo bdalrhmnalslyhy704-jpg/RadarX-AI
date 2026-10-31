@@ -603,7 +603,7 @@ jobs:
             if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
           if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 || u.discovered<1 || u.deep_scanned!==u.discovered) throw new Error('PRE_MOVE_NO_VALID_LIVE_MARKET_DATA');
-          if (u.per_cycle_scan_cap!==16 || u.discovered>u.per_cycle_scan_cap) throw new Error('PRE_MOVE_SCAN_CAP_CONTRACT_INVALID');
+          if (u.per_cycle_scan_cap!==10 || u.discovered>u.per_cycle_scan_cap) throw new Error('PRE_MOVE_SCAN_CAP_CONTRACT_INVALID');
           if (u.coverage_mode !== 'PINNED_PLUS_ROTATING_V1') throw new Error('PRE_MOVE_UNIVERSE_ROTATION_NOT_DEPLOYED');
           if (u.rotation_cursor_source !== 'DURABLE_STORE' || u.rotation_cursor_persisted !== true ||
               u.rotation_sequence !== 'COMPLETED_SCAN_CURSOR_V1') throw new Error('PRE_MOVE_ROTATION_CURSOR_NOT_PERSISTED');
@@ -612,7 +612,7 @@ jobs:
           if (u.rotation_width<1 || u.rotation_cycle<0 || u.rotation_offset<0) throw new Error('PRE_MOVE_ROTATION_METADATA_INVALID');
           // This response is the completed background-worker scan, not a duplicate forced scan.
           // The independent worker check below enforces the production <=45s duration.
-          // Keep the 16-symbol scan below the 45-second target on the small DHDTech runtime.
+          // Keep the 10-symbol scan below the 45-second target on the small DHDTech runtime.
           // 45s remains the optimization target; 50s is the hard acceptance ceiling for bounded live-market variance.
           if (u.elapsed_ms>50000) throw new Error('PRE_MOVE_BACKGROUND_SCAN_LATENCY_OVER_50_SECONDS:'+u.elapsed_ms);
           if (!Array.isArray(b.candidates)) throw new Error('PRE_MOVE_CANDIDATES_MISSING');

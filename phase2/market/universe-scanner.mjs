@@ -10,7 +10,7 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 
 // Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
 // envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
-export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 16;
+export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
 // Live measurements showed no speed gain from large fan-out. Sixteen workers
 // reduce simultaneous candle/depth payloads while keeping network utilization high.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 4;
@@ -2430,10 +2430,14 @@ export class MarketUniverseScanner {
 
   async _scanPreMove({ quote = this.config.quote, limit = 30, signal = null, deadlineAtMs = null } = {}) {
     const startedAt=this.clock();
+    const progress={stage:'EXCHANGE_INFO',symbols_total:0,symbols_completed:0,last_completed_symbol:null};
     const assertScanActive=()=>{
       if(signal?.aborted===true||(Number.isFinite(Number(deadlineAtMs))&&Date.now()>=Number(deadlineAtMs))){
-        const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED');
+        const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED stage='+progress.stage+
+          ' symbols='+progress.symbols_completed+'/'+progress.symbols_total+
+          (progress.last_completed_symbol?' last='+progress.last_completed_symbol:''));
         error.name='ScanDeadlineError';
+        error.scan_progress={...progress,elapsed_ms:Math.max(0,this.clock()-startedAt)};
         throw error;
       }
     };
@@ -2444,6 +2448,7 @@ export class MarketUniverseScanner {
     const info=await this.exchangeInfo(normalizedQuote);
     assertScanActive();
     const universe=buildSpotUniverse(info.data,normalizedQuote);
+    progress.stage='TICKER_24H';
     const tickerResponse=await this.ticker24h();
     assertScanActive();
     const tickerCapturedAt=this.clock();
@@ -2466,10 +2471,11 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    // Keep a 16-symbol rotating batch but limit fan-out to four concurrent symbol
-    // pairs. The shared Binance broker already spaces requests globally; high fan-out
-    // adds memory/CPU pressure on the 512MB DHDTech runtime without improving throughput.
-    const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(20,normalizedLimit));
+    // Keep a ten-symbol rotating batch with four concurrent symbol pairs. On the
+    // 512MB DHDTech runtime, shorter batches finish within the 45s worker window;
+    // the durable cursor and ticker-activity lane preserve wider-market coverage.
+    const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(10,normalizedLimit));
+    progress.stage='DISCOVERY';
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
     let rotationCursorOffset=0;
@@ -2527,15 +2533,24 @@ export class MarketUniverseScanner {
     // Each pair requests 15m klines and order-book depth. Use a bounded middle
     // concurrency of 24 while preserving the complete 40-symbol rotation batch.
     const preMoveConcurrency=Math.min(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,Math.max(1,discovery.length));
+    progress.stage='DEEP_SCAN';
+    progress.symbols_total=discovery.length;
     const scanned=await boundedMap(
       discovery,
       preMoveConcurrency,
-      (ticker,i)=>this.scanPreMoveSymbol(
-        ticker,
-        i+1,
-        {exchangeInfo:info.source,ticker:tickerResponse.source},
-        {tickerActivity:tickerActivitySignals.get(String(ticker?.symbol||'').toUpperCase())||null}
-      )
+      async(ticker,i)=>{
+        try{
+          return await this.scanPreMoveSymbol(
+            ticker,
+            i+1,
+            {exchangeInfo:info.source,ticker:tickerResponse.source},
+            {tickerActivity:tickerActivitySignals.get(String(ticker?.symbol||'').toUpperCase())||null}
+          );
+        }finally{
+          progress.symbols_completed+=1;
+          progress.last_completed_symbol=String(ticker?.symbol||'').toUpperCase()||null;
+        }
+      }
     );
     assertScanActive();
     // Use every fresh, valid candle set for market context, including low-volume
