@@ -22,6 +22,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
+  // Production may use a slightly smaller rotating deep batch to stay below
+  // the 45s background-worker SLA on low-memory hosted containers. The public
+  // hard cap remains ten; unit/test adapters keep the default ten-symbol batch.
+  preMoveCycleScanLimit: 10,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2497,7 +2501,11 @@ export class MarketUniverseScanner {
     // Keep a ten-symbol rotating batch with four concurrent symbol pairs. On the
     // 512MB DHDTech runtime, shorter batches finish within the 45s worker window;
     // the durable cursor and ticker-activity lane preserve wider-market coverage.
-    const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(10,normalizedLimit));
+    const configuredCycleLimit=Math.max(1,Math.min(
+      PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
+      Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE)
+    ));
+    const discoveryLimit=Math.min(configuredCycleLimit,normalizedLimit);
     progress.stage='DISCOVERY';
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
