@@ -1793,8 +1793,6 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
                   diagnostics:{duration_ms:Number(snapshotDiagnostics.duration_ms)||0,
                     attempted_analyses:Number(snapshotDiagnostics.attempted_analyses)||0,
                     successful_analyses:Number(snapshotDiagnostics.successful_analyses)||0,
-                    specialist_complete_symbols:Number(snapshotDiagnostics.specialist_complete_symbols)||0,
-                    final_analyst_complete_symbols:Number(snapshotDiagnostics.final_analyst_complete_symbols)||0,
                     fully_analysed_symbols:Number(snapshotDiagnostics.fully_analysed_symbols)||0,
                     analysts_per_fully_analysed_symbol:Number(snapshotDiagnostics.analysts_per_fully_analysed_symbol)||0,
                     gate_rejected:Number(snapshotDiagnostics.gate_rejected)||0,

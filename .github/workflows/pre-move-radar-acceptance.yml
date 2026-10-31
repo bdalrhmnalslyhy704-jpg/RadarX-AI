@@ -480,8 +480,6 @@ jobs:
             deep_scan_pool:u.deep_scan_pool,
             attempted_analyses:d.attempted_analyses,
             successful_analyses:d.successful_analyses,
-            specialist_complete_symbols:d.specialist_complete_symbols,
-            final_analyst_complete_symbols:d.final_analyst_complete_symbols,
             fully_analysed_symbols:d.fully_analysed_symbols,
             analysts_per_fully_analysed_symbol:d.analysts_per_fully_analysed_symbol,
             gate_rejected:d.gate_rejected,
