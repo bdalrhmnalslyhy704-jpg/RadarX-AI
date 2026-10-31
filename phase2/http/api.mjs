@@ -16,6 +16,7 @@ import {buildRadarMissedMoverAuditReport} from '../core/radar-missed-mover-audit
 import {buildEarlyMoverCaseStudy} from '../core/missed-mover-case-study.mjs';
 import {buildPreMoveBackgroundScanSummary} from '../core/pre-move-background-summary.mjs';
 import {buildPreMoveNotificationDeliveryState} from '../core/pre-move-background-summary.mjs';
+import {resolvePreMoveSpotRestUrls} from '../config.mjs';
 
 function send(res,status,body,extra={}){
   const data=JSON.stringify(body);
@@ -592,26 +593,23 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     rest: marketRadarRestClient,
     config: config.marketRadar ?? {}
   }) : null;
-  // Keep Pre-Move independent from other radar REST endpoint failover waterfalls.
-  // Use the known public market-data mirror first and one official Binance fallback,
-  // with a bounded per-host timeout. Failed sources remain fail-closed; live candle
-  // freshness, order-book liquidity, and the alert gate are not weakened.
-  // Share all seven official Spot mirrors with the 20-analyst scanner.
-  // Identical order makes exchangeInfo cache/in-flight keys identical between
-  // the scanners, avoiding duplicate regional fallback sweeps.
-  // Keep the bounded 3.5s per-host timeout and strict data-quality gates.
-  const preMoveBaseUrls = Array.isArray(marketRadarRestClient?.baseUrls)
-    ? [...new Set(marketRadarRestClient.baseUrls
-        .map(value=>String(value??'').trim().replace(/\/+$/,''))
-        .filter(url=>/^https:\/\/(?:data-api\.binance\.vision|api(?:-gcp)?\.binance\.com|api[1-4]\.binance\.com)$/i.test(url)))]
-    : [];
-  if (!preMoveBaseUrls.length && marketRadarRestClient?.baseUrls?.[0]) {
-    preMoveBaseUrls.push(marketRadarRestClient.baseUrls[0]);
-  }
+  // Keep Pre-Move independent from the seven-host failover waterfall used by
+  // the broader radar pool. Its whole cycle is capped at 45s, and exchangeInfo
+  // and 24h ticker discovery are sequential; seven 3.5s host attempts per call
+  // can exhaust the cycle before discovery begins. Use two official Spot mirrors,
+  // rotating the last successful shared client host to the front. The other
+  // Radars keep the complete official mirror list and all market-data gates remain strict.
+  const preMoveBaseUrls = resolvePreMoveSpotRestUrls(
+    marketRadarRestClient?.baseUrls,
+    marketRadarRestClient?.currentBaseIndex
+  );
   console.info?.('[PRE_MOVE_REST_FALLBACKS] '+JSON.stringify({
     count:preMoveBaseUrls.length,
     hosts:preMoveBaseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
-    shares_analyst_universe_cache:true
+    preferred_from_host_index:Number.isInteger(marketRadarRestClient?.currentBaseIndex)
+      ?marketRadarRestClient.currentBaseIndex:null,
+    max_sequential_mirrors:2,
+    market_data_only:true
   }));
   const preMoveRestClient = marketRadarRestClient && preMoveBaseUrls.length
     ? new RestClient({
