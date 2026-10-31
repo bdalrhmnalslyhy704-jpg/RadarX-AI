@@ -455,7 +455,7 @@ export class RestClient {
       const deadline=Number(this.requestDeadlineAtMs);
       const externallyAborted=this.requestAbortSignal?.aborted===true;
       if(!externallyAborted&&(!Number.isFinite(deadline)||deadline<=0||Date.now()<deadline))return;
-      const previous=String(this.lastError||'').replace(/\\s+/g,' ').slice(0,180);
+      const previous=String(this.lastError||'').replace(/\s+/g,' ').slice(0,180);
       const host=this.lastRequestUrl?new URL(this.lastRequestUrl).host:
         (this.baseUrls[this.currentBaseIndex]?new URL(this.baseUrls[this.currentBaseIndex]).host:'UNKNOWN');
       const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED'+
