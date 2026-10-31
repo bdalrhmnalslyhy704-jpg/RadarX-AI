@@ -156,80 +156,35 @@ jobs:
           }));
           NODE
 
-      - name: Verify Adaptive Trader live Spot scan and server learning on DHDTech
-        timeout-minutes: 8
-        run: |
-          set -euo pipefail
-          # The independent server worker owns recurring market scans. Read its
-          # verified last-good snapshot instead of launching a second heavy scan
-          # in parallel with the Multi-Analyst and Pre-Move acceptance checks.
-          STATUS_TMP="$RUNNER_TEMP/adaptive-trader-status.tmp.json"
-          STATUS_JSON="$RUNNER_TEMP/adaptive-trader-status.json"
-          READY=0
-          CODE=000
-          for attempt in $(seq 1 30); do
-            rm -f "$STATUS_TMP"
-            CURL_EXIT=0
-            CODE="$(curl --location --silent --show-error --connect-timeout 5 --max-time 8 -o "$STATUS_TMP" -w "%{http_code}" "$BASE/api/adaptive-trader/status")" || CURL_EXIT=$?
-            if [ "$CURL_EXIT" -eq 0 ] && [ "$CODE" = "200" ] && [ -s "$STATUS_TMP" ]; then
-              if node --input-type=module - "$STATUS_TMP" <<'NODE'
-          import fs from 'node:fs';
-          try {
-            const x=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
-            const s=x.last_summary||{},m=s.meta||{};
-            const scanAt=Date.parse(String(x.last_scan_at||''));
-            const summaryAt=Date.parse(String(s.as_of||''));
-            const scanAgeMs=Date.now()-scanAt;
-            const summaryAgeMs=Date.now()-summaryAt;
-            const ok=x.scanner_contract==='SERVER_DRIVEN_SCAN_V2'&&
-              Number(x.successful_scans)>0&&Number.isFinite(scanAt)&&scanAgeMs>=0&&scanAgeMs<=8*60*1000&&
-              x.last_error===null&&x.paper_trading===true&&x.real_order_execution===false&&
-              Number(x.memory?.history_rows)>0&&s.status==='LIVE_DATA'&&
-              Number.isFinite(summaryAt)&&summaryAgeMs>=0&&summaryAgeMs<=8*60*1000&&
-              m.live===true&&m.paper_trading===true&&m.real_order_execution===false&&
-              m.closed_candles_only===true&&m.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
-              Array.isArray(s.candidates)&&s.candidates.length>0&&
-              s.candidates.some(row=>row.data_valid===true&&Number.isFinite(Number(row.score)))&&
-              Array.isArray(s.latest_prices)&&s.latest_prices.length>0;
-            process.exit(ok?0:1);
-          } catch { process.exit(1); }
-          NODE
-              then
-                mv "$STATUS_TMP" "$STATUS_JSON"
-                READY=1
-                break
-              fi
-              echo "::warning::DHDTech worker status is reachable but its latest verified scan or memory is not ready (attempt $attempt/30)."
-            else
-              case "$CODE" in
-                000|502|503|504)
-                  echo "::warning::DHDTech worker status transport/gateway error (curl=$CURL_EXIT HTTP=$CODE), attempt $attempt/30."
-                  ;;
-                *)
-                  echo "::warning::DHDTech worker status returned HTTP $CODE, attempt $attempt/30."
-                  ;;
-              esac
-            fi
-            if [ "$attempt" -lt 30 ]; then sleep 5; fi
-          done
-          if [ "$READY" != "1" ]; then
-            echo "::error::DHDTech Adaptive Trader worker did not prove a fresh successful live scan and persisted price history."
-            cat "$STATUS_TMP" 2>/dev/null | head -c 5000 || true
-            exit 1
-          fi
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-trader-status.json','utf8'));
-          const s=x.last_summary||{};
-          console.log('ADAPTIVE_TRADER_DHDTECH_WORKER_MEMORY_OK '+JSON.stringify({
-            status:x.status,scanner_contract:x.scanner_contract,
-            scan_count:x.scan_count,successful_scans:x.successful_scans,
-            last_scan_at:x.last_scan_at,last_error:x.last_error,
-            candidate_count:s.candidates?.length,latest_price_count:s.latest_prices?.length,
-            unresolved_samples:x.memory?.unresolved_samples,resolved_samples:x.memory?.resolved_samples,
-            history_rows:x.memory?.history_rows,real_order_execution:x.real_order_execution
-          }));
-          NODE
+      - name: Require exact-commit DHDTech Adaptive Trader live acceptance
+        uses: actions/github-script@v7
+        timeout-minutes: 5
+        with:
+          script: |
+            const deadline = Date.now() + 4 * 60 * 1000;
+            const contextName = 'dhdtech-adaptive-trader-live';
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.repos.listCommitStatusesForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.sha,
+                per_page: 100
+              });
+              const status = data
+                .filter(row => row.context === contextName)
+                .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))[0];
+              if (status?.state === 'success') {
+                core.info(`Exact-commit DHDTech Adaptive Trader acceptance passed: ${status.target_url || 'verified'}`);
+                return;
+              }
+              if (status && status.state !== 'pending' && status.state !== 'success') {
+                core.setFailed(`Exact-commit DHDTech Adaptive Trader acceptance is ${status.state}; refusing release.`);
+                return;
+              }
+              core.info('Waiting for the independent exact-commit DHDTech Adaptive Trader live acceptance status.');
+              await new Promise(resolve => setTimeout(resolve, 10000));
+            }
+            core.setFailed('Timed out waiting for exact-commit DHDTech Adaptive Trader live acceptance.');
 
       - name: Audit all 13 screenshot gainers against closed Binance Spot USDT candles
         # Historical replay is supporting evidence, not a reason to block the live Pre-Move release gate.
