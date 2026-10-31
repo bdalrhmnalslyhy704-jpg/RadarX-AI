@@ -63,9 +63,8 @@ test('Pre-Move mirror selection rejects unapproved hosts and supplements a singl
   ],1),[
     'https://api-gcp.binance.com','https://data-api.binance.vision'
   ]);
-  assert.deepEqual(resolvePreMoveSpotRestUrls(['https://unapproved.example'],0),[
-    'https://data-api.binance.vision','https://api-gcp.binance.com'
-  ]);
+  assert.deepEqual(resolvePreMoveSpotRestUrls(['https://unapproved.example'],0),[]);
+  assert.deepEqual(resolvePreMoveSpotRestUrls([],0),[]);
 });
 
 test('deployment endpoint overrides remain honored', async () => {
