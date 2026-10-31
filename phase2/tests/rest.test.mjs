@@ -251,6 +251,25 @@ test('TEST_FIXTURE: caller deadline also bounds waiting on another client in-fli
   await ownerRequest;
 });
 
+test('TEST_FIXTURE: whole-scan abort cancels an active REST fetch without falling through to another host',async()=>{
+  const baseUrls=['https://abort-scan-a.test','https://abort-scan-b.test'];
+  let attempts=0,startedResolve;
+  const started=new Promise(resolve=>{startedResolve=resolve;});
+  const fetchImpl=(_url,{signal})=>new Promise((resolve,reject)=>{
+    attempts++;startedResolve();
+    signal.addEventListener('abort',()=>reject(new Error('operation aborted')),{once:true});
+  });
+  const client=new RestClient({baseUrls,fetchImpl,timeoutMs:9000,minIntervalMs:0,maxRequestsPerMinute:100});
+  const controller=new AbortController();
+  client.requestAbortSignal=controller.signal;
+  const pending=client.request('/api/v3/klines',{symbol:'WHOLESCANABORTUSDT',interval:'15m',limit:200});
+  await started;
+  controller.abort();
+  await assert.rejects(pending,error=>error?.name==='ScanDeadlineError'&&/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/.test(error.message));
+  assert.equal(attempts,1,'a whole-scan abort must stop fallback attempts immediately');
+  assert.match(client.health().last_error,/MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED/);
+});
+
 test('TEST_FIXTURE: expired analyst scan deadline blocks outbound REST requests immediately',async()=>{
   let calls=0;
   const client=new RestClient({baseUrls:['https://scan-deadline.test'],timeoutMs:100,minIntervalMs:0,

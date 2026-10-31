@@ -13,7 +13,7 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 16;
 // Live measurements showed no speed gain from large fan-out. Sixteen workers
 // reduce simultaneous candle/depth payloads while keeping network utilization high.
-export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 16;
+export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 4;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -2384,20 +2384,40 @@ export class MarketUniverseScanner {
     return this._coalesceScan(key,()=>{
       const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
       const flight=previous.catch(()=>{}).then(async()=>{
-        // The Pre-Move RestClient is dedicated to this worker. Give its outbound
-        // calls one absolute deadline so a stalled Binance response cannot leave
-        // the background worker and its API snapshot in SCANNING forever.
-        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||50_000);
-        const timeoutMs=Math.max(15_000,Math.min(50_000,configuredTimeout));
+        // One deadline and one abort signal cover the complete cycle, including
+        // every in-flight Kline/depth request. A timed-out cycle must release the
+        // worker latch and must not advance the durable market-rotation cursor.
+        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||45_000);
+        const timeoutMs=Math.max(15_000,Math.min(45_000,configuredTimeout));
         const previousDeadline=this.rest.requestDeadlineAtMs;
+        const previousSignal=this.rest.requestAbortSignal??null;
         const nextDeadline=Date.now()+timeoutMs;
         const priorDeadline=Number(previousDeadline);
-        this.rest.requestDeadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
+        const deadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
           ?Math.min(priorDeadline,nextDeadline):nextDeadline;
+        const controller=new AbortController();
+        const abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+        this.rest.requestDeadlineAtMs=deadlineAtMs;
+        this.rest.requestAbortSignal=controller.signal;
+        const deadlineError=()=>{
+          const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED');
+          error.name='ScanDeadlineError';
+          return error;
+        };
         try {
-          return await this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit});
+          const result=await this._scanPreMove({
+            quote:normalizedQuote,limit:normalizedLimit,
+            signal:controller.signal,deadlineAtMs
+          });
+          if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
+          return result;
+        } catch(error) {
+          if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
+          throw error;
         } finally {
+          clearTimeout(abortTimer);
           this.rest.requestDeadlineAtMs=previousDeadline;
+          this.rest.requestAbortSignal=previousSignal;
         }
       });
       const tail=flight.then(()=>undefined,()=>undefined);
@@ -2408,15 +2428,24 @@ export class MarketUniverseScanner {
     });
   }
 
-  async _scanPreMove({ quote = this.config.quote, limit = 30 } = {}) {
+  async _scanPreMove({ quote = this.config.quote, limit = 30, signal = null, deadlineAtMs = null } = {}) {
     const startedAt=this.clock();
+    const assertScanActive=()=>{
+      if(signal?.aborted===true||(Number.isFinite(Number(deadlineAtMs))&&Date.now()>=Number(deadlineAtMs))){
+        const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED');
+        error.name='ScanDeadlineError';
+        throw error;
+      }
+    };
     const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
     if(!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
     this._requests=new Map();
 
     const info=await this.exchangeInfo(normalizedQuote);
+    assertScanActive();
     const universe=buildSpotUniverse(info.data,normalizedQuote);
     const tickerResponse=await this.ticker24h();
+    assertScanActive();
     const tickerCapturedAt=this.clock();
     const eligibleTickerSymbols=new Set(universe.map(x=>x.symbol));
     const tickerActivityRows=(Array.isArray(tickerResponse.data)?tickerResponse.data:[])
@@ -2437,9 +2466,9 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    // Bound one request to 40 symbols so candle + depth reads can finish inside the
-    // 45-second service objective. The persisted cursor rotates the broader universe
-    // across completed cycles; fewer pinned rows keep per-cycle rotating coverage wide.
+    // Keep a 16-symbol rotating batch but limit fan-out to four concurrent symbol
+    // pairs. The shared Binance broker already spaces requests globally; high fan-out
+    // adds memory/CPU pressure on the 512MB DHDTech runtime without improving throughput.
     const discoveryLimit=Math.min(PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,Math.max(20,normalizedLimit));
     const rotationKey=`RADARX:PRE_MOVE_ROTATION_CURSOR:V1:${normalizedQuote}`;
     let rotationCycle=0;
@@ -2508,6 +2537,7 @@ export class MarketUniverseScanner {
         {tickerActivity:tickerActivitySignals.get(String(ticker?.symbol||'').toUpperCase())||null}
       )
     );
+    assertScanActive();
     // Use every fresh, valid candle set for market context, including low-volume
     // pairs. Keep the alert-eligible subset separate so low liquidity cannot
     // silently become an actionable signal.
@@ -2556,6 +2586,7 @@ export class MarketUniverseScanner {
     }).sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct));
     // Exclude overextended symbols before applying the final result limit. Filtering only
     // in the client can otherwise allow the backend's top-N list to be filled with late movers.
+    assertScanActive();
     let tickerActivityBaselinePersisted=false;
     let tickerActivityBaselineError=null;
     if(tickerActivityStoreReady&&tickerActivityRows.length){
@@ -2646,6 +2677,7 @@ export class MarketUniverseScanner {
     const extendedExcluded=enriched.filter(x=>x.pre_move_context.already_moved===true||x.pre_move_context.stage==='ALREADY_MOVED').length;
     const noSetupExcluded=enriched.filter(x=>x.pre_move_context.stage==='NO_SETUP').length;
     const returned=actionable.slice(0,Math.min(10,normalizedLimit));
+    assertScanActive();
     let rotationCursorPersisted=false;
     if(rotationCursorSource==='DURABLE_STORE'){
       try{

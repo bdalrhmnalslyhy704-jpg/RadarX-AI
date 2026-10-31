@@ -299,6 +299,8 @@ export class RestClient {
     this.lastSuccessAt=null; this.lastError=null; this.rateLimitedUntil=0; this.state='INIT';
     // Set only for a bounded top-level radar scan; null means ordinary REST use.
     this.requestDeadlineAtMs=null;
+    // A bounded radar cycle may cancel all its own in-flight REST work together.
+    this.requestAbortSignal=null;
   }
   subscribeKlines(observer){
     if(typeof observer!=='function')throw new Error('KLINE_OBSERVER_MUST_BE_FUNCTION');
@@ -349,7 +351,8 @@ export class RestClient {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
     const assertRequestDeadline=()=>{
       const deadline=Number(this.requestDeadlineAtMs);
-      if(!Number.isFinite(deadline)||deadline<=0||Date.now()<deadline)return;
+      const externallyAborted=this.requestAbortSignal?.aborted===true;
+      if(!externallyAborted&&(!Number.isFinite(deadline)||deadline<=0||Date.now()<deadline))return;
       const error=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
       error.name='ScanDeadlineError';
       this.lastError=error.message;
@@ -389,6 +392,10 @@ export class RestClient {
         const qs=new URLSearchParams(normalizedQuery(query));
         const url=this.baseUrls[idx]+path+(qs.toString()?'?'+qs:'');
         const ac=new AbortController();
+        const parentSignal=this.requestAbortSignal;
+        const abortFromParent=()=>{if(!ac.signal.aborted)ac.abort();};
+        if(parentSignal?.aborted)abortFromParent();
+        else parentSignal?.addEventListener('abort',abortFromParent,{once:true});
         const deadline=Number(this.requestDeadlineAtMs);
         const requestTimeoutMs=Number.isFinite(deadline)&&deadline>0
           ?Math.max(1,Math.min(this.timeoutMs,deadline-Date.now())):this.timeoutMs;
@@ -426,13 +433,21 @@ export class RestClient {
           return result;
         }catch(e){
           const timedOut=ac.signal.aborted||e?.name==='AbortError';
-          error=timedOut
-            ?new Error(`REST_REQUEST_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`)
-            :e;
-          if(timedOut)error.name='RestTimeoutError';
+          const scanAborted=parentSignal?.aborted===true||
+            (Number.isFinite(deadline)&&deadline>0&&Date.now()>=deadline);
+          error=scanAborted
+            ?new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED')
+            :timedOut
+              ?new Error(`REST_REQUEST_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`)
+              :e;
+          if(scanAborted)error.name='ScanDeadlineError';
+          else if(timedOut)error.name='RestTimeoutError';
           this.lastError=String(error?.message??error);
           if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') break;
-        }finally{clearTimeout(tm);}
+        }finally{
+          clearTimeout(tm);
+          parentSignal?.removeEventListener('abort',abortFromParent);
+        }
       }
       if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') throw error;
       throw error??new Error('REST_REQUEST_FAILED');

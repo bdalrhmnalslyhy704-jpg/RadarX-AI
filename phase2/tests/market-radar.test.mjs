@@ -1025,8 +1025,8 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
 
   const first=await scanner.scanPreMove({quote:'USDT',limit:50});
   const firstSymbols=new Set(seen);
-  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,16);
-  assert.equal(maxActive,16,'a 20-symbol batch must use bounded concurrency, not a 32-way REST burst');
+  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,4);
+  assert.equal(maxActive,4,'a 16-symbol batch should stay inside the small DHDTech memory envelope');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,16);
   assert.equal(first.universe.discovered,16);
@@ -1045,20 +1045,24 @@ test('Pre-Move scan caps each cycle at 40 symbols and rotates broad coverage',as
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
-test('Pre-Move scan applies a bounded REST deadline and restores the previous client deadline',async()=>{
-  const rest={requestDeadlineAtMs:null,async request(){return {data:[]};}};
-  const scanner=new MarketUniverseScanner({rest});
+test('Pre-Move scan applies one abortable REST deadline and restores prior client controls',async()=>{
+  const previousSignal=new AbortController().signal;
+  const rest={requestDeadlineAtMs:null,requestAbortSignal:previousSignal,async request(){return {data:[]};}};
+  const scanner=new MarketUniverseScanner({rest,config:{preMoveScanTimeoutMs:45000}});
   let observedDeadline=null;
   scanner._scanPreMove=async()=>{
     observedDeadline=rest.requestDeadlineAtMs;
     assert.ok(Number.isFinite(observedDeadline));
     assert.ok(observedDeadline>Date.now());
-    assert.ok(observedDeadline-Date.now()<=50_000);
+    assert.ok(observedDeadline-Date.now()<=45_000);
+    assert.ok(rest.requestAbortSignal instanceof AbortSignal);
+    assert.notEqual(rest.requestAbortSignal,previousSignal,'each scan must own an abort signal');
     return {status:'bounded'};
   };
   const result=await scanner.scanPreMove({quote:'USDT',limit:10});
   assert.equal(result.status,'bounded');
   assert.equal(rest.requestDeadlineAtMs,null,'the temporary scan deadline must not leak to later work');
+  assert.equal(rest.requestAbortSignal,previousSignal,'the previous REST abort signal must be restored');
 });
 
 test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{

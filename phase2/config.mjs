@@ -151,7 +151,7 @@ export const CONFIG = Object.freeze({
     // Pre-Move background surveillance continues when no Android page is open.
     preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
-    preMoveScanTimeoutMs: int(process.env.RADARX_PREMOVE_SCAN_TIMEOUT_MS, 50000)
+    preMoveScanTimeoutMs: int(process.env.RADARX_PREMOVE_SCAN_TIMEOUT_MS, 45000)
   },
   symbolDeepScan: {
     quote: 'USDT',
