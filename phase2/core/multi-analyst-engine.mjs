@@ -1182,7 +1182,7 @@ export class MultiAnalystEngine {
     this.running=false;
     this.monitorTimer=null;
     this.monitorStartedAt=null;
-    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null,active_scan_deadline_at:null};
+    this.monitorStats={scan_count:0,last_scan_at:null,last_error:null,next_scan_at:null,last_scan_successful:false,active_scan_started_at:null,active_scan_deadline_at:null,active_request_id:null,last_request_id:null,last_request_status:null,last_request_error:null};
     this.pendingRadarReviews=new Map();
     this.latestAnalystAssessments=new Map();
     this.lastRadarReviewSelection=[];
@@ -1440,6 +1440,12 @@ export class MultiAnalystEngine {
     };
     this.monitorStats.active_scan_started_at=new Date(scanStartedAt).toISOString();
     this.monitorStats.active_scan_deadline_at=new Date(scanDeadlineAtMs).toISOString();
+    this.monitorStats.active_request_id=safeRequestId;
+    if(safeRequestId){
+      this.monitorStats.last_request_id=safeRequestId;
+      this.monitorStats.last_request_status='RUNNING';
+      this.monitorStats.last_request_error=null;
+    }
     this.monitorStats.last_scan_successful=false;
     this.monitorStats.last_error=null;
     this.busy=(async()=>{
@@ -1779,12 +1785,21 @@ export class MultiAnalystEngine {
       };
       assertScanDeadline();
       this.cache={quote:q,expiresAt:this.clock()+this.config.ttlMs,value};
+      if(safeRequestId){
+        this.monitorStats.last_request_status='SUCCESS';
+        this.monitorStats.last_request_error=null;
+      }
       return value;
     })();
     try{return await this.busy}
     catch(error){
-      this.monitorStats.last_error=String(error?.message??error);
+      const message=String(error?.message??error);
+      this.monitorStats.last_error=message;
       this.monitorStats.last_scan_successful=false;
+      if(safeRequestId){
+        this.monitorStats.last_request_status='FAILED';
+        this.monitorStats.last_request_error=message;
+      }
       throw error;
     }
     finally{
@@ -1792,6 +1807,7 @@ export class MultiAnalystEngine {
       this.busy=null;
       this.monitorStats.active_scan_started_at=null;
       this.monitorStats.active_scan_deadline_at=null;
+      this.monitorStats.active_request_id=null;
     }
   }
   getCached({quote=this.config.quote}={}){
