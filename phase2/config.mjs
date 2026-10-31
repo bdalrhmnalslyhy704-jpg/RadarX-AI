@@ -22,7 +22,7 @@ export function resolvePublicSpotRestUrls(env=process.env, additionalUrls=[]){
   const configured=String(env.BINANCE_REST_URLS??'').split(',').map(x=>x.trim()).filter(Boolean);
   const extra=Array.isArray(additionalUrls)?additionalUrls:[];
   return [...new Set([...DEFAULT_PUBLIC_SPOT_REST_URLS,...configured,...extra]
-    .map(value=>String(value??'').trim().replace(/\\/+$/,''))
+    .map(value=>String(value??'').trim().replace(/\/+$/,''))
     .filter(value=>value.startsWith('https://')) )];
 }
 
