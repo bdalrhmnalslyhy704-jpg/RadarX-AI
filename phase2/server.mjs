@@ -198,15 +198,18 @@ export async function startServer({
     try{return new URL(url).host.toLowerCase()!=='api.binance.com';}
     catch{return false;}
   });
-  logger.info?.('[MULTI_ANALYST_REST_FALLBACKS] '+JSON.stringify({
-    count:multiAnalystRestUrls.length,
-    hosts:multiAnalystRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
-  }));
+  const multiAnalystTimeoutMs=Math.min(3500,Number(config.rest?.timeoutMs)||3500);
   const multiAnalystRest=new RestClient({
     ...config.rest,
     baseUrls:multiAnalystRestUrls.length?multiAnalystRestUrls:publicSpotRestUrls,
-    timeoutMs:Math.min(3500,Number(config.rest?.timeoutMs)||3500)
+    timeoutMs:multiAnalystTimeoutMs
   });
+  logger.info?.('[MULTI_ANALYST_REST_FALLBACKS] '+JSON.stringify({
+    count:multiAnalystRest.baseUrls.length,
+    hosts:multiAnalystRest.baseUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}}),
+    timeout_ms:multiAnalystRest.timeoutMs,
+    isolated_from_shared_exchange_info:true
+  }));
   const multiAnalystRadar=new MultiAnalystEngine({rest:multiAnalystRest,store,config:config.multiAnalyst||{}});
   const alMuqawimRadar=new AlMuqawimRadar({rest,store,pushManager:push,config:config.alMuqawimRadar||{},logger});
   const marketWideKlineCache=new MarketWideKlineCache({
