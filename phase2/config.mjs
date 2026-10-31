@@ -37,6 +37,10 @@ export function resolvePreMoveSpotRestUrls(urls=[], currentBaseIndex=0){
     :[];
   const official=new Set(DEFAULT_PUBLIC_SPOT_REST_URLS);
   const ordered=[...new Set(input.filter(value=>official.has(value)))];
+  // An injected/custom Rest adapter may intentionally expose no baseUrls (for
+  // example a fixture or a host-managed proxy). Do not replace such a client
+  // with a new global-fetch Binance client; let the caller keep its adapter.
+  if(ordered.length===0)return [];
   for(const value of DEFAULT_PUBLIC_SPOT_REST_URLS){
     if(!ordered.includes(value))ordered.push(value);
   }
