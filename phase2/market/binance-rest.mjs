@@ -464,7 +464,7 @@ export class RestClient {
             try{
               const responseCopy=typeof r.clone==='function'?r.clone():null;
               if(responseCopy&&typeof responseCopy.text==='function'){
-                responseDetail=String(await responseCopy.text()).replace(/[\\r\\n\\t]+/g,' ').slice(0,180);
+                responseDetail=String(await responseCopy.text()).replace(/\s+/g,' ').slice(0,180);
               }
             }catch{}
             const host=new URL(url).host;
