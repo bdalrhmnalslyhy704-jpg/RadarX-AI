@@ -2,7 +2,7 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {resolve} from 'node:path';
-import {CONFIG} from './config.mjs';
+import {CONFIG,resolvePublicSpotRestUrls} from './config.mjs';
 import {RestClient} from './market/binance-rest.mjs';
 import {BinanceStreamClient} from './market/binance-ws.mjs';
 import {BinanceAllMarketTickerClient} from './market/binance-market-ticker-ws.mjs';
@@ -125,17 +125,13 @@ export async function startServer({
     incomplete_count:archiveRecords.filter(row=>row?.outcome_status==='INCOMPLETE').length,
     migrated_legacy_files:store.migratedFiles,records_sha256:archiveDigest
   }));
-  // Use Binance's public market-data mirror first for every Spot radar. Some
-  // hosting regions cannot reach api.binance.com (HTTP 451); keep any configured
-  // endpoints as fallbacks rather than letting one blocked host disable most radars.
-  const publicSpotRestUrls=[
-    'https://data-api.binance.vision',
-    'https://api.binance.com',
-    'https://api1.binance.com',
-    'https://api2.binance.com',
-    'https://api3.binance.com',
-    ...(config.rest.baseUrls??config.rest.urls??[])
-  ].filter((url,index,arr)=>arr.indexOf(url)===index);
+  // Public Spot requests use Binance's documented market-data mirror first,
+  // followed by every official REST base endpoint. Hosting regions may return
+  // HTTP 451 from one hostname while another official endpoint remains reachable.
+  const publicSpotRestUrls=resolvePublicSpotRestUrls(process.env,config.rest.baseUrls??config.rest.urls??[]);
+  logger.info?.('[BINANCE_SPOT_REST_FALLBACKS] '+JSON.stringify({
+    count:publicSpotRestUrls.length,hosts:publicSpotRestUrls.map(value=>{try{return new URL(value).host;}catch{return 'INVALID_URL';}})
+  }));
   const rest=new RestClient({...config.rest,baseUrls:publicSpotRestUrls});
   // Outcome work is deliberately bounded: at most two public-Spot kline requests
   // per minute, using stored alerts and real closed candles only.
