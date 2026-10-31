@@ -446,6 +446,39 @@ test('dedicated Bottom Radar scan uses the optimized discovery path',async()=>{
   assert.equal(result.candidates.length,2);
 });
 
+test('24h ticker discovery uses compact Binance MINI data and derives the rolling 24h return',async()=>{
+  const calls=[];
+  const rest={
+    baseUrls:['https://spot-a.test','https://spot-b.test'],
+    async request(path,query){
+      calls.push({path,query});
+      return {source:'TEST_MINI',data:[
+        {symbol:'EARLYUSDT',openPrice:'100',lastPrice:'104.5',highPrice:'106',lowPrice:'98',quoteVolume:'2500000',count:12000},
+        {symbol:'KEEPUSDT',openPrice:'100',lastPrice:'102',highPrice:'103',lowPrice:'99',quoteVolume:'1800000',count:8500,priceChangePercent:'2.1'}
+      ]};
+    }
+  };
+  const scanner=new MarketUniverseScanner({rest,config:{retryAttempts:2}});
+  const snapshot=await scanner.ticker24h();
+  assert.deepEqual(calls,[{path:'/api/v3/ticker/24hr',query:{type:'MINI'}}]);
+  assert.equal(snapshot.source,'TEST_MINI');
+  assert.equal(snapshot.data[0].priceChangePercent,4.5);
+  assert.equal(snapshot.data[0].quoteVolume,'2500000');
+  assert.equal(snapshot.data[0].count,12000);
+  assert.equal(snapshot.data[1].priceChangePercent,2.1,'keep an explicit percentage when a source provides one');
+});
+
+test('REST adapters with internal Binance host failover are not retried through the entire mirror list',async()=>{
+  let calls=0;
+  const rest={
+    baseUrls:['https://spot-a.test','https://spot-b.test','https://spot-c.test'],
+    async request(){calls++;throw new Error('REST_REQUEST_TIMEOUT');}
+  };
+  const scanner=new MarketUniverseScanner({rest,config:{retryAttempts:2,retryBaseMs:1},sleepFn:async()=>{}});
+  await assert.rejects(()=>scanner.ticker24h(),/REST_REQUEST_TIMEOUT/);
+  assert.equal(calls,1,'the RestClient already tried each configured host before returning the error');
+});
+
 test('market scanner deduplicates symbols and only deep-scans selected rows',async()=>{
   const rest=makeRest();
   const scanner=new MarketUniverseScanner({rest,config:{minQuoteVolume24h:750000,scanLimit:2,returnLimit:2,deepConcurrency:2},strategyEvaluator:evaluator});
