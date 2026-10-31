@@ -345,7 +345,7 @@ jobs:
           echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
 
       - name: Verify DHDTech backend and Radar 8 public contract
-        timeout-minutes: 10
+        timeout-minutes: 12
         env:
           RADAR8_JSON: ${{ runner.temp }}/radar8.json
         run: |
@@ -423,7 +423,7 @@ jobs:
           VERIFIED=false
           RADAR8_SCAN_REQUESTED_AT_MS="$(date +%s%3N)"
           export RADAR8_SCAN_REQUESTED_AT_MS
-          for attempt in $(seq 1 18); do
+          for attempt in $(seq 1 30); do
             if [ "$attempt" -eq 1 ]; then
               # Trigger exactly one fresh scan. Later polls read the snapshot only,
               # so the acceptance loop does not repeatedly restart Radar 8.
@@ -496,7 +496,7 @@ jobs:
               VERIFIED=true
               break
             fi
-            echo "Radar 8 has not completed a valid market scan yet (attempt $attempt/18; HTTP ${RADAR8:-no response})."
+            echo "Radar 8 has not completed a valid market scan yet (attempt $attempt/30; HTTP ${RADAR8:-no response})."
             sleep 5
           done
           if [ "$VERIFIED" != "true" ]; then
