@@ -367,6 +367,37 @@ test('Pre-Move scan deadline also bounds non-REST operations that ignore cancell
   assert.ok(Date.now()-startedAt<1000,'a stalled storage operation must release the scan within its absolute deadline');
 });
 
+test('Pre-Move timed-out adapter cannot permanently poison the per-quote scan queue',async()=>{
+  const rest={requestDeadlineAtMs:null,requestAbortSignal:null,request:async()=>({data:{}})};
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{preMoveScanTimeoutMs:300}
+  });
+  const signals=[];
+  // Simulate an adapter/storage promise that ignores AbortSignal entirely.
+  // The public scan must time out, cancel its REST signal, and allow the next
+  // bounded cycle to start without waiting forever for this abandoned promise.
+  scanner._scanPreMove=({signal})=>{
+    signals.push(signal);
+    return new Promise(()=>{});
+  };
+  const startedAt=Date.now();
+  await assert.rejects(
+    scanner.scanPreMove({quote:'USDT',limit:50}),
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED/
+  );
+  assert.equal(signals.length,1);
+  assert.equal(signals[0].aborted,true,'the expired cycle must cancel its own signal');
+  await assert.rejects(
+    scanner.scanPreMove({quote:'USDT',limit:50}),
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED/
+  );
+  assert.equal(signals.length,2,'a second cycle must enter the scanner even if the old adapter promise never settles');
+  assert.notEqual(signals[0],signals[1],'each cycle must own an independent cancellation signal');
+  assert.equal(signals[1].aborted,true,'the second test cycle must also be bounded');
+  assert.ok(Date.now()-startedAt<2000,'two timed-out cycles must not wait on the abandoned first adapter promise');
+});
+
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
