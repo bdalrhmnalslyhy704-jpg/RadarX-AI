@@ -667,6 +667,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   const relative = finite(features.relative_strength_vs_btc_pct);
   const upperWick = finite(features.upper_wick_pct);
   const range = finite(features.current_range_pct);
+  const close = finite(features.close_location);
   const contradictions = [];
   if (volume !== null && volume >= 1.5 && buyer !== null && buyer < 0.48)
     contradictions.push('تزايد الحجم دون ضغط شراء مؤيد');
