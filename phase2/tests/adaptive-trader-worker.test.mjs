@@ -358,6 +358,78 @@ test('server learner records eligible and below-threshold Spot pairs outside the
 });
 
 
+
+test('adaptive trader joins 12-radar outcome memory, records the motive case and persists both horizons without changing gates',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-outcome-memory-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now(),detectedAt=now-30*60*60*1000;
+  const features={
+    volume_ratio:2.0,trade_ratio:1.7,taker_buy_ratio:0.60,close_location:0.8,
+    higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,
+    hourly_return_pct:0.6,return_3h_pct:1.1,trend_aligned:true,
+    relative_strength_vs_btc_pct:1.0,recent_15m_return_pct:0.4,
+    current_range_pct:1.0,upper_wick_pct:0.1
+  };
+  const complete=(horizonMs,ret)=>({
+    status:'COMPLETE',source:'BINANCE_PUBLIC_CLOSED_OHLC',
+    sample_quality:'HISTORICAL_CLOSED_OHLC',horizon_ms:horizonMs,
+    close_return_pct:ret,max_favorable_pct:Math.max(0,ret+1),max_adverse_pct:Math.min(0,ret-1),
+    horizon_window_complete_through:detectedAt+horizonMs-1,
+    updated_at:detectedAt+horizonMs+60_000
+  });
+  store.getRadarSignalOutcomes=async()=>({
+    version:'RADAR_SIGNAL_OUTCOMES_V1',
+    records:[{
+      signal_id:'RADAR_8|COGNITIVE-CASE',radar:'RADAR_8',symbol:'COGNITIVEUSDT',
+      stage:'PRE_EXPANSION',detected_at:detectedAt,entry_price:1.0,
+      baseline_status:'COMPLETE',feature_snapshot_available_count:12,features,
+      reason_codes:['VOLUME_EXPANSION','BUYER_FLOW_SUPPORT'],risk_flags:[],
+      updated_at:now,outcomes:{'60m':complete(60*60*1000,1.2),'24h':complete(24*60*60*1000,2.8)}
+    }]
+  });
+  const candidate={
+    symbol:'LIVECASEUSDT',price:1.02,quote_volume_24h:4_000_000,change_24h_pct:1.2,score:72,
+    tier:'WATCH',data_valid:true,data_stale:false,closed_candles_only:true,
+    candle_close_time:now-60_000,candle_close_price:1.02,candle_age_ms:60_000,
+    features,reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+    universe:{eligible_spot_symbols:1,analyzed_symbols:1,valid_symbols:1,requested_limit:40,
+      scan_offset:0,scan_advance_count:1,coverage_pct:100,scan_complete:true},
+    candidates:[candidate],
+    latest_prices:[{symbol:candidate.symbol,price:candidate.price,quote_volume_24h:candidate.quote_volume_24h,change_24h_pct:candidate.change_24h_pct}],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    const status=worker.snapshot();
+    const learning=status.cognitive_brain.radar_outcome_learning;
+    assert.equal(learning.case_study_count,1);
+    assert.equal(learning.training_records['60m'],1);
+    assert.equal(learning.training_records['24h'],1);
+    assert.equal(learning.policy.radar_threshold_changes,false);
+    const liveCase=status.cognitive_brain.recent_journal.find(row=>row.symbol==='LIVECASEUSDT');
+    assert.ok(liveCase);
+    assert.equal(liveCase.market_motive_assessment.order_book_checked,false);
+    assert.equal(liveCase.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
+    assert.equal(liveCase.outcome_learning_adjustment,0);
+    assert.deepEqual(liveCase.outcome_learning_horizons,[]);
+    const saved=await store.getAdaptiveTraderState();
+    assert.equal(saved.radar_outcome_learning.case_study_count,1);
+    assert.equal(saved.radar_outcome_learning.case_studies[0].symbol,'COGNITIVEUSDT');
+    assert.equal(saved.radar_outcome_learning.horizon_profiles['60m'].probability_ready,false);
+    assert.equal(saved.cognitive_journal.find(row=>row.symbol==='LIVECASEUSDT').entry_eligible,false);
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('worker ingests real closed-candle historical outcomes before collecting live samples',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-historical-outcomes-'));
   const store=await new DurableStore({dir}).init();
