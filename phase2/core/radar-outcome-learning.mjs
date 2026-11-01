@@ -164,6 +164,18 @@ export function buildRadarOutcomeLearningSnapshot(state={},now=Date.now()) {
     .sort((a,b)=>(b.detected_at||0)-(a.detected_at||0));
   const profiles={},capture={},samplesByHorizon={};
   for(const horizon of HORIZONS) {
+    const resolvedOutcomes=records.map(record=>{
+      const row=object(record);
+      const outcome=object(object(row.outcomes)[horizon.key]);
+      const symbol=String(row.symbol||'').trim().toUpperCase();
+      const at=finite(row.detected_at),price=finite(row.entry_price);
+      const resolvedAt=finite(outcome.updated_at);
+      if(row.baseline_status!=='COMPLETE'||!/^[A-Z0-9]{2,26}USDT$/.test(symbol)||
+         at===null||at<=0||at>now||!(price>0)||resolvedAt===null||
+         resolvedAt<at+horizon.horizon_ms||!outcomeReady(outcome,horizon,now))return null;
+      const label=classifyReturn(outcome.close_return_pct,horizon.threshold_pct);
+      return label?{symbol,at:Math.trunc(at),outcome:label,return_pct:Number(outcome.close_return_pct)}:null;
+    }).filter(Boolean);
     const samples=records.map(record=>{
       const outcome=object(record?.outcomes)[horizon.key];
       return outcomeReady(outcome,horizon,now)?buildTrainingSample(record,outcome,horizon,now):null;
@@ -173,14 +185,15 @@ export function buildRadarOutcomeLearningSnapshot(state={},now=Date.now()) {
     samplesByHorizon[horizon.key]=samples;
     capture[horizon.key]={
       source_records:records.length,
-      complete_closed_candle_outcomes:samples.length,
+      complete_closed_candle_outcomes:resolvedOutcomes.length,
       eligible_feature_snapshots:samples.length,
-      excluded_incomplete_or_untrusted:Math.max(0,records.length-samples.length),
+      missing_feature_snapshots:Math.max(0,resolvedOutcomes.length-samples.length),
+      excluded_incomplete_or_untrusted:Math.max(0,records.length-resolvedOutcomes.length),
       threshold_pct:horizon.threshold_pct,
       outcome_counts:{
-        up:samples.filter(x=>x.outcome==='UP').length,
-        down:samples.filter(x=>x.outcome==='DOWN').length,
-        flat:samples.filter(x=>x.outcome==='FLAT').length
+        up:resolvedOutcomes.filter(x=>x.outcome==='UP').length,
+        down:resolvedOutcomes.filter(x=>x.outcome==='DOWN').length,
+        flat:resolvedOutcomes.filter(x=>x.outcome==='FLAT').length
       },
       ranking_ready:profile.ranking_ready===true,
       probability_ready:profile.probability_ready===true,
