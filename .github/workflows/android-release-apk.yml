@@ -587,17 +587,30 @@ jobs:
             esac
           done
       - name: Verify Pre-Move background worker and exact-commit acceptance
-        timeout-minutes: 4
+        timeout-minutes: 6
         run: |
           set -euo pipefail
           BASE="$RADARX_BACKEND_BASE_URL"
-          CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 20 -o "$RUNNER_TEMP/pre-move-worker-status.json" -w "%{http_code}" "$BASE/api/pre-move-radar-status")"
-          if [ "$CODE" != "200" ]; then
-            echo "::error::Pre-Move background worker status returned HTTP $CODE"
-            cat "$RUNNER_TEMP/pre-move-worker-status.json"
-            exit 1
-          fi
-          node --input-type=module <<'NODE'
+          STATUS_FILE="$RUNNER_TEMP/pre-move-worker-status.json"
+          READY=false
+          # Do not fail on a transient previous scan error or a cooldown-only
+          # attempt. Wait for the independent worker's next actual completed scan.
+          for attempt in $(seq 1 24); do
+            CODE="$(curl --location --silent --show-error --connect-timeout 8 --max-time 20 -o "$STATUS_FILE" -w "%{http_code}" "$BASE/api/pre-move-radar-status" || true)"
+            if [ "$CODE" != "200" ]; then
+              case "$CODE" in
+                502|503|504|000)
+                  echo "::warning::Pre-Move worker status temporarily unavailable (HTTP $CODE), attempt $attempt/24."
+                  ;;
+                *)
+                  echo "::error::Pre-Move background worker status returned HTTP $CODE."
+                  cat "$STATUS_FILE" 2>/dev/null || true
+                  exit 1
+                  ;;
+              esac
+            else
+              RESULT=0
+              node --input-type=module <<'NODE' || RESULT=$?
           import fs from 'node:fs';
           const body=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/pre-move-worker-status.json','utf8'));
           const worker=body.worker||{};
@@ -605,27 +618,44 @@ jobs:
           const at=Date.parse(worker.last_scan_at||'');
           const age=Number.isFinite(at)?Math.max(0,Date.now()-at):null;
           const duration=Number(worker.last_duration_ms);
-          if (body.scanner_ready!==true || worker.enabled!==true ||
-              Number(worker.successful_scans)<1 || worker.last_scan_status!=='READY' ||
-              worker.last_error!==null || !summary || age===null || age>300000 ||
-              !Number.isFinite(duration) || duration>45000 ||
-              body.paper_trading!==true || body.real_order_execution!==false) {
-            throw new Error('PRE_MOVE_BACKGROUND_WORKER_NOT_ACCEPTABLE:'+JSON.stringify({
-              status:body.status,scanner_ready:body.scanner_ready,enabled:worker.enabled,
-              successful_scans:worker.successful_scans,last_scan_status:worker.last_scan_status,
-              last_error:worker.last_error,last_scan_at:worker.last_scan_at,age_ms:age,
-              duration_ms:duration,has_summary:Boolean(summary),
-              paper_trading:body.paper_trading,real_order_execution:body.real_order_execution
-            }));
-          }
-          console.log(JSON.stringify({
+          const attempt={
+            last_attempt_at:worker.last_attempt_at??null,
+            last_attempt_status:worker.last_attempt_status??null,
+            last_attempt_error:worker.last_attempt_error??null
+          };
+          const contractValid=body.scanner_ready===true&&worker.enabled===true&&
+            body.paper_trading===true&&body.real_order_execution===false;
+          const scanReady=contractValid&&Number(worker.successful_scans)>=1&&
+            worker.last_scan_status==='READY'&&worker.last_error===null&&summary&&
+            age!==null&&age<=300000&&Number.isFinite(duration)&&duration>=0&&duration<=45000;
+          console.log('PRE_MOVE_RELEASE_READINESS '+JSON.stringify({
             status:body.status,scanner_ready:body.scanner_ready,enabled:worker.enabled,
-            successful_scans:worker.successful_scans,last_scan_status:worker.last_scan_status,
+            running:worker.running,successful_scans:worker.successful_scans,
+            last_scan_status:worker.last_scan_status,last_error:worker.last_error,
             last_scan_at:worker.last_scan_at,age_ms:age,duration_ms:duration,
-            summary,notification_transport:body.notification_transport||null,
-            paper_trading:body.paper_trading,real_order_execution:body.real_order_execution
+            ...attempt,paper_trading:body.paper_trading,
+            real_order_execution:body.real_order_execution,scan_ready:scanReady
           }));
+          if(!contractValid)process.exit(2);
+          if(!scanReady)process.exit(1);
           NODE
+              if [ "$RESULT" -eq 0 ]; then
+                READY=true
+                break
+              fi
+              if [ "$RESULT" -eq 2 ]; then
+                echo "::error::Pre-Move worker is disabled, unavailable, or violates the read-only trading contract."
+                cat "$STATUS_FILE"
+                exit 1
+              fi
+            fi
+            sleep 10
+          done
+          if [ "$READY" != "true" ]; then
+            echo "::error::Pre-Move did not produce a fresh successful background scan within the bounded recovery window."
+            cat "$STATUS_FILE" 2>/dev/null || true
+            exit 1
+          fi
       - name: Verify Coin Hunter public contract
         timeout-minutes: 3
         run: |
