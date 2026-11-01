@@ -2133,7 +2133,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         }
         const refresh=refreshPreMoveRadarSnapshot(key,quote,limit);
         if(refresh)refresh.catch(()=>{});
-        return send(res,200,preMoveRadarPendingBody(quote,limit,key,'SCAN_IN_PROGRESS',ageMs));
+        return send(res,200,preMoveRadarPendingBody(quote,limit,quote,'SCAN_IN_PROGRESS',ageMs));
       }
       if(u.pathname==='/api/market-radar'&&req.method==='GET'){
         if(!marketRadar)return send(res,503,{error:'MARKET_RADAR_UNAVAILABLE'});
