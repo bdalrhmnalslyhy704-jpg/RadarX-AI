@@ -237,6 +237,9 @@ export function emptyRadarSignalOutcomeState() {
     last_import_at: null,
     last_import_counts: {},
     last_archive_cursors: {},
+    feature_backfill_cursors: {},
+    feature_backfill_radar_cursor: 0,
+    last_feature_backfill_at: null,
     last_pass_at: null,
     last_pass: null,
     updated_at: 0
@@ -251,6 +254,9 @@ function normalizeState(raw) {
     records: Array.isArray(s.records) ? s.records.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [],
     last_import_counts: object(s.last_import_counts),
     last_archive_cursors: object(s.last_archive_cursors),
+    feature_backfill_cursors:object(s.feature_backfill_cursors),
+    feature_backfill_radar_cursor:Math.max(0,Math.trunc(Number(s.feature_backfill_radar_cursor)||0)),
+    last_feature_backfill_at:finite(s.last_feature_backfill_at),
     last_pass: s.last_pass === null ? null : object(s.last_pass)
   };
 }
@@ -583,6 +589,42 @@ export async function runRadarSignalOutcomePass({
       importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READ_FAILED', reason: safeError(error) };
     }
   }
+  // Older records created before feature snapshots are enriched from their
+  // original archives in a small rotating budget. This makes historical cases
+  // useful for learning without rereading every radar archive on every pass.
+  const backfillNeed=RADAR_OUTCOME_ARCHIVES.filter(radar=>priorState.records.some(row=>
+    String(row?.radar||'').toUpperCase()===radar.id&&
+    (finite(row?.feature_snapshot_available_count)??finite(row?.features?.feature_snapshot_available_count)??0)<4));
+  const backfillUpdates=[];
+  const nextFeatureBackfillCursors={...priorState.feature_backfill_cursors};
+  let featureBackfillNextIndex=priorState.feature_backfill_radar_cursor;
+  const backfillCounts={};
+  if(backfillNeed.length>0&&typeof store.readAlertPage==='function'){
+    const start=Math.max(0,featureBackfillNextIndex)%backfillNeed.length;
+    const selectedBackfill=[...backfillNeed.slice(start),...backfillNeed.slice(0,start)].slice(0,2);
+    for(const radar of selectedBackfill){
+      const cursor=object(priorState.feature_backfill_cursors[radar.id]);
+      const cursorAt=Math.max(cutoff,finite(cursor.at)??cutoff);
+      const cursorId=cursorAt===finite(cursor.at)?String(cursor.id||''):'';
+      try{
+        const page=await store.readAlertPage(radar.archive,{
+          sinceMs:cursorAt,sinceId:cursorId,radar:radar.id,limit:40
+        });
+        const rows=Array.isArray(page)?page:[];
+        const normalized=rows.map(row=>normalizeArchivedRadarSignal(row,radar.id,now));
+        backfillUpdates.push(...normalized);
+        const last=rows.at(-1)||null;
+        const lastAt=timestamp(last?.replay_cursor_at,last?.processed_at,last?.detected_at,last?.detectedAt,last?.event_at,last?.timestamp);
+        const lastId=String(last?.replay_cursor_id||'');
+        if(lastAt!==null)nextFeatureBackfillCursors[radar.id]={at:lastAt,id:lastId};
+        backfillCounts[radar.id]={scanned:rows.length,feature_candidates:normalized.filter(row=>row.feature_snapshot_available_count>=4).length,status:'OK'};
+      }catch(error){
+        backfillCounts[radar.id]={scanned:0,feature_candidates:0,status:'READ_FAILED',reason:safeError(error)};
+      }
+    }
+    featureBackfillNextIndex=(start+selectedBackfill.length)%Math.max(1,backfillNeed.length);
+  }
+  let newlyEnriched=0;
   let newlyImported = 0;
   await store.updateRadarSignalOutcomes(raw => {
     const state = normalizeState(raw);
@@ -594,6 +636,33 @@ export async function runRadarSignalOutcomePass({
       newlyImported++;
       importCounts[row.radar] ||= { scanned: 0 };
       importCounts[row.radar].imported = (importCounts[row.radar].imported || 0) + 1;
+    }
+    const recordIndex=new Map(state.records.map((row,index)=>[String(row.signal_id),index]));
+    for(const update of backfillUpdates){
+      const index=recordIndex.get(String(update.signal_id));
+      if(index===undefined)continue;
+      const previous=state.records[index];
+      const oldCount=finite(previous.feature_snapshot_available_count)??finite(previous.features?.feature_snapshot_available_count)??0;
+      const newCount=finite(update.feature_snapshot_available_count)??0;
+      if(newCount<=oldCount||newCount<4)continue;
+      const mergedFeatures={...object(previous.features)};
+      for(const [key,value] of Object.entries(object(update.features))){
+        if((mergedFeatures[key]===null||mergedFeatures[key]===undefined)&&value!==null&&value!==undefined)
+          mergedFeatures[key]=value;
+      }
+      state.records[index]={...previous,features:mergedFeatures,
+        feature_snapshot_available_count:newCount,
+        reason_codes:Array.isArray(previous.reason_codes)&&previous.reason_codes.length
+          ?previous.reason_codes:update.reason_codes,
+        risk_flags:Array.isArray(previous.risk_flags)&&previous.risk_flags.length
+          ?previous.risk_flags:update.risk_flags,
+        feature_snapshot_backfilled_at:Number(now)};
+      newlyEnriched++;
+    }
+    if(backfillNeed.length>0){
+      state.feature_backfill_cursors=nextFeatureBackfillCursors;
+      state.feature_backfill_radar_cursor=featureBackfillNextIndex;
+      state.last_feature_backfill_at=Number(now);
     }
     state.records = trimRecords(state.records);
     if (importDue) {
@@ -661,6 +730,7 @@ export async function runRadarSignalOutcomePass({
   }
   const pass = {
     ok: true, at: Number(now), imported: newlyImported, archives_scanned: incoming.length,
+    feature_backfill:{enriched_records:newlyEnriched,radars:backfillCounts},
     archive_import_performed: importDue,
     next_archive_import_due_at: (importDue ? Number(now) : (lastImportAt ?? Number(now))) + ARCHIVE_IMPORT_INTERVAL_MS,
     rest_requests: requests, records_evaluated: evaluatedRecords, completed_horizons: completeHorizons,
