@@ -345,6 +345,66 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
 });
 
+
+test('market-motive reasoning requires convergent flow and structure, and does not claim whale identity',()=>{
+  const candidate={
+    symbol:'ACCUMUSDT',price:1.05,change_24h_pct:1.2,score:78,
+    data_valid:true,data_stale:false,closed_candles_only:true,candle_age_ms:60_000,
+    order_book_checked:true,
+    features:{
+      volume_ratio:2.1,trade_ratio:1.8,taker_buy_ratio:0.61,
+      higher_low:true,breakout_above_prior_high:false,compression_ratio:0.68,
+      relative_strength_vs_btc_pct:1.1,recent_15m_return_pct:0.5,
+      close_location:0.82,current_range_pct:1.1,upper_wick_pct:0.12,
+      trend_aligned:true,micro_5m_available:true,micro_5m_taker_buy_ratio:0.6,
+      order_book_checked:true,order_book_spread_bps:9.5,
+      order_book_bid_ask_depth_ratio:1.6,order_book_imbalance_pct:23,
+      order_book_persistence_samples:1
+    }
+  };
+  const result=assessCognitiveCandidate(candidate,{},BASE_TIME+1_000);
+  assert.equal(result.market_motive_assessment.accumulation_hypothesis,'SUPPORTED_BY_CONVERGENT_PUBLIC_EVIDENCE');
+  assert.equal(result.market_motive_assessment.order_book_confirmation,'BID_DEPTH_SUPPORTS_BUY_FLOW');
+  assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_ASSESSABLE_SINGLE_SNAPSHOT');
+  assert.equal(result.market_motive_assessment.whale_identity_claim,false);
+});
+
+test('cognitive brain reports order book not checked and identifies a possible liquidity trap without inventing depth',()=>{
+  const candidate={
+    symbol:'TRAPUSDT',price:1.01,change_24h_pct:1,score:66,
+    data_valid:true,data_stale:false,closed_candles_only:true,candle_age_ms:60_000,
+    features:{
+      volume_ratio:2.0,trade_ratio:0.85,taker_buy_ratio:0.41,
+      higher_low:false,breakout_above_prior_high:false,compression_ratio:1.15,
+      relative_strength_vs_btc_pct:-1.3,recent_15m_return_pct:0.8,
+      close_location:0.28,current_range_pct:1.0,upper_wick_pct:0.82,
+      order_book_checked:true,order_book_spread_bps:42,
+      order_book_bid_ask_depth_ratio:0.52,order_book_imbalance_pct:-31,
+      order_book_persistence_samples:1
+    }
+  };
+  const result=assessCognitiveCandidate(candidate,{},BASE_TIME+1_000);
+  assert.equal(result.market_motive_assessment.possible_liquidity_trap,true);
+  assert.equal(result.market_motive_assessment.order_book_confirmation,'NO_CLEAR_BID_DEPTH_SUPPORT');
+  assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_ASSESSABLE_SINGLE_SNAPSHOT');
+  assert.ok(result.contradictions.length>=2);
+});
+
+test('unobserved order book stays explicitly unknown and never receives a fabricated neutral score',()=>{
+  const candidate={
+    symbol:'NOBOOKUSDT',price:1,change_24h_pct:0.5,score:60,
+    data_valid:true,data_stale:false,closed_candles_only:true,candle_age_ms:30_000,
+    features:{volume_ratio:1.4,trade_ratio:1.2,taker_buy_ratio:0.53,
+      higher_low:true,breakout_above_prior_high:false,compression_ratio:0.75,
+      relative_strength_vs_btc_pct:0.4,close_location:0.7,current_range_pct:1,upper_wick_pct:0.1}
+  };
+  const result=assessCognitiveCandidate(candidate,{},BASE_TIME+1_000);
+  assert.equal(result.market_motive_assessment.order_book_checked,false);
+  assert.equal(result.market_motive_assessment.order_book_confirmation,'NOT_CHECKED');
+  assert.equal(result.market_motive_assessment.order_book_spread_bps,null);
+  assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
+});
+
 test('prequential audit scores only immutable, matured V3 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
