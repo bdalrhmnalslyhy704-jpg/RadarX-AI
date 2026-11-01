@@ -2481,7 +2481,8 @@ export class MarketUniverseScanner {
         return error;
       };
       const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
-      const flight=awaitPreMoveScanOperation(previous.catch(()=>{}),{
+      const previousReady=previous.catch(()=>{});
+      const flight=awaitPreMoveScanOperation(previousReady,{
         deadlineAtMs,signal:controller.signal,stage:'WAIT_PREVIOUS_SCAN'
       }).then(async()=>{
         if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
@@ -2515,7 +2516,9 @@ export class MarketUniverseScanner {
           this.rest.requestAbortSignal=previousSignal;
         }
       });
-      const tail=flight.then(()=>undefined,()=>undefined);
+      // A queued request that times out must not release later requests while
+      // the scan ahead of it is still running. Keep the queue tail linked to both.
+      const tail=Promise.allSettled([previousReady,flight]).then(()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
       return flight.finally(()=>{
         clearTimeout(abortTimer);
