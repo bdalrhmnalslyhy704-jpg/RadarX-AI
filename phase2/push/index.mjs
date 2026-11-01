@@ -888,6 +888,11 @@ export class PushManager{
       push.notification_gate_eligible=false;
       push.data_quality=dataQuality;
       push.liquidity_quality=liquidityQuality;
+      push.micro_data_validated=microValidatedEarlyFlow;
+      push.liquidity_evidence_status=microValidatedEarlyFlow
+        ?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE'
+        :(alert?.liquidity_evidence_status??null);
+      push.quote_volume_24h=quoteVolume24h;
       push.price_change_24h=firstFinite([alert?.price_change_24h]);
       push.watch_only=true;
       push.entry_eligible=false;
