@@ -7,7 +7,7 @@ import {
 
 const HOUR=60*60*1000;
 const BASE=1_700_000_000_000;
-const NOW=BASE+400*HOUR;
+const NOW=BASE+160*24*HOUR;
 
 function makeFeatures(positive){
   return {
@@ -44,7 +44,7 @@ function outcome(at,horizonMs,positive,overrides={}){
   };
 }
 function record(index,{features=true,radar='RADAR_1',future=false,incomplete=false}={}){
-  const at=BASE+index*2*HOUR,positive=index%2===0;
+  const at=BASE+index*30*HOUR,positive=index%2===0;
   const row={
     signal_id:radar+'|CASE-'+index,source_alert_id:'CASE-'+index,radar,
     symbol:'CASE'+String(index).padStart(4,'0')+'USDT',
@@ -86,6 +86,29 @@ test('twelve-radar outcomes become 1h and 24h training cases only after complete
   assert.equal(snapshot.case_studies[0].no_future_data_used,true);
   assert.equal(snapshot.policy.entry_gate_changes,false);
   assert.equal(snapshot.policy.radar_threshold_changes,false);
+});
+
+
+test('matured 1h and 24h evidence can update ranking only after both chronological windows beat the baseline',()=>{
+  const records=Array.from({length:120},(_,i)=>record(i));
+  const snapshot=buildRadarOutcomeLearningSnapshot({records},NOW);
+  const oneHour=snapshot.horizon_profiles['60m'];
+  const oneDay=snapshot.horizon_profiles['24h'];
+  assert.equal(oneHour.ranking_ready,true);
+  assert.equal(oneDay.ranking_ready,true);
+  assert.equal(oneHour.validation.evaluated,true);
+  assert.equal(oneDay.validation.evaluated,true);
+  assert.equal(oneHour.holdout.evaluated,true);
+  assert.equal(oneDay.holdout.evaluated,true);
+  assert.equal(oneHour.probability_ready,true);
+  assert.equal(oneDay.probability_ready,true);
+  assert.equal(snapshot.policy.automatic_weight_update,true);
+  const adjusted=applyRadarOutcomeLearningAdjustment(70,makeFeatures(true),snapshot);
+  assert.equal(adjusted.status,'OUT_OF_SAMPLE_VALIDATED_RANKING_ONLY');
+  assert.deepEqual(adjusted.used_horizons,['60m','24h']);
+  assert.ok(Math.abs(adjusted.adjustment)<=2.5);
+  assert.equal(adjusted.entry_eligible,false);
+  assert.equal(adjusted.real_order_execution,false);
 });
 
 test('future, incomplete and featureless cases are kept as case studies but never become training labels',()=>{
