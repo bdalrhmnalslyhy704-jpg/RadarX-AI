@@ -11,6 +11,7 @@ import {
   applyAdaptiveLearning,
   findMissedMoverEvents,
   createAdaptiveTraderSnapshotService,
+  summarizePublicSpotOrderBook,
   createPaperPortfolio,
   openPaperPosition,
   advancePaperPortfolio,
@@ -77,6 +78,38 @@ function longClosedCandleFixture(now=Date.now(),count=240,intervalMs=15*60*1000,
   }
   return {data,source:'https://data-api.binance.vision',receivedAt:now};
 }
+
+
+test('public Spot order-book snapshot computes spread and visible depth but never infers spoofing',()=>{
+  const receivedAt=1_700_000_000_000;
+  const evidence=summarizePublicSpotOrderBook({
+    source:'BINANCE_PUBLIC_REST',receivedAt,
+    data:{
+      bids:[[99.95,10],[99.70,5],[99.20,50]],
+      asks:[[100.05,5],[100.30,4],[100.80,50]]
+    }
+  },receivedAt+1000);
+  assert.equal(evidence.order_book_checked,true);
+  assert.equal(evidence.order_book_status,'SINGLE_PUBLIC_SPOT_SNAPSHOT');
+  assert.equal(evidence.order_book_spread_bps,10);
+  assert.ok(evidence.order_book_bid_depth_quote_05pct>0);
+  assert.ok(evidence.order_book_ask_depth_quote_05pct>0);
+  assert.ok(evidence.order_book_bid_ask_depth_ratio>1);
+  assert.equal(evidence.order_book_persistence_samples,1);
+  assert.equal(evidence.spoofing_assessment,'NOT_ASSESSABLE_SINGLE_SNAPSHOT');
+});
+
+test('stale, crossed or empty order books fail closed and do not synthesize depth values',()=>{
+  const at=1_700_000_000_000;
+  const stale=summarizePublicSpotOrderBook({receivedAt:at,data:{bids:[[99,1]],asks:[[100,1]]}},at+30_000);
+  assert.equal(stale.order_book_checked,false);
+  assert.equal(stale.order_book_spread_bps,undefined);
+  assert.equal(stale.spoofing_assessment,'NOT_ASSESSABLE_SINGLE_SNAPSHOT');
+  const crossed=summarizePublicSpotOrderBook({receivedAt:at,data:{bids:[[101,1]],asks:[[100,1]]}},at+100);
+  assert.equal(crossed.order_book_checked,false);
+  const empty=summarizePublicSpotOrderBook({receivedAt:at,data:{bids:[],asks:[]}},at+100);
+  assert.equal(empty.order_book_checked,false);
+});
 
 test('historical learning examples use only baseline candles and label returns four hours later',()=>{
   const now=Date.now();
