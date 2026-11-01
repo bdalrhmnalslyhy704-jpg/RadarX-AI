@@ -758,6 +758,72 @@ test('TEST_FIXTURE: Pre-Move Radar reuses an active radar REST client when the d
 });
 
 
+test('TEST_FIXTURE: Pre-Move requests with different limits join one quote-level market scan',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-single-flight-api-'));
+  const store=await new DurableStore({dir}).init();
+  let fetchCalls=0,releaseExchangeInfo=null,exchangeInfoStartedResolve=null;
+  const exchangeInfoStarted=new Promise(resolve=>{exchangeInfoStartedResolve=resolve;});
+  const exchangeInfoGate=new Promise(resolve=>{releaseExchangeInfo=resolve;});
+  const response=(data)=>({
+    ok:true,status:200,
+    headers:{get:()=>null},
+    json:async()=>data
+  });
+  const fetchImpl=async url=>{
+    fetchCalls++;
+    const pathname=new URL(url).pathname;
+    if(pathname==='/api/v3/exchangeInfo'){
+      exchangeInfoStartedResolve();
+      await exchangeInfoGate;
+      return response({symbols:[]});
+    }
+    if(pathname==='/api/v3/ticker/24hr')return response([]);
+    throw new Error('UNEXPECTED_PRE_MOVE_PATH '+pathname);
+  };
+  const marketRadarRest={
+    baseUrls:['https://api.binance.com','https://data-api.binance.vision'],
+    currentBaseIndex:0,fetchImpl,timeoutMs:800,minIntervalMs:0,maxRequestsPerMinute:240
+  };
+  const config={
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    marketRadar:{minQuoteVolume24h:750000,deepConcurrency:2,deepKlines:160,
+      preMoveScanTimeoutMs:15000,preMoveBackgroundIntervalMs:600000}
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({
+    config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const base='http://127.0.0.1:'+server.address().port+'/api/pre-move-radar?quote=USDT';
+    const first=await fetch(base+'&limit=10&scan=1');
+    assert.equal(first.status,200);
+    assert.equal((await first.json()).status,'refreshing');
+    await exchangeInfoStarted;
+
+    const second=await fetch(base+'&limit=50&scan=1');
+    assert.equal(second.status,200);
+    const joined=await second.json();
+    assert.equal(joined.status,'refreshing');
+    assert.equal(joined.meta.response_cache.mode,'SCAN_IN_PROGRESS');
+    assert.equal(fetchCalls,1,
+      'different display limits for the same USDT market must join one exchangeInfo scan rather than enqueue a second scanner cycle');
+
+    releaseExchangeInfo();
+    for(let attempt=0;attempt<40;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,10));
+      if(fetchCalls>=2)break;
+    }
+    assert.equal(fetchCalls,2,
+      'the single active scan may continue to one ticker request but must not restart exchangeInfo for limit=50');
+  }finally{
+    releaseExchangeInfo?.();
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: forced analyst polling returns only the matching request scan, never an older cache entry',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-multi-analyst-background-')),store=await new DurableStore({dir}).init();
   let releaseScan=null,scanFlight=null,scanCalls=0,cached=null;
