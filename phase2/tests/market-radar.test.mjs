@@ -367,6 +367,37 @@ test('Pre-Move scan deadline also bounds non-REST operations that ignore cancell
   assert.ok(Date.now()-startedAt<1000,'a stalled storage operation must release the scan within its absolute deadline');
 });
 
+test('Pre-Move timed-out adapter cannot permanently poison the per-quote scan queue',async()=>{
+  const rest={requestDeadlineAtMs:null,requestAbortSignal:null,request:async()=>({data:{}})};
+  const scanner=new MarketUniverseScanner({
+    rest,
+    config:{preMoveScanTimeoutMs:300}
+  });
+  const signals=[];
+  // Simulate an adapter/storage promise that ignores AbortSignal entirely.
+  // The public scan must time out, cancel its REST signal, and allow the next
+  // bounded cycle to start without waiting forever for this abandoned promise.
+  scanner._scanPreMove=({signal})=>{
+    signals.push(signal);
+    return new Promise(()=>{});
+  };
+  const startedAt=Date.now();
+  await assert.rejects(
+    scanner.scanPreMove({quote:'USDT',limit:50}),
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED/
+  );
+  assert.equal(signals.length,1);
+  assert.equal(signals[0].aborted,true,'the expired cycle must cancel its own signal');
+  await assert.rejects(
+    scanner.scanPreMove({quote:'USDT',limit:50}),
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED/
+  );
+  assert.equal(signals.length,2,'a second cycle must enter the scanner even if the old adapter promise never settles');
+  assert.notEqual(signals[0],signals[1],'each cycle must own an independent cancellation signal');
+  assert.equal(signals[1].aborted,true,'the second test cycle must also be bounded');
+  assert.ok(Date.now()-startedAt<2000,'two timed-out cycles must not wait on the abandoned first adapter promise');
+});
+
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
   const symbols=Array.from({length:80},(_,i)=>({
     symbol:'C'+String(i).padStart(3,'0')+'USDT',
@@ -842,6 +873,56 @@ test('Pre-Move Radar detects quiet early acceleration instead of chasing large 2
 });
 
 
+test('Pre-Move rolling flow window works during first 15, 30 and 45 minutes of Aden session',()=>{
+  const step=15*60*1000;
+  const sessionStart=Date.UTC(2026,10,1,1,0); // 04:00 Asia/Aden
+  const bottom={
+    last_rise:{high:104},
+    metrics:{compression:70,structure:72,buying_pressure:78,whale_pressure:70}
+  };
+  for(const sessionBars of [1,2,3]){
+    const rows=Array.from({length:16+sessionBars},(_,i)=>{
+      const openTime=sessionStart-16*step+i*step;
+      const open=100+i*0.03;
+      const close=open+(i>=12?0.18:0.02);
+      const volume=i>=12?2000:1000;
+      const tradeCount=i>=12?150:100;
+      const takerBuyBaseVolume=volume*(i>=12?0.70:0.50);
+      return {
+        openTime,closeTime:openTime+step-1,
+        open,high:close+0.02,low:open-0.02,close,
+        volume,quoteVolume:volume*close,tradeCount,takerBuyBaseVolume,
+        closed:true
+      };
+    });
+    const now=rows.at(-1).closeTime;
+    const ticker={
+      symbol:'EARLYSESSIONUSDT',
+      lastPrice:rows.at(-1).close,
+      priceChange24h:1.2,
+      highPrice24h:104,
+      lowPrice24h:99,
+      dataQuality:100
+    };
+    const context=buildPreMoveContext({'15m':rows},ticker,now,bottom,{marketMedianReturn:0.1});
+    assert.equal(context.session_candle_count,sessionBars,
+      'only closed candles after 04:00 local may count toward the session');
+    assert.equal(context.evidence_complete,true,
+      'the rolling market window must use earlier closed candles instead of demanding four candles inside the new session');
+    assert.equal(context.missing_evidence.includes('four_closed_session_candles_for_one_hour_return'),false);
+    assert.ok(Number.isFinite(context.volume_acceleration));
+    assert.ok(Number.isFinite(context.trade_acceleration));
+    assert.ok(Number.isFinite(context.mean_close_location));
+    assert.equal(context.flow_transition_confirmed,true);
+    assert.equal(context.price_window_valid,true);
+    assert.ok(context.session_return_pct>=0&&context.session_return_pct<=6,
+      'anti-chase remains anchored to the 04:00 session open');
+    assert.ok(['READY','EARLY_WAKE','QUIET_BUILD'].includes(context.stage),
+      'a valid early-session setup must not be suppressed only because the session is young');
+    assert.equal(context.closed_candles_only,true);
+  }
+});
+ 
 test('Pre-Move composite score uses only normalized 0-100 components, never raw flow ratios',()=>{
   const scores={
     calm:90,acceleration:80,relative_strength:70,low_reclaim:75,
