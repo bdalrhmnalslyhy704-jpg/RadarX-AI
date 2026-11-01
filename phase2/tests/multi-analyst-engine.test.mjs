@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations,buildAnalystExecutionStatus} from '../core/multi-analyst-engine.mjs';
+import {MULTI_ANALYST_NAMES,MULTI_ANALYST_ROLE_CONTRACT,analyzeMultiAnalystCandidate,MultiAnalystEngine,nextContinuousScanDelayMs,isMomentumLiquidityEligible,selectWithPriorityRotation,selectDiscoveryWithRadarReviewPriority,countAnalystEvidenceCoverage,buildMultiAnalystMarketMoverObservations,buildAnalystExecutionStatus,buildMultiAnalystActivityPriorityRows} from '../core/multi-analyst-engine.mjs';
 
 // Execution telemetry must never report a failed/fallback assessment as complete.
 {
@@ -51,6 +51,53 @@ assert.equal(isMomentumLiquidityEligible(4_060_000,2.6),true);
 assert.equal(isMomentumLiquidityEligible(999_999,3.2),false);
 assert.equal(isMomentumLiquidityEligible(4_060_000,2.49),false);
 assert.equal(isMomentumLiquidityEligible('N/A',4.0),false);
+
+// Full-universe 24h ticker deltas give early volume/trade bursts first access
+// to one of the two expensive 20-analyst deep-scan slots. This changes order only.
+{
+  const snapshots={
+    version:1,
+    snapshots:[
+      {captured_at:240000,rows:{
+        'BURSTUSDT':{quote_volume_24h:700000,trade_count_24h:7000},
+        'QUIETUSDT':{quote_volume_24h:850000,trade_count_24h:8500},
+        'THINUSDT':{quote_volume_24h:150000,trade_count_24h:1500}
+      }},
+      {captured_at:180000,rows:{
+        'BURSTUSDT':{quote_volume_24h:600000,trade_count_24h:6000},
+        'QUIETUSDT':{quote_volume_24h:800000,trade_count_24h:8000},
+        'THINUSDT':{quote_volume_24h:100000,trade_count_24h:1000}
+      }}
+    ]
+  };
+  const tickers=[
+    {symbol:'BURSTUSDT',lastPrice:1.2,priceChange24h:0.8,quoteVolume24h:1000000,tradeCount24h:10000},
+    {symbol:'QUIETUSDT',lastPrice:1.0,priceChange24h:0.2,quoteVolume24h:900000,tradeCount24h:9000},
+    {symbol:'THINUSDT',lastPrice:0.5,priceChange24h:0.4,quoteVolume24h:250000,tradeCount24h:2500}
+  ];
+  const beforeWarmup=buildMultiAnalystActivityPriorityRows(tickers,{version:1,snapshots:[]},300000,{
+    minQuoteVolume24h:300000,limit:1
+  });
+  assert.deepEqual(beforeWarmup,[],'no activity burst may be invented before two real ticker baselines exist');
+  const picked=buildMultiAnalystActivityPriorityRows(tickers,snapshots,300000,{
+    minQuoteVolume24h:300000,limit:1
+  });
+  assert.equal(picked.length,1);
+  assert.equal(picked[0].symbol,'BURSTUSDT');
+  assert.equal(picked[0]._ticker_activity_priority,true);
+  assert.ok(picked[0].ticker_activity.volume_acceleration_ratio>=1.35);
+  assert.ok(picked[0].ticker_activity.trade_acceleration_ratio>=1.30);
+  assert.ok(picked[0].ticker_activity.score>=3);
+  const priority=selectDiscoveryWithRadarReviewPriority(
+    [{symbol:'RADAR_REVIEW_USDT',_radar_review_priority:true},...picked],
+    [[{symbol:'ROTATING_USDT'}]],2,[]
+  );
+  assert.deepEqual(priority.map(x=>x.symbol),['RADAR_REVIEW_USDT','BURSTUSDT'],
+    'one cross-radar review and one measured early-activity burst share the fixed two-symbol deep-scan budget');
+  assert.equal(picked.some(x=>x.symbol==='THINUSDT'),false,
+    'the multi-analyst discovery volume floor remains in force');
+}
+console.log('multi-analyst live activity-priority regression: PASS');
 
 // A stalled initial market-data request must fail the cycle, release the busy
 // latch, and clear its REST deadline instead of leaving the UI polling forever.
