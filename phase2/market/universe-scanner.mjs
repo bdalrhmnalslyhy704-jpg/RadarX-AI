@@ -2467,6 +2467,16 @@ export class MarketUniverseScanner {
       let deadlineAtMs=Date.now()+timeoutMs;
       const controller=new AbortController();
       let abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+      let scanStarted=false;
+      let restoreRestControls=()=>{};
+      let releaseUnderlyingScan=()=>{};
+      let underlyingScanReleased=false;
+      const underlyingScanDone=new Promise(resolve=>{releaseUnderlyingScan=resolve;});
+      const releaseUnderlying=()=>{
+        if(underlyingScanReleased)return;
+        underlyingScanReleased=true;
+        releaseUnderlyingScan();
+      };
       const deadlineError=(cause=null)=>{
         const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
           ?cause.scan_progress:null;
@@ -2500,28 +2510,40 @@ export class MarketUniverseScanner {
         if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
         this.rest.requestDeadlineAtMs=deadlineAtMs;
         this.rest.requestAbortSignal=controller.signal;
+        restoreRestControls=()=>{
+          this.rest.requestDeadlineAtMs=previousDeadline;
+          this.rest.requestAbortSignal=previousSignal;
+        };
+        scanStarted=true;
+        const scanTask=Promise.resolve().then(()=>this._scanPreMove({
+          quote:normalizedQuote,limit:normalizedLimit,signal:controller.signal,deadlineAtMs
+        }));
+        // The API-facing promise may time out first. Keep the per-quote queue
+        // and shared REST controls until the actual scanner operation settles.
+        scanTask.then(
+          ()=>{restoreRestControls();releaseUnderlying();},
+          ()=>{restoreRestControls();releaseUnderlying();}
+        );
         try{
-          const result=await awaitPreMoveScanOperation(
-            this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit,signal:controller.signal,deadlineAtMs}),
-            {deadlineAtMs,signal:controller.signal,stage:'SCAN'}
-          );
+          const result=await awaitPreMoveScanOperation(scanTask,{
+            deadlineAtMs,signal:controller.signal,stage:'SCAN'
+          });
           if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
           return result;
         }catch(error){
           if(controller.signal.aborted||Date.now()>=deadlineAtMs||error?.name==='ScanDeadlineError')
             throw deadlineError(error);
           throw error;
-        }finally{
-          this.rest.requestDeadlineAtMs=previousDeadline;
-          this.rest.requestAbortSignal=previousSignal;
         }
+      }).finally(()=>{
+        // No scan operation is running when the request expires in the queue.
+        if(!scanStarted)releaseUnderlying();
       });
-      // A queued request that times out must not release later requests while
-      // the scan ahead of it is still running. Keep the queue tail linked to both.
-      const tail=Promise.allSettled([previousReady,flight]).then(()=>undefined);
+      // A deadline releases the caller, but cannot release a still-running
+      // underlying scan. This prevents a second scan from mutating the same REST
+      // client concurrently if a storage layer ignores cancellation.
+      const tail=Promise.allSettled([previousReady,flight,underlyingScanDone]).then(()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
-      // Keep the queue entry until its predecessor has settled as well. A timed-out
-      // queued request must not open a parallel lane around the still-active scan.
       tail.then(()=>{
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
       });
