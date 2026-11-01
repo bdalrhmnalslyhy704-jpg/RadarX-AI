@@ -809,9 +809,21 @@ export class PushManager{
     const isQualifiedRadarEarlyTrackPush=event==='RADAR_WATCH_ONLY_EARLY_TRACK'&&
       alert?.notification_gate?.eligible===true&&alert?.notification_gate?.watch_only===true&&
       alert?.market==='SPOT'&&alert?.watch_only===true&&alert?.entry_eligible===false;
+    // Radar 8's Micro lane has its own intentionally narrow watch-only proof:
+    // fresh trusted Spot 1m/5m closed candles, validated participation, no
+    // low-liquidity bypass, and >=750k USDT 24h turnover. It has no order-book
+    // snapshot yet, so it remains NONE-direction / WATCH_ONLY / non-entry.
+    const isQualifiedMicroEarlyFlowPush=
+      event==='EARLY_FLOW_WATCH_ONLY'&&alert?.radar==='EARLY_EXPANSION_RADAR'&&
+      microValidatedEarlyFlow===true&&alert?.watch_only===true&&
+      alert?.entry_eligible===false&&alert?.paper_trading===true&&
+      alert?.real_order_execution===false&&alert?.low_liquidity_burst_bypass!==true&&
+      alert?.liquidity_evidence_status==='ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE'&&
+      quoteVolume24h!==null&&quoteVolume24h>=750000;
     const monitorNotificationMode=isQualifiedRadarEarlyTrackPush
-      ?'RADAR_EARLY_TRACK_WATCH_ONLY':'PRE_MOVE_WATCH_ONLY';
-    if(!isQualifiedPreMovePush&&!isQualifiedRadarEarlyTrackPush){
+      ?'RADAR_EARLY_TRACK_WATCH_ONLY'
+      :isQualifiedMicroEarlyFlowPush?'EARLY_FLOW_MICRO_WATCH_ONLY':'PRE_MOVE_WATCH_ONLY';
+    if(!isQualifiedPreMovePush&&!isQualifiedRadarEarlyTrackPush&&!isQualifiedMicroEarlyFlowPush){
       const notifications=[];
       for(const sub of recipients){
         const audit={
@@ -866,9 +878,9 @@ export class PushManager{
         ...alert,
         market:'SPOT',direction:'NONE',signal_type:'WATCH_ONLY',
         notification_mode:monitorNotificationMode,
-        notification_gate:{...(alert?.notification_gate||{}),eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
+        notification_gate:{...(alert?.notification_gate||{}),eligible:false,watch_only:true,mode:monitorNotificationMode},
         watch_only:true,entry_eligible:false,paper_trading:true,real_order_execution:false
-      },processedAt,'PRE_MOVE_WATCH_ONLY');
+      },processedAt,monitorNotificationMode);
       push.notification_mode=monitorNotificationMode;
       push.notification_gate_mode=monitorNotificationMode;
       push.signal_type='WATCH_ONLY';
@@ -876,6 +888,11 @@ export class PushManager{
       push.notification_gate_eligible=false;
       push.data_quality=dataQuality;
       push.liquidity_quality=liquidityQuality;
+      push.micro_data_validated=microValidatedEarlyFlow;
+      push.liquidity_evidence_status=microValidatedEarlyFlow
+        ?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE'
+        :(alert?.liquidity_evidence_status??null);
+      push.quote_volume_24h=quoteVolume24h;
       push.price_change_24h=firstFinite([alert?.price_change_24h]);
       push.watch_only=true;
       push.entry_eligible=false;
@@ -885,10 +902,12 @@ export class PushManager{
       push.asset_class=alert?.asset_class==='TOKENIZED_SECURITY'?'TOKENIZED_SECURITY':'CRYPTO';
       push.tokenized_security=push.asset_class==='TOKENIZED_SECURITY';
       push.requires_follow_up_confirmation=true;
-      push.title=(isQualifiedRadarEarlyTrackPush?radarTitle(alert):'RadarX')+
+      push.title=(isQualifiedRadarEarlyTrackPush||isQualifiedMicroEarlyFlowPush?radarTitle(alert):'RadarX')+
         (push.tokenized_security?' • bStocks':'')+' • مراقبة مبكرة • '+symbol;
       push.message=[push.tokenized_security?'أصل مُرمّز من فئة bStocks':symbol,
-        alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+        isQualifiedMicroEarlyFlowPush
+          ?'تسارع مرصود في شموع 1m/5m؛ دفتر الأوامر لم يُفحص بعد — مراقبة فقط، لا دخول'
+          :alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
           ?'تسارع موثق في الحجم والصفقات وضغط الشراء — مراقبة فقط، لا دخول'
           :alert?.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR'
             ?'تسارع المشاركة والحجم والصفقات مع دلائل شراء — مراقبة مبكرة فقط، لا دخول'
