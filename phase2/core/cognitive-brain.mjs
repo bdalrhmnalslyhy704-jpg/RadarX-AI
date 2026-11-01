@@ -145,9 +145,8 @@ function validResolvedSamples(samples, {
           resolvedAt === null || !resolvedAfterHorizon ||
           horizon !== horizonMs || !sourceValid ||
           (radarOutcome && !String(row.radar || '').trim())) return false;
-      const baselineKey = radarOutcome
-        ? String(row.radar).toUpperCase() + ':' + symbol + ':' + String(Math.trunc(at))
-        : symbol + ':' + String(Math.trunc(at));
+      // Alerts from several radars can refer to the same pair/candle. Count the market event once.
+      const baselineKey = symbol + ':' + String(Math.trunc(at));
       // A live observation and a later historical backfill can describe the
       // exact same pair/candle under different IDs. Count that market event once.
       if (seenIds.has(id) || seenBaselines.has(baselineKey)) return false;
