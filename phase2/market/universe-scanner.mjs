@@ -2465,20 +2465,12 @@ export class MarketUniverseScanner {
       // release the per-quote scan queue. A stalled earlier request must not pin
       // this worker indefinitely.
       const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||45_000);
-      const timeoutMs=Math.max(15_000,Math.min(45_000,configuredTimeout));
+      const timeoutMs=Math.max(250,Math.min(45_000,configuredTimeout));
       let deadlineAtMs=Date.now()+timeoutMs;
       const controller=new AbortController();
       let abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
       let scanStarted=false;
       let restoreRestControls=()=>{};
-      let releaseUnderlyingScan=()=>{};
-      let underlyingScanReleased=false;
-      const underlyingScanDone=new Promise(resolve=>{releaseUnderlyingScan=resolve;});
-      const releaseUnderlying=()=>{
-        if(underlyingScanReleased)return;
-        underlyingScanReleased=true;
-        releaseUnderlyingScan();
-      };
       const deadlineError=(cause=null)=>{
         const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
           ?cause.scan_progress:null;
@@ -2501,8 +2493,15 @@ export class MarketUniverseScanner {
         // Read shared REST controls only after the previous same-quote scan has
         // restored them. Capturing them before queue wait would accidentally
         // inherit the previous scan's already-expiring deadline.
-        const previousDeadline=this.rest.requestDeadlineAtMs;
-        const previousSignal=this.rest.requestAbortSignal??null;
+        const activePreviousSignal=this.rest.requestAbortSignal??null;
+        const activePreviousDeadline=this.rest.requestDeadlineAtMs;
+        // A previous timed-out scan may still be unwinding a storage promise.
+        // Its cancellation/deadline controls must not poison the next cycle.
+        const previousControlsExpired=activePreviousSignal?.aborted===true||
+          (Number.isFinite(Number(activePreviousDeadline))&&Number(activePreviousDeadline)>0&&
+           Number(activePreviousDeadline)<=Date.now());
+        const previousDeadline=previousControlsExpired?null:activePreviousDeadline;
+        const previousSignal=previousControlsExpired?null:activePreviousSignal;
         const priorDeadline=Number(previousDeadline);
         if(Number.isFinite(priorDeadline)&&priorDeadline>0){
           deadlineAtMs=Math.min(deadlineAtMs,priorDeadline);
@@ -2512,7 +2511,10 @@ export class MarketUniverseScanner {
         if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
         this.rest.requestDeadlineAtMs=deadlineAtMs;
         this.rest.requestAbortSignal=controller.signal;
+        // A late completion from an abandoned scan must never overwrite a newer
+        // cycle's REST deadline/signal.
         restoreRestControls=()=>{
+          if(this.rest.requestAbortSignal!==controller.signal)return;
           this.rest.requestDeadlineAtMs=previousDeadline;
           this.rest.requestAbortSignal=previousSignal;
         };
@@ -2520,11 +2522,12 @@ export class MarketUniverseScanner {
         const scanTask=Promise.resolve().then(()=>this._scanPreMove({
           quote:normalizedQuote,limit:normalizedLimit,signal:controller.signal,deadlineAtMs
         }));
-        // The API-facing promise may time out first. Keep the per-quote queue
-        // and shared REST controls until the actual scanner operation settles.
+        // The request deadline aborts its REST signal. Do not keep the entire
+        // background worker locked on an adapter/storage promise that ignores it;
+        // the next scan gets a fresh signal and old work cannot use it.
         scanTask.then(
-          ()=>{restoreRestControls();releaseUnderlying();},
-          ()=>{restoreRestControls();releaseUnderlying();}
+          ()=>restoreRestControls(),
+          ()=>restoreRestControls()
         );
         try{
           const result=await awaitPreMoveScanOperation(scanTask,{
@@ -2537,14 +2540,11 @@ export class MarketUniverseScanner {
             throw deadlineError(error);
           throw error;
         }
-      }).finally(()=>{
-        // No scan operation is running when the request expires in the queue.
-        if(!scanStarted)releaseUnderlying();
       });
-      // A deadline releases the caller, but cannot release a still-running
-      // underlying scan. This prevents a second scan from mutating the same REST
-      // client concurrently if a storage layer ignores cancellation.
-      const tail=Promise.allSettled([previousReady,flight,underlyingScanDone]).then(()=>undefined);
+      // Serialize callers through the bounded public scan lifetime. The scan's
+      // AbortSignal is cancelled at the same deadline; conditional REST-control
+      // restoration prevents late work from clobbering the next cycle.
+      const tail=Promise.allSettled([previousReady,flight]).then(()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
       tail.then(()=>{
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
