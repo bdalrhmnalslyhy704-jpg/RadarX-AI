@@ -122,12 +122,18 @@ test('future, incomplete and featureless cases are kept as case studies but neve
   assert.equal(snapshot.case_study_count,4);
   assert.equal(snapshot.training_records['60m'],1);
   assert.equal(snapshot.training_records['24h'],1);
+  assert.equal(snapshot.capture['60m'].complete_closed_candle_outcomes,2);
+  assert.equal(snapshot.capture['24h'].complete_closed_candle_outcomes,2);
+  assert.equal(snapshot.capture['60m'].eligible_feature_snapshots,1);
+  assert.equal(snapshot.capture['60m'].missing_feature_snapshots,1);
+  assert.equal(snapshot.capture['60m'].outcome_counts.up,1);
+  assert.equal(snapshot.capture['60m'].outcome_counts.down,1);
   const future=snapshot.case_studies.find(x=>x.id==='RADAR_1|CASE-1');
   assert.equal(future.one_hour.status,'PENDING');
   assert.equal(future.one_hour.close_return_pct,null);
   const incomplete=snapshot.case_studies.find(x=>x.id==='RADAR_1|CASE-2');
   assert.equal(incomplete.twenty_four_hour.status,'PENDING');
-  assert.equal(snapshot.capture['60m'].excluded_incomplete_or_untrusted,3);
+  assert.equal(snapshot.capture['60m'].excluded_incomplete_or_untrusted,2);
 });
 
 test('training labels use closed-candle close returns, not intrahorizon wick hits',()=>{
