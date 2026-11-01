@@ -47,6 +47,58 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
   }
 });
 
+test('Pre-Move retry cooldown is a skipped attempt and does not overwrite the last real scan result',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-worker-cooldown-')),store=await new DurableStore({dir}).init();
+  const marketRest={
+    request:async path=>{
+      if(String(path).includes('/api/v3/exchangeInfo'))return{data:{symbols:[]},source:'TEST_FIXTURE'};
+      if(String(path).includes('/api/v3/ticker/24hr'))return{data:[],source:'TEST_FIXTURE'};
+      throw new Error('UNEXPECTED_PATH '+path);
+    },
+    klines:async()=>({candles:[],source:'TEST_FIXTURE'}),
+    depth:async()=>({bids:[],asks:[],source:'TEST_FIXTURE'})
+  };
+  const config={
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    marketRadar:{minQuoteVolume24h:750000,preMoveBackgroundIntervalMs:600000,preMoveResponseCacheRetryMs:15000}
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    server.startPreMoveWatchWorker({intervalMs:600000,initialDelayMs:600000});
+    assert.equal(typeof server.runPreMoveWatchScan,'function');
+    await server.runPreMoveWatchScan();
+    const first=server.preMoveWatchWorkerStatus().worker;
+    assert.equal(first.last_scan_status,'FAILED');
+    assert.ok(first.last_scan_at);
+    assert.ok(first.last_error);
+    assert.equal(first.last_attempt_status,'FAILED');
+    const preserved={
+      last_scan_at:first.last_scan_at,last_scan_status:first.last_scan_status,
+      last_duration_ms:first.last_duration_ms,last_error:first.last_error,
+      successful_scans:first.successful_scans
+    };
+
+    await server.runPreMoveWatchScan();
+    const afterCooldown=server.preMoveWatchWorkerStatus().worker;
+    assert.equal(afterCooldown.last_attempt_status,'SKIPPED_COOLDOWN');
+    assert.equal(afterCooldown.last_attempt_error,'PRE_MOVE_SCAN_RETRY_COOLDOWN');
+    assert.equal(afterCooldown.last_scan_at,preserved.last_scan_at);
+    assert.equal(afterCooldown.last_scan_status,preserved.last_scan_status);
+    assert.equal(afterCooldown.last_duration_ms,preserved.last_duration_ms);
+    assert.equal(afterCooldown.last_error,preserved.last_error);
+    assert.equal(afterCooldown.successful_scans,preserved.successful_scans);
+    assert.equal(afterCooldown.running,false);
+    assert.equal(afterCooldown.in_flight,false);
+  }finally{
+    server.stopPreMoveWatchWorker?.();
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: subscription/settings API requires auth and never returns push keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-')),store=await new DurableStore({dir}).init();
   const secret='TEST_FIXTURE_AUTH_SECRET';
