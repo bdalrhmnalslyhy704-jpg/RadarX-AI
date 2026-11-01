@@ -599,7 +599,9 @@ export async function runRadarSignalOutcomePass({
   const nextFeatureBackfillCursors={...priorState.feature_backfill_cursors};
   let featureBackfillNextIndex=priorState.feature_backfill_radar_cursor;
   const backfillCounts={};
-  if(backfillNeed.length>0&&typeof store.readAlertPage==='function'){
+  const lastFeatureBackfillAt=finite(priorState.last_feature_backfill_at);
+  const featureBackfillDue=lastFeatureBackfillAt===null||Number(now)-lastFeatureBackfillAt>=ARCHIVE_IMPORT_INTERVAL_MS;
+  if(featureBackfillDue&&backfillNeed.length>0&&typeof store.readAlertPage==='function'){
     const start=Math.max(0,featureBackfillNextIndex)%backfillNeed.length;
     const selectedBackfill=[...backfillNeed.slice(start),...backfillNeed.slice(0,start)].slice(0,2);
     for(const radar of selectedBackfill){
@@ -659,7 +661,7 @@ export async function runRadarSignalOutcomePass({
         feature_snapshot_backfilled_at:Number(now)};
       newlyEnriched++;
     }
-    if(backfillNeed.length>0){
+    if(featureBackfillDue&&backfillNeed.length>0){
       state.feature_backfill_cursors=nextFeatureBackfillCursors;
       state.feature_backfill_radar_cursor=featureBackfillNextIndex;
       state.last_feature_backfill_at=Number(now);
@@ -730,7 +732,7 @@ export async function runRadarSignalOutcomePass({
   }
   const pass = {
     ok: true, at: Number(now), imported: newlyImported, archives_scanned: incoming.length,
-    feature_backfill:{enriched_records:newlyEnriched,radars:backfillCounts},
+    feature_backfill:{due:featureBackfillDue,enriched_records:newlyEnriched,radars:backfillCounts},
     archive_import_performed: importDue,
     next_archive_import_due_at: (importDue ? Number(now) : (lastImportAt ?? Number(now))) + ARCHIVE_IMPORT_INTERVAL_MS,
     rest_requests: requests, records_evaluated: evaluatedRecords, completed_horizons: completeHorizons,
