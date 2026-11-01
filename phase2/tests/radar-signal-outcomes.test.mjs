@@ -195,6 +195,44 @@ test('bounded maintenance imports archived alerts and respects the per-pass REST
   assert.equal(result.report.summary.completed_24h_outcomes,1);
 });
 
+
+test('outcome worker backfills missing decision-time features into older durable archive cases',async()=>{
+  const now=BASE+40*minute;
+  const archiveRow={
+    id:'BACKFILL-CASE-1',symbol:'ABCUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:0.5,stage:'PRE_EXPANSION',
+    features:{volume_ratio:2.0,trade_ratio:1.6,taker_buy_ratio:0.6,
+      close_location:0.8,higher_low:true,compression_ratio:0.72,relative_strength_vs_btc_pct:0.9},
+    reason_codes:['BUYER_FLOW_SUPPORT']
+  };
+  let state=emptyRadarSignalOutcomeState();
+  state.last_import_at=now;
+  state.records=[normalizeArchivedRadarSignal({
+    id:archiveRow.id,symbol:archiveRow.symbol,detected_at:archiveRow.detected_at,
+    processed_at:archiveRow.processed_at,price:archiveRow.price,stage:archiveRow.stage
+  },'RADAR_1',now)];
+  assert.equal(state.records[0].feature_snapshot_available_count,0);
+  const store={
+    async getRadarSignalOutcomes(){return structuredClone(state);},
+    async updateRadarSignalOutcomes(updater){const next=await updater(structuredClone(state));if(next!==false)state=next;return state;},
+    async readAlertPage(archive){
+      return archive==='moveAlerts'?[{...archiveRow,replay_cursor_at:BASE,replay_cursor_id:'RADAR_1|BACKFILL-CASE-1'}]:[];
+    }
+  };
+  const result=await runRadarSignalOutcomePass({
+    store,rest:{klines:async()=>({source:'BINANCE_PUBLIC_REST',candles:[]})},
+    now,maxRestCalls:0,logger:{warn(){}}
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.feature_backfill.due,true);
+  assert.equal(result.feature_backfill.enriched_records,1);
+  assert.equal(state.records[0].features.volume_ratio,2);
+  assert.equal(state.records[0].features.taker_buy_ratio,0.6);
+  assert.ok(state.records[0].feature_snapshot_available_count>=6);
+  assert.ok(state.records[0].feature_snapshot_backfilled_at===now);
+  assert.ok(state.feature_backfill_cursors.RADAR_1);
+});
+
 test('outcome ledger persists atomically through DurableStore updates',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-radar-outcomes-'));
   try{
