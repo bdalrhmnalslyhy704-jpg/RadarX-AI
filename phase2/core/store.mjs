@@ -473,6 +473,7 @@ export class DurableStore {
   }
   async putAdaptiveTraderState(value){
     if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('ADAPTIVE_TRADER_STATE_INVALID');
+    const persistedNumber=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
     const journalRows=(Array.isArray(value.cognitive_journal)?value.cognitive_journal:[])
       .filter(row=>row&&typeof row==='object'&&!Array.isArray(row)).slice(-3000).map(row=>{
         const number=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
@@ -524,7 +525,7 @@ export class DurableStore {
       ?value.radar_outcome_learning:null;
     const radarOutcomeLearning=radarOutcomeSource?{
       version:String(radarOutcomeSource.version||'RADARX_RADAR_OUTCOME_COGNITIVE_MEMORY_V1').slice(0,80),
-      at:number(radarOutcomeSource.at),source:String(radarOutcomeSource.source||'BINANCE_PUBLIC_CLOSED_OHLC').slice(0,80),
+      at:persistedNumber(radarOutcomeSource.at),source:String(radarOutcomeSource.source||'BINANCE_PUBLIC_CLOSED_OHLC').slice(0,80),
       scope:String(radarOutcomeSource.scope||'TWELVE_RADARS_SPOT_USDT').slice(0,80),
       status:String(radarOutcomeSource.status||'AVAILABLE').slice(0,80),
       capture:radarOutcomeSource.capture&&typeof radarOutcomeSource.capture==='object'?radarOutcomeSource.capture:{},
@@ -535,8 +536,8 @@ export class DurableStore {
       case_studies:(Array.isArray(radarOutcomeSource.case_studies)?radarOutcomeSource.case_studies:[]).slice(0,100).map(row=>({
         id:String(row?.id||'').slice(0,240),radar:String(row?.radar||'UNKNOWN').slice(0,80),
         symbol:String(row?.symbol||'UNKNOWN').slice(0,32),stage:String(row?.stage||'UNKNOWN').slice(0,80),
-        detected_at:number(row?.detected_at),entry_price:number(row?.entry_price),
-        feature_snapshot_available_count:number(row?.feature_snapshot_available_count),
+        detected_at:persistedNumber(row?.detected_at),entry_price:persistedNumber(row?.entry_price),
+        feature_snapshot_available_count:persistedNumber(row?.feature_snapshot_available_count),
         one_hour:row?.one_hour&&typeof row.one_hour==='object'?row.one_hour:{status:'PENDING'},
         twenty_four_hour:row?.twenty_four_hour&&typeof row.twenty_four_hour==='object'?row.twenty_four_hour:{status:'PENDING'},
         retrospective_review_reasons:(Array.isArray(row?.retrospective_review_reasons)?row.retrospective_review_reasons:[]).slice(0,8).map(x=>String(x).slice(0,120)),
@@ -549,10 +550,10 @@ export class DurableStore {
           ?radarOutcomeSource.horizon_profiles[key]:{};
         return [key,{
           method:String(p.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3').slice(0,100),
-          horizon:key,outcome_horizon_ms:number(p.outcome_horizon_ms),
+          horizon:key,outcome_horizon_ms:persistedNumber(p.outcome_horizon_ms),
           ranking_ready:p.ranking_ready===true,probability_ready:p.probability_ready===true,
-          resolved_samples:number(p.resolved_samples),training_samples:number(p.training_samples),
-          validation_samples:number(p.validation_samples),holdout_samples:number(p.holdout_samples),
+          resolved_samples:persistedNumber(p.resolved_samples),training_samples:persistedNumber(p.training_samples),
+          validation_samples:persistedNumber(p.validation_samples),holdout_samples:persistedNumber(p.holdout_samples),
           validation:p.validation||null,holdout:p.holdout||null,
           model_selection:p.model_selection||null,regime_adaptation:p.regime_adaptation||null,
           outcome_counts:p.outcome_counts||{},note:String(p.note||'').slice(0,160)
