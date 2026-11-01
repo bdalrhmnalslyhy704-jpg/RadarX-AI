@@ -77,7 +77,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','low_volume_watch_only','asset_class','tokenized_security','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','low_volume_watch_only','asset_class','tokenized_security','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','micro_data_validated','liquidity_evidence_status','quote_volume_24h','low_liquidity_burst_bypass','detected_candle_close_time','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -889,6 +889,8 @@ export class PushManager{
       push.data_quality=dataQuality;
       push.liquidity_quality=liquidityQuality;
       push.micro_data_validated=microValidatedEarlyFlow;
+      push.detected_candle_close_time=closeTime;
+      push.low_liquidity_burst_bypass=alert?.low_liquidity_burst_bypass===true;
       push.liquidity_evidence_status=microValidatedEarlyFlow
         ?'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE'
         :(alert?.liquidity_evidence_status??null);
@@ -896,7 +898,7 @@ export class PushManager{
       push.price_change_24h=firstFinite([alert?.price_change_24h]);
       push.watch_only=true;
       push.entry_eligible=false;
-      if(isQualifiedRadarEarlyTrackPush)push.data_valid=true;
+      if(isQualifiedRadarEarlyTrackPush||isQualifiedMicroEarlyFlowPush)push.data_valid=true;
       push.watch_notification_tier=alert?.watch_notification_tier||null;
       push.low_volume_watch_only=alert?.low_volume_watch_only===true;
       push.asset_class=alert?.asset_class==='TOKENIZED_SECURITY'?'TOKENIZED_SECURITY':'CRYPTO';
