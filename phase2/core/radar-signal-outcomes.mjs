@@ -162,7 +162,9 @@ export function extractRadarOutcomeFeatures(raw = {}) {
     ask_depth_quote_05pct: pick('ask_depth_quote_05pct','ask_depth_0_5pct_quote')
   };
   const available = Object.entries(f).filter(([key,value]) =>
-    value !== null && value !== undefined && !(key === 'micro_5m_available' && value !== true)
+    value !== null && value !== undefined &&
+    !(key === 'micro_5m_available' && value !== true) &&
+    !(key === 'order_book_checked' && value !== true)
   ).length;
   return { ...f, feature_snapshot_version:'RADAR_OUTCOME_FEATURES_V1', feature_snapshot_available_count:available };
 }
