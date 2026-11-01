@@ -113,26 +113,39 @@ function normalizedFeatures(features = {}) {
   ];
 }
 
-function validResolvedSamples(samples) {
+function validResolvedSamples(samples, {
+  outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  allowResolutionLag = false,
+  allowedOutcomeSources = null
+} = {}) {
+  const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || MIN_OUTCOME_HORIZON_MS));
+  const allowedSources = Array.isArray(allowedOutcomeSources)
+    ? new Set(allowedOutcomeSources.map(String)) : null;
   const seenIds = new Set();
   const seenBaselines = new Set();
   return (Array.isArray(samples) ? samples : [])
     .filter(row => {
+      const radarOutcome = row?.radar_outcome_baseline === true;
       if (!row || row.training_eligible !== true ||
-          (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
+          (row.closed_candle_baseline !== true && row.historical_baseline !== true && !radarOutcome) ||
           !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
-          !row.features || typeof row.features !== 'object') return false;
+          !row.features || typeof row.features !== 'object' || Array.isArray(row.features)) return false;
       const id = String(row.id || '');
       const symbol = String(row.symbol || '').trim().toUpperCase();
       const at = finite(row.at);
       const resolvedAt = finite(row.resolved_at);
       const horizon = finite(row.horizon_ms);
+      const source = String(row.outcome_source || '');
       const expectedSource = row.historical_baseline === true
-        ? 'HISTORICAL_CLOSED_CANDLE' : 'CLOSED_CANDLE_4H';
+        ? 'HISTORICAL_CLOSED_CANDLE' : radarOutcome ? source : 'CLOSED_CANDLE_4H';
+      const sourceValid = allowedSources ? allowedSources.has(source) : source === expectedSource;
+      const resolvedAfterHorizon = resolvedAt !== null && at !== null &&
+        (allowResolutionLag ? resolvedAt >= at + horizonMs : resolvedAt - at === horizonMs);
       if (!id || !symbol || at === null || at <= 0 ||
-          resolvedAt === null || resolvedAt - at !== MIN_OUTCOME_HORIZON_MS ||
-          horizon !== MIN_OUTCOME_HORIZON_MS ||
-          row.outcome_source !== expectedSource) return false;
+          resolvedAt === null || !resolvedAfterHorizon ||
+          horizon !== horizonMs || !sourceValid ||
+          (radarOutcome && !String(row.radar || '').trim())) return false;
+      // Alerts from several radars can refer to the same pair/candle. Count the market event once.
       const baselineKey = symbol + ':' + String(Math.trunc(at));
       // A live observation and a later historical backfill can describe the
       // exact same pair/candle under different IDs. Count that market event once.
@@ -189,9 +202,22 @@ function predictFromFit(features, fit) {
 function factorEvidence(training, { minimumBucket = 8 } = {}) {
   const output = {};
   let covered = 0;
+  const availability = {
+    volume_expansion: f => finite(f.volume_ratio) !== null,
+    trade_expansion: f => finite(f.trade_ratio) !== null,
+    buyer_flow: f => finite(f.taker_buy_ratio) !== null,
+    price_structure: f => f.higher_low !== null && f.higher_low !== undefined ||
+      f.breakout_above_prior_high !== null && f.breakout_above_prior_high !== undefined,
+    volatility_compression: f => finite(f.compression_ratio) !== null,
+    relative_strength: f => finite(f.relative_strength_vs_btc_pct) !== null,
+    short_momentum: f => finite(f.recent_15m_return_pct) !== null || finite(f.price_change_15m_pct) !== null,
+    multi_hour_trend: f => f.trend_aligned !== null && f.trend_aligned !== undefined || finite(f.return_3h_pct) !== null,
+    five_minute_flow: f => f.micro_5m_available === true && finite(f.micro_5m_taker_buy_ratio) !== null
+  };
   for (const factor of FACTORS) {
-    const active = training.filter(row => factor.test(row.features || {}));
-    const inactive = training.filter(row => !factor.test(row.features || {}));
+    const available = training.filter(row => availability[factor.key]?.(row.features || {}) === true);
+    const active = available.filter(row => factor.test(row.features || {}));
+    const inactive = available.filter(row => !factor.test(row.features || {}));
     const activeMean = active.length ? mean(active.map(row => row.target)) : null;
     const inactiveMean = inactive.length ? mean(inactive.map(row => row.target)) : null;
     const ready = active.length >= minimumBucket && inactive.length >= minimumBucket;
@@ -270,9 +296,19 @@ export function buildCognitiveLearningProfile(samples = [], {
   minTrainingSamples = 60, minimumBucket = 8,
   minimumValidationSamples = 20, minimumHoldoutSamples = 20,
   validationFraction = 0.2, holdoutFraction = 0.2,
-  recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08
+  recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08,
+  outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  allowResolutionLag = false,
+  allowedOutcomeSources = null,
+  iterations = 900, learningRate = 0.12,
+  maxResolvedSamples = 0
 } = {}) {
-  const resolved = validResolvedSamples(samples);
+  const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
+  const allResolved = validResolvedSamples(samples, {
+    outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
+  });
+  const maxSamples = Math.max(0, Math.trunc(Number(maxResolvedSamples) || 0));
+  const resolved = maxSamples > 0 ? allResolved.slice(-maxSamples) : allResolved;
   const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
   const holdoutCount = Math.max(minimumHoldoutSamples, Math.floor(uniqueTimes.length * holdoutFraction));
   const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * validationFraction));
@@ -280,10 +316,11 @@ export function buildCognitiveLearningProfile(samples = [], {
   const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0;
 
   if (!canSplit) {
-    const fit = fitLogisticModel(resolved, { l2 });
+    const fit = fitLogisticModel(resolved, { l2, iterations, learningRate });
     const evidence = factorEvidence(resolved, { minimumBucket });
     return {
       method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+      outcome_horizon_ms: horizonMs,
       ranking_ready: false, probability_ready: false, ready: false,
       resolved_samples: resolved.length, training_samples: resolved.length,
       fit_samples: resolved.length, validation_samples: 0, holdout_samples: 0,
@@ -327,7 +364,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const validation = validationPool.filter(row => row.resolved_at < holdoutStartAt);
   const purgedValidation = validationPool.length - validation.length;
   const holdout = resolved.filter(row => row.at >= holdoutStartAt);
-  const globalFit = fitLogisticModel(training, { l2 });
+  const globalFit = fitLogisticModel(training, { l2, iterations, learningRate });
   const globalValidation = evaluateHoldout(validation, globalFit);
 
   const trainingTimes = [...new Set(training.map(row => row.at))].sort((a, b) => a - b);
@@ -337,7 +374,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const recentTraining = recentStartAt === null
     ? [] : training.filter(row => row.at >= recentStartAt);
   const recentFit = recentTraining.length >= minTrainingSamples
-    ? fitLogisticModel(recentTraining, { l2 }) : null;
+    ? fitLogisticModel(recentTraining, { l2, iterations, learningRate }) : null;
   const recentValidation = recentFit ? evaluateHoldout(validation, recentFit) : {
     evaluated: false, reason: 'RECENT_WINDOW_REQUIRES_MINIMUM_TRAINING_SAMPLES',
     sample_count: validation.length, model_brier_score: null, base_rate_brier_score: null,
@@ -386,6 +423,7 @@ export function buildCognitiveLearningProfile(samples = [], {
 
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+    outcome_horizon_ms: horizonMs,
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
     ready: rankingReady,
@@ -615,6 +653,11 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   };
 
   const flags = factorValues(features);
+  const orderBookChecked = candidate?.order_book_checked === true || features.order_book_checked === true;
+  const orderBookSpread = finite(features.order_book_spread_bps ?? candidate?.order_book_spread_bps);
+  const orderBookImbalance = finite(features.order_book_imbalance_pct ?? candidate?.order_book_imbalance_pct);
+  const bidAskDepthRatio = finite(features.order_book_bid_ask_depth_ratio ?? candidate?.order_book_bid_ask_depth_ratio);
+  const spoofingAssessment = orderBookChecked ? 'NOT_ASSESSABLE_SINGLE_SNAPSHOT' : 'NOT_CHECKED';
   const dailyLate = daily !== null && daily >= 8;
   const late = candidate?.tier === 'LATE_MOVE' || candidate?.thresholds?.late_move === true ||
     dailyLate || (hourly !== null && hourly >= 5) ||
@@ -624,6 +667,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   const relative = finite(features.relative_strength_vs_btc_pct);
   const upperWick = finite(features.upper_wick_pct);
   const range = finite(features.current_range_pct);
+  const close = finite(features.close_location);
   const contradictions = [];
   if (volume !== null && volume >= 1.5 && buyer !== null && buyer < 0.48)
     contradictions.push('تزايد الحجم دون ضغط شراء مؤيد');
@@ -633,6 +677,11 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     contradictions.push('ذيل علوي كبير قد يدل على رفض الأسعار الأعلى');
   if (daily !== null && daily < -5)
     contradictions.push('ضغط هبوطي يومي مرتفع');
+  if (orderBookChecked && orderBookSpread !== null && orderBookSpread > 30)
+    contradictions.push('فارق دفتر الأوامر واسع ويضعف جودة التنفيذ');
+  if (orderBookChecked && bidAskDepthRatio !== null && bidAskDepthRatio < 0.70 &&
+      buyer !== null && buyer < 0.50)
+    contradictions.push('عمق الطلبات أضعف من العروض رغم الحركة');
 
   const activityEvidence = [flags.volume_expansion, flags.trade_expansion, flags.buyer_flow].filter(Boolean).length;
   const supportingDomains = Object.values(flags).filter(Boolean).length;
@@ -649,6 +698,38 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
       supported: flags.multi_hour_trend && flags.short_momentum,
       evidence: [flags.multi_hour_trend, flags.short_momentum].filter(Boolean).length, required: 2 }
   ];
+  const buyerAccumulationSupported = volume !== null && volume >= 1.5 &&
+    finite(features.trade_ratio) !== null && Number(features.trade_ratio) >= 1.25 &&
+    buyer !== null && buyer >= 0.54 &&
+    (flags.price_structure || flags.volatility_compression) &&
+    (relative === null || relative >= -0.25);
+  const orderBookSupportsBuyers = orderBookChecked && orderBookSpread !== null &&
+    orderBookSpread <= 20 && bidAskDepthRatio !== null && bidAskDepthRatio >= 1.15;
+  const possibleTrap = (orderBookChecked && orderBookSpread !== null && orderBookSpread > 30) ||
+    (orderBookChecked && bidAskDepthRatio !== null && bidAskDepthRatio < 0.70) ||
+    (upperWick !== null && range !== null && range > 0 && upperWick / range > 0.55 &&
+      close !== null && close < 0.45) ||
+    (volume !== null && volume >= 1.5 && (buyer === null || buyer < 0.48));
+  const marketMotiveAssessment = {
+    accumulation_hypothesis: buyerAccumulationSupported ? 'SUPPORTED_BY_CONVERGENT_PUBLIC_EVIDENCE' : 'NOT_ESTABLISHED',
+    order_book_confirmation: !orderBookChecked ? 'NOT_CHECKED' :
+      orderBookSupportsBuyers ? 'BID_DEPTH_SUPPORTS_BUY_FLOW' : 'NO_CLEAR_BID_DEPTH_SUPPORT',
+    possible_liquidity_trap: possibleTrap,
+    reasons: [
+      ...(buyerAccumulationSupported ? ['VOLUME_TRADE_BUYER_FLOW_AND_STRUCTURE_CONFLUENCE'] : []),
+      ...(orderBookSupportsBuyers ? ['NARROW_SPREAD_AND_BID_DEPTH_IMBALANCE'] : []),
+      ...(possibleTrap ? ['CONTRADICTORY_OR_TRAP_LIKE_MICROSTRUCTURE'] : [])
+    ],
+    order_book_checked: orderBookChecked,
+    order_book_spread_bps: orderBookSpread,
+    order_book_imbalance_pct: orderBookImbalance,
+    order_book_bid_ask_depth_ratio: bidAskDepthRatio,
+    spoofing_assessment: spoofingAssessment,
+    whale_identity_claim: false,
+    interpretation_ar: orderBookChecked
+      ? 'هذه قرائن دفتر أوامر من لقطة واحدة؛ لا تثبت هوية الحوت أو نية التجميع ولا تكشف التلاعب زمنياً.'
+      : 'لم يُفحص دفتر الأوامر لهذه العملة؛ لا يجوز استنتاج نية الحيتان أو نفي فخ السيولة.'
+  };
   const noChase = (daily === null || daily <= 7) &&
     (hourly === null || hourly <= 3.5) &&
     (recent15 === null || recent15 <= 1.5) &&
@@ -690,6 +771,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     reason_codes: reasons.length ? reasons : ['INSUFFICIENT_CONFLUENT_EVIDENCE'],
     hypotheses,
     contradictions,
+    market_motive_assessment:marketMotiveAssessment,
     evidence_domains: supportingDomains,
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,

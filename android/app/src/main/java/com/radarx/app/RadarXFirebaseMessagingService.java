@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.util.Log;
+import org.json.JSONObject;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
@@ -50,7 +51,8 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 "CONFIRMED".equals(signalType) || "STRICT_NOTIFICATION".equals(notificationGateMode));
         boolean approvedPreMoveWatch = isApprovedPreMoveWatch(message.getData());
         boolean approvedRadarEarlyTrackWatch = isApprovedRadarEarlyTrackWatch(message.getData());
-        if (!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&
+        boolean approvedMicroEarlyFlowWatch = isApprovedMicroEarlyFlowWatch(message.getData());
+        if (!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch && !approvedMicroEarlyFlowWatch &&
                 (watchOnly || watchEvent || !risingDirection || !entryEligible ||
                 !notificationGateEligible || followUpRequired || lifecycleConflicts || !finalConfirmation)) {
             Log.i(TAG, "FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED");
@@ -136,8 +138,9 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
             try {
                 manager.notify(requestCode == 0 ? 42099 : requestCode, builder.build());
                 Log.i(TAG, explicitTest ? "FCM_TEST_NOTIFICATION_POSTED" :
-                        (approvedRadarEarlyTrackWatch ? "FCM_RADAR_EARLY_TRACK_WATCH_NOTIFICATION_POSTED" :
-                         (approvedPreMoveWatch ? "FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED")));
+                        (approvedMicroEarlyFlowWatch ? "FCM_MICRO_EARLY_FLOW_WATCH_NOTIFICATION_POSTED" :
+                         (approvedRadarEarlyTrackWatch ? "FCM_RADAR_EARLY_TRACK_WATCH_NOTIFICATION_POSTED" :
+                          (approvedPreMoveWatch ? "FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED" : "FCM_CONFIRMED_NOTIFICATION_POSTED"))));
                 if (!eventId.isEmpty()) {
                     RadarXPushRegistration.acknowledgeReceipt(getApplicationContext(), eventId, event, symbol, radar);
                 }
@@ -270,6 +273,106 @@ public final class RadarXFirebaseMessagingService extends FirebaseMessagingServi
                 !Double.isNaN(price) && !Double.isInfinite(price) &&
                 dataQuality >= 70.0 && liquidityQuality >= 60.0 && price > 0.0 &&
                 lifecycleOkay && !unsafeRisk;
+    }
+
+
+    /**
+     * Accept only the server-validated Radar 8 Micro early-flow observation.
+     * This lane is explicitly non-entry and has no order-book depth yet. The
+     * server must attest the closed-candle micro proof and the phone re-checks
+     * its freshness, Spot source, turnover floor, anti-chase and risk metadata.
+     */
+    private static boolean isApprovedMicroEarlyFlowWatch(java.util.Map<String, String> data) {
+        if (data == null) return false;
+        String event = dataValue(data, "event", "").toUpperCase(java.util.Locale.ROOT);
+        String eventClass = dataValue(data, "event_class", "").toUpperCase(java.util.Locale.ROOT);
+        String type = dataValue(data, "type", "").toUpperCase(java.util.Locale.ROOT);
+        String mode = dataValue(data, "notification_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String gateMode = dataValue(data, "notification_gate_mode", "").toUpperCase(java.util.Locale.ROOT);
+        String radar = dataValue(data, "radar", "").toUpperCase(java.util.Locale.ROOT);
+        String symbol = dataValue(data, "symbol", "").toUpperCase(java.util.Locale.ROOT);
+        String source = dataValue(data, "source", "").trim();
+        String direction = dataValue(data, "direction", "").toUpperCase(java.util.Locale.ROOT);
+        String lifecycle = dataValue(data, "signal_lifecycle_state", "").toUpperCase(java.util.Locale.ROOT);
+        String riskFlags = dataValue(data, "risk_flags", "").toUpperCase(java.util.Locale.ROOT);
+        double quoteVolume24h = numericValue(data, "quote_volume_24h");
+        double price = numericValue(data, "price");
+        double dailyMove = numericValue(data, "price_change_24h");
+        double candleCloseTime = numericValue(data, "detected_candle_close_time");
+        long now = System.currentTimeMillis();
+        boolean lifecycleOkay = lifecycle.isEmpty() ||
+                "WATCH_EARLY".equals(lifecycle) || "MONITOR".equals(lifecycle) ||
+                "MONITOR_ONLY".equals(lifecycle) || "WATCH_ONLY".equals(lifecycle);
+        boolean unsafeRisk = riskFlags.matches("(?s).*?(ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY).*");
+        return "EARLY_FLOW_WATCH_ONLY".equals(event) &&
+                "RADAR_ALERT".equals(eventClass) && "RADARX_RADAR_ALERT".equals(type) &&
+                "EARLY_FLOW_MICRO_WATCH_ONLY".equals(mode) &&
+                "EARLY_FLOW_MICRO_WATCH_ONLY".equals(gateMode) &&
+                "EARLY_EXPANSION_RADAR".equals(radar) &&
+                "WATCH_ONLY".equals(dataValue(data, "signal_type", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "SPOT".equals(dataValue(data, "market", "").toUpperCase(java.util.Locale.ROOT)) &&
+                "NONE".equals(direction) &&
+                "true".equalsIgnoreCase(dataValue(data, "watch_only", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "entry_eligible", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "notification_gate_eligible", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "requires_follow_up_confirmation", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "closed_candles_only", "false")) &&
+                "true".equalsIgnoreCase(dataValue(data, "data_valid", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "data_stale", "true")) &&
+                "false".equalsIgnoreCase(dataValue(data, "future_data_detected", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "paper_trading", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "real_order_execution", "true")) &&
+                "true".equalsIgnoreCase(dataValue(data, "micro_data_validated", "false")) &&
+                "false".equalsIgnoreCase(dataValue(data, "low_liquidity_burst_bypass", "true")) &&
+                "ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE".equals(
+                        dataValue(data, "liquidity_evidence_status", "")) &&
+                !data.containsKey("data_quality") && !data.containsKey("liquidity_quality") &&
+                symbol.matches("[A-Z0-9]{2,20}USDT") &&
+                isTrustedBinancePublicSpotSource(source) &&
+                !Double.isNaN(quoteVolume24h) && quoteVolume24h >= 750000.0 &&
+                !Double.isNaN(price) && !Double.isInfinite(price) && price > 0.0 &&
+                !Double.isNaN(dailyMove) && Math.abs(dailyMove) < 18.0 &&
+                !Double.isNaN(candleCloseTime) && candleCloseTime <= now + 5000L &&
+                now - candleCloseTime <= 20L * 60L * 1000L &&
+                isValidMicroEarlyFlowEvidence(dataValue(data, "early_flow_watch_evidence", "")) &&
+                lifecycleOkay && !unsafeRisk;
+    }
+
+    private static boolean isValidMicroEarlyFlowEvidence(String raw) {
+        if (raw == null || raw.trim().isEmpty()) return false;
+        try {
+            JSONObject evidence = new JSONObject(raw);
+            double volumeRatio = maxFinite(
+                    evidence.optDouble("rvol_1m", Double.NaN),
+                    evidence.optDouble("rvol_5m", Double.NaN));
+            double tradeRatio = maxFinite(
+                    evidence.optDouble("trade_rvol_1m", Double.NaN),
+                    evidence.optDouble("trade_rvol_5m", Double.NaN));
+            double takerBuyRatio = evidence.optDouble("taker_buy_ratio", Double.NaN);
+            double acceleration = maxFinite(
+                    evidence.optDouble("acceleration_1m_pct", Double.NaN),
+                    evidence.optDouble("acceleration_5m_pct", Double.NaN));
+            double recentReturn = maxFinite(
+                    evidence.optDouble("return_1m", Double.NaN),
+                    evidence.optDouble("return_5m", Double.NaN));
+            boolean participation = volumeRatio >= 1.20 || tradeRatio >= 1.15 ||
+                    (takerBuyRatio >= 0.54 && (volumeRatio >= 1.0 || tradeRatio >= 1.0));
+            return evidence.optBoolean("closed_candles_only", false) &&
+                    evidence.optDouble("micro_score", Double.NaN) >= 58.0 &&
+                    evidence.optInt("confirmation_count", 0) >= 3 &&
+                    participation && (acceleration > 0.0 || recentReturn > 0.0);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static double maxFinite(double left, double right) {
+        boolean leftOk = !Double.isNaN(left) && !Double.isInfinite(left);
+        boolean rightOk = !Double.isNaN(right) && !Double.isInfinite(right);
+        if (leftOk && rightOk) return Math.max(left, right);
+        if (leftOk) return left;
+        if (rightOk) return right;
+        return Double.NaN;
     }
 
     private static double numericValue(java.util.Map<String, String> data, String key) {

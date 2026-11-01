@@ -516,6 +516,51 @@ async function mapLimit(items, limit, worker) {
   return result;
 }
 
+
+/**
+ * Summarize one public Spot depth snapshot. It is evidence about visible
+ * liquidity at one instant, not proof of spoofing, hidden orders or trader
+ * identity. The caller bounds requests to a handful of strongest candidates.
+ */
+export function summarizePublicSpotOrderBook(response, now = Date.now()) {
+  const root=response&&typeof response==='object'?response:{};
+  const data=root.data&&typeof root.data==='object'?root.data:root;
+  const receivedAt=finite(root.receivedAt??root.received_at??data.receivedAt)??Number(now);
+  const ageMs=Number(now)-receivedAt;
+  const bids=(Array.isArray(data.bids)?data.bids:[]).map(level=>({
+    price:finite(Array.isArray(level)?level[0]:level?.price),
+    quantity:finite(Array.isArray(level)?level[1]:level?.quantity)
+  })).filter(x=>x.price>0&&x.quantity>=0).sort((a,b)=>b.price-a.price);
+  const asks=(Array.isArray(data.asks)?data.asks:[]).map(level=>({
+    price:finite(Array.isArray(level)?level[0]:level?.price),
+    quantity:finite(Array.isArray(level)?level[1]:level?.quantity)
+  })).filter(x=>x.price>0&&x.quantity>=0).sort((a,b)=>a.price-b.price);
+  if(ageMs<0||ageMs>15_000||!bids.length||!asks.length||bids[0].price>=asks[0].price){
+    return {order_book_checked:false,order_book_status:ageMs>15_000?'STALE_OR_INVALID_DEPTH':'DEPTH_UNAVAILABLE',
+      order_book_received_at:receivedAt,order_book_age_ms:Number.isFinite(ageMs)?Math.trunc(ageMs):null,
+      spoofing_assessment:'NOT_ASSESSABLE_SINGLE_SNAPSHOT'};
+  }
+  const bestBid=bids[0].price,bestAsk=asks[0].price,mid=(bestBid+bestAsk)/2;
+  const spreadBps=(bestAsk-bestBid)/mid*10_000;
+  const bidDepth=bids.filter(x=>x.price>=mid*0.995).reduce((sum,x)=>sum+x.price*x.quantity,0);
+  const askDepth=asks.filter(x=>x.price<=mid*1.005).reduce((sum,x)=>sum+x.price*x.quantity,0);
+  const depthTotal=bidDepth+askDepth;
+  const ratio=askDepth>0?Math.min(50,bidDepth/askDepth):bidDepth>0?50:null;
+  const imbalance=depthTotal>0?(bidDepth-askDepth)/depthTotal*100:null;
+  return {
+    order_book_checked:true,order_book_status:'SINGLE_PUBLIC_SPOT_SNAPSHOT',
+    order_book_received_at:receivedAt,order_book_age_ms:Math.max(0,Math.trunc(ageMs)),
+    order_book_best_bid:bestBid,order_book_best_ask:bestAsk,order_book_mid_price:mid,
+    order_book_spread_bps:Number(spreadBps.toFixed(2)),
+    order_book_bid_depth_quote_05pct:Number(bidDepth.toFixed(2)),
+    order_book_ask_depth_quote_05pct:Number(askDepth.toFixed(2)),
+    order_book_bid_ask_depth_ratio:ratio===null?null:Number(ratio.toFixed(3)),
+    order_book_imbalance_pct:imbalance===null?null:Number(imbalance.toFixed(1)),
+    order_book_persistence_samples:1,
+    spoofing_assessment:'NOT_ASSESSABLE_SINGLE_SNAPSHOT'
+  };
+}
+
 export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.defaultUniverseLimit, now = Date.now(),
   offset = 0, retrySymbols = [], previousSnapshot = null, pendingSamples = [], minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   if (!rest || typeof rest.request !== 'function') throw new Error('ADAPTIVE_TRADER_REST_UNAVAILABLE');
@@ -704,6 +749,35 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       real_order_execution: false,
       confidence_score: 'UNKNOWN'
     });
+  // Query public Spot depth only for a tiny shortlist; a book snapshot is
+  // never promoted into proof of spoofing or an actionable entry condition.
+  const orderBookTargets=candidates.filter(row=>row?.data_valid===true&&row?.data_stale!==true&&
+    row?.tier!=='LATE_MOVE'&&row?.shock_move_audit_only!==true&&
+    (finite(row?.features?.volume_ratio)>=1.5||finite(row?.features?.trade_ratio)>=1.25)&&
+    finite(row?.features?.taker_buy_ratio)>=0.52)
+    .sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0)).slice(0,4);
+  const orderBookResults=typeof rest.depth==='function'
+    ?await mapLimit(orderBookTargets,2,async row=>({
+      symbol:row.symbol,evidence:summarizePublicSpotOrderBook(await rest.depth(row.symbol,20),Date.now())
+    }))
+    :[];
+  const orderBookBySymbol=new Map(orderBookResults.filter(row=>row&&!row.error&&row.evidence?.order_book_checked===true)
+    .map(row=>[String(row.symbol).toUpperCase(),row.evidence]));
+  for(const candidate of candidates){
+    const evidence=orderBookBySymbol.get(String(candidate.symbol||'').toUpperCase());
+    candidate.order_book_checked=evidence?.order_book_checked===true;
+    candidate.order_book=evidence||{
+      order_book_checked:false,order_book_status:'NOT_CHECKED',
+      spoofing_assessment:'NOT_ASSESSABLE_SINGLE_SNAPSHOT'
+    };
+    candidate.features={...(candidate.features||{}),
+      order_book_checked:candidate.order_book.order_book_checked===true,
+      order_book_spread_bps:finite(candidate.order_book.order_book_spread_bps),
+      order_book_bid_ask_depth_ratio:finite(candidate.order_book.order_book_bid_ask_depth_ratio),
+      order_book_imbalance_pct:finite(candidate.order_book.order_book_imbalance_pct),
+      order_book_persistence_samples:finite(candidate.order_book.order_book_persistence_samples)??0
+    };
+  }
   const decoratedCandidates = candidates.map(candidate => ({...candidate, trade_decision:buildAdaptiveTraderRecommendation(candidate,{now})}));
   candidates.splice(0,candidates.length,...decoratedCandidates);
   candidates.sort((a, b) => (Number(b.score) || -1) - (Number(a.score) || -1));
@@ -741,6 +815,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       extended_movers_available: extendedMovers.length,
       price_acceleration_movers_available: accelerationMovers.length,
       rapid_burst_movers_available: burstMovers.length,
+      order_book_candidates_checked:orderBookBySymbol.size,
+      order_book_snapshot_limit:4,
       selection_strategy: 'MOVER_AWARE_ACCELERATION_ROTATION_V3',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true

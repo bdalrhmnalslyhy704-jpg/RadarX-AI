@@ -97,6 +97,78 @@ function rowIdOf(row) {
   return String(r.id ?? r.alert_id ?? r.signal_id ?? r.event_id ?? '').trim().slice(0, 150);
 }
 
+export 
+function firstFinite(values) {
+  for (const value of values) {
+    const parsed = finite(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+function firstBoolean(values) {
+  for (const value of values) if (typeof value === 'boolean') return value;
+  return null;
+}
+function nestedObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+/**
+ * Capture only contemporaneous, explicitly supplied alert evidence. Missing
+ * fields remain null; we never manufacture a neutral/negative value for a
+ * metric that the producing radar did not measure.
+ */
+export function extractRadarOutcomeFeatures(raw = {}) {
+  const r = object(raw);
+  const blocks = [
+    object(r.features), object(r.metrics), object(r.early_expansion?.metrics),
+    object(r.early_expansion), object(r.early_wake?.metrics), object(r.early_wake),
+    object(r.strong_move?.metrics), object(r.strong_move),
+    object(r.rotation?.metrics), object(r.rotation),
+    object(r.falcon_eye?.metrics), object(r.falcon_eye),
+    object(r.liquidity_absorption?.metrics), object(r.liquidity_absorption),
+    object(r.kahir_analysis?.metrics), object(r.kahir_analysis),
+    object(r.whale_accumulation?.metrics), object(r.whale_accumulation),
+    object(r.coin_hunter?.features), object(r.coin_hunter),
+    object(r.professor_opinion?.metrics), object(r.professor_opinion),
+    object(r.almuqawim?.metrics), object(r.almuqawim)
+  ];
+  const pick = (...keys) => firstFinite(blocks.flatMap(block => keys.map(key => block[key])));
+  const pickBool = (...keys) => firstBoolean(blocks.flatMap(block => keys.map(key => block[key])));
+  const f = {
+    volume_ratio: pick('volume_ratio','rvol','rvol_1m','relative_volume','volume_accel_ratio','volume_acceleration_ratio'),
+    trade_ratio: pick('trade_ratio','trade_rvol','trade_rvol_1m','trade_accel_ratio','trade_count_ratio','trade_acceleration_ratio'),
+    taker_buy_ratio: pick('taker_buy_ratio','buy_ratio','buyer_pressure_ratio','taker_buy_share'),
+    close_location: pick('close_location','close_location_pct','close_position','close_location_ratio'),
+    higher_low: pickBool('higher_low','higher_lows','higher_low_structure'),
+    breakout_above_prior_high: pickBool('breakout_above_prior_high','breakout_up','resistance_reclaimed','local_breakout'),
+    compression_ratio: pick('compression_ratio','volatility_compression_ratio','range_compression_ratio'),
+    hourly_return_pct: pick('hourly_return_pct','return_1h_pct','price_change_1h_pct','session_return_pct'),
+    return_3h_pct: pick('return_3h_pct','price_change_3h_pct'),
+    trend_aligned: pickBool('trend_aligned','multi_timeframe_aligned','trend_confirmation'),
+    relative_strength_vs_btc_pct: pick('relative_strength_vs_btc_pct','relative_btc_strength_pct','rs_vs_btc_pct'),
+    recent_15m_return_pct: pick('recent_15m_return_pct','price_change_15m_pct','return_15m_pct'),
+    current_range_pct: pick('current_range_pct','range_pct','atr_range_pct'),
+    upper_wick_pct: pick('upper_wick_pct','upper_shadow_pct'),
+    order_book_checked:pickBool('order_book_checked'),
+    order_book_spread_bps:pick('order_book_spread_bps','spread_bps','order_book_spread'),
+    order_book_imbalance_pct:pick('order_book_imbalance_pct','depth_imbalance_pct','book_imbalance_pct'),
+    order_book_bid_ask_depth_ratio:pick('order_book_bid_ask_depth_ratio','bid_ask_depth_ratio'),
+    micro_5m_available: pickBool('micro_5m_available'),
+    micro_5m_taker_buy_ratio: pick('micro_5m_taker_buy_ratio','taker_buy_ratio_5m','buy_ratio_5m'),
+    spread_bps: pick('spread_bps','order_book_spread_bps'),
+    book_imbalance_pct: pick('book_imbalance_pct','order_book_imbalance_pct','depth_imbalance_pct'),
+    bid_depth_quote_05pct: pick('bid_depth_quote_05pct','bid_depth_0_5pct_quote'),
+    ask_depth_quote_05pct: pick('ask_depth_quote_05pct','ask_depth_0_5pct_quote')
+  };
+  const available = Object.entries(f).filter(([key,value]) =>
+    value !== null && value !== undefined &&
+    !(key === 'micro_5m_available' && value !== true) &&
+    !(key === 'order_book_checked' && value !== true)
+  ).length;
+  return { ...f, feature_snapshot_version:'RADAR_OUTCOME_FEATURES_V1', feature_snapshot_available_count:available };
+}
+
 export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
   const raw = object(row);
   const radar = String(radarId || '').toUpperCase();
@@ -105,6 +177,7 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
   const detectedAt = signalTimeOf(raw);
   const sourceId = rowIdOf(raw);
   const stage = stageOf(raw);
+  const features = extractRadarOutcomeFeatures(raw);
   const reasons = [];
   if (!symbol) reasons.push('SYMBOL_MISSING_OR_NOT_USDT_SPOT');
   if (entryPrice === null) reasons.push('ENTRY_PRICE_MISSING');
@@ -125,6 +198,12 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
     detected_at: detectedAt,
     detected_at_iso: detectedAt === null ? null : new Date(detectedAt).toISOString(),
     entry_price: entryPrice,
+    direction: String(raw.direction || raw.signal_type || raw.side || 'UNKNOWN').trim().toUpperCase().slice(0,32),
+    event: String(raw.event || raw.potential_label || raw.alert_type || 'UNKNOWN').trim().toUpperCase().slice(0,80),
+    reason_codes: (Array.isArray(raw.reason_codes) ? raw.reason_codes : Array.isArray(raw.reasons) ? raw.reasons : []).slice(0,16).map(String),
+    risk_flags: (Array.isArray(raw.risk_flags) ? raw.risk_flags : []).slice(0,16).map(String),
+    features,
+    feature_snapshot_available_count: features.feature_snapshot_available_count,
     baseline_status: validBaseline ? 'COMPLETE' : 'INCOMPLETE',
     baseline_missing_reasons: reasons,
     alert_archive: RADAR_OUTCOME_ARCHIVES.find(x => x.id === radar)?.archive || null,
@@ -164,6 +243,9 @@ export function emptyRadarSignalOutcomeState() {
     last_import_at: null,
     last_import_counts: {},
     last_archive_cursors: {},
+    feature_backfill_cursors: {},
+    feature_backfill_radar_cursor: 0,
+    last_feature_backfill_at: null,
     last_pass_at: null,
     last_pass: null,
     updated_at: 0
@@ -178,6 +260,9 @@ function normalizeState(raw) {
     records: Array.isArray(s.records) ? s.records.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [],
     last_import_counts: object(s.last_import_counts),
     last_archive_cursors: object(s.last_archive_cursors),
+    feature_backfill_cursors:object(s.feature_backfill_cursors),
+    feature_backfill_radar_cursor:Math.max(0,Math.trunc(Number(s.feature_backfill_radar_cursor)||0)),
+    last_feature_backfill_at:finite(s.last_feature_backfill_at),
     last_pass: s.last_pass === null ? null : object(s.last_pass)
   };
 }
@@ -510,6 +595,44 @@ export async function runRadarSignalOutcomePass({
       importCounts[radar.id] = { scanned: 0, imported: 0, status: 'READ_FAILED', reason: safeError(error) };
     }
   }
+  // Older records created before feature snapshots are enriched from their
+  // original archives in a small rotating budget. This makes historical cases
+  // useful for learning without rereading every radar archive on every pass.
+  const backfillNeed=RADAR_OUTCOME_ARCHIVES.filter(radar=>priorState.records.some(row=>
+    String(row?.radar||'').toUpperCase()===radar.id&&
+    (finite(row?.feature_snapshot_available_count)??finite(row?.features?.feature_snapshot_available_count)??0)<4));
+  const backfillUpdates=[];
+  const nextFeatureBackfillCursors={...priorState.feature_backfill_cursors};
+  let featureBackfillNextIndex=priorState.feature_backfill_radar_cursor;
+  const backfillCounts={};
+  const lastFeatureBackfillAt=finite(priorState.last_feature_backfill_at);
+  const featureBackfillDue=lastFeatureBackfillAt===null||Number(now)-lastFeatureBackfillAt>=ARCHIVE_IMPORT_INTERVAL_MS;
+  if(featureBackfillDue&&backfillNeed.length>0&&typeof store.readAlertPage==='function'){
+    const start=Math.max(0,featureBackfillNextIndex)%backfillNeed.length;
+    const selectedBackfill=[...backfillNeed.slice(start),...backfillNeed.slice(0,start)].slice(0,2);
+    for(const radar of selectedBackfill){
+      const cursor=object(priorState.feature_backfill_cursors[radar.id]);
+      const cursorAt=Math.max(cutoff,finite(cursor.at)??cutoff);
+      const cursorId=cursorAt===finite(cursor.at)?String(cursor.id||''):'';
+      try{
+        const page=await store.readAlertPage(radar.archive,{
+          sinceMs:cursorAt,sinceId:cursorId,radar:radar.id,limit:40
+        });
+        const rows=Array.isArray(page)?page:[];
+        const normalized=rows.map(row=>normalizeArchivedRadarSignal(row,radar.id,now));
+        backfillUpdates.push(...normalized);
+        const last=rows.at(-1)||null;
+        const lastAt=timestamp(last?.replay_cursor_at,last?.processed_at,last?.detected_at,last?.detectedAt,last?.event_at,last?.timestamp);
+        const lastId=String(last?.replay_cursor_id||'');
+        if(lastAt!==null)nextFeatureBackfillCursors[radar.id]={at:lastAt,id:lastId};
+        backfillCounts[radar.id]={scanned:rows.length,feature_candidates:normalized.filter(row=>row.feature_snapshot_available_count>=4).length,status:'OK'};
+      }catch(error){
+        backfillCounts[radar.id]={scanned:0,feature_candidates:0,status:'READ_FAILED',reason:safeError(error)};
+      }
+    }
+    featureBackfillNextIndex=(start+selectedBackfill.length)%Math.max(1,backfillNeed.length);
+  }
+  let newlyEnriched=0;
   let newlyImported = 0;
   await store.updateRadarSignalOutcomes(raw => {
     const state = normalizeState(raw);
@@ -521,6 +644,33 @@ export async function runRadarSignalOutcomePass({
       newlyImported++;
       importCounts[row.radar] ||= { scanned: 0 };
       importCounts[row.radar].imported = (importCounts[row.radar].imported || 0) + 1;
+    }
+    const recordIndex=new Map(state.records.map((row,index)=>[String(row.signal_id),index]));
+    for(const update of backfillUpdates){
+      const index=recordIndex.get(String(update.signal_id));
+      if(index===undefined)continue;
+      const previous=state.records[index];
+      const oldCount=finite(previous.feature_snapshot_available_count)??finite(previous.features?.feature_snapshot_available_count)??0;
+      const newCount=finite(update.feature_snapshot_available_count)??0;
+      if(newCount<=oldCount||newCount<4)continue;
+      const mergedFeatures={...object(previous.features)};
+      for(const [key,value] of Object.entries(object(update.features))){
+        if((mergedFeatures[key]===null||mergedFeatures[key]===undefined)&&value!==null&&value!==undefined)
+          mergedFeatures[key]=value;
+      }
+      state.records[index]={...previous,features:mergedFeatures,
+        feature_snapshot_available_count:newCount,
+        reason_codes:Array.isArray(previous.reason_codes)&&previous.reason_codes.length
+          ?previous.reason_codes:update.reason_codes,
+        risk_flags:Array.isArray(previous.risk_flags)&&previous.risk_flags.length
+          ?previous.risk_flags:update.risk_flags,
+        feature_snapshot_backfilled_at:Number(now)};
+      newlyEnriched++;
+    }
+    if(featureBackfillDue&&backfillNeed.length>0){
+      state.feature_backfill_cursors=nextFeatureBackfillCursors;
+      state.feature_backfill_radar_cursor=featureBackfillNextIndex;
+      state.last_feature_backfill_at=Number(now);
     }
     state.records = trimRecords(state.records);
     if (importDue) {
@@ -588,6 +738,7 @@ export async function runRadarSignalOutcomePass({
   }
   const pass = {
     ok: true, at: Number(now), imported: newlyImported, archives_scanned: incoming.length,
+    feature_backfill:{due:featureBackfillDue,enriched_records:newlyEnriched,radars:backfillCounts},
     archive_import_performed: importDue,
     next_archive_import_due_at: (importDue ? Number(now) : (lastImportAt ?? Number(now))) + ARCHIVE_IMPORT_INTERVAL_MS,
     rest_requests: requests, records_evaluated: evaluatedRecords, completed_horizons: completeHorizons,

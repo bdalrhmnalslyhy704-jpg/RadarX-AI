@@ -68,8 +68,35 @@ test('Android allows only the dedicated verified Radar early-track monitor-only 
   assert.match(helper,/dataQuality >= 70\.0 && liquidityQuality >= 60\.0 && price > 0\.0/);
 });
 
+test('Android allows only the validated high-turnover Radar 8 Micro watch-only FCM lane',()=>{
+  const start=service.indexOf('private static boolean isApprovedMicroEarlyFlowWatch(');
+  const end=service.indexOf('private static boolean isValidMicroEarlyFlowEvidence(',start);
+  assert.ok(start>=0&&end>start,'the dedicated Micro FCM allow-list exists');
+  const helper=service.slice(start,end);
+  for(const field of [
+    'EARLY_FLOW_WATCH_ONLY','EARLY_FLOW_MICRO_WATCH_ONLY','EARLY_EXPANSION_RADAR',
+    'RADAR_ALERT','RADARX_RADAR_ALERT','SPOT','WATCH_ONLY','closed_candles_only',
+    'data_valid','data_stale','future_data_detected','micro_data_validated',
+    'quote_volume_24h','liquidity_evidence_status','low_liquidity_burst_bypass',
+    'detected_candle_close_time','paper_trading','real_order_execution',
+    'requires_follow_up_confirmation','symbol.matches','isTrustedBinancePublicSpotSource',
+    'ALREADY_EXTENDED','data_quality','liquidity_quality'
+  ]) assert.ok(helper.includes(field),'Micro FCM allow-list requires '+field);
+  assert.match(helper,/quoteVolume24h >= 750000\.0/);
+  assert.match(helper,/Math\.abs\(dailyMove\) < 18\.0/);
+  assert.match(helper,/20L \* 60L \* 1000L/);
+  assert.match(helper,/!data\.containsKey\("data_quality"\) && !data\.containsKey\("liquidity_quality"\)/);
+  const evidenceStart=service.indexOf('private static boolean isValidMicroEarlyFlowEvidence(');
+  const evidenceEnd=service.indexOf('private static double maxFinite(',evidenceStart);
+  const evidence=service.slice(evidenceStart,evidenceEnd);
+  for(const field of ['micro_score','confirmation_count','rvol_1m','rvol_5m',
+    'trade_rvol_1m','trade_rvol_5m','taker_buy_ratio','acceleration_1m_pct',
+    'acceleration_5m_pct','return_1m','return_5m'])
+    assert.ok(evidence.includes('"'+field+'"'),'Micro FCM requires '+field);
+});
+
 test('All other unconfirmed or generic watch events still pass through the original strict suppression gate',()=>{
-  assert.match(service,/if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|\s*!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation\)\)/);
+  assert.match(service,/if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch && !approvedMicroEarlyFlowWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|\s*!notificationGateEligible \|\| followUpRequired \|\| lifecycleConflicts \|\| !finalConfirmation\)\)/);
   assert.ok(service.includes('FCM_MESSAGE_SUPPRESSED_WATCH_OR_UNCONFIRMED'));
   assert.ok(service.includes('FCM_PRE_MOVE_WATCH_NOTIFICATION_POSTED'));
 });
@@ -83,6 +110,9 @@ test('FCM data payload forwards every field required by the device-side allow-li
     'watch_notification_tier','closed_candles_only','data_valid','data_stale',
     'future_data_detected','data_quality','liquidity_quality','notification_gate_mode',
     'notification_gate_eligible','requires_follow_up_confirmation','watch_only',
-    'entry_eligible','real_order_execution','paper_trading'
+    'entry_eligible','real_order_execution','paper_trading','micro_data_validated','liquidity_evidence_status','quote_volume_24h','low_liquidity_burst_bypass','detected_candle_close_time'
   ]) assert.ok(whitelist.includes("'"+field+"'"),'FCM payload forwards '+field);
+  assert.ok(push.includes('push.micro_data_validated=microValidatedEarlyFlow'));
+  assert.ok(push.includes('push.detected_candle_close_time=closeTime'));
+  assert.ok(push.includes('push.low_liquidity_burst_bypass=alert?.low_liquidity_burst_bypass===true'));
 });

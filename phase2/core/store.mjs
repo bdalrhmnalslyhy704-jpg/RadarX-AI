@@ -473,6 +473,7 @@ export class DurableStore {
   }
   async putAdaptiveTraderState(value){
     if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('ADAPTIVE_TRADER_STATE_INVALID');
+    const persistedNumber=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
     const journalRows=(Array.isArray(value.cognitive_journal)?value.cognitive_journal:[])
       .filter(row=>row&&typeof row==='object'&&!Array.isArray(row)).slice(-3000).map(row=>{
         const number=input=>input!==null&&input!==undefined&&input!==''&&Number.isFinite(Number(input))?Number(input):null;
@@ -494,6 +495,20 @@ export class DurableStore {
           evidence_domains:number(row.evidence_domains),
           predicted_up_probability:number(row.predicted_up_probability),
           confidence_label:String(row.confidence_label||'UNKNOWN').slice(0,60),
+          market_motive_assessment:row.market_motive_assessment&&typeof row.market_motive_assessment==='object'?{
+            accumulation_hypothesis:String(row.market_motive_assessment.accumulation_hypothesis||'NOT_ESTABLISHED').slice(0,80),
+            order_book_confirmation:String(row.market_motive_assessment.order_book_confirmation||'NOT_CHECKED').slice(0,80),
+            possible_liquidity_trap:row.market_motive_assessment.possible_liquidity_trap===true,
+            order_book_checked:row.market_motive_assessment.order_book_checked===true,
+            order_book_spread_bps:number(row.market_motive_assessment.order_book_spread_bps),
+            order_book_imbalance_pct:number(row.market_motive_assessment.order_book_imbalance_pct),
+            order_book_bid_ask_depth_ratio:number(row.market_motive_assessment.order_book_bid_ask_depth_ratio),
+            spoofing_assessment:String(row.market_motive_assessment.spoofing_assessment||'NOT_ASSESSABLE_SINGLE_SNAPSHOT').slice(0,80),
+            whale_identity_claim:false,
+            reasons:(Array.isArray(row.market_motive_assessment.reasons)?row.market_motive_assessment.reasons:[]).slice(0,8).map(x=>String(x).slice(0,100))
+          }:null,
+          outcome_learning_adjustment:number(row.outcome_learning_adjustment),
+          outcome_learning_horizons:(Array.isArray(row.outcome_learning_horizons)?row.outcome_learning_horizons:[]).slice(0,2).map(x=>String(x).slice(0,16)),
           features,
           data_valid:row.data_valid===true,data_stale:row.data_stale===true,
           closed_candles_only:row.closed_candles_only===true,
@@ -506,6 +521,49 @@ export class DurableStore {
       }).filter(row=>row.id&&row.symbol&&row.at!==null&&row.at>0);
     const cognitiveCapture=value.cognitive_capture&&typeof value.cognitive_capture==='object'&&!Array.isArray(value.cognitive_capture)
       ?value.cognitive_capture:null;
+    const radarOutcomeSource=value.radar_outcome_learning&&typeof value.radar_outcome_learning==='object'&&!Array.isArray(value.radar_outcome_learning)
+      ?value.radar_outcome_learning:null;
+    const radarOutcomeLearning=radarOutcomeSource?{
+      version:String(radarOutcomeSource.version||'RADARX_RADAR_OUTCOME_COGNITIVE_MEMORY_V1').slice(0,80),
+      at:persistedNumber(radarOutcomeSource.at),source:String(radarOutcomeSource.source||'BINANCE_PUBLIC_CLOSED_OHLC').slice(0,80),
+      scope:String(radarOutcomeSource.scope||'TWELVE_RADARS_SPOT_USDT').slice(0,80),
+      status:String(radarOutcomeSource.status||'AVAILABLE').slice(0,80),
+      capture:radarOutcomeSource.capture&&typeof radarOutcomeSource.capture==='object'?radarOutcomeSource.capture:{},
+      training_records:radarOutcomeSource.training_records&&typeof radarOutcomeSource.training_records==='object'
+        ?{'60m':Math.max(0,Math.trunc(Number(radarOutcomeSource.training_records['60m'])||0)),
+          '24h':Math.max(0,Math.trunc(Number(radarOutcomeSource.training_records['24h'])||0))}:{'60m':0,'24h':0},
+      case_study_count:Math.max(0,Math.trunc(Number(radarOutcomeSource.case_study_count)||0)),
+      case_studies:(Array.isArray(radarOutcomeSource.case_studies)?radarOutcomeSource.case_studies:[]).slice(0,100).map(row=>({
+        id:String(row?.id||'').slice(0,240),radar:String(row?.radar||'UNKNOWN').slice(0,80),
+        symbol:String(row?.symbol||'UNKNOWN').slice(0,32),stage:String(row?.stage||'UNKNOWN').slice(0,80),
+        detected_at:persistedNumber(row?.detected_at),entry_price:persistedNumber(row?.entry_price),
+        feature_snapshot_available_count:persistedNumber(row?.feature_snapshot_available_count),
+        one_hour:row?.one_hour&&typeof row.one_hour==='object'?row.one_hour:{status:'PENDING'},
+        twenty_four_hour:row?.twenty_four_hour&&typeof row.twenty_four_hour==='object'?row.twenty_four_hour:{status:'PENDING'},
+        retrospective_review_reasons:(Array.isArray(row?.retrospective_review_reasons)?row.retrospective_review_reasons:[]).slice(0,8).map(x=>String(x).slice(0,120)),
+        no_future_data_used:row?.no_future_data_used===true,
+        causality:'CORRELATIONAL_CASE_STUDY_NOT_PROOF_OF_WHALE_INTENT',
+        training_eligible:row?.training_eligible===true,paper_trading:true,real_order_execution:false
+      })),
+      horizon_profiles:Object.fromEntries(['60m','24h'].map(key=>{
+        const p=radarOutcomeSource.horizon_profiles?.[key]&&typeof radarOutcomeSource.horizon_profiles[key]==='object'
+          ?radarOutcomeSource.horizon_profiles[key]:{};
+        return [key,{
+          method:String(p.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3').slice(0,100),
+          horizon:key,outcome_horizon_ms:persistedNumber(p.outcome_horizon_ms),
+          ranking_ready:p.ranking_ready===true,probability_ready:p.probability_ready===true,
+          resolved_samples:persistedNumber(p.resolved_samples),training_samples:persistedNumber(p.training_samples),
+          validation_samples:persistedNumber(p.validation_samples),holdout_samples:persistedNumber(p.holdout_samples),
+          validation:p.validation||null,holdout:p.holdout||null,
+          model_selection:p.model_selection||null,regime_adaptation:p.regime_adaptation||null,
+          outcome_counts:p.outcome_counts||{},note:String(p.note||'').slice(0,160)
+        }];
+      })),
+      policy:radarOutcomeSource.policy&&typeof radarOutcomeSource.policy==='object'?{
+        automatic_weight_update:radarOutcomeSource.policy.automatic_weight_update===true,
+        entry_gate_changes:false,radar_threshold_changes:false,real_order_execution:false,paper_trading:true
+      }:{automatic_weight_update:false,entry_gate_changes:false,radar_threshold_changes:false,real_order_execution:false,paper_trading:true}
+    }:null;
     const safe={
       version:1,
       updated_at:Date.now(),
@@ -519,6 +577,7 @@ export class DurableStore {
       last_error:value.last_error==null?null:String(value.last_error).slice(0,240),
       last_summary:value.last_summary&&typeof value.last_summary==='object'?value.last_summary:null,
       learning_profile:value.learning_profile&&typeof value.learning_profile==='object'?value.learning_profile:null,
+      radar_outcome_learning:radarOutcomeLearning,
       cognitive_journal:journalRows,
       cognitive_capture:cognitiveCapture,
       samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-1000):[],

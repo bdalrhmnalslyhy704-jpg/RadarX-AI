@@ -202,8 +202,8 @@ test('TEST_FIXTURE: validated early-flow watch stays in-app before confirmation'
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test('TEST_FIXTURE: validated Micro early-flow stays in-app without fabricated depth scores',async()=>{
-  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-micro-watch-no-depth-score-')),store=await new DurableStore({dir}).init();
+test('TEST_FIXTURE: validated high-turnover Micro early-flow sends a non-entry watch-only push',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-micro-watch-push-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
     await store.upsertSubscription('u1',pushSubscription());
@@ -213,7 +213,7 @@ test('TEST_FIXTURE: validated Micro early-flow stays in-app without fabricated d
     const now=Date.now();
     const out=await manager.notifyRadarWatchOnlyAlert({
       event:'EARLY_FLOW_WATCH_ONLY',potential_label:'EARLY_FLOW_WATCH_ONLY',decision_band:'WATCH_EARLY',
-      radar:'EARLY_EXPANSION_RADAR',symbol:'MICROWATCHUSDT',market:'SPOT',direction:'UP_BIAS',
+      radar:'EARLY_EXPANSION_RADAR',radar_name:'Radar 8 — البرق',symbol:'MICROWATCHUSDT',market:'SPOT',direction:'UP_BIAS',
       price:1.02,price_change_24h:2.1,data_quality:null,liquidity_quality:null,data_stale:false,
       source:'BINANCE_PUBLIC_REST',quote_volume_24h:900000,micro_data_validated:true,
       liquidity_evidence_status:'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE',
@@ -224,16 +224,55 @@ test('TEST_FIXTURE: validated Micro early-flow stays in-app without fabricated d
         taker_buy_ratio:.55,acceleration_1m_pct:.03,acceleration_5m_pct:.01,return_1m:.02,return_5m:.04},
       risk_flags:['EARLY_FLOW_WATCH_ONLY'],reason_codes:['MICRO_EARLY_FLOW']
     });
-    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY',JSON.stringify(out));
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.attempted,true);
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].notification_mode,'EARLY_FLOW_MICRO_WATCH_ONLY');
+    assert.equal(sent[0].notification_gate_mode,'EARLY_FLOW_MICRO_WATCH_ONLY');
+    assert.equal(sent[0].signal_type,'WATCH_ONLY');
+    assert.equal(sent[0].direction,'NONE');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+    assert.equal(sent[0].micro_data_validated,true);
+    assert.equal(sent[0].quote_volume_24h,900000);
+    assert.equal(sent[0].liquidity_evidence_status,'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE');
+    assert.match(sent[0].message,/دفتر الأوامر لم يُفحص بعد/);
+    const audits=await store.readRecent('notifications',10);
+    const audit=audits.find(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='SENT');
+    assert.ok(audit);
+    assert.equal(audit.attempted,true);
+    assert.equal(audit.micro_data_validated,true);
+    assert.equal(audit.liquidity_quality,null);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: Micro early-flow below 750k stays feed-only even with valid data/liquidity scores',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-micro-watch-underfloor-')),store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    let calls=0;
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(){calls++;return{ok:true,status:'SENT',httpStatus:201};}};
+    const manager=new PushManager({provider,store});
+    const now=Date.now();
+    const out=await manager.notifyRadarWatchOnlyAlert({
+      event:'EARLY_FLOW_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',symbol:'UNDERFLOORUSDT',market:'SPOT',
+      price:1.02,price_change_24h:2.1,data_quality:88,liquidity_quality:82,
+      source:'BINANCE_PUBLIC_REST',quote_volume_24h:749999,micro_data_validated:true,
+      liquidity_evidence_status:'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE',
+      detected_candle_close_time:now-1000,closed_candles_only:true,watch_only:true,
+      entry_eligible:false,paper_trading:true,real_order_execution:false,
+      early_flow_watch_evidence:{closed_candles_only:true,closed_candle_close_time:now-1000,
+        micro_score:80,confirmation_count:6,rvol_1m:2.5,rvol_5m:2.0,trade_rvol_1m:2.0,trade_rvol_5m:1.8,
+        taker_buy_ratio:.60,acceleration_1m_pct:.10,acceleration_5m_pct:.12,return_1m:.08,return_5m:.16},
+      risk_flags:['EARLY_FLOW_WATCH_ONLY']
+    });
+    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY');
     assert.equal(out.attempted,false);
     assert.equal(out.sent_count,0);
-    assert.equal(sent.length,0);
-    const audits=await store.readRecent('notifications',10);
-    const audit=audits.find(x=>x.event==='RADAR_WATCH_ONLY_NOTIFICATION'&&x.status==='WATCH_ONLY_FEED_ONLY');
-    assert.ok(audit);
-    assert.equal(audit.data_quality,null);
-    assert.equal(audit.liquidity_quality,null);
-    assert.equal(audit.micro_data_validated,true);
+    assert.equal(calls,0,'turnover below 750,000 USDT must never reach the provider');
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 

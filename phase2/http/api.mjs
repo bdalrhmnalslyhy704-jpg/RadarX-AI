@@ -1207,7 +1207,29 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             ? await store.getRadarSignalOutcomes() : emptyRadarSignalOutcomeState();
           const worker=typeof radarSignalOutcomeWorker?.snapshot==='function'
             ? radarSignalOutcomeWorker.snapshot() : {service:'RADAR_SIGNAL_OUTCOME_WORKER_V1',running:false,last_error:'WORKER_NOT_CONFIGURED'};
-          return send(res,200,{...buildRadarSignalOutcomeReport(state,Date.now()),worker});
+          let adaptive=null;
+          try{adaptive=typeof adaptiveTraderWorker?.snapshot==='function'?adaptiveTraderWorker.snapshot():null;}catch{}
+          const learning=adaptive?.cognitive_brain?.radar_outcome_learning||null;
+          return send(res,200,{
+            ...buildRadarSignalOutcomeReport(state,Date.now()),worker,
+            cognitive_learning:learning?{
+              version:learning.version,at:learning.at,source:learning.source,scope:learning.scope,
+              capture:learning.capture||{},training_records:learning.training_records||{'60m':0,'24h':0},
+              case_study_count:Number(learning.case_study_count)||0,
+              case_studies:Array.isArray(learning.case_studies)?learning.case_studies.slice(0,50):[],
+              policy:learning.policy||{automatic_weight_update:false,entry_gate_changes:false,real_order_execution:false}
+            }:null,
+            cognitive_decisions:Array.isArray(adaptive?.cognitive_brain?.recent_journal)
+              ?adaptive.cognitive_brain.recent_journal.slice(0,30).map(row=>({
+                id:row.id,symbol:row.symbol,decision:row.decision,reason_codes:row.reason_codes,
+                predicted_up_probability:row.predicted_up_probability,
+                market_motive_assessment:row.market_motive_assessment||null,
+                outcome_learning_adjustment:row.outcome_learning_adjustment??0,
+                outcome_learning_horizons:row.outcome_learning_horizons||[],
+                outcome:row.outcome??null,return_pct:row.return_pct??null
+              })):[],
+            adaptive_worker_status:adaptive?.status||'UNAVAILABLE'
+          });
         }catch(error){
           return send(res,503,{error:String(error?.message??error),scope:'EMITTED_ARCHIVED_ALERTS_ONLY',
             policy:{paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}});

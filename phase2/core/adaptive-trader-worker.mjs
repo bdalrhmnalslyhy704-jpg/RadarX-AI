@@ -1,6 +1,7 @@
 import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
 import {buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
+import {buildRadarOutcomeLearningSnapshot,applyRadarOutcomeLearningAdjustment} from './radar-outcome-learning.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -44,6 +45,7 @@ function emptyState(){
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
     cognitive_prequential:buildCognitivePrequentialProfile([]),
+    radar_outcome_learning:null,
     paper_portfolio:paperPortfolio,
     paper_validation_profile:buildAdaptiveTraderPaperValidationProfile(paperPortfolio),
     samples:[],price_history:[],missed_movers:[]
@@ -208,6 +210,22 @@ export class AdaptiveTraderWorker{
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
       this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
+      this.activeScanStage='RADAR_OUTCOME_MEMORY';
+      if(typeof this.store.getRadarSignalOutcomes==='function'){
+        try{
+          const radarOutcomeState=await withStageTimeout(this.store.getRadarSignalOutcomes(),8_000,'RADAR_OUTCOME_LEDGER_READ');
+          this.state.radar_outcome_learning=buildRadarOutcomeLearningSnapshot(radarOutcomeState||{},now);
+        }catch(error){
+          this.state.radar_outcome_learning={
+            ...(this.state.radar_outcome_learning||{}),
+            status:'LEDGER_READ_FAILED',last_error:String(error?.message??error).slice(0,160),
+            ranking_adjustments_enabled:false,at:now
+          };
+          this.logger.warn?.('[ADAPTIVE_TRADER_RADAR_OUTCOME_MEMORY_FAILED] '+String(error?.message??error).slice(0,160));
+        }
+      }else{
+        this.state.radar_outcome_learning={status:'OUTCOME_LEDGER_UNAVAILABLE',ranking_adjustments_enabled:false,at:now};
+      }
       const cognitiveAssessments=[];
       const adaptiveCandidates=snapshot.candidates.map(candidate=>{
         const baseScore=finite(candidate?.score);
@@ -216,15 +234,23 @@ export class AdaptiveTraderWorker{
           ...candidate,base_score:baseScore,score:learnedScore,
           learning_adjustment:Number((learnedScore-baseScore).toFixed(2))
         };
-        const cognitiveRankScore=applyCognitiveRankAdjustment(learnedScore??baseScore,candidate?.features||{},this.state.cognitive_profile);
+        const fourHourRankScore=applyCognitiveRankAdjustment(learnedScore??baseScore,candidate?.features||{},this.state.cognitive_profile);
+        const outcomeRank=applyRadarOutcomeLearningAdjustment(
+          fourHourRankScore??learnedScore??baseScore,candidate?.features||{},this.state.radar_outcome_learning||{});
+        const cognitiveRankScore=fourHourRankScore!==null||outcomeRank.used_horizons.length>0
+          ?outcomeRank.score:null;
         const cognitive=assessCognitiveCandidate(ranked,this.state.cognitive_profile,now);
         const enriched={...ranked,cognitive_rank_score:cognitiveRankScore,
           cognitive_rank_adjustment:baseScore===null||cognitiveRankScore===null?0:Number((cognitiveRankScore-(learnedScore??baseScore)).toFixed(2)),
+          four_hour_cognitive_rank_score:fourHourRankScore,
+          outcome_learning_adjustment:Number(outcomeRank.adjustment)||0,
+          outcome_learning_horizons:Array.isArray(outcomeRank.used_horizons)?outcomeRank.used_horizons:[],
+          outcome_learning_status:outcomeRank.status,
           cognitive_assessment:cognitive};
         this.recordCognitiveAssessment(enriched,now);
         cognitiveAssessments.push(enriched);
         return enriched;
-      }).sort((a,b)=>(Number(b.score)||0)-(Number(a.score)||0));
+      }).sort((a,b)=>(Number(b.cognitive_rank_score??b.score)||0)-(Number(a.cognitive_rank_score??a.score)||0));
       this.refreshCognitiveOutcomeLinks();
       this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal);
       this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
@@ -326,6 +352,10 @@ export class AdaptiveTraderWorker{
       evidence_domains:finite(assessment.evidence_domains),
       predicted_up_probability:finite(assessment.predicted_up_probability),
       confidence_label:String(assessment.confidence_label||'UNKNOWN'),
+      market_motive_assessment:assessment.market_motive_assessment&&typeof assessment.market_motive_assessment==='object'
+        ?{...assessment.market_motive_assessment}:null,
+      outcome_learning_adjustment:finite(candidate?.outcome_learning_adjustment),
+      outcome_learning_horizons:Array.isArray(candidate?.outcome_learning_horizons)?candidate.outcome_learning_horizons.slice(0,2):[],
       features:candidate?.features&&typeof candidate.features==='object'?{...candidate.features}:{},
       data_valid:candidate?.data_valid===true,data_stale:candidate?.data_stale===true,
       closed_candles_only:candidate?.closed_candles_only===true,
@@ -370,6 +400,12 @@ export class AdaptiveTraderWorker{
       journal_records:journal.length,
       journal_resolved:journal.filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
       journal_pending:journal.filter(row=>!['UP','DOWN','FLAT'].includes(row.outcome)).length,
+      radar_outcome_learning:{
+        capture:this.state.radar_outcome_learning?.capture||{},
+        training_records:this.state.radar_outcome_learning?.training_records||{'60m':0,'24h':0},
+        case_study_count:Number(this.state.radar_outcome_learning?.case_study_count)||0,
+        ranking_adjustments_enabled:this.state.radar_outcome_learning?.policy?.automatic_weight_update===true
+      },
       ranking_ready:profile.ranking_ready===true,
       probability_ready:profile.probability_ready===true,
       training_samples:Number(profile.training_samples)||0,
@@ -627,6 +663,7 @@ recordServerPaperPortfolio(snapshot,now){
         model_selection:this.state.cognitive_profile?.model_selection||null,
         regime_adaptation:this.state.cognitive_profile?.regime_adaptation||null,
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        radar_outcome_learning:this.state.radar_outcome_learning||null,
         holdout:this.state.cognitive_profile?.holdout||null,
         capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
         missed_mover_feedback:(this.state.missed_movers||[]).slice(0,30).map(row=>({
@@ -720,6 +757,7 @@ recordServerPaperPortfolio(snapshot,now){
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        radar_outcome_learning:this.state.radar_outcome_learning||null,
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
         recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse(),

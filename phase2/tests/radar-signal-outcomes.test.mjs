@@ -53,6 +53,41 @@ test('archive normalization never substitutes missing price or timestamp with ze
   assert.ok(missing.baseline_missing_reasons.includes('SIGNAL_TIMESTAMP_MISSING'));
 });
 
+
+test('archived radar cases preserve only observed decision-time factors for later learning',()=>{
+  const now=BASE+30*minute;
+  const row=normalizeArchivedRadarSignal({
+    id:'FEATURE-CASE-1',symbol:'ABCUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:1.25,stage:'PRE_EXPANSION',direction:'UP',
+    features:{volume_ratio:2.2,trade_ratio:1.7,taker_buy_ratio:0.61,
+      close_location:0.78,higher_low:true,compression_ratio:0.7,
+      relative_strength_vs_btc_pct:1.1},
+    early_expansion:{metrics:{recent_15m_return_pct:0.45,upper_wick_pct:0.12}},
+    reason_codes:['VOLUME_EXPANSION','BUYER_FLOW_SUPPORT'],
+    risk_flags:['SPOT_ONLY']
+  },'RADAR_8',now);
+  assert.equal(row.baseline_status,'COMPLETE');
+  assert.equal(row.features.volume_ratio,2.2);
+  assert.equal(row.features.trade_ratio,1.7);
+  assert.equal(row.features.taker_buy_ratio,0.61);
+  assert.equal(row.features.higher_low,true);
+  assert.equal(row.features.recent_15m_return_pct,0.45);
+  assert.equal(row.features.order_book_checked,null);
+  assert.ok(row.feature_snapshot_available_count>=8);
+  assert.ok(row.reason_codes.includes('BUYER_FLOW_SUPPORT'));
+  assert.deepEqual(row.risk_flags,['SPOT_ONLY']);
+});
+
+
+test('an unchecked order book is not counted as an observed training feature',()=>{
+  const row=normalizeArchivedRadarSignal({
+    id:'UNKNOWN-BOOK-CASE',symbol:'XYZUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:1.1,stage:'WATCH_EARLY',features:{order_book_checked:false}
+  },'RADAR_8',BASE+10_000);
+  assert.equal(row.features.order_book_checked,false);
+  assert.equal(row.feature_snapshot_available_count,0);
+});
+
 test('outcome evaluation rejects an invalid entry baseline instead of awarding false threshold hits',()=>{
   const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
   const now=BASE+horizon.ms+horizon.intervalMs+minute;
@@ -168,6 +203,44 @@ test('bounded maintenance imports archived alerts and respects the per-pass REST
   assert.equal(row.outcomes['4h'].status,'COMPLETE');
   assert.equal(row.outcomes['24h'].status,'COMPLETE');
   assert.equal(result.report.summary.completed_24h_outcomes,1);
+});
+
+
+test('outcome worker backfills missing decision-time features into older durable archive cases',async()=>{
+  const now=BASE+40*minute;
+  const archiveRow={
+    id:'BACKFILL-CASE-1',symbol:'ABCUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:0.5,stage:'PRE_EXPANSION',
+    features:{volume_ratio:2.0,trade_ratio:1.6,taker_buy_ratio:0.6,
+      close_location:0.8,higher_low:true,compression_ratio:0.72,relative_strength_vs_btc_pct:0.9},
+    reason_codes:['BUYER_FLOW_SUPPORT']
+  };
+  let state=emptyRadarSignalOutcomeState();
+  state.last_import_at=now;
+  state.records=[normalizeArchivedRadarSignal({
+    id:archiveRow.id,symbol:archiveRow.symbol,detected_at:archiveRow.detected_at,
+    processed_at:archiveRow.processed_at,price:archiveRow.price,stage:archiveRow.stage
+  },'RADAR_1',now)];
+  assert.equal(state.records[0].feature_snapshot_available_count,0);
+  const store={
+    async getRadarSignalOutcomes(){return structuredClone(state);},
+    async updateRadarSignalOutcomes(updater){const next=await updater(structuredClone(state));if(next!==false)state=next;return state;},
+    async readAlertPage(archive){
+      return archive==='moveAlerts'?[{...archiveRow,replay_cursor_at:BASE,replay_cursor_id:'RADAR_1|BACKFILL-CASE-1'}]:[];
+    }
+  };
+  const result=await runRadarSignalOutcomePass({
+    store,rest:{klines:async()=>({source:'BINANCE_PUBLIC_REST',candles:[]})},
+    now,maxRestCalls:0,logger:{warn(){}}
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.feature_backfill.due,true);
+  assert.equal(result.feature_backfill.enriched_records,1);
+  assert.equal(state.records[0].features.volume_ratio,2);
+  assert.equal(state.records[0].features.taker_buy_ratio,0.6);
+  assert.ok(state.records[0].feature_snapshot_available_count>=6);
+  assert.ok(state.records[0].feature_snapshot_backfilled_at===now);
+  assert.ok(state.feature_backfill_cursors.RADAR_1);
 });
 
 test('outcome ledger persists atomically through DurableStore updates',async()=>{
