@@ -657,6 +657,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),
     scan_attempts:0,successful_scans:0,last_started_at:null,last_scan_at:null,last_scan_status:'NOT_STARTED',
     last_duration_ms:null,last_error:null,last_summary:null,
+    last_attempt_at:null,last_attempt_status:'NOT_STARTED',last_attempt_duration_ms:null,last_attempt_error:null,
     notification_delivery:{
       results:0,send_calls:0,recipients_attempted:0,notifications_sent:0,
       current_status:'NOT_YET_ATTEMPTED',current_reason:null,last_result_at:null,
@@ -707,20 +708,44 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       interval_ms:state.interval_ms,scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
       last_started_at:state.last_started_at,last_scan_at:state.last_scan_at,last_scan_status:state.last_scan_status,
       last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary,
+      last_attempt_at:state.last_attempt_at,last_attempt_status:state.last_attempt_status,
+      last_attempt_duration_ms:state.last_attempt_duration_ms,last_attempt_error:state.last_attempt_error,
       notification_delivery:state.notification_delivery
     },paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'};
   }
   async function runPreMoveBackgroundScan(){
     if(!preMoveRadarScanner||preMoveBackgroundInFlight)return null;
-    preMoveBackgroundInFlight=true;preMoveBackgroundWorkerState.running=true;
-    preMoveBackgroundWorkerState.scan_attempts+=1;preMoveBackgroundWorkerState.last_started_at=new Date().toISOString();
-    preMoveBackgroundWorkerState.last_scan_status='RUNNING';
-    preMoveBackgroundWorkerState.last_duration_ms=null;
-    preMoveBackgroundWorkerState.last_error=null;
-    const startedAt=Date.now();
+    preMoveBackgroundInFlight=true;
+    const attemptStartedAt=Date.now();
+    preMoveBackgroundWorkerState.scan_attempts+=1;
+    preMoveBackgroundWorkerState.last_attempt_at=new Date(attemptStartedAt).toISOString();
+    preMoveBackgroundWorkerState.last_attempt_status='CHECKING';
+    preMoveBackgroundWorkerState.last_attempt_duration_ms=null;
+    preMoveBackgroundWorkerState.last_attempt_error=null;
     try{
       const task=refreshPreMoveRadarSnapshot('USDT:50','USDT',50);
-      if(!task)throw new Error('PRE_MOVE_SCAN_RETRY_COOLDOWN');
+      // A retry-cooldown result means no scan ran. Keep the previous actual scan's
+      // status, timestamp, duration and error intact; record this separately as a
+      // skipped attempt so health gates never mistake a throttle for a failed scan.
+      if(!task){
+        preMoveBackgroundWorkerState.last_attempt_status='SKIPPED_COOLDOWN';
+        preMoveBackgroundWorkerState.last_attempt_duration_ms=Math.max(0,Date.now()-attemptStartedAt);
+        preMoveBackgroundWorkerState.last_attempt_error='PRE_MOVE_SCAN_RETRY_COOLDOWN';
+        console.info?.('[PRE_MOVE_BACKGROUND_SCAN_SKIPPED] '+JSON.stringify({
+          at:preMoveBackgroundWorkerState.last_attempt_at,
+          reason:'PRE_MOVE_SCAN_RETRY_COOLDOWN',
+          last_scan_status:preMoveBackgroundWorkerState.last_scan_status,
+          last_scan_at:preMoveBackgroundWorkerState.last_scan_at,
+          paper_trading:true,real_order_execution:false
+        }));
+        return null;
+      }
+      preMoveBackgroundWorkerState.running=true;
+      preMoveBackgroundWorkerState.last_started_at=new Date().toISOString();
+      preMoveBackgroundWorkerState.last_scan_status='RUNNING';
+      preMoveBackgroundWorkerState.last_duration_ms=null;
+      preMoveBackgroundWorkerState.last_error=null;
+      const startedAt=Date.now();
       const snapshot=await task,universe=snapshot?.universe||{},diagnostics=snapshot?.watch_notification_diagnostics||{};
       const watchAlerts=Array.isArray(snapshot?.watch_notification_candidates)?snapshot.watch_notification_candidates:[];
       const summary=buildPreMoveBackgroundScanSummary({snapshot,watchAlerts,elapsedMs:Date.now()-startedAt});
@@ -729,6 +754,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       preMoveBackgroundWorkerState.last_scan_status='READY';
       preMoveBackgroundWorkerState.last_duration_ms=Math.max(0,Date.now()-startedAt);
       preMoveBackgroundWorkerState.last_error=null;preMoveBackgroundWorkerState.last_summary=summary;
+      preMoveBackgroundWorkerState.last_attempt_status='READY';
+      preMoveBackgroundWorkerState.last_attempt_duration_ms=Math.max(0,Date.now()-attemptStartedAt);
+      preMoveBackgroundWorkerState.last_attempt_error=null;
       console.info?.('[PRE_MOVE_BACKGROUND_SCAN_COMPLETE] '+JSON.stringify({
         at:preMoveBackgroundWorkerState.last_scan_at,duration_ms:preMoveBackgroundWorkerState.last_duration_ms,
         ...summary,paper_trading:true,real_order_execution:false
@@ -737,7 +765,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     }catch(error){
       const message=String(error?.message??error??'PRE_MOVE_BACKGROUND_SCAN_FAILED').slice(0,180);
       preMoveBackgroundWorkerState.last_scan_at=new Date().toISOString();preMoveBackgroundWorkerState.last_scan_status='FAILED';
-      preMoveBackgroundWorkerState.last_duration_ms=Math.max(0,Date.now()-startedAt);preMoveBackgroundWorkerState.last_error=message;
+      preMoveBackgroundWorkerState.last_duration_ms=Math.max(0,Date.now()-attemptStartedAt);preMoveBackgroundWorkerState.last_error=message;
+      preMoveBackgroundWorkerState.last_attempt_status='FAILED';
+      preMoveBackgroundWorkerState.last_attempt_duration_ms=Math.max(0,Date.now()-attemptStartedAt);
+      preMoveBackgroundWorkerState.last_attempt_error=message;
       console.warn?.('[PRE_MOVE_BACKGROUND_SCAN_FAILED] '+JSON.stringify({
         at:preMoveBackgroundWorkerState.last_scan_at,error:message,
         duration_ms:preMoveBackgroundWorkerState.last_duration_ms,paper_trading:true,real_order_execution:false
@@ -2467,5 +2498,6 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   apiServer.stopAdaptiveTraderWorker=()=>adaptiveTraderWorker?.stop?.()??null;
   apiServer.stopPreMoveWatchWorker=stopPreMoveWatchWorker;
   apiServer.preMoveWatchWorkerStatus=preMoveBackgroundWorkerSnapshot;
+  apiServer.runPreMoveWatchScan=runPreMoveBackgroundScan;
   return apiServer;
 }
