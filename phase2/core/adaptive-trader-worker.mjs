@@ -237,7 +237,8 @@ export class AdaptiveTraderWorker{
         const fourHourRankScore=applyCognitiveRankAdjustment(learnedScore??baseScore,candidate?.features||{},this.state.cognitive_profile);
         const outcomeRank=applyRadarOutcomeLearningAdjustment(
           fourHourRankScore??learnedScore??baseScore,candidate?.features||{},this.state.radar_outcome_learning||{});
-        const cognitiveRankScore=outcomeRank.score;
+        const cognitiveRankScore=fourHourRankScore!==null||outcomeRank.used_horizons.length>0
+          ?outcomeRank.score:null;
         const cognitive=assessCognitiveCandidate(ranked,this.state.cognitive_profile,now);
         const enriched={...ranked,cognitive_rank_score:cognitiveRankScore,
           cognitive_rank_adjustment:baseScore===null||cognitiveRankScore===null?0:Number((cognitiveRankScore-(learnedScore??baseScore)).toFixed(2)),
@@ -756,6 +757,7 @@ recordServerPaperPortfolio(snapshot,now){
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        radar_outcome_learning:this.state.radar_outcome_learning||null,
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
         recent_journal:(this.state.cognitive_journal||[]).slice(-30).reverse(),
