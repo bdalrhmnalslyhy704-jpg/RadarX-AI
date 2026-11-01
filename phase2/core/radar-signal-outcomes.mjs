@@ -163,7 +163,7 @@ export function extractRadarOutcomeFeatures(raw = {}) {
   return { ...f, feature_snapshot_version:'RADAR_OUTCOME_FEATURES_V1', feature_snapshot_available_count:available };
 }
 
-function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
+export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
   const raw = object(row);
   const radar = String(radarId || '').toUpperCase();
   const symbol = symbolOf(raw);
