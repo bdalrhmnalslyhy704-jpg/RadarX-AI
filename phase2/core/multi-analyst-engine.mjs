@@ -4,7 +4,8 @@ import {
   rankBottomTickerRows,
   normalizeRadarLimit,
   boundedMap,
-  MarketUniverseScanner
+  MarketUniverseScanner,
+  buildPreMoveTickerActivitySignals
 } from '../market/universe-scanner.mjs';
 
 import {finiteNumberOr} from './finite-number.mjs';
@@ -38,6 +39,40 @@ export function selectWithPriorityRotation(rows,limit,cursor=0){
     rows:[...source.slice(0,priorityCount),...rotated],
     nextCursor:(start+rotationSize)%tail.length
   };
+}
+
+/**
+ * Rank live Spot symbols whose cumulative 24h quote volume and trade count have
+ * accelerated across two consecutive observation windows. This is a discovery
+ * priority only: the selected symbol still needs a full 19+1 analyst review and
+ * all existing freshness, liquidity, anti-chase and final decision gates.
+ */
+export function buildMultiAnalystActivityPriorityRows(tickers,snapshotState,now=Date.now(),{
+  minQuoteVolume24h=300000,limit=1
+}={}){
+  const max=Math.max(0,Math.min(3,Math.trunc(Number(limit)||0)));
+  if(!max)return [];
+  const signals=buildPreMoveTickerActivitySignals(tickers,snapshotState,now);
+  if(!signals.size)return [];
+  const floor=Math.max(1,Number(minQuoteVolume24h)||300000);
+  return (Array.isArray(tickers)?tickers:[])
+    .map(row=>{
+      const symbol=String(row?.symbol||'').trim().toUpperCase();
+      const activity=signals.get(symbol);
+      return activity?{...row,ticker_activity:activity,_ticker_activity_priority:true}:null;
+    })
+    .filter(Boolean)
+    .filter(row=>Number(row.quoteVolume24h)>=floor&&
+      Number(row.ticker_activity?.score)>=3&&
+      Number(row.ticker_activity?.volume_acceleration_ratio)>=1.35&&
+      Number(row.ticker_activity?.trade_acceleration_ratio)>=1.30)
+    .sort((a,b)=>
+      Number(b.ticker_activity.score)-Number(a.ticker_activity.score)||
+      Number(b.ticker_activity.volume_acceleration_ratio)-Number(a.ticker_activity.volume_acceleration_ratio)||
+      Number(b.ticker_activity.trade_acceleration_ratio)-Number(a.ticker_activity.trade_acceleration_ratio)||
+      String(a.symbol).localeCompare(String(b.symbol))
+    )
+    .slice(0,max);
 }
 
 /** Reserve existing discovery capacity for queued radar symbols before round-robin buckets. */
@@ -1186,6 +1221,8 @@ export class MultiAnalystEngine {
     this.pendingRadarReviews=new Map();
     this.latestAnalystAssessments=new Map();
     this.lastRadarReviewSelection=[];
+    // Two recent full-universe ticker snapshots enable a cheap, short-window activity lane.
+    this.marketActivitySnapshots=[];
   }
 
   _pruneRadarReviewState(now=this.clock()){
@@ -1532,12 +1569,48 @@ export class MultiAnalystEngine {
       const coverageFallback=this._rotatingDiscoveryBucket(
         'coverage',normalized,Math.min(normalized.length,this.config.discoveryPool)
       );
+      const deepPool=Math.max(1,Math.min(
+        selected.length||Math.max(1,Math.trunc(Number(this.config.discoveryPool)||1)),
+        Math.trunc(Number(this.config.deepScanPool)||selected.length||1)
+      ));
+      const activityCapturedAt=this.clock();
+      const activitySnapshotState={version:1,snapshots:this.marketActivitySnapshots.slice(0,2)};
+      const activityPriorityCapacity=Math.max(0,Math.min(1,deepPool-radarPriorityRows.length));
+      const tickerActivityPriorityRows=buildMultiAnalystActivityPriorityRows(
+        normalized,activitySnapshotState,activityCapturedAt,{
+          minQuoteVolume24h:this.config.minQuoteVolume24h,
+          limit:activityPriorityCapacity
+        }
+      );
+      const activitySignals=buildPreMoveTickerActivitySignals(
+        normalized,activitySnapshotState,activityCapturedAt
+      );
+      // Store only current full-universe ticker counters, not another copy of candles/depth.
+      const activitySnapshotRows=Object.fromEntries(normalized.map(row=>[
+        String(row.symbol||'').toUpperCase(),
+        {quote_volume_24h:Number(row.quoteVolume24h)||0,trade_count_24h:Number(row.tradeCount24h)||0}
+      ]));
+      const lastActivitySnapshotAt=Number(this.marketActivitySnapshots[0]?.captured_at)||0;
+      if(!lastActivitySnapshotAt||activityCapturedAt-lastActivitySnapshotAt>=20_000){
+        this.marketActivitySnapshots=[
+          {captured_at:activityCapturedAt,rows:activitySnapshotRows},
+          ...this.marketActivitySnapshots.slice(0,1)
+        ];
+      }
+      const priorityRows=[...radarPriorityRows,...tickerActivityPriorityRows];
       const selected=selectDiscoveryWithRadarReviewPriority(
-        radarPriorityRows,buckets,this.config.discoveryPool,coverageFallback
+        priorityRows,buckets,this.config.discoveryPool,coverageFallback
       );
       if(!selected.length)throw new Error('NO_SPOT_CANDIDATES');
-      const deepPool=Math.max(1,Math.min(selected.length,Math.trunc(Number(this.config.deepScanPool)||selected.length)));
       const deepSelected=selected.slice(0,deepPool);
+      const tickerActivityPrioritySelected=deepSelected
+        .filter(row=>row?._ticker_activity_priority===true)
+        .map(row=>({
+          symbol:String(row.symbol||'').toUpperCase(),
+          score:Number(row.ticker_activity?.score)||0,
+          volume_acceleration_ratio:Number(row.ticker_activity?.volume_acceleration_ratio)||0,
+          trade_acceleration_ratio:Number(row.ticker_activity?.trade_acceleration_ratio)||0
+        }));
       this.lastRadarReviewSelection=deepSelected.filter(row=>row?._radar_review_priority===true)
         .map(row=>String(row.symbol||'').toUpperCase()).slice(0,reviewSlots);
       // Record attempt time before requests so a repeatedly failing symbol cannot monopolize
@@ -1569,7 +1642,15 @@ export class MultiAnalystEngine {
           // The final judge remains fail-closed: invalid/stale/future/incomplete data is rejected there.
           this._settleOutcome(ticker.symbol,this.clock(),row?._analysis?.series?.['15m']||[]);
           const reviewContext=this.pendingRadarReviews.get(String(ticker?.symbol||'').toUpperCase());
-          row._analyst_context={snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,13):[],cross_radar_fusion:reviewContext?.cross_radar_fusion||null,radar_review_priority:ticker?._radar_review_priority===true||Number(reviewContext?.review_priority_score)>=70,duplicate_alert_suppressed:false};
+          row._analyst_context={
+            snapshot_id:sharedMarketSnapshot.snapshot_id,snapshot_as_of:sharedMarketSnapshot.as_of,
+            source_radars:Array.isArray(reviewContext?.source_radars)?reviewContext.source_radars.slice(0,13):[],
+            cross_radar_fusion:reviewContext?.cross_radar_fusion||null,
+            radar_review_priority:ticker?._radar_review_priority===true||Number(reviewContext?.review_priority_score)>=70,
+            ticker_activity_priority:ticker?._ticker_activity_priority===true,
+            ticker_activity:ticker?.ticker_activity||null,
+            duplicate_alert_suppressed:false
+          };
           let prior=null;
           try{ prior=await awaitScanStep(this.store?.getIntelligenceMemory?.(ticker.symbol),'MEMORY_READ:'+ticker.symbol) || null; }catch{ prior=null; }
           assertScanDeadline();
@@ -1614,6 +1695,8 @@ export class MultiAnalystEngine {
             direction:final.direction,verdict:final.verdict,decision:final.decision,final_score:final.score,
             shared_snapshot:specialist.sharedSnapshot,source_radars:row._analyst_context.source_radars,
             cross_radar_fusion:row._analyst_context.cross_radar_fusion||null,
+            ticker_activity_priority:row._analyst_context.ticker_activity_priority===true,
+            ticker_activity:row._analyst_context.ticker_activity||null,
             consensus:{positive:final.positiveAnalysts,strong:final.strongAnalysts,total:final.totalAnalysts,ratio:final.totalAnalysts>0?final.positiveAnalysts/final.totalAnalysts:0,bearish_strong:Number(final.bearishStrongAnalysts||0)},
             analysts:publicAnalysts,analyst_execution:analystExecution,final_judge:final,
             highlights:specialist.a.filter(x=>x.score>=72).sort((a,b)=>b.score-a.score).slice(0,6),
@@ -1750,6 +1833,13 @@ export class MultiAnalystEngine {
           deep_klines:this.config.deepKlines,
           attempted_analyses:deepSelected.length,
           successful_analyses:validLive.length,
+          ticker_activity_priority:{
+            baseline_snapshots:activitySnapshotState.snapshots.length,
+            baseline_ready:activitySnapshotState.snapshots.length>=2,
+            evaluated_signals:activitySignals.size,
+            priority_candidates:tickerActivityPriorityRows.length,
+            selected:tickerActivityPrioritySelected
+          },
           specialist_complete_symbols:live.filter(x=>x?.analyst_execution?.specialists_complete===true).length,
           final_analyst_complete_symbols:live.filter(x=>x?.analyst_execution?.final_analyst_complete===true).length,
           fully_analysed_symbols:fullyAnalysed.length,
