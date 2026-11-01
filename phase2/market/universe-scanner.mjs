@@ -2549,7 +2549,13 @@ export class MarketUniverseScanner {
       tail.then(()=>{
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
       });
-      return flight.finally(()=>clearTimeout(abortTimer));
+      return flight.finally(()=>{
+        // The API deadline and AbortController timer share one absolute edge.
+        // Always propagate expiry into the signal even if the wrapper timer wins
+        // the event-loop race by a few milliseconds.
+        if(Date.now()>=deadlineAtMs&&!controller.signal.aborted)controller.abort();
+        clearTimeout(abortTimer);
+      });
     });
   }
 
