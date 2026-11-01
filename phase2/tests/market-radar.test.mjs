@@ -1,7 +1,7 @@
 /* Bottom Radar v2 regression coverage: live flow, squeeze, structure, whale heuristic. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {MarketUniverseScanner, PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveTickerActivitySignals, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner, PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS, buildSpotUniverse, rankTickerRows, rankBottomTickerRows, boundedMap, normalizeRadarLimit, normalizeTickerRow, buildBottomMarketContext, buildPreMoveContext, rankPreMoveTickerRows, buildPreMoveTickerActivitySignals, buildPreMoveWatchCandidates, aggregateClosed15mIntoHourly, buildPreMoveTargetPlan, scorePreMoveComponents, awaitPreMoveScanOperation} from '../market/universe-scanner.mjs';
 
 function candle(t, close=100, tfMs=900000) {
   return {
@@ -312,6 +312,59 @@ test('Pre-Move activity-priority lane deep-scans up to eight independent acceler
     'activity bursts must be examined directly after the stable pinned cohort');
   assert.equal(picked[12].ticker_activity_priority_selected,false,
     'the remaining slots must continue the fair rotating market scan');
+});
+
+test('Pre-Move six-pair cycle reserves two burst slots and keeps a fair rotating lane',()=>{
+  const stable=Array.from({length:40},(_,i)=>({
+    symbol:'CORE'+String(i).padStart(2,'0')+'USDT',
+    baseAsset:'CORE'+String(i).padStart(2,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const bursts=Array.from({length:5},(_,i)=>({
+    symbol:'BURST'+String(i).padStart(2,'0')+'USDT',
+    baseAsset:'BURST'+String(i).padStart(2,'0'),quoteAsset:'USDT',status:'TRADING'
+  }));
+  const all=[...stable,...bursts];
+  const rows=all.map((x,i)=>({
+    symbol:x.symbol,lastPrice:'10',highPrice:'12',lowPrice:'8',
+    quoteVolume:String(x.symbol.startsWith('BURST')?180000:5_000_000+i*1000),
+    count:x.symbol.startsWith('BURST')?1000:50000+i*100,
+    priceChangePercent:'2'
+  }));
+  const activitySignals=new Map(bursts.map((x,i)=>[x.symbol,{
+    score:18-i*0.1,volume_acceleration_ratio:2.4-i*0.01,trade_acceleration_ratio:1.8-i*0.01,
+    observed_at:180000,baseline_age_ms:60000
+  }]));
+  const picked=rankPreMoveTickerRows(rows,all,{
+    minQuoteVolume24h:750000,limit:6,rotationOffset:0,activitySignals,
+    pinnedFraction:0.10,activityPriorityLimit:8
+  });
+  assert.equal(picked.length,6);
+  const priority=picked.filter(row=>row.ticker_activity_priority_selected===true);
+  assert.equal(priority.length,2,'the six-slot live cycle must use two measured burst slots, not silently clamp eight requested slots to one');
+  assert.ok(picked.slice(1,3).every(row=>row.ticker_activity_priority_selected===true),
+    'burst candidates must follow the pinned core immediately');
+  assert.ok(picked.slice(3).every(row=>row.ticker_activity_priority_selected===false),
+    'at least three slots remain for fair rotation when the batch size is six');
+});
+
+test('Pre-Move scan deadline also bounds non-REST operations that ignore cancellation',async()=>{
+  const startedAt=Date.now();
+  await assert.rejects(
+    awaitPreMoveScanOperation(new Promise(()=>{}),{
+      deadlineAtMs:Date.now()+35,stage:'PERSIST_ROTATION_CURSOR',
+      progress:{stage:'PERSIST_ROTATION_CURSOR',symbols_total:6,symbols_completed:6}
+    }),
+    error=>{
+      assert.equal(error.name,'ScanDeadlineError');
+      assert.match(error.message,/PRE_MOVE_SCAN_DEADLINE_EXCEEDED/);
+      assert.match(error.message,/PERSIST_ROTATION_CURSOR/);
+      assert.deepEqual(error.scan_progress,{
+        stage:'PERSIST_ROTATION_CURSOR',symbols_total:6,symbols_completed:6
+      });
+      return true;
+    }
+  );
+  assert.ok(Date.now()-startedAt<1000,'a stalled storage operation must release the scan within its absolute deadline');
 });
 
 test('Pre-Move rotation remains fair when non-pinned market scores change between cycles',()=>{
