@@ -39,6 +39,7 @@ const phase2=[
   'phase2/tests/buy-pressure-transition.test.mjs',
   'phase2/tests/pre-expansion-outcome-tracker.test.mjs',
   'phase2/tests/radar-signal-outcomes.test.mjs',
+  'phase2/tests/radar-outcome-learning.test.mjs',
   'phase2/tests/radar-missed-mover-audit.test.mjs',
   'phase2/tests/missed-mover-case-study.test.mjs',
   'phase2/tests/pre-move-background-summary.test.mjs',
