@@ -653,6 +653,11 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   };
 
   const flags = factorValues(features);
+  const orderBookChecked = candidate?.order_book_checked === true || features.order_book_checked === true;
+  const orderBookSpread = finite(features.order_book_spread_bps ?? candidate?.order_book_spread_bps);
+  const orderBookImbalance = finite(features.order_book_imbalance_pct ?? candidate?.order_book_imbalance_pct);
+  const bidAskDepthRatio = finite(features.order_book_bid_ask_depth_ratio ?? candidate?.order_book_bid_ask_depth_ratio);
+  const spoofingAssessment = orderBookChecked ? 'NOT_ASSESSABLE_SINGLE_SNAPSHOT' : 'NOT_CHECKED';
   const dailyLate = daily !== null && daily >= 8;
   const late = candidate?.tier === 'LATE_MOVE' || candidate?.thresholds?.late_move === true ||
     dailyLate || (hourly !== null && hourly >= 5) ||
@@ -671,6 +676,11 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     contradictions.push('ذيل علوي كبير قد يدل على رفض الأسعار الأعلى');
   if (daily !== null && daily < -5)
     contradictions.push('ضغط هبوطي يومي مرتفع');
+  if (orderBookChecked && orderBookSpread !== null && orderBookSpread > 30)
+    contradictions.push('فارق دفتر الأوامر واسع ويضعف جودة التنفيذ');
+  if (orderBookChecked && bidAskDepthRatio !== null && bidAskDepthRatio < 0.70 &&
+      buyer !== null && buyer < 0.50)
+    contradictions.push('عمق الطلبات أضعف من العروض رغم الحركة');
 
   const activityEvidence = [flags.volume_expansion, flags.trade_expansion, flags.buyer_flow].filter(Boolean).length;
   const supportingDomains = Object.values(flags).filter(Boolean).length;
@@ -687,6 +697,38 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
       supported: flags.multi_hour_trend && flags.short_momentum,
       evidence: [flags.multi_hour_trend, flags.short_momentum].filter(Boolean).length, required: 2 }
   ];
+  const buyerAccumulationSupported = volume !== null && volume >= 1.5 &&
+    finite(features.trade_ratio) !== null && Number(features.trade_ratio) >= 1.25 &&
+    buyer !== null && buyer >= 0.54 &&
+    (flags.price_structure || flags.volatility_compression) &&
+    (relative === null || relative >= -0.25);
+  const orderBookSupportsBuyers = orderBookChecked && orderBookSpread !== null &&
+    orderBookSpread <= 20 && bidAskDepthRatio !== null && bidAskDepthRatio >= 1.15;
+  const possibleTrap = (orderBookChecked && orderBookSpread !== null && orderBookSpread > 30) ||
+    (orderBookChecked && bidAskDepthRatio !== null && bidAskDepthRatio < 0.70) ||
+    (upperWick !== null && range !== null && range > 0 && upperWick / range > 0.55 &&
+      close !== null && close < 0.45) ||
+    (volume !== null && volume >= 1.5 && (buyer === null || buyer < 0.48));
+  const marketMotiveAssessment = {
+    accumulation_hypothesis: buyerAccumulationSupported ? 'SUPPORTED_BY_CONVERGENT_PUBLIC_EVIDENCE' : 'NOT_ESTABLISHED',
+    order_book_confirmation: !orderBookChecked ? 'NOT_CHECKED' :
+      orderBookSupportsBuyers ? 'BID_DEPTH_SUPPORTS_BUY_FLOW' : 'NO_CLEAR_BID_DEPTH_SUPPORT',
+    possible_liquidity_trap: possibleTrap,
+    reasons: [
+      ...(buyerAccumulationSupported ? ['VOLUME_TRADE_BUYER_FLOW_AND_STRUCTURE_CONFLUENCE'] : []),
+      ...(orderBookSupportsBuyers ? ['NARROW_SPREAD_AND_BID_DEPTH_IMBALANCE'] : []),
+      ...(possibleTrap ? ['CONTRADICTORY_OR_TRAP_LIKE_MICROSTRUCTURE'] : [])
+    ],
+    order_book_checked: orderBookChecked,
+    order_book_spread_bps: orderBookSpread,
+    order_book_imbalance_pct: orderBookImbalance,
+    order_book_bid_ask_depth_ratio: bidAskDepthRatio,
+    spoofing_assessment: spoofingAssessment,
+    whale_identity_claim: false,
+    interpretation_ar: orderBookChecked
+      ? 'هذه قرائن دفتر أوامر من لقطة واحدة؛ لا تثبت هوية الحوت أو نية التجميع ولا تكشف التلاعب زمنياً.'
+      : 'لم يُفحص دفتر الأوامر لهذه العملة؛ لا يجوز استنتاج نية الحيتان أو نفي فخ السيولة.'
+  };
   const noChase = (daily === null || daily <= 7) &&
     (hourly === null || hourly <= 3.5) &&
     (recent15 === null || recent15 <= 1.5) &&
@@ -728,6 +770,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     reason_codes: reasons.length ? reasons : ['INSUFFICIENT_CONFLUENT_EVIDENCE'],
     hypotheses,
     contradictions,
+    market_motive_assessment:marketMotiveAssessment,
     evidence_domains: supportingDomains,
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,
