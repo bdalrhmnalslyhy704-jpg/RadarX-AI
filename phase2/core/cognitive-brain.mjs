@@ -303,6 +303,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   iterations = 900, learningRate = 0.12,
   maxResolvedSamples = 0
 } = {}) {
+  const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
   const allResolved = validResolvedSamples(samples, {
     outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
   });
