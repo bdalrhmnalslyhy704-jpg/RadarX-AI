@@ -2464,14 +2464,9 @@ export class MarketUniverseScanner {
       // this worker indefinitely.
       const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||45_000);
       const timeoutMs=Math.max(15_000,Math.min(45_000,configuredTimeout));
-      const previousDeadline=this.rest.requestDeadlineAtMs;
-      const previousSignal=this.rest.requestAbortSignal??null;
-      const nextDeadline=Date.now()+timeoutMs;
-      const priorDeadline=Number(previousDeadline);
-      const deadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
-        ?Math.min(priorDeadline,nextDeadline):nextDeadline;
+      let deadlineAtMs=Date.now()+timeoutMs;
       const controller=new AbortController();
-      const abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+      let abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
       const deadlineError=(cause=null)=>{
         const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
           ?cause.scan_progress:null;
@@ -2489,6 +2484,18 @@ export class MarketUniverseScanner {
       const flight=awaitPreMoveScanOperation(previous.catch(()=>{}),{
         deadlineAtMs,signal:controller.signal,stage:'WAIT_PREVIOUS_SCAN'
       }).then(async()=>{
+        if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
+        // Read shared REST controls only after the previous same-quote scan has
+        // restored them. Capturing them before queue wait would accidentally
+        // inherit the previous scan's already-expiring deadline.
+        const previousDeadline=this.rest.requestDeadlineAtMs;
+        const previousSignal=this.rest.requestAbortSignal??null;
+        const priorDeadline=Number(previousDeadline);
+        if(Number.isFinite(priorDeadline)&&priorDeadline>0){
+          deadlineAtMs=Math.min(deadlineAtMs,priorDeadline);
+          clearTimeout(abortTimer);
+          abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+        }
         if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
         this.rest.requestDeadlineAtMs=deadlineAtMs;
         this.rest.requestAbortSignal=controller.signal;
