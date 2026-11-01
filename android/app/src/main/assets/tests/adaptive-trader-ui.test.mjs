@@ -88,6 +88,28 @@ test('dashboard distinguishes push-provider status from actual device delivery',
   assert.match(html,/مزود إشعارات الهاتف/);
 });
 
+
+test('learning panel displays separate 1h and 24h radar outcome calibration and retained case studies',()=>{
+  assert.match(html,/id="radarOutcomeLearningStatus"/);
+  assert.match(html,/id="radarOutcomeLearning"/);
+  assert.match(html,/id="radarOutcomeCases"/);
+  assert.match(html,/horizonProfiles\['60m'\]/);
+  assert.match(html,/horizonProfiles\['24h'\]/);
+  assert.match(html,/complete_closed_candle_outcomes/);
+  assert.match(html,/case_studies/);
+  assert.match(html,/after 24 hours|24 ساعة/);
+  assert.match(html,/لا تُحوَّل الحالة غير المكتملة إلى ربح أو خسارة/);
+  assert.match(html,/لا تعدّل الترتيب بعد/);
+});
+
+test('candidate card explains accumulation, order-book support and uncertainty about spoofing',()=>{
+  assert.match(html,/market_motive_assessment/);
+  assert.match(html,/قرائن تدفق وتجميع متوافقة/);
+  assert.match(html,/دفتر الأوامر لم يُفحص/);
+  assert.match(html,/لا تثبت لقطة واحدة هوية حوت أو تلاعبًا/);
+  assert.match(html,/تحذير: قرائن فخ سيولة/);
+});
+
 test('server owns the recurring scan loop; page visibility only polls status',()=>{
   assert.match(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'\)void refreshWorkerStatus\(\);\},15\*1000\)/);
   assert.doesNotMatch(html,/setInterval\(function\(\)\{if\(document\.visibilityState==='visible'&&!scanBusy\)void scanMarket\(\);\},5\*60\*1000\)/);
