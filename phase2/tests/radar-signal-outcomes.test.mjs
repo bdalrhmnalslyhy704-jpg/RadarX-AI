@@ -78,6 +78,16 @@ test('archived radar cases preserve only observed decision-time factors for late
   assert.deepEqual(row.risk_flags,['SPOT_ONLY']);
 });
 
+
+test('an unchecked order book is not counted as an observed training feature',()=>{
+  const row=normalizeArchivedRadarSignal({
+    id:'UNKNOWN-BOOK-CASE',symbol:'XYZUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:1.1,stage:'WATCH_EARLY',features:{order_book_checked:false}
+  },'RADAR_8',BASE+10_000);
+  assert.equal(row.features.order_book_checked,false);
+  assert.equal(row.feature_snapshot_available_count,0);
+});
+
 test('outcome evaluation rejects an invalid entry baseline instead of awarding false threshold hits',()=>{
   const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
   const now=BASE+horizon.ms+horizon.intervalMs+minute;
