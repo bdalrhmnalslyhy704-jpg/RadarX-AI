@@ -714,6 +714,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!preMoveRadarScanner||preMoveBackgroundInFlight)return null;
     preMoveBackgroundInFlight=true;preMoveBackgroundWorkerState.running=true;
     preMoveBackgroundWorkerState.scan_attempts+=1;preMoveBackgroundWorkerState.last_started_at=new Date().toISOString();
+    preMoveBackgroundWorkerState.last_scan_status='RUNNING';
+    preMoveBackgroundWorkerState.last_duration_ms=null;
     preMoveBackgroundWorkerState.last_error=null;
     const startedAt=Date.now();
     try{
