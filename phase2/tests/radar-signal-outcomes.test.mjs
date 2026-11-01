@@ -53,6 +53,31 @@ test('archive normalization never substitutes missing price or timestamp with ze
   assert.ok(missing.baseline_missing_reasons.includes('SIGNAL_TIMESTAMP_MISSING'));
 });
 
+
+test('archived radar cases preserve only observed decision-time factors for later learning',()=>{
+  const now=BASE+30*minute;
+  const row=normalizeArchivedRadarSignal({
+    id:'FEATURE-CASE-1',symbol:'ABCUSDT',detected_at:BASE,processed_at:BASE+1000,
+    price:1.25,stage:'PRE_EXPANSION',direction:'UP',
+    features:{volume_ratio:2.2,trade_ratio:1.7,taker_buy_ratio:0.61,
+      close_location:0.78,higher_low:true,compression_ratio:0.7,
+      relative_strength_vs_btc_pct:1.1},
+    early_expansion:{metrics:{recent_15m_return_pct:0.45,upper_wick_pct:0.12}},
+    reason_codes:['VOLUME_EXPANSION','BUYER_FLOW_SUPPORT'],
+    risk_flags:['SPOT_ONLY']
+  },'RADAR_8',now);
+  assert.equal(row.baseline_status,'COMPLETE');
+  assert.equal(row.features.volume_ratio,2.2);
+  assert.equal(row.features.trade_ratio,1.7);
+  assert.equal(row.features.taker_buy_ratio,0.61);
+  assert.equal(row.features.higher_low,true);
+  assert.equal(row.features.recent_15m_return_pct,0.45);
+  assert.equal(row.features.order_book_checked,null);
+  assert.ok(row.feature_snapshot_available_count>=8);
+  assert.ok(row.reason_codes.includes('BUYER_FLOW_SUPPORT'));
+  assert.deepEqual(row.risk_flags,['SPOT_ONLY']);
+});
+
 test('outcome evaluation rejects an invalid entry baseline instead of awarding false threshold hits',()=>{
   const horizon=RADAR_OUTCOME_HORIZONS.find(x=>x.key==='5m');
   const now=BASE+horizon.ms+horizon.intervalMs+minute;
