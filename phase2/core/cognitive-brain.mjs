@@ -113,27 +113,41 @@ function normalizedFeatures(features = {}) {
   ];
 }
 
-function validResolvedSamples(samples) {
+function validResolvedSamples(samples, {
+  outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  allowResolutionLag = false,
+  allowedOutcomeSources = null
+} = {}) {
+  const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || MIN_OUTCOME_HORIZON_MS));
+  const allowedSources = Array.isArray(allowedOutcomeSources)
+    ? new Set(allowedOutcomeSources.map(String)) : null;
   const seenIds = new Set();
   const seenBaselines = new Set();
   return (Array.isArray(samples) ? samples : [])
     .filter(row => {
+      const radarOutcome = row?.radar_outcome_baseline === true;
       if (!row || row.training_eligible !== true ||
-          (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
+          (row.closed_candle_baseline !== true && row.historical_baseline !== true && !radarOutcome) ||
           !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
-          !row.features || typeof row.features !== 'object') return false;
+          !row.features || typeof row.features !== 'object' || Array.isArray(row.features)) return false;
       const id = String(row.id || '');
       const symbol = String(row.symbol || '').trim().toUpperCase();
       const at = finite(row.at);
       const resolvedAt = finite(row.resolved_at);
       const horizon = finite(row.horizon_ms);
+      const source = String(row.outcome_source || '');
       const expectedSource = row.historical_baseline === true
-        ? 'HISTORICAL_CLOSED_CANDLE' : 'CLOSED_CANDLE_4H';
+        ? 'HISTORICAL_CLOSED_CANDLE' : radarOutcome ? source : 'CLOSED_CANDLE_4H';
+      const sourceValid = allowedSources ? allowedSources.has(source) : source === expectedSource;
+      const resolvedAfterHorizon = resolvedAt !== null && at !== null &&
+        (allowResolutionLag ? resolvedAt >= at + horizonMs : resolvedAt - at === horizonMs);
       if (!id || !symbol || at === null || at <= 0 ||
-          resolvedAt === null || resolvedAt - at !== MIN_OUTCOME_HORIZON_MS ||
-          horizon !== MIN_OUTCOME_HORIZON_MS ||
-          row.outcome_source !== expectedSource) return false;
-      const baselineKey = symbol + ':' + String(Math.trunc(at));
+          resolvedAt === null || !resolvedAfterHorizon ||
+          horizon !== horizonMs || !sourceValid ||
+          (radarOutcome && !String(row.radar || '').trim())) return false;
+      const baselineKey = radarOutcome
+        ? String(row.radar).toUpperCase() + ':' + symbol + ':' + String(Math.trunc(at))
+        : symbol + ':' + String(Math.trunc(at));
       // A live observation and a later historical backfill can describe the
       // exact same pair/candle under different IDs. Count that market event once.
       if (seenIds.has(id) || seenBaselines.has(baselineKey)) return false;
@@ -189,9 +203,22 @@ function predictFromFit(features, fit) {
 function factorEvidence(training, { minimumBucket = 8 } = {}) {
   const output = {};
   let covered = 0;
+  const availability = {
+    volume_expansion: f => finite(f.volume_ratio) !== null,
+    trade_expansion: f => finite(f.trade_ratio) !== null,
+    buyer_flow: f => finite(f.taker_buy_ratio) !== null,
+    price_structure: f => f.higher_low !== null && f.higher_low !== undefined ||
+      f.breakout_above_prior_high !== null && f.breakout_above_prior_high !== undefined,
+    volatility_compression: f => finite(f.compression_ratio) !== null,
+    relative_strength: f => finite(f.relative_strength_vs_btc_pct) !== null,
+    short_momentum: f => finite(f.recent_15m_return_pct) !== null || finite(f.price_change_15m_pct) !== null,
+    multi_hour_trend: f => f.trend_aligned !== null && f.trend_aligned !== undefined || finite(f.return_3h_pct) !== null,
+    five_minute_flow: f => f.micro_5m_available === true && finite(f.micro_5m_taker_buy_ratio) !== null
+  };
   for (const factor of FACTORS) {
-    const active = training.filter(row => factor.test(row.features || {}));
-    const inactive = training.filter(row => !factor.test(row.features || {}));
+    const available = training.filter(row => availability[factor.key]?.(row.features || {}) === true);
+    const active = available.filter(row => factor.test(row.features || {}));
+    const inactive = available.filter(row => !factor.test(row.features || {}));
     const activeMean = active.length ? mean(active.map(row => row.target)) : null;
     const inactiveMean = inactive.length ? mean(inactive.map(row => row.target)) : null;
     const ready = active.length >= minimumBucket && inactive.length >= minimumBucket;
@@ -270,9 +297,18 @@ export function buildCognitiveLearningProfile(samples = [], {
   minTrainingSamples = 60, minimumBucket = 8,
   minimumValidationSamples = 20, minimumHoldoutSamples = 20,
   validationFraction = 0.2, holdoutFraction = 0.2,
-  recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08
+  recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08,
+  outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  allowResolutionLag = false,
+  allowedOutcomeSources = null,
+  iterations = 900, learningRate = 0.12,
+  maxResolvedSamples = 0
 } = {}) {
-  const resolved = validResolvedSamples(samples);
+  const allResolved = validResolvedSamples(samples, {
+    outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
+  });
+  const maxSamples = Math.max(0, Math.trunc(Number(maxResolvedSamples) || 0));
+  const resolved = maxSamples > 0 ? allResolved.slice(-maxSamples) : allResolved;
   const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
   const holdoutCount = Math.max(minimumHoldoutSamples, Math.floor(uniqueTimes.length * holdoutFraction));
   const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * validationFraction));
@@ -280,10 +316,11 @@ export function buildCognitiveLearningProfile(samples = [], {
   const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0;
 
   if (!canSplit) {
-    const fit = fitLogisticModel(resolved, { l2 });
+    const fit = fitLogisticModel(resolved, { l2, iterations, learningRate });
     const evidence = factorEvidence(resolved, { minimumBucket });
     return {
       method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+      outcome_horizon_ms: horizonMs,
       ranking_ready: false, probability_ready: false, ready: false,
       resolved_samples: resolved.length, training_samples: resolved.length,
       fit_samples: resolved.length, validation_samples: 0, holdout_samples: 0,
@@ -327,7 +364,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const validation = validationPool.filter(row => row.resolved_at < holdoutStartAt);
   const purgedValidation = validationPool.length - validation.length;
   const holdout = resolved.filter(row => row.at >= holdoutStartAt);
-  const globalFit = fitLogisticModel(training, { l2 });
+  const globalFit = fitLogisticModel(training, { l2, iterations, learningRate });
   const globalValidation = evaluateHoldout(validation, globalFit);
 
   const trainingTimes = [...new Set(training.map(row => row.at))].sort((a, b) => a - b);
@@ -337,7 +374,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const recentTraining = recentStartAt === null
     ? [] : training.filter(row => row.at >= recentStartAt);
   const recentFit = recentTraining.length >= minTrainingSamples
-    ? fitLogisticModel(recentTraining, { l2 }) : null;
+    ? fitLogisticModel(recentTraining, { l2, iterations, learningRate }) : null;
   const recentValidation = recentFit ? evaluateHoldout(validation, recentFit) : {
     evaluated: false, reason: 'RECENT_WINDOW_REQUIRES_MINIMUM_TRAINING_SAMPLES',
     sample_count: validation.length, model_brier_score: null, base_rate_brier_score: null,
@@ -386,6 +423,7 @@ export function buildCognitiveLearningProfile(samples = [], {
 
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+    outcome_horizon_ms: horizonMs,
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
     ready: rankingReady,
