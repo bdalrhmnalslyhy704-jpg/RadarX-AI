@@ -2102,7 +2102,16 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const force=u.searchParams.get('scan')==='1';
         const cached=preMoveRadarResponseCache.get(key);
         const ageMs=cached?Math.max(0,now-cached.savedAt):null;
-        if(preMoveRadarRefreshFlights.has(quote)){
+        const activePreMoveFlight=preMoveRadarRefreshFlights.get(quote);
+        if(activePreMoveFlight){
+          // A caller using a different presentation limit joins the same quote-level
+          // scan. Cache the completed snapshot under its requested view key so the
+          // next poll does not start a redundant deep scan.
+          if(key!==quote){
+            activePreMoveFlight.then(snapshot=>{
+              if(snapshot)preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
+            }).catch(()=>{});
+          }
           if(cached&&ageMs!==null&&ageMs<=preMoveRadarCacheTtlMs){
             return send(res,200,{
               ...cached.snapshot,status:'ready',
