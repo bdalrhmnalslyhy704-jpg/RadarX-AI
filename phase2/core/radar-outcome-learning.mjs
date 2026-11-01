@@ -52,7 +52,7 @@ function buildTrainingSample(record, outcome, horizon, now) {
   const price = finite(record.entry_price);
   const resolvedAt = finite(outcome.updated_at);
   const target = classifyReturn(outcome.close_return_pct,horizon.threshold_pct);
-  if (record.baseline_status !== 'COMPLETE' || !/^[A-Z0-9]{5,30}USDT$/.test(symbol) ||
+  if (record.baseline_status !== 'COMPLETE' || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
       !radar || at === null || at <= 0 || at > now || price === null || price <= 0 ||
       available < 4 || resolvedAt === null || resolvedAt < at + horizon.horizon_ms ||
       target === null || !outcomeReady(outcome,horizon,now)) return null;
