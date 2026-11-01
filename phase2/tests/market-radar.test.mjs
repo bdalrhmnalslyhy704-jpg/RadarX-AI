@@ -755,6 +755,52 @@ test('Bottom Radar range position and flow metrics are symbol-specific and bound
   assert.notEqual(ca.metrics.whale_pressure,cb.metrics.whale_pressure);
 });
 
+test('Pre-Move rolling hour stays complete during the first Aden session hour',()=>{
+  const step=15*60*1000;
+  // 04:35 local Asia/Aden: only two 15m candles have closed since the 04:00 session open.
+  const now=Date.UTC(2026,9,2,1,35);
+  const start=Date.UTC(2026,9,1,22,0);
+  const candles=Array.from({length:16},(_,i)=>{
+    const openTime=start+i*step;
+    const closeTime=openTime+step-1;
+    const open=100+i*0.12;
+    const close=open+0.08;
+    return {
+      openTime,closeTime,open,high:close+0.18,low:open-0.14,close,
+      volume:1000+i*35,quoteVolume:100000+i*3000,
+      tradeCount:800+i*25,takerBuyBaseVolume:(1000+i*35)*(0.52+i*0.002),
+      closed:closeTime<=now,source:'TEST_FIXTURE'
+    };
+  });
+  const currentPrice=Number(candles.filter(x=>x.closed).at(-1).close);
+  const ticker={
+    symbol:'OPENUSDT',lastPrice:currentPrice,priceChange24h:1.2,
+    quoteVolume24h:2_000_000,highPrice24h:currentPrice+1,
+    lowPrice24h:currentPrice-1
+  };
+  const context=buildPreMoveContext({'15m':candles},ticker,now,{
+    last_rise:{high:currentPrice+0.5},
+    metrics:{compression:62,structure:68,buying_pressure:66,whale_pressure:null}
+  });
+  assert.equal(context.timezone,'Asia/Aden');
+  assert.equal(context.session_candle_count,2,
+    'only two 15m candles have closed since 04:00 local at this observation time');
+  assert.equal(context.recent_candle_count,4,
+    'the last closed hour should span the session boundary instead of shrinking to two session candles');
+  assert.equal(context.prior_window_candle_count,4,
+    'the immediately preceding hour should remain a separate comparison window');
+  assert.equal(context.evidence_complete,true,
+    'the rolling one-hour evidence must not wait for four candles inside the new session');
+  assert.equal(context.missing_evidence.length,0);
+  assert.ok(Number.isFinite(context.one_hour_return_pct));
+  assert.ok(Number.isFinite(context.volume_acceleration));
+  assert.ok(Number.isFinite(context.trade_acceleration));
+  assert.ok(Number.isFinite(context.mean_close_location));
+  assert.ok(Number.isFinite(context.session_return_pct),
+    'session return remains measured only from the first closed Aden-session candle');
+  assert.equal(context.session_start,new Date(Date.UTC(2026,9,2,1,0)).toISOString());
+});
+
 test('Pre-Move Radar detects quiet early acceleration instead of chasing large 24h movers',()=>{
   const now=Date.UTC(2026,9,2,7,30);
   const step=15*60*1000;
