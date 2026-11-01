@@ -2520,10 +2520,12 @@ export class MarketUniverseScanner {
       // the scan ahead of it is still running. Keep the queue tail linked to both.
       const tail=Promise.allSettled([previousReady,flight]).then(()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
-      return flight.finally(()=>{
-        clearTimeout(abortTimer);
+      // Keep the queue entry until its predecessor has settled as well. A timed-out
+      // queued request must not open a parallel lane around the still-active scan.
+      tail.then(()=>{
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
       });
+      return flight.finally(()=>clearTimeout(abortTimer));
     });
   }
 
