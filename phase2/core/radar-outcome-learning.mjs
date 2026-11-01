@@ -114,7 +114,15 @@ function failureReasons(record,outcomes) {
 }
 function caseStudy(record,now) {
   const outcomes=object(record.outcomes);
-  const oneHour=object(outcomes['60m']),day=object(outcomes['24h']);
+  const safeOutcome=(value,key)=>{
+    const row=object(value),horizon=HORIZONS.find(item=>item.key===key);
+    const knownAt=finite(row.updated_at),closedThrough=finite(row.horizon_window_complete_through);
+    return horizon&&row.status==='COMPLETE'&&row.source==='BINANCE_PUBLIC_CLOSED_OHLC'&&
+      row.sample_quality==='HISTORICAL_CLOSED_OHLC'&&knownAt!==null&&knownAt<=now&&
+      closedThrough!==null&&closedThrough<=now?row:{status:'PENDING',close_return_pct:null,
+        max_favorable_pct:null,max_adverse_pct:null,horizon_window_complete_through:null,updated_at:null};
+  };
+  const oneHour=safeOutcome(outcomes['60m'],'60m'),day=safeOutcome(outcomes['24h'],'24h');
   const knownTimes=[finite(oneHour.updated_at),finite(day.updated_at)].filter(x=>x!==null);
   return {
     id:String(record.signal_id||'').slice(0,240),
