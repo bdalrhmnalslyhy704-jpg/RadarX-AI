@@ -93,8 +93,8 @@ test('learning panel displays separate 1h and 24h radar outcome calibration and 
   assert.match(html,/id="radarOutcomeLearningStatus"/);
   assert.match(html,/id="radarOutcomeLearning"/);
   assert.match(html,/id="radarOutcomeCases"/);
-  assert.match(html,/horizonProfiles\['60m'\]/);
-  assert.match(html,/horizonProfiles\['24h'\]/);
+  assert.match(html,/horizonCard\('60m','ساعة'\)/);
+  assert.match(html,/horizonCard\('24h','24 ساعة'\)/);
   assert.match(html,/complete_closed_candle_outcomes/);
   assert.match(html,/case_studies/);
   assert.match(html,/after 24 hours|24 ساعة/);
