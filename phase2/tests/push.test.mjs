@@ -236,6 +236,7 @@ test('TEST_FIXTURE: validated high-turnover Micro early-flow sends a non-entry w
     assert.equal(sent[0].entry_eligible,false);
     assert.equal(sent[0].real_order_execution,false);
     assert.equal(sent[0].micro_data_validated,true);
+    assert.equal(sent[0].quote_volume_24h,900000);
     assert.equal(sent[0].liquidity_evidence_status,'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE');
     assert.match(sent[0].message,/دفتر الأوامر لم يُفحص بعد/);
     const audits=await store.readRecent('notifications',10);
@@ -247,7 +248,7 @@ test('TEST_FIXTURE: validated high-turnover Micro early-flow sends a non-entry w
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test('TEST_FIXTURE: Micro early-flow cannot push below the 750k turnover floor',async()=>{
+test('TEST_FIXTURE: Micro early-flow below 750k stays feed-only even with valid data/liquidity scores',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-micro-watch-underfloor-')),store=await new DurableStore({dir}).init();
   try{
     await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
@@ -258,7 +259,7 @@ test('TEST_FIXTURE: Micro early-flow cannot push below the 750k turnover floor',
     const now=Date.now();
     const out=await manager.notifyRadarWatchOnlyAlert({
       event:'EARLY_FLOW_WATCH_ONLY',radar:'EARLY_EXPANSION_RADAR',symbol:'UNDERFLOORUSDT',market:'SPOT',
-      price:1.02,price_change_24h:2.1,data_quality:null,liquidity_quality:null,
+      price:1.02,price_change_24h:2.1,data_quality:88,liquidity_quality:82,
       source:'BINANCE_PUBLIC_REST',quote_volume_24h:749999,micro_data_validated:true,
       liquidity_evidence_status:'ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE',
       detected_candle_close_time:now-1000,closed_candles_only:true,watch_only:true,
@@ -268,10 +269,10 @@ test('TEST_FIXTURE: Micro early-flow cannot push below the 750k turnover floor',
         taker_buy_ratio:.60,acceleration_1m_pct:.10,acceleration_5m_pct:.12,return_1m:.08,return_5m:.16},
       risk_flags:['EARLY_FLOW_WATCH_ONLY']
     });
-    assert.equal(out.status,'REJECTED_WATCH_ONLY');
-    assert.equal(out.reason,'DATA_QUALITY_MISSING_OR_LOW');
+    assert.equal(out.status,'WATCH_ONLY_FEED_ONLY');
     assert.equal(out.attempted,false);
-    assert.equal(calls,0);
+    assert.equal(out.sent_count,0);
+    assert.equal(calls,0,'turnover below 750,000 USDT must never reach the provider');
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
