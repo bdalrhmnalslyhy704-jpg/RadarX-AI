@@ -98,7 +98,7 @@ assert.match(firebase, /boolean lifecycleConflicts = !lifecycleState\.isEmpty\(\
   'Firebase must reject a lifecycle that conflicts with a strict-looking gate');
 assert.match(firebase, /boolean finalConfirmation = !lifecycleConflicts && \(/,
   'Firebase must require an internally consistent final confirmation state');
-assert.match(firebase, /if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
+assert.match(firebase, /if \(!explicitTest && !approvedPreMoveWatch && !approvedRadarEarlyTrackWatch && !approvedMicroEarlyFlowWatch &&\s*\(watchOnly \|\| watchEvent \|\| !risingDirection \|\| !entryEligible \|\|/,
   'Firebase keeps the original strict last-mile gate for every message outside the explicit Pre-Move and verified early-track allow-lists');
 assert.match(firebase, /private static boolean isApprovedPreMoveWatch\(/,
   'Firebase permits Pre-Move monitor-only delivery only through a dedicated allow-list helper');
