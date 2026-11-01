@@ -47,6 +47,51 @@ const avgDefined = (values, fallback = 50) => {
 };
 const clamp = (x, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, Number(x)));
 
+/**
+ * Bound every asynchronous part of a Pre-Move scan, including persistent-store
+ * reads/writes and time spent behind another scan. REST aborts alone cannot
+ * release the worker when a storage promise never settles.
+ */
+export function awaitPreMoveScanOperation(operation,{deadlineAtMs,signal=null,stage='UNKNOWN',progress=null}={}){
+  const deadline=Number(deadlineAtMs);
+  const makeDeadlineError=()=>{
+    const detail=progress&&typeof progress==='object'
+      ?' stage='+String(stage||progress.stage||'UNKNOWN')+
+        ' symbols='+String(Number(progress.symbols_completed)||0)+'/'+String(Number(progress.symbols_total)||0)
+      :' stage='+String(stage||'UNKNOWN');
+    const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED'+detail);
+    error.name='ScanDeadlineError';
+    if(progress&&typeof progress==='object')error.scan_progress={...progress,stage:String(stage||progress.stage||'UNKNOWN')};
+    return error;
+  };
+  if(signal?.aborted===true)return Promise.reject(makeDeadlineError());
+  if(!Number.isFinite(deadline)||deadline<=0)return Promise.resolve(
+    typeof operation==='function'?operation():operation
+  );
+  const remaining=deadline-Date.now();
+  if(remaining<=0)return Promise.reject(makeDeadlineError());
+  return new Promise((resolve,reject)=>{
+    let settled=false,timer=null;
+    const cleanup=()=>{
+      if(timer!==null)clearTimeout(timer);
+      signal?.removeEventListener?.('abort',onAbort);
+    };
+    const finish=(error,value)=>{
+      if(settled)return;
+      settled=true;cleanup();
+      error?reject(error):resolve(value);
+    };
+    const onAbort=()=>finish(makeDeadlineError());
+    timer=setTimeout(()=>finish(makeDeadlineError()),Math.max(1,remaining));
+    if(signal?.aborted===true)onAbort();
+    else signal?.addEventListener?.('abort',onAbort,{once:true});
+    let pending;
+    try{pending=typeof operation==='function'?operation():operation;}
+    catch(error){finish(error);return;}
+    Promise.resolve(pending).then(value=>finish(null,value),error=>finish(error));
+  });
+}
+
 export function normalizeRadarLimit(raw, defaults = MARKET_RADAR_DEFAULTS) {
   const n = Number(raw);
   if (!Number.isFinite(n)) return defaults.scanLimit;
@@ -1211,7 +1256,10 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   const requestedActivitySlots=activityPriorityLimit==null
     ?defaultActivityPrioritySlots
     :Math.max(0,Math.trunc(Number(activityPriorityLimit)||0));
-  const activityPrioritySlots=Math.min(defaultActivityPrioritySlots,requestedActivitySlots);
+  const activityCapacity=Math.max(0,Math.min(
+    Math.floor(take/3),take-pinned.length-(ranked.length>take?1:0)
+  ));
+  const activityPrioritySlots=Math.min(requestedActivitySlots,activityCapacity);
   const activityPriority=ranked
     .filter(x=>!pinnedSymbols.has(x.symbol)&&
       Number(x.pre_move_activity_score)>=3&&
@@ -2411,48 +2459,51 @@ export class MarketUniverseScanner {
     const normalizedLimit=Math.min(50,Math.max(10,normalizeRadarLimit(limit,{...this.config,maxScanLimit:50,scanLimit:30})));
     const key=`pre-move:${normalizedQuote}:${normalizedLimit}`;
     return this._coalesceScan(key,()=>{
+      // Start the absolute deadline before waiting for another limit/consumer to
+      // release the per-quote scan queue. A stalled earlier request must not pin
+      // this worker indefinitely.
+      const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||45_000);
+      const timeoutMs=Math.max(15_000,Math.min(45_000,configuredTimeout));
+      const previousDeadline=this.rest.requestDeadlineAtMs;
+      const previousSignal=this.rest.requestAbortSignal??null;
+      const nextDeadline=Date.now()+timeoutMs;
+      const priorDeadline=Number(previousDeadline);
+      const deadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
+        ?Math.min(priorDeadline,nextDeadline):nextDeadline;
+      const controller=new AbortController();
+      const abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+      const deadlineError=(cause=null)=>{
+        const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
+          ?cause.scan_progress:null;
+        const detail=progress
+          ?' stage='+String(progress.stage||'UNKNOWN')+
+            ' symbols='+String(Number(progress.symbols_completed)||0)+'/'+String(Number(progress.symbols_total)||0)+
+            (progress.last_completed_symbol?' last='+String(progress.last_completed_symbol):'')
+          :' stage=SCAN_OR_QUEUE';
+        const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED'+detail);
+        error.name='ScanDeadlineError';
+        if(progress)error.scan_progress={...progress};
+        return error;
+      };
       const previous=this._preMoveScanTails.get(normalizedQuote)||Promise.resolve();
-      const flight=previous.catch(()=>{}).then(async()=>{
-        // One deadline and one abort signal cover the complete cycle, including
-        // every in-flight Kline/depth request. A timed-out cycle must release the
-        // worker latch and must not advance the durable market-rotation cursor.
-        const configuredTimeout=Math.trunc(Number(this.config.preMoveScanTimeoutMs)||45_000);
-        const timeoutMs=Math.max(15_000,Math.min(45_000,configuredTimeout));
-        const previousDeadline=this.rest.requestDeadlineAtMs;
-        const previousSignal=this.rest.requestAbortSignal??null;
-        const nextDeadline=Date.now()+timeoutMs;
-        const priorDeadline=Number(previousDeadline);
-        const deadlineAtMs=Number.isFinite(priorDeadline)&&priorDeadline>0
-          ?Math.min(priorDeadline,nextDeadline):nextDeadline;
-        const controller=new AbortController();
-        const abortTimer=setTimeout(()=>controller.abort(),Math.max(1,deadlineAtMs-Date.now()));
+      const flight=awaitPreMoveScanOperation(previous.catch(()=>{}),{
+        deadlineAtMs,signal:controller.signal,stage:'WAIT_PREVIOUS_SCAN'
+      }).then(async()=>{
+        if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
         this.rest.requestDeadlineAtMs=deadlineAtMs;
         this.rest.requestAbortSignal=controller.signal;
-        const deadlineError=(cause=null)=>{
-          const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
-            ?cause.scan_progress:null;
-          const detail=progress
-            ?' stage='+String(progress.stage||'UNKNOWN')+
-              ' symbols='+String(Number(progress.symbols_completed)||0)+'/'+String(Number(progress.symbols_total)||0)+
-              (progress.last_completed_symbol?' last='+String(progress.last_completed_symbol):'')
-            :'';
-          const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED'+detail);
-          error.name='ScanDeadlineError';
-          if(progress)error.scan_progress={...progress};
-          return error;
-        };
-        try {
-          const result=await this._scanPreMove({
-            quote:normalizedQuote,limit:normalizedLimit,
-            signal:controller.signal,deadlineAtMs
-          });
+        try{
+          const result=await awaitPreMoveScanOperation(
+            this._scanPreMove({quote:normalizedQuote,limit:normalizedLimit,signal:controller.signal,deadlineAtMs}),
+            {deadlineAtMs,signal:controller.signal,stage:'SCAN'}
+          );
           if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
           return result;
-        } catch(error) {
-          if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError(error);
+        }catch(error){
+          if(controller.signal.aborted||Date.now()>=deadlineAtMs||error?.name==='ScanDeadlineError')
+            throw deadlineError(error);
           throw error;
-        } finally {
-          clearTimeout(abortTimer);
+        }finally{
           this.rest.requestDeadlineAtMs=previousDeadline;
           this.rest.requestAbortSignal=previousSignal;
         }
@@ -2460,6 +2511,7 @@ export class MarketUniverseScanner {
       const tail=flight.then(()=>undefined,()=>undefined);
       this._preMoveScanTails.set(normalizedQuote,tail);
       return flight.finally(()=>{
+        clearTimeout(abortTimer);
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
       });
     });
@@ -2478,6 +2530,7 @@ export class MarketUniverseScanner {
         throw error;
       }
     };
+    const awaitScanOperation=(operation,stage)=>awaitPreMoveScanOperation(operation,{deadlineAtMs,signal,stage,progress});
     const normalizedQuote=String(quote||this.config.quote).trim().toUpperCase();
     if(!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
     this._requests=new Map();
@@ -2499,7 +2552,15 @@ export class MarketUniverseScanner {
     const tickerActivityStoreReady=typeof this.rotationStateStore?.getDedupKey==='function'&&
       typeof this.rotationStateStore?.putDedupKey==='function';
     if(tickerActivityStoreReady){
-      try{tickerActivityBaseline=await this.rotationStateStore.getDedupKey(tickerActivityBaselineKey);}catch{}
+      try{
+        progress.stage='READ_ACTIVITY_BASELINE';
+        tickerActivityBaseline=await awaitScanOperation(
+          this.rotationStateStore.getDedupKey(tickerActivityBaselineKey),'READ_ACTIVITY_BASELINE'
+        );
+        assertScanActive();
+      }catch(error){
+        if(error?.name==='ScanDeadlineError')throw error;
+      }
     }
     const tickerActivitySignals=buildPreMoveTickerActivitySignals(
       tickerActivityRows,tickerActivityBaseline,tickerCapturedAt
@@ -2525,7 +2586,11 @@ export class MarketUniverseScanner {
       typeof this.rotationStateStore?.putDedupKey==='function';
     if(rotationStoreReady){
       try{
-        const saved=await this.rotationStateStore.getDedupKey(rotationKey);
+        progress.stage='READ_ROTATION_CURSOR';
+        const saved=await awaitScanOperation(
+          this.rotationStateStore.getDedupKey(rotationKey),'READ_ROTATION_CURSOR'
+        );
+        assertScanActive();
         const next=Number(saved?.next_cycle);
         rotationCycle=Number.isSafeInteger(next)&&next>=0?next:0;
         const savedOffset=Number(saved?.next_rotation_offset);
@@ -2535,7 +2600,8 @@ export class MarketUniverseScanner {
         rotationCursorOffset=Number.isSafeInteger(savedOffset)&&savedOffset>=0
           ?savedOffset:rotationCycle*legacyWidth;
         rotationCursorSource='DURABLE_STORE';
-      }catch{
+      }catch(error){
+        if(error?.name==='ScanDeadlineError')throw error;
         rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
         rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
         rotationCursorSource='PROCESS_MEMORY_FALLBACK';
@@ -2656,12 +2722,15 @@ export class MarketUniverseScanner {
           .filter(x=>Number.isFinite(Number(x?.captured_at))&&Number(x.captured_at)<tickerCapturedAt&&
             tickerCapturedAt-Number(x.captured_at)<=10*60_000&&x?.rows&&typeof x.rows==='object')
           .sort((a,b)=>Number(b.captured_at)-Number(a.captured_at))[0]||null;
-        await this.rotationStateStore.putDedupKey(tickerActivityBaselineKey,{
+        progress.stage='PERSIST_ACTIVITY_BASELINE';
+        await awaitScanOperation(this.rotationStateStore.putDedupKey(tickerActivityBaselineKey,{
           version:1,
           snapshots:[{captured_at:tickerCapturedAt,rows},...(previous?[previous]:[])]
-        });
+        }),'PERSIST_ACTIVITY_BASELINE');
+        assertScanActive();
         tickerActivityBaselinePersisted=true;
       }catch(error){
+        if(error?.name==='ScanDeadlineError')throw error;
         tickerActivityBaselineError=String(error?.message??error).slice(0,160);
       }
     }
@@ -2739,13 +2808,16 @@ export class MarketUniverseScanner {
       try{
         // Advance only after a completed scan. An interrupted scan retries the same
         // slice instead of silently skipping coverage on the next worker start.
-        await this.rotationStateStore.putDedupKey(rotationKey,{
+        progress.stage='PERSIST_ROTATION_CURSOR';
+        await awaitScanOperation(this.rotationStateStore.putDedupKey(rotationKey,{
           next_cycle:rotationCycle+1,
           next_rotation_offset:rotationOffset+rotationAdvanceCount,
           version:2,updated_at:this.clock()
-        });
+        }),'PERSIST_ROTATION_CURSOR');
+        assertScanActive();
         rotationCursorPersisted=true;
       }catch(error){
+        if(error?.name==='ScanDeadlineError')throw error;
         throw new Error('PRE_MOVE_ROTATION_CURSOR_PERSIST_FAILED:'+String(error?.message||error).slice(0,160));
       }
     }else{
