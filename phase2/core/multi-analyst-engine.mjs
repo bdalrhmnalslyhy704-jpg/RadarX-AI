@@ -48,11 +48,13 @@ export function selectWithPriorityRotation(rows,limit,cursor=0){
  * all existing freshness, liquidity, anti-chase and final decision gates.
  */
 export function buildMultiAnalystActivityPriorityRows(tickers,snapshotState,now=Date.now(),{
-  minQuoteVolume24h=300000,limit=1
+  minQuoteVolume24h=300000,limit=1,signals:providedSignals=null
 }={}){
   const max=Math.max(0,Math.min(3,Math.trunc(Number(limit)||0)));
   if(!max)return [];
-  const signals=buildPreMoveTickerActivitySignals(tickers,snapshotState,now);
+  const signals=providedSignals instanceof Map
+    ?providedSignals
+    :buildPreMoveTickerActivitySignals(tickers,snapshotState,now);
   if(!signals.size)return [];
   const floor=Math.max(1,Number(minQuoteVolume24h)||300000);
   return (Array.isArray(tickers)?tickers:[])
@@ -1569,21 +1571,21 @@ export class MultiAnalystEngine {
       const coverageFallback=this._rotatingDiscoveryBucket(
         'coverage',normalized,Math.min(normalized.length,this.config.discoveryPool)
       );
+      const discoveryLimit=Math.max(1,Math.trunc(Number(this.config.discoveryPool)||1));
       const deepPool=Math.max(1,Math.min(
-        selected.length||Math.max(1,Math.trunc(Number(this.config.discoveryPool)||1)),
-        Math.trunc(Number(this.config.deepScanPool)||selected.length||1)
+        discoveryLimit,Math.trunc(Number(this.config.deepScanPool)||discoveryLimit)
       ));
       const activityCapturedAt=this.clock();
       const activitySnapshotState={version:1,snapshots:this.marketActivitySnapshots.slice(0,2)};
+      const activitySignals=buildPreMoveTickerActivitySignals(
+        normalized,activitySnapshotState,activityCapturedAt
+      );
       const activityPriorityCapacity=Math.max(0,Math.min(1,deepPool-radarPriorityRows.length));
       const tickerActivityPriorityRows=buildMultiAnalystActivityPriorityRows(
         normalized,activitySnapshotState,activityCapturedAt,{
           minQuoteVolume24h:this.config.minQuoteVolume24h,
-          limit:activityPriorityCapacity
+          limit:activityPriorityCapacity,signals:activitySignals
         }
-      );
-      const activitySignals=buildPreMoveTickerActivitySignals(
-        normalized,activitySnapshotState,activityCapturedAt
       );
       // Store only current full-universe ticker counters, not another copy of candles/depth.
       const activitySnapshotRows=Object.fromEntries(normalized.map(row=>[
