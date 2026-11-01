@@ -2550,10 +2550,10 @@ export class MarketUniverseScanner {
         if(this._preMoveScanTails.get(normalizedQuote)===tail)this._preMoveScanTails.delete(normalizedQuote);
       });
       return flight.finally(()=>{
-        // The API deadline and AbortController timer share one absolute edge.
-        // Always propagate expiry into the signal even if the wrapper timer wins
-        // the event-loop race by a few milliseconds.
-        if(Date.now()>=deadlineAtMs&&!controller.signal.aborted)controller.abort();
+        // Once this bounded scan call settles, no downstream work may keep using
+        // its REST signal. Abort unconditionally: the wrapper timeout can win the
+        // event-loop race just before the AbortController timer becomes runnable.
+        if(!controller.signal.aborted)controller.abort();
         clearTimeout(abortTimer);
       });
     });
