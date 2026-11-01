@@ -703,7 +703,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     const status=!preMoveRadarScanner?'UNAVAILABLE':
       state.running?'SCANNING':!enabled?'IDLE':state.last_error?'DEGRADED':state.last_scan_at?'RUNNING':'STARTING';
     return {status,scanner_ready:Boolean(preMoveRadarScanner),worker:{
-      enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
+      enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT'),
       interval_ms:state.interval_ms,scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
       last_started_at:state.last_started_at,last_scan_at:state.last_scan_at,last_scan_status:state.last_scan_status,
       last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary,
@@ -865,11 +865,22 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   }
 
   function refreshPreMoveRadarSnapshot(key,quote,limit){
-    const active=preMoveRadarRefreshFlights.get(key);
-    if(active)return active;
-    const retryAfter=Number(preMoveRadarRefreshRetryAfter.get(key)||0);
+    // One live market scan per quote at a time. The worker requests USDT:50
+    // while the app may request USDT:10/30; these are views over one universe
+    // and must share one scanner flight rather than queue separate cycles.
+    const flightKey=String(quote||'USDT').trim().toUpperCase();
+    const active=preMoveRadarRefreshFlights.get(flightKey);
+    if(active){
+      return active.then(snapshot=>{
+        if(snapshot&&key!==flightKey){
+          preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
+        }
+        return snapshot;
+      });
+    }
+    const retryAfter=Number(preMoveRadarRefreshRetryAfter.get(flightKey)||0);
     if(retryAfter>Date.now())return null;
-    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(snapshot=>{
+    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote:flightKey,limit})).then(snapshot=>{
       if(!snapshot||snapshot.meta?.radar!=='PRE_MOVE'||typeof snapshot.as_of!=='string'||
          !snapshot.session||!snapshot.universe||!Array.isArray(snapshot.candidates))
         throw new Error('PRE_MOVE_RADAR_SNAPSHOT_INVALID');
@@ -879,8 +890,6 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         throw new Error('PRE_MOVE_SCANNER_SCHEMA_OUTDATED');
       if(snapshot.meta.live!==true||snapshot.universe.valid_data<1)
         throw new Error('PRE_MOVE_NO_VALID_LIVE_DATA');
-      // The same strict watch-only validator feeds FCM and the app's local-polling
-      // fallback. The fallback must not promote any row to an actionable entry signal.
       const watchCandidates=Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[];
       const watchEvaluationAt=Date.now();
       const watchAlerts=buildPreMoveWatchOnlyAlerts(watchCandidates,snapshot,watchEvaluationAt,3);
@@ -895,22 +904,19 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         if(oldest)preMoveRadarResponseCache.delete(oldest[0]);
       }
       preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
-      // Only validated observations enter this separate watch lane. Entry gates stay unchanged.
       if(typeof pushManager?.notifyRadarWatchOnlyAlert==='function'){
         for(const alert of watchAlerts){
           Promise.resolve().then(()=>pushManager.notifyRadarWatchOnlyAlert(alert)).then(result=>{
             const outcome={
               ...result,symbol:String(alert?.symbol||'').toUpperCase(),
-              status:String(result?.status||'UNKNOWN'),
-              reason:result?.reason||null
+              status:String(result?.status||'UNKNOWN'),reason:result?.reason||null
             };
             preMoveBackgroundWorkerState.notification_delivery=
               buildPreMoveNotificationDeliveryState(preMoveBackgroundWorkerState.notification_delivery,outcome,Date.now());
             console.info?.('[PRE_MOVE_WATCH_NOTIFICATION_RESULT] '+JSON.stringify({
-              symbol:outcome.symbol,status:outcome.status,
-              attempted:outcome.attempted===true,sent_count:Number(outcome.sent_count)||0,
-              attempted_count:Number(outcome.attempted_count)||0,reason:outcome.reason,
-              delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
+              symbol:outcome.symbol,status:outcome.status,attempted:outcome.attempted===true,
+              sent_count:Number(outcome.sent_count)||0,attempted_count:Number(outcome.attempted_count)||0,
+              reason:outcome.reason,delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
               watch_only:true,entry_eligible:false
             }));
           }).catch(error=>{
@@ -921,26 +927,25 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
                 attempted:false,sent_count:0,attempted_count:0,reason:'PUSH_RESULT_PROMISE_REJECTED',error:message
               },Date.now());
             console.warn?.('[PRE_MOVE_WATCH_NOTIFICATION_FAILED] '+JSON.stringify({
-              symbol:alert.symbol,error:message,
-              delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
+              symbol:alert.symbol,error:message,delivery_totals:preMoveBackgroundWorkerState.notification_delivery,
               watch_only:true,entry_eligible:false
             }));
           });
         }
       }
-      preMoveRadarRefreshRetryAfter.delete(key);
-      preMoveRadarLastError.delete(key);
+      preMoveRadarRefreshRetryAfter.delete(flightKey);
+      preMoveRadarLastError.delete(flightKey);
       return snapshot;
     }).catch(error=>{
       const message=String(error?.message??error).slice(0,180);
-      preMoveRadarRefreshRetryAfter.set(key,Date.now()+preMoveRadarRetryCooldownMs);
-      preMoveRadarLastError.set(key,message);
-      console.warn?.('[PRE_MOVE_RADAR_SCAN_FAILED] '+JSON.stringify({quote,limit,error:message}));
+      preMoveRadarRefreshRetryAfter.set(flightKey,Date.now()+preMoveRadarRetryCooldownMs);
+      preMoveRadarLastError.set(flightKey,message);
+      console.warn?.('[PRE_MOVE_RADAR_SCAN_FAILED] '+JSON.stringify({quote:flightKey,limit,error:message}));
       throw error;
     }).finally(()=>{
-      if(preMoveRadarRefreshFlights.get(key)===task)preMoveRadarRefreshFlights.delete(key);
+      if(preMoveRadarRefreshFlights.get(flightKey)===task)preMoveRadarRefreshFlights.delete(flightKey);
     });
-    preMoveRadarRefreshFlights.set(key,task);
+    preMoveRadarRefreshFlights.set(flightKey,task);
     return task;
   }
 
@@ -2097,8 +2102,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         const force=u.searchParams.get('scan')==='1';
         const cached=preMoveRadarResponseCache.get(key);
         const ageMs=cached?Math.max(0,now-cached.savedAt):null;
-        if(preMoveRadarRefreshFlights.has(key)){
-          return send(res,200,preMoveRadarPendingBody(quote,limit,key,'SCAN_IN_PROGRESS',ageMs));
+        if(preMoveRadarRefreshFlights.has(quote)){
+          if(cached&&ageMs!==null&&ageMs<=preMoveRadarCacheTtlMs){
+            return send(res,200,{
+              ...cached.snapshot,status:'ready',
+              meta:{...cached.snapshot.meta,live:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+                response_cache:{mode:'COALESCED_ACTIVE_SCAN',age_ms:ageMs,fresh_ttl_ms:preMoveRadarCacheTtlMs,refresh_in_progress:true}}
+            });
+          }
+          return send(res,200,preMoveRadarPendingBody(quote,limit,quote,'SCAN_IN_PROGRESS',ageMs));
         }
         if(!force&&cached&&ageMs<=preMoveRadarCacheTtlMs){
           return send(res,200,{
@@ -2107,8 +2119,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
               response_cache:{mode:'HIT',age_ms:ageMs,fresh_ttl_ms:preMoveRadarCacheTtlMs}}
           });
         }
-        if(Number(preMoveRadarRefreshRetryAfter.get(key)||0)>now){
-          return send(res,200,preMoveRadarPendingBody(quote,limit,key,'RETRY_COOLDOWN',ageMs));
+        if(Number(preMoveRadarRefreshRetryAfter.get(quote)||0)>now){
+          return send(res,200,preMoveRadarPendingBody(quote,limit,quote,'RETRY_COOLDOWN',ageMs));
         }
         const refresh=refreshPreMoveRadarSnapshot(key,quote,limit);
         if(refresh)refresh.catch(()=>{});
