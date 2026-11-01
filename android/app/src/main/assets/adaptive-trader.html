@@ -158,6 +158,13 @@ main{width:min(1180px,100%);margin:auto;padding:0 15px 38px;position:relative;z-
     <div class="learning-card"><h3>حالة المعرفة</h3><p>تظهر بعد أول دورة تحليل خادمية.</p></div>
     <div class="learning-card"><h3>اختبار خارج العينة</h3><p>لن يعرض احتمال صعود قبل اجتياز المقارنة الزمنية.</p></div>
   </div>
+  <div class="section-title"><h2>ذاكرة نتائج الرادارات — ساعة و24 ساعة</h2><span id="radarOutcomeLearningStatus" class="tag watch">تُجمع النتائج</span></div>
+  <div class="learning-grid" id="radarOutcomeLearning">
+    <div class="learning-card"><h3>أفق ساعة</h3><p>تظهر النتائج بعد اكتمال الشموع.</p></div>
+    <div class="learning-card"><h3>أفق 24 ساعة</h3><p>لا تُحتسب النتائج قبل اكتمال الأفق.</p></div>
+  </div>
+  <div class="section-title"><h2>دراسات الحالات المحفوظة</h2><span class="tiny">12 رادار · نتائج Spot مغلقة فقط</span></div>
+  <div id="radarOutcomeCases" class="log-list"><div class="empty">لا توجد دراسات حالات مكتملة بعد.</div></div>
   <div class="section-title"><h2>دفتر الفرضيات والنتائج</h2><span class="tiny">ملاحظات مستقلة عن قرارات الرادارات</span></div>
   <div id="cognitiveJournal" class="log-list"><div class="empty">تظهر الفرضيات بعد أول دورة تحليل.</div></div>
   <div class="section-title"><h2>مراجعة العملات التي فاتته</h2><span class="tiny">تدقيق لاحق لا يستخدم معلومات المستقبل عند خط الأساس</span></div>
@@ -571,8 +578,17 @@ function renderCandidates(snapshot){
     const cognitiveRank=num(candidate.cognitive_rank_score);
     const brainProbability=brain.predicted_up_probability===null||brain.predicted_up_probability===undefined
       ?'احتمال الصعود غير معتمد':'احتمال اختباري '+fmt(brain.predicted_up_probability,1)+'%';
-    const brainLine=brain.summary_ar
-      ?'<div class="tiny" style="margin-top:6px"><b>تحليل العقل:</b> '+esc(brain.summary_ar)+' · '+esc(brainProbability)+'</div>':'';
+    const motive=brain.market_motive_assessment||{};
+    const motiveLabel=motive.accumulation_hypothesis==='SUPPORTED_BY_CONVERGENT_PUBLIC_EVIDENCE'
+      ?'قرائن تدفق وتجميع متوافقة':'فرضية التجميع غير مثبتة';
+    const bookLabel=motive.order_book_confirmation==='BID_DEPTH_SUPPORTS_BUY_FLOW'
+      ?'عمق الطلبات داعم':motive.order_book_confirmation==='NO_CLEAR_BID_DEPTH_SUPPORT'
+        ?'دفتر الأوامر لا يؤكد ضغط الشراء':'دفتر الأوامر لم يُفحص';
+    const trapLabel=motive.possible_liquidity_trap===true?' · تحذير: قرائن فخ سيولة':'';
+    const motiveLine=brain.market_motive_assessment
+      ?'<div class="tiny" style="margin-top:5px"><b>قراءة الدوافع:</b> '+esc(motiveLabel)+' · '+esc(bookLabel)+esc(trapLabel)+' · لا تثبت لقطة واحدة هوية حوت أو تلاعبًا.</div>':'';
+    const brainLine=(brain.summary_ar
+      ?'<div class="tiny" style="margin-top:6px"><b>تحليل العقل:</b> '+esc(brain.summary_ar)+' · '+esc(brainProbability)+'</div>':'')+motiveLine;
     const reasons=(decision.label_ar?[decision.label_ar]:[]).concat(candidate.reason_codes||[]).slice(0,5)
       .map(function(code){return '<span class="reason">'+esc(code)+'</span>';}).join('');
     return '<article class="candidate '+cls+'">'+
@@ -755,6 +771,49 @@ function renderLearning(){
     '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' تدريب · '+esc(Math.max(0,Number(brainProfile.validation_samples)||0))+' تحقق · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' اختبار نهائي.</p><div class="tiny">عينات تداخل مستبعدة: '+esc(Number(brainProfile.purged_overlap_samples)||0)+' · عوامل مغطاة: '+esc(covered)+' · قرارات مبكرة للمراجعة: '+esc(Number(brainCapture.early_setup_reviews)||0)+'</div></div>'+
     '<div class="learning-card"><h3>اختيار النموذج والتكيّف</h3><p>'+esc(selectedModel)+' · '+esc(adaptationText)+'</p><div class="tiny">'+esc(validationText)+'</div></div>'+
     '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null&&Number.isFinite(Number(prequential.recent_window.brier_score))?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div><div class="tiny">'+esc(errorReviewText)+'</div></div>';
+
+  const radarMemory=brain.radar_outcome_learning||{};
+  const horizonProfiles=radarMemory.horizon_profiles||{};
+  const horizonCapture=radarMemory.capture||{};
+  const radarMemoryPolicy=radarMemory.policy||{};
+  const memoryAuto=radarMemoryPolicy.automatic_weight_update===true;
+  el('radarOutcomeLearningStatus').textContent=memoryAuto
+    ?'تعديل ترتيب مُتحقق خارج العينة'
+    :'ذاكرة رصدية — لا تعدّل الترتيب بعد';
+  el('radarOutcomeLearningStatus').className='tag '+(memoryAuto?'early':'watch');
+  const horizonCard=function(key,label){
+    const p=horizonProfiles[key]||{},cap=horizonCapture[key]||{},counts=cap.outcome_counts||p.outcome_counts||{};
+    const ready=p.probability_ready===true;
+    const validation=p.validation||{},hold=p.holdout||{};
+    const status=ready?'اجتاز التحقق والاختبار النهائي':
+      p.ranking_ready===true?'ترتيب تجريبي فقط':'عينات غير كافية أو لا يوجد تفوق مثبت';
+    return '<div class="learning-card"><h3>نتائج '+label+'</h3>'+
+      '<p>'+esc(Number(cap.complete_closed_candle_outcomes??p.resolved_samples)||0)+' نتيجة إغلاق مكتملة · تدريب '+esc(Number(p.training_samples)||0)+
+      ' · تحقق '+esc(Number(p.validation_samples)||0)+' · اختبار مستقل '+esc(Number(p.holdout_samples)||0)+'</p>'+
+      '<div class="tiny">صعود '+esc(Number(counts.up)||0)+' · هبوط '+esc(Number(counts.down)||0)+' · حيادي '+esc(Number(counts.flat)||0)+'</div>'+
+      '<div class="tiny">'+esc(status)+'</div>'+
+      '<div class="tiny">Brier التحقق: '+esc(validation.evaluated===true?fmt(validation.model_brier_score,3)+' مقابل '+fmt(validation.base_rate_brier_score,3):'غير مكتمل')+
+      ' · Brier الاختبار: '+esc(hold.evaluated===true?fmt(hold.model_brier_score,3)+' مقابل '+fmt(hold.base_rate_brier_score,3):'غير مكتمل')+'</div>'+
+      '<div class="tiny">حد التصنيف: '+esc(fmt(p.outcome_threshold_pct,1))+'% · مصدر: Binance Spot OHLC مغلق</div>'+
+      '</div>';
+  };
+  el('radarOutcomeLearning').innerHTML=horizonCard('60m','ساعة')+horizonCard('24h','24 ساعة');
+  const radarCases=Array.isArray(radarMemory.case_studies)?radarMemory.case_studies:[];
+  const returnText=function(item){
+    return item&&item.status==='COMPLETE'&&Number.isFinite(Number(item.close_return_pct))
+      ?(Number(item.close_return_pct)>0?'+':'')+fmt(item.close_return_pct,2)+'%'
+      :'لم يكتمل';
+  };
+  el('radarOutcomeCases').innerHTML=radarCases.length?radarCases.slice(0,12).map(function(row){
+    const one=row.one_hour||{},day=row.twenty_four_hour||{};
+    const reasons=(Array.isArray(row.retrospective_review_reasons)?row.retrospective_review_reasons:[])
+      .slice(0,4).map(x=>'<span class="reason">'+esc(x)+'</span>').join('');
+    return '<article class="log-entry"><div class="log-meta"><b>'+esc(row.symbol||'—')+'</b><span>'+esc(row.radar||'—')+' · '+esc(row.stage||'—')+'</span></div>'+
+      '<div class="tiny">بعد ساعة: '+esc(returnText(one))+' · بعد 24 ساعة: '+esc(returnText(day))+
+      ' · خصائص موثقة وقت الرصد: '+esc(Number(row.feature_snapshot_available_count)||0)+'</div>'+
+      '<div class="reasons">'+reasons+'</div></article>';
+  }).join(''):'<div class="empty">لا توجد حالات محفوظة بعد. تُسجل النتيجة بعد اكتمال نافذة الشموع، ولا تُحوَّل الحالة غير المكتملة إلى ربح أو خسارة.</div>';
+
   const recentBrain=Array.isArray(brain.recent_journal)?brain.recent_journal:[];
   el('cognitiveJournal').innerHTML=recentBrain.length?recentBrain.slice(0,12).map(function(row){
     const outcome=['UP','DOWN','FLAT'].includes(row.outcome)?(' · النتيجة '+row.outcome+' '+percent(row.return_pct)):' · تنتظر إغلاق أفق التقييم';
