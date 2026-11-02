@@ -557,7 +557,7 @@ export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAl
       ...(snapshot||{}),source:'Binance Public REST',
       meta:{...(snapshot?.meta||{}),radar:'PRE_MOVE',live:true,paper_trading:true,real_order_execution:false}
     },now);
-    if(!validated)continue;
+    if(!validated||validated.watch_notification_tier!=='EARLY_FLOW_MONITOR')continue;
     const symbol=validated.symbol;
     if(!bySymbol.has(symbol)){
       bySymbol.set(symbol,{
