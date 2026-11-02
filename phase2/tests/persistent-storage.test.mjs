@@ -115,3 +115,26 @@ test('FCM device registry survives reopening DurableStore when its directory is 
     await rm(root,{recursive:true,force:true});
   }
 });
+
+
+test('DHDTech /APP/.RADARX-DATA volume is auto-detected as the archive directory itself',()=>{
+  const value=resolveDurableStorage({
+    env:{},cwd:'/app',
+    mountsContent:'/dev/vdb1 /APP/.RADARX-DATA ext4 rw,relatime 0 0\noverlay / overlay rw 0 0'
+  });
+  assert.equal(value.directory,'/APP/.RADARX-DATA');
+  assert.equal(value.absolute_directory,'/APP/.RADARX-DATA');
+  assert.equal(value.persistent,true);
+  assert.equal(value.mount_path,'/APP/.RADARX-DATA');
+  assert.equal(value.source,'AUTO_DETECTED_RADARX_MOUNT');
+});
+
+test('explicit DHDTech RADARX_DATA_MOUNT_PATH can point directly at /APP/.RADARX-DATA',()=>{
+  const value=resolveDurableStorage({
+    env:{RADARX_DATA_MOUNT_PATH:'/APP/.RADARX-DATA'},cwd:'/app',
+    mountsContent:'/dev/vdb1 /APP/.RADARX-DATA ext4 rw,relatime 0 0'
+  });
+  assert.equal(value.directory,'/APP/.RADARX-DATA');
+  assert.equal(value.persistent,true);
+  assert.equal(value.source,'ENV_CONFIGURED_MOUNT_DIRECTORY');
+});
