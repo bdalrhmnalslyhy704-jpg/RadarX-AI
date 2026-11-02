@@ -71,16 +71,6 @@ export function resolveDurableStorage({env=process.env,mountsContent='',cwd=proc
     explicitDir?'ENV_CONFIGURED_DIRECTORY_EPHEMERAL':
     isRailway?'RAILWAY_DEFAULT_DIRECTORY_EPHEMERAL':
     'CONTAINER_FILESYSTEM_FALLBACK';
-  const absoluteDirectory=resolve(cwd,directory);
-  const backingMount=findBackingMount(directory);
-  const persistent=Boolean(backingMount);
-  const source=explicitDir&&explicitMount?'ENV_CONFIGURED_MOUNT_DIRECTORY':
-    requestedMount&&selectedMount?(requestedMountIsExactDataDirectory?'ENV_CONFIGURED_MOUNT_DIRECTORY':'ENV_CONFIGURED_MOUNT_SUBDIRECTORY'):
-    namedRadarxMount?'AUTO_DETECTED_RADARX_MOUNT':
-    selectedMount?'AUTO_DETECTED_MOUNT':
-    explicitDir?'ENV_CONFIGURED_DIRECTORY_EPHEMERAL':
-    isRailway?'RAILWAY_DEFAULT_DIRECTORY_EPHEMERAL':
-    'CONTAINER_FILESYSTEM_FALLBACK';
   return {
     directory,
     absolute_directory:absoluteDirectory,
