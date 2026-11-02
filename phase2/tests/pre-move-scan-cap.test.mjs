@@ -15,19 +15,19 @@ test('Build 224 Pre-Move deep-scan capacity is bounded, configurable, and deadli
   try {
     delete process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT;
     const defaults = await import('../config.mjs?pre-move-cap-default-test');
-    assert.equal(defaults.config.marketRadar.preMoveCycleScanLimit, 8);
+    assert.equal(defaults.CONFIG.marketRadar.preMoveCycleScanLimit, 8);
 
     process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = '10';
     const maximum = await import('../config.mjs?pre-move-cap-maximum-test');
-    assert.equal(maximum.config.marketRadar.preMoveCycleScanLimit, 10);
+    assert.equal(maximum.CONFIG.marketRadar.preMoveCycleScanLimit, 10);
 
     process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = '2';
     const minimum = await import('../config.mjs?pre-move-cap-minimum-test');
-    assert.equal(minimum.config.marketRadar.preMoveCycleScanLimit, 6);
+    assert.equal(minimum.CONFIG.marketRadar.preMoveCycleScanLimit, 6);
 
     process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = 'not-a-number';
     const invalid = await import('../config.mjs?pre-move-cap-invalid-test');
-    assert.equal(invalid.config.marketRadar.preMoveCycleScanLimit, 8);
+    assert.equal(invalid.CONFIG.marketRadar.preMoveCycleScanLimit, 8);
   } finally {
     if (original === undefined) delete process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT;
     else process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = original;
