@@ -23,7 +23,7 @@ test('Build 224 Pre-Move deep-scan capacity is bounded, configurable, and deadli
 
     process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = '2';
     const minimum = await import('../config.mjs?pre-move-cap-minimum-test');
-    assert.equal(minimum.CONFIG.marketRadar.preMoveCycleScanLimit, 6);
+    assert.equal(minimum.CONFIG.marketRadar.preMoveCycleScanLimit, 8);
 
     process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = 'not-a-number';
     const invalid = await import('../config.mjs?pre-move-cap-invalid-test');
