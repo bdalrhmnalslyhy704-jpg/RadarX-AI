@@ -1,0 +1,137 @@
+name: RadarX Build 224 missed-mover historical replay
+
+on:
+  push:
+    branches:
+      - research/build224-monthly-move-forensics-20261019
+    paths:
+      - 'reports/missed-mover-replay-cohort.json'
+      - '.github/workflows/radarx-missed-mover-replay.yml'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/monthly-historical-replay-lab.mjs'
+      - 'phase2/tests/dynamic-early-warning-gate.test.mjs'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/monthly-historical-replay-lab.mjs'
+      - 'phase2/tests/dynamic-early-warning-gate.test.mjs'
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - 'reports/missed-mover-replay-cohort.json'
+      - '.github/workflows/radarx-missed-mover-replay.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radarx-build224-missed-mover-replay
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Re-run Strong Move detector before 12 confirmed historical events
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out Build 224 research branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          check-latest: true
+
+      - name: Verify cohort has the exact closed-candle schema
+        run: |
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            const x = JSON.parse(await readFile('reports/missed-mover-replay-cohort.json', 'utf8'));
+            if (!String(x.schema_version || '').startsWith('radarx.monthly-move-forensics.')) throw new Error('FORENSICS_SCHEMA_INVALID');
+            if (x.policy?.market_data !== 'BINANCE_SPOT_PUBLIC_READ_ONLY' || x.policy?.paper_trading !== true || x.policy?.real_order_execution !== false) throw new Error('PAPER_ONLY_POLICY_INVALID');
+            if (!Array.isArray(x.cases) || x.cases.length !== 12) throw new Error('EXPECTED_12_REPLAY_CASES');
+            for (const c of x.cases) {
+              if (!/^[A-Z0-9]{5,20}$/.test(c.symbol) || c.anchorMarker !== 'FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH' || c.forensics?.outcomes?.complete_24h !== true) throw new Error('INVALID_OR_UNMATURED_CASE:' + c.symbol);
+            }
+            console.log('Validated ' + x.cases.length + ' matured historical cases; event markers are labels, not evaluator inputs.');
+          "
+
+      - name: Replay detector over the 24 hours before each historical anchor
+        id: replay
+        run: |
+          mkdir -p reports/missed-mover-replay
+          set +e
+          node phase2/tools/monthly-historical-replay-lab.mjs \
+            --input reports/missed-mover-replay-cohort.json \
+            --output-dir reports/missed-mover-replay \
+            --max-cases 12 \
+            --max-input-cases 12 \
+            --max-trade-pages 20 \
+            --max-trades 20000 \
+            --outcome-horizon-hours 24 \
+            --case-timeout-ms 900000 > reports/missed-mover-replay/replay-console.log 2>&1
+          result=$?
+          cat reports/missed-mover-replay/replay-console.log
+          echo "$result" > reports/missed-mover-replay/replay-exit-code.txt
+          exit "$result"
+
+      - name: Validate and summarize actual replay evidence
+        if: always()
+        run: |
+          node --input-type=module -e "
+            import { readFile } from 'node:fs/promises';
+            const p = 'reports/missed-mover-replay/monthly-learning-summary.json';
+            const r = JSON.parse(await readFile(p, 'utf8'));
+            const c = r.coverage || {};
+            const m = r.metrics || {};
+            console.log(JSON.stringify({
+              schema:r.schema_version,
+              source_cases:c.source_cases,
+              complete_replays:c.complete_replays,
+              failed_or_skipped_cases:c.failed_or_skipped_cases,
+              positive_anchor_cases:c.positive_anchor_cases,
+              positive_anchors_captured_before_anchor:c.positive_anchors_captured_before_anchor,
+              accepted_decisions:m.accepted_decisions,
+              successful_alerts:m.successful_alerts,
+              false_alerts:m.false_alerts,
+              missed_move_decisions:m.missed_move_decisions,
+              missed_move_events:m.missed_move_events,
+              median_lead_time_minutes:m.median_lead_time_minutes,
+              walk_forward:r.walk_forward?.status,
+              policy:r.policy
+            }, null, 2));
+            if (r.policy?.real_order_execution !== false || r.policy?.paper_trading !== true) throw new Error('PAPER_ONLY_POLICY_INVALID');
+          "
+
+      - name: Commit actual Markdown summary to the research branch
+        if: always() && github.event_name == 'push'
+        run: |
+          if [ -f reports/missed-mover-replay/monthly-learning-summary.md ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add reports/missed-mover-replay/monthly-learning-summary.md
+            if ! git diff --cached --quiet; then
+              git commit -m 'research(build224): record missed-mover replay results'
+              git push origin HEAD:refs/heads/research/build224-monthly-move-forensics-20261019
+            else
+              echo 'Replay Markdown unchanged; no report commit needed.'
+            fi
+          else
+            echo 'No summary was produced; keep the failed log as the evidence.'
+          fi
+
+      - name: Upload replay, metrics and run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-missed-mover-historical-replay
+          path: |
+            reports/missed-mover-replay/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,173 @@
+{
+  "schema_version": "radarx.monthly-move-forensics.v1",
+  "build": "Build 224",
+  "window": {
+    "days": 30,
+    "start_utc": "2026-09-19T16:49:57.505Z",
+    "end_utc": "2026-10-19T16:49:57.505Z"
+  },
+  "policy": {
+    "quote": "USDT",
+    "market_data": "BINANCE_SPOT_PUBLIC_READ_ONLY",
+    "paper_trading": true,
+    "real_order_execution": false
+  },
+  "cases": [
+    {
+      "symbol": "GTCUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 221.572,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-25T09:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "QNTUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 203.777,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-22T11:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "RLCUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 149.548,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-19T23:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "AMPUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 72.549,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-26T10:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "GLMRUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 71.526,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-25T10:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "TIAUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 56.325,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-22T09:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "PHAUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 47.401,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-20T16:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "STRKUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 36.61,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-28T17:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "NEARUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 33.298,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-20T13:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "RSRUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 25.904,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-10-11T16:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "AEROUSDT",
+      "cohort": "STRONG",
+      "monthlyReturnPct": 24.594,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-09-24T14:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    },
+    {
+      "symbol": "CFXUSDT",
+      "cohort": "MEDIUM",
+      "monthlyReturnPct": 6.722,
+      "anchorMarker": "FIRST_4PCT_RANGE_BREAK_WITH_8PCT_24H_FOLLOW_THROUGH",
+      "forensics": {
+        "anchor_time": "2026-10-10T01:00:00.000Z",
+        "outcomes": {
+          "complete_24h": true
+        }
+      },
+      "error": null
+    }
+  ]
+}
