@@ -592,6 +592,7 @@ export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAl
     }
   }
   const merged=[...bySymbol.values()].sort((a,b)=>
+    Number(b.archived_early_wake_observation===true)-Number(a.archived_early_wake_observation===true)||
     Number(b.pre_move_context?.score||0)-Number(a.pre_move_context?.score||0)||
     Number(a.pre_move_context?.session_return_pct||0)-Number(b.pre_move_context?.session_return_pct||0)||
     String(a.symbol).localeCompare(String(b.symbol))
