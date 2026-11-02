@@ -8,11 +8,10 @@ import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit
 import {finiteNumberOr} from '../core/finite-number.mjs';
 import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSecurityCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
-// Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
-// envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
+// Bound each Pre-Move cycle for the small DHDTech worker. The durable cursor
+// rotates the full Spot universe while only a small candidate batch gets deep data.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
-// Live measurements showed no speed gain from large fan-out. Sixteen workers
-// reduce simultaneous candle/depth payloads while keeping network utilization high.
+// Four parallel symbol scans cap simultaneous kline/depth payloads on the small worker.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 4;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
@@ -22,10 +21,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // Keep the low-memory hosted worker's closed-candle + order-book batch
-  // bounded to six pairs per cycle. The durable cursor rotates the full universe;
-  // the public hard cap remains ten for compatibility with the API contract.
-  preMoveCycleScanLimit: 6,
+  // Keep the low-memory hosted worker's closed-candle + order-book batch bounded.
+  // Eight is the default (two waves at concurrency four); the runtime config permits
+  // a measured 6-10 range without exceeding the scanner's hard cap.
+  preMoveCycleScanLimit: 8,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2611,9 +2610,9 @@ export class MarketUniverseScanner {
     // This screen uses only the timeframes needed for early-flow evidence (1h + 15m)
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
-    // Preserve the public ten-symbol hard cap, while the hosted worker deep-scans
-    // six pairs per cycle to finish within its 45s deadline on the small CPU tier.
-    // The durable cursor and ticker-activity lane preserve wider-market coverage.
+    // The hosted worker defaults to eight deep scans and permits a bounded 6-10
+    // range. The 45s deadline remains authoritative: incomplete cycles fail closed,
+    // and only completed cycles persist a cursor advance.
     const configuredCycleLimit=Math.max(1,Math.min(
       PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
       Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE)
@@ -2678,9 +2677,8 @@ export class MarketUniverseScanner {
       tickerResponse.data,universe,{...discoveryOptions,rotationOffset}
     );
     const rotationAdvanceCount=Math.max(0,Math.trunc(Number(discovery.rotation_advance_count)||0));
-    // Live acceptance measured 51.6s at concurrency 16 and 56.1s at 40.
-    // Each pair requests 15m klines and order-book depth. Use a bounded middle
-    // concurrency of 24 while preserving the complete 40-symbol rotation batch.
+    // Each pair requests 15m klines and order-book depth. Keep concurrency at four;
+    // the durable cursor resumes the remaining Spot universe on subsequent cycles.
     const preMoveConcurrency=Math.min(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,Math.max(1,discovery.length));
     progress.stage='DEEP_SCAN';
     progress.symbols_total=discovery.length;
