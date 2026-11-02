@@ -38,19 +38,31 @@ if [ -z "${RADARX_PUSH_PROVIDER:-}" ]; then
 fi
 export RADARX_PUSH_PROVIDER
 
-# Prefer DHDTech's persistent volume when it is mounted and writable.
-# Preserve an explicit operator-selected directory; never silently relocate it.
+# Prefer the operator's actual DHDTech RadarX volume mount. The user has
+# mounted this volume directly at /APP/.RADARX-DATA; that mountpoint is the
+# archive directory, not a parent folder to which another directory is appended.
+# Preserve an explicit RADARX_DATA_DIR; only auto-detect when it is unset.
 if [ -z "${RADARX_DATA_DIR:-}" ]; then
-  if [ -d /data ] && grep -qs " /data " /proc/mounts && [ -w /data ] && mkdir -p /data/radarx 2>/dev/null && [ -w /data/radarx ]; then
-    export RADARX_DATA_DIR=/data/radarx
-    # Migrate only missing files from the old container-local directory.
-    # Existing persistent records always win; this is idempotent across restarts.
-    if [ -d ./.radarx-data ] && [ "$(cd ./.radarx-data && pwd)" != "$(cd "$RADARX_DATA_DIR" && pwd)" ]; then
-      cp -an ./.radarx-data/. "$RADARX_DATA_DIR"/ 2>/dev/null || true
+  radarx_mount=""
+  for candidate in /APP/.RADARX-DATA /app/.RADARX-DATA /app/.radarx-data /APP/.radarx-data; do
+    if [ -d "$candidate" ] && awk -v expected="$candidate" '$2 == expected { found=1 } END { exit(found ? 0 : 1) }' /proc/mounts && [ -w "$candidate" ]; then
+      radarx_mount="$candidate"
+      break
     fi
+  done
+  if [ -n "$radarx_mount" ]; then
+    export RADARX_DATA_DIR="$radarx_mount"
+  elif [ -d /data ] && awk '$2 == "/data" { found=1 } END { exit(found ? 0 : 1) }' /proc/mounts && [ -w /data ]; then
+    mkdir -p /data/radarx
+    export RADARX_DATA_DIR=/data/radarx
   else
     export RADARX_DATA_DIR=./.radarx-data
   fi
+fi
+# Migrate only missing files from the old container-local directory. Existing
+# persistent records always win; the operation is idempotent across restarts.
+if [ -d ./.radarx-data ] && [ "$(cd ./.radarx-data && pwd)" != "$(cd "$RADARX_DATA_DIR" && pwd)" ]; then
+  cp -an ./.radarx-data/. "$RADARX_DATA_DIR"/ 2>/dev/null || true
 fi
 mkdir -p "$RADARX_DATA_DIR"
 chmod 700 "$RADARX_DATA_DIR" 2>/dev/null || true
