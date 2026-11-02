@@ -176,7 +176,7 @@ async function readBoundedOutcomeLedger(path,recordLimit){
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.preExpansionOutcomeQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.preExpansionOutcomeQueue=Promise.resolve();this.preExpansionOutcomeState=null;this.preExpansionOutcomeStateLoaded=false;this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),preMoveState:join(dir,'pre-move-state.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
@@ -676,6 +676,8 @@ export class DurableStore {
         trimmedStageKeys=removeCount;
       }else if(state.last_stage_by_key!==stageMap)state.last_stage_by_key=stageMap;
       if(!trimmedRecords&&!trimmedStageKeys){
+        this.preExpansionOutcomeState=state;
+        this.preExpansionOutcomeStateLoaded=true;
         return {compacted:false,reason:'WITHIN_LIMITS',retained_records:state.records.length,trimmed_records:0,
           retained_stage_keys:stageEntries.length,trimmed_stage_keys:0,before_bytes:beforeBytes,after_bytes:beforeBytes};
       }
@@ -683,6 +685,8 @@ export class DurableStore {
       // 5,000-row JSON.parse allocation that previously aborted the V8 heap.
       await new Promise(resolve=>setImmediate(resolve));
       await this.writeJson(this.files.preExpansionOutcomes,state);
+      this.preExpansionOutcomeState=state;
+      this.preExpansionOutcomeStateLoaded=true;
       const afterBytes=Number((await stat(this.files.preExpansionOutcomes)).size)||0;
       return {compacted:true,reason:'WORKING_SET_BOUNDED',retained_records:state.records.length,
         trimmed_records:trimmedRecords,retained_stage_keys:Object.keys(state.last_stage_by_key||{}).length,
@@ -690,23 +694,46 @@ export class DurableStore {
     });
   }
   // Internal evaluation state only; no HTTP/API contract is exposed for this file.
+  // This small mutable working set is owned by one DurableStore/backend process.
+  // The durable JSON file remains the restart source of truth; caching avoids parsing
+  // and allocating the same 1,500-record ledger in every 20-second Radar 8 cycle.
   async getPreExpansionOutcomes(){
-    return this.readJson(this.files.preExpansionOutcomes);
+    if(this.preExpansionOutcomeStateLoaded)return this.preExpansionOutcomeState||{};
+    return this.preExpansionOutcomeLock(async()=>{
+      if(this.preExpansionOutcomeStateLoaded)return this.preExpansionOutcomeState||{};
+      const state=await this.readJson(this.files.preExpansionOutcomes);
+      this.preExpansionOutcomeState=state&&typeof state==='object'&&!Array.isArray(state)?state:{};
+      this.preExpansionOutcomeStateLoaded=true;
+      return this.preExpansionOutcomeState;
+    });
   }
   async updatePreExpansionOutcomes(updater){
     if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
     return this.preExpansionOutcomeLock(async()=>{
-      let current=await this.readJson(this.files.preExpansionOutcomes);
+      let source=this.preExpansionOutcomeStateLoaded
+        ?(this.preExpansionOutcomeState||{})
+        :await this.readJson(this.files.preExpansionOutcomes);
+      // Outcome tracker callbacks mutate their input. Clone the cached snapshot so
+      // a failed write cannot make uncommitted mutations visible to live radar reads.
+      let current=structuredClone(source);
       const result=await updater(current);
-      if(result===false)return current;
+      if(result===false){
+        if(!this.preExpansionOutcomeStateLoaded){
+          // The updater may have mutated its private clone before returning false.
+          // Keep the original snapshot, matching the old read/discard behavior.
+          this.preExpansionOutcomeState=source;
+          this.preExpansionOutcomeStateLoaded=true;
+        }
+        return this.preExpansionOutcomeState||source;
+      }
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
       if(next!==current){
-        // Drop the original parsed snapshot before serializing the normalized state.
-        // Yield once so the completed updater's stack can unwind and become collectible.
         current=null;
         await new Promise(resolve=>setImmediate(resolve));
       }
       await this.writeJson(this.files.preExpansionOutcomes,next);
+      this.preExpansionOutcomeState=next;
+      this.preExpansionOutcomeStateLoaded=true;
       return next;
     });
   }

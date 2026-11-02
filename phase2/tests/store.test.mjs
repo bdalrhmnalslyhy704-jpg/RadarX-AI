@@ -535,3 +535,66 @@ test('Radar 8 outcome ledger updates and compaction do not wait behind the share
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('Radar 8 outcome ledger is read once and then served from a bounded in-memory cache',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-state-cache-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const state={
+      version:'PRE_EXPANSION_OUTCOMES_V2',
+      records:[{signal_id:'CACHE:ABCUSDT:1',radar:'RADAR_8',symbol:'ABCUSDT',outcome_status:'PENDING'}],
+      last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,
+      last_historical_import_at:0,last_historical_backfill_at:0,updated_at:1700000000000
+    };
+    await writeFile(store.files.preExpansionOutcomes,JSON.stringify(state));
+    const originalReadJson=store.readJson.bind(store);
+    let outcomeFileReads=0;
+    store.readJson=async path=>{
+      if(path===store.files.preExpansionOutcomes)outcomeFileReads++;
+      return originalReadJson(path);
+    };
+
+    const first=await store.getPreExpansionOutcomes();
+    const second=await store.getPreExpansionOutcomes();
+    assert.equal(first.records.length,1);
+    assert.equal(second.records[0].signal_id,'CACHE:ABCUSDT:1');
+    assert.equal(outcomeFileReads,1,'the persistent ledger should only be parsed once per store lifetime');
+
+    store.readJson=async path=>{
+      if(path===store.files.preExpansionOutcomes)throw new Error('RADAR8_OUTCOME_DISK_READ_REPEATED');
+      return originalReadJson(path);
+    };
+    await store.updatePreExpansionOutcomes(current=>({...current,updated_at:1700000000123}));
+    const cached=await store.getPreExpansionOutcomes();
+    assert.equal(cached.updated_at,1700000000123);
+    assert.equal(cached.records.length,1);
+    const persisted=JSON.parse(await readFile(store.files.preExpansionOutcomes,'utf8'));
+    assert.equal(persisted.updated_at,1700000000123,'cached state and atomic durable write must stay aligned');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test('a declined Radar 8 outcome updater cannot leak its in-memory mutations into the durable cache',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-cache-rollback-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const baseline={
+      version:'PRE_EXPANSION_OUTCOMES_V2',records:[{signal_id:'KEEP:ABCUSDT:1'}],
+      last_stage_by_key:{},last_price_update_at:0,last_report_log_at:0,
+      last_historical_import_at:0,last_historical_backfill_at:0,updated_at:1700000000000
+    };
+    await writeFile(store.files.preExpansionOutcomes,JSON.stringify(baseline));
+    await store.updatePreExpansionOutcomes(current=>{
+      current.records.push({signal_id:'DO_NOT_COMMIT:ABCUSDT:2'});
+      return false;
+    });
+    const state=await store.getPreExpansionOutcomes();
+    assert.deepEqual(state.records.map(x=>x.signal_id),['KEEP:ABCUSDT:1']);
+    const persisted=JSON.parse(await readFile(store.files.preExpansionOutcomes,'utf8'));
+    assert.deepEqual(persisted.records.map(x=>x.signal_id),['KEEP:ABCUSDT:1']);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
