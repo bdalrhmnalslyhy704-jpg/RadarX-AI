@@ -369,3 +369,38 @@ test('explicit Futures metadata is rejected from the Binance Spot outcome baseli
   assert.equal(row.market_scope,'NON_SPOT_REJECTED');
   assert.ok(row.baseline_missing_reasons.includes('NON_SPOT_MARKET_REJECTED'));
 });
+
+test('all twelve radar archives retain WATCH_ONLY observations outside entry-alert scoring',async()=>{
+  const now=BASE+30*minute;
+  let state=emptyRadarSignalOutcomeState();
+  const store={
+    async getRadarSignalOutcomes(){return structuredClone(state);},
+    async updateRadarSignalOutcomes(mutator){state=mutator(structuredClone(state));return state;}
+  };
+  for(const radar of RADAR_OUTCOME_ARCHIVES){
+    store[radar.reader]=async()=>[{
+      id:'WATCH:'+radar.id+':ABCUSDT',
+      event:'RADAR_WATCH_ONLY',event_class:'RADAR_WATCH_ONLY',
+      symbol:'ABCUSDT',market:'SPOT',price:1,detected_at:BASE,processed_at:BASE+1000,
+      watch_only:true,entry_eligible:false,potential_label:'WATCH_EARLY'
+    }];
+  }
+  const result=await runRadarSignalOutcomePass({
+    store,rest:{klines:async()=>({candles:[],source:'BINANCE_PUBLIC_REST'})},
+    now,maxRestCalls:0,logger:{warn(){}}
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.imported,12);
+  assert.equal(result.watch_only_imported,12);
+  assert.equal(state.records.length,12);
+  assert.ok(state.records.every(row=>row.signal_class==='WATCH_ONLY'&&row.baseline_status==='COMPLETE'));
+  assert.equal(result.report.summary.archived_signals,0);
+  assert.equal(result.report.summary.emitted_alerts,0);
+  assert.equal(result.report.summary.watch_only_observations,12);
+  assert.equal(result.report.summary.tracked_observations,12);
+  assert.equal(result.report.by_radar.length,12);
+  assert.ok(result.report.by_radar.every(row=>
+    row.archived_signals===0&&row.emitted_alerts===0&&row.watch_only_observations===1&&
+    row.watch_only_horizons['5m'].pending_samples===1
+  ));
+});
