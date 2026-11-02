@@ -380,9 +380,8 @@ test('all twelve radar archives retain WATCH_ONLY observations outside entry-ale
   for(const radar of RADAR_OUTCOME_ARCHIVES){
     store[radar.reader]=async()=>[{
       id:'WATCH:'+radar.id+':ABCUSDT',
-      event:'RADAR_WATCH_ONLY',event_class:'RADAR_WATCH_ONLY',
-      symbol:'ABCUSDT',market:'SPOT',price:1,detected_at:BASE,processed_at:BASE+1000,
-      watch_only:true,entry_eligible:false,potential_label:'WATCH_EARLY'
+      event:'RADAR_CANDIDATE',stage:'WATCH_EARLY',
+      symbol:'ABCUSDT',market:'SPOT',price:1,detected_at:BASE,processed_at:BASE+1000
     }];
   }
   const result=await runRadarSignalOutcomePass({
@@ -393,7 +392,7 @@ test('all twelve radar archives retain WATCH_ONLY observations outside entry-ale
   assert.equal(result.imported,12);
   assert.equal(result.watch_only_imported,12);
   assert.equal(state.records.length,12);
-  assert.ok(state.records.every(row=>row.signal_class==='WATCH_ONLY'&&row.baseline_status==='COMPLETE'));
+  assert.ok(state.records.every(row=>row.signal_class==='WATCH_ONLY'&&row.watch_only===true&&row.entry_eligible===false&&row.baseline_status==='COMPLETE'));
   assert.equal(result.report.summary.archived_signals,0);
   assert.equal(result.report.summary.emitted_alerts,0);
   assert.equal(result.report.summary.watch_only_observations,12);
