@@ -509,3 +509,18 @@ test('Early-Wake drain preserves a qualified near miss and routes it only to the
   assert.equal(archived.length,1,'the same closed candle must not create duplicate observations');
   assert.equal(watchPushes.length,1);
 });
+
+
+test('saved Early-Wake observations carry an explicit non-actionable archive contract',()=>{
+  const now=1710008000000;
+  const candidate=makeEarlyFlowWatchCandidate(now);
+  const watch=buildPreMoveWatchOnlyAlert(candidate,{
+    symbol:'WATCHUSDT',lastPrice:1.25,priceChange24h:1.4,quoteVolume24h:2_500_000
+  },{movePct:1.4},{now,strictFailures:['EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET']});
+  assert.ok(watch);
+  assert.equal(watch.alert_eligible,false);
+  assert.equal(watch.entry_eligible,false);
+  assert.equal(watch.watch_only,true);
+  assert.equal(watch.direction,'NONE');
+  assert.equal(watch.signal_type,'WATCH_ONLY');
+});
