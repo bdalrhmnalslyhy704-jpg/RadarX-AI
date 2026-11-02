@@ -79,8 +79,11 @@ jobs:
             android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java \
             android/app/src/main/java/com/radarx/app/RadarXPushRegistration.java
 
-      - name: Validate bundled backend-client JavaScript
-        run: node --check android/app/src/main/assets/radarx-backend-client.mjs
+      - name: Validate bundled radar outcome audit JavaScript
+        run: |
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          node --check android/app/src/main/assets/radar-outcome-audit.mjs
 
       - name: Build Android debug APK
         run: gradle -p android :app:assembleDebug --stacktrace
