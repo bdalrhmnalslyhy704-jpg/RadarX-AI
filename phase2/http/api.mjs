@@ -998,7 +998,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(active)return active;
     const retryAfter=Number(preMoveRadarRefreshRetryAfter.get(key)||0);
     if(retryAfter>Date.now())return null;
-    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(snapshot=>{
+    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(async snapshot=>{
       if(!snapshot||snapshot.meta?.radar!=='PRE_MOVE'||typeof snapshot.as_of!=='string'||
          !snapshot.session||!snapshot.universe||!Array.isArray(snapshot.candidates))
         throw new Error('PRE_MOVE_RADAR_SNAPSHOT_INVALID');
