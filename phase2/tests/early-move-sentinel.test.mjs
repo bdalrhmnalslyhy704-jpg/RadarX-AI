@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
+import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,buildPreMoveWatchOnlyAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
 import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
 
 const candidate={
@@ -403,4 +403,109 @@ test('Move Sentinel skips overlapping REST reconciliations while a previous run 
   releaseTicker();
   await first;
   assert.equal(sentinel.reconciling,false);
+});
+
+
+function makeEarlyFlowWatchCandidate(now){
+  return {
+    symbol:'WATCHUSDT',last_price:1.25,price_change_24h:1.4,
+    source:'Binance Public REST',data_quality:90,liquidity_quality:80,
+    data_status:{
+      status:'LIVE_DATA',source:'Binance Public REST',data_valid:true,
+      data_stale:false,stale:false,future_data_detected:false
+    },
+    risk_flags:[],
+    pre_move_context:{
+      session_close:now-60_000,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,score:74,session_return_pct:1.2,one_hour_return_pct:0.8,
+      volume_acceleration:1.8,trade_acceleration:1.25,taker_buy_ratio:0.56,
+      taker_buy_acceleration:0.06,mean_close_location:0.65,
+      relative_strength_vs_market_pct:0.8,
+      components:{structure:65,buying_pressure:72,squeeze:48},
+      reasons:['تسارع الحجم والشراء']
+    }
+  };
+}
+
+test('qualified early-flow near misses are saved as a separate non-entry watch observation',()=>{
+  const now=1710005000000;
+  const candidate=makeEarlyFlowWatchCandidate(now);
+  const row={symbol:'WATCHUSDT',lastPrice:1.25,priceChange24h:1.4,quoteVolume24h:2_500_000};
+  const watch=buildPreMoveWatchOnlyAlert(candidate,row,{movePct:1.4},{now,strictFailures:['EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET']});
+  assert.ok(watch);
+  assert.equal(watch.event,'PRE_MOVE_RADAR_WATCH_ONLY');
+  assert.equal(watch.radar,'PRE_MOVE');
+  assert.equal(watch.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(watch.watch_only,true);
+  assert.equal(watch.entry_eligible,false);
+  assert.equal(watch.eligible,false);
+  assert.equal(watch.notification_gate.eligible,false);
+  assert.equal(watch.market,'SPOT');
+  assert.equal(watch.direction,'NONE');
+  assert.equal(watch.closed_candles_only,true);
+  assert.equal(watch.paper_trading,true);
+  assert.equal(watch.real_order_execution,false);
+  assert.ok(watch.strict_gate_failures.includes('EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET'));
+  assert.equal(watch.pre_move_context.stage,'WATCH_EARLY');
+  assert.equal(watch.pre_move_context.actionable,false);
+  assert.equal(watch.data_status.data_valid,true);
+});
+
+test('early-flow watch-only corridor rejects thin, stale, extended and incomplete evidence',()=>{
+  const now=1710006000000;
+  const candidate=makeEarlyFlowWatchCandidate(now);
+  const row={symbol:'WATCHUSDT',lastPrice:1.25,priceChange24h:1.4,quoteVolume24h:2_500_000};
+  assert.equal(buildPreMoveWatchOnlyAlert(candidate,{...row,quoteVolume24h:749_999},{},{now}),null,
+    'turnover below the established 750k USDT floor must stay out of this watch lane');
+  assert.equal(buildPreMoveWatchOnlyAlert({
+    ...candidate,data_status:{...candidate.data_status,data_stale:true}
+  },row,{}, {now}),null,'stale market data must never generate a watch notification');
+  assert.equal(buildPreMoveWatchOnlyAlert({
+    ...candidate,risk_flags:['ALREADY_EXTENDED_24H']
+  },row,{}, {now}),null,'already-extended coins must not be chased');
+  assert.equal(buildPreMoveWatchOnlyAlert({
+    ...candidate,pre_move_context:{...candidate.pre_move_context,evidence_complete:false}
+  },row,{}, {now}),null,'incomplete candle evidence must fail closed');
+  assert.equal(buildPreMoveWatchOnlyAlert({
+    ...candidate,pre_move_context:{...candidate.pre_move_context,session_close:now-21*60*1000}
+  },row,{}, {now}),null,'a stale source candle must fail closed');
+});
+
+test('Early-Wake drain preserves a qualified near miss and routes it only to the watch-only push lane',async()=>{
+  const now=1710007000000;
+  const candidate=makeEarlyFlowWatchCandidate(now);
+  const archived=[],watchPushes=[];
+  let strictPushCalls=0;
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},
+    store:{async appendMoveAlert(alert){archived.push(alert);}},
+    pushManager:{
+      async notifyRadarWatchOnlyAlert(alert){
+        watchPushes.push(alert);
+        return {status:'SENT',attempted:true,sent_count:1};
+      },
+      async notifyRadarAlert(){strictPushCalls++;}
+    },
+    config:{earlyWakeWatchOnlyCooldownMs:60_000},
+    clock:()=>now,logger:{info(){},warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.scanner={async scanSymbol(){return candidate;}};
+  const job={symbol:'WATCHUSDT',row:{
+    symbol:'WATCHUSDT',lastPrice:1.25,priceChange24h:1.4,quoteVolume24h:2_500_000
+  },trigger:{movePct:1.4},queuedAt:now,mode:'PRE_EXPLOSION'};
+  sentinel.deepQueue.push(job);
+  await sentinel.drainDeepQueue();
+  assert.equal(archived.length,1);
+  assert.equal(archived[0].event,'PRE_MOVE_RADAR_WATCH_ONLY');
+  assert.equal(archived[0].watch_only,true);
+  assert.equal(archived[0].entry_eligible,false);
+  assert.equal(watchPushes.length,1);
+  assert.equal(watchPushes[0].entry_eligible,false);
+  assert.equal(strictPushCalls,0,'a near miss must never enter the strict actionable push method');
+  assert.equal(sentinel.watchOnlyAlertCount,1);
+  sentinel.deepQueue.push(job);
+  await sentinel.drainDeepQueue();
+  assert.equal(archived.length,1,'the same closed candle must not create duplicate observations');
+  assert.equal(watchPushes.length,1);
 });
