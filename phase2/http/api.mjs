@@ -526,7 +526,8 @@ export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAl
   let archivedConsidered=0,archivedAccepted=0;
   for(const row of (Array.isArray(archivedMoveAlerts)?archivedMoveAlerts:[])){
     if(row?.event!=='PRE_MOVE_RADAR_WATCH_ONLY'||row?.watch_only!==true||
-       row?.entry_eligible!==false||row?.market!=='SPOT'||
+       row?.entry_eligible!==false||row?.alert_eligible!==false||
+       row?.watch_notification_tier!=='EARLY_FLOW_MONITOR'||row?.market!=='SPOT'||
        row?.real_order_execution===true||row?.paper_trading!==true||
        row?.closed_candles_only!==true||row?.data_stale===true)continue;
     archivedConsidered++;
@@ -564,13 +565,28 @@ export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAl
         id:String(row.id||validated.id),
         direction:'NONE',
         signal_type:'WATCH_ONLY',
+        watch_notification_tier:'EARLY_FLOW_MONITOR',
         watch_only:true,
         entry_eligible:false,
         alert_eligible:false,
         actionable:false,
+        closed_candles_only:true,
+        data_stale:false,
+        source:'Binance Public REST',
+        data_status:{
+          ...validated.data_status,status:'LIVE_DATA',data_valid:true,data_stale:false,
+          stale:false,future_data_detected:false,source:'Binance Public REST',
+          close_time:validated.detected_candle_close_time,candle_closed:true
+        },
+        early_wake_watch_evidence:row.early_wake_watch_evidence||row.watch_evidence||null,
+        watch_evidence:row.watch_evidence||row.early_wake_watch_evidence||null,
+        reasons:Array.isArray(row.reasons)?row.reasons.slice(0,12):validated.reasons,
+        reason_codes:Array.isArray(row.reason_codes)?row.reason_codes.slice(0,30):validated.reason_codes,
+        watch_reason_codes:Array.isArray(row.watch_reason_codes)?row.watch_reason_codes.slice(0,30):validated.watch_reason_codes,
+        strict_gate_failures:Array.isArray(row.strict_gate_failures)?row.strict_gate_failures.slice(0,30):[],
+        notification_gate:{eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
         archived_early_wake_observation:true,
-        archive_event_time:Number(row.detected_at)||Number(row.processed_at)||null,
-        strict_gate_failures:Array.isArray(row.strict_gate_failures)?row.strict_gate_failures.slice(0,30):[]
+        archive_event_time:Number(row.detected_at)||Number(row.processed_at)||null
       });
       archivedAccepted++;
     }
