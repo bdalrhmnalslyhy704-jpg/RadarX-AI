@@ -9,6 +9,7 @@ on:
       - package.json
       - package-lock.json
       - phase2/**
+      - android/app/src/main/assets/**
       - .github/workflows/build224-container-runtime-smoke.yml
   push:
     branches:
