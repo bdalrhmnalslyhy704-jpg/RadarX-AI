@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts,diagnosePreMoveWatchOnlyCandidates} from '../http/api.mjs';
+import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts,diagnosePreMoveWatchOnlyCandidates,mergeArchivedEarlyWakeWatchAlerts} from '../http/api.mjs';
 import {PushManager, isTrustedBinancePublicSpotSource} from '../push/index.mjs';
 import {DurableStore} from '../core/store.mjs';
 import {SignalDeduplicator} from '../core/dedup.mjs';
@@ -927,4 +927,102 @@ test('SOXSB-like bStock Spot pair is labelled as tokenized security in the bound
     assert.equal(sent[0].entry_eligible,false);
     assert.equal(sent[0].real_order_execution,false);
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+
+test('validated Early-Wake archive observations join the Android local watch list without duplicate FCM sends',()=>{
+  const now=1710009000000;
+  const {candidate,snapshot}=fixture(now);
+  const ordinary=buildPreMoveWatchOnlyAlerts([
+    {...candidate,symbol:'SCANUSDT',pre_move_context:{...candidate.pre_move_context,score:70}}
+  ],snapshot,now,3);
+  const archived={
+    id:'EARLY_WAKE_WATCH_ONLY:EARLYUSDT:'+(now-60_000),
+    event:'PRE_MOVE_RADAR_WATCH_ONLY',event_class:'RADAR_WATCH_ONLY',
+    symbol:'EARLYUSDT',market:'SPOT',price:1.25,last_price:1.25,
+    price_change_24h:1.4,quote_volume_24h:2_500_000,
+    data_quality:90,liquidity_quality:80,
+    source:'BINANCE_PUBLIC_REST',data_stale:false,
+    data_status:{
+      status:'LIVE_DATA',source:'BINANCE_PUBLIC_REST',data_valid:true,
+      data_stale:false,stale:false,future_data_detected:false,close_time:now-60_000
+    },
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:74,session_return_pct:1.2,one_hour_return_pct:0.8,
+      volume_acceleration:1.8,trade_acceleration:1.25,
+      taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
+      mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
+      components:{structure:65,buying_pressure:72,squeeze:48},
+      reasons:['VOLUME_ACCELERATING','TRADE_COUNT_ACCELERATING','BUY_FLOW_CONFIRMED']
+    },
+    watch_notification_tier:'EARLY_FLOW_MONITOR',
+    watch_only:true,entry_eligible:false,alert_eligible:false,
+    closed_candles_only:true,paper_trading:true,real_order_execution:false,
+    detected_at:now,processed_at:now,detected_candle_close_time:now-60_000,
+    early_wake_watch_evidence:{independent_confirmations:6},
+    reasons:['EARLY_FLOW_MONITOR'],reason_codes:['EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET'],
+    watch_reason_codes:['STRICT_GATE_NOT_MET'],
+    strict_gate_failures:['EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET'],risk_flags:[]
+  };
+  const merged=mergeArchivedEarlyWakeWatchAlerts(ordinary,[archived],snapshot,now,3);
+  assert.deepEqual(merged.map(x=>x.symbol),['EARLYUSDT','SCANUSDT']);
+  const watch=merged[0];
+  assert.equal(watch.event,'PRE_MOVE_RADAR_WATCH_ONLY');
+  assert.equal(watch.archived_early_wake_observation,true);
+  assert.equal(watch.watch_notification_tier,'EARLY_FLOW_MONITOR');
+  assert.equal(watch.direction,'NONE');
+  assert.equal(watch.signal_type,'WATCH_ONLY');
+  assert.equal(watch.watch_only,true);
+  assert.equal(watch.entry_eligible,false);
+  assert.equal(watch.alert_eligible,false);
+  assert.equal(watch.actionable,false);
+  assert.equal(watch.data_status.data_valid,true);
+  assert.equal(watch.data_status.source,'Binance Public REST');
+  assert.equal(watch.closed_candles_only,true);
+  assert.equal(watch.paper_trading,true);
+  assert.equal(watch.real_order_execution,false);
+  assert.deepEqual(watch.early_wake_watch_evidence,{independent_confirmations:6});
+  assert.deepEqual(merged.diagnostics,{
+    scan_watch_candidates:1,archived_rows_considered:1,
+    archived_rows_revalidated:1,merged_count:2
+  });
+});
+
+test('archived Early-Wake rows are rejected by phone-list merge when stale, extended, untrusted, or no longer valid',()=>{
+  const now=1710010000000;
+  const {snapshot}=fixture(now);
+  const base={
+    id:'EARLY_WAKE_WATCH_ONLY:BADUSDT:'+(now-60_000),
+    event:'PRE_MOVE_RADAR_WATCH_ONLY',symbol:'BADUSDT',market:'SPOT',
+    price:1.25,price_change_24h:1.4,quote_volume_24h:2_500_000,
+    data_quality:90,liquidity_quality:80,source:'BINANCE_PUBLIC_REST',
+    data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'BINANCE_PUBLIC_REST',close_time:now-60_000},
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,session_close:now-60_000,score:74,session_return_pct:1.2,one_hour_return_pct:0.8,
+      volume_acceleration:1.8,trade_acceleration:1.25,taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
+      mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
+      components:{structure:65,buying_pressure:72,squeeze:48}
+    },
+    watch_notification_tier:'EARLY_FLOW_MONITOR',watch_only:true,
+    entry_eligible:false,alert_eligible:false,closed_candles_only:true,
+    paper_trading:true,real_order_execution:false,detected_at:now,processed_at:now,
+    risk_flags:[]
+  };
+  const bad=[
+    {...base,data_stale:true},
+    {...base,symbol:'EXTENDEDUSDT',risk_flags:['ALREADY_EXTENDED_24H']},
+    {...base,symbol:'UNTRUSTEDUSDT',source:'UNKNOWN_FEED',data_status:{...base.data_status,source:'UNKNOWN_FEED'}},
+    {...base,symbol:'INVALIDUSDT',data_status:{...base.data_status,data_valid:false}},
+    {...base,symbol:'FUTUREUSDT',pre_move_context:{...base.pre_move_context,session_close:now+10_000}},
+    {...base,symbol:'OLDUSDT',pre_move_context:{...base.pre_move_context,session_close:now-21*60_000}},
+    {...base,symbol:'ENTRYUSDT',entry_eligible:true},
+    {...base,symbol:'NOTSPOTUSDT',market:'FUTURES'},
+    {...base,symbol:'GENERICUSDT',watch_notification_tier:'STANDARD_WATCH_EARLY'}
+  ];
+  const merged=mergeArchivedEarlyWakeWatchAlerts([],bad,snapshot,now,10);
+  assert.equal(merged.length,0);
+  assert.equal(merged.diagnostics.archived_rows_revalidated,0);
 });
