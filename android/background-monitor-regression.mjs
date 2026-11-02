@@ -274,14 +274,14 @@ assert.ok(
 );
 assert.match(service, /private volatile boolean foregroundStarted;/,
   'the service must track its initial foreground transition');
-assert.match(service, /if \\(!foregroundStarted\\) startAsForeground\\(\\);/,
+assert.match(service, /if \(!foregroundStarted\) startAsForeground\(\);/,
   'onStartCommand must only repair a missing foreground transition, not delay the first one');
 
 const mainCreateStart = main.indexOf('protected void onCreate(');
 const mainNewIntentStart = main.indexOf('protected void onNewIntent(', mainCreateStart);
 const mainOnCreate = main.slice(mainCreateStart, mainNewIntentStart);
 assert.ok(mainCreateStart >= 0 && mainNewIntentStart > mainCreateStart);
-assert.doesNotMatch(mainOnCreate, /ensureContinuousMonitoring\\(\\)|startBackgroundMonitor\\(/,
+assert.doesNotMatch(mainOnCreate, /ensureContinuousMonitoring\(\)|startBackgroundMonitor\(/,
   'cold startup must not launch the isolated service before MainActivity is resumed');
 const mainOnResumeStart = main.indexOf('protected void onResume()');
 const mainOnPostResumeStart = main.indexOf('protected void onPostResume()', mainOnResumeStart);
@@ -292,7 +292,7 @@ assert.match(main, /activityResumed = true;/,
   'the Activity must mark itself visible before starting its service');
 assert.match(main, /activityResumed = false;/,
   'the Activity must clear visibility when leaving the foreground');
-assert.match(main, /if \\(!initialForegroundStartupDone\\)[\\s\\S]*?ensureContinuousMonitoring\\(\\);/,
+assert.match(main, /if \(!initialForegroundStartupDone\)[\s\S]*?ensureContinuousMonitoring\(\);/,
   'initial background monitoring must start from onPostResume after the Activity is foreground');
-assert.match(main, /Build\\.VERSION\\.SDK_INT >= 26 && !activityResumed[\\s\\S]*?startForegroundService\\(intent\\)[\\s\\S]*?startService\\(intent\\);/,
+assert.match(main, /Build\.VERSION\.SDK_INT >= 26 && !activityResumed[\s\S]*?startForegroundService\(intent\)[\s\S]*?startService\(intent\);/,
   'visible Activities should use an ordinary service start while background/boot starts retain the foreground-service API');
