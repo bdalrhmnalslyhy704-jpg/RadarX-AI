@@ -44,6 +44,16 @@ assert.match(service, /oldest_first=1&since_id=/,
   'background sync must request chronological replay pages from its durable cursor');
 assert.match(service, /radar_alert_cursor_id/,
   'equal-timestamp detections must be paginated without advancing past unseen alerts');
+assert.match(service, /CURSOR_PREFS_FILE = "radarx_background_cursor"/,
+  'the isolated background service must keep its durable replay cursor out of Activity-owned shared preferences');
+assert.match(service, /private SharedPreferences cursorPrefs\(\)/,
+  'the cursor store must be owned by the background service process');
+assert.match(service, /legacy_cursor_state_migrated_v1/,
+  'existing installed users must migrate their prior compound cursor before any new replay starts');
+assert.match(service, /copyLegacyStringSet\(legacy, editor, "radar_alert_seen_ids"\)/,
+  'migration must preserve handled alert identities so users do not receive historical duplicate notifications');
+assert.match(service, /copyLegacyStringSet\(legacy, editor, "radar_alert_pending_notification_ids"\)/,
+  'migration must preserve interrupted notification reservations for restart reconciliation');
 assert.doesNotMatch(service, /candidates = body\.optJSONArray\("candidates"\)/,
   'unqualified radar analysis candidates must never be promoted into Android notifications');
 assert.match(service, /private static boolean isActionableRadarAlert\(JSONObject alert\)/,
