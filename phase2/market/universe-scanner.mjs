@@ -2611,7 +2611,7 @@ export class MarketUniverseScanner {
     // and the order book; it does not run the unrelated general 20-strategy pipeline.
     // A rotating second half broadens coverage without repeatedly deep-scanning only the same top symbols.
     // The hosted worker defaults to eight deep scans and permits a bounded 6-10
-    // range. The 45s deadline remains authoritative: incomplete cycles fail closed,
+    // range (minimum eight). The 45s deadline remains authoritative: incomplete cycles fail closed,
     // and only completed cycles persist a cursor advance.
     const configuredCycleLimit=Math.max(1,Math.min(
       PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
