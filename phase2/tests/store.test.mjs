@@ -489,3 +489,49 @@ test('Pre-Move durable cursor writes bypass the shared radar archive queue and m
     await rm(dir,{recursive:true,force:true});
   }
 });
+
+
+test('Radar 8 outcome ledger updates and compaction do not wait behind the shared archive queue',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-outcome-queue-isolation-'));
+  try{
+    const store=await new DurableStore({dir}).init();
+    const records=Array.from({length:180},(_,i)=>({
+      signal_id:'RADAR8:QUEUE'+i+'USDT:'+i,
+      radar:'RADAR_8',symbol:'QUEUE'+i+'USDT',signal_type:'WATCH_EARLY',
+      detected_at:1700000000000+i,entry_price:1+i/10000
+    }));
+    const last_stage_by_key=Object.fromEntries(records.map((row,i)=>[
+      'RADAR_8|'+row.symbol,{stage:'WATCH_EARLY',last_recorded_at:1700000000000+i}
+    ]));
+    await store.updatePreExpansionOutcomes(()=>({
+      version:'PRE_EXPANSION_OUTCOMES_V2',records,last_stage_by_key,
+      last_price_update_at:0,last_report_log_at:0,last_historical_import_at:0,
+      last_historical_backfill_at:0,updated_at:1700000000000
+    }));
+
+    // Simulate another radar/archive write pinning the shared DurableStore queue.
+    store.queue=new Promise(()=>{});
+    const timeout=()=>new Promise((_,reject)=>setTimeout(
+      ()=>reject(new Error('RADAR8_OUTCOME_LEDGER_BLOCKED_BY_SHARED_ARCHIVE_QUEUE')),1000
+    ));
+
+    const compacted=await Promise.race([
+      store.compactPreExpansionOutcomes({maxRecords:100,maxStageKeys:100}),
+      timeout()
+    ]);
+    assert.equal(compacted.compacted,true);
+    assert.equal(compacted.retained_records,100);
+    assert.equal(compacted.trimmed_stage_keys,80);
+
+    await Promise.race([
+      store.updatePreExpansionOutcomes(current=>({...current,updated_at:1700000000123})),
+      timeout()
+    ]);
+    const saved=await store.getPreExpansionOutcomes();
+    assert.equal(saved.records.length,100);
+    assert.equal(Object.keys(saved.last_stage_by_key).length,100);
+    assert.equal(saved.updated_at,1700000000123);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
