@@ -33,12 +33,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Install locked dependencies for behavioral tests
         run: npm ci
-      - name: Run adaptive trader regression tests
+      - name: Run adaptive trader and radar outcome regression tests
         run: |
           node --check phase2/core/adaptive-trader-engine.mjs
           node --check phase2/core/adaptive-trader-worker.mjs
           node --check phase2/core/early-move-sentinel.mjs
+          node --check phase2/core/radar-signal-outcomes.mjs
+          node --check phase2/core/strong-move-radar.mjs
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          node --check android/app/src/main/assets/radar-outcome-audit.mjs
           node --check phase2/core/store.mjs
+          node --test --test-timeout=60000 phase2/tests/radar-signal-outcomes.test.mjs phase2/tests/strong-move-radar.test.mjs
           node --test --test-timeout=60000 phase2/tests/adaptive-trader-engine.test.mjs phase2/tests/adaptive-trader-api.test.mjs phase2/tests/adaptive-trader-worker.test.mjs phase2/tests/adaptive-trader-execution.test.mjs phase2/tests/early-move-sentinel.test.mjs phase2/tests/pre-move-watch-notification.test.mjs phase2/tests/fcm-push.test.mjs
           node --test --test-timeout=60000 android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
       - name: Build exact container image

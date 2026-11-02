@@ -96,6 +96,34 @@ function rowIdOf(row) {
   const r = object(row);
   return String(r.id ?? r.alert_id ?? r.signal_id ?? r.event_id ?? '').trim().slice(0, 150);
 }
+function isWatchOnlySignal(row) {
+  const r = object(row);
+  const event = String(r.event || r.alert_type || '').trim().toUpperCase();
+  const labels = [
+    r.stage, r.pre_expansion_stage, r.potential_label, r.decision_band,
+    r.signal_class, r.event_class
+  ].map(value => String(value || '').trim().toUpperCase());
+  const watchStage = labels.some(value =>
+    /^(WATCH_EARLY|WATCH_ONLY|EARLY_WATCH|EARLY_MONITORING)$/.test(value)
+  );
+  return r.watch_only === true ||
+    String(r.signal_class || '').toUpperCase() === 'WATCH_ONLY' ||
+    String(r.event_class || '').toUpperCase() === 'RADAR_WATCH_ONLY' ||
+    event === 'STRONG_MOVE_WATCH_ONLY' || event === 'RADAR_WATCH_ONLY' || watchStage;
+}
+function explicitNonSpotMarket(row) {
+  const r = object(row);
+  const marketValues = [
+    typeof r.market === 'string' ? r.market : null,
+    r.market?.type, r.market?.market, r.market_type, r.marketType, r.market_scope,
+    r.product_type, r.productType, r.contract_type, r.contractType
+  ];
+  const nonSpotLabel = marketValues.some(value =>
+    /FUTURE|PERPETUAL|SWAP|DERIVATIVE|MARGIN/.test(String(value || '').trim().toUpperCase())
+  );
+  return r.isFutures === true || r.is_futures === true ||
+    String(r.real_order_market || '').toUpperCase() === 'FUTURES' || nonSpotLabel;
+}
 
 export 
 function firstFinite(values) {
@@ -148,6 +176,14 @@ export function extractRadarOutcomeFeatures(raw = {}) {
     trend_aligned: pickBool('trend_aligned','multi_timeframe_aligned','trend_confirmation'),
     relative_strength_vs_btc_pct: pick('relative_strength_vs_btc_pct','relative_btc_strength_pct','rs_vs_btc_pct'),
     recent_15m_return_pct: pick('recent_15m_return_pct','price_change_15m_pct','return_15m_pct'),
+    // Preserve the move already travelled before the alert. These are contemporaneous
+    // radar measurements, not reconstructed or future prices.
+    return_1m_pct: pick('return_1m','return_1m_pct','recent_1m_return_pct'),
+    return_3m_pct: pick('return_3m','return_3m_pct','recent_3m_return_pct'),
+    return_5m_pct: pick('return_5m','return_5m_pct','recent_5m_return_pct'),
+    return_10m_pct: pick('return_10m','return_10m_pct','recent_10m_return_pct'),
+    return_20m_pct: pick('return_20m','return_20m_pct','recent_20m_return_pct'),
+    momentum_acceleration_pct: pick('acceleration','momentum_acceleration_pct','price_acceleration_pct'),
     current_range_pct: pick('current_range_pct','range_pct','atr_range_pct'),
     upper_wick_pct: pick('upper_wick_pct','upper_shadow_pct'),
     order_book_checked:pickBool('order_book_checked'),
@@ -177,9 +213,12 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
   const detectedAt = signalTimeOf(raw);
   const sourceId = rowIdOf(raw);
   const stage = stageOf(raw);
+  const watchOnly = isWatchOnlySignal(raw);
+  const nonSpotMarket = explicitNonSpotMarket(raw);
   const features = extractRadarOutcomeFeatures(raw);
   const reasons = [];
   if (!symbol) reasons.push('SYMBOL_MISSING_OR_NOT_USDT_SPOT');
+  if (nonSpotMarket) reasons.push('NON_SPOT_MARKET_REJECTED');
   if (entryPrice === null) reasons.push('ENTRY_PRICE_MISSING');
   if (detectedAt === null) reasons.push('SIGNAL_TIMESTAMP_MISSING');
   if (detectedAt !== null && detectedAt > Number(now) + MINUTE_MS) reasons.push('SIGNAL_TIMESTAMP_IN_FUTURE');
@@ -188,6 +227,7 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
     detectedAt ?? 'NO_TIME', entryPrice ?? 'NO_PRICE', stage].join('|');
   const signalId = identity.slice(0, 240);
   const validBaseline = symbol !== null && entryPrice !== null && detectedAt !== null &&
+    !nonSpotMarket &&
     detectedAt <= Number(now) + MINUTE_MS && detectedAt >= Number(now) - 180 * DAY_MS;
   return {
     signal_id: signalId,
@@ -195,6 +235,10 @@ export function normalizeArchivedRadarSignal(row, radarId, now = Date.now()) {
     radar,
     symbol,
     stage,
+    signal_class: watchOnly ? 'WATCH_ONLY' : 'EMITTED_ALERT',
+    watch_only: watchOnly,
+    entry_eligible: watchOnly ? false : (raw.entry_eligible === true || raw.eligible === true ? true : null),
+    market_scope: nonSpotMarket ? 'NON_SPOT_REJECTED' : 'SPOT_KLINE_VALIDATION_REQUIRED',
     detected_at: detectedAt,
     detected_at_iso: detectedAt === null ? null : new Date(detectedAt).toISOString(),
     entry_price: entryPrice,
@@ -423,45 +467,60 @@ export function buildRadarSignalOutcomeReport(input = {}, now = Date.now()) {
   const state = normalizeState(input);
   const byRadar = RADAR_OUTCOME_ARCHIVES.map(radar => {
     const records = state.records.filter(row => row.radar === radar.id);
-    const baselineComplete = records.filter(row => row.baseline_status === 'COMPLETE');
-    const baselineIncomplete = records.filter(row => row.baseline_status !== 'COMPLETE');
+    const watchOnlyRecords = records.filter(isWatchOnlySignal);
+    const emittedRecords = records.filter(row => !isWatchOnlySignal(row));
+    const baselineComplete = emittedRecords.filter(row => row.baseline_status === 'COMPLETE');
+    const baselineIncomplete = emittedRecords.filter(row => row.baseline_status !== 'COMPLETE');
     return {
       radar: radar.id,
       name: radar.name,
-      archived_signals: records.length,
+      archived_signals: emittedRecords.length,
+      emitted_alerts: emittedRecords.length,
+      watch_only_observations: watchOnlyRecords.length,
       measurable_baselines: baselineComplete.length,
       incomplete_baselines: baselineIncomplete.length,
+      watch_only_measurable_baselines: watchOnlyRecords.filter(row => row.baseline_status === 'COMPLETE').length,
       last_signal_at: records.reduce((latest, row) => Math.max(latest, finite(row.detected_at) ?? 0), 0) || null,
       missing_baseline_reasons: baselineIncomplete.reduce((acc, row) => {
         for (const reason of row.baseline_missing_reasons || []) acc[reason] = (acc[reason] || 0) + 1;
         return acc;
       }, {}),
-      horizons: Object.fromEntries(RADAR_OUTCOME_HORIZONS.map(h => [h.key, summarizeHorizon(records, h.key)]))
+      horizons: Object.fromEntries(RADAR_OUTCOME_HORIZONS.map(h => [h.key, summarizeHorizon(emittedRecords, h.key)])),
+      watch_only_horizons: Object.fromEntries(RADAR_OUTCOME_HORIZONS.map(h => [h.key, summarizeHorizon(watchOnlyRecords, h.key)]))
     };
   });
   const records = state.records;
+  const watchOnlyRecords = records.filter(isWatchOnlySignal);
+  const emittedRecords = records.filter(row => !isWatchOnlySignal(row));
   return {
     version: 'RADAR_SIGNAL_OUTCOME_REPORT_V1',
     as_of: new Date(Number(now)).toISOString(),
-    scope: 'EMITTED_ARCHIVED_ALERTS_ONLY',
+    scope: 'EMITTED_ALERTS_WITH_SEPARATE_WATCH_ONLY_OUTCOME_COHORT',
     interpretation: {
       measured_source: 'BINANCE_PUBLIC_CLOSED_OHLC',
       horizon_resolution: { '5m': '1m', '15m': '1m', '30m': '1m', '60m': '1m', '4h': '5m', '24h': '5m' },
       min_samples_for_rates: MIN_RATE_SAMPLE,
       candle_high_thresholds_are_not_exact_trade_times: true,
+      watch_only_observations_measured_separately: true,
+      watch_only_observations_are_not_entry_signals: true,
       misses_not_measured_by_this_report: true,
       no_profitability_claim: true
     },
     limits: { max_records: MAX_RECORDS, archive_scan_limit_per_radar: ARCHIVE_LIMIT_PER_RADAR, lookback_days: DEFAULT_LOOKBACK_DAYS },
     summary: {
       expected_radars: RADAR_OUTCOME_ARCHIVES.length,
-      radars_with_archived_signals: byRadar.filter(x => x.archived_signals > 0).length,
-      archived_signals: records.length,
-      measurable_baselines: records.filter(x => x.baseline_status === 'COMPLETE').length,
-      incomplete_baselines: records.filter(x => x.baseline_status !== 'COMPLETE').length,
-      completed_24h_outcomes: records.filter(x => x.outcomes?.['24h']?.status === 'COMPLETE').length,
-      incomplete_24h_outcomes: records.filter(x => x.outcomes?.['24h']?.status === 'INCOMPLETE').length,
-      pending_24h_outcomes: records.filter(x => x.baseline_status === 'COMPLETE' && x.outcomes?.['24h']?.status === 'PENDING').length
+      radars_with_archived_signals: byRadar.filter(x => x.emitted_alerts > 0).length,
+      archived_signals: emittedRecords.length,
+      emitted_alerts: emittedRecords.length,
+      watch_only_observations: watchOnlyRecords.length,
+      tracked_observations: records.length,
+      measurable_baselines: emittedRecords.filter(x => x.baseline_status === 'COMPLETE').length,
+      incomplete_baselines: emittedRecords.filter(x => x.baseline_status !== 'COMPLETE').length,
+      completed_24h_outcomes: emittedRecords.filter(x => x.outcomes?.['24h']?.status === 'COMPLETE').length,
+      incomplete_24h_outcomes: emittedRecords.filter(x => x.outcomes?.['24h']?.status === 'INCOMPLETE').length,
+      pending_24h_outcomes: emittedRecords.filter(x => x.baseline_status === 'COMPLETE' && x.outcomes?.['24h']?.status === 'PENDING').length,
+      watch_only_measurable_baselines: watchOnlyRecords.filter(x => x.baseline_status === 'COMPLETE').length,
+      watch_only_completed_24h_outcomes: watchOnlyRecords.filter(x => x.outcomes?.['24h']?.status === 'COMPLETE').length
     },
     last_import_at: state.last_import_at,
     last_import_counts: state.last_import_counts,
@@ -566,14 +625,10 @@ export async function runRadarSignalOutcomePass({
         rows = await reader.call(store, { sinceMs: cursorAt, limit: pageLimit });
       }
       const archiveRows=Array.isArray(rows)?rows:[];
-      // Diagnostic watch-only candidates belong in the near-miss ledger, not the
-      // emitted-alert outcome denominator. Counting them as failed entry alerts
-      // would corrupt false-alert rates and analyst calibration.
-      const isWatchOnly=row=>row?.watch_only===true||
-        String(row?.event||row?.potential_label||'').toUpperCase()==='STRONG_MOVE_WATCH_ONLY';
-      const watchOnlyExcluded=radar.id==='RADAR_2'?archiveRows.filter(isWatchOnly).length:0;
-      const scoredRows=radar.id==='RADAR_2'?archiveRows.filter(row=>!isWatchOnly(row)):archiveRows;
-      const normalized = scoredRows.map(row => normalizeArchivedRadarSignal(row, radar.id, now));
+      // Keep WATCH_EARLY evidence, but measure it in a separate cohort so it
+      // cannot dilute strict emitted-alert or entry-signal performance.
+      const normalized = archiveRows.map(row => normalizeArchivedRadarSignal(row, radar.id, now));
+      const watchOnlyCount = normalized.filter(isWatchOnlySignal).length;
       incoming.push(...normalized);
       const finalRow = archiveRows.at(-1) ?? null;
       const finalAt = timestamp(finalRow?.replay_cursor_at, finalRow?.processed_at, finalRow?.detected_at, finalRow?.detectedAt, finalRow?.event_at, finalRow?.timestamp);
@@ -586,7 +641,8 @@ export async function runRadarSignalOutcomePass({
       }
       importCounts[radar.id] = {
         scanned: archiveRows.length, normalized:normalized.length,
-        watch_only_excluded:watchOnlyExcluded,
+        watch_only_imported:watchOnlyCount,
+        watch_only_excluded:0,
         status: 'OK',
         page_cursor_at: nextCursors[radar.id]?.at ?? null,
         has_more_possible: archiveRows.length >= pageLimit
@@ -634,6 +690,7 @@ export async function runRadarSignalOutcomePass({
   }
   let newlyEnriched=0;
   let newlyImported = 0;
+  let newlyImportedWatchOnly = 0;
   await store.updateRadarSignalOutcomes(raw => {
     const state = normalizeState(raw);
     const known = new Set(state.records.map(row => String(row.signal_id)));
@@ -642,6 +699,7 @@ export async function runRadarSignalOutcomePass({
       known.add(row.signal_id);
       state.records.push(row);
       newlyImported++;
+      if (isWatchOnlySignal(row)) newlyImportedWatchOnly++;
       importCounts[row.radar] ||= { scanned: 0 };
       importCounts[row.radar].imported = (importCounts[row.radar].imported || 0) + 1;
     }
@@ -737,7 +795,7 @@ export async function runRadarSignalOutcomePass({
     }
   }
   const pass = {
-    ok: true, at: Number(now), imported: newlyImported, archives_scanned: incoming.length,
+    ok: true, at: Number(now), imported: newlyImported, watch_only_imported: newlyImportedWatchOnly, archives_scanned: incoming.length,
     feature_backfill:{due:featureBackfillDue,enriched_records:newlyEnriched,radars:backfillCounts},
     archive_import_performed: importDue,
     next_archive_import_due_at: (importDue ? Number(now) : (lastImportAt ?? Number(now))) + ARCHIVE_IMPORT_INTERVAL_MS,
@@ -809,6 +867,7 @@ export class RadarSignalOutcomeWorker {
       last_error: this.lastError,
       last_pass: this.lastResult && {
         ok: this.lastResult.ok, imported: this.lastResult.imported ?? 0,
+        watch_only_imported: this.lastResult.watch_only_imported ?? 0,
         archives_scanned: this.lastResult.archives_scanned ?? 0,
         rest_requests: this.lastResult.rest_requests ?? 0,
         records_evaluated: this.lastResult.records_evaluated ?? 0,
