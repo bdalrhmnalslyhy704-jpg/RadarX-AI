@@ -106,7 +106,7 @@ function isWatchOnlySignal(row) {
   const watchStage = labels.some(value =>
     /^(WATCH_EARLY|WATCH_ONLY|EARLY_WATCH|EARLY_MONITORING)$/.test(value)
   );
-  return r.watch_only === true || r.entry_eligible === false ||
+  return r.watch_only === true ||
     String(r.signal_class || '').toUpperCase() === 'WATCH_ONLY' ||
     String(r.event_class || '').toUpperCase() === 'RADAR_WATCH_ONLY' ||
     event === 'STRONG_MOVE_WATCH_ONLY' || event === 'RADAR_WATCH_ONLY' || watchStage;
