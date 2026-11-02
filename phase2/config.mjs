@@ -204,7 +204,7 @@ export const CONFIG = Object.freeze({
     // Default to eight deep scans in two four-worker waves. Allow a bounded 6-10
     // tuning range; the 45s whole-scan deadline still aborts slow/incomplete cycles.
     // Every completed cycle advances the durable market-rotation cursor.
-    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 8, 6, 10),
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 8, 8, 10),
     // Pre-Move background surveillance continues when no Android page is open.
     preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
