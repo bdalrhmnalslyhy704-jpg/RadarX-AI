@@ -313,6 +313,11 @@ export async function getRadarStatus(fetchImpl = globalThis.fetch) {
   return requestJson(base, '/api/radar-status', fetchImpl);
 }
 
+export async function getRadarOutcomeReport(fetchImpl = globalThis.fetch) {
+  const base = normalizeBackendBaseUrl(DEFAULT_BACKEND_BASE_URL);
+  return requestJson(base, '/api/radar-outcomes', fetchImpl, 20000);
+}
+
 export async function getRadarAlerts({radar='ALL',limit=20,since=0}={}, fetchImpl = globalThis.fetch) {
   const safeRadar=String(radar||'ALL').trim().toUpperCase();
   if(!/^[A-Z0-9_]{2,40}$/.test(safeRadar)) throw new Error('INVALID_RADAR');
