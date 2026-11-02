@@ -951,7 +951,7 @@ test('validated Early-Wake archive observations join the Android local watch lis
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
       closed_candles_only:true,already_moved:false,session_close:now-60_000,
       score:74,session_return_pct:1.2,one_hour_return_pct:0.05,
-      volume_acceleration:1.8,trade_acceleration:1.25,
+      volume_acceleration:1.8,trade_acceleration:1.15,
       taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
       mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
       components:{structure:65,buying_pressure:72,squeeze:48},
@@ -1002,7 +1002,7 @@ test('archived Early-Wake rows are rejected by phone-list merge when stale, exte
     pre_move_context:{
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
       already_moved:false,session_close:now-60_000,score:74,session_return_pct:1.2,one_hour_return_pct:0.05,
-      volume_acceleration:1.8,trade_acceleration:1.25,taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
+      volume_acceleration:1.8,trade_acceleration:1.15,taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
       mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
       components:{structure:65,buying_pressure:72,squeeze:48}
     },
