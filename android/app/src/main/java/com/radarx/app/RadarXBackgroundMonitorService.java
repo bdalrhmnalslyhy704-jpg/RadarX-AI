@@ -79,6 +79,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private ScheduledExecutorService executor;
     private volatile boolean stopping;
+    private volatile boolean foregroundStarted;
     private volatile boolean loggedFirstScan;
     private final DecimalFormat scoreFmt = new DecimalFormat("0.0");
     private volatile long lastPreMoveWatchPollAtMs = 0L;
@@ -90,7 +91,15 @@ public final class RadarXBackgroundMonitorService extends Service {
         super.onCreate();
         Log.i(TAG, "BACKGROUND_SERVICE_ON_CREATE pid=" + android.os.Process.myPid()
             + " process=" + android.app.Application.getProcessName());
-        createChannels();
+
+        // Enter foreground in onCreate, before creating the scan executor or any
+        // non-essential alert channels. The service runs in an isolated process;
+        // its cold process start can consume the entire startForegroundService
+        // deadline on slower Android 10 devices.
+        createStatusChannel();
+        startAsForeground();
+        createAdditionalChannels();
+
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "RadarX-Background");
             t.setDaemon(true);
@@ -117,7 +126,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         // Push token/network synchronization can block on first boot, so schedule it
         // only after the foreground notification and recurring scan are established.
         try {
-            startAsForeground();
+            if (!foregroundStarted) startAsForeground();
         } catch (Throwable error) {
             Log.e(TAG, "Foreground service failed", error);
             saveRunning(false);
@@ -1208,6 +1217,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         } else {
             startForeground(STATUS_NOTIFICATION_ID, builder.build());
         }
+        foregroundStarted = true;
         saveRunning(true);
         Log.i(TAG, "BACKGROUND_SERVICE_READY pid=" + android.os.Process.myPid()
             + " process=" + android.app.Application.getProcessName());
@@ -1227,16 +1237,21 @@ public final class RadarXBackgroundMonitorService extends Service {
         if (manager != null) manager.notify(STATUS_NOTIFICATION_ID, builder.build());
     }
 
-    private void createChannels() {
+    private void createStatusChannel() {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
-        if (manager == null) return;
-
+        if (manager == null) throw new IllegalStateException("RADARX_NOTIFICATION_MANAGER_UNAVAILABLE");
         NotificationChannel status = new NotificationChannel(
             CHANNEL_STATUS, "RadarX Background Monitor", NotificationManager.IMPORTANCE_LOW
         );
         status.setDescription("حالة متابعة رادار الحركة في الخلفية");
         manager.createNotificationChannel(status);
+    }
+
+    private void createAdditionalChannels() {
+        if (Build.VERSION.SDK_INT < 26) return;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager == null) return;
 
         NotificationChannel alerts = new NotificationChannel(
             CHANNEL_ALERTS, "RadarX Early-Wake Alerts", NotificationManager.IMPORTANCE_HIGH
