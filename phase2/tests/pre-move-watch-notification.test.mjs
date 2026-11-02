@@ -934,7 +934,7 @@ test('validated Early-Wake archive observations join the Android local watch lis
   const now=1710009000000;
   const {candidate,snapshot}=fixture(now);
   const ordinary=buildPreMoveWatchOnlyAlerts([
-    {...candidate,symbol:'SCANUSDT',pre_move_context:{...candidate.pre_move_context,score:70}}
+    {...candidate,symbol:'SCANUSDT',pre_move_context:{...candidate.pre_move_context,score:90}}
   ],snapshot,now,3);
   const archived={
     id:'EARLY_WAKE_WATCH_ONLY:EARLYUSDT:'+(now-60_000),
@@ -950,7 +950,7 @@ test('validated Early-Wake archive observations join the Android local watch lis
     pre_move_context:{
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
       closed_candles_only:true,already_moved:false,session_close:now-60_000,
-      score:74,session_return_pct:1.2,one_hour_return_pct:0.05,
+      score:68,session_return_pct:1.2,one_hour_return_pct:0.05,
       volume_acceleration:1.8,trade_acceleration:1.15,
       taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
       mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
@@ -1020,7 +1020,9 @@ test('archived Early-Wake rows are rejected by phone-list merge when stale, exte
     {...base,symbol:'OLDUSDT',pre_move_context:{...base.pre_move_context,session_close:now-21*60_000}},
     {...base,symbol:'ENTRYUSDT',entry_eligible:true},
     {...base,symbol:'NOTSPOTUSDT',market:'FUTURES'},
-    {...base,symbol:'GENERICUSDT',watch_notification_tier:'STANDARD_WATCH_EARLY'}
+    {...base,symbol:'GENERICUSDT',watch_notification_tier:'STANDARD_WATCH_EARLY'},
+    {...base,symbol:'MISLABELEDUSDT',pre_move_context:{...base.pre_move_context,one_hour_return_pct:0.8,trade_acceleration:1.25},
+      watch_notification_tier:'EARLY_FLOW_MONITOR'}
   ];
   const merged=mergeArchivedEarlyWakeWatchAlerts([],bad,snapshot,now,10);
   assert.equal(merged.length,0);
