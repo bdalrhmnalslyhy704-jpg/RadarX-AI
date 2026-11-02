@@ -950,7 +950,7 @@ test('validated Early-Wake archive observations join the Android local watch lis
     pre_move_context:{
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
       closed_candles_only:true,already_moved:false,session_close:now-60_000,
-      score:74,session_return_pct:1.2,one_hour_return_pct:0.8,
+      score:74,session_return_pct:1.2,one_hour_return_pct:0.05,
       volume_acceleration:1.8,trade_acceleration:1.25,
       taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
       mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
@@ -1001,7 +1001,7 @@ test('archived Early-Wake rows are rejected by phone-list merge when stale, exte
     data_status:{data_valid:true,data_stale:false,stale:false,future_data_detected:false,source:'BINANCE_PUBLIC_REST',close_time:now-60_000},
     pre_move_context:{
       stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,closed_candles_only:true,
-      already_moved:false,session_close:now-60_000,score:74,session_return_pct:1.2,one_hour_return_pct:0.8,
+      already_moved:false,session_close:now-60_000,score:74,session_return_pct:1.2,one_hour_return_pct:0.05,
       volume_acceleration:1.8,trade_acceleration:1.25,taker_buy_ratio:0.56,taker_buy_acceleration:0.06,
       mean_close_location:0.65,relative_strength_vs_market_pct:0.8,
       components:{structure:65,buying_pressure:72,squeeze:48}
