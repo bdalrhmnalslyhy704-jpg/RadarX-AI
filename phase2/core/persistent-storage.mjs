@@ -37,6 +37,7 @@ export function resolveDurableStorage({env=process.env,mountsContent='',cwd=proc
   const candidates=[requestedMount,'/data','/app/data','/mnt/data','/mnt/persistent','/persistent']
     .map(x=>String(x||'').trim())
     .filter((x,i,a)=>x&&a.indexOf(x)===i);
+  const isRadarxDataPath=path=>/(?:^|\\/)\\.?radarx[-_.]?data$/i.test(String(path||''));
   const findBackingMount=directory=>{
     const absolute=resolve(cwd,directory);
     return mounts
@@ -45,16 +46,25 @@ export function resolveDurableStorage({env=process.env,mountsContent='',cwd=proc
   };
   const explicitMount=explicitDir?findBackingMount(explicitDir):null;
   const selectedMount=candidates.find(path=>mountSet.has(resolve(cwd,path)))||null;
-  // A stale RADARX_DATA_DIR pointing into the writable image must never override
-  // a real mounted disk. Keep an explicit directory only when it is itself backed
-  // by a detected mount, or when no mounted volume is available at all.
+  const selectedMountIsExactDataDirectory=Boolean(selectedMount&&isRadarxDataPath(selectedMount));
+  const namedRadarxMount=mounts
+    .filter(entry=>isRadarxDataPath(entry.mount_path))
+    .sort((a,b)=>b.mount_path.length-a.mount_path.length)[0]||null;
+  // DHDTech operators may mount the volume directly at /APP/.RADARX-DATA.
+  // In that case the mountpoint itself is the archive directory; do not append
+  // another .radarx-data folder and accidentally write to a different layer.
+  const requestedMountIsExactDataDirectory=Boolean(requestedMount&&isRadarxDataPath(requestedMount));
   const directory=explicitDir&&explicitMount?explicitDir:
-    selectedMount?join(selectedMount,'.radarx-data'):
+    selectedMount?(requestedMountIsExactDataDirectory?selectedMount:
+      selectedMountIsExactDataDirectory?selectedMount:join(selectedMount,'.radarx-data')):
+    namedRadarxMount?namedRadarxMount.mount_path:
     explicitDir|| (isRailway?'/data/.radarx-data':'./.radarx-data');
   const absoluteDirectory=resolve(cwd,directory);
   const backingMount=findBackingMount(directory);
   const persistent=Boolean(backingMount);
   const source=explicitDir&&explicitMount?'ENV_CONFIGURED_MOUNT_DIRECTORY':
+    requestedMount&&selectedMount?(requestedMountIsExactDataDirectory?'ENV_CONFIGURED_MOUNT_DIRECTORY':'ENV_CONFIGURED_MOUNT_SUBDIRECTORY'):
+    namedRadarxMount?'AUTO_DETECTED_RADARX_MOUNT':
     selectedMount?'AUTO_DETECTED_MOUNT':
     explicitDir?'ENV_CONFIGURED_DIRECTORY_EPHEMERAL':
     isRailway?'RAILWAY_DEFAULT_DIRECTORY_EPHEMERAL':
