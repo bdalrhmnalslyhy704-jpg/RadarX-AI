@@ -34,28 +34,40 @@ export function resolveDurableStorage({env=process.env,mountsContent='',cwd=proc
   const isRailway=Boolean(env.RAILWAY_SERVICE_ID||env.RAILWAY_ENVIRONMENT);
   const mounts=parseMountTable(mountsContent);
   const mountSet=new Set(mounts.map(x=>x.mount_path));
-  const candidates=[requestedMount,'/data','/app/data','/mnt/data','/mnt/persistent','/persistent']
-    .map(x=>String(x||'').trim())
-    .filter((x,i,a)=>x&&a.indexOf(x)===i);
   const findBackingMount=directory=>{
     const absolute=resolve(cwd,directory);
     return mounts
       .filter(entry=>absolute===entry.mount_path||absolute.startsWith(entry.mount_path+sep))
       .sort((a,b)=>b.mount_path.length-a.mount_path.length)[0]||null;
   };
+  const isRadarxDataPath=path=>{
+    const name=String(path||'').split('/').filter(Boolean).at(-1)||'';
+    return name.replace(/^\./,'').toLowerCase().replace(/[-_.]/g,'')==='radarxdata';
+  };
   const explicitMount=explicitDir?findBackingMount(explicitDir):null;
-  const selectedMount=candidates.find(path=>mountSet.has(resolve(cwd,path)))||null;
-  // A stale RADARX_DATA_DIR pointing into the writable image must never override
-  // a real mounted disk. Keep an explicit directory only when it is itself backed
-  // by a detected mount, or when no mounted volume is available at all.
+  const requestedMountPresent=Boolean(requestedMount&&mountSet.has(resolve(cwd,requestedMount)));
+  const requestedMountIsExactDataDirectory=isRadarxDataPath(requestedMount);
+  const namedRadarxMount=mounts
+    .filter(entry=>isRadarxDataPath(entry.mount_path))
+    .sort((a,b)=>b.mount_path.length-a.mount_path.length)[0]||null;
+  const genericCandidates=['/data','/app/data','/mnt/data','/mnt/persistent','/persistent'];
+  const selectedGenericMount=genericCandidates
+    .find(path=>mountSet.has(resolve(cwd,path)))||null;
+  // DHDTech may mount the data disk directly at /APP/.RADARX-DATA.
+  // Prefer that exact named mount over generic /data mounts so the durable
+  // store never silently moves away from the operator-selected volume.
   const directory=explicitDir&&explicitMount?explicitDir:
-    selectedMount?join(selectedMount,'.radarx-data'):
-    explicitDir|| (isRailway?'/data/.radarx-data':'./.radarx-data');
+    requestedMountPresent?(requestedMountIsExactDataDirectory?requestedMount:join(requestedMount,'.radarx-data')):
+    namedRadarxMount?namedRadarxMount.mount_path:
+    selectedGenericMount?join(selectedGenericMount,'.radarx-data'):
+    explicitDir||(isRailway?'/data/.radarx-data':'./.radarx-data');
   const absoluteDirectory=resolve(cwd,directory);
   const backingMount=findBackingMount(directory);
   const persistent=Boolean(backingMount);
   const source=explicitDir&&explicitMount?'ENV_CONFIGURED_MOUNT_DIRECTORY':
-    selectedMount?'AUTO_DETECTED_MOUNT':
+    requestedMountPresent?(requestedMountIsExactDataDirectory?'ENV_CONFIGURED_MOUNT_DIRECTORY':'ENV_CONFIGURED_MOUNT_SUBDIRECTORY'):
+    namedRadarxMount?'AUTO_DETECTED_RADARX_MOUNT':
+    selectedGenericMount?'AUTO_DETECTED_MOUNT':
     explicitDir?'ENV_CONFIGURED_DIRECTORY_EPHEMERAL':
     isRailway?'RAILWAY_DEFAULT_DIRECTORY_EPHEMERAL':
     'CONTAINER_FILESYSTEM_FALLBACK';

@@ -29,6 +29,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   earlyWakeMin24hMovePct:-2,
   earlyWakeScanCooldownMs:90*1000,
   earlyWakeAlertCooldownMs:15*60*1000,
+  earlyWakeWatchOnlyCooldownMs:15*60*1000,
   earlyWakeMinScore:76,
   earlyWakeMinLeaders:4,
   fastInterval:'5m',
@@ -539,6 +540,119 @@ export function buildPreExplosionAlert(candidate,trigger,{now=Date.now()}={}) {
   };
 }
 
+
+/**
+ * Preserve a narrowly qualified early-flow near miss as a non-entry observation.
+ * The strict Early-Wake/Pre-Explosion + Elite gates remain unchanged.
+ */
+export function buildPreMoveWatchOnlyAlert(candidate,row,trigger,{now=Date.now(),strictFailures=[]}={}){
+  const p=candidate?.pre_move_context||{};
+  const numeric=value=>{
+    if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
+    const n=Number(value);return Number.isFinite(n)?n:null;
+  };
+  const symbol=String(candidate?.symbol||row?.symbol||'').trim().toUpperCase();
+  const price=numeric(candidate?.last_price??row?.lastPrice);
+  const dailyMove=numeric(candidate?.price_change_24h??row?.priceChange24h);
+  const quoteVolume=numeric(row?.quoteVolume24h??row?.quote_volume_24h);
+  const dataQuality=numeric(candidate?.data_quality);
+  const liquidityQuality=numeric(candidate?.liquidity_quality);
+  const source=String(candidate?.data_status?.source||candidate?.source||'').trim();
+  const closeAt=numeric(p.session_close);
+  const session=numeric(p.session_return_pct);
+  const hour=numeric(p.one_hour_return_pct);
+  const score=numeric(p.score);
+  const volumeRatio=numeric(p.volume_acceleration);
+  const tradeRatio=numeric(p.trade_acceleration);
+  const taker=numeric(p.taker_buy_ratio);
+  const takerDelta=numeric(p.taker_buy_acceleration);
+  const closeLocation=numeric(p.mean_close_location);
+  const relative=numeric(p.relative_strength_vs_market_pct);
+  const structure=numeric(p.components?.structure);
+  const buyingPressure=numeric(p.components?.buying_pressure);
+  const squeeze=numeric(p.components?.squeeze);
+  const ageMs=closeAt===null?null:Number(now)-closeAt;
+  const independentEvidence=[
+    volumeRatio!==null&&volumeRatio>=1.0,
+    tradeRatio!==null&&tradeRatio>=1.05,
+    taker!==null&&taker>=0.54,
+    takerDelta!==null&&takerDelta>=0.01,
+    closeLocation!==null&&closeLocation>=0.54,
+    relative!==null&&relative>=0.5
+  ].filter(Boolean).length;
+  const riskFlags=(Array.isArray(candidate?.risk_flags)?candidate.risk_flags:[])
+    .map(value=>String(value).toUpperCase());
+  const hardRisk=riskFlags.some(value=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(value));
+  const sourceTrusted=/BINANCE[\s_-]*PUBLIC[\s_-]*(REST|WS)|BINANCE PUBLIC REST\/WS/i.test(source);
+  const dataValid=candidate?.data_status?.data_valid===true&&
+    candidate?.data_status?.data_stale!==true&&candidate?.data_status?.stale!==true&&
+    candidate?.data_status?.future_data_detected!==true&&candidate?.data_stale!==true;
+  const eligible=
+    /^[A-Z0-9]{5,30}USDT$/.test(symbol)&&price!==null&&price>0&&
+    quoteVolume!==null&&quoteVolume>=750000&&
+    sourceTrusted&&dataValid&&p.evidence_complete===true&&p.closed_candles_only===true&&
+    p.already_moved!==true&&closeAt!==null&&ageMs!==null&&ageMs>=0&&ageMs<=20*60*1000&&
+    dailyMove!==null&&dailyMove>=-5&&dailyMove<=4.5&&
+    score!==null&&score>=68&&
+    session!==null&&session>=-1.25&&session<=4.5&&
+    hour!==null&&hour>=-0.75&&hour<=2.5&&
+    volumeRatio!==null&&volumeRatio>=1.4&&
+    tradeRatio!==null&&tradeRatio>=1.05&&
+    taker!==null&&taker>=0.50&&
+    takerDelta!==null&&takerDelta>=0.03&&
+    relative!==null&&relative>=0.25&&
+    dataQuality!==null&&dataQuality>=85&&dataQuality<=100&&
+    liquidityQuality!==null&&liquidityQuality>=70&&liquidityQuality<=100&&
+    structure!==null&&structure>=50&&independentEvidence>=4&&!hardRisk;
+  if(!eligible)return null;
+  const blockers=[...new Set([
+    ...(Array.isArray(strictFailures)?strictFailures.map(String):[]),
+    ...(!p.flow_transition_confirmed?['STRICT_FLOW_TRANSITION_NOT_CONFIRMED']:[]),
+    ...(!p.structure_gate_passed?['STRICT_STRUCTURE_GATE_NOT_CONFIRMED']:[]),
+    'EARLY_WATCH_ONLY_NOT_ENTRY_ELIGIBLE'
+  ])].filter(Boolean).slice(0,30);
+  const watchContext={
+    ...p,stage:'WATCH_EARLY',watch_only:true,actionable:false,
+    evidence_complete:true,closed_candles_only:true,already_moved:false
+  };
+  const evidence={
+    volume_acceleration:volumeRatio,trade_acceleration:tradeRatio,
+    taker_buy_ratio:taker,taker_buy_acceleration:takerDelta,
+    mean_close_location:closeLocation,relative_strength_vs_market_pct:relative,
+    independent_confirmations:independentEvidence,closed_candle_close_time:closeAt,
+    candle_age_ms:ageMs,quote_volume_24h:quoteVolume
+  };
+  return {
+    id:'EARLY_WAKE_WATCH_ONLY:'+symbol+':'+String(closeAt),
+    event:'PRE_MOVE_RADAR_WATCH_ONLY',event_class:'RADAR_WATCH_ONLY',
+    radar:'PRE_MOVE',radar_name:'رادار الاستيقاظ المبكر',
+    symbol,market:'SPOT',direction:'NONE',price,
+    price_change_24h:dailyMove,quote_volume_24h:quoteVolume,
+    opportunity_score:score,setup_score:score,
+    potential_label:'WATCH_EARLY',decision_band:'WATCH_EARLY',
+    pre_move_context:watchContext,
+    early_wake_watch_evidence:evidence,
+    watch_evidence:evidence,
+    watch_notification_tier:'EARLY_FLOW_MONITOR',
+    watch_only:true,entry_eligible:false,alert_eligible:false,eligible:false,actionable:false,
+    signal_type:'WATCH_ONLY',closed_candles_only:true,detected_candle_close_time:closeAt,
+    data_quality:dataQuality,liquidity_quality:liquidityQuality,data_stale:false,
+    data_status:{
+      ...(candidate.data_status||{}),status:'LIVE_DATA',data_valid:true,
+      data_stale:false,stale:false,future_data_detected:false,
+      source,close_time:closeAt,candle_closed:true
+    },
+    source,detected_at:Number(now),processed_at:Number(now),
+    reasons:[...(Array.isArray(p.reasons)?p.reasons:[]),
+      'تدفق مبكر موثق؛ الشروط الصارمة للدخول لم تكتمل بعد'],
+    reason_codes:blockers,watch_reason_codes:blockers,strict_gate_failures:blockers,
+    risk_flags:riskFlags,
+    notification_gate:{eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
+    paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
+    disclaimer:'مراقبة مبكرة فقط من بيانات Spot مغلقة؛ لا تعني دخولًا ولا تضمن استمرار الصعود.'
+  };
+}
+
 export class EarlyMoveSentinel {
   constructor({rest,store,pushManager=null,config={},clock=()=>Date.now(),logger=console,tickerWsFactory=null,scannerFactory=null}){
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
@@ -559,6 +673,8 @@ export class EarlyMoveSentinel {
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
     this.lastEarlyScanAt=new Map();
+    this.lastWatchOnlyAt=new Map();
+    this.lastWatchOnlyCandleAt=new Map();
     this.preExplosionCursor=0;this.preExplosionRotationTotal=0;
     this.deepQueue=[];
     this.deepActive=0;
@@ -568,6 +684,7 @@ export class EarlyMoveSentinel {
     this.lastReconcileAt=null;
     this.reconciling=false;this.reconcileStartedAt=null;this.reconcileSkippedCount=0;
     this.alertCount=0;
+    this.watchOnlyAlertCount=0;
     this.lastError=null;
   }
 
@@ -637,7 +754,8 @@ export class EarlyMoveSentinel {
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
       pre_explosion_rotation_cursor:this.preExplosionCursor,pre_explosion_rotation_total:this.preExplosionRotationTotal,
-      alerts_emitted:this.alertCount
+      alerts_emitted:this.alertCount,
+      watch_only_observations_emitted:this.watchOnlyAlertCount
     };
   }
 
@@ -822,6 +940,36 @@ export class EarlyMoveSentinel {
     });
   }
 
+  async recordEarlyWakeWatchOnly(watch,job){
+    const closeAt=Number(watch?.detected_candle_close_time);
+    if(!Number.isFinite(closeAt)||closeAt<=0)return null;
+    if(Number(this.lastWatchOnlyCandleAt.get(job.symbol)||0)===closeAt)
+      return {...watch,watch_only_deduplicated:true};
+    const now=this.clock();
+    const last=this.lastWatchOnlyAt.get(job.symbol)||0;
+    const cooldown=Math.max(60_000,Number(this.config.earlyWakeWatchOnlyCooldownMs)||15*60*1000);
+    if(now-last<cooldown)return {...watch,watch_only_suppressed_by_cooldown:true};
+    const decorated=decorateRadarAlert(watch,'Radar 1 — Early-Wake / WATCH ONLY');
+    await this.store.appendMoveAlert(decorated);
+    this.lastWatchOnlyCandleAt.set(job.symbol,closeAt);
+    this.lastWatchOnlyAt.set(job.symbol,now);
+    this.watchOnlyAlertCount++;
+    if(this.pushManager?.notifyRadarWatchOnlyAlert){
+      try{
+        const result=await this.pushManager.notifyRadarWatchOnlyAlert(decorated);
+        this.logger.info?.('[EARLY_WAKE_WATCH_ONLY_RESULT] '+JSON.stringify({
+          symbol:job.symbol,status:String(result?.status||'UNKNOWN'),
+          attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+          reason:result?.reason||null,watch_only:true,entry_eligible:false
+        }));
+      }catch(error){
+        this.lastError=String(error?.message??error);
+        this.logger.warn?.('EARLY_WAKE_WATCH_ONLY_PUSH',this.lastError);
+      }
+    }
+    return decorated;
+  }
+
   async drainDeepQueue(){
     while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
@@ -831,8 +979,31 @@ export class EarlyMoveSentinel {
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
-        const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);
-        if(!alert?.eligible)continue;
+        const moveAlert=job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null;
+        const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:moveAlert;
+        const strictFailures=[];
+        if(!preAlert.eligible)strictFailures.push('PRE_EXPLOSION_STRICT_ELIGIBILITY_NOT_MET');
+        if(!wakeAlert.eligible)strictFailures.push('EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET');
+        if(moveAlert&&!moveAlert.eligible)strictFailures.push('MOVE_ALERT_STRICT_ELIGIBILITY_NOT_MET');
+        if(!alert?.eligible){
+          const watch=buildPreMoveWatchOnlyAlert(candidate,job.row,job.trigger,{
+            now:this.clock(),strictFailures
+          });
+          if(watch){
+            await this.recordEarlyWakeWatchOnly(watch,job);
+          }else{
+            this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
+              symbol:job.symbol,mode:job.mode,
+              decision:'REJECTED_NO_WATCH_ONLY_CORRIDOR',
+              strict_failures:strictFailures,
+              pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[],
+              pre_move_score:candidate?.pre_move_context?.score??null,
+              data_quality:candidate?.data_quality??null,
+              liquidity_quality:candidate?.liquidity_quality??null
+            }));
+          }
+          continue;
+        }
         const cc=alert.components||{};
         const sc=alert.strategy_confluence||{};
         const gate=evaluateEliteGate({
@@ -853,25 +1024,40 @@ export class EarlyMoveSentinel {
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;
-        if(!gate.eligible)continue;
-        const alertKey=`${job.symbol}:${alert.event}`;
+        if(!gate.eligible){
+          strictFailures.push(...(Array.isArray(gate.failures)?gate.failures:['ELITE_GATE_NOT_ELIGIBLE']));
+          const watch=buildPreMoveWatchOnlyAlert(candidate,job.row,job.trigger,{
+            now:this.clock(),strictFailures
+          });
+          if(watch){
+            await this.recordEarlyWakeWatchOnly(watch,job);
+          }else{
+            this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
+              symbol:job.symbol,mode:job.mode,decision:'REJECTED_ELITE_GATE',
+              strict_failures:strictFailures,
+              pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[]
+            }));
+          }
+          continue;
+        }
+        const alertKey=job.symbol+':'+alert.event;
         const recent=this.lastAlertScore.get(alertKey)||0;
         const lastAt=this.lastAlertAt.get(alertKey)||0;
         const cooldown=alert.event==='EARLY_WAKE_ALERT'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
         if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
-        const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        const decorated=decorateRadarAlert(alert,alert.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
         await this.store.appendMoveAlert(decorated);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);
         if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
+        this.logger.warn?.('EARLY_MOVE_DEEP_SCAN',this.lastError);
       }finally{
         this.deepActive--;
         if(this.deepActive<=0){this.deepActive=0;this.deepActiveStartedAt=null;}
       }
     }
-  }
-}
+  }}

@@ -507,6 +507,105 @@ export function buildPreMoveWatchOnlyAlerts(candidates,snapshot,now=Date.now(),l
   return out;
 }
 
+
+/**
+ * Re-validate recent Early-Wake near-miss archive rows for the Android local
+ * WATCH ONLY fallback. FCM may be disabled on the backend, so validated rows
+ * must still reach the native poller without being promoted to entry signals.
+ */
+export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAlerts,snapshot,now=Date.now(),limit=3){
+  const cap=Math.max(0,Math.min(10,Math.trunc(Number(limit)||3)));
+  if(cap===0)return [];
+  const bySymbol=new Map();
+  for(const alert of (Array.isArray(scanWatchAlerts)?scanWatchAlerts:[])){
+    const symbol=String(alert?.symbol||'').trim().toUpperCase();
+    if(!symbol||alert?.event!=='PRE_MOVE_RADAR_WATCH_ONLY'||alert?.watch_only!==true||
+       alert?.entry_eligible!==false||alert?.closed_candles_only!==true)continue;
+    bySymbol.set(symbol,alert);
+  }
+  let archivedConsidered=0,archivedAccepted=0;
+  for(const row of (Array.isArray(archivedMoveAlerts)?archivedMoveAlerts:[])){
+    if(row?.event!=='PRE_MOVE_RADAR_WATCH_ONLY'||row?.watch_only!==true||
+       row?.entry_eligible!==false||row?.alert_eligible!==false||
+       row?.watch_notification_tier!=='EARLY_FLOW_MONITOR'||row?.market!=='SPOT'||
+       row?.real_order_execution===true||row?.paper_trading!==true||
+       row?.closed_candles_only!==true||row?.data_stale===true)continue;
+    archivedConsidered++;
+    const source=String(row?.source||row?.data_status?.source||'').trim();
+    if(!/^BINANCE[\s_-]*PUBLIC[\s_-]*(REST|WS)(?:\b|[\s_-])/i.test(source))continue;
+    const status=row?.data_status;
+    const context=row?.pre_move_context;
+    if(!status||status.data_valid!==true||status.data_stale===true||status.stale===true||
+       status.future_data_detected===true||!context||context.stage!=='WATCH_EARLY'||
+       context.watch_only!==true||context.actionable!==false||
+       context.evidence_complete!==true||context.closed_candles_only!==true||
+       context.already_moved===true)continue;
+    const candidate={
+      ...row,
+      symbol:String(row.symbol||'').trim().toUpperCase(),
+      last_price:row.last_price??row.price,
+      alert_eligible:false,
+      watch_only:true,
+      entry_eligible:false,
+      source:'Binance Public REST',
+      data_status:{
+        ...status,source:'Binance Public REST',data_valid:true,
+        data_stale:false,stale:false,future_data_detected:false
+      }
+    };
+    const validated=buildPreMoveWatchOnlyAlert(candidate,{
+      ...(snapshot||{}),source:'Binance Public REST',
+      meta:{...(snapshot?.meta||{}),radar:'PRE_MOVE',live:true,paper_trading:true,real_order_execution:false}
+    },now);
+    if(!validated||validated.watch_notification_tier!=='EARLY_FLOW_MONITOR')continue;
+    const symbol=validated.symbol;
+    if(!bySymbol.has(symbol)){
+      bySymbol.set(symbol,{
+        ...validated,
+        id:String(row.id||validated.id),
+        direction:'NONE',
+        signal_type:'WATCH_ONLY',
+        watch_notification_tier:'EARLY_FLOW_MONITOR',
+        watch_only:true,
+        entry_eligible:false,
+        alert_eligible:false,
+        actionable:false,
+        closed_candles_only:true,
+        data_stale:false,
+        source:'Binance Public REST',
+        data_status:{
+          ...validated.data_status,status:'LIVE_DATA',data_valid:true,data_stale:false,
+          stale:false,future_data_detected:false,source:'Binance Public REST',
+          close_time:validated.detected_candle_close_time,candle_closed:true
+        },
+        early_wake_watch_evidence:row.early_wake_watch_evidence||row.watch_evidence||null,
+        watch_evidence:row.watch_evidence||row.early_wake_watch_evidence||null,
+        reasons:Array.isArray(row.reasons)?row.reasons.slice(0,12):validated.reasons,
+        reason_codes:Array.isArray(row.reason_codes)?row.reason_codes.slice(0,30):validated.reason_codes,
+        watch_reason_codes:Array.isArray(row.watch_reason_codes)?row.watch_reason_codes.slice(0,30):validated.watch_reason_codes,
+        strict_gate_failures:Array.isArray(row.strict_gate_failures)?row.strict_gate_failures.slice(0,30):[],
+        notification_gate:{eligible:false,watch_only:true,mode:'PRE_MOVE_WATCH_ONLY'},
+        archived_early_wake_observation:true,
+        archive_event_time:Number(row.detected_at)||Number(row.processed_at)||null
+      });
+      archivedAccepted++;
+    }
+  }
+  const merged=[...bySymbol.values()].sort((a,b)=>
+    Number(b.archived_early_wake_observation===true)-Number(a.archived_early_wake_observation===true)||
+    Number(b.pre_move_context?.score||0)-Number(a.pre_move_context?.score||0)||
+    Number(a.pre_move_context?.session_return_pct||0)-Number(b.pre_move_context?.session_return_pct||0)||
+    String(a.symbol).localeCompare(String(b.symbol))
+  ).slice(0,cap);
+  Object.defineProperty(merged,'diagnostics',{value:{
+    scan_watch_candidates:Array.isArray(scanWatchAlerts)?scanWatchAlerts.length:0,
+    archived_rows_considered:archivedConsidered,
+    archived_rows_revalidated:archivedAccepted,
+    merged_count:merged.length
+  },enumerable:false});
+  return merged;
+}
+
 export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null,storageInfo=null}= {}){
   const counters=new Map();
   const nativePushTestLastAt=new Map();
@@ -900,7 +999,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(active)return active;
     const retryAfter=Number(preMoveRadarRefreshRetryAfter.get(key)||0);
     if(retryAfter>Date.now())return null;
-    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(snapshot=>{
+    const task=Promise.resolve().then(()=>preMoveRadarScanner.scanPreMove({quote,limit})).then(async snapshot=>{
       if(!snapshot||snapshot.meta?.radar!=='PRE_MOVE'||typeof snapshot.as_of!=='string'||
          !snapshot.session||!snapshot.universe||!Array.isArray(snapshot.candidates))
         throw new Error('PRE_MOVE_RADAR_SNAPSHOT_INVALID');
@@ -914,10 +1013,25 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       // fallback. The fallback must not promote any row to an actionable entry signal.
       const watchCandidates=Array.isArray(snapshot.watch_candidates)?snapshot.watch_candidates:[];
       const watchEvaluationAt=Date.now();
-      const watchAlerts=buildPreMoveWatchOnlyAlerts(watchCandidates,snapshot,watchEvaluationAt,3);
+      const scanWatchAlerts=buildPreMoveWatchOnlyAlerts(watchCandidates,snapshot,watchEvaluationAt,3);
+      let archivedMoveAlerts=[];
+      if(typeof store?.readMoveAlerts==='function'){
+        try{
+          archivedMoveAlerts=await store.readMoveAlerts({sinceMs:watchEvaluationAt-20*60*1000,limit:100});
+        }catch(error){
+          console.warn?.('[PRE_MOVE_ARCHIVED_WATCH_READ_FAILED] '+String(error?.message??error).slice(0,160));
+        }
+      }
+      const watchAlerts=mergeArchivedEarlyWakeWatchAlerts(
+        scanWatchAlerts,archivedMoveAlerts,snapshot,watchEvaluationAt,3
+      );
       snapshot.watch_notification_candidates=watchAlerts;
       snapshot.watch_notification_diagnostics={
         ...diagnosePreMoveWatchOnlyCandidates(watchCandidates,snapshot,watchEvaluationAt,12),
+        archived_early_wake:watchAlerts.diagnostics||{
+          scan_watch_candidates:scanWatchAlerts.length,archived_rows_considered:0,
+          archived_rows_revalidated:0,merged_count:watchAlerts.length
+        },
         evaluated_at:new Date(watchEvaluationAt).toISOString(),
         policy:'STRICT_WATCH_ONLY_NO_ENTRY'
       };
@@ -928,7 +1042,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       preMoveRadarResponseCache.set(key,{snapshot,savedAt:Date.now()});
       // Only validated observations enter this separate watch lane. Entry gates stay unchanged.
       if(typeof pushManager?.notifyRadarWatchOnlyAlert==='function'){
-        for(const alert of watchAlerts){
+        for(const alert of scanWatchAlerts){
           Promise.resolve().then(()=>pushManager.notifyRadarWatchOnlyAlert(alert)).then(result=>{
             const outcome={
               ...result,symbol:String(alert?.symbol||'').toUpperCase(),

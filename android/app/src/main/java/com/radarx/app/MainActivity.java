@@ -51,6 +51,8 @@ public final class MainActivity extends Activity {
     private static final String PREF_REPLAY_TEST_SCAN_MS = "radarx_test_scan_interval_ms";
     private boolean pendingBackgroundStart;
     private boolean hasResumedOnce;
+    private boolean activityResumed;
+    private boolean initialForegroundStartupDone;
 
     private WebView webView;
     private WebViewAssetLoader assetLoader;
@@ -132,11 +134,9 @@ public final class MainActivity extends Activity {
         });
 
         setContentView(webView);
-        // Start the foreground monitor before WebView boots its heavy dashboard.
-        // The foreground-service start deadline must not depend on WebView startup
-        // or main-thread callbacks queued behind dashboard JavaScript.
-        ensureContinuousMonitoring();
-        RadarXPushRegistration.syncIfConfigured(this);
+        // The service is started from onPostResume, after Android has promoted
+        // this Activity to the foreground. This avoids using startForegroundService
+        // from a not-yet-resumed Activity during a cold launch on Android 8+.
         webView.loadUrl(APP_URL);
     }
 
@@ -164,10 +164,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         // Android may return here after the user grants notification permission in
         // system settings, or after the OS reclaims the background process.
         // Re-sync push registration and restore local polling only if auto-monitoring
-        // remains enabled. Skip the first resume because onCreate already does this.
+        // remains enabled. The first start is deferred to onPostResume below.
         if (hasResumedOnce) {
             RadarXPushRegistration.syncIfConfigured(this);
             ensureContinuousMonitoring();
@@ -179,7 +180,20 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPostResume() {
+        super.onPostResume();
+        // onPostResume guarantees the Activity is visible before starting the
+        // isolated foreground-monitor process from this Activity.
+        if (!initialForegroundStartupDone) {
+            initialForegroundStartupDone = true;
+            RadarXPushRegistration.syncIfConfigured(this);
+            ensureContinuousMonitoring();
+        }
+    }
+
+    @Override
     protected void onPause() {
+        activityResumed = false;
         if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             Log.i("RadarXSmoke", "ACTIVITY_PAUSED");
         }
@@ -354,7 +368,11 @@ public final class MainActivity extends Activity {
         try {
             Intent intent = new Intent(this, RadarXBackgroundMonitorService.class);
             intent.setAction(RadarXBackgroundMonitorService.ACTION_START);
-            if (Build.VERSION.SDK_INT >= 26) {
+            // A resumed Activity is already foreground, so startService is legal
+            // on Android 8+ and avoids the five-second startForegroundService
+            // watchdog while the separate :radar_background process cold-starts.
+            // BootReceiver and non-visible lifecycle paths retain the FGS API.
+            if (Build.VERSION.SDK_INT >= 26 && !activityResumed) {
                 startForegroundService(intent);
             } else {
                 startService(intent);

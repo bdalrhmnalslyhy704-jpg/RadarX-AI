@@ -258,3 +258,41 @@ assert.match(manifest, /android:launchMode="singleTop"/,
   'the manifest must deliver repeated test intents to MainActivity.onNewIntent');
 
 
+
+
+const serviceCreateStart = service.indexOf('public void onCreate()');
+const serviceStartCommand = service.indexOf('public int onStartCommand(', serviceCreateStart);
+const serviceCreate = service.slice(serviceCreateStart, serviceStartCommand);
+assert.ok(serviceCreateStart >= 0 && serviceStartCommand > serviceCreateStart,
+  'background monitor lifecycle methods must remain present');
+assert.ok(
+  serviceCreate.indexOf('createStatusChannel();') >= 0 &&
+  serviceCreate.indexOf('createStatusChannel();') < serviceCreate.indexOf('startAsForeground();') &&
+  serviceCreate.indexOf('startAsForeground();') < serviceCreate.indexOf('createAdditionalChannels();') &&
+  serviceCreate.indexOf('createAdditionalChannels();') < serviceCreate.indexOf('newSingleThreadScheduledExecutor'),
+  'the isolated service must enter foreground immediately after its one required channel, before nonessential channel/executor setup'
+);
+assert.match(service, /private volatile boolean foregroundStarted;/,
+  'the service must track its initial foreground transition');
+assert.match(service, /if \(!foregroundStarted\) startAsForeground\(\);/,
+  'onStartCommand must only repair a missing foreground transition, not delay the first one');
+
+const mainCreateStart = main.indexOf('protected void onCreate(');
+const mainNewIntentStart = main.indexOf('protected void onNewIntent(', mainCreateStart);
+const mainOnCreate = main.slice(mainCreateStart, mainNewIntentStart);
+assert.ok(mainCreateStart >= 0 && mainNewIntentStart > mainCreateStart);
+assert.doesNotMatch(mainOnCreate, /ensureContinuousMonitoring\(\)|startBackgroundMonitor\(/,
+  'cold startup must not launch the isolated service before MainActivity is resumed');
+const mainOnResumeStart = main.indexOf('protected void onResume()');
+const mainOnPostResumeStart = main.indexOf('protected void onPostResume()', mainOnResumeStart);
+const mainOnPauseStart = main.indexOf('protected void onPause()', mainOnPostResumeStart);
+assert.ok(mainOnResumeStart >= 0 && mainOnPostResumeStart > mainOnResumeStart && mainOnPauseStart > mainOnPostResumeStart,
+  'Activity foreground lifecycle must be explicitly tracked');
+assert.match(main, /activityResumed = true;/,
+  'the Activity must mark itself visible before starting its service');
+assert.match(main, /activityResumed = false;/,
+  'the Activity must clear visibility when leaving the foreground');
+assert.match(main, /if \(!initialForegroundStartupDone\)[\s\S]*?ensureContinuousMonitoring\(\);/,
+  'initial background monitoring must start from onPostResume after the Activity is foreground');
+assert.match(main, /Build\.VERSION\.SDK_INT >= 26 && !activityResumed[\s\S]*?startForegroundService\(intent\)[\s\S]*?startService\(intent\);/,
+  'visible Activities should use an ordinary service start while background/boot starts retain the foreground-service API');
