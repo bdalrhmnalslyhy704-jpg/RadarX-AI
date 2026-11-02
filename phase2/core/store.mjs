@@ -176,7 +176,7 @@ async function readBoundedOutcomeLedger(path,recordLimit){
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.preExpansionOutcomeQueue=Promise.resolve();this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),preMoveState:join(dir,'pre-move-state.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
@@ -230,6 +230,13 @@ export class DurableStore {
   async preMoveStateLock(fn){
     const p=this.preMoveStateQueue.then(fn);
     this.preMoveStateQueue=p.catch(()=>{});
+    return p;
+  }
+  // Radar 8's outcome ledger is independent of alert, radar-signal, and Scan Journey writes.
+  // A busy shared archive queue must not consume the live scan's entire deadline.
+  async preExpansionOutcomeLock(fn){
+    const p=this.preExpansionOutcomeQueue.then(fn);
+    this.preExpansionOutcomeQueue=p.catch(()=>{});
     return p;
   }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
@@ -638,7 +645,7 @@ export class DurableStore {
   async compactPreExpansionOutcomes({maxRecords=1500,maxStageKeys=4000}={}){
     const recordLimit=Math.max(100,Math.min(5000,Math.trunc(Number(maxRecords)||2500)));
     const stageLimit=Math.max(100,Math.min(10000,Math.trunc(Number(maxStageKeys)||6000)));
-    return this.lock(async()=>{
+    return this.preExpansionOutcomeLock(async()=>{
       let beforeBytes=0;
       try{beforeBytes=Number((await stat(this.files.preExpansionOutcomes)).size)||0;}
       catch(error){
@@ -688,7 +695,7 @@ export class DurableStore {
   }
   async updatePreExpansionOutcomes(updater){
     if(typeof updater!=='function')throw new Error('PRE_EXPANSION_OUTCOME_UPDATER_REQUIRED');
-    return this.lock(async()=>{
+    return this.preExpansionOutcomeLock(async()=>{
       let current=await this.readJson(this.files.preExpansionOutcomes);
       const result=await updater(current);
       if(result===false)return current;
