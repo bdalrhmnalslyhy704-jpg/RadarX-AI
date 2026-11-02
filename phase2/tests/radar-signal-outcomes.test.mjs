@@ -309,18 +309,19 @@ test('archive pagination advances beyond 200 same-timestamp alerts without dupli
 });
 
 
-test('watch-only diagnostic observations are excluded from emitted-alert outcome calibration',async()=>{
+test('watch-only observations receive closed-candle outcomes in their own cohort',async()=>{
   let state=emptyRadarSignalOutcomeState();
   const watchOnly={
     id:'STRONG_MOVE_WATCH_ONLY:ABCUSDT:'+String(BASE),
-    event:'STRONG_MOVE_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',
-    symbol:'ABCUSDT',price:100,detected_at:BASE,processed_at:BASE+1000,
-    watch_only:true,entry_eligible:false,potential_label:'WATCH_EARLY'
+    event:'STRONG_MOVE_WATCH_ONLY',event_class:'RADAR_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',
+    symbol:'ABCUSDT',market:'SPOT',price:100,detected_at:BASE,processed_at:BASE+1000,
+    watch_only:true,entry_eligible:false,eligible:false,potential_label:'WATCH_EARLY',
+    strong_move:{metrics:{return_1m:0.15,return_3m:0.42,return_5m:0.8,volume_ratio:1.8,taker_buy_ratio:0.59}}
   };
   const strictAlert={
     id:'STRONG:ABCUSDT:UP_SURGE:'+String(BASE+2000),
     event:'STRONG_MOVE_ALERT',radar:'STRONG_MOVE_RADAR',
-    symbol:'ABCUSDT',price:100,detected_at:BASE+2000,processed_at:BASE+3000,
+    symbol:'ABCUSDT',market:'SPOT',price:100,detected_at:BASE+2000,processed_at:BASE+3000,
     eligible:true,entry_eligible:true,potential_label:'STRONG_MOVE'
   };
   const store={
@@ -333,10 +334,38 @@ test('watch-only diagnostic observations are excluded from emitted-alert outcome
     now:BASE+30*minute,maxRestCalls:0,logger:{warn(){}}
   });
   assert.equal(result.ok,true);
-  assert.equal(state.records.length,1);
-  assert.equal(state.records[0].source_alert_id,strictAlert.id);
-  assert.equal(state.records[0].baseline_status,'COMPLETE');
-  assert.equal(state.last_import_counts.RADAR_2.watch_only_excluded,1);
+  assert.equal(state.records.length,2);
+  const strict=state.records.find(row=>row.source_alert_id===strictAlert.id);
+  const watch=state.records.find(row=>row.source_alert_id===watchOnly.id);
+  assert.equal(strict.signal_class,'EMITTED_ALERT');
+  assert.equal(strict.baseline_status,'COMPLETE');
+  assert.equal(watch.signal_class,'WATCH_ONLY');
+  assert.equal(watch.watch_only,true);
+  assert.equal(watch.entry_eligible,false);
+  assert.equal(watch.baseline_status,'COMPLETE');
+  assert.equal(watch.features.return_1m_pct,0.15);
+  assert.equal(watch.features.return_3m_pct,0.42);
+  assert.equal(watch.features.return_5m_pct,0.8);
+  assert.equal(state.last_import_counts.RADAR_2.watch_only_imported,1);
+  assert.equal(state.last_import_counts.RADAR_2.watch_only_excluded,0);
   assert.equal(state.last_import_counts.RADAR_2.scanned,2);
-  assert.equal(state.last_import_counts.RADAR_2.normalized,1);
+  assert.equal(state.last_import_counts.RADAR_2.normalized,2);
+  const radar2=result.report.by_radar.find(row=>row.radar==='RADAR_2');
+  assert.equal(radar2.emitted_alerts,1);
+  assert.equal(radar2.watch_only_observations,1);
+  assert.equal(radar2.horizons['5m'].pending_samples,1);
+  assert.equal(radar2.watch_only_horizons['5m'].pending_samples,1);
+  assert.equal(result.report.summary.archived_signals,1);
+  assert.equal(result.report.summary.watch_only_observations,1);
+  assert.equal(result.watch_only_imported,1);
+});
+
+test('explicit Futures metadata is rejected from the Binance Spot outcome baseline',()=>{
+  const row=normalizeArchivedRadarSignal({
+    id:'KORU-FUTURES',symbol:'KORUBUSDT',market:'FUTURES',
+    price:11.77,detected_at:BASE,processed_at:BASE+1000
+  },'RADAR_2',BASE+10*minute);
+  assert.equal(row.baseline_status,'INCOMPLETE');
+  assert.equal(row.market_scope,'NON_SPOT_REJECTED');
+  assert.ok(row.baseline_missing_reasons.includes('NON_SPOT_MARKET_REJECTED'));
 });
