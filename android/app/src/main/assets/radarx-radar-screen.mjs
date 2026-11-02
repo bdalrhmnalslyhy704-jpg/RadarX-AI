@@ -1,4 +1,4 @@
-import {getRadarStatus,getRadarAlerts,getFalconEyeRadar,getRotationRadar,getMoveRadar,getStrongMoveRadar,setRadarState} from './radarx-backend-client.mjs';
+import {getRadarStatus,getRadarAlerts,getRadarOutcomeReport,getFalconEyeRadar,getRotationRadar,getMoveRadar,getStrongMoveRadar,setRadarState} from './radarx-backend-client.mjs';
 
 const P = {
   EARLY_MOVE_RADAR:{n:'المدمر',i:'☠️',c:'#ff3b30',m:'ما قبل الانفجار',s:'Pre-Breakout Fingerprint + Relative Strength + Compression',t:'1m • 5m • 15m',a:['Fast Impulse','RVOL','Taker Flow','EMA Reclaim','S/R','RSI','OBV','Wyckoff','MTF'],g:['يمنع مطاردة الحركة','جودة وسيولة لازمتان','شموع مغلقة فقط']},
@@ -9,6 +9,13 @@ const P = {
   FALCON_EYE_RADAR:{n:'عين الصقر',i:'🦅',c:'#f6c453',m:'البصمة قبل الانفجار',s:'OGN Pre-Explosion Fingerprint + Spot/Futures Confluence + Anti-Chase',t:'1m • 5m • Futures',a:['Full-Market Pulse 30s','Quiet Base','Adaptive Acceleration','ATR/Bollinger','Higher-Lows','RVOL','Trade Count','Taker Flow','Resistance','VWAP/EMA','BTC Relative Strength','Futures/Spot','Open Interest','Funding','Liquidations','Range Expansion','Efficiency'],g:['يرفض مطاردة +8% يوميًا','يشترط عدة أدلة مستقلة','المشتقات اختيارية عند عدم توفرها','شموع مغلقة فقط','3 إشعارات كحد أقصى في الساعة']},
 };
 
+const OUTCOME_RADAR_MAP={
+  EARLY_MOVE_RADAR:'RADAR_1',
+  STRONG_MOVE_RADAR:'RADAR_2',
+  ROTATION_LAG_RADAR:'RADAR_3',
+  LIQUIDITY_ABSORPTION_RADAR:'RADAR_4',
+  FALCON_EYE_RADAR:'RADAR_9'
+};
 function e(v){return String(v||'').replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));}
 function q(v){return Number.isFinite(Number(v))?Number(v).toFixed(1):'—';}
 
@@ -56,8 +63,8 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
   const p=P[id];
   if(!root||!p)return{destroy(){}};
 
-  let dead=false,busy=false,timer=null;
-  const onPageHide=()=>{dead=true;if(timer)clearInterval(timer);};
+  let dead=false,busy=false,timer=null,outcomeTimer=null;
+  const onPageHide=()=>{dead=true;if(timer)clearInterval(timer);if(outcomeTimer)clearInterval(outcomeTimer);};
   const CACHE_KEY='radarx.radar.cache.'+id;
   const CACHE_TTL_MS=5*60*1000;
   function readRadarCache(){try{const raw=sessionStorage.getItem(CACHE_KEY);if(!raw)return null;const x=JSON.parse(raw);return x&&Number.isFinite(Number(x.savedAt))&&x.body&&(Date.now()-Number(x.savedAt)<CACHE_TTL_MS)?x:null;}catch(error){return null;}}
@@ -83,6 +90,7 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
         <div class="top"><b>🚨 آخر اكتشافات ${p.n}</b><button class="btn go" style="min-height:34px;padding:0 10px" data-ref>تحديث</button></div>
         <div data-a><div class="muted">لا توجد بيانات بعد.</div></div>
       </section>
+      ${OUTCOME_RADAR_MAP[id]?'<section class="card"><div class="top"><b>📊 ماذا حدث بعد إشارات الرادار؟</b><button class="btn go" style="min-height:34px;padding:0 10px" data-outcome-refresh>تحديث النتائج</button></div><div data-outcome><div class="muted">جارٍ تحميل تدقيق النتائج…</div></div></section>':''}
     </main>`;
 
     const stn=root.querySelector('[data-st]');
@@ -90,6 +98,8 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     const off=root.querySelector('[data-off]');
     const box=root.querySelector('[data-a]');
     const ref=root.querySelector('[data-ref]');
+    const outcomeBox=root.querySelector('[data-outcome]');
+    const outcomeRefresh=root.querySelector('[data-outcome-refresh]');
     let diagnosticsHtml='';
     const buildDiagnostics=(entry)=>{
       if(id!=='FALCON_EYE_RADAR')return '';
@@ -117,6 +127,45 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
       on.disabled=live;off.disabled=!live;
     };
 
+    const renderOutcomeCohort=(label,count,horizons)=>{
+      const h5=horizons&&horizons['5m']||{};
+      const h15=horizons&&horizons['15m']||{};
+      const pct=value=>value===null||value===undefined||!Number.isFinite(Number(value))
+        ?'غير متاح':(Number(value)>0?'+':'')+Number(value).toFixed(2)+'%';
+      const countText=value=>Number.isFinite(Number(value))?String(Number(value)):'0';
+      const rateText=(stat,key)=>stat&&stat.rate_status==='READY_N_GE_30'
+        ?pct(stat[key]):'العينة أقل من 30 — لا نحسب نسبة';
+      return '<article class="alert">'+
+        '<div class="top"><b>'+e(label)+'</b><span class="score">عدد '+countText(count)+'</span></div>'+
+        '<div class="muted">بعد 5 دقائق: مكتمل '+countText(h5.completed_samples)+' • قيد الانتظار '+countText(h5.pending_samples)+' • غير مكتمل '+countText(h5.incomplete_samples)+'</div>'+
+        '<div class="muted">متوسط الإغلاق '+pct(h5.avg_close_return_pct)+' • أفضل حركة داخل النافذة '+pct(h5.avg_max_favorable_pct)+' • أكبر تراجع '+pct(h5.avg_max_adverse_pct)+'</div>'+
+        '<div class="muted">بعد 15 دقيقة: مكتمل '+countText(h15.completed_samples)+' • قيد الانتظار '+countText(h15.pending_samples)+' • متوسط الإغلاق '+pct(h15.avg_close_return_pct)+'</div>'+
+        '<div class="muted">بلوغ +1% داخل 5 دقائق: '+rateText(h5,'max_favorable_gte_1pct_rate')+'</div>'+
+      '</article>';
+    };
+    async function refreshOutcomeReview(){
+      if(dead||!outcomeBox||!OUTCOME_RADAR_MAP[id])return;
+      if(outcomeRefresh)outcomeRefresh.disabled=true;
+      try{
+        const response=await getRadarOutcomeReport();
+        if(!response.ok)throw new Error('HTTP_'+response.status);
+        const body=response.body||{};
+        const row=(Array.isArray(body.by_radar)?body.by_radar:[])
+          .find(item=>item.radar===OUTCOME_RADAR_MAP[id]);
+        if(!row)throw new Error('RADAR_OUTCOME_NOT_FOUND');
+        outcomeBox.innerHTML=
+          '<div class="muted">إشارات الدخول '+String(row.emitted_alerts??row.archived_signals??0)+
+          ' • ملاحظات WATCH_EARLY '+String(row.watch_only_observations??0)+
+          ' • المصدر Binance Spot closed candles</div>'+
+          renderOutcomeCohort('إشارات الرادار المؤكدة',row.emitted_alerts??row.archived_signals,row.horizons)+
+          renderOutcomeCohort('مراقبة مبكرة فقط — ليست دخولاً',row.watch_only_observations,row.watch_only_horizons)+
+          '<div class="muted" style="margin-top:7px">النتائج تُحسب من شموع مغلقة. لا تُعرض نسب أداء قبل اكتمال 30 عينة، ولا تعني النتائج ضمان ربح.</div>';
+      }catch(error){
+        outcomeBox.innerHTML='<div class="muted">تعذّر تحميل تدقيق النتائج: '+e(error&&error.message||error)+'</div>';
+      }finally{
+        if(outcomeRefresh)outcomeRefresh.disabled=false;
+      }
+    }
     const show=(rows,marketMovers=[])=>{
       const validRows=Array.isArray(rows)?rows:[];
       const movers=Array.isArray(marketMovers)?marketMovers:[];
@@ -228,7 +277,10 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
     on.onclick=()=>control('start');
     off.onclick=()=>control('stop');
     ref.onclick=()=>refresh(true);
+    outcomeRefresh?.addEventListener('click',refreshOutcomeReview);
     refresh(false);
+    refreshOutcomeReview();
+    outcomeTimer=setInterval(refreshOutcomeReview,90000);
     timer=setInterval(refresh,20000);
     window.addEventListener('pagehide',onPageHide,{once:true,capture:true});
   }catch(error){
@@ -237,6 +289,6 @@ export function mountStandaloneRadar(root,radarId=idFromPath()){
 
   return {
     refresh:()=>refresh(),
-    destroy(){dead=true;if(timer)clearInterval(timer);window.removeEventListener('pagehide',onPageHide,true);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
+    destroy(){dead=true;if(timer)clearInterval(timer);if(outcomeTimer)clearInterval(outcomeTimer);window.removeEventListener('pagehide',onPageHide,true);root.innerHTML='';(function(){var _n=document.getElementById('rxs-style');if(_n)_n.remove();})();}
   };
 }
