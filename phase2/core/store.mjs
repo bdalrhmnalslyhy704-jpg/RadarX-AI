@@ -719,10 +719,12 @@ export class DurableStore {
       const result=await updater(current);
       if(result===false){
         if(!this.preExpansionOutcomeStateLoaded){
-          this.preExpansionOutcomeState=current;
+          // The updater may have mutated its private clone before returning false.
+          // Keep the original snapshot, matching the old read/discard behavior.
+          this.preExpansionOutcomeState=source;
           this.preExpansionOutcomeStateLoaded=true;
         }
-        return this.preExpansionOutcomeState||current;
+        return this.preExpansionOutcomeState||source;
       }
       const next=result&&typeof result==='object'&&!Array.isArray(result)?result:current;
       if(next!==current){
