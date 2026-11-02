@@ -105,11 +105,16 @@ function isWatchOnlySignal(row) {
 }
 function explicitNonSpotMarket(row) {
   const r = object(row);
-  const market = typeof r.market === 'string' ? r.market :
-    (r.market?.type ?? r.market?.market ?? r.market_type ?? r.marketType ?? r.market_scope ?? '');
-  const normalized = String(market || '').trim().toUpperCase();
-  return r.isFutures === true || r.is_futures === true || r.real_order_market === 'FUTURES' ||
-    /FUTURE|PERPETUAL|SWAP|DERIVATIVE|MARGIN/.test(normalized);
+  const marketValues = [
+    typeof r.market === 'string' ? r.market : null,
+    r.market?.type, r.market?.market, r.market_type, r.marketType, r.market_scope,
+    r.product_type, r.productType, r.contract_type, r.contractType
+  ];
+  const nonSpotLabel = marketValues.some(value =>
+    /FUTURE|PERPETUAL|SWAP|DERIVATIVE|MARGIN/.test(String(value || '').trim().toUpperCase())
+  );
+  return r.isFutures === true || r.is_futures === true ||
+    String(r.real_order_market || '').toUpperCase() === 'FUTURES' || nonSpotLabel;
 }
 
 export 
