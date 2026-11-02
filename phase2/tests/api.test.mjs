@@ -590,10 +590,17 @@ test('read-only radar outcome endpoint reports all twelve archives and worker st
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const state=emptyRadarSignalOutcomeState();
   state.records.push({
-    signal_id:'RADAR_9|API_TEST',radar:'RADAR_9',symbol:'ABCUSDT',stage:'WATCH_EARLY',
-    detected_at:Date.now()-60_000,entry_price:1,baseline_status:'COMPLETE',
+    signal_id:'RADAR_9|API_TEST',radar:'RADAR_9',symbol:'ABCUSDT',stage:'BREAKOUT_DEVELOPING',
+    signal_class:'EMITTED_ALERT',detected_at:Date.now()-60_000,entry_price:1,baseline_status:'COMPLETE',
     outcomes:{'5m':{status:'COMPLETE',sample_quality:'HISTORICAL_CLOSED_OHLC',close_return_pct:0.5,
       max_favorable_pct:1.2,max_adverse_pct:-0.4}}
+  });
+  state.records.push({
+    signal_id:'RADAR_9|API_WATCH',radar:'RADAR_9',symbol:'XYZUSDT',stage:'WATCH_EARLY',
+    signal_class:'WATCH_ONLY',watch_only:true,entry_eligible:false,
+    detected_at:Date.now()-60_000,entry_price:2,baseline_status:'COMPLETE',
+    outcomes:{'5m':{status:'COMPLETE',sample_quality:'HISTORICAL_CLOSED_OHLC',close_return_pct:0.8,
+      max_favorable_pct:2.0,max_adverse_pct:-0.2}}
   });
   await store.updateRadarSignalOutcomes(()=>state);
   const worker={snapshot:()=>({service:'RADAR_SIGNAL_OUTCOME_WORKER_V1',running:true,busy:false,last_error:null,
@@ -606,13 +613,21 @@ test('read-only radar outcome endpoint reports all twelve archives and worker st
     assert.equal(response.status,200);
     const body=await response.json();
     assert.equal(body.version,'RADAR_SIGNAL_OUTCOME_REPORT_V1');
-    assert.equal(body.scope,'EMITTED_ARCHIVED_ALERTS_ONLY');
+    assert.equal(body.scope,'EMITTED_ALERTS_WITH_SEPARATE_WATCH_ONLY_OUTCOME_COHORT');
     assert.equal(body.by_radar.length,12);
     const hawkeye=body.by_radar.find(x=>x.radar==='RADAR_9');
     assert.equal(hawkeye.archived_signals,1);
+    assert.equal(hawkeye.emitted_alerts,1);
+    assert.equal(hawkeye.watch_only_observations,1);
     assert.equal(hawkeye.horizons['5m'].completed_samples,1);
     assert.equal(hawkeye.horizons['5m'].rate_status,'INSUFFICIENT_SAMPLE');
     assert.equal(hawkeye.horizons['5m'].max_favorable_gte_1pct_rate,null);
+    assert.equal(hawkeye.watch_only_horizons['5m'].completed_samples,1);
+    assert.equal(body.summary.archived_signals,1);
+    assert.equal(body.summary.watch_only_observations,1);
+    assert.equal(body.summary.tracked_observations,2);
+    assert.equal(body.interpretation.watch_only_observations_measured_separately,true);
+    assert.equal(body.interpretation.watch_only_observations_are_not_entry_signals,true);
     assert.equal(body.worker.running,true);
     assert.equal(body.policy.real_order_execution,false);
     assert.equal(body.interpretation.misses_not_measured_by_this_report,true);
