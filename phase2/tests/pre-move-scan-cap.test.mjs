@@ -21,7 +21,8 @@ test('Build 224 Pre-Move deep-scan capacity is bounded, configurable, and deadli
     const maximum = await import('../config.mjs?pre-move-cap-maximum-test');
     assert.equal(maximum.CONFIG.marketRadar.preMoveCycleScanLimit, 10);
 
-    process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = '2';
+    // A previously deployed DHDTech variable may still be six; never let it preserve the old clamp.
+    process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT = '6';
     const minimum = await import('../config.mjs?pre-move-cap-minimum-test');
     assert.equal(minimum.CONFIG.marketRadar.preMoveCycleScanLimit, 8);
 
