@@ -1,6 +1,7 @@
 import {getRadarOutcomeReport} from './radarx-backend-client.mjs';
 
-const root=document.getElementById('auditRoot');
+const root=document.getElementById('radarRoot');
+if(!root)throw new Error('RADAR_OUTCOME_AUDIT_ROOT_NOT_FOUND');
 const refreshButton=document.getElementById('refreshAudit');
 const statusNode=document.getElementById('auditStatus');
 const updatedNode=document.getElementById('auditUpdated');
@@ -70,6 +71,7 @@ async function refresh(){
     const notes=[];
     if(policy.watch_only_observations_measured_separately)notes.push('إشارات WATCH_EARLY تُقاس في مجموعة مستقلة.');
     if(policy.watch_only_observations_are_not_entry_signals)notes.push('المراقبة المبكرة ليست توصية دخول.');
+    notes.push('هذا التقرير يقيس الإشارات التي صدرت وأُرشفت؛ لا يحصي وحده جميع العملات التي فاتت الرصد.');
     notes.push('لا تُحسب نسب الأداء قبل 30 عينة مكتملة لكل أفق.');
     notes.push('بيانات الشموع تقيس أعلى وأدنى حركة داخل النافذة، ولا تثبت وقت تنفيذ صفقة.');
     document.getElementById('auditNotes').textContent=notes.join(' ');
