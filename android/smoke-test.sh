@@ -635,10 +635,18 @@ if ! grep -Fq 'FALCON_EYE_RADAR|REPLAY:0623' "${handled_file}"; then
   echo "::error::Last archived alert was neither posted nor reconciled as already active"
   exit 1
 fi
-prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background.xml 2>/dev/null || true)"
+if ! prefs_xml="$(timeout 8s adb shell run-as com.radarx.app cat shared_prefs/radarx_background_cursor.xml 2>&1)"; then
+  echo "::error::Could not read the service-owned durable cursor preferences file"
+  echo "run-as output: ${prefs_xml}"
+  timeout 8s adb shell run-as com.radarx.app ls -la shared_prefs 2>&1 || true
+  tail -n 140 "${REPLAY_LOG_FILE}" || true
+  exit 1
+fi
 if ! printf '%s\n' "${prefs_xml}" | grep -F 'FALCON_EYE_RADAR|REPLAY:0623' >/dev/null; then
   echo "::error::The persisted compound cursor did not reach the final event"
-  printf '%s\n' "${prefs_xml}" | grep -E 'radar_alert_cursor_(at|id)|cursor_initialized' || true
+  printf '%s\n' "${prefs_xml}" | grep -E 'radar_alert_cursor_(at|id)|cursor_initialized|legacy_cursor_state' || true
+  timeout 8s adb shell run-as com.radarx.app ls -la shared_prefs 2>&1 || true
+  tail -n 140 "${REPLAY_LOG_FILE}" || true
   exit 1
 fi
 final_stats="$(fixture_stats)"

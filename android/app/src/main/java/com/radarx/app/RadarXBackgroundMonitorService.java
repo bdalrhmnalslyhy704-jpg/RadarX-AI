@@ -44,6 +44,8 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final String TAG = "RadarXBackground";
     // Serialize fetch/replay cycles across executor replacement and service re-starts.
     private static final Object SCAN_LOCK = new Object();
+    private static final Object CURSOR_PREFS_MIGRATION_LOCK = new Object();
+    private static final String CURSOR_PREFS_FILE = "radarx_background_cursor";
     private static final String BACKEND_ORIGIN = "https://radarx-backend.dhdtech.site";
     private static final String BACKEND_RADAR_ALERTS =
             BACKEND_ORIGIN + "/api/radar-alerts?radar=ALL&limit=50";
@@ -182,7 +184,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
         try {
             long cursor = currentAlertCursor();
-            String cursorId = prefs().getString("radar_alert_cursor_id", "");
+            String cursorId = cursorPrefs().getString("radar_alert_cursor_id", "");
             JSONObject root = fetchRadarAlertsFeed(cursor, cursorId);
             JSONObject meta = root.optJSONObject("meta");
             boolean live = meta != null && meta.optBoolean("paper_trading", true)
@@ -285,7 +287,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     /** Initialize a new install at the current time, but preserve a cursor from older app versions. */
     private long currentAlertCursor() {
-        SharedPreferences p = prefs();
+        SharedPreferences p = cursorPrefs();
         if (!p.contains("radar_alert_cursor_at")) {
             long now = System.currentTimeMillis();
             p.edit().putLong("radar_alert_cursor_at", now)
@@ -895,8 +897,9 @@ public final class RadarXBackgroundMonitorService extends Service {
      * it is not proof that the notification was displayed or seen by the user.
      */
     private int notifyNewRadarAlerts(JSONArray alerts, boolean oldestFirst, boolean cursorAdvanceAllowed) {
-        Set<String> seen = new HashSet<>(prefs().getStringSet("radar_alert_seen_ids", new HashSet<>()));
-        Set<String> fallbackSeen = new HashSet<>(prefs().getStringSet("radar_alert_fallback_seen_ids", new HashSet<>()));
+        SharedPreferences cursorState = cursorPrefs();
+        Set<String> seen = new HashSet<>(cursorState.getStringSet("radar_alert_seen_ids", new HashSet<>()));
+        Set<String> fallbackSeen = new HashSet<>(cursorState.getStringSet("radar_alert_fallback_seen_ids", new HashSet<>()));
         int count = 0;
         int start = oldestFirst ? 0 : alerts.length() - 1;
         int end = oldestFirst ? alerts.length() : -1;
@@ -962,7 +965,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 fallbackSeen.add(replayKey);
                 count++;
                 while (fallbackSeen.size() > 5000) fallbackSeen.remove(fallbackSeen.iterator().next());
-                prefs().edit().putStringSet("radar_alert_fallback_seen_ids", fallbackSeen).apply();
+                cursorPrefs().edit().putStringSet("radar_alert_fallback_seen_ids", fallbackSeen).apply();
             }
         }
         return count;
@@ -970,7 +973,7 @@ public final class RadarXBackgroundMonitorService extends Service {
 
     private boolean persistDurableAlertCursor(long at, String replayKey, Set<String> seen) {
         while (seen.size() > 300) seen.remove(seen.iterator().next());
-        SharedPreferences p = prefs();
+        SharedPreferences p = cursorPrefs();
         Set<String> pending = new HashSet<>(
             p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
         pending.remove(replayKey);
@@ -1077,7 +1080,7 @@ public final class RadarXBackgroundMonitorService extends Service {
         }
         boolean wasPendingReservation = false;
         if (durableCursor) {
-            SharedPreferences p = prefs();
+            SharedPreferences p = cursorPrefs();
             Set<String> pendingNotificationIds = new HashSet<>(
                 p.getStringSet("radar_alert_pending_notification_ids", new HashSet<>()));
             wasPendingReservation = pendingNotificationIds.contains(notificationIdentity);
@@ -1296,6 +1299,51 @@ public final class RadarXBackgroundMonitorService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    /**
+     * Durable alert replay has a single writer: the isolated background service process.
+     * MainActivity shares the legacy configuration/status preferences and may write them
+     * from a different Android process. Android SharedPreferences is not a safe
+     * multi-process database; using the same XML for cursor checkpoints allowed a stale
+     * Activity cache to overwrite the service's newest replay cursor during service restart.
+     */
+    private SharedPreferences cursorPrefs() {
+        SharedPreferences cursor = getSharedPreferences(CURSOR_PREFS_FILE, Context.MODE_PRIVATE);
+        if (cursor.getBoolean("legacy_cursor_state_migrated_v1", false)) return cursor;
+        synchronized (CURSOR_PREFS_MIGRATION_LOCK) {
+            if (cursor.getBoolean("legacy_cursor_state_migrated_v1", false)) return cursor;
+            SharedPreferences legacy = prefs();
+            SharedPreferences.Editor editor = cursor.edit();
+            copyLegacyLong(legacy, editor, "radar_alert_cursor_at");
+            copyLegacyString(legacy, editor, "radar_alert_cursor_id");
+            copyLegacyBoolean(legacy, editor, "radar_alert_cursor_initialized");
+            copyLegacyStringSet(legacy, editor, "radar_alert_seen_ids");
+            copyLegacyStringSet(legacy, editor, "radar_alert_fallback_seen_ids");
+            copyLegacyStringSet(legacy, editor, "radar_alert_pending_notification_ids");
+            editor.putBoolean("legacy_cursor_state_migrated_v1", true);
+            if (!editor.commit()) {
+                throw new IllegalStateException("RADAR_ALERT_CURSOR_MIGRATION_COMMIT_FAILED");
+            }
+        }
+        return cursor;
+    }
+
+    private static void copyLegacyLong(SharedPreferences from, SharedPreferences.Editor to, String key) {
+        if (from.contains(key)) to.putLong(key, from.getLong(key, 0L));
+    }
+
+    private static void copyLegacyString(SharedPreferences from, SharedPreferences.Editor to, String key) {
+        if (from.contains(key)) to.putString(key, from.getString(key, ""));
+    }
+
+    private static void copyLegacyBoolean(SharedPreferences from, SharedPreferences.Editor to, String key) {
+        if (from.contains(key)) to.putBoolean(key, from.getBoolean(key, false));
+    }
+
+    private static void copyLegacyStringSet(SharedPreferences from, SharedPreferences.Editor to, String key) {
+        Set<String> values = from.getStringSet(key, null);
+        if (values != null) to.putStringSet(key, new HashSet<>(values));
     }
 
     private SharedPreferences prefs() {
