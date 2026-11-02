@@ -120,7 +120,7 @@ test('FCM device registry survives reopening DurableStore when its directory is 
 test('DHDTech /APP/.RADARX-DATA volume is auto-detected as the archive directory itself',()=>{
   const value=resolveDurableStorage({
     env:{},cwd:'/app',
-    mountsContent:'/dev/vdb1 /APP/.RADARX-DATA ext4 rw,relatime 0 0\noverlay / overlay rw 0 0'
+    mountsContent:'/dev/vdb1 /APP/.RADARX-DATA ext4 rw,relatime 0 0\n/dev/vdc1 /data ext4 rw,relatime 0 0\noverlay / overlay rw 0 0'
   });
   assert.equal(value.directory,'/APP/.RADARX-DATA');
   assert.equal(value.absolute_directory,'/APP/.RADARX-DATA');
