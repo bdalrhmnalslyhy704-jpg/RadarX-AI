@@ -634,7 +634,7 @@ export function buildPreMoveWatchOnlyAlert(candidate,row,trigger,{now=Date.now()
     early_wake_watch_evidence:evidence,
     watch_evidence:evidence,
     watch_notification_tier:'EARLY_FLOW_MONITOR',
-    watch_only:true,entry_eligible:false,eligible:false,actionable:false,
+    watch_only:true,entry_eligible:false,alert_eligible:false,eligible:false,actionable:false,
     signal_type:'WATCH_ONLY',closed_candles_only:true,detected_candle_close_time:closeAt,
     data_quality:dataQuality,liquidity_quality:liquidityQuality,data_stale:false,
     data_status:{
