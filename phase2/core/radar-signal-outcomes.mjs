@@ -98,10 +98,18 @@ function rowIdOf(row) {
 }
 function isWatchOnlySignal(row) {
   const r = object(row);
-  const event = String(r.event || r.potential_label || r.alert_type || '').trim().toUpperCase();
-  return r.watch_only === true || r.signal_class === 'WATCH_ONLY' ||
+  const event = String(r.event || r.alert_type || '').trim().toUpperCase();
+  const labels = [
+    r.stage, r.pre_expansion_stage, r.potential_label, r.decision_band,
+    r.signal_class, r.event_class
+  ].map(value => String(value || '').trim().toUpperCase());
+  const watchStage = labels.some(value =>
+    /^(WATCH_EARLY|WATCH_ONLY|EARLY_WATCH|EARLY_MONITORING)$/.test(value)
+  );
+  return r.watch_only === true || r.entry_eligible === false ||
+    String(r.signal_class || '').toUpperCase() === 'WATCH_ONLY' ||
     String(r.event_class || '').toUpperCase() === 'RADAR_WATCH_ONLY' ||
-    event === 'STRONG_MOVE_WATCH_ONLY';
+    event === 'STRONG_MOVE_WATCH_ONLY' || event === 'RADAR_WATCH_ONLY' || watchStage;
 }
 function explicitNonSpotMarket(row) {
   const r = object(row);
