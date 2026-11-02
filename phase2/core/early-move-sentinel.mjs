@@ -29,6 +29,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   earlyWakeMin24hMovePct:-2,
   earlyWakeScanCooldownMs:90*1000,
   earlyWakeAlertCooldownMs:15*60*1000,
+  earlyWakeWatchOnlyCooldownMs:15*60*1000,
   earlyWakeMinScore:76,
   earlyWakeMinLeaders:4,
   fastInterval:'5m',
@@ -672,6 +673,8 @@ export class EarlyMoveSentinel {
     this.lastAlertAt=new Map();
     this.lastAlertScore=new Map();
     this.lastEarlyScanAt=new Map();
+    this.lastWatchOnlyAt=new Map();
+    this.lastWatchOnlyCandleAt=new Map();
     this.preExplosionCursor=0;this.preExplosionRotationTotal=0;
     this.deepQueue=[];
     this.deepActive=0;
@@ -681,6 +684,7 @@ export class EarlyMoveSentinel {
     this.lastReconcileAt=null;
     this.reconciling=false;this.reconcileStartedAt=null;this.reconcileSkippedCount=0;
     this.alertCount=0;
+    this.watchOnlyAlertCount=0;
     this.lastError=null;
   }
 
@@ -750,7 +754,8 @@ export class EarlyMoveSentinel {
       active_deep_scans:this.deepActive,
       pre_explosion_scans_tracked:this.lastEarlyScanAt.size,
       pre_explosion_rotation_cursor:this.preExplosionCursor,pre_explosion_rotation_total:this.preExplosionRotationTotal,
-      alerts_emitted:this.alertCount
+      alerts_emitted:this.alertCount,
+      watch_only_observations_emitted:this.watchOnlyAlertCount
     };
   }
 
@@ -935,6 +940,36 @@ export class EarlyMoveSentinel {
     });
   }
 
+  async recordEarlyWakeWatchOnly(watch,job){
+    const closeAt=Number(watch?.detected_candle_close_time);
+    if(!Number.isFinite(closeAt)||closeAt<=0)return null;
+    if(Number(this.lastWatchOnlyCandleAt.get(job.symbol)||0)===closeAt)
+      return {...watch,watch_only_deduplicated:true};
+    const now=this.clock();
+    const last=this.lastWatchOnlyAt.get(job.symbol)||0;
+    const cooldown=Math.max(60_000,Number(this.config.earlyWakeWatchOnlyCooldownMs)||15*60*1000);
+    if(now-last<cooldown)return {...watch,watch_only_suppressed_by_cooldown:true};
+    const decorated=decorateRadarAlert(watch,'Radar 1 — Early-Wake / WATCH ONLY');
+    await this.store.appendMoveAlert(decorated);
+    this.lastWatchOnlyCandleAt.set(job.symbol,closeAt);
+    this.lastWatchOnlyAt.set(job.symbol,now);
+    this.watchOnlyAlertCount++;
+    if(this.pushManager?.notifyRadarWatchOnlyAlert){
+      try{
+        const result=await this.pushManager.notifyRadarWatchOnlyAlert(decorated);
+        this.logger.info?.('[EARLY_WAKE_WATCH_ONLY_RESULT] '+JSON.stringify({
+          symbol:job.symbol,status:String(result?.status||'UNKNOWN'),
+          attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+          reason:result?.reason||null,watch_only:true,entry_eligible:false
+        }));
+      }catch(error){
+        this.lastError=String(error?.message??error);
+        this.logger.warn?.('EARLY_WAKE_WATCH_ONLY_PUSH',this.lastError);
+      }
+    }
+    return decorated;
+  }
+
   async drainDeepQueue(){
     while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
@@ -944,8 +979,31 @@ export class EarlyMoveSentinel {
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
-        const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:(job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null);
-        if(!alert?.eligible)continue;
+        const moveAlert=job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null;
+        const alert=preAlert.eligible?preAlert:wakeAlert.eligible?wakeAlert:moveAlert;
+        const strictFailures=[];
+        if(!preAlert.eligible)strictFailures.push('PRE_EXPLOSION_STRICT_ELIGIBILITY_NOT_MET');
+        if(!wakeAlert.eligible)strictFailures.push('EARLY_WAKE_STRICT_ELIGIBILITY_NOT_MET');
+        if(moveAlert&&!moveAlert.eligible)strictFailures.push('MOVE_ALERT_STRICT_ELIGIBILITY_NOT_MET');
+        if(!alert?.eligible){
+          const watch=buildPreMoveWatchOnlyAlert(candidate,job.row,job.trigger,{
+            now:this.clock(),strictFailures
+          });
+          if(watch){
+            await this.recordEarlyWakeWatchOnly(watch,job);
+          }else{
+            this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
+              symbol:job.symbol,mode:job.mode,
+              decision:'REJECTED_NO_WATCH_ONLY_CORRIDOR',
+              strict_failures:strictFailures,
+              pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[],
+              pre_move_score:candidate?.pre_move_context?.score??null,
+              data_quality:candidate?.data_quality??null,
+              liquidity_quality:candidate?.liquidity_quality??null
+            }));
+          }
+          continue;
+        }
         const cc=alert.components||{};
         const sc=alert.strategy_confluence||{};
         const gate=evaluateEliteGate({
@@ -966,25 +1024,40 @@ export class EarlyMoveSentinel {
           minConfirmations:7,minScore:88,max24hMovePct:2.5,requireTrigger:true,minCategoryHits:5
         });
         alert.elite_gate=gate;
-        if(!gate.eligible)continue;
-        const alertKey=`${job.symbol}:${alert.event}`;
+        if(!gate.eligible){
+          strictFailures.push(...(Array.isArray(gate.failures)?gate.failures:['ELITE_GATE_NOT_ELIGIBLE']));
+          const watch=buildPreMoveWatchOnlyAlert(candidate,job.row,job.trigger,{
+            now:this.clock(),strictFailures
+          });
+          if(watch){
+            await this.recordEarlyWakeWatchOnly(watch,job);
+          }else{
+            this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
+              symbol:job.symbol,mode:job.mode,decision:'REJECTED_ELITE_GATE',
+              strict_failures:strictFailures,
+              pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[]
+            }));
+          }
+          continue;
+        }
+        const alertKey=job.symbol+':'+alert.event;
         const recent=this.lastAlertScore.get(alertKey)||0;
         const lastAt=this.lastAlertAt.get(alertKey)||0;
         const cooldown=alert.event==='EARLY_WAKE_ALERT'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
         if(lastAt>0&&this.clock()-lastAt<cooldown&&alert.opportunity_score<recent+5)continue;
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
-        const decorated=decorateRadarAlert(alert,alert?.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        const decorated=decorateRadarAlert(alert,alert.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
         await this.store.appendMoveAlert(decorated);
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
         this.alertCount++;
       }catch(error){
         this.lastError=String(error?.message??error);
         if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
+        this.logger.warn?.('EARLY_MOVE_DEEP_SCAN',this.lastError);
       }finally{
         this.deepActive--;
         if(this.deepActive<=0){this.deepActive=0;this.deepActiveStartedAt=null;}
       }
     }
-  }
-}
+  }}
