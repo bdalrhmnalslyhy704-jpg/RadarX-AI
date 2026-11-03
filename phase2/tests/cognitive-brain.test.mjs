@@ -412,7 +412,7 @@ test('unobserved order book stays explicitly unknown and never receives a fabric
   assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
 });
 
-test('prequential audit scores only immutable, matured V3 forecasts and detects sustained degradation', () => {
+test('prequential audit scores only immutable, matured V4 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
     const predictionIsCorrect = index < 30;
