@@ -933,8 +933,8 @@ test('screenshot gainer pairs receive quiet-flow priority before daily expansion
     priceChangePercent:'0.1',count:'50000'
   }));
   const rows=targets.map(([symbol,volume,trades])=>({
-    symbol,lastPrice:'10',quoteVolume:String(Number(volume)-15_000),
-    priceChangePercent:'0.1',count:String(Number(trades)-3_000)
+    symbol,lastPrice:'10',quoteVolume:String(Number(volume)-Math.max(10_000,Math.ceil(Number(volume)*0.01))),
+    priceChangePercent:'0.1',count:String(Number(trades)-Math.max(1_000,Math.ceil(Number(trades)*0.01)))
   }));
   const tickers=[...regular,...rows];
   const rest={async request(path){
