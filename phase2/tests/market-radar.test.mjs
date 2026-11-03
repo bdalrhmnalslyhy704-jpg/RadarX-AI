@@ -1320,6 +1320,21 @@ test('Pre-Move deadline reports when the worker is waiting behind a previous sca
   await previous;
 });
 
+test('Pre-Move deep-scan deadline includes completed-symbol progress',async()=>{
+  const scanNow=stablePreMoveTestTime();
+  const scanner=new MarketUniverseScanner({
+    rest:makeRest({clock:()=>scanNow}),
+    clock:()=>scanNow,
+    config:{minQuoteVolume24h:750000,preMoveCycleScanLimit:3,preMoveScanTimeoutMs:250}
+  });
+  scanner.scanPreMoveSymbol=async()=>new Promise(()=>{});
+  await assert.rejects(
+    scanner.scanPreMove({quote:'USDT',limit:50}),
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED stage=DEEP_SCAN symbols=0\/3/,
+    'a stalled symbol lane must report the exact deep-scan phase and completed-symbol count'
+  );
+});
+
 test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{
   const scanNow=stablePreMoveTestTime();
   const scanner=new MarketUniverseScanner({
