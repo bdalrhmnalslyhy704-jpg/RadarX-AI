@@ -721,14 +721,15 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   addLane(volumeLeaders,Math.ceil(selectedCount*0.15),'TOP_VOLUME');
   // Counter-based participation acceleration gets its own quota before price
   // pulses and daily movers, so quiet accumulation candidates are not starved.
+  const activityQuota=Math.ceil(selectedCount*0.20);
+  let activityAdded=0;
   for (const item of activityAccelerationMovers) {
-    if(selectedBySymbol.size>=priorityBudget)break;
+    if(selectedBySymbol.size>=priorityBudget||activityAdded>=activityQuota)break;
     const symbol=String(item.row?.symbol||'').toUpperCase();
     if(!symbol||selectedBySymbol.has(symbol))continue;
     selectedBySymbol.set(symbol,{...item.row,selection_lane:'MARKET_ACTIVITY_ACCELERATION',
       market_activity_acceleration:item.evidence});
-    if(selectedBySymbol.size>=Math.min(priorityBudget,
-      Math.ceil(selectedCount*0.20)+selected.filter(row=>row.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length))break;
+    activityAdded++;
   }
   // Short-term price pulses outrank the broad daily-mover bucket so a coin
   // cannot be consumed by the latter before its acceleration is deep-scanned.
