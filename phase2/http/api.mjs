@@ -785,6 +785,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveBackgroundWorkerState={
     enabled:false,running:false,interval_ms:Math.max(60000,Math.min(600000,
       Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),
+    initial_delay_ms:0,
     scan_attempts:0,successful_scans:0,last_started_at:null,last_scan_at:null,last_scan_status:'NOT_STARTED',
     last_duration_ms:null,last_error:null,last_summary:null,
     last_attempt_at:null,last_attempt_status:'NOT_STARTED',last_attempt_duration_ms:null,last_attempt_error:null,
@@ -835,7 +836,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       state.running?'SCANNING':!enabled?'IDLE':state.last_error?'DEGRADED':state.last_scan_at?'RUNNING':'STARTING';
     return {status,scanner_ready:Boolean(preMoveRadarScanner),worker:{
       enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
-      interval_ms:state.interval_ms,scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
+      interval_ms:state.interval_ms,initial_delay_ms:state.initial_delay_ms||0,
+      scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
       last_started_at:state.last_started_at,last_scan_at:state.last_scan_at,last_scan_status:state.last_scan_status,
       last_duration_ms:state.last_duration_ms,last_error:state.last_error,last_summary:state.last_summary,
       last_attempt_at:state.last_attempt_at,last_attempt_status:state.last_attempt_status,
@@ -908,14 +910,30 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   }
   function startPreMoveWatchWorker({intervalMs,initialDelayMs=10000}={}){
     if(!preMoveRadarScanner)return {status:'UNAVAILABLE',scanner_ready:false,reason:'MARKET_DATA_CLIENT_NOT_INITIALIZED'};
-    if(preMoveBackgroundInterval)return preMoveBackgroundWorkerSnapshot();
+    if(preMoveBackgroundWorkerState.enabled)return preMoveBackgroundWorkerSnapshot();
     const requestedInterval=Number(intervalMs??config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs;
     const safeInterval=Math.max(60000,Math.min(600000,Math.trunc(requestedInterval)));
-    const delay=Math.max(0,Math.min(safeInterval,Math.trunc(Number(initialDelayMs)||0)));
-    preMoveBackgroundWorkerState.interval_ms=safeInterval;preMoveBackgroundWorkerState.enabled=true;preMoveBackgroundWorkerState.last_error=null;
-    preMoveBackgroundInterval=setInterval(()=>{void runPreMoveBackgroundScan();},safeInterval);preMoveBackgroundInterval.unref?.();
-    preMoveBackgroundInitialTimer=setTimeout(()=>{preMoveBackgroundInitialTimer=null;void runPreMoveBackgroundScan();},delay);
-    preMoveBackgroundInitialTimer.unref?.();
+    // Initial warm-up is independent from the recurring interval. Do not start
+    // setInterval before this delay: that would launch an early cycle at 60s and
+    // recreate the startup CPU/REST contention the delay is intended to avoid.
+    const delay=Math.max(0,Math.min(600000,Math.trunc(Number(initialDelayMs)||0)));
+    preMoveBackgroundWorkerState.interval_ms=safeInterval;
+    preMoveBackgroundWorkerState.initial_delay_ms=delay;
+    preMoveBackgroundWorkerState.enabled=true;preMoveBackgroundWorkerState.last_error=null;
+    const scheduleRecurring=()=>{
+      if(!preMoveBackgroundWorkerState.enabled||preMoveBackgroundInterval)return;
+      preMoveBackgroundInterval=setInterval(()=>{void runPreMoveBackgroundScan();},safeInterval);
+      preMoveBackgroundInterval.unref?.();
+    };
+    const startFirstCycle=()=>{
+      preMoveBackgroundInitialTimer=null;
+      void runPreMoveBackgroundScan().finally(scheduleRecurring);
+    };
+    if(delay===0)startFirstCycle();
+    else {
+      preMoveBackgroundInitialTimer=setTimeout(startFirstCycle,delay);
+      preMoveBackgroundInitialTimer.unref?.();
+    }
     console.info?.('[PRE_MOVE_BACKGROUND_WORKER_STARTED] '+JSON.stringify({
       interval_ms:safeInterval,initial_delay_ms:delay,quote:'USDT',limit:50,scanner_ready:true,paper_trading:true,real_order_execution:false
     }));
