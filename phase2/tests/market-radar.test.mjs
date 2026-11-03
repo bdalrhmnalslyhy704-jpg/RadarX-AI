@@ -1318,6 +1318,9 @@ test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audi
     assert.equal(row.watch_only,true);
     assert.equal(row.alert_eligible,false);
     assert.ok(Array.isArray(row.blocker_codes)&&row.blocker_codes.length>0);
+    assert.ok(Object.hasOwn(row,'market_median_return_pct'));
+    assert.ok(Object.hasOwn(row,'relative_strength_vs_market_pct'));
+    assert.ok(Object.hasOwn(row,'relative_strength_vs_btc_pct'));
     assert.ok(!result.candidates.some(candidate=>candidate.symbol===row.symbol),
       'near-miss diagnostic rows are never promoted to actionable candidates');
   }
