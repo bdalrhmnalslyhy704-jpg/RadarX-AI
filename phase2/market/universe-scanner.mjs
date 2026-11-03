@@ -2603,11 +2603,12 @@ export class MarketUniverseScanner {
     if(!/^[A-Z]{2,10}$/.test(normalizedQuote)) throw new Error('INVALID_QUOTE');
     this._requests=new Map();
 
-    const info=await this.exchangeInfo(normalizedQuote);
+    progress.stage='EXCHANGE_INFO';
+    const info=await awaitScanOperation(this.exchangeInfo(normalizedQuote),'EXCHANGE_INFO');
     assertScanActive();
     const universe=buildSpotUniverse(info.data,normalizedQuote);
     progress.stage='TICKER_24H';
-    const tickerResponse=await this.ticker24h();
+    const tickerResponse=await awaitScanOperation(this.ticker24h(),'TICKER_24H');
     assertScanActive();
     const tickerCapturedAt=this.clock();
     const eligibleTickerSymbols=new Set(universe.map(x=>x.symbol));
@@ -2710,7 +2711,7 @@ export class MarketUniverseScanner {
     const preMoveConcurrency=Math.min(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,Math.max(1,discovery.length));
     progress.stage='DEEP_SCAN';
     progress.symbols_total=discovery.length;
-    const scanned=await boundedMap(
+    const scanned=await awaitScanOperation(boundedMap(
       discovery,
       preMoveConcurrency,
       async(ticker,i)=>{
@@ -2726,7 +2727,7 @@ export class MarketUniverseScanner {
           progress.last_completed_symbol=String(ticker?.symbol||'').toUpperCase()||null;
         }
       }
-    );
+    ),'DEEP_SCAN');
     assertScanActive();
     // Use every fresh, valid candle set for market context, including low-volume
     // pairs. Keep the alert-eligible subset separate so low liquidity cannot
