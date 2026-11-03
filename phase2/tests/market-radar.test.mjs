@@ -1224,23 +1224,23 @@ test('Pre-Move defaults to six deep scans per hosted cycle while preserving the 
 
   const first=await scanner.scanPreMove({quote:'USDT',limit:50});
   const firstSymbols=new Set(seen);
-  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,4);
-  assert.equal(maxActive,4,'a 16-symbol batch should stay inside the small DHDTech memory envelope');
+  assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,2);
+  assert.equal(maxActive,2,'a three-symbol batch must keep candle/depth fan-out inside the small DHDTech CPU envelope');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,10,'the public API hard cap remains ten');
-  assert.equal(first.universe.discovered,6,'the small hosted runtime deep-scans six pairs by default');
-  assert.equal(first.universe.deep_scanned,6);
+  assert.equal(first.universe.discovered,3,'the small hosted runtime deep-scans three pairs by default');
+  assert.equal(first.universe.deep_scanned,3);
   assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
-  assert.equal(first.universe.rotation_width,5,'unused activity-priority slots must return to the fair rotating lane');
-  assert.equal(seen.length,6);
+  assert.equal(first.universe.rotation_width,2,'unused activity-priority slots must return to the fair rotating lane');
+  assert.equal(seen.length,3);
 
   seen=[];
   const second=await scanner.scanPreMove({quote:'USDT',limit:50});
   assert.equal(second.universe.rotation_cycle,1);
-  assert.equal(second.universe.discovered,6);
-  assert.equal(second.universe.deep_scanned,6);
+  assert.equal(second.universe.discovered,3);
+  assert.equal(second.universe.deep_scanned,3);
   const newlyCovered=seen.filter(symbol=>!firstSymbols.has(symbol));
-  assert.ok(newlyCovered.length>=4,
+  assert.ok(newlyCovered.length>=2,
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
