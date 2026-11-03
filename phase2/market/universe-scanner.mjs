@@ -2556,11 +2556,15 @@ export class MarketUniverseScanner {
           ()=>restoreRestControls()
         );
         try{
-          // _scanPreMove wraps each asynchronous phase with the shared absolute
-          // deadline and progress object. Do not install a second timer here:
-          // an outer timer at the same deadline can win the event-loop race and
-          // erase the more useful phase/symbol progress from the inner timeout.
-          const result=await scanTask;
+          // Inner phase wrappers share the real absolute deadline and signal,
+          // so they can report EXCHANGE_INFO / TICKER_24H / DEEP_SCAN progress.
+          // Keep one outer orphan-work safety timer 50ms later, without sharing
+          // the abort signal: an adapter that ignores cancellation must still
+          // release this public flight and the per-quote queue.
+          const result=await awaitPreMoveScanOperation(scanTask,{
+            deadlineAtMs:deadlineAtMs+50,
+            stage:'SCAN_ORPHAN_SAFETY'
+          });
           if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
           return result;
         }catch(error){
