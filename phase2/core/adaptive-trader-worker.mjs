@@ -120,7 +120,7 @@ export class AdaptiveTraderWorker{
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
           this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
-          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal);
+          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
@@ -252,7 +252,7 @@ export class AdaptiveTraderWorker{
         return enriched;
       }).sort((a,b)=>(Number(b.cognitive_rank_score??b.score)||0)-(Number(a.cognitive_rank_score??a.score)||0));
       this.refreshCognitiveOutcomeLinks();
-      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal);
+      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
       this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
       const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
       this.recordServerPaperPortfolio(executionSnapshot,now);
@@ -671,7 +671,7 @@ recordServerPaperPortfolio(snapshot,now){
         validation:this.state.cognitive_profile?.validation||null,
         model_selection:this.state.cognitive_profile?.model_selection||null,
         regime_adaptation:this.state.cognitive_profile?.regime_adaptation||null,
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         holdout:this.state.cognitive_profile?.holdout||null,
         capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
@@ -768,7 +768,7 @@ recordServerPaperPortfolio(snapshot,now){
         status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
