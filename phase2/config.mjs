@@ -201,10 +201,11 @@ export const CONFIG = Object.freeze({
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     maxTriggerAgeMs: 30 * 60 * 1000,
     retryAttempts: 1,
-    // Limit DHDTech's expensive closed-candle + order-book lane to three pairs
-    // per 60s cycle by default; the durable cursor continues rotating all Spot pairs.
-    // Permit an explicit operator override from two to three after runtime benchmarking.
-    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 3, 2, 3),
+    // DHDTech's 0.5-CPU worker has repeatedly hit the 45s scan deadline on a
+    // three-pair batch. Bound the expensive closed-candle + order-book lane to
+    // two pairs; full-market ticker activity and the durable cursor keep rotation alive.
+    // Operators may lower the batch to one, but cannot raise it above two on this tier.
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 2, 1, 2),
     // Pre-Move background surveillance continues when no Android page is open.
     preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
