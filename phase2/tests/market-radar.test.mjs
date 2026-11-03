@@ -1322,8 +1322,21 @@ test('Pre-Move deadline reports when the worker is waiting behind a previous sca
 
 test('Pre-Move deep-scan deadline includes completed-symbol progress',async()=>{
   const scanNow=stablePreMoveTestTime();
+  const rest=makeRest({clock:()=>scanNow});
+  const baseRequest=rest.request;
+  rest.request=async(path,options)=>{
+    const result=await baseRequest(path,options);
+    if(path==='/api/v3/ticker/24hr'){
+      // Keep all three fixture pairs above the real 750k USDT eligibility
+      // floor; the normal LOWUSDT fixture is intentionally below that gate.
+      return {...result,data:result.data.map(row=>row.symbol==='LOWUSDT'
+        ?{...row,quoteVolume:'1000000',priceChangePercent:'1'}
+        :row)};
+    }
+    return result;
+  };
   const scanner=new MarketUniverseScanner({
-    rest:makeRest({clock:()=>scanNow}),
+    rest,
     clock:()=>scanNow,
     config:{minQuoteVolume24h:750000,preMoveCycleScanLimit:3,preMoveScanTimeoutMs:250}
   });
