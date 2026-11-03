@@ -346,15 +346,31 @@ function makeSignal(alert,now,marketContext){
   };
 }
 
-export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),marketContext={},logger=console}={}){
+export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),marketContext={},logger=console}={}) {
+  const input=list(alerts);
+  if(!input.length)return {recorded:0,skipped:0};
+  if(typeof store?.updatePreExpansionOutcomes!=='function')
+    return {recorded:0,skipped:input.length,reason:'TRACKER_STORE_UNAVAILABLE'};
+
+  // Build candidate ledger rows before taking the durable-store lock. Most Radar 8
+  // deep observations are diagnostics rather than qualifying evaluation records.
+  // An empty/invalid observation batch must not queue behind markout/backfill writes,
+  // otherwise research bookkeeping can consume the entire live scan deadline.
+  const prepared=[];
+  let skipped=input.length;
+  for(const alert of input){
+    const incoming=makeSignal(alert,now,marketContext);
+    if(!incoming)continue;
+    prepared.push(incoming);
+  }
+  skipped-=prepared.length;
+  if(!prepared.length)return {recorded:0,skipped};
+
   const loggedSignals=[];
-  if(typeof store?.updatePreExpansionOutcomes!=='function')return {recorded:0,skipped:list(alerts).length,reason:'TRACKER_STORE_UNAVAILABLE'};
-  let recorded=0,skipped=0;
+  let recorded=0;
   await store.updatePreExpansionOutcomes(raw=>{
     const state=normalizeState(raw);let changed=false;
-    for(const alert of list(alerts)){
-      const incoming=makeSignal(alert,now,marketContext);
-      if(!incoming){skipped++;continue;}
+    for(const incoming of prepared){
       const key=keyOf(incoming.radar,incoming.symbol),prior=state.last_stage_by_key[key];
       if(prior&&prior.stage===incoming.signal_type&&now-num(prior.last_recorded_at,0)<REARM_MS){
         skipped++;continue;
@@ -397,6 +413,94 @@ export async function recordPreExpansionSignals(store,alerts,{now=Date.now(),mar
   return {recorded,skipped};
 }
 
+/**
+ * Coalesced, bounded writer for Radar 8's measurement-only outcome ledger.
+ * The main market scan never waits for this queue; each qualifying observation
+ * is persisted in the background and pending volume/error state remains visible.
+ */
+export function createPreExpansionSignalRecordQueue({store,logger=console,maxPending=1500,batchSize=32}={}) {
+  const pending=new Map();
+  const pendingLimit=Math.max(100,Math.min(5000,Math.trunc(Number(maxPending)||1500)));
+  const batchLimit=Math.max(1,Math.min(100,Math.trunc(Number(batchSize)||32)));
+  let runningTask=null,droppedTotal=0,recordedTotal=0,skippedTotal=0,failedBatches=0,lastError=null,lastWriteAt=null;
+
+  const health=()=>({
+    pending_count:pending.size,writing:runningTask!==null,recorded_total:recordedTotal,
+    skipped_total:skippedTotal,dropped_total:droppedTotal,failed_batches:failedBatches,
+    last_error:lastError,last_write_at:lastWriteAt,max_pending:pendingLimit
+  });
+
+  const drain=()=>{
+    if(runningTask)return runningTask;
+    if(!pending.size)return Promise.resolve(health());
+    const work=(async()=>{
+      while(pending.size){
+        const first=pending.values().next().value;
+        const batch=[];
+        for(const [key,item] of pending){
+          if(item.now!==first.now)continue;
+          batch.push(item);
+          pending.delete(key);
+          if(batch.length>=batchLimit)break;
+        }
+        if(!batch.length)continue;
+        try{
+          const result=await recordPreExpansionSignals(store,batch.map(x=>x.alert),{
+            now:first.now,marketContext:first.marketContext,logger
+          });
+          recordedTotal+=Number(result?.recorded)||0;
+          skippedTotal+=Number(result?.skipped)||0;
+          lastError=null;
+          lastWriteAt=Date.now();
+        }catch(error){
+          failedBatches++;
+          lastError=String(error?.message||error).slice(0,200);
+          logger?.warn?.('[PRE_EXPANSION_OUTCOME_QUEUE_WRITE_FAILED] '+JSON.stringify({
+            error:lastError,batch_size:batch.length,pending_count:pending.size
+          }));
+        }
+      }
+      return health();
+    })();
+    runningTask=work.finally(()=>{
+      runningTask=null;
+      if(pending.size)void drain().catch(error=>{
+        lastError=String(error?.message||error).slice(0,200);
+        logger?.warn?.('[PRE_EXPANSION_OUTCOME_QUEUE_DRAIN_FAILED] '+lastError);
+      });
+    });
+    return runningTask;
+  };
+
+  const enqueue=(alerts,{now=Date.now(),marketContext={}}={})=>{
+    const rows=list(alerts);
+    if(!rows.length)return {...health(),queued_now:0,coalesced_now:0,dropped_now:0};
+    let queued=0,coalesced=0,dropped=0;
+    const timestamp=num(now,Date.now());
+    for(const alert of rows){
+      const symbol=String(alert?.symbol||'').trim().toUpperCase();
+      const radar=normalizedRadar(alert);
+      const stage=inferStage(alert);
+      const key=radar&&symbol&&stage
+        ?[radar,symbol,stage].join('|')
+        :String(alert?.id||'').trim()||[symbol,stage,timestamp].join('|');
+      if(pending.has(key)){coalesced++;continue;}
+      if(pending.size>=pendingLimit){droppedTotal++;dropped++;continue;}
+      pending.set(key,{alert,now:timestamp,marketContext:object(marketContext)});
+      queued++;
+    }
+    if(dropped)logger?.warn?.('[PRE_EXPANSION_OUTCOME_QUEUE_CAPACITY] '+JSON.stringify({
+      dropped_now:dropped,dropped_total:droppedTotal,pending_count:pending.size,max_pending:pendingLimit
+    }));
+    if(queued)void drain().catch(error=>{
+      lastError=String(error?.message||error).slice(0,200);
+      logger?.warn?.('[PRE_EXPANSION_OUTCOME_QUEUE_DRAIN_FAILED] '+lastError);
+    });
+    return {...health(),queued_now:queued,coalesced_now:coalesced,dropped_now:dropped};
+  };
+
+  return {enqueue,flush:drain,health};
+}
 function markOutcome(ret,horizon){
   const r=num(ret);
   if(r===null)return null;
