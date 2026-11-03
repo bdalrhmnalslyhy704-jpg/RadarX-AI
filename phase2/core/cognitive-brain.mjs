@@ -652,7 +652,7 @@ export function buildCognitiveLearningProfile(samples = [], {
  * train/validation/test splits.
  */
 export function buildCognitivePrequentialProfile(journal = [], {
-  minimumWindowSamples = 20, windowSize = 40
+  minimumWindowSamples = 20, windowSize = 40, modelVariant = null
 } = {}) {
   const rows = (Array.isArray(journal) ? journal : [])
     .filter(row => row && Number(row.model_version) === 4 &&
@@ -666,11 +666,16 @@ export function buildCognitivePrequentialProfile(journal = [], {
       Number(row.resolved_at) - Number(row.at) === MIN_OUTCOME_HORIZON_MS)
     .map(row => ({
       ...row,
+      model_variant: String(row.selected_model || row.model_variant || 'V4_UNSPECIFIED').trim() || 'V4_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
       target: row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))
     .sort((a, b) => Number(a.at) - Number(b.at) || String(a.id).localeCompare(String(b.id)));
 
+  // A changing winner (neural/global/recent) is a new model variant. Never
+  // compare its forward errors against forecasts made by a different winner.
+  const auditedModelVariant=String(modelVariant || rows.at(-1)?.model_variant || 'V4_UNSPECIFIED').trim() || 'V4_UNSPECIFIED';
+  const variantRows=rows.filter(row=>row.model_variant===auditedModelVariant);
   const score = subset => {
     if (!subset.length) return {
       sample_count: 0, brier_score: null, log_loss: null,
@@ -726,9 +731,9 @@ export function buildCognitivePrequentialProfile(journal = [], {
     };
   };
 
-  const recent = rows.slice(-Math.max(minimumWindowSamples, windowSize));
-  const previousEnd = Math.max(0, rows.length - recent.length);
-  const previous = rows.slice(Math.max(0, previousEnd - Math.max(minimumWindowSamples, windowSize)), previousEnd);
+  const recent = variantRows.slice(-Math.max(minimumWindowSamples, windowSize));
+  const previousEnd = Math.max(0, variantRows.length - recent.length);
+  const previous = variantRows.slice(Math.max(0, previousEnd - Math.max(minimumWindowSamples, windowSize)), previousEnd);
   const recentMetrics = score(recent);
   const previousMetrics = score(previous);
   const enough = recent.length >= minimumWindowSamples && previous.length >= minimumWindowSamples;
@@ -741,7 +746,10 @@ export function buildCognitivePrequentialProfile(journal = [], {
     method: 'IMMUTABLE_FORWARD_FORECAST_PREQUENTIAL_AUDIT_V2',
     status: !enough ? 'INSUFFICIENT_FORWARD_PREDICTIONS' :
       driftDetected ? 'FORWARD_PERFORMANCE_DEGRADING' : 'FORWARD_MONITORING_STABLE',
-    resolved_forecasts: rows.length,
+    resolved_forecasts: variantRows.length,
+    all_v4_resolved_forecasts: rows.length,
+    audited_model_variant: auditedModelVariant,
+    excluded_other_model_variant_forecasts: rows.length-variantRows.length,
     minimum_window_samples: minimumWindowSamples,
     previous_window: previousMetrics,
     recent_window: recentMetrics,
@@ -750,7 +758,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
     reassessment_required: driftDetected,
     note: driftDetected
       ? 'RECENT_IMMUTABLE_FORECASTS_DEGRADED_VS_PRIOR_WINDOW'
-      : 'ONLY_FIRST_RECORDED_MODEL_V4_FORECAST_PER_CLOSED_CANDLE_IS_SCORED'
+      : 'ONLY_FIRST_RECORDED_MODEL_V4_FORECAST_PER_CLOSED_CANDLE_IS_SCORED_PER_SELECTED_MODEL_VARIANT'
   };
 }
 
