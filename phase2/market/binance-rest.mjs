@@ -618,7 +618,7 @@ export class RestClient {
           this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
           attemptFailures.push(message);
           this.lastError=message;
-          if(error?.name==='RestRateLimitError'||error?.name==='RestRegionRestrictedError'||error?.name==='ScanDeadlineError') break;
+          if(error?.name==='RestRateLimitError'||error?.name==='ScanDeadlineError') break;
         }finally{
           clearTimeout(tm);
           parentSignal?.removeEventListener('abort',abortFromParent);
