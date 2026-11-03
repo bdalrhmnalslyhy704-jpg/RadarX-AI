@@ -1331,10 +1331,11 @@ export function buildPreMoveWatchCandidates(rows,{
     const buying=Number(p.components?.buying_pressure);
     const rawRelativeBtc=p.relative_strength_vs_btc_pct;
     const rawRelativeMarket=p.relative_strength_vs_market_pct;
+    const relativeMarket=rawRelativeMarket!==null&&rawRelativeMarket!==undefined&&Number.isFinite(Number(rawRelativeMarket))
+      ?Number(rawRelativeMarket):NaN;
     const relativeBtc=rawRelativeBtc!==null&&rawRelativeBtc!==undefined&&Number.isFinite(Number(rawRelativeBtc))
       ?Number(rawRelativeBtc)
-      :rawRelativeMarket!==null&&rawRelativeMarket!==undefined&&Number.isFinite(Number(rawRelativeMarket))
-        ?Number(rawRelativeMarket):NaN;
+      :relativeMarket;
     const quoteVolume=Number(x?.quote_volume_24h);
     const liquidityQuality=Number(x?.liquidity_quality);
     const tickerActivity=x?.ticker_activity&&typeof x.ticker_activity==='object'?x.ticker_activity:null;
@@ -1402,17 +1403,36 @@ export function buildPreMoveWatchCandidates(rows,{
       taker>=0.60&&takerDelta>=0.05&&closeLocation>=0.55&&
       Number.isFinite(relativeBtc)&&relativeBtc>=-3.5&&
       structure>=55&&buying>=75&&strongBuyerChecks>=7;
+    // Relative-strength buyer absorption: keep an exceptionally strong coin visible
+    // when the broad session is red, instead of requiring the coin itself to be green.
+    // The profile is closed-candle, liquid, high-quality and WATCH ONLY.
+    const relativeStrengthBuyerChecks=[
+      volume>=1.25,trades>=1.15,taker>=0.62,takerDelta>=0.05,
+      closeLocation>=0.55,Number.isFinite(relativeMarket)&&relativeMarket>=0.25,
+      squeeze>=35,structure>=60,buying>=75
+    ].filter(Boolean).length;
+    const relativeStrengthBuyerAbsorptionEarly=ds.data_valid===true&&
+      ds.candle_data_valid===true&&ds.data_stale!==true&&ds.stale!==true&&
+      ds.future_data_detected!==true&&!ds.last_error&&
+      quality>=90&&liquidityQuality>=80&&quoteVolume>=minQuoteVolume24h&&
+      Number.isFinite(dailyChange)&&dailyChange>=-5&&dailyChange<=5&&
+      Number.isFinite(sessionReturn)&&sessionReturn>=-3&&sessionReturn<=3.5&&
+      Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.5&&oneHourReturn<=2.5&&
+      score>=68&&volume>=1.25&&trades>=1.15&&
+      taker>=0.62&&takerDelta>=0.05&&closeLocation>=0.55&&
+      Number.isFinite(relativeMarket)&&relativeMarket>=0.25&&
+      squeeze>=35&&structure>=60&&buying>=75&&relativeStrengthBuyerChecks>=8;
     const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
     if(ds.candle_data_valid!==true||ds.data_stale===true||ds.last_error||
        !Number.isFinite(quality)||quality<minDataQuality||
        p.evidence_complete!==true||p.closed_candles_only!==true||
        p.already_moved===true||p.stage==='ALREADY_MOVED'||
        !Number.isFinite(score)||score<minScore||
-       !Number.isFinite(sessionReturn)||(!strongBuyerAbsorptionEarly&&!compressedBuyerAbsorptionEarly&&sessionReturn< -1.5)||sessionReturn>(strongBuyerAbsorptionEarly?6:8)||
+       !Number.isFinite(sessionReturn)||(!strongBuyerAbsorptionEarly&&!compressedBuyerAbsorptionEarly&&!relativeStrengthBuyerAbsorptionEarly&&sessionReturn< -1.5)||sessionReturn>(relativeStrengthBuyerAbsorptionEarly?3.5:strongBuyerAbsorptionEarly?6:8)||
        !Number.isFinite(oneHourReturn)||(!strongBuyerAbsorptionEarly&&(oneHourReturn< -1.25||oneHourReturn>4.5))||
        !Number.isFinite(dailyChange)||Math.abs(dailyChange)>=20||
-       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
-       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly)||
+       (coreChecks.filter(Boolean).length<2&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly&&!relativeStrengthBuyerAbsorptionEarly)||
+       (structureChecks.filter(Boolean).length<1&&!tickerActivityEarly&&!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly&&!relativeStrengthBuyerAbsorptionEarly)||
        riskFlags.some(flag=>hardRisks.has(flag))) continue;
 
     const blockers=[];
@@ -1427,6 +1447,8 @@ export function buildPreMoveWatchCandidates(rows,{
     if(p.flow_transition_confirmed!==true) {
       if(compressedBuyerAbsorptionEarly) {
         blockers.push('COMPRESSED_BUYER_ABSORPTION_MONITOR_ONLY');
+      } else if(relativeStrengthBuyerAbsorptionEarly) {
+        blockers.push('RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR_ONLY');
       } else if(strongBuyerAbsorptionEarly) {
         blockers.push('STRONG_BUYER_ABSORPTION_MONITOR_ONLY');
       } else {
@@ -1439,11 +1461,11 @@ export function buildPreMoveWatchCandidates(rows,{
     }
     if(p.price_window_valid!==true)blockers.push('PRICE_WINDOW_NOT_CONFIRMED');
     if(p.structure_gate_passed!==true&&p.structure_confirmed!==true) {
-      if(!compressedBuyerAbsorptionEarly&&p.flow_led_expansion_confirmed!==true&&!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
+      if(!compressedBuyerAbsorptionEarly&&!relativeStrengthBuyerAbsorptionEarly&&p.flow_led_expansion_confirmed!==true&&!(squeeze>=55))blockers.push('COMPRESSION_NOT_CONFIRMED');
       if(!(structure>=60))blockers.push('STRUCTURE_NOT_CONFIRMED');
       if(!(buying>=60))blockers.push('BUYING_PRESSURE_NOT_CONFIRMED');
     }
-    if(!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly&&(sessionReturn<0||sessionReturn>6))blockers.push('SESSION_MOVE_NOT_CONFIRMED');
+    if(!compressedBuyerAbsorptionEarly&&!strongBuyerAbsorptionEarly&&!relativeStrengthBuyerAbsorptionEarly&&(sessionReturn<0||sessionReturn>6))blockers.push('SESSION_MOVE_NOT_CONFIRMED');
     if(score<62)blockers.push('SCORE_BELOW_ACTIONABLE_THRESHOLD');
     if(tickerActivityEarly)blockers.push('TICKER_ACTIVITY_ACCELERATION_MONITOR_ONLY');
     const watchReasons=[...new Set(blockers.length?blockers:['ACTIONABLE_GATE_NOT_MET'])];
@@ -1459,6 +1481,8 @@ export function buildPreMoveWatchCandidates(rows,{
         compressed_buyer_absorption_checks:compressedBuyerChecks,
         strong_buyer_absorption_monitor_only:strongBuyerAbsorptionEarly,
         strong_buyer_absorption_checks:strongBuyerChecks,
+        relative_strength_buyer_absorption_monitor_only:relativeStrengthBuyerAbsorptionEarly,
+        relative_strength_buyer_absorption_checks:relativeStrengthBuyerChecks,
         original_stage:p.stage||'NO_SETUP',
         stage:'WATCH_EARLY',
         watch_only:true,
@@ -2821,6 +2845,9 @@ export class MarketUniverseScanner {
           score:Number.isFinite(Number(p.score))?Number(p.score):null,
           price_change_24h:Number.isFinite(Number(x.price_change_24h))?Number(x.price_change_24h):null,
           session_return_pct:Number.isFinite(Number(p.session_return_pct))?Number(p.session_return_pct):null,
+          market_median_return_pct:Number.isFinite(Number(p.market_median_return_pct))?Number(p.market_median_return_pct):null,
+          relative_strength_vs_market_pct:Number.isFinite(Number(p.relative_strength_vs_market_pct))?Number(p.relative_strength_vs_market_pct):null,
+          relative_strength_vs_btc_pct:Number.isFinite(Number(p.relative_strength_vs_btc_pct))?Number(p.relative_strength_vs_btc_pct):null,
           one_hour_return_pct:Number.isFinite(Number(p.one_hour_return_pct))?Number(p.one_hour_return_pct):null,
           volume_acceleration:Number.isFinite(Number(p.volume_acceleration))?Number(p.volume_acceleration):null,
           trade_acceleration:Number.isFinite(Number(p.trade_acceleration))?Number(p.trade_acceleration):null,

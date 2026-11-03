@@ -1028,3 +1028,62 @@ test('archived Early-Wake rows are rejected by phone-list merge when stale, exte
   assert.equal(merged.length,0);
   assert.equal(merged.diagnostics.archived_rows_revalidated,0);
 });
+
+test('OPUS-like relative buyer absorption during a negative session passes both server watch gates only',async()=>{
+  const {candidate:base,snapshot,now}=fixture();
+  const candidate={
+    ...base,symbol:'OPUSUSDT',last_price:0.80,price_change_24h:-2.0318,quote_volume_24h:2_317_385,
+    data_quality:100,liquidity_quality:88.72,
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,
+      stale:false,future_data_detected:false,source:'Binance Public REST'},
+    risk_flags:[],
+    pre_move_context:{
+      ...base.pre_move_context,stage:'WATCH_EARLY',watch_only:true,actionable:false,
+      evidence_complete:true,closed_candles_only:true,already_moved:false,session_close:now-60_000,
+      score:77.3,session_return_pct:-1.5972,one_hour_return_pct:0.9083,
+      volume_acceleration:1.6348,trade_acceleration:1.3263,taker_buy_ratio:0.7122,
+      taker_buy_acceleration:0.2138,mean_close_location:0.5917,
+      relative_strength_vs_market_pct:0.528,relative_strength_vs_btc_pct:-0.2,
+      flow_transition_confirmed:false,price_window_valid:false,structure_gate_passed:false,
+      components:{squeeze:49.22,structure:72.63,buying_pressure:100},
+      reasons:['BUYER_FLOW_STRONG','OUTPERFORMING_NEGATIVE_MARKET']
+    }
+  };
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'the API should classify the pattern as a qualified monitor-only observation');
+  assert.equal(alert.watch_notification_tier,'RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.data_status.data_valid,true);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-relative-strength-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent[0].watch_notification_tier,'RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].real_order_execution,false);
+
+    const weakRelative={...alert,pre_move_context:{...alert.pre_move_context,
+      relative_strength_vs_market_pct:-0.2,relative_strength_vs_btc_pct:0.8}};
+    assert.equal((await manager.notifyRadarWatchOnlyAlert(weakRelative)).reason,
+      'PRE_MOVE_RELATIVE_STRENGTH_BUYER_TIER_UNVERIFIED');
+    const weakLiquidity={...alert,liquidity_quality:59};
+    assert.equal((await manager.notifyRadarWatchOnlyAlert(weakLiquidity)).reason,
+      'LIQUIDITY_QUALITY_MISSING_OR_LOW');
+    const stale={...alert,data_status:{...alert.data_status,data_stale:true}};
+    assert.equal((await manager.notifyRadarWatchOnlyAlert(stale)).reason,'STALE_OR_INVALID_DATA');
+  }finally{await rm(dir,{recursive:true,force:true});}
+});

@@ -603,7 +603,7 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
   }};
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_ACCELERATION_ROTATION_V3');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_FLOW_ACCELERATION_ROTATION_V4');
   assert.equal(snapshot.universe.emerging_movers_available,15);
   assert.equal(snapshot.universe.extended_movers_available,9);
   assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
@@ -619,6 +619,50 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
     assert.equal(candidate.entry_eligible,false);
     assert.equal(candidate.real_order_execution,false);
   }
+});
+
+
+test('24h ticker volume and trade-count acceleration gets a deep-scan lane before daily price expansion',async()=>{
+  const f=marketFixture();
+  const regular=Array.from({length:80},(_,i)=>({
+    symbol:'BASE'+String(i).padStart(3,'0')+'USDT',
+    lastPrice:'10',
+    quoteVolume:String(10_000_000-i*50_000),
+    priceChangePercent:'0.1',
+    count:'10000'
+  }));
+  const activity={
+    symbol:'QUIETFLOWUSDT',lastPrice:'10',quoteVolume:'985000',
+    priceChangePercent:'0.1',count:'29700'
+  };
+  const tickers=[...regular,activity];
+  const rest={async request(path){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers.map(row=>({...row})),
+      source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:40,now:f.now});
+  assert.ok(first.latest_prices.some(row=>row.symbol==='QUIETFLOWUSDT'));
+  assert.equal(first.candidates.some(row=>row.symbol==='QUIETFLOWUSDT'),false,
+    'the quiet-flow pair starts outside top-volume and daily-mover selection lanes');
+
+  activity.quoteVolume='1000000';activity.count='30000';
+  const second=await service({limit:40,now:f.now+3*60*1000});
+  assert.ok(second.universe.activity_acceleration_movers_available>=1);
+  const candidate=second.candidates.find(row=>row.symbol==='QUIETFLOWUSDT');
+  assert.ok(candidate,'a market-wide volume-and-trades acceleration should receive a deep-scan slot');
+  assert.equal(candidate.selection_lane,'MARKET_ACTIVITY_ACCELERATION');
+  assert.ok(candidate.market_activity_acceleration.volume_rate_vs_24h_average>=1.5);
+  assert.ok(candidate.market_activity_acceleration.trade_rate_vs_24h_average>=1.3);
+  assert.equal(candidate.data_valid,true,'deep scan must still validate real closed candles');
+  assert.equal(candidate.entry_eligible,false,'activity acceleration alone must never authorize entry');
+  assert.equal(candidate.real_order_execution,false);
+  assert.equal(second.latest_prices.find(row=>row.symbol==='QUIETFLOWUSDT').trade_count_24h,30000);
 });
 
 test('universe rotation continues after the last successful pair and retries the failed tail',async()=>{
@@ -758,7 +802,9 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
       price_change_4h_pct:i%4===0?2:-1,
       relative_24h_strength_vs_btc_pct:i%3===1?1:-0.4,
       change_24h_pct:i%5===0?10:2,
-      quote_volume_24h:1_000_000
+      quote_volume_24h:1_000_000,
+      market_activity_volume_rate_vs_24h_average:i%2===0?2.1:0.8,
+      market_activity_trade_rate_vs_24h_average:i%2===0?1.7:1.0
     }
   }));
   const profile=buildAdaptiveLearningProfile(samples);
@@ -770,6 +816,8 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
   assert.equal(profile.outcome_counts.down,27);
   assert.equal(profile.outcome_counts.flat,26);
   assert.ok(profile.covered_factor_buckets>=4);
+  assert.equal(profile.buckets.market_activity_acceleration.samples,40);
+  assert.ok(Object.hasOwn(profile.adjustments,'market_activity_acceleration'));
   assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
 });
 
@@ -869,3 +917,53 @@ test('historical sample phases give the cognitive learner enough distinct time b
   // unlock probabilities merely because the chronology is now large enough.
   assert.equal(profile.probability_ready,false);
 });
+
+test('screenshot gainer pairs receive quiet-flow priority before daily expansion',async()=>{
+  const f=marketFixture();
+  const targets=[
+    ['BMTUSDT','12730000','400000'],
+    ['HOTUSDT','12030000','350000'],
+    ['RUNEUSDT','5820000','180000'],
+    ['KMNOUSDT','1210000','90000'],
+    ['ZROUSDT','8180000','240000']
+  ];
+  const regular=Array.from({length:80},(_,i)=>({
+    symbol:'BASE'+String(i).padStart(3,'0')+'USDT',
+    lastPrice:'10',quoteVolume:String(20_000_000-i*100_000),
+    priceChangePercent:'0.1',count:'50000'
+  }));
+  const rows=targets.map(([symbol,volume,trades])=>({
+    symbol,lastPrice:'10',quoteVolume:String(Number(volume)-Math.max(10_000,Math.ceil(Number(volume)*0.01))),
+    priceChangePercent:'0.1',count:String(Number(trades)-Math.max(1_000,Math.ceil(Number(trades)*0.01)))
+  }));
+  const tickers=[...regular,...rows];
+  const rest={async request(path){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',
+      isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers.map(row=>({...row})),
+      source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:40,now:f.now});
+  assert.equal(first.candidates.some(row=>targets.some(([symbol])=>row.symbol===symbol)),false,
+    'first snapshot seeds the ticker baseline and must not infer acceleration');
+  for(const row of rows){
+    const target=targets.find(([symbol])=>symbol===row.symbol);
+    row.quoteVolume=String(Number(target[1]));
+    row.count=String(Number(target[2]));
+  }
+  const second=await service({limit:40,now:f.now+3*60*1000});
+  for(const [symbol] of targets){
+    const candidate=second.candidates.find(row=>row.symbol===symbol);
+    assert.ok(candidate, symbol+' should receive a deep-scan slot from its fresh volume/trade acceleration');
+    assert.equal(candidate.selection_lane,'MARKET_ACTIVITY_ACCELERATION');
+    assert.equal(candidate.data_valid,true,'the ticker pulse must still pass real closed-candle validation');
+    assert.equal(candidate.entry_eligible,false,'activity acceleration is priority evidence, not entry permission');
+    assert.equal(candidate.real_order_execution,false);
+  }
+});
+

@@ -1318,6 +1318,9 @@ test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audi
     assert.equal(row.watch_only,true);
     assert.equal(row.alert_eligible,false);
     assert.ok(Array.isArray(row.blocker_codes)&&row.blocker_codes.length>0);
+    assert.ok(Object.hasOwn(row,'market_median_return_pct'));
+    assert.ok(Object.hasOwn(row,'relative_strength_vs_market_pct'));
+    assert.ok(Object.hasOwn(row,'relative_strength_vs_btc_pct'));
     assert.ok(!result.candidates.some(candidate=>candidate.symbol===row.symbol),
       'near-miss diagnostic rows are never promoted to actionable candidates');
   }
@@ -1410,4 +1413,40 @@ test('Pre-Move scans at different limits are serialized per quote and identical 
   assert.equal(smallResult.limit,10);
   assert.equal(largeResultA.limit,50);
   assert.strictEqual(largeResultA,largeResultB,'identical quote/limit requests share one in-flight scan');
+});
+
+test('OPUS-like strong relative buyer absorption remains watch-only when the broad market session is negative',()=>{
+  const candidate={
+    symbol:'OPUSUSDT',last_price:0.80,price_change_24h:-2.0318,quote_volume_24h:2_317_385,
+    liquidity_quality:88.72,data_quality:100,risk_flags:[],
+    data_status:{data_valid:true,candle_data_valid:true,volume_gate_pass:true,data_stale:false,
+      stale:false,future_data_detected:false,last_error:null},
+    pre_move_context:{
+      stage:'NO_SETUP',score:77.3,evidence_complete:true,closed_candles_only:true,
+      already_moved:false,session_return_pct:-1.5972,one_hour_return_pct:0.9083,
+      volume_acceleration:1.6348,trade_acceleration:1.3263,
+      taker_buy_ratio:0.7122,taker_buy_acceleration:0.2138,mean_close_location:0.5917,
+      relative_strength_vs_market_pct:0.528,relative_strength_vs_btc_pct:-0.2,
+      flow_transition_confirmed:false,price_window_valid:false,structure_confirmed:false,
+      components:{squeeze:49.22,structure:72.63,buying_pressure:100},
+      reasons:['BUYER_FLOW_STRONG','OUTPERFORMING_NEGATIVE_MARKET']
+    }
+  };
+  const rows=buildPreMoveWatchCandidates([candidate]);
+  assert.equal(rows.length,1,'strong relative buyer absorption should remain visible even while session return is negative');
+  assert.equal(rows[0].symbol,'OPUSUSDT');
+  assert.equal(rows[0].pre_move_context.relative_strength_buyer_absorption_monitor_only,true);
+  assert.ok(rows[0].watch_reason_codes.includes('RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR_ONLY'));
+  assert.equal(rows[0].watch_only,true);
+  assert.equal(rows[0].alert_eligible,false);
+  assert.equal(rows[0].pre_move_context.actionable,false);
+
+  const weakRelative=buildPreMoveWatchCandidates([{
+    ...candidate,pre_move_context:{...candidate.pre_move_context,relative_strength_vs_market_pct:-0.2,relative_strength_vs_btc_pct:0.8}
+  }]);
+  assert.equal(weakRelative.length,0,'negative relative strength must not receive the special tier');
+  const poorLiquidity=buildPreMoveWatchCandidates([{...candidate,liquidity_quality:59}]);
+  assert.equal(poorLiquidity.length,0,'poor liquidity must not enter the special tier');
+  const stale=buildPreMoveWatchCandidates([{...candidate,data_status:{...candidate.data_status,data_stale:true}}]);
+  assert.equal(stale.length,0,'stale candles must remain excluded');
 });
