@@ -22,11 +22,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // Keep the low-memory hosted worker's closed-candle + order-book batch
-  // to three pairs per cycle. The durable cursor and full ticker-activity lane
-  // rotate the whole Spot universe without letting one deep scan monopolize the CPU.
+  // The 0.5-CPU hosted worker is bounded to two closed-candle + order-book pairs
+  // per cycle. Full-market ticker activity and the durable cursor keep rotation alive.
   // The public hard cap remains ten for API compatibility.
-  preMoveCycleScanLimit: 3,
+  preMoveCycleScanLimit: 2,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
