@@ -45,7 +45,10 @@ export function resolveFastPublicSpotRestUrls(urls=[], currentBaseIndex=0){
   // request on api1..api4 must not pin every new scan to a mirror that can return
   // HTTP 451 from the DHDTech runtime's region. currentBaseIndex is retained for
   // API compatibility but deliberately does not change this priority.
-  const preferred=DEFAULT_PUBLIC_SPOT_REST_URLS.slice(0,2);
+  // DHDTech's hosting region has received HTTP 451 from api-gcp.binance.com.
+  // Keep the documented market-data endpoint first and use the standard public
+  // REST hostname as the bounded fallback instead of pinning the restricted GCP host.
+  const preferred=['https://data-api.binance.vision','https://api.binance.com'];
   const selected=preferred.filter(value=>ordered.includes(value));
   for(const value of ordered){
     if(!selected.includes(value))selected.push(value);
