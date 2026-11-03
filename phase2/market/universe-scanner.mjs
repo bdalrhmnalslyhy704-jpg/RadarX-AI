@@ -11,9 +11,9 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 // Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
 // envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
-// Live measurements showed no speed gain from large fan-out. Sixteen workers
-// reduce simultaneous candle/depth payloads while keeping network utilization high.
-export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 4;
+// Keep DHDTech's 0.5-CPU worker to two concurrent closed-candle/depth pairs.
+// More fan-out increases REST contention and has not improved completion time.
+export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 2;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
@@ -23,9 +23,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   deepConcurrency: 4,
   deepKlines: 250,
   // Keep the low-memory hosted worker's closed-candle + order-book batch
-  // bounded to six pairs per cycle. The durable cursor rotates the full universe;
-  // the public hard cap remains ten for compatibility with the API contract.
-  preMoveCycleScanLimit: 6,
+  // to three pairs per cycle. The durable cursor and full ticker-activity lane
+  // rotate the whole Spot universe without letting one deep scan monopolize the CPU.
+  // The public hard cap remains ten for API compatibility.
+  preMoveCycleScanLimit: 3,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2498,11 +2499,12 @@ export class MarketUniverseScanner {
       const deadlineError=(cause=null)=>{
         const progress=cause?.scan_progress&&typeof cause.scan_progress==='object'
           ?cause.scan_progress:null;
+        const causeStage=String(cause?.message||'').match(/stage=([A-Z_]+)/)?.[1]||'SCAN_OR_QUEUE';
         const detail=progress
           ?' stage='+String(progress.stage||'UNKNOWN')+
             ' symbols='+String(Number(progress.symbols_completed)||0)+'/'+String(Number(progress.symbols_total)||0)+
             (progress.last_completed_symbol?' last='+String(progress.last_completed_symbol):'')
-          :' stage=SCAN_OR_QUEUE';
+          :' stage='+causeStage;
         const error=new Error('PRE_MOVE_SCAN_DEADLINE_EXCEEDED'+detail);
         error.name='ScanDeadlineError';
         if(progress)error.scan_progress={...progress};
@@ -2702,9 +2704,9 @@ export class MarketUniverseScanner {
       tickerResponse.data,universe,{...discoveryOptions,rotationOffset}
     );
     const rotationAdvanceCount=Math.max(0,Math.trunc(Number(discovery.rotation_advance_count)||0));
-    // Live acceptance measured 51.6s at concurrency 16 and 56.1s at 40.
-    // Each pair requests 15m klines and order-book depth. Use a bounded middle
-    // concurrency of 24 while preserving the complete 40-symbol rotation batch.
+    // Each pair requests 15m klines and order-book depth. Keep both the batch
+    // size and in-flight fan-out bounded for the 0.5-CPU DHDTech service.
+    // Wider market coverage is maintained by the persisted cursor and ticker activity lane.
     const preMoveConcurrency=Math.min(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,Math.max(1,discovery.length));
     progress.stage='DEEP_SCAN';
     progress.symbols_total=discovery.length;
