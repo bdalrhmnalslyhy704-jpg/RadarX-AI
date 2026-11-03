@@ -10,6 +10,7 @@ import {
   evaluateHistoricalPreExpansionSignal,
   importHistoricalPreExpansionSignals,
   backfillHistoricalPreExpansionOutcomes,
+  createPreExpansionSignalRecordQueue,
   recordPreExpansionSignals,
   updatePreExpansionMarkouts,
   maybeLogPreExpansionOutcomeReport
@@ -106,6 +107,57 @@ test('records Radar 8/Radar 9 observations with time, entry, stage, data quality
     assert.equal(r8.outcome_status,'PENDING');
     assert.equal(r8.horizon_status['5m'].status,'PENDING');
     assert.equal(state.records.find(x=>x.radar==='RADAR_9').radar,'RADAR_9');
+  });
+});
+
+test('empty and non-evaluable Radar 8 observations do not queue durable outcome writes',async()=>{
+  let writes=0;
+  const store={async updatePreExpansionOutcomes(){writes++;}};
+  const empty=await recordPreExpansionSignals(store,[],{now:NOW});
+  const lowLiquidity=await recordPreExpansionSignals(store,[{
+    ...signal({symbol:'BYPASSUSDT',stage:'WATCH_EARLY'}),
+    low_liquidity_burst_bypass:true
+  }],{now:NOW});
+  assert.deepEqual(empty,{recorded:0,skipped:0});
+  assert.deepEqual(lowLiquidity,{recorded:0,skipped:1});
+  assert.equal(writes,0,'empty or intentionally excluded observations must not wait on the outcome ledger lock');
+});
+
+test('background Radar 8 outcome queue coalesces pending duplicates and survives a delayed durable write',async()=>{
+  await withStore(async baseStore=>{
+    let releaseFirst=null,firstWrite=true,calls=0;
+    const store={
+      updatePreExpansionOutcomes(updater){
+        calls++;
+        if(firstWrite){
+          firstWrite=false;
+          return new Promise((resolve,reject)=>{
+            releaseFirst=()=>baseStore.updatePreExpansionOutcomes(updater).then(resolve,reject);
+          });
+        }
+        return baseStore.updatePreExpansionOutcomes(updater);
+      },
+      getPreExpansionOutcomes:()=>baseStore.getPreExpansionOutcomes()
+    };
+    const recorder=createPreExpansionSignalRecordQueue({store,logger:{info(){},warn(){}},batchSize:8});
+    const first=recorder.enqueue([signal({symbol:'QUEUEAUSDT',stage:'WATCH_EARLY'})],{now:NOW});
+    assert.equal(first.queued_now,1);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(calls,1,'the first background write should be in flight');
+    const pending=recorder.enqueue([
+      signal({symbol:'QUEUEBUSDT',stage:'WATCH_EARLY',at:NOW+60_000}),
+      signal({symbol:'QUEUEBUSDT',stage:'WATCH_EARLY',at:NOW+90_000})
+    ],{now:NOW+60_000});
+    assert.equal(pending.queued_now,1);
+    assert.equal(pending.coalesced_now,1);
+    assert.equal(pending.pending_count,1,'one pending symbol/stage observation is retained');
+    releaseFirst();
+    await recorder.flush();
+    const state=await baseStore.getPreExpansionOutcomes();
+    assert.equal(state.records.length,2);
+    assert.deepEqual(state.records.map(row=>row.symbol).sort(),['QUEUEAUSDT','QUEUEBUSDT']);
+    assert.equal(recorder.health().pending_count,0);
+    assert.equal(recorder.health().failed_batches,0);
   });
 });
 
