@@ -2556,9 +2556,11 @@ export class MarketUniverseScanner {
           ()=>restoreRestControls()
         );
         try{
-          const result=await awaitPreMoveScanOperation(scanTask,{
-            deadlineAtMs,signal:controller.signal,stage:'SCAN'
-          });
+          // _scanPreMove wraps each asynchronous phase with the shared absolute
+          // deadline and progress object. Do not install a second timer here:
+          // an outer timer at the same deadline can win the event-loop race and
+          // erase the more useful phase/symbol progress from the inner timeout.
+          const result=await scanTask;
           if(controller.signal.aborted||Date.now()>=deadlineAtMs)throw deadlineError();
           return result;
         }catch(error){
