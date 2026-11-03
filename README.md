@@ -28,6 +28,7 @@ The web client calls the configured DHDTech backend and displays server-reported
 - Outcomes use the project's +2% / -2% labels, with intermediate outcomes classified as flat.
 - Historical calibration samples are calculated from available closed-candle history; missing data is not replaced with simulated prices.
 - The learner does not apply score calibration until the configured minimum resolved-sample count and factor-bucket coverage are satisfied.
+- Cognitive Agent V4 adds a deterministic `18-8-1` neural evidence model trained only on matured, deduplicated closed-candle outcomes. It competes with the global and recent-window logistic models on the middle chronological validation block; it is selected only when it beats the active challenger by the configured Brier-score margin. The final chronological holdout remains untouched until selection is complete. V4 forward-performance audits exclude V3 forecasts so incompatible model versions are never mixed.
 - A missed-mover record is an audit clue, not a buy signal. Already-extended moves remain excluded from entry recommendations.
 
 ## Tests
