@@ -555,7 +555,7 @@ test('cognitive journal freezes the first forecast for a closed candle and block
     assert.equal(worker.state.cognitive_journal[0].features.volume_ratio,1.6);
     assert.equal(worker.state.cognitive_journal[0].decision,'WATCH_AND_REASSESS');
     assert.equal(worker.state.cognitive_journal[0].last_seen_at,now+60_000);
-    assert.equal(worker.state.cognitive_journal[0].model_version,3);
+    assert.equal(worker.state.cognitive_journal[0].model_version,4);
 
     worker.state.cognitive_profile={max_training_outcome_resolved_at:now+120_000};
     worker.recordCognitiveAssessment({
