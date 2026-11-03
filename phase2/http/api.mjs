@@ -320,7 +320,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     volume!==null&&volume>=1.25,trades!==null&&trades>=1.15,
     buy!==null&&buy>=0.62,buyDelta!==null&&buyDelta>=0.05,
     closeLocation!==null&&closeLocation>=0.55,
-    relativeBtc!==null&&relativeBtc>=0.25,
+    relative!==null&&relative>=0.25,
     squeeze!==null&&squeeze>=35,structure!==null&&structure>=60,
     buyingPressure!==null&&buyingPressure>=75
   ].filter(Boolean).length;
@@ -329,7 +329,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     hour!==null&&hour>=-0.5&&hour<=2.5&&
     volume!==null&&volume>=1.25&&trades!==null&&trades>=1.15&&
     buy!==null&&buy>=0.62&&buyDelta!==null&&buyDelta>=0.05&&
-    closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=0.25&&
+    closeLocation!==null&&closeLocation>=0.55&&relative!==null&&relative>=0.25&&
     squeeze!==null&&squeeze>=35&&structure!==null&&structure>=60&&
     buyingPressure!==null&&buyingPressure>=75&&relativeStrengthBuyerChecks>=8&&
     quoteVolume!==null&&quoteVolume>=750000&&quality!==null&&quality>=90&&
