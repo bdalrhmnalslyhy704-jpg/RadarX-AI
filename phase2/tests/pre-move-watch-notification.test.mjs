@@ -1043,7 +1043,7 @@ test('OPUS-like relative buyer absorption during a negative session passes both 
       score:77.3,session_return_pct:-1.5972,one_hour_return_pct:0.9083,
       volume_acceleration:1.6348,trade_acceleration:1.3263,taker_buy_ratio:0.7122,
       taker_buy_acceleration:0.2138,mean_close_location:0.5917,
-      relative_strength_vs_market_pct:0.528,relative_strength_vs_btc_pct:0.528,
+      relative_strength_vs_market_pct:0.528,relative_strength_vs_btc_pct:-0.2,
       flow_transition_confirmed:false,price_window_valid:false,structure_gate_passed:false,
       components:{squeeze:49.22,structure:72.63,buying_pressure:100},
       reasons:['BUYER_FLOW_STRONG','OUTPERFORMING_NEGATIVE_MARKET']
@@ -1077,7 +1077,7 @@ test('OPUS-like relative buyer absorption during a negative session passes both 
     assert.equal(sent[0].real_order_execution,false);
 
     const weakRelative={...alert,pre_move_context:{...alert.pre_move_context,
-      relative_strength_vs_market_pct:-0.2,relative_strength_vs_btc_pct:-0.2}};
+      relative_strength_vs_market_pct:-0.2,relative_strength_vs_btc_pct:0.8}};
     assert.equal((await manager.notifyRadarWatchOnlyAlert(weakRelative)).reason,
       'PRE_MOVE_RELATIVE_STRENGTH_BUYER_TIER_UNVERIFIED');
     const weakLiquidity={...alert,liquidity_quality:59};
