@@ -1331,10 +1331,11 @@ export function buildPreMoveWatchCandidates(rows,{
     const buying=Number(p.components?.buying_pressure);
     const rawRelativeBtc=p.relative_strength_vs_btc_pct;
     const rawRelativeMarket=p.relative_strength_vs_market_pct;
+    const relativeMarket=rawRelativeMarket!==null&&rawRelativeMarket!==undefined&&Number.isFinite(Number(rawRelativeMarket))
+      ?Number(rawRelativeMarket):NaN;
     const relativeBtc=rawRelativeBtc!==null&&rawRelativeBtc!==undefined&&Number.isFinite(Number(rawRelativeBtc))
       ?Number(rawRelativeBtc)
-      :rawRelativeMarket!==null&&rawRelativeMarket!==undefined&&Number.isFinite(Number(rawRelativeMarket))
-        ?Number(rawRelativeMarket):NaN;
+      :relativeMarket;
     const quoteVolume=Number(x?.quote_volume_24h);
     const liquidityQuality=Number(x?.liquidity_quality);
     const tickerActivity=x?.ticker_activity&&typeof x.ticker_activity==='object'?x.ticker_activity:null;
@@ -1407,7 +1408,7 @@ export function buildPreMoveWatchCandidates(rows,{
     // The profile is closed-candle, liquid, high-quality and WATCH ONLY.
     const relativeStrengthBuyerChecks=[
       volume>=1.25,trades>=1.15,taker>=0.62,takerDelta>=0.05,
-      closeLocation>=0.55,Number.isFinite(relativeBtc)&&relativeBtc>=0.25,
+      closeLocation>=0.55,Number.isFinite(relativeMarket)&&relativeMarket>=0.25,
       squeeze>=35,structure>=60,buying>=75
     ].filter(Boolean).length;
     const relativeStrengthBuyerAbsorptionEarly=ds.data_valid===true&&
@@ -1419,7 +1420,7 @@ export function buildPreMoveWatchCandidates(rows,{
       Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.5&&oneHourReturn<=2.5&&
       score>=68&&volume>=1.25&&trades>=1.15&&
       taker>=0.62&&takerDelta>=0.05&&closeLocation>=0.55&&
-      Number.isFinite(relativeBtc)&&relativeBtc>=0.25&&
+      Number.isFinite(relativeMarket)&&relativeMarket>=0.25&&
       squeeze>=35&&structure>=60&&buying>=75&&relativeStrengthBuyerChecks>=8;
     const riskFlags=Array.isArray(x?.risk_flags)?x.risk_flags.map(v=>String(v).toUpperCase()):[];
     if(ds.candle_data_valid!==true||ds.data_stale===true||ds.last_error||
