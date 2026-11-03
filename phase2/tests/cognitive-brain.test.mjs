@@ -167,7 +167,7 @@ test('nested chronological validation purges labels crossing both validation and
   assert.ok(profile.max_training_outcome_resolved_at < profile.validation_start_at);
   assert.ok(profile.validation_start_at < profile.holdout_start_at);
   assert.equal(profile.holdout.evaluated, true);
-  assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3');
+  assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_NEURAL_EVIDENCE_MODEL_V4');
 });
 
 test('the model generalizes from market evidence to unseen pair identifiers across repeated datasets', () => {
@@ -179,6 +179,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'the model must beat the chronological baseline before publishing probabilities');
     assert.ok(profile.holdout.model_brier_score < profile.holdout.base_rate_brier_score);
     assert.equal(profile.identifier_features_used, false);
+    assert.equal(profile.neural_network.architecture, '18-8-1');
+    assert.equal(profile.neural_network.trained, true);
+    assert.equal(profile.neural_network.input_neurons, 18);
+    assert.equal(profile.neural_network.hidden_neurons, 8);
 
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
@@ -342,6 +346,9 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.equal(profile.identifier_features_used, false);
   assert.equal(profile.probability_ready, false,
     'a model that memorizes alternating pair identities must not pass evidence-only validation');
+  assert.equal(profile.neural_network.trained, true);
+  assert.equal(profile.neural_network.selected, false);
+  assert.equal(profile.neural_network.probability_ready, false);
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
 });
 
@@ -414,7 +421,7 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
       : (outcome === 'UP' ? 10 : 90);
     const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
     return {
-      id: 'FORWARD-' + index, model_version: 3, at,
+      id: 'FORWARD-' + index, model_version: 4, at,
       trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
@@ -422,6 +429,7 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
       predicted_up_probability: predicted
     };
   });
+  journal.push({ ...journal[0], id: 'OLD-V3', model_version: 3 });
   journal.push({ ...journal[0], id: 'OLD-V1', model_version: 1 });
   journal.push({ ...journal[0], id: 'UNRESOLVED', outcome: null });
   journal.push({ ...journal[0], id: 'LOOKAHEAD', trained_through_at: journal[0].at + 1 });
