@@ -1302,6 +1302,24 @@ test('Pre-Move scan applies one abortable REST deadline and restores prior clien
   assert.equal(rest.requestAbortSignal,previousSignal,'the previous REST abort signal must be restored');
 });
 
+test('Pre-Move deadline reports when the worker is waiting behind a previous scan',async()=>{
+  const scanner=new MarketUniverseScanner({
+    rest:{async request(){return {data:[]};}},
+    config:{preMoveScanTimeoutMs:250}
+  });
+  let releasePrevious;
+  const previous=new Promise(resolve=>{releasePrevious=resolve;});
+  scanner._preMoveScanTails.set('USDT',previous);
+  const pending=scanner.scanPreMove({quote:'USDT',limit:50});
+  await assert.rejects(
+    pending,
+    /PRE_MOVE_SCAN_DEADLINE_EXCEEDED stage=WAIT_PREVIOUS_SCAN/,
+    'queue contention must retain its actual stage instead of collapsing to SCAN_OR_QUEUE'
+  );
+  releasePrevious();
+  await previous;
+});
+
 test('Pre-Move diagnostic audit exposes blocker evidence but never promotes audit rows to candidates',async()=>{
   const scanNow=stablePreMoveTestTime();
   const scanner=new MarketUniverseScanner({
