@@ -1183,7 +1183,7 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
 });
 
 
-test('Pre-Move defaults to six deep scans per hosted cycle while preserving the public ten-symbol cap',async()=>{
+test('Pre-Move defaults to two deep scans per hosted cycle while preserving the public ten-symbol cap',async()=>{
   const scanNow=stablePreMoveTestTime();
   const alpha=n=>{
     let value=n,out='';
@@ -1225,22 +1225,22 @@ test('Pre-Move defaults to six deep scans per hosted cycle while preserving the 
   const first=await scanner.scanPreMove({quote:'USDT',limit:50});
   const firstSymbols=new Set(seen);
   assert.equal(PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,2);
-  assert.equal(maxActive,2,'a three-symbol batch must keep candle/depth fan-out inside the small DHDTech CPU envelope');
+  assert.equal(maxActive,2,'a two-symbol batch keeps candle/depth fan-out inside the small DHDTech CPU envelope');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,10,'the public API hard cap remains ten');
-  assert.equal(first.universe.discovered,3,'the small hosted runtime deep-scans three pairs by default');
-  assert.equal(first.universe.deep_scanned,3);
+  assert.equal(first.universe.discovered,2,'the small hosted runtime deep-scans two pairs by default');
+  assert.equal(first.universe.deep_scanned,2);
   assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
-  assert.equal(first.universe.rotation_width,2,'unused activity-priority slots must return to the fair rotating lane');
-  assert.equal(seen.length,3);
+  assert.equal(first.universe.rotation_width,1,'one rotating slot remains beside the pinned market row when no activity burst is present');
+  assert.equal(seen.length,2);
 
   seen=[];
   const second=await scanner.scanPreMove({quote:'USDT',limit:50});
   assert.equal(second.universe.rotation_cycle,1);
-  assert.equal(second.universe.discovered,3);
-  assert.equal(second.universe.deep_scanned,3);
+  assert.equal(second.universe.discovered,2);
+  assert.equal(second.universe.deep_scanned,2);
   const newlyCovered=seen.filter(symbol=>!firstSymbols.has(symbol));
-  assert.ok(newlyCovered.length>=2,
+  assert.ok(newlyCovered.length>=1,
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
