@@ -8,9 +8,11 @@ import {FUTURE_DATA_CLOCK_SKEW_MS, futureIssues, normalizeEpochMs, timestampUnit
 import {finiteNumberOr} from '../core/finite-number.mjs';
 import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSecurityCandidateSymbol} from '../core/market-wide-light-scan.mjs';
 
-// Keep each Pre-Move cycle below the small DHDTech service's memory/CPU
-// envelope. A 32-symbol batch still rotates the full Spot universe in bounded cycles.
+// The public request cap remains ten for API compatibility.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
+// The 0.5-CPU DHDTech worker can complete one closed-candle/depth pair inside
+// its 45-second budget when competing with the 12-radar and analyst fleet.
+const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 1;
 // Keep DHDTech's 0.5-CPU worker to two concurrent closed-candle/depth pairs.
 // More fan-out increases REST contention and has not improved completion time.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 2;
@@ -22,10 +24,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // The 0.5-CPU hosted worker is bounded to two closed-candle + order-book pairs
-  // per cycle. Full-market ticker activity and the durable cursor keep rotation alive.
+  // One deep candle/depth pair per hosted cycle; full-market ticker activity and
+  // the durable cursor keep discovery rotating across the entire Spot universe.
   // The public hard cap remains ten for API compatibility.
-  preMoveCycleScanLimit: 2,
+  preMoveCycleScanLimit: 1,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2647,8 +2649,8 @@ export class MarketUniverseScanner {
     // six pairs per cycle to finish within its 45s deadline on the small CPU tier.
     // The durable cursor and ticker-activity lane preserve wider-market coverage.
     const configuredCycleLimit=Math.max(1,Math.min(
-      PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
-      Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE)
+      PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,
+      Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE)
     ));
     const discoveryLimit=Math.min(configuredCycleLimit,normalizedLimit);
     progress.stage='DISCOVERY';
@@ -2684,7 +2686,9 @@ export class MarketUniverseScanner {
       rotationCycle=Math.max(0,Math.trunc(Number(this._preMoveRotationCycle)||0));
       rotationCursorOffset=Math.max(0,Math.trunc(Number(this._preMoveRotationOffset)||0));
     }
-    const preMovePinnedFraction=0.10;
+    // With a single deep slot, reserving a pinned row would starve the durable
+    // rotation lane. Let the activity-priority/rotation ranker select that slot.
+    const preMovePinnedFraction=discoveryLimit>1?0.10:0;
     const preMoveActivityPrioritySlots=8;
     const discoveryOptions={
       minQuoteVolume24h:this.config.minQuoteVolume24h,
