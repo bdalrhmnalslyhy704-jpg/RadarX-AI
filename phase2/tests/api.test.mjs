@@ -47,6 +47,38 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
   }
 });
 
+test('Pre-Move startup delay is independent from the recurring scan interval',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-worker-start-delay-')),store=await new DurableStore({dir}).init();
+  const marketRest={
+    request:async path=>({data:path==='/api/v3/exchangeInfo'?{symbols:[]} : [],source:'TEST_FIXTURE'}),
+    klines:async()=>({candles:[],source:'TEST_FIXTURE'}),
+    depth:async()=>({bids:[],asks:[],source:'TEST_FIXTURE'})
+  };
+  const config={
+    auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},
+    marketRadar:{minQuoteVolume24h:750000,preMoveBackgroundIntervalMs:60000,
+      preMoveBackgroundInitialDelayMs:120000}
+  };
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const started=server.startPreMoveWatchWorker();
+    assert.equal(started.status,'STARTING');
+    assert.equal(started.worker.enabled,true);
+    assert.equal(started.worker.interval_ms,60000);
+    assert.equal(started.worker.initial_delay_ms,120000,
+      'the first worker scan must wait through the 12-radar and analyst startup burst');
+    assert.equal(started.worker.scan_attempts,0,
+      'the initial timer must not be replaced by an early recurring interval tick');
+    assert.equal(started.worker.successful_scans,0);
+  }finally{
+    server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('Pre-Move retry cooldown is a skipped attempt and does not overwrite the last real scan result',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-pre-move-worker-cooldown-')),store=await new DurableStore({dir}).init();
   const marketRest={
