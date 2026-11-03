@@ -6,7 +6,7 @@ import {assessPreExpansionFingerprint,measureGradualParticipation} from './pre-e
 import {buildRadarRoleEvidence} from './radar-role-evidence.mjs';
 import {assessQuietBaseActivityShock,isFastActivityShockCandidate,isFastEarlyWatchCandidate} from './activity-shock.mjs';
 import {assessQuietBasePreExpansion,summarizeQuietBasePreExpansion} from './quiet-base-pre-expansion.mjs';
-import {recordPreExpansionSignals,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
+import {createPreExpansionSignalRecordQueue,updatePreExpansionMarkouts,maybeLogPreExpansionOutcomeReport,importHistoricalPreExpansionSignals,backfillHistoricalPreExpansionOutcomes} from './pre-expansion-outcome-tracker.mjs';
 import {SCAN_JOURNEY_SCHEMA,INCOMPLETE,closedCandleSnapshot,incompleteHorizons,makeScanJourneyCycleId,normalizeMissing,scanJourneyOutcomesFromRecord,summarizeScanJourneyOutcomes,reconcileEligibilityQueueAge} from './scan-journey-ledger.mjs';
 import {ScanSchedulerJournal, schedulerLaneReason} from './scan-scheduler.mjs';
 import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
@@ -1916,6 +1916,7 @@ export class EarlyExpansionRadar{
     this.lastQuietBaseWatchAt=new Map();this.lastQuietBaseWatchKeyBySymbol=new Map();
     this.lastMicroScanCycleBySymbol=new Map();this.lastDeepScanCycleBySymbol=new Map();
     this.scheduler=new ScanSchedulerJournal({radar:'RADAR_8',store,clock,logger});
+    this.preExpansionOutcomeRecorder=createPreExpansionSignalRecordQueue({store,logger,maxPending:1500,batchSize:32});
     this.lastDeepAtBySymbol=new Map();this.firstEligibleAtBySymbol=new Map();
     this.journeyStateHydrated=false;this.lastJourneyArchive=null;this.lastJourneyError=null;
     this.outcomeBackfillTask=null;
@@ -3541,9 +3542,14 @@ export class EarlyExpansionRadar{
         quiet_base_scan_latency_ms:hasFiniteNumber(candidate.quiet_base_scan_latency_ms)?Number(candidate.quiet_base_scan_latency_ms):null,
         market_regime:candidate.market_regime,source:candidate.source,detected_at:now
       }));
+      // Outcome tracking is measurement-only. Queue it durably in the background
+      // so a busy/slow outcome ledger cannot cancel market discovery or suppress alerts.
+      // Scan Journey and the actionable-alert archive remain on their own durable paths.
       const signalArchiveStartedAt=this.clock();
-      await awaitCycleStep(recordPreExpansionSignals(this.store,evaluationObservations,{now,marketContext,logger:this.logger}).catch(e=>noteOptionalCycleError(e,'outcome-record')),'OUTCOME_RECORD');
+      const outcomeQueue=this.preExpansionOutcomeRecorder.enqueue(evaluationObservations,{now,marketContext});
       phaseTimings.signal_archive_ms=Math.max(0,this.clock()-signalArchiveStartedAt);
+      phaseTimings.signal_archive_queued=Number(outcomeQueue.queued_now)||0;
+      phaseTimings.signal_archive_pending=Number(outcomeQueue.pending_count)||0;
       const notificationStartedAt=this.clock();
       let alertsThisCycle=0;
       const previousActivityShockKeys=new Set(historyAlerts.filter(x=>x?.activity_shock?.detected===true)
@@ -3934,6 +3940,7 @@ export class EarlyExpansionRadar{
       busy_since_at:this.busySinceAtMs,scans:this.scans,alerts_emitted:this.alertCount,last_error:this.lastError,
       fast_scanned_total:this.fastScannedTotal,failed_total:this.failedTotal,failed_symbols:this.failedSymbols,fast_shock_pending_total:[...this.fastShockPendingUntil.values()].filter(until=>Number(until)>now).length,micro_scanned_total:Number(this.lastCoverage?.micro_scanned_total||0),micro_scan_candidates:Number(this.lastCoverage?.micro_scan_candidates||0),rotation_cycle:Number(this.lastCoverage?.rotation_cycle||0),
       coverage:this.lastCoverage,
+      pre_expansion_outcome_recorder:this.preExpansionOutcomeRecorder?.health?.()||null,
       poll_ms:this.config.pollMs,micro_scan_candidates:this.config.microScanCandidates,micro_concurrency:this.config.microConcurrency,rotation_reserve:this.config.rotationReserve,quiet_reserve:this.config.quietReserve,deep_candidates:this.config.deepCandidates,deep_concurrency:this.config.deepConcurrency,
       closed_candles_only:true,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN',
       algorithms:['ALL eligible Spot USDT ticker fast scan','Rotating 1m/5m micro-fingerprint','Price acceleration','Volume/RVOL acceleration','Trade-count acceleration','ATR/Bollinger compression-release','VWAP/EMA','ADX/MACD/RSI/OBV','Higher lows','Resistance pressure','BTC relative strength','Taker-flow divergence','Absorption/reversal fingerprint','Bid/ask imbalance','Spread/depth quality'],
