@@ -283,6 +283,7 @@ export class AdaptiveTraderWorker{
         selection_lanes:snapshot.universe?.selection_lane_counts||{},
         resolved_samples:this.state.learning_profile.resolved_samples,
         learning_capture:this.state.last_learning_capture||null,
+        neural_model:this.state.cognitive_profile?.neural_network?.status||'NOT_AVAILABLE',
         missed_movers:this.state.missed_movers.filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length,
         worker_interval_ms:this.intervalMs,paper_trading:true,real_order_execution:false
       }));
@@ -335,7 +336,7 @@ export class AdaptiveTraderWorker{
     const assessment=candidate?.cognitive_assessment||{};
     const profile=this.state.cognitive_profile||{};
     const row={
-      id,symbol,model_version:Number(assessment.version)||3,at:Math.trunc(closeAt),
+      id,symbol,model_version:Number(assessment.version)||4,at:Math.trunc(closeAt),
       price:finite(candidate?.candle_close_price)??finite(candidate?.price),
       base_score:finite(candidate?.base_score??candidate?.score),
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),
@@ -410,7 +411,7 @@ export class AdaptiveTraderWorker{
       probability_ready:profile.probability_ready===true,
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
-      holdout:profile.holdout||null,method:profile.method
+      holdout:profile.holdout||null,neural_network:profile.neural_network||null,method:profile.method
     };
   }
 
