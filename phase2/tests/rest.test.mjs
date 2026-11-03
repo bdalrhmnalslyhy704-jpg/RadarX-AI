@@ -253,25 +253,46 @@ test('TEST_FIXTURE: whole-scan abort interrupts a shared Binance cooldown wait',
 });
 
 
-test('TEST_FIXTURE: Binance HTTP 451 is classified as regional restriction without probing more mirrors',async()=>{
-  let calls=0;
+test('TEST_FIXTURE: Binance HTTP 451 on one mirror falls back to the next official mirror',async()=>{
+  const calls=[];
   const client=new RestClient({
     baseUrls:['https://data-api.binance.vision','https://api-gcp.binance.com','https://api.binance.com'],
     timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100,
-    fetchImpl:async()=>{
-      calls++;
-      return {
-        status:451,ok:false,
-        headers:new Map(),
-        clone(){return {text:async()=> 'Service unavailable from a restricted location according to Binance eligibility terms'}},
+    fetchImpl:async url=>{
+      calls.push(new URL(url).host);
+      if(calls.length===1)return{
+        status:451,ok:false,headers:new Map(),
+        clone(){return{text:async()=> 'Service unavailable from a restricted location according to Binance eligibility terms'}},
+        text:async()=> 'Service unavailable from a restricted location'
+      };
+      return{status:200,ok:true,headers:new Map(),json:async()=>({source:'fallback'})};
+    }
+  });
+  const result=await client.request('/api/v3/ticker/24hr',{symbol:'REGIONFALLBACKUSDT'});
+  assert.deepEqual(calls,['data-api.binance.vision','api-gcp.binance.com']);
+  assert.equal(result.data.source,'fallback');
+  assert.equal(result.source,'https://api-gcp.binance.com');
+  assert.equal(client.health().state,'LIVE');
+});
+
+test('TEST_FIXTURE: all Binance HTTP 451 mirrors are tried and reported as regional restriction',async()=>{
+  const calls=[];
+  const client=new RestClient({
+    baseUrls:['https://data-api.binance.vision','https://api-gcp.binance.com','https://api.binance.com'],
+    timeoutMs:200,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async url=>{
+      calls.push(new URL(url).host);
+      return{
+        status:451,ok:false,headers:new Map(),
+        clone(){return{text:async()=> 'Service unavailable from a restricted location according to Binance eligibility terms'}},
         text:async()=> 'Service unavailable from a restricted location'
       };
     }
   });
-  await assert.rejects(client.request('/api/v3/ticker/24hr'),error=>
+  await assert.rejects(client.request('/api/v3/ticker/24hr',{symbol:'REGIONBLOCKEDUSDT'}),error=>
     error?.name==='RestRegionRestrictedError'&&error?.status===451&&
-    String(error.message).includes('BINANCE_REGION_RESTRICTED'));
-  assert.equal(calls,1,'do not retry other hostnames after Binance explicitly reports region restriction');
+    String(error.message).includes('BINANCE_REGION_RESTRICTED')&&String(error.message).includes('attempts=['));
+  assert.deepEqual(calls,['data-api.binance.vision','api-gcp.binance.com','api.binance.com']);
   assert.equal(client.health().state,'REGION_RESTRICTED');
 });
 
