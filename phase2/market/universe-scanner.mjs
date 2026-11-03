@@ -1252,7 +1252,7 @@ export function rankPreMoveTickerRows(tickers,symbols,{
   // unusually strong live ticker-activity bursts so alphabetical rotation cannot
   // delay fast-emerging pairs until their next full-market turn.
   const pinnedShare=Number.isFinite(Number(pinnedFraction))
-    ?Math.max(0.05,Math.min(0.50,Number(pinnedFraction))):0.20;
+    ?Math.max(0,Math.min(0.50,Number(pinnedFraction))):0.20;
   const pinnedCount=Math.min(Math.ceil(take*pinnedShare),ranked.length);
   const pinned=ranked.slice(0,pinnedCount);
   const pinnedSymbols=new Set(pinned.map(x=>x.symbol));
