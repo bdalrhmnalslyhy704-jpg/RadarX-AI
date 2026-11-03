@@ -421,7 +421,7 @@ test('TEST_FIXTURE: full-market batch ticker snapshot is multiplexed across rada
 });
 
 
-test('TEST_FIXTURE: HTTP 451 diagnostics stop after Binance reports regional eligibility restriction',async()=>{
+test('TEST_FIXTURE: HTTP 451 diagnostics try each configured mirror and retain regional restriction',async()=>{
   const hosts=['https://restricted-a.test','https://restricted-b.test'];
   const seen=[];
   const client=new RestClient({
@@ -444,13 +444,14 @@ test('TEST_FIXTURE: HTTP 451 diagnostics stop after Binance reports regional eli
     error=>{
       assert.equal(error.name,'RestRegionRestrictedError');
       assert.equal(error.status,451);
-      assert.match(error.message,/HTTP_451 path=\/api\/v3\/exchangeInfo host=restricted-a\.test/);
-      assert.doesNotMatch(error.message,/restricted-b\.test/);
+      assert.match(error.message,/HTTP_451 path=\/api\/v3\/exchangeInfo host=restricted-b\.test/);
+      assert.match(error.message,/attempts=.*restricted-a\.test/);
+      assert.match(error.message,/attempts=.*restricted-b\.test/);
       assert.match(error.message,/Service unavailable from a restricted location/);
       return true;
     }
   );
-  assert.deepEqual(seen,['restricted-a.test']);
+  assert.deepEqual(seen,['restricted-a.test','restricted-b.test']);
   assert.equal(client.health().state,'REGION_RESTRICTED');
 });
 
