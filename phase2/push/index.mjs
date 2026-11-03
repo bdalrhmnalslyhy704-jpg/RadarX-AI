@@ -502,8 +502,9 @@ export class PushManager{
       const compressedBuyerTier=alert?.watch_notification_tier==='COMPRESSED_BUYER_ABSORPTION_MONITOR';
       const participationSurgeTier=alert?.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR';
       const strongBuyerTier=alert?.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR';
+      const relativeStrengthBuyerTier=alert?.watch_notification_tier==='RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR';
       if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||
-         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:68)||
+         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:relativeStrengthBuyerTier?68:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -640,8 +641,20 @@ export class PushManager{
         quoteVolume24h!==null&&quoteVolume24h>=300000&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=65&&
         strongBuyerChecks>=7;
+      const relativeStrengthBuyerAbsorptionMonitor=relativeStrengthBuyerTier&&
+        dailyMove!==null&&dailyMove>=-5&&dailyMove<=5&&score!==null&&score>=68&&
+        session!==null&&session>=-3&&session<=3.5&&hour!==null&&hour>=-0.5&&hour<=2.5&&
+        volumeRatio!==null&&volumeRatio>=1.25&&tradeRatio!==null&&tradeRatio>=1.15&&
+        taker!==null&&taker>=0.62&&takerDelta!==null&&takerDelta>=0.05&&
+        closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=0.25&&
+        squeeze!==null&&squeeze>=35&&structure!==null&&structure>=60&&
+        buyingPressure!==null&&buyingPressure>=75&&
+        quoteVolume24h!==null&&quoteVolume24h>=750000&&
+        dataQuality!==null&&dataQuality>=90&&liquidityQuality!==null&&liquidityQuality>=80&&
+        independentEvidence>=4;
       const preMoveMonitorCorridor=highActivityStructurePending||earlyFlowMonitor||tickerActivityMonitor||
-        accumulationPrepMonitor||compressedBuyerAbsorptionMonitor||participationSurgeMonitor||strongBuyerAbsorptionMonitor;
+        accumulationPrepMonitor||compressedBuyerAbsorptionMonitor||participationSurgeMonitor||
+        strongBuyerAbsorptionMonitor||relativeStrengthBuyerAbsorptionMonitor;
       // Validate the claimed special tier before generic price-window checks so bad
       // or stale tier evidence is rejected for the right reason at the final gate.
       if(alert?.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'&&!highActivityStructurePending)
@@ -654,26 +667,33 @@ export class PushManager{
         return rejected('PRE_MOVE_PARTICIPATION_SURGE_TIER_UNVERIFIED');
       if(strongBuyerTier&&!strongBuyerAbsorptionMonitor)
         return rejected('PRE_MOVE_STRONG_BUYER_TIER_UNVERIFIED');
+      if(relativeStrengthBuyerTier&&!relativeStrengthBuyerAbsorptionMonitor)
+        return rejected('PRE_MOVE_RELATIVE_STRENGTH_BUYER_TIER_UNVERIFIED');
       if(accumulationPrepTier&&!accumulationPrepMonitor)
         return rejected('PRE_MOVE_ACCUMULATION_PREP_TIER_UNVERIFIED');
       if(compressedBuyerTier&&!compressedBuyerAbsorptionMonitor)
         return rejected('PRE_MOVE_COMPRESSED_BUYER_TIER_UNVERIFIED');
-      if(session<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
+      if(session<(relativeStrengthBuyerAbsorptionMonitor?-3:
+           participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
            accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:
            highActivityStructurePending?-0.75:(earlyFlowMonitor||tickerActivityMonitor)?-1.25:0)||
-         session>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
+         session>(relativeStrengthBuyerAbsorptionMonitor?3.5:
+           participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
            accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:
            highActivityStructurePending?5:(earlyFlowMonitor||tickerActivityMonitor)?4.5:6)||
-         hour<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
+         hour<(relativeStrengthBuyerAbsorptionMonitor?-0.5:
+           participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
            accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:
            highActivityStructurePending?-0.5:(earlyFlowMonitor||tickerActivityMonitor)?-0.75:0.15)||
-         hour>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
+         hour>(relativeStrengthBuyerAbsorptionMonitor?2.5:
+           participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
            accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
            highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       const independentEvidenceFloor=(tickerActivityMonitor||compressedBuyerAbsorptionMonitor||
         participationSurgeMonitor||strongBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
-      const minimumMonitorStructure=(participationSurgeMonitor||strongBuyerAbsorptionMonitor)?55:
+      const minimumMonitorStructure=relativeStrengthBuyerAbsorptionMonitor?60:
+        (participationSurgeMonitor||strongBuyerAbsorptionMonitor)?55:
         accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
       if(structure===null||(structure<minimumMonitorStructure)||
          independentEvidence<independentEvidenceFloor)
@@ -802,7 +822,8 @@ export class PushManager{
     const qualifiedPreMoveTiers=new Set([
       'HIGH_ACTIVITY_STRUCTURE_PENDING','EARLY_FLOW_MONITOR','TICKER_ACTIVITY_ACCELERATION_MONITOR',
       'ACCUMULATION_PREP_MONITOR','COMPRESSED_BUYER_ABSORPTION_MONITOR',
-      'PARTICIPATION_SURGE_MONITOR','STRONG_BUYER_ABSORPTION_MONITOR'
+      'PARTICIPATION_SURGE_MONITOR','STRONG_BUYER_ABSORPTION_MONITOR',
+      'RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR'
     ]);
     const isQualifiedPreMovePush=event==='PRE_MOVE_RADAR_WATCH_ONLY'&&alert?.radar==='PRE_MOVE'&&
       qualifiedPreMoveTiers.has(String(alert?.watch_notification_tier||''));
