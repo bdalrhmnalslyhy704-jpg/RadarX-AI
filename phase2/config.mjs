@@ -201,11 +201,11 @@ export const CONFIG = Object.freeze({
     minLiquidityQuality: int(process.env.RADARX_MIN_LIQUIDITY_QUALITY, 60),
     maxTriggerAgeMs: 30 * 60 * 1000,
     retryAttempts: 1,
-    // DHDTech's 0.5-CPU worker has repeatedly hit the 45s scan deadline on a
-    // three-pair batch. Bound the expensive closed-candle + order-book lane to
-    // two pairs; full-market ticker activity and the durable cursor keep rotation alive.
-    // Operators may lower the batch to one, but cannot raise it above two on this tier.
-    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 2, 1, 2),
+    // Defer the first deep cycle until the 12-radar and analyst startup burst
+    // settles on the 0.5-CPU DHDTech tier. The full Spot ticker lane still observes
+    // all eligible pairs; one durable-cursor deep check rotates each cycle.
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 1, 1, 1),
+    preMoveBackgroundInitialDelayMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INITIAL_DELAY_MS, 120000),
     // Pre-Move background surveillance continues when no Android page is open.
     preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
