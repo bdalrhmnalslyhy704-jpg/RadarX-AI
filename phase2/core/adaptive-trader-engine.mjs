@@ -1078,7 +1078,12 @@ export function buildAdaptiveLearningProfile(samples = [], { minSamples = 60, mi
     multi_hour_trend:row=>row.features.trend_aligned===true||(finite(row.features.return_3h_pct)!==null&&Number(row.features.return_3h_pct)>0)||(finite(row.features.price_change_4h_pct)!==null&&Number(row.features.price_change_4h_pct)>0),
     five_minute_flow:row=>finite(row.features.micro_5m_taker_buy_ratio)!==null&&Number(row.features.micro_5m_taker_buy_ratio)>=0.55,
     ticker_momentum:row=>{const value=finite(row.features.price_change_15m_pct)??finite(row.features.recent_15m_return_pct);return value!==null&&value>0;},
-    daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7
+    daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7,
+    market_activity_acceleration:row=>
+      finite(row.features.market_activity_volume_rate_vs_24h_average)!==null&&
+      Number(row.features.market_activity_volume_rate_vs_24h_average)>=1.5&&
+      finite(row.features.market_activity_trade_rate_vs_24h_average)!==null&&
+      Number(row.features.market_activity_trade_rate_vs_24h_average)>=1.3
   };
   const buckets={},adjustments={};
   for(const [key,matcher] of Object.entries(featureKeys)){
@@ -1122,6 +1127,11 @@ export function applyAdaptiveLearning(baseScore,features={},profile={}){
   add('five_minute_flow',finite(features.micro_5m_taker_buy_ratio)!==null&&Number(features.micro_5m_taker_buy_ratio)>=0.55);
   add('ticker_momentum',((finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))!==null&&(finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))>0));
   add('daily_regime',finite(features.change_24h_pct)!==null&&Number(features.change_24h_pct)>=-2&&Number(features.change_24h_pct)<=7);
+  add('market_activity_acceleration',
+    finite(features.market_activity_volume_rate_vs_24h_average)!==null&&
+    Number(features.market_activity_volume_rate_vs_24h_average)>=1.5&&
+    finite(features.market_activity_trade_rate_vs_24h_average)!==null&&
+    Number(features.market_activity_trade_rate_vs_24h_average)>=1.3);
   const delta=active.length?active.reduce((a,b)=>a+b,0)/active.length:0;
   return Number(clamp(score+clamp(delta,-4,4),0,100).toFixed(1));
 }
