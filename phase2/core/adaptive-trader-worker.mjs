@@ -661,9 +661,10 @@ recordServerPaperPortfolio(snapshot,now){
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
       universe:{...(snapshot.universe||{})},
       cognitive_brain:{
-        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_NEURAL_EVIDENCE_MODEL_V4',
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
         probability_ready:this.state.cognitive_profile?.probability_ready===true,
+        neural_network:this.state.cognitive_profile?.neural_network||null,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
         holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
@@ -763,7 +764,7 @@ recordServerPaperPortfolio(snapshot,now){
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.trainingSamples()),
       learning_capture:this.state.last_learning_capture||null,
       cognitive_brain:{
-        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_NEURAL_EVIDENCE_MODEL_V4',
         status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
