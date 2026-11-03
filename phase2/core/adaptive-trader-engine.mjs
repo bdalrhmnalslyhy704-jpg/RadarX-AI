@@ -791,6 +791,17 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     ? {
       ...entry.candidate,
       selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
+      market_activity_acceleration:selected[index]?.market_activity_acceleration||null,
+      ...(selected[index]?.market_activity_acceleration?{
+        features:{
+          ...(entry.candidate.features||{}),
+          market_activity_volume_rate_vs_24h_average:selected[index].market_activity_acceleration.volume_rate_vs_24h_average,
+          market_activity_trade_rate_vs_24h_average:selected[index].market_activity_acceleration.trade_rate_vs_24h_average,
+          market_activity_baseline_age_ms:selected[index].market_activity_acceleration.baseline_age_ms
+        },
+        reason_codes:[...new Set([...(entry.candidate.reason_codes||[]),
+          'MARKET_WIDE_ACTIVITY_ACCELERATION_SCAN_PRIORITY'])].slice(0,12)
+      }:{}),
       ...(selected[index]?.selection_lane==='SHOCK_MOVE_AUDIT'?{
         shock_move_audit_only:true,
         // A sharp inter-snapshot jump is diagnostic evidence, not an early setup.
