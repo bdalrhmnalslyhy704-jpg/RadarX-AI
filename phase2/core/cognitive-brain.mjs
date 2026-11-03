@@ -544,9 +544,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       factor_evidence: evidence.factors,
       neural_network: {
         status: resolved.length >= minNeuralTrainingSamples ? 'WAITING_FOR_CHRONOLOGICAL_SPLIT' : 'WAITING_FOR_MATURED_OUTCOMES',
-        architecture: FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-1',
+        architecture: FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
         input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
-        output_neurons: 1, training_samples: 0, trained: false, selected: false,
+        second_hidden_neurons:NEURAL_POLICY.secondHiddenUnits,output_neurons: 1,
+        samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, iterations: neuralIterations
       },
       feature_names: [...FEATURE_NAMES],
@@ -739,7 +740,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
       Number(row.resolved_at) - Number(row.at) === MIN_OUTCOME_HORIZON_MS)
     .map(row => ({
       ...row,
-      model_variant: String(row.selected_model || row.model_variant || 'V4_UNSPECIFIED').trim() || 'V4_UNSPECIFIED',
+      model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
       target: row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))
@@ -747,7 +748,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
 
   // A changing winner (neural/global/recent) is a new model variant. Never
   // compare its forward errors against forecasts made by a different winner.
-  const auditedModelVariant=String(modelVariant || rows.at(-1)?.model_variant || 'V4_UNSPECIFIED').trim() || 'V4_UNSPECIFIED';
+  const auditedModelVariant=String(modelVariant || rows.at(-1)?.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED';
   const variantRows=rows.filter(row=>row.model_variant===auditedModelVariant);
   const score = subset => {
     if (!subset.length) return {
@@ -831,7 +832,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
     reassessment_required: driftDetected,
     note: driftDetected
       ? 'RECENT_IMMUTABLE_FORECASTS_DEGRADED_VS_PRIOR_WINDOW'
-      : 'ONLY_FIRST_RECORDED_MODEL_V4_FORECAST_PER_CLOSED_CANDLE_IS_SCORED_PER_SELECTED_MODEL_VARIANT'
+      : 'ONLY_FIRST_RECORDED_MODEL_V5_FORECAST_PER_CLOSED_CANDLE_IS_SCORED_PER_SELECTED_MODEL_VARIANT'
   };
 }
 
