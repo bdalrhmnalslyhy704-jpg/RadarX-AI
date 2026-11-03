@@ -917,3 +917,53 @@ test('historical sample phases give the cognitive learner enough distinct time b
   // unlock probabilities merely because the chronology is now large enough.
   assert.equal(profile.probability_ready,false);
 });
+
+test('screenshot gainer pairs receive quiet-flow priority before daily expansion',async()=>{
+  const f=marketFixture();
+  const targets=[
+    ['BMTUSDT','12730000','400000'],
+    ['HOTUSDT','12030000','350000'],
+    ['RUNEUSDT','5820000','180000'],
+    ['KMNOUSDT','1210000','90000'],
+    ['ZROUSDT','8180000','240000']
+  ];
+  const regular=Array.from({length:80},(_,i)=>({
+    symbol:'BASE'+String(i).padStart(3,'0')+'USDT',
+    lastPrice:'10',quoteVolume:String(20_000_000-i*100_000),
+    priceChangePercent:'0.1',count:'50000'
+  }));
+  const rows=targets.map(([symbol,volume,trades])=>({
+    symbol,lastPrice:'10',quoteVolume:String(Number(volume)-15_000),
+    priceChangePercent:'0.1',count:String(Number(trades)-3_000)
+  }));
+  const tickers=[...regular,...rows];
+  const rest={async request(path){
+    if(path==='/api/v3/exchangeInfo')return {data:{symbols:tickers.map(row=>({
+      symbol:row.symbol,status:'TRADING',quoteAsset:'USDT',
+      isSpotTradingAllowed:true,permissions:['SPOT']
+    }))},source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/ticker/24hr')return {data:tickers.map(row=>({...row})),
+      source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines')return f.klines;
+    throw new Error('UNEXPECTED_REQUEST '+path);
+  }};
+  const service=createAdaptiveTraderSnapshotService({rest,ttlMs:0});
+  const first=await service({limit:40,now:f.now});
+  assert.equal(first.candidates.some(row=>targets.some(([symbol])=>row.symbol===symbol)),false,
+    'first snapshot seeds the ticker baseline and must not infer acceleration');
+  for(const row of rows){
+    const target=targets.find(([symbol])=>symbol===row.symbol);
+    row.quoteVolume=String(Number(target[1]));
+    row.count=String(Number(target[2]));
+  }
+  const second=await service({limit:40,now:f.now+3*60*1000});
+  for(const [symbol] of targets){
+    const candidate=second.candidates.find(row=>row.symbol===symbol);
+    assert.ok(candidate, symbol+' should receive a deep-scan slot from its fresh volume/trade acceleration');
+    assert.equal(candidate.selection_lane,'MARKET_ACTIVITY_ACCELERATION');
+    assert.equal(candidate.data_valid,true,'the ticker pulse must still pass real closed-candle validation');
+    assert.equal(candidate.entry_eligible,false,'activity acceleration is priority evidence, not entry permission');
+    assert.equal(candidate.real_order_execution,false);
+  }
+});
+
