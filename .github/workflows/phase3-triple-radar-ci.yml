@@ -197,7 +197,11 @@ jobs:
           install_sdk_package "build-tools;37.0.0" "$ANDROID_SDK_ROOT/build-tools/37.0.0"
 
       - name: Android emulator online/offline background smoke
-        # A bounded local ADB loop repairs transient "device offline" boot states.
+        # Build 224's signed Release workflow runs the full emulator/service smoke
+        # plus the durable notification replay against the exact final APK. Avoid
+        # running the same 12-minute emulator job twice on the official push path;
+        # retain this independent smoke for pull requests and other branches.
+        if: github.event_name != 'push' || github.ref != 'refs/heads/build224-multi-analyst-20261007'
         timeout-minutes: 40
         env:
           RADARX_EMULATOR_API_LEVEL: "29"
