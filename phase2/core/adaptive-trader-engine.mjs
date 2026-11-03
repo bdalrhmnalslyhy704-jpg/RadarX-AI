@@ -584,8 +584,11 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   const tickers = Array.isArray(tickerResult?.data) ? tickerResult.data : [];
   const previousAsOf = Date.parse(String(previousSnapshot?.as_of || ''));
   const previousSnapshotAgeMs = Number.isFinite(previousAsOf) ? Number(now) - previousAsOf : null;
-  const previousPrices = new Map((Array.isArray(previousSnapshot?.latest_prices) ? previousSnapshot.latest_prices : [])
+  const previousPriceRows = Array.isArray(previousSnapshot?.latest_prices) ? previousSnapshot.latest_prices : [];
+  const previousPrices = new Map(previousPriceRows
     .map(row => [String(row?.symbol || '').toUpperCase(), finite(row?.price)]));
+  const previousTickerRows = new Map(previousPriceRows
+    .map(row => [String(row?.symbol || '').toUpperCase(), row]));
   const marketTickers = tickers.filter(row => {
     const symbol = String(row?.symbol || '').toUpperCase();
     return activeSpot.has(symbol) && symbol.endsWith('USDT') && !isLeveragedToken(symbol) &&
@@ -617,6 +620,54 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       Number(b.quoteVolume)-Number(a.quoteVolume) ||
       String(a.symbol||'').localeCompare(String(b.symbol||''));
   });
+  // A separate ticker-counter lane finds participation shocks before the daily
+  // percentage move becomes obvious. This is only a deep-scan priority: every
+  // candidate still passes the closed-candle, data-quality, liquidity, flow,
+  // anti-chase and analyst gates before it can become a watch or recommendation.
+  const activityWindowMs = Number.isFinite(previousSnapshotAgeMs) &&
+    previousSnapshotAgeMs >= 20_000 && previousSnapshotAgeMs <= 10 * 60_000
+    ? previousSnapshotAgeMs : null;
+  const activityAccelerationMovers = activityWindowMs === null ? [] : eligible.map(row => {
+    const symbol=String(row?.symbol||'').toUpperCase();
+    const prior=previousTickerRows.get(symbol);
+    const currentQuote=finite(row?.quoteVolume);
+    const priorQuote=finite(prior?.quote_volume_24h);
+    const currentTrades=finite(row?.count);
+    const priorTrades=finite(prior?.trade_count_24h);
+    if (![currentQuote,priorQuote,currentTrades,priorTrades].every(Number.isFinite) ||
+        currentQuote<=0 || priorQuote<0 || currentTrades<=0 || priorTrades<0) return null;
+    const minutes=activityWindowMs/60_000;
+    const volumeRate=Math.max(0,currentQuote-priorQuote)/minutes;
+    const tradeRate=Math.max(0,currentTrades-priorTrades)/minutes;
+    const averageVolumeRate=Math.max(1,currentQuote/1440);
+    const averageTradeRate=Math.max(0.1,currentTrades/1440);
+    const volumeRatio=volumeRate/averageVolumeRate;
+    const tradeRatio=tradeRate/averageTradeRate;
+    const daily=changePct(row);
+    const pulse=finite(row?.move_since_previous_pct);
+    // Exclude already extended daily/short-term moves from the early lane.
+    if (daily===null || daily < -5 || daily > 7 || (pulse!==null && pulse > 2.5) ||
+        volumeRate < Math.max(150,averageVolumeRate*1.5) ||
+        tradeRate < Math.max(1,averageTradeRate*1.3)) return null;
+    const score=Number((Math.log2(Math.max(1,volumeRatio))*35+
+      Math.log2(Math.max(1,tradeRatio))*25+
+      Math.min(15,Math.max(0,pulse||0)*5)).toFixed(3));
+    return {
+      row,score,
+      evidence:{
+        observed_at:Number(now),
+        baseline_age_ms:activityWindowMs,
+        volume_delta_usdt_per_min:Number(volumeRate.toFixed(2)),
+        volume_rate_vs_24h_average:Number(volumeRatio.toFixed(3)),
+        trade_delta_per_min:Number(tradeRate.toFixed(3)),
+        trade_rate_vs_24h_average:Number(tradeRatio.toFixed(3)),
+        short_term_price_change_pct:pulse
+      }
+    };
+  }).filter(Boolean).sort((a,b)=>b.score-a.score ||
+    b.evidence.volume_rate_vs_24h_average-a.evidence.volume_rate_vs_24h_average ||
+    b.evidence.trade_rate_vs_24h_average-a.evidence.trade_rate_vs_24h_average ||
+    String(a.row.symbol||'').localeCompare(String(b.row.symbol||'')));
   const extendedMovers = eligible.filter(row => {
     const change = changePct(row);
     return change !== null && change >= 8;
@@ -668,6 +719,18 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   }).sort((a,b)=>(Number(b.move_since_previous_pct)||0)-(Number(a.move_since_previous_pct)||0)||
     Number(b.quoteVolume)-Number(a.quoteVolume)||String(a.symbol||'').localeCompare(String(b.symbol||'')));
   addLane(volumeLeaders,Math.ceil(selectedCount*0.15),'TOP_VOLUME');
+  // Counter-based participation acceleration gets its own quota before price
+  // pulses and daily movers, so quiet accumulation candidates are not starved.
+  const activityQuota=Math.ceil(selectedCount*0.20);
+  let activityAdded=0;
+  for (const item of activityAccelerationMovers) {
+    if(selectedBySymbol.size>=priorityBudget||activityAdded>=activityQuota)break;
+    const symbol=String(item.row?.symbol||'').toUpperCase();
+    if(!symbol||selectedBySymbol.has(symbol))continue;
+    selectedBySymbol.set(symbol,{...item.row,selection_lane:'MARKET_ACTIVITY_ACCELERATION',
+      market_activity_acceleration:item.evidence});
+    activityAdded++;
+  }
   // Short-term price pulses outrank the broad daily-mover bucket so a coin
   // cannot be consumed by the latter before its acceleration is deep-scanned.
   addLane(accelerationMovers,Math.ceil(selectedCount*0.20),'PRICE_ACCELERATION');
@@ -683,7 +746,14 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     if(!symbol || selectedBySymbol.has(symbol)) continue;
     selectedBySymbol.set(symbol,{...row,selection_lane:'ROTATING_COVERAGE'});
   }
-  const selected=[...selectedBySymbol.values()].slice(0,selectedCount);
+  const activityEvidenceBySymbol=new Map(activityAccelerationMovers.map(item=>[
+    String(item.row?.symbol||'').toUpperCase(),item.evidence
+  ]));
+  const selected=[...selectedBySymbol.values()].slice(0,selectedCount).map(row=>({
+    ...row,
+    market_activity_acceleration:row.market_activity_acceleration||
+      activityEvidenceBySymbol.get(String(row?.symbol||'').toUpperCase())||null
+  }));
   // Advance by the number of rows actually traversed. Repeated priority picks
   // do not freeze coverage, and previously failed pairs cannot pin this cursor.
   const rotationAdvanceCount=rotationVisited;
@@ -721,6 +791,17 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     ? {
       ...entry.candidate,
       selection_lane: selected[index]?.selection_lane || 'ROTATING_COVERAGE',
+      market_activity_acceleration:selected[index]?.market_activity_acceleration||null,
+      ...(selected[index]?.market_activity_acceleration?{
+        features:{
+          ...(entry.candidate.features||{}),
+          market_activity_volume_rate_vs_24h_average:selected[index].market_activity_acceleration.volume_rate_vs_24h_average,
+          market_activity_trade_rate_vs_24h_average:selected[index].market_activity_acceleration.trade_rate_vs_24h_average,
+          market_activity_baseline_age_ms:selected[index].market_activity_acceleration.baseline_age_ms
+        },
+        reason_codes:[...new Set([...(entry.candidate.reason_codes||[]),
+          'MARKET_WIDE_ACTIVITY_ACCELERATION_SCAN_PRIORITY'])].slice(0,12)
+      }:{}),
       ...(selected[index]?.selection_lane==='SHOCK_MOVE_AUDIT'?{
         shock_move_audit_only:true,
         // A sharp inter-snapshot jump is diagnostic evidence, not an early setup.
@@ -817,7 +898,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       rapid_burst_movers_available: burstMovers.length,
       order_book_candidates_checked:orderBookBySymbol.size,
       order_book_snapshot_limit:4,
-      selection_strategy: 'MOVER_AWARE_ACCELERATION_ROTATION_V3',
+      activity_acceleration_movers_available:activityAccelerationMovers.length,
+      activity_acceleration_movers_scanned:candidates.filter(row=>row.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length,
+      selection_strategy: 'MOVER_AWARE_FLOW_ACCELERATION_ROTATION_V4',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },
@@ -825,7 +908,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     // Track all active non-leveraged Spot USDT pairs even while deep-scan slots rotate.
     latest_prices: marketTickers.map(row => ({
       symbol:String(row.symbol),price:finite(row.lastPrice),
-      quote_volume_24h:finite(row.quoteVolume),change_24h_pct:finite(row.priceChangePercent),
+      quote_volume_24h:finite(row.quoteVolume),trade_count_24h:finite(row.count),
+      change_24h_pct:finite(row.priceChangePercent),
       move_since_previous_pct:finite(row.move_since_previous_pct)
     })),
     meta: {
@@ -994,7 +1078,12 @@ export function buildAdaptiveLearningProfile(samples = [], { minSamples = 60, mi
     multi_hour_trend:row=>row.features.trend_aligned===true||(finite(row.features.return_3h_pct)!==null&&Number(row.features.return_3h_pct)>0)||(finite(row.features.price_change_4h_pct)!==null&&Number(row.features.price_change_4h_pct)>0),
     five_minute_flow:row=>finite(row.features.micro_5m_taker_buy_ratio)!==null&&Number(row.features.micro_5m_taker_buy_ratio)>=0.55,
     ticker_momentum:row=>{const value=finite(row.features.price_change_15m_pct)??finite(row.features.recent_15m_return_pct);return value!==null&&value>0;},
-    daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7
+    daily_regime:row=>finite(row.features.change_24h_pct)!==null&&Number(row.features.change_24h_pct)>=-2&&Number(row.features.change_24h_pct)<=7,
+    market_activity_acceleration:row=>
+      finite(row.features.market_activity_volume_rate_vs_24h_average)!==null&&
+      Number(row.features.market_activity_volume_rate_vs_24h_average)>=1.5&&
+      finite(row.features.market_activity_trade_rate_vs_24h_average)!==null&&
+      Number(row.features.market_activity_trade_rate_vs_24h_average)>=1.3
   };
   const buckets={},adjustments={};
   for(const [key,matcher] of Object.entries(featureKeys)){
@@ -1038,6 +1127,11 @@ export function applyAdaptiveLearning(baseScore,features={},profile={}){
   add('five_minute_flow',finite(features.micro_5m_taker_buy_ratio)!==null&&Number(features.micro_5m_taker_buy_ratio)>=0.55);
   add('ticker_momentum',((finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))!==null&&(finite(features.price_change_15m_pct)??finite(features.recent_15m_return_pct))>0));
   add('daily_regime',finite(features.change_24h_pct)!==null&&Number(features.change_24h_pct)>=-2&&Number(features.change_24h_pct)<=7);
+  add('market_activity_acceleration',
+    finite(features.market_activity_volume_rate_vs_24h_average)!==null&&
+    Number(features.market_activity_volume_rate_vs_24h_average)>=1.5&&
+    finite(features.market_activity_trade_rate_vs_24h_average)!==null&&
+    Number(features.market_activity_trade_rate_vs_24h_average)>=1.3);
   const delta=active.length?active.reduce((a,b)=>a+b,0)/active.length:0;
   return Number(clamp(score+clamp(delta,-4,4),0,100).toFixed(1));
 }

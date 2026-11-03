@@ -534,16 +534,19 @@ recordServerPaperPortfolio(snapshot,now){
       const prior4h=findPrior(3.5*60*60*1000,4.5*60*60*1000);
       const relative=(finite(row?.change_24h_pct)!==null&&btcDaily!==null)
         ?Number((Number(row.change_24h_pct)-btcDaily).toFixed(3)):null;
+      const candidate=candidateBySymbol.get(symbol);
       const tickerFeatures={
         change_24h_pct:finite(row?.change_24h_pct),
         quote_volume_24h:finite(row?.quote_volume_24h),
+        trade_count_24h:finite(row?.trade_count_24h),
         price_change_15m_pct:prior15?Number(((price/Number(prior15.price)-1)*100).toFixed(3)):null,
         price_change_1h_pct:prior1h?Number(((price/Number(prior1h.price)-1)*100).toFixed(3)):null,
         price_change_4h_pct:prior4h?Number(((price/Number(prior4h.price)-1)*100).toFixed(3)):null,
         relative_24h_strength_vs_btc_pct:relative,
-        move_since_previous_pct:finite(row?.move_since_previous_pct)
+        move_since_previous_pct:finite(row?.move_since_previous_pct),
+        market_activity_volume_rate_vs_24h_average:finite(candidate?.features?.market_activity_volume_rate_vs_24h_average),
+        market_activity_trade_rate_vs_24h_average:finite(candidate?.features?.market_activity_trade_rate_vs_24h_average)
       };
-      const candidate=candidateBySymbol.get(symbol);
       const deepValid=Boolean(candidate&&candidate.data_valid===true&&candidate.data_stale!==true&&
         finite(candidate.score)!==null&&finite(candidate.candle_close_time)!==null&&finite(candidate.candle_close_price)>0);
       const quoteVolume=finite(row?.quote_volume_24h);
@@ -590,6 +593,8 @@ recordServerPaperPortfolio(snapshot,now){
       snapshot_historical_samples_available:Math.max(0,Math.trunc(Number(snapshot.universe?.historical_training_samples_available)||0)),
       snapshot_closed_candle_outcomes_input:closedCandleOutcomeRows.length,
       new_market_wide_samples:newMarketSamples,new_deep_candidate_samples:newDeepSamples,
+      market_activity_acceleration_candidates:(snapshot.candidates||[]).filter(row=>
+        row?.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length,
       active_spot_prices:(snapshot.latest_prices||[]).length,
       tracked_samples:this.state.samples.length,
       historical_resolved_samples:this.state.samples.filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'&&row.outcome).length,
@@ -617,6 +622,8 @@ recordServerPaperPortfolio(snapshot,now){
         quote_volume_24h:finite(row.quote_volume_24h),
         change_24h_pct:finite(row.change_24h_pct),
         move_since_previous_pct:finite(row.move_since_previous_pct),
+        trade_count_24h:finite(row.trade_count_24h),
+        market_activity_acceleration:candidate?.market_activity_acceleration||null,
         tier:candidate?String(candidate.tier||'NO_SETUP'):'NOT_EVALUATED',
         score:candidate&&candidate.data_valid===true?finite(candidate.score):null,
         features:candidate&&candidate.data_valid===true&&!candidate.data_stale?{...(candidate.features||{})}:null,
@@ -691,7 +698,9 @@ recordServerPaperPortfolio(snapshot,now){
         waiting_confirmation:candidates.filter(row=>row.trade_decision?.decision==='WAIT_FOR_CONFIRMATION').length,
         avoid_chasing:candidates.filter(row=>row.trade_decision?.decision==='AVOID_CHASING').length,
         no_setup:candidates.filter(row=>row.trade_decision?.decision==='NO_SETUP').length,
-        rejected:candidates.filter(row=>row.data_valid!==true||row.data_stale===true).length
+        rejected:candidates.filter(row=>row.data_valid!==true||row.data_stale===true).length,
+        market_activity_acceleration:candidates.filter(row=>
+          row.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length
       },
       current_recommendation:(()=>{const top=candidates.filter(row=>row.data_valid===true&&!row.data_stale)
         .slice().sort((a,b)=>(Number(b.trade_decision?.priority)||0)-(Number(a.trade_decision?.priority)||0)||
@@ -714,6 +723,7 @@ recordServerPaperPortfolio(snapshot,now){
           cognitive_assessment:row.cognitive_assessment||null,
           selection_lane:row.selection_lane||null,
           quote_volume_24h:row.quote_volume_24h,change_24h_pct:row.change_24h_pct,
+          market_activity_acceleration:row.market_activity_acceleration||null,
           candle_close_time:row.candle_close_time,features:row.features,reason_codes:row.reason_codes
         })),
       // Keep late movers visible even when their score is below early-entry candidates.

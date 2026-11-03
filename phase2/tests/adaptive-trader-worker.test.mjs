@@ -244,7 +244,10 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     candidates:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2,score:59.5,tier:'WATCH',
         data_valid:true,data_stale:false,candle_close_time:now-60_000,candle_close_price:1.07,
-        features:{volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
+        selection_lane:'MARKET_ACTIVITY_ACCELERATION',
+        market_activity_acceleration:{volume_rate_vs_24h_average:2.4,trade_rate_vs_24h_average:1.8,baseline_age_ms:180000},
+        features:{market_activity_volume_rate_vs_24h_average:2.4,market_activity_trade_rate_vs_24h_average:1.8,
+          market_activity_baseline_age_ms:180000,volume_ratio:1.2,trade_ratio:1.1,taker_buy_ratio:0.51,close_location:0.65,
           higher_low:false,breakout_above_prior_high:false,compression_ratio:1.1,relative_strength_vs_btc_pct:0.4},
         reason_codes:['TEST_FIXTURE'],entry_eligible:false,paper_trading:true,real_order_execution:false},
       {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1,score:57,tier:'WATCH',
@@ -279,6 +282,9 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     assert.equal(status.successful_scans,9);
     assert.equal(status.last_summary.counts.valid,3);
     assert.equal(status.last_summary.counts.late_move,1);
+    assert.equal(status.last_summary.counts.market_activity_acceleration,1);
+    assert.equal(status.last_summary.top_candidates.find(row=>row.symbol==='TESTUSDT')
+      .market_activity_acceleration.volume_rate_vs_24h_average,2.4);
     assert.equal(status.last_summary.mover_audit.length,1);
     assert.equal(status.last_summary.mover_audit[0].symbol,'LATEUSDT');
     assert.equal(status.last_summary.mover_audit[0].selection_lane,'EXTENDED_MOVER_AUDIT');
