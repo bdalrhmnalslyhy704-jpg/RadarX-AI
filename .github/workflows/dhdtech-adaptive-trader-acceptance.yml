@@ -12,6 +12,7 @@ on:
       - ".github/workflows/android-release-apk.yml"
       - ".github/workflows/build224-container-runtime-smoke.yml"
       - ".github/workflows/pre-move-radar-acceptance.yml"
+      - ".github/workflows/phase3-triple-radar-ci.yml"
 
 permissions:
   contents: read
