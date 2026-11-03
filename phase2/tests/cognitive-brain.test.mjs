@@ -412,6 +412,38 @@ test('unobserved order book stays explicitly unknown and never receives a fabric
   assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
 });
 
+test('prequential audit never mixes neural and logistic model variants after model selection changes', () => {
+  const journal = [];
+  for (let index = 0; index < 40; index++) {
+    const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
+    const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
+    const logisticBlock = index < 20;
+    const correct = logisticBlock;
+    const predicted = correct
+      ? (outcome === 'UP' ? 90 : 10)
+      : (outcome === 'UP' ? 10 : 90);
+    journal.push({
+      id: 'VARIANT-' + index, model_version: 4,
+      selected_model: logisticBlock ? 'GLOBAL_HISTORY' : 'NEURAL_GLOBAL',
+      at, trained_through_at: at - 60 * 60 * 1000,
+      resolved_at: at + FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H', outcome,
+      predicted_up_probability: predicted
+    });
+  }
+  const audit = buildCognitivePrequentialProfile(journal, {
+    minimumWindowSamples: 10, windowSize: 10
+  });
+  assert.equal(audit.all_v4_resolved_forecasts, 40);
+  assert.equal(audit.audited_model_variant, 'NEURAL_GLOBAL');
+  assert.equal(audit.resolved_forecasts, 20);
+  assert.equal(audit.excluded_other_model_variant_forecasts, 20);
+  assert.equal(audit.previous_window.sample_count, 10);
+  assert.equal(audit.recent_window.sample_count, 10);
+  assert.equal(audit.drift_detected, false,
+    'a newly selected model must not inherit the previous model variant error history');
+});
+
 test('prequential audit scores only immutable, matured V4 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
