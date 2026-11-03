@@ -314,7 +314,28 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     quoteVolume!==null&&quoteVolume>=300000&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=65&&
     strongBuyerChecks>=7;
-  const watchTier=tickerActivityMonitor?'TICKER_ACTIVITY_ACCELERATION_MONITOR':
+  // Special high-liquidity lane for a strong coin outperforming a falling market.
+  // Relative strength, buyer flow and structure must agree; no low-volume bypass.
+  const relativeStrengthBuyerChecks=[
+    volume!==null&&volume>=1.25,trades!==null&&trades>=1.15,
+    buy!==null&&buy>=0.62,buyDelta!==null&&buyDelta>=0.05,
+    closeLocation!==null&&closeLocation>=0.55,
+    relativeBtc!==null&&relativeBtc>=0.25,
+    squeeze!==null&&squeeze>=35,structure!==null&&structure>=60,
+    buyingPressure!==null&&buyingPressure>=75
+  ].filter(Boolean).length;
+  const relativeStrengthBuyerAbsorptionMonitor=daily!==null&&daily>=-5&&daily<=5&&
+    score!==null&&score>=68&&session!==null&&session>=-3&&session<=3.5&&
+    hour!==null&&hour>=-0.5&&hour<=2.5&&
+    volume!==null&&volume>=1.25&&trades!==null&&trades>=1.15&&
+    buy!==null&&buy>=0.62&&buyDelta!==null&&buyDelta>=0.05&&
+    closeLocation!==null&&closeLocation>=0.55&&relativeBtc!==null&&relativeBtc>=0.25&&
+    squeeze!==null&&squeeze>=35&&structure!==null&&structure>=60&&
+    buyingPressure!==null&&buyingPressure>=75&&relativeStrengthBuyerChecks>=8&&
+    quoteVolume!==null&&quoteVolume>=750000&&quality!==null&&quality>=90&&
+    liquidity!==null&&liquidity>=80;
+  const watchTier=relativeStrengthBuyerAbsorptionMonitor?'RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR':
+    tickerActivityMonitor?'TICKER_ACTIVITY_ACCELERATION_MONITOR':
     participationSurgeMonitor?'PARTICIPATION_SURGE_MONITOR':
     strongBuyerAbsorptionMonitor?'STRONG_BUYER_ABSORPTION_MONITOR':
     highActivityStructurePending?'HIGH_ACTIVITY_STRUCTURE_PENDING':
@@ -354,25 +375,31 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('DATA_FRESHNESS_QUALITY_OR_LIQUIDITY_GATE');
   if(!Number.isFinite(price)||price<=0||daily===null||Math.abs(daily)>=12)
     return fail('PRICE_OR_DAILY_CHANGE_INVALID');
-  if(score===null||score<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?58:
+  if(score===null||score<(relativeStrengthBuyerAbsorptionMonitor?68:
+    participationSurgeMonitor||strongBuyerAbsorptionMonitor?58:
     accumulationPrepMonitor?66:compressedBuyerAbsorptionMonitor?70:
     (tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
-  if(session===null||session<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
+  if(session===null||session<(relativeStrengthBuyerAbsorptionMonitor?-3:
+      participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
       accumulationPrepMonitor?0:compressedBuyerAbsorptionMonitor?-1.5:
       highActivityStructurePending?-0.75:(tickerActivityMonitor||earlyFlowMonitor)?-1.25:0)||
-     session>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
+     session>(relativeStrengthBuyerAbsorptionMonitor?3.5:
+      participationSurgeMonitor||strongBuyerAbsorptionMonitor?6:
       accumulationPrepMonitor?3.5:compressedBuyerAbsorptionMonitor?3.5:
       highActivityStructurePending?5:(tickerActivityMonitor||earlyFlowMonitor)?4.5:6))
     return fail('SESSION_RETURN_OUT_OF_RANGE');
-  if(hour===null||hour<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
+  if(hour===null||hour<(relativeStrengthBuyerAbsorptionMonitor?-0.5:
+      participationSurgeMonitor||strongBuyerAbsorptionMonitor?-2:
       accumulationPrepMonitor?-0.35:compressedBuyerAbsorptionMonitor?-0.5:
       highActivityStructurePending?-0.5:(tickerActivityMonitor||earlyFlowMonitor)?-0.75:0.15)||
-     hour>(participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
+     hour>(relativeStrengthBuyerAbsorptionMonitor?2.5:
+      participationSurgeMonitor||strongBuyerAbsorptionMonitor?4.5:
       accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
       highActivityStructurePending?3.5:(tickerActivityMonitor||earlyFlowMonitor)?2.5:4.5))
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
-  if(structure===null||(structure<(participationSurgeMonitor||strongBuyerAbsorptionMonitor?55:
+  if(structure===null||(structure<(relativeStrengthBuyerAbsorptionMonitor?60:
+      participationSurgeMonitor||strongBuyerAbsorptionMonitor?55:
       tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
@@ -425,6 +452,8 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
         ?'STRONG_VOLUME_TRADE_AND_BUYER_FLOW_WITHIN_EXPANDED_EARLY_WATCH_WINDOW'
         :assessment.values.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR'
           ?'STRONG_BUYER_ABSORPTION_AND_STRUCTURE_BELOW_STANDARD_VOLUME_FLOOR'
+          :assessment.values.watch_notification_tier==='RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR'
+            ?'BUYER_ABSORPTION_AND_RELATIVE_STRENGTH_DURING_NEGATIVE_MARKET_SESSION'
           :assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?'STRONG_VOLUME_AND_TRADE_ACCELERATION_WITH_PRICE_STRUCTURE_PENDING'
         :assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
@@ -442,6 +471,8 @@ export function buildPreMoveWatchOnlyAlert(candidate,snapshot,now=Date.now()){
         ?['PARTICIPATION_SURGE_MONITOR','BUYER_FLOW_CONFIRMED_EARLY_ACTIVITY']:[]),
       ...(assessment.values.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR'
         ?['STRONG_BUYER_ABSORPTION_MONITOR','LOW_VOLUME_WATCH_ONLY']:[]),
+      ...(assessment.values.watch_notification_tier==='RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR'
+        ?['RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR','BUYER_ABSORPTION_DURING_NEGATIVE_MARKET_SESSION']:[]),
       ...(assessment.values.watch_notification_tier==='HIGH_ACTIVITY_STRUCTURE_PENDING'
         ?['HIGH_ACTIVITY_STRUCTURE_PENDING']:[]),
       ...(assessment.values.watch_notification_tier==='EARLY_FLOW_MONITOR'
