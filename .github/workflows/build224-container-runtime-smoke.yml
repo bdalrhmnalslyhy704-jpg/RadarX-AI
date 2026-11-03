@@ -174,8 +174,25 @@ jobs:
           const capture=x.learning_capture||null;
           const brain=x.cognitive_brain||{};
           const brainProfile=brain.profile||{};
+          const neuralNetwork=brainProfile.neural_network||{};
+          const neuralNetworkContract=
+            neuralNetwork.architecture==='18-10-6-1+RESIDUAL'&&
+            Number(neuralNetwork.input_neurons)===18&&
+            Number(neuralNetwork.hidden_neurons)===10&&
+            Number(neuralNetwork.second_hidden_neurons)===6&&
+            Number(neuralNetwork.output_neurons)===1&&
+            Number(neuralNetwork.samples_required)>=240&&
+            ['WAITING_FOR_MATURED_TRAINING_SAMPLES','WAITING_FOR_CHRONOLOGICAL_SPLIT',
+             'VALIDATION_DID_NOT_BEAT_BASE_RATE','VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER',
+             'SELECTED_ON_CHRONOLOGICAL_VALIDATION'].includes(String(neuralNetwork.status));
           const cognitiveEvidence={
             method:String(brainProfile.method||brain.method||'UNKNOWN'),
+            model_selected:String(brainProfile.model_selection?.selected_model||'NONE'),
+            neural_network_contract:neuralNetworkContract,
+            neural_network_status:String(neuralNetwork.status||'UNKNOWN'),
+            neural_network_training_samples:Number(neuralNetwork.training_samples)||0,
+            neural_network_required_samples:Number(neuralNetwork.samples_required)||0,
+            neural_network_selected:neuralNetwork.selected===true,
             status:String(brain.status||'UNKNOWN'),
             resolved_samples:Number(brainProfile.resolved_samples)||0,
             training_samples:Number(brainProfile.training_samples)||0,
@@ -191,8 +208,8 @@ jobs:
             holdout_start_at:brainProfile.holdout_start_at??null,
             max_training_outcome_resolved_at:brainProfile.max_training_outcome_resolved_at??null
           };
-          if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'){
-            throw new Error('ADAPTIVE_TRADER_COGNITIVE_MODEL_VERSION_INVALID '+JSON.stringify(cognitiveEvidence));
+          if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'||!cognitiveEvidence.neural_network_contract){
+            throw new Error('ADAPTIVE_TRADER_COGNITIVE_MODEL_V5_CONTRACT_INVALID '+JSON.stringify(cognitiveEvidence));
           }
           const chronologicalSplitSafe=
             cognitiveEvidence.training_samples>=60&&
@@ -203,7 +220,10 @@ jobs:
           const probabilityGateSafe=!cognitiveEvidence.probability_ready||
             (cognitiveEvidence.validation_samples>=20&&cognitiveEvidence.holdout_samples>=20&&
              cognitiveEvidence.validation_evaluated&&cognitiveEvidence.validation_beat_base_rate&&
-             cognitiveEvidence.holdout_evaluated&&cognitiveEvidence.holdout_beat_base_rate);
+             cognitiveEvidence.holdout_evaluated&&cognitiveEvidence.holdout_beat_base_rate&&
+             (cognitiveEvidence.model_selected!=='NEURAL_GLOBAL'||neuralNetwork.selected===true&&
+               neuralNetwork.probability_ready===true&&neuralNetwork.holdout?.evaluated===true&&
+               neuralNetwork.holdout?.beat_base_rate===true));
           if(cognitiveEvidence.resolved_samples>=100&&(!chronologicalSplitSafe||!probabilityGateSafe)){
             throw new Error('ADAPTIVE_TRADER_COGNITIVE_CHRONOLOGICAL_SPLIT_INCOMPLETE '+JSON.stringify(cognitiveEvidence));
           }
