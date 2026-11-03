@@ -908,7 +908,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       return null;
     }finally{preMoveBackgroundWorkerState.running=false;preMoveBackgroundInFlight=false;}
   }
-  function startPreMoveWatchWorker({intervalMs,initialDelayMs=10000}={}){
+  function startPreMoveWatchWorker({intervalMs,initialDelayMs=config.marketRadar?.preMoveBackgroundInitialDelayMs??10000}={}){
     if(!preMoveRadarScanner)return {status:'UNAVAILABLE',scanner_ready:false,reason:'MARKET_DATA_CLIENT_NOT_INITIALIZED'};
     if(preMoveBackgroundWorkerState.enabled)return preMoveBackgroundWorkerSnapshot();
     const requestedInterval=Number(intervalMs??config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs;
