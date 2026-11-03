@@ -802,7 +802,9 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
       price_change_4h_pct:i%4===0?2:-1,
       relative_24h_strength_vs_btc_pct:i%3===1?1:-0.4,
       change_24h_pct:i%5===0?10:2,
-      quote_volume_24h:1_000_000
+      quote_volume_24h:1_000_000,
+      market_activity_volume_rate_vs_24h_average:i%2===0?2.1:0.8,
+      market_activity_trade_rate_vs_24h_average:i%2===0?1.7:1.0
     }
   }));
   const profile=buildAdaptiveLearningProfile(samples);
@@ -814,6 +816,8 @@ test('adaptive learning calibrates on market-wide outcomes and exposes up/down/f
   assert.equal(profile.outcome_counts.down,27);
   assert.equal(profile.outcome_counts.flat,26);
   assert.ok(profile.covered_factor_buckets>=4);
+  assert.equal(profile.buckets.market_activity_acceleration.samples,40);
+  assert.ok(Object.hasOwn(profile.adjustments,'market_activity_acceleration'));
   assert.equal(profile.note,'MARKET_WIDE_OUTCOME_CALIBRATION_ONLY_NO_AUTOMATIC_RULE_OR_EXECUTION_CHANGES');
 });
 
