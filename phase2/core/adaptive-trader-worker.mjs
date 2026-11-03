@@ -534,9 +534,11 @@ recordServerPaperPortfolio(snapshot,now){
       const prior4h=findPrior(3.5*60*60*1000,4.5*60*60*1000);
       const relative=(finite(row?.change_24h_pct)!==null&&btcDaily!==null)
         ?Number((Number(row.change_24h_pct)-btcDaily).toFixed(3)):null;
+      const candidate=candidateBySymbol.get(symbol);
       const tickerFeatures={
         change_24h_pct:finite(row?.change_24h_pct),
         quote_volume_24h:finite(row?.quote_volume_24h),
+        trade_count_24h:finite(row?.trade_count_24h),
         price_change_15m_pct:prior15?Number(((price/Number(prior15.price)-1)*100).toFixed(3)):null,
         price_change_1h_pct:prior1h?Number(((price/Number(prior1h.price)-1)*100).toFixed(3)):null,
         price_change_4h_pct:prior4h?Number(((price/Number(prior4h.price)-1)*100).toFixed(3)):null,
@@ -545,7 +547,6 @@ recordServerPaperPortfolio(snapshot,now){
         market_activity_volume_rate_vs_24h_average:finite(candidate?.features?.market_activity_volume_rate_vs_24h_average),
         market_activity_trade_rate_vs_24h_average:finite(candidate?.features?.market_activity_trade_rate_vs_24h_average)
       };
-      const candidate=candidateBySymbol.get(symbol);
       const deepValid=Boolean(candidate&&candidate.data_valid===true&&candidate.data_stale!==true&&
         finite(candidate.score)!==null&&finite(candidate.candle_close_time)!==null&&finite(candidate.candle_close_price)>0);
       const quoteVolume=finite(row?.quote_volume_24h);
