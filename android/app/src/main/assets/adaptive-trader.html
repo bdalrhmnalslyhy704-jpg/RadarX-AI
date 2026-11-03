@@ -731,6 +731,9 @@ function renderLearning(){
   const validation=brainProfile.validation||brain.validation||{};
   const modelSelection=brainProfile.model_selection||brain.model_selection||{};
   const adaptation=brainProfile.regime_adaptation||brain.regime_adaptation||{};
+  const neuralNetwork=brainProfile.neural_network||brainCapture.neural_network||{};
+  const neuralValidation=neuralNetwork.validation||{};
+  const neuralHoldout=neuralNetwork.holdout||{};
   const prequential=brain.prequential||{};
   const holdout=brainProfile.holdout||brainCapture.holdout||{};
   const brainReady=brainProfile.ranking_ready===true;
@@ -747,13 +750,33 @@ function renderLearning(){
   const probabilityText=probabilityReady&&Number.isFinite(Number(holdout.model_brier_score))
     ?'الامتحان الأخير نجح: Brier '+fmt(holdout.model_brier_score,3)+' مقابل خط الأساس '+fmt(holdout.base_rate_brier_score,3)
     :'لا توجد احتمالات صعود معتمدة؛ لا يُسمح بها قبل النجاح في التحقق الأوسط والاختبار النهائي المستقل.';
-  const selectedModel=modelSelection.selected_model==='RECENT_WINDOW'?'الذاكرة الحديثة':
+  const selectedModel=modelSelection.selected_model==='NEURAL_GLOBAL'?'الشبكة العصبية العميقة V5':
+    modelSelection.selected_model==='RECENT_WINDOW'?'الذاكرة الحديثة':
     modelSelection.selected_model==='GLOBAL_HISTORY'?'الذاكرة الطويلة':'لا يوجد نموذج معتمد';
-  const adaptationText=adaptation.status==='RECENT_WINDOW_SELECTED'
-    ?'تكيّف: اختير النموذج الحديث بعد تفوقه في التحقق الأوسط.'
-    :adaptation.status==='GLOBAL_HISTORY_RETAINED'
-      ?'تكيّف: احتُفظ بالنموذج الطويل؛ لم يثبت تفوق المنافس الحديث.'
-      :'التكيّف غير معتمد بعد بسبب نقص الأدلة أو فشل التحقق.';
+  const adaptationText=modelSelection.selected_model==='NEURAL_GLOBAL'
+    ?'تكيّف: اختيرت الشبكة العصبية بعد تفوقها على المنافس الخطي في التحقق الأوسط.'
+    :adaptation.status==='RECENT_WINDOW_SELECTED'
+      ?'تكيّف: اختير النموذج الحديث بعد تفوقه في التحقق الأوسط.'
+      :adaptation.status==='GLOBAL_HISTORY_RETAINED'
+        ?'تكيّف: احتُفظ بالنموذج الطويل؛ لم يثبت تفوق المنافس الحديث.'
+        :'التكيّف غير معتمد بعد بسبب نقص الأدلة أو فشل التحقق.';
+  const neuralStatusText=neuralNetwork.status==='SELECTED_ON_CHRONOLOGICAL_VALIDATION'
+    ?'اختيرت الشبكة في التحقق الزمني الأوسط؛ قبول الاحتمالات يظل مشروطًا باختبار زمني نهائي مستقل.'
+    :neuralNetwork.status==='VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER'
+      ?'تدرّبت واجتازت شرط خط الأساس، لكنها لم تتفوق بما يكفي على النموذج الخطي.'
+      :neuralNetwork.status==='VALIDATION_DID_NOT_BEAT_BASE_RATE'
+        ?'لم تتفوق على خط الأساس في التحقق؛ لذلك لا تُستخدم لإصدار احتمالات.'
+        :neuralNetwork.status==='WAITING_FOR_CHRONOLOGICAL_SPLIT'
+          ?'تنتظر عينات كافية لتكوين تدريب وتحقق واختبار زمني منفصل.'
+          :neuralNetwork.status==='WAITING_FOR_MATURED_TRAINING_SAMPLES'
+            ?'تنتظر نتائج شموع مغلقة ناضجة؛ لا تتعلم من السعر اللحظي.'
+            :'لم تتوفر بعد بيانات تدريب عصبي صالحة.';
+  const neuralValidationText=neuralValidation.evaluated===true
+    ?'Brier التحقق العصبي '+fmt(neuralValidation.model_brier_score,3)+' مقابل خط الأساس '+fmt(neuralValidation.base_rate_brier_score,3)
+    :'التحقق العصبي لم يكتمل بعد.';
+  const neuralHoldoutText=neuralHoldout.evaluated===true
+    ?'Brier الاختبار العصبي المستقل '+fmt(neuralHoldout.model_brier_score,3)+' مقابل خط الأساس '+fmt(neuralHoldout.base_rate_brier_score,3)
+    :'الشبكة لم تحصل على اختبار نهائي معتمد بعد؛ لا تُنشر احتمالاتها.';
   const prequentialText=prequential.status==='FORWARD_PERFORMANCE_DEGRADING'
     ?'إنذار: أداء التوقعات المسجلة يتراجع؛ يلزم إعادة التقييم.'
     :prequential.status==='FORWARD_MONITORING_STABLE'
@@ -769,6 +792,7 @@ function renderLearning(){
     :'لا توجد مجموعة أخطاء متكررة كافية لتشخيصها بعد.';
   el('cognitiveSummary').innerHTML=
     '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' تدريب · '+esc(Math.max(0,Number(brainProfile.validation_samples)||0))+' تحقق · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' اختبار نهائي.</p><div class="tiny">عينات تداخل مستبعدة: '+esc(Number(brainProfile.purged_overlap_samples)||0)+' · عوامل مغطاة: '+esc(covered)+' · قرارات مبكرة للمراجعة: '+esc(Number(brainCapture.early_setup_reviews)||0)+'</div></div>'+
+    '<div class="learning-card"><h3>الشبكة العصبية العميقة V5</h3><p>'+esc(neuralNetwork.architecture||'18-10-6-1+RESIDUAL')+' · '+esc(Number(neuralNetwork.training_samples)||0)+' / '+esc(Number(neuralNetwork.samples_required)||240)+' عينة تدريب ناضجة.</p><div class="tiny">'+esc(neuralStatusText)+'</div><div class="tiny">'+esc(neuralValidationText)+'</div><div class="tiny">'+esc(neuralHoldoutText)+'</div></div>'+
     '<div class="learning-card"><h3>اختيار النموذج والتكيّف</h3><p>'+esc(selectedModel)+' · '+esc(adaptationText)+'</p><div class="tiny">'+esc(validationText)+'</div></div>'+
     '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null&&Number.isFinite(Number(prequential.recent_window.brier_score))?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div><div class="tiny">'+esc(errorReviewText)+'</div></div>';
 

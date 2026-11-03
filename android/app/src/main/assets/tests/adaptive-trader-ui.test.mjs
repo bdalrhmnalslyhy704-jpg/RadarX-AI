@@ -138,3 +138,15 @@ test('cognitive dashboard distinguishes nested validation, untouched holdout, ad
   assert.match(html,/لا يُسمح بها قبل النجاح في التحقق الأوسط والاختبار النهائي المستقل/);
 });
 
+
+
+test('cognitive dashboard exposes the V5 residual neural network and selected model without hiding fallback status',()=>{
+  assert.match(html,/neuralNetwork=brainProfile\.neural_network\|\|brainCapture\.neural_network/);
+  assert.match(html,/الشبكة العصبية العميقة V5/);
+  assert.match(html,/neuralNetwork\.architecture/);
+  assert.match(html,/neuralNetwork\.samples_required/);
+  assert.match(html,/neuralValidationText/);
+  assert.match(html,/neuralHoldoutText/);
+  assert.match(html,/modelSelection\.selected_model==='NEURAL_GLOBAL'/);
+  assert.match(html,/18-10-6-1\+RESIDUAL/);
+});

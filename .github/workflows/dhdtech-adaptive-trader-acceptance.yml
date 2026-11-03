@@ -96,8 +96,17 @@ jobs:
                   (summary&&summary.cognitive_brain)||null;
                 const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
+                const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
+                const neuralNetworkContract=Boolean(
+                  neuralNetwork.architecture==='18-10-6-1+RESIDUAL'&&
+                  Number(neuralNetwork.input_neurons)===18&&
+                  Number(neuralNetwork.hidden_neurons)===10&&
+                  Number(neuralNetwork.second_hidden_neurons)===6&&
+                  Number(neuralNetwork.output_neurons)===1&&
+                  Number(neuralNetwork.samples_required)>=240
+                );
                 const cognitiveSplitReady=Boolean(
-                  cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
+                  cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
                   Number(cognitiveProfile.resolved_samples)>=100&&
                   Number(cognitiveProfile.training_samples)>=60&&
                   Number(cognitiveProfile.validation_samples)>=20&&
@@ -165,14 +174,25 @@ jobs:
                     purged_overlap_samples:Number(cognitiveProfile.purged_overlap_samples)||0,
                     journal_records:Number(cognitive.journal_records??cognitive.journal_rows)||0,
                     journal_resolved:Number(cognitiveCapture.journal_resolved??cognitive.resolved_journal_rows)||0,
-                    early_setup_reviews:Number(cognitiveCapture.early_setup_reviews)||0
+                    early_setup_reviews:Number(cognitiveCapture.early_setup_reviews)||0,
+                    neural_network:neuralNetwork?{
+                      architecture:String(neuralNetwork.architecture||'unknown'),
+                      status:String(neuralNetwork.status||'unknown'),
+                      training_samples:Number(neuralNetwork.training_samples)||0,
+                      samples_required:Number(neuralNetwork.samples_required)||0,
+                      trained:neuralNetwork.trained===true,
+                      selected:neuralNetwork.selected===true,
+                      probability_ready:neuralNetwork.probability_ready===true,
+                      validation_evaluated:neuralNetwork.validation?.evaluated===true,
+                      holdout_evaluated:neuralNetwork.holdout?.evaluated===true
+                    }:null
                   }:null
                 };
                 const scanFresh=Number.isFinite(scannedAt)&&scannedAt<=Date.now()+5000&&
                   Date.now()-scannedAt<=8*60*1000&&
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
-                const cognitiveV3=cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3'&&
-                  cognitiveProfile.identifier_features_used===false;
+                const cognitiveV5=cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
+                  cognitiveProfile.identifier_features_used===false&&neuralNetworkContract;
                 const probabilityClaimSafe=cognitiveProfile.probability_ready!==true||
                   (cognitiveProfile.validation?.evaluated===true&&cognitiveProfile.validation?.beat_base_rate===true&&
                    cognitiveProfile.holdout?.evaluated===true&&cognitiveProfile.holdout?.beat_base_rate===true);
@@ -185,7 +205,7 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV3&&probabilityClaimSafe&&
+                  cognitive&&cognitiveV5&&probabilityClaimSafe&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&

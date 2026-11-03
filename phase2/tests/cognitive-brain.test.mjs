@@ -70,7 +70,7 @@ function candidate(overrides = {}) {
   };
 }
 
-function behavioralSamples({ seed = 0, reverse = false, count = 240 } = {}) {
+function behavioralSamples({ seed = 0, reverse = false, count = 600 } = {}) {
   const rows = [];
   for (let i = 0; i < count; i++) {
     const n = i + seed;
@@ -167,7 +167,7 @@ test('nested chronological validation purges labels crossing both validation and
   assert.ok(profile.max_training_outcome_resolved_at < profile.validation_start_at);
   assert.ok(profile.validation_start_at < profile.holdout_start_at);
   assert.equal(profile.holdout.evaluated, true);
-  assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3');
+  assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5');
 });
 
 test('the model generalizes from market evidence to unseen pair identifiers across repeated datasets', () => {
@@ -179,6 +179,11 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'the model must beat the chronological baseline before publishing probabilities');
     assert.ok(profile.holdout.model_brier_score < profile.holdout.base_rate_brier_score);
     assert.equal(profile.identifier_features_used, false);
+    assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
+    assert.equal(profile.neural_network.trained, true);
+    assert.equal(profile.neural_network.input_neurons, 18);
+    assert.equal(profile.neural_network.hidden_neurons, 10);
+    assert.equal(profile.neural_network.second_hidden_neurons, 6);
 
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
@@ -284,7 +289,7 @@ function regimeDriftSamples({ count = 360, changeAt = 96 } = {}) {
   return rows;
 }
 
-function noSignalSamples({ count = 320 } = {}) {
+function noSignalSamples({ count = 600 } = {}) {
   const rows = [];
   for (let i = 0; i < count; i++) {
     const block = Math.floor(i / 8);
@@ -342,6 +347,9 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.equal(profile.identifier_features_used, false);
   assert.equal(profile.probability_ready, false,
     'a model that memorizes alternating pair identities must not pass evidence-only validation');
+  assert.equal(profile.neural_network.trained, true);
+  assert.equal(profile.neural_network.selected, false);
+  assert.equal(profile.neural_network.probability_ready, false);
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
 });
 
@@ -405,7 +413,39 @@ test('unobserved order book stays explicitly unknown and never receives a fabric
   assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
 });
 
-test('prequential audit scores only immutable, matured V3 forecasts and detects sustained degradation', () => {
+test('prequential audit never mixes neural and logistic model variants after model selection changes', () => {
+  const journal = [];
+  for (let index = 0; index < 40; index++) {
+    const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
+    const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
+    const logisticBlock = index < 20;
+    const correct = logisticBlock;
+    const predicted = correct
+      ? (outcome === 'UP' ? 90 : 10)
+      : (outcome === 'UP' ? 10 : 90);
+    journal.push({
+      id: 'VARIANT-' + index, model_version: 5,
+      selected_model: logisticBlock ? 'GLOBAL_HISTORY' : 'NEURAL_GLOBAL',
+      at, trained_through_at: at - 60 * 60 * 1000,
+      resolved_at: at + FOUR_HOURS,
+      outcome_source: 'CLOSED_CANDLE_4H', outcome,
+      predicted_up_probability: predicted
+    });
+  }
+  const audit = buildCognitivePrequentialProfile(journal, {
+    minimumWindowSamples: 10, windowSize: 10
+  });
+  assert.equal(audit.all_v5_resolved_forecasts, 40);
+  assert.equal(audit.audited_model_variant, 'NEURAL_GLOBAL');
+  assert.equal(audit.resolved_forecasts, 20);
+  assert.equal(audit.excluded_other_model_variant_forecasts, 20);
+  assert.equal(audit.previous_window.sample_count, 10);
+  assert.equal(audit.recent_window.sample_count, 10);
+  assert.equal(audit.drift_detected, false,
+    'a newly selected model must not inherit the previous model variant error history');
+});
+
+test('prequential audit scores only immutable, matured V5 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
     const predictionIsCorrect = index < 30;
@@ -414,7 +454,7 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
       : (outcome === 'UP' ? 10 : 90);
     const at = BASE_TIME + index * 5 * 60 * 60 * 1000;
     return {
-      id: 'FORWARD-' + index, model_version: 3, at,
+      id: 'FORWARD-' + index, model_version: 5, at,
       trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS, horizon_ms: FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
@@ -422,6 +462,8 @@ test('prequential audit scores only immutable, matured V3 forecasts and detects 
       predicted_up_probability: predicted
     };
   });
+  journal.push({ ...journal[0], id: 'OLD-V3', model_version: 3 });
+  journal.push({ ...journal[0], id: 'OLD-V4', model_version: 4 });
   journal.push({ ...journal[0], id: 'OLD-V1', model_version: 1 });
   journal.push({ ...journal[0], id: 'UNRESOLVED', outcome: null });
   journal.push({ ...journal[0], id: 'LOOKAHEAD', trained_through_at: journal[0].at + 1 });

@@ -28,6 +28,7 @@ The web client calls the configured DHDTech backend and displays server-reported
 - Outcomes use the project's +2% / -2% labels, with intermediate outcomes classified as flat.
 - Historical calibration samples are calculated from available closed-candle history; missing data is not replaced with simulated prices.
 - The learner does not apply score calibration until the configured minimum resolved-sample count and factor-bucket coverage are satisfied.
+- Cognitive Agent V5 adds a residual deep neural challenger (`18-10-6-1` plus a direct residual evidence path). It requires at least 240 matured training events, trains on at most the latest 600, and competes against global/recent logistic challengers using a middle chronological validation block. Probabilities remain disabled unless the selected model also beats the untouched chronological holdout. V5 forward audits keep V4 and older forecasts separate.
 - A missed-mover record is an audit clue, not a buy signal. Already-extended moves remain excluded from entry recommendations.
 
 ## Tests

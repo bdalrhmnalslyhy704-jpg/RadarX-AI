@@ -120,7 +120,7 @@ export class AdaptiveTraderWorker{
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
           this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
-          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal);
+          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
@@ -252,7 +252,7 @@ export class AdaptiveTraderWorker{
         return enriched;
       }).sort((a,b)=>(Number(b.cognitive_rank_score??b.score)||0)-(Number(a.cognitive_rank_score??a.score)||0));
       this.refreshCognitiveOutcomeLinks();
-      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal);
+      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
       this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
       const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
       this.recordServerPaperPortfolio(executionSnapshot,now);
@@ -283,6 +283,7 @@ export class AdaptiveTraderWorker{
         selection_lanes:snapshot.universe?.selection_lane_counts||{},
         resolved_samples:this.state.learning_profile.resolved_samples,
         learning_capture:this.state.last_learning_capture||null,
+        neural_model:this.state.cognitive_profile?.neural_network?.status||'NOT_AVAILABLE',
         missed_movers:this.state.missed_movers.filter(row=>row.classification==='POTENTIAL_MISSED_MOVER').length,
         worker_interval_ms:this.intervalMs,paper_trading:true,real_order_execution:false
       }));
@@ -335,7 +336,7 @@ export class AdaptiveTraderWorker{
     const assessment=candidate?.cognitive_assessment||{};
     const profile=this.state.cognitive_profile||{};
     const row={
-      id,symbol,model_version:Number(assessment.version)||3,at:Math.trunc(closeAt),
+      id,symbol,model_version:Number(assessment.version)||5,at:Math.trunc(closeAt),
       price:finite(candidate?.candle_close_price)??finite(candidate?.price),
       base_score:finite(candidate?.base_score??candidate?.score),
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),
@@ -410,7 +411,7 @@ export class AdaptiveTraderWorker{
       probability_ready:profile.probability_ready===true,
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
-      holdout:profile.holdout||null,method:profile.method
+      holdout:profile.holdout||null,neural_network:profile.neural_network||null,method:profile.method
     };
   }
 
@@ -660,16 +661,17 @@ recordServerPaperPortfolio(snapshot,now){
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
       universe:{...(snapshot.universe||{})},
       cognitive_brain:{
-        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
         probability_ready:this.state.cognitive_profile?.probability_ready===true,
+        neural_network:this.state.cognitive_profile?.neural_network||null,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
         holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
         validation:this.state.cognitive_profile?.validation||null,
         model_selection:this.state.cognitive_profile?.model_selection||null,
         regime_adaptation:this.state.cognitive_profile?.regime_adaptation||null,
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         holdout:this.state.cognitive_profile?.holdout||null,
         capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
@@ -762,11 +764,11 @@ recordServerPaperPortfolio(snapshot,now){
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.trainingSamples()),
       learning_capture:this.state.last_learning_capture||null,
       cognitive_brain:{
-        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+        method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,

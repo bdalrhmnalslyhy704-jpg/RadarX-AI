@@ -1,5 +1,5 @@
 /**
- * RadarX Build 224 — Cognitive Agent V3
+ * RadarX Build 224 — Cognitive Agent V5 (Residual Deep Neural Challenger)
  *
  * An interpretable, feedback-driven research model. It learns relationships
  * between market evidence and matured closed-candle outcomes, checks itself
@@ -9,6 +9,16 @@
  */
 
 const MIN_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
+const NEURAL_POLICY = Object.freeze({
+  hiddenUnits: 10,
+  secondHiddenUnits: 6,
+  minTrainingSamples: 240,
+  maxTrainingSamples: 600,
+  iterations: 100,
+  learningRate: 0.012,
+  l2: 0.04,
+  selectionMargin: 0.003
+});
 const FEATURE_NAMES = Object.freeze([
   'volume_expansion',
   'trade_expansion',
@@ -191,7 +201,185 @@ function fitLogisticModel(training, { l2 = 0.08, iterations = 900, learningRate 
   return { intercept, weights, base_rate: baseRate, feature_names: [...FEATURE_NAMES], l2 };
 }
 
+function fitNeuralNetworkModel(training, {
+  hiddenUnits = NEURAL_POLICY.hiddenUnits,
+  secondHiddenUnits = NEURAL_POLICY.secondHiddenUnits,
+  iterations = NEURAL_POLICY.iterations,
+  learningRate = NEURAL_POLICY.learningRate,
+  l2 = NEURAL_POLICY.l2
+} = {}) {
+  const rows=(Array.isArray(training)?training:[]).map(row=>({
+    vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
+      ?row.vector:normalizedFeatures(row?.features||{}),
+    target:finite(row?.target)===null?targetOf(row):clamp(Number(row.target),0,1)
+  })).filter(row=>row.vector.length===FEATURE_NAMES.length&&
+    row.vector.every(value=>Number.isFinite(value))&&Number.isFinite(row.target));
+  if(!rows.length)return null;
+
+  const inputSize=FEATURE_NAMES.length;
+  const units1=Math.max(4,Math.min(16,Math.trunc(Number(hiddenUnits)||NEURAL_POLICY.hiddenUnits)));
+  const units2=Math.max(3,Math.min(12,Math.trunc(Number(secondHiddenUnits)||NEURAL_POLICY.secondHiddenUnits)));
+  const steps=Math.max(30,Math.min(180,Math.trunc(Number(iterations)||NEURAL_POLICY.iterations)));
+  const rate=clamp(Number(learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
+  const regularization=clamp(Number(l2)||NEURAL_POLICY.l2,0.001,0.5);
+  const baseRate=betaRate(rows.reduce((sum,row)=>sum+row.target,0),rows.length);
+
+  // Deterministic symmetry-breaking initialization: reproducible fits and tests.
+  const inputWeights=Array.from({length:inputSize},(_,i)=>
+    Array.from({length:units1},(_,j)=>0.07*Math.sin((i+1)*12.9898+(j+1)*78.233)));
+  const hiddenBias1=Array.from({length:units1},(_,j)=>0.008*Math.cos((j+1)*9.173));
+  const hiddenWeights=Array.from({length:units1},(_,i)=>
+    Array.from({length:units2},(_,j)=>0.07*Math.cos((i+1)*5.173+(j+1)*3.117)));
+  const hiddenBias2=Array.from({length:units2},(_,j)=>0.008*Math.sin((j+1)*7.913));
+  const outputWeights=Array.from({length:units2},(_,j)=>0.035*Math.sin((j+1)*4.121));
+  const skipWeights=Array.from({length:inputSize},(_,i)=>0.015*Math.cos((i+1)*2.417));
+  let outputBias=logit(baseRate);
+
+  const zerosLike=values=>Array.isArray(values)
+    ?values.map(value=>Array.isArray(value)?zerosLike(value):0):0;
+  const mInput=zerosLike(inputWeights),vInput=zerosLike(inputWeights);
+  const mHidden=zerosLike(hiddenWeights),vHidden=zerosLike(hiddenWeights);
+  const mBias1=zerosLike(hiddenBias1),vBias1=zerosLike(hiddenBias1);
+  const mBias2=zerosLike(hiddenBias2),vBias2=zerosLike(hiddenBias2);
+  const mOutput=zerosLike(outputWeights),vOutput=zerosLike(outputWeights);
+  const mSkip=zerosLike(skipWeights),vSkip=zerosLike(skipWeights);
+  let mOutputBias=0,vOutputBias=0;
+
+  const update=(value,gradient,moment,variance,step,bound=3,decay=true)=>{
+    const g=clamp(gradient,-3,3);
+    const nextMoment=0.9*moment+0.1*g;
+    const nextVariance=0.999*variance+0.001*g*g;
+    const correctedMoment=nextMoment/(1-Math.pow(0.9,step));
+    const correctedVariance=nextVariance/(1-Math.pow(0.999,step));
+    const regularized=decay?regularization*value:0;
+    return {
+      value:clamp(value-rate*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
+      moment:nextMoment,variance:nextVariance
+    };
+  };
+
+  for(let epoch=1;epoch<=steps;epoch++){
+    const gradInput=zerosLike(inputWeights),gradHidden=zerosLike(hiddenWeights);
+    const gradBias1=Array(units1).fill(0),gradBias2=Array(units2).fill(0);
+    const gradOutput=Array(units2).fill(0),gradSkip=Array(inputSize).fill(0);
+    let gradOutputBias=0;
+
+    for(const row of rows){
+      const hidden1=new Array(units1);
+      for(let j=0;j<units1;j++){
+        let sum=hiddenBias1[j];
+        for(let i=0;i<inputSize;i++)sum+=row.vector[i]*inputWeights[i][j];
+        hidden1[j]=Math.tanh(sum);
+      }
+      const hidden2=new Array(units2);
+      for(let j=0;j<units2;j++){
+        let sum=hiddenBias2[j];
+        for(let i=0;i<units1;i++)sum+=hidden1[i]*hiddenWeights[i][j];
+        hidden2[j]=Math.tanh(sum);
+      }
+      let output=outputBias;
+      for(let j=0;j<units2;j++)output+=outputWeights[j]*hidden2[j];
+      // Residual linear path preserves reliable first-order evidence while the
+      // two nonlinear layers learn interactions between market conditions.
+      for(let i=0;i<inputSize;i++)output+=skipWeights[i]*row.vector[i];
+      const error=logistic(output)-row.target;
+      gradOutputBias+=error;
+      for(let i=0;i<inputSize;i++)gradSkip[i]+=error*row.vector[i];
+
+      const hidden2Error=new Array(units2);
+      for(let j=0;j<units2;j++){
+        gradOutput[j]+=error*hidden2[j];
+        hidden2Error[j]=error*outputWeights[j]*(1-hidden2[j]*hidden2[j]);
+        gradBias2[j]+=hidden2Error[j];
+        for(let i=0;i<units1;i++)gradHidden[i][j]+=hidden1[i]*hidden2Error[j];
+      }
+      for(let i=0;i<units1;i++){
+        let error1=0;
+        for(let j=0;j<units2;j++)error1+=hidden2Error[j]*hiddenWeights[i][j];
+        error1*=1-hidden1[i]*hidden1[i];
+        gradBias1[i]+=error1;
+        for(let j=0;j<inputSize;j++)gradInput[j][i]+=row.vector[j]*error1;
+      }
+    }
+
+    const n=rows.length;
+    for(let i=0;i<inputSize;i++)for(let j=0;j<units1;j++){
+      const result=update(inputWeights[i][j],gradInput[i][j]/n,mInput[i][j],vInput[i][j],epoch);
+      inputWeights[i][j]=result.value;mInput[i][j]=result.moment;vInput[i][j]=result.variance;
+    }
+    for(let i=0;i<units1;i++)for(let j=0;j<units2;j++){
+      const result=update(hiddenWeights[i][j],gradHidden[i][j]/n,mHidden[i][j],vHidden[i][j],epoch);
+      hiddenWeights[i][j]=result.value;mHidden[i][j]=result.moment;vHidden[i][j]=result.variance;
+    }
+    for(let j=0;j<units1;j++){
+      const result=update(hiddenBias1[j],gradBias1[j]/n,mBias1[j],vBias1[j],epoch,4,false);
+      hiddenBias1[j]=result.value;mBias1[j]=result.moment;vBias1[j]=result.variance;
+    }
+    for(let j=0;j<units2;j++){
+      const bias=update(hiddenBias2[j],gradBias2[j]/n,mBias2[j],vBias2[j],epoch,4,false);
+      hiddenBias2[j]=bias.value;mBias2[j]=bias.moment;vBias2[j]=bias.variance;
+      const output=update(outputWeights[j],gradOutput[j]/n,mOutput[j],vOutput[j],epoch);
+      outputWeights[j]=output.value;mOutput[j]=output.moment;vOutput[j]=output.variance;
+    }
+    for(let i=0;i<inputSize;i++){
+      const result=update(skipWeights[i],gradSkip[i]/n,mSkip[i],vSkip[i],epoch);
+      skipWeights[i]=result.value;mSkip[i]=result.moment;vSkip[i]=result.variance;
+    }
+    const bias=update(outputBias,gradOutputBias/n,mOutputBias,vOutputBias,epoch,6,false);
+    outputBias=bias.value;mOutputBias=bias.moment;vOutputBias=bias.variance;
+  }
+
+  return {
+    kind:'RESIDUAL_DEEP_MLP_V2',
+    architecture:inputSize+'-'+units1+'-'+units2+'-1+RESIDUAL',
+    input_size:inputSize,hidden_units:units1,second_hidden_units:units2,output_size:1,
+    input_weights:inputWeights,hidden_bias_1:hiddenBias1,
+    hidden_weights:hiddenWeights,hidden_bias_2:hiddenBias2,
+    output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
+    base_rate:baseRate,feature_names:[...FEATURE_NAMES],
+    training_samples:rows.length,iterations:steps,l2:regularization
+  };
+}
+
 function predictFromFit(features, fit) {
+  if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
+    if(!Array.isArray(fit.input_weights)||fit.input_weights.length!==FEATURE_NAMES.length||
+       !Array.isArray(fit.hidden_bias_1)||!Array.isArray(fit.hidden_weights)||
+       !Array.isArray(fit.hidden_bias_2)||!Array.isArray(fit.output_weights)||
+       !Array.isArray(fit.skip_weights)||fit.input_weights.some(row=>!Array.isArray(row))||
+       fit.hidden_weights.length!==fit.hidden_bias_1.length||
+       fit.hidden_bias_2.length!==fit.output_weights.length||
+       fit.skip_weights.length!==FEATURE_NAMES.length)return null;
+    const vector=normalizedFeatures(features);
+    const hidden1=fit.hidden_bias_1.map((bias,j)=>{
+      let sum=Number(bias)||0;
+      for(let i=0;i<vector.length;i++)sum+=vector[i]*(Number(fit.input_weights[i]?.[j])||0);
+      return Math.tanh(sum);
+    });
+    const hidden2=fit.hidden_bias_2.map((bias,j)=>{
+      let sum=Number(bias)||0;
+      for(let i=0;i<hidden1.length;i++)sum+=hidden1[i]*(Number(fit.hidden_weights[i]?.[j])||0);
+      return Math.tanh(sum);
+    });
+    let output=Number(fit.output_bias)||0;
+    for(let j=0;j<hidden2.length;j++)output+=(Number(fit.output_weights[j])||0)*hidden2[j];
+    for(let i=0;i<vector.length;i++)output+=vector[i]*(Number(fit.skip_weights[i])||0);
+    return clamp(logistic(output),0.02,0.98);
+  }
+  if(fit?.kind==='NEURAL_MLP_V1'){
+    if(!Array.isArray(fit.input_weights)||fit.input_weights.length!==FEATURE_NAMES.length||
+       !Array.isArray(fit.hidden_bias)||!Array.isArray(fit.output_weights)||
+       fit.hidden_bias.length!==fit.output_weights.length)return null;
+    const vector=normalizedFeatures(features);
+    const hidden=fit.hidden_bias.map((bias,j)=>{
+      let sum=Number(bias)||0;
+      for(let i=0;i<vector.length;i++)sum+=vector[i]*(Number(fit.input_weights[i]?.[j])||0);
+      return Math.tanh(sum);
+    });
+    let output=Number(fit.output_bias)||0;
+    for(let j=0;j<hidden.length;j++)output+=(Number(fit.output_weights[j])||0)*hidden[j];
+    return clamp(logistic(output),0.02,0.98);
+  }
   if (!fit || !Array.isArray(fit.weights) || fit.weights.length !== FEATURE_NAMES.length) return null;
   const vector = normalizedFeatures(features);
   let value = Number(fit.intercept) || 0;
@@ -301,6 +489,12 @@ export function buildCognitiveLearningProfile(samples = [], {
   allowResolutionLag = false,
   allowedOutcomeSources = null,
   iterations = 900, learningRate = 0.12,
+  minNeuralTrainingSamples = NEURAL_POLICY.minTrainingSamples,
+  maxNeuralTrainingSamples = NEURAL_POLICY.maxTrainingSamples,
+  neuralIterations = NEURAL_POLICY.iterations,
+  neuralLearningRate = NEURAL_POLICY.learningRate,
+  neuralL2 = NEURAL_POLICY.l2,
+  neuralSelectionMargin = NEURAL_POLICY.selectionMargin,
   maxResolvedSamples = 0
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
@@ -319,7 +513,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     const fit = fitLogisticModel(resolved, { l2, iterations, learningRate });
     const evidence = factorEvidence(resolved, { minimumBucket });
     return {
-      method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+      method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
       outcome_horizon_ms: horizonMs,
       ranking_ready: false, probability_ready: false, ready: false,
       resolved_samples: resolved.length, training_samples: resolved.length,
@@ -348,6 +542,14 @@ export function buildCognitiveLearningProfile(samples = [], {
       },
       regime_adaptation: { status: 'INSUFFICIENT_DATA', recent_window_samples: 0 },
       factor_evidence: evidence.factors,
+      neural_network: {
+        status: resolved.length >= minNeuralTrainingSamples ? 'WAITING_FOR_CHRONOLOGICAL_SPLIT' : 'WAITING_FOR_MATURED_OUTCOMES',
+        architecture: FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
+        input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
+        second_hidden_neurons:NEURAL_POLICY.secondHiddenUnits,output_neurons: 1,
+        samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
+        probability_ready: false, iterations: neuralIterations
+      },
       feature_names: [...FEATURE_NAMES],
       identifier_features_used: false,
       note: 'INSUFFICIENT_CHRONOLOGICAL_DATA_FOR_NESTED_VALIDATION',
@@ -401,6 +603,32 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
   }
 
+  const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
+  const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
+  const neuralTraining=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
+  const neuralFit=neuralTraining.length>=neuralMinimum
+    ?fitNeuralNetworkModel(neuralTraining,{
+      hiddenUnits:NEURAL_POLICY.hiddenUnits,
+      secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
+      iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2
+    }):null;
+  const neuralValidation=neuralFit?evaluateHoldout(validation,neuralFit):{
+    evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MORE_MATURED_TRAINING_SAMPLES',
+    sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
+  };
+  const neuralWins=neuralFit!==null&&neuralValidation.evaluated===true&&
+    neuralValidation.beat_base_rate===true&&
+    (!selectedValidation.evaluated||
+      neuralValidation.model_brier_score+Math.max(0,Number(neuralSelectionMargin)||0)<selectedValidation.model_brier_score);
+  let neuralSelected=false;
+  if(neuralWins){
+    selectedModel='NEURAL_GLOBAL';
+    selectedFit=neuralFit;
+    selectedTraining=neuralTraining;
+    selectedValidation=neuralValidation;
+    selectionReason='NEURAL_MLP_BEAT_LOGISTIC_CHALLENGER_ON_MIDDLE_CHRONOLOGICAL_VALIDATION';
+    neuralSelected=true;
+  }
   const holdoutMetrics = evaluateHoldout(holdout, selectedFit);
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
@@ -422,7 +650,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     : null;
 
   return {
-    method: 'NESTED_PURGED_WALK_FORWARD_ADAPTIVE_EVIDENCE_MODEL_V3',
+    method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
     outcome_horizon_ms: horizonMs,
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
@@ -446,6 +674,21 @@ export function buildCognitiveLearningProfile(samples = [], {
     training_positive_rate_pct: Number((selectedFit.base_rate * 100).toFixed(1)),
     validation: selectedValidation,
     holdout: holdoutMetrics,
+    neural_network: {
+      status: neuralSelected ? 'SELECTED_ON_CHRONOLOGICAL_VALIDATION' :
+        !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
+        neuralValidation.beat_base_rate===true ? 'VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER' : 'VALIDATION_DID_NOT_BEAT_BASE_RATE',
+      architecture: neuralFit?.architecture || FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
+      input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
+      second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
+      samples_required:neuralMinimum,training_samples: neuralTraining.length,
+      trained: neuralFit!==null, selected: neuralSelected,
+      probability_ready: neuralSelected&&probabilityReady,
+      iterations: neuralFit?.iterations??Math.max(20,Math.min(240,Math.trunc(Number(neuralIterations)||NEURAL_POLICY.iterations))),
+      validation: neuralValidation,
+      holdout: neuralSelected?holdoutMetrics:null,
+      selection_margin: Math.max(0,Number(neuralSelectionMargin)||0)
+    },
     model_selection: {
       selected_model: selectedModel,
       reason: selectionReason,
@@ -483,10 +726,10 @@ export function buildCognitiveLearningProfile(samples = [], {
  * train/validation/test splits.
  */
 export function buildCognitivePrequentialProfile(journal = [], {
-  minimumWindowSamples = 20, windowSize = 40
+  minimumWindowSamples = 20, windowSize = 40, modelVariant = null
 } = {}) {
   const rows = (Array.isArray(journal) ? journal : [])
-    .filter(row => row && Number(row.model_version) === 3 &&
+    .filter(row => row && Number(row.model_version) === 5 &&
       finite(row.predicted_up_probability) !== null &&
       Number(row.predicted_up_probability) >= 0 && Number(row.predicted_up_probability) <= 100 &&
       ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
@@ -497,11 +740,16 @@ export function buildCognitivePrequentialProfile(journal = [], {
       Number(row.resolved_at) - Number(row.at) === MIN_OUTCOME_HORIZON_MS)
     .map(row => ({
       ...row,
+      model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
       target: row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))
     .sort((a, b) => Number(a.at) - Number(b.at) || String(a.id).localeCompare(String(b.id)));
 
+  // A changing winner (neural/global/recent) is a new model variant. Never
+  // compare its forward errors against forecasts made by a different winner.
+  const auditedModelVariant=String(modelVariant || rows.at(-1)?.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED';
+  const variantRows=rows.filter(row=>row.model_variant===auditedModelVariant);
   const score = subset => {
     if (!subset.length) return {
       sample_count: 0, brier_score: null, log_loss: null,
@@ -557,9 +805,9 @@ export function buildCognitivePrequentialProfile(journal = [], {
     };
   };
 
-  const recent = rows.slice(-Math.max(minimumWindowSamples, windowSize));
-  const previousEnd = Math.max(0, rows.length - recent.length);
-  const previous = rows.slice(Math.max(0, previousEnd - Math.max(minimumWindowSamples, windowSize)), previousEnd);
+  const recent = variantRows.slice(-Math.max(minimumWindowSamples, windowSize));
+  const previousEnd = Math.max(0, variantRows.length - recent.length);
+  const previous = variantRows.slice(Math.max(0, previousEnd - Math.max(minimumWindowSamples, windowSize)), previousEnd);
   const recentMetrics = score(recent);
   const previousMetrics = score(previous);
   const enough = recent.length >= minimumWindowSamples && previous.length >= minimumWindowSamples;
@@ -572,7 +820,10 @@ export function buildCognitivePrequentialProfile(journal = [], {
     method: 'IMMUTABLE_FORWARD_FORECAST_PREQUENTIAL_AUDIT_V2',
     status: !enough ? 'INSUFFICIENT_FORWARD_PREDICTIONS' :
       driftDetected ? 'FORWARD_PERFORMANCE_DEGRADING' : 'FORWARD_MONITORING_STABLE',
-    resolved_forecasts: rows.length,
+    resolved_forecasts: variantRows.length,
+    all_v5_resolved_forecasts: rows.length,
+    audited_model_variant: auditedModelVariant,
+    excluded_other_model_variant_forecasts: rows.length-variantRows.length,
     minimum_window_samples: minimumWindowSamples,
     previous_window: previousMetrics,
     recent_window: recentMetrics,
@@ -581,7 +832,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
     reassessment_required: driftDetected,
     note: driftDetected
       ? 'RECENT_IMMUTABLE_FORECASTS_DEGRADED_VS_PRIOR_WINDOW'
-      : 'ONLY_FIRST_RECORDED_MODEL_V3_FORECAST_PER_CLOSED_CANDLE_IS_SCORED'
+      : 'ONLY_FIRST_RECORDED_MODEL_V5_FORECAST_PER_CLOSED_CANDLE_IS_SCORED_PER_SELECTED_MODEL_VARIANT'
   };
 }
 
@@ -636,7 +887,7 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     price !== null && price > 0 && score !== null && candleAge !== null &&
     candleAge >= 0 && candleAge <= 20 * 60 * 1000;
   const base = {
-    version: 3,
+    version: 5,
     symbol,
     assessed_at: Number(now),
     entry_eligible: false,
@@ -776,7 +1027,8 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,
     predicted_up_probability: predicted === null ? null : Number((predicted * 100).toFixed(1)),
-    confidence_label: predicted === null ? 'UNKNOWN' : 'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT',
+    confidence_label: predicted === null ? 'UNKNOWN' : profile?.neural_network?.selected === true
+      ? 'VALIDATED_NEURAL_MLP_ON_CHRONOLOGICAL_HOLDOUT' : 'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT',
     learning_samples: Number(profile?.resolved_samples) || 0,
     counterfactual_evidence: counterfactuals,
     entry_eligible: false,
