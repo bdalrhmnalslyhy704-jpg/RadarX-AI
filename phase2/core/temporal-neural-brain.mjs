@@ -10,7 +10,7 @@
 export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
-export const TEMPORAL_SEQUENCE_CHANNELS = 8;
+export const TEMPORAL_SEQUENCE_CHANNELS = 14;
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -380,7 +380,7 @@ function fitEnsemble(rows, options = {}) {
   const members = SEEDS.map(seed => fitMember(rows, seed, {...options,baseRate}));
   return {
     members,seeds:[...SEEDS],
-    architecture:'TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1',
+    architecture:'TCN_24x14_DILATED_RESIDUAL_MICROSTRUCTURE_ENSEMBLE_V2',
     training_prior_probability:baseRate
   };
 }
@@ -401,7 +401,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const enoughSplit = trainingEndIndex > 0;
   if (!enoughSplit) return {
     status: 'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture: 'TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1',
+    architecture: 'TCN_24x14_DILATED_RESIDUAL_MICROSTRUCTURE_ENSEMBLE_V2',
     target_definition: TEMPORAL_TARGET_DEFINITION,
     sequence_steps: TEMPORAL_SEQUENCE_STEPS, sequence_channels: TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members: 0, ensemble_members_required: SEEDS.length,
@@ -427,7 +427,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   if (training.length < minTrainingSamples || validation.length < minimumValidationSamples ||
       holdout.length < minimumHoldoutSamples) return {
     status: 'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture: 'TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1',
+    architecture: 'TCN_24x14_DILATED_RESIDUAL_MICROSTRUCTURE_ENSEMBLE_V2',
     target_definition: TEMPORAL_TARGET_DEFINITION,
     sequence_steps: TEMPORAL_SEQUENCE_STEPS, sequence_channels: TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members: 0, ensemble_members_required: SEEDS.length,
