@@ -512,7 +512,11 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.equal(snapshot.candidates[0].symbol,'TESTUSDT');
   const cached=await service({limit:20,now:f.now+1000});
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
-  assert.equal(requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='15m').length,2);
+  const fifteenRequests=requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='15m');
+  assert.equal(fifteenRequests.length,4,
+    'BTC and the scanned asset each receive one current and one older 15m page');
+  assert.ok(fifteenRequests.some(x=>x.query.symbol==='BTCUSDT'&&Number(x.query.endTime)>0));
+  assert.ok(fifteenRequests.some(x=>x.query.symbol==='TESTUSDT'&&Number(x.query.endTime)>0));
   const fastRequests=requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m');
   assert.equal(fastRequests.length,2);
   assert.equal(fastRequests[0].query.limit,1000);
@@ -726,6 +730,7 @@ test('universe rotation continues after the last successful pair and retries the
   const symbols=Array.from({length:100},(_,i)=>'ROT'+String(i).padStart(3,'0')+'USDT');
   let failTail=true;
   const symbolRequests=[];
+  const historicalPageRequests=[];
   const rest={async request(path,query={}) {
     if(path==='/api/v3/exchangeInfo')return {data:{symbols:symbols.map(symbol=>({
       symbol,status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
@@ -736,7 +741,8 @@ test('universe rotation continues after the last successful pair and retries the
     if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return f.klines;
     if(path==='/api/v3/klines'&&query.interval==='5m')return f.klines;
     if(path==='/api/v3/klines'){
-      symbolRequests.push(query.symbol);
+      if(query.interval==='15m'&&query.endTime===undefined)symbolRequests.push(query.symbol);
+      if(query.interval==='15m'&&query.endTime!==undefined)historicalPageRequests.push(query.symbol);
       const index=Number(String(query.symbol).slice(3,6));
       if(failTail&&index>=28)throw new Error('TEST_TEMPORARY_KLINE_FAILURE');
       return f.klines;
@@ -763,6 +769,8 @@ test('universe rotation continues after the last successful pair and retries the
   assert.equal(second.universe.valid_symbols,40);
   assert.ok(second.universe.scan_advance_count>0);
   assert.equal(symbolRequests[countBeforeSecond],'ROT028USDT');
+  assert.ok(historicalPageRequests.includes('ROT028USDT'),
+    'successfully retried pairs also fetch their older closed-candle history');
   assert.equal(symbolRequests[countBeforeSecond+7],'ROT035USDT');
   assert.equal(second.candidates[0].real_order_execution,false);
 
