@@ -434,11 +434,14 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Hold out enough complete timestamp groups to preserve at least 100 untouched
   // outcomes when the sample history permits it. This frees unnecessary old
   // timestamps for training without weakening the holdout performance threshold.
-  const holdoutTargetSamples=Math.max(minimumHoldoutSamples,
-    Math.min(liveHoldoutSamples,Math.floor(rows.length*0.2)));
-  const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples);
-  const validationTargetSamples=Math.max(minimumValidationSamples,Math.floor(rows.length*0.15));
-  const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,validationTargetSamples);
+  const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
+    ?liveHoldoutSamples:minimumHoldoutSamples;
+  const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
+  // Keep at least eight hours of timestamps in the middle block: after purging
+  // the four-hour label-overlap tail, a full four-hour evaluation window remains.
+  const validationTargetSamples=minimumValidationSamples;
+  const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
+    validationTargetSamples,2*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
   const emptySpecialists=Object.fromEntries(regimes.map(regime=>[regime,{
