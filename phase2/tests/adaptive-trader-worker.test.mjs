@@ -10,17 +10,23 @@ import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
 
 
-test('worker exposes the exact V5 plus TCN source contract without claiming model readiness',()=>{
+test('worker exposes the exact V5 plus TCN source contract without claiming model readiness',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-contract-'));
+  const store=await new DurableStore({dir}).init();
   const worker=new AdaptiveTraderWorker({
-    store:{},snapshotProvider:async()=>({}),logger:{info(){},warn(){}}
+    store,snapshotProvider:async()=>({}),logger:{info(){},warn(){}}
   });
-  const status=worker.snapshot();
-  assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
-  assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
-    'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
-  assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
-    'source presence must never be confused with out-of-sample readiness');
-  assert.equal(status.real_order_execution,false);
+  try{
+    const status=worker.snapshot();
+    assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
+    assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
+      'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
+    assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
+      'source presence must never be confused with out-of-sample readiness');
+    assert.equal(status.real_order_execution,false);
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
 });
 
 test('TEST_FIXTURE: adaptive trader persistence bypasses a stalled main radar archive queue',async()=>{
