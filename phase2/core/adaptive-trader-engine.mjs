@@ -491,7 +491,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     if(dailyReturn===null)continue;
     possible.push({index,volume24h,dailyReturn,baseline,future});
   }
-  const desired=Math.max(1,Math.min(16,Math.trunc(Number(maxSamples)||8)));
+  const desired=Math.max(1,Math.min(48,Math.trunc(Number(maxSamples)||48)));
   const selected=[];
   // Give each symbol a deterministic phase on the 4h sampling grid. This keeps
   // that symbol's own outcomes non-overlapping, while preventing every market
