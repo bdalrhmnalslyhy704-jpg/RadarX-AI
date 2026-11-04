@@ -175,7 +175,8 @@ jobs:
           const brain=x.cognitive_brain||{};
           const brainProfile=brain.profile||{};
           const neuralNetwork=brainProfile.neural_network||{};
-          const neuralNetworkContract=
+          const temporalNetwork=brainProfile.temporal_network||{};
+          const legacyNeuralNetworkContract=
             neuralNetwork.architecture==='18-10-6-1+RESIDUAL'&&
             Number(neuralNetwork.input_neurons)===18&&
             Number(neuralNetwork.hidden_neurons)===10&&
@@ -183,18 +184,41 @@ jobs:
             Number(neuralNetwork.output_neurons)===1&&
             Number(neuralNetwork.samples_required)>=240&&
             Number(neuralNetwork.ensemble_members_required)===3&&
-            (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3)&&
-            ['WAITING_FOR_MATURED_TRAINING_SAMPLES','WAITING_FOR_CHRONOLOGICAL_SPLIT',
-             'VALIDATION_DID_NOT_BEAT_BASE_RATE','VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER',
-             'SELECTED_ON_CHRONOLOGICAL_VALIDATION'].includes(String(neuralNetwork.status));
+            (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
+          const temporalNetworkContract=
+            temporalNetwork.architecture==='TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1'&&
+            temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
+            Number(temporalNetwork.sequence_steps)===24&&
+            Number(temporalNetwork.sequence_channels)===8&&
+            Number(temporalNetwork.ensemble_members_required)===3&&
+            (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)&&
+            ['WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
+             'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE',
+             'VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
+             'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
+             'LIVE_GATE_PASSED_OUT_OF_SAMPLE'].includes(String(temporalNetwork.status));
           const cognitiveEvidence={
             method:String(brainProfile.method||brain.method||'UNKNOWN'),
             model_selected:String(brainProfile.model_selection?.selected_model||'NONE'),
-            neural_network_contract:neuralNetworkContract,
-            neural_network_status:String(neuralNetwork.status||'UNKNOWN'),
-            neural_network_training_samples:Number(neuralNetwork.training_samples)||0,
-            neural_network_required_samples:Number(neuralNetwork.samples_required)||0,
-            neural_network_selected:neuralNetwork.selected===true,
+            legacy_neural_network_contract:legacyNeuralNetworkContract,
+            temporal_network_contract:temporalNetworkContract,
+            temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
+            temporal_network_resolved_samples:Number(temporalNetwork.resolved_samples)||0,
+            temporal_network_training_samples:Number(temporalNetwork.training_samples)||0,
+            temporal_network_required_samples:Number(temporalNetwork.required_training_samples)||0,
+            temporal_network_validation_samples:Number(temporalNetwork.validation_samples)||0,
+            temporal_network_holdout_samples:Number(temporalNetwork.holdout_samples)||0,
+            temporal_network_selected:temporalNetwork.selected===true,
+            temporal_network_probability_ready:temporalNetwork.probability_ready===true,
+            temporal_network_live_eligibility_ready:temporalNetwork.live_eligibility_ready===true,
+            temporal_network_validation_evaluated:temporalNetwork.validation?.evaluated===true,
+            temporal_network_validation_beats_baseline:temporalNetwork.validation?.beat_base_rate===true,
+            temporal_network_holdout_evaluated:temporalNetwork.holdout?.evaluated===true,
+            temporal_network_holdout_beats_baseline:temporalNetwork.holdout?.beat_base_rate===true,
+            temporal_network_holdout_beats_pooled_logistic:temporalNetwork.holdout_comparison?.beats_pooled_logistic===true,
+            temporal_network_validation_start_at:temporalNetwork.validation_start_at??null,
+            temporal_network_holdout_start_at:temporalNetwork.holdout_start_at??null,
+            temporal_network_max_training_outcome_resolved_at:temporalNetwork.max_training_outcome_resolved_at??null,
             status:String(brain.status||'UNKNOWN'),
             resolved_samples:Number(brainProfile.resolved_samples)||0,
             training_samples:Number(brainProfile.training_samples)||0,
@@ -205,29 +229,31 @@ jobs:
             validation_beat_base_rate:brainProfile.validation?.beat_base_rate===true,
             holdout_evaluated:brainProfile.holdout?.evaluated===true,
             holdout_beat_base_rate:brainProfile.holdout?.beat_base_rate===true,
-            probability_ready:brainProfile.probability_ready===true,
+            probability_ready:temporalNetwork.probability_ready===true||brainProfile.probability_ready===true,
             validation_start_at:brainProfile.validation_start_at??null,
             holdout_start_at:brainProfile.holdout_start_at??null,
             max_training_outcome_resolved_at:brainProfile.max_training_outcome_resolved_at??null
           };
-          if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'||!cognitiveEvidence.neural_network_contract){
-            throw new Error('ADAPTIVE_TRADER_COGNITIVE_MODEL_V5_CONTRACT_INVALID '+JSON.stringify(cognitiveEvidence));
+          if(cognitiveEvidence.method!=='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'||
+             !cognitiveEvidence.temporal_network_contract){
+            throw new Error('ADAPTIVE_TRADER_TEMPORAL_TCN_CONTRACT_INVALID '+JSON.stringify(cognitiveEvidence));
           }
+          const temporalTrained=temporalNetwork.trained===true;
           const chronologicalSplitSafe=
-            cognitiveEvidence.training_samples>=60&&
-            cognitiveEvidence.validation_samples>=1&&
-            cognitiveEvidence.holdout_samples>=20&&
-            Number(cognitiveEvidence.max_training_outcome_resolved_at)<Number(cognitiveEvidence.validation_start_at)&&
-            Number(cognitiveEvidence.validation_start_at)<Number(cognitiveEvidence.holdout_start_at);
-          const probabilityGateSafe=!cognitiveEvidence.probability_ready||
-            (cognitiveEvidence.validation_samples>=20&&cognitiveEvidence.holdout_samples>=20&&
-             cognitiveEvidence.validation_evaluated&&cognitiveEvidence.validation_beat_base_rate&&
-             cognitiveEvidence.holdout_evaluated&&cognitiveEvidence.holdout_beat_base_rate&&
-             (cognitiveEvidence.model_selected!=='NEURAL_GLOBAL'||neuralNetwork.selected===true&&
-               neuralNetwork.probability_ready===true&&neuralNetwork.holdout?.evaluated===true&&
-               neuralNetwork.holdout?.beat_base_rate===true));
-          if(cognitiveEvidence.resolved_samples>=100&&(!chronologicalSplitSafe||!probabilityGateSafe)){
-            throw new Error('ADAPTIVE_TRADER_COGNITIVE_CHRONOLOGICAL_SPLIT_INCOMPLETE '+JSON.stringify(cognitiveEvidence));
+            Number(temporalNetwork.training_samples)>=160&&
+            Number(temporalNetwork.validation_samples)>=24&&
+            Number(temporalNetwork.holdout_samples)>=40&&
+            Number(temporalNetwork.max_training_outcome_resolved_at)<Number(temporalNetwork.validation_start_at)&&
+            Number(temporalNetwork.validation_start_at)<Number(temporalNetwork.holdout_start_at);
+          const probabilityGateSafe=!temporalNetwork.probability_ready||
+            (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
+             temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
+             temporalNetwork.holdout_comparison?.beats_pooled_logistic===true);
+          if(temporalTrained&&(!chronologicalSplitSafe||!probabilityGateSafe)){
+            throw new Error('ADAPTIVE_TRADER_TEMPORAL_CHRONOLOGICAL_SPLIT_INCOMPLETE '+JSON.stringify(cognitiveEvidence));
+          }
+          if(temporalNetwork.probability_ready===true&&!temporalTrained){
+            throw new Error('ADAPTIVE_TRADER_TEMPORAL_PROBABILITY_WITHOUT_TRAINING '+JSON.stringify(cognitiveEvidence));
           }
           const trainingEvidence={
             resolved_samples:Number(x.memory?.resolved_samples)||0,
