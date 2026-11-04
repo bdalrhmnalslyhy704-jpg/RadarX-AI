@@ -837,7 +837,9 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ...row,
       model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
-      target: row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
+      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
+        ? (row.outcome==='UP'?1:0)
+        : row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))
     .sort((a, b) => Number(a.at) - Number(b.at) || String(a.id).localeCompare(String(b.id)));
 
