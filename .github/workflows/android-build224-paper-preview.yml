@@ -49,11 +49,10 @@ jobs:
             echo "::error::Legacy backend or placeholder URL found in Android source."
             exit 1
           fi
-          if grep -RIn --exclude-dir=build -E 'real_order_execution[[:space:]]*=[[:space:]]*true|REAL_ORDER_EXECUTION[[:space:]]*=[[:space:]]*true' android/app/src/main phase2; then
-            echo "::error::Real order execution enabled in a paper-preview build."
-            exit 1
-          fi
-          echo "Build 224 source pinned to DHDTech; no Railway/placeholder/GitHub Pages fallback; version 1.6.1."
+          grep -Fq 'paperTrading: true' phase2/config.mjs
+          grep -Fq 'realOrderExecution: false' phase2/config.mjs
+          grep -Fq 'real_order_execution:false' android/app/src/main/assets/radarx-backend-client.mjs
+          echo "Build 224 source pinned to DHDTech; paper trading is true and real order execution is false; version 1.6.1."
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
