@@ -15,6 +15,16 @@ const MAX_SAMPLES=6000;
 const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 const MAX_COGNITIVE_JOURNAL=3000;
+// V5 learns four-hour close direction; moves inside this deadband are FLAT.
+// TCN retains its separate +3% before -2% first-passage target.
+const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
+function v5CloseOutcome(value){
+  const move=finite(value);
+  if(move===null)return null;
+  if(move>=V5_CLOSE_DIRECTION_DEADBAND_PCT)return 'UP';
+  if(move<=-V5_CLOSE_DIRECTION_DEADBAND_PCT)return 'DOWN';
+  return 'FLAT';
+}
 
 function publicTemporalProfile(profile){
   if(!profile||typeof profile!=='object')return null;
@@ -56,6 +66,7 @@ function emptyState(){
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
+    v5_samples:[],
     cognitive_prequential:buildCognitivePrequentialProfile([]),
     radar_outcome_learning:null,
     paper_portfolio:paperPortfolio,
@@ -118,6 +129,10 @@ export class AdaptiveTraderWorker{
               }
               return sample;
             }),
+            v5_samples:Array.isArray(saved.v5_samples)?saved.v5_samples.slice(-MAX_SAMPLES).filter(row=>
+              row&&row.training_eligible===true&&
+              (row.historical_baseline===true||row.closed_candle_baseline===true)&&
+              row.target_definition==='LEGACY_4H_CLOSE_RETURN'):[],
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
             cognitive_journal:Array.isArray(saved.cognitive_journal)?saved.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL):[],
@@ -131,7 +146,9 @@ export class AdaptiveTraderWorker{
               :createServerPaperPortfolio()
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
-          this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
+          this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
+            temporalSamples:this.trainingSamples()
+          });
           this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{
         modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
@@ -170,42 +187,18 @@ export class AdaptiveTraderWorker{
   }
 
   trainingSamples(){
+    // TCN-only first-passage dataset: +3% before -2% within four hours.
     return this.state.samples.filter(row=>row&&row.training_eligible===true&&
-      (row.historical_baseline===true||row.closed_candle_baseline===true));
+      (row.historical_baseline===true||row.closed_candle_baseline===true)&&
+      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1');
   }
 
-  // V5 predicts the direction of the completed four-hour close, while TCN
-  // predicts +3% before -2% first-passage. Keep the same verified candle event
-  // as two separate, immutable training rows; never feed TCN labels into V5.
   cognitiveTrainingSamples(){
-    const samples=this.trainingSamples();
-    const legacyRows=[];
-    for(const row of samples){
-      const historical=row.historical_baseline===true;
-      const expectedTemporalSource=historical
-        ?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
-        :'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
-      if(row.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
-         row.outcome_source!==expectedTemporalSource||
-         !['UP','DOWN','FLAT'].includes(row.outcome))continue;
-      const price=finite(row.price),markPrice=finite(row.mark_price);
-      const recordedCloseReturn=finite(row.close_return_pct);
-      const closeReturn=price!==null&&price>0&&markPrice!==null
-        ?(markPrice/price-1)*100:recordedCloseReturn;
-      const at=finite(row.at),resolvedAt=finite(row.resolved_at),horizon=finite(row.horizon_ms);
-      if(closeReturn===null||at===null||resolvedAt===null||
-         resolvedAt-at!==SAMPLE_HORIZON_MS||horizon!==SAMPLE_HORIZON_MS)continue;
-      legacyRows.push({
-        ...row,
-        id:'V5_4H_CLOSE_RETURN:'+String(row.id),
-        outcome:closeReturn>0?'UP':closeReturn<0?'DOWN':'FLAT',
-        return_pct:Number(closeReturn.toFixed(5)),
-        close_return_pct:Number(closeReturn.toFixed(5)),
-        target_definition:'LEGACY_4H_CLOSE_RETURN',
-        outcome_source:historical?'HISTORICAL_CLOSED_CANDLE':'CLOSED_CANDLE_4H'
-      });
-    }
-    return samples.concat(legacyRows);
+    // V5-only four-hour close-direction dataset; first-passage labels are excluded.
+    return (Array.isArray(this.state.v5_samples)?this.state.v5_samples:[]).filter(row=>
+      row&&row.training_eligible===true&&
+      (row.historical_baseline===true||row.closed_candle_baseline===true)&&
+      row.target_definition==='LEGACY_4H_CLOSE_RETURN');
   }
 
   async runOnce({limit:requestedLimit}={}){
@@ -258,7 +251,9 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
-      this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
+      this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
+        temporalSamples:this.trainingSamples()
+      });
       this.activeScanStage='RADAR_OUTCOME_MEMORY';
       if(typeof this.store.getRadarSignalOutcomes==='function'){
         try{
@@ -404,6 +399,8 @@ export class AdaptiveTraderWorker{
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),
       selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
         String(profile.model_selection?.selected_model||'UNVALIDATED'),
+      target_definition:profile.temporal_network?.probability_ready===true
+        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1':'LEGACY_4H_CLOSE_RETURN',
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,
@@ -432,9 +429,11 @@ export class AdaptiveTraderWorker{
   }
 
   refreshCognitiveOutcomeLinks(){
-    const byId=new Map(this.trainingSamples().map(sample=>[String(sample.id||''),sample]));
+    const temporalById=new Map(this.trainingSamples().map(sample=>[String(sample.id||''),sample]));
+    const v5ById=new Map(this.cognitiveTrainingSamples().map(sample=>[String(sample.id||''),sample]));
     for(const row of this.state.cognitive_journal||[]){
-      const sample=byId.get(String(row.id||''));
+      const source=row.selected_model==='TEMPORAL_TCN'?temporalById:v5ById;
+      const sample=source.get(String(row.id||''));
       if(!sample||!sample.outcome)continue;
       row.outcome=sample.outcome;
       row.return_pct=finite(sample.return_pct);
@@ -456,7 +455,9 @@ export class AdaptiveTraderWorker{
       if(decision==='EARLY_SETUP_REVIEW')reviewable++;
       if(Array.isArray(brain.contradictions)&&brain.contradictions.length)contradictory++;
     }
-    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
+    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
+      temporalSamples:this.trainingSamples()
+    });
     const journal=this.state.cognitive_journal||[];
     return {
       at:Number(now),assessed_candidates:rows.length,valid_data_candidates:valid,
@@ -522,7 +523,9 @@ recordServerPaperPortfolio(snapshot,now){
       missing_id:0,duplicate_id:0,invalid_outcome:0,missing_features:0,
       invalid_timestamp:0,invalid_price:0,invalid_return:0,resolved_in_future:0,horizon_too_short:0
     };
-    let newHistoricalSamples=0;
+    let newHistoricalSamples=0,newHistoricalV5Samples=0;
+    this.state.v5_samples=Array.isArray(this.state.v5_samples)?this.state.v5_samples:[];
+    const knownV5Ids=new Set(this.state.v5_samples.map(row=>String(row?.id||'')));
     for(const row of historicalRows){
       const id=String(row?.id||''),at=finite(row?.at),resolvedAt=finite(row?.resolved_at),move=finite(row?.return_pct);
       if(!id){historicalRejected.missing_id++;continue;}
@@ -537,14 +540,27 @@ recordServerPaperPortfolio(snapshot,now){
       this.state.samples.push({...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
         training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'});
       knownIds.add(id);newHistoricalSamples++;
+      const closeReturnPct=finite(row.close_return_pct);
+      const v5Outcome=v5CloseOutcome(closeReturnPct);
+      if(closeReturnPct!==null&&v5Outcome!==null&&!knownV5Ids.has(id)){
+        const {temporal_sequence,...v5Base}=row;
+        this.state.v5_samples.push({...v5Base,id,observation_type:'HISTORICAL_CLOSED_CANDLE',
+          historical_baseline:true,closed_candle_baseline:false,training_eligible:true,
+          target_definition:'LEGACY_4H_CLOSE_RETURN',outcome:v5Outcome,
+          return_pct:closeReturnPct,close_return_pct:closeReturnPct,
+          close_return_deadband_pct:V5_CLOSE_DIRECTION_DEADBAND_PCT,
+          resolved_at:resolvedAt,horizon_ms:SAMPLE_HORIZON_MS,
+          outcome_source:'HISTORICAL_CLOSED_CANDLE'});
+        knownV5Ids.add(id);newHistoricalV5Samples++;
+      }
     }
-    let newClosedCandleOutcomes=0;
+    let newClosedCandleOutcomes=0,newV5ClosedOutcomes=0;
     const sampleById=new Map(this.state.samples.map(row=>[String(row?.id||''),row]));
+    const v5SampleById=new Map(this.state.v5_samples.map(row=>[String(row?.id||''),row]));
     for(const label of (Array.isArray(snapshot.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[])){
       const sample=sampleById.get(String(label?.sample_id||''));
       const at=finite(label?.at),baselinePrice=finite(label?.baseline_price);
-      const markPrice=finite(label?.mark_price),resolvedAt=finite(label?.resolved_at);
-      const passageReturn=finite(label?.return_pct),closeReturn=finite(label?.close_return_pct);
+      const markPrice=finite(label?.mark_price),resolvedAt=finite(label?.resolved_at),move=finite(label?.return_pct);
       if(!sample||sample.closed_candle_baseline!==true||sample.training_eligible!==true||sample.outcome||
          cleanSymbol(sample.symbol)!==cleanSymbol(label?.symbol)||at===null||at!==Number(sample.at)||
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
@@ -552,15 +568,27 @@ recordServerPaperPortfolio(snapshot,now){
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
          label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
-         !['UP','DOWN','FLAT'].includes(label?.outcome)||passageReturn===null||closeReturn===null)continue;
+         !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
-      sample.return_pct=passageReturn;
-      sample.close_return_pct=closeReturn;
+      sample.return_pct=Number(label.return_pct);
+      sample.close_return_pct=move;
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
       sample.first_passage=label.first_passage||null;
       sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
+      const v5Sample=v5SampleById.get(String(label?.sample_id||''));
+      const closeReturnPct=finite(label?.close_return_pct);
+      const closeOutcome=v5CloseOutcome(closeReturnPct);
+      if(v5Sample&&!v5Sample.outcome&&closeReturnPct!==null&&closeOutcome!==null){
+        v5Sample.outcome=closeOutcome;v5Sample.mark_price=markPrice;
+        v5Sample.return_pct=closeReturnPct;v5Sample.close_return_pct=closeReturnPct;
+        v5Sample.resolved_at=resolvedAt;v5Sample.horizon_ms=SAMPLE_HORIZON_MS;
+        v5Sample.target_definition='LEGACY_4H_CLOSE_RETURN';
+        v5Sample.close_return_deadband_pct=V5_CLOSE_DIRECTION_DEADBAND_PCT;
+        v5Sample.outcome_source='CLOSED_CANDLE_4H';
+        newV5ClosedOutcomes++;
+      }
     }
 
     // Build a per-symbol index once, so thousands of market-wide observations
@@ -642,6 +670,13 @@ recordServerPaperPortfolio(snapshot,now){
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
         this.state.samples.push(item);
+        const {temporal_sequence,...v5Base}=item;
+        if(!knownV5Ids.has(item.id)){
+          this.state.v5_samples.push({...v5Base,target_definition:'LEGACY_4H_CLOSE_RETURN',
+            close_return_deadband_pct:V5_CLOSE_DIRECTION_DEADBAND_PCT,
+            outcome:null,mark_price:null,return_pct:null,outcome_source:null});
+          knownV5Ids.add(item.id);
+        }
         newestTraining.set(symbol,item);
         knownIds.add(item.id);newDeepSamples++;
         continue;
@@ -660,6 +695,7 @@ recordServerPaperPortfolio(snapshot,now){
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
+    this.state.v5_samples=this.state.v5_samples.slice(-MAX_SAMPLES);
     // Keep the sequence tensor for each retained training row. With a 6,000-row
     // cap this is bounded and preserves enough chronological groups for the
     // independent temporal holdout instead of silently discarding most history.
@@ -668,6 +704,7 @@ recordServerPaperPortfolio(snapshot,now){
       at:now,
       historical_input_samples:historicalRows.length,
       new_historical_samples:newHistoricalSamples,
+      new_historical_v5_close_samples:newHistoricalV5Samples,
       historical_rejected:historicalRejected,
       snapshot_historical_samples_available:Math.max(0,Math.trunc(Number(snapshot.universe?.historical_training_samples_available)||0)),
       snapshot_closed_candle_outcomes_input:closedCandleOutcomeRows.length,
@@ -679,7 +716,10 @@ recordServerPaperPortfolio(snapshot,now){
       historical_resolved_samples:this.state.samples.filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'&&row.outcome).length,
       resolved_samples:this.trainingSamples().filter(row=>row.outcome).length,
       unresolved_training_samples:this.trainingSamples().filter(row=>!row.outcome).length,
-      new_closed_candle_outcomes:newClosedCandleOutcomes
+      new_closed_candle_outcomes:newClosedCandleOutcomes,
+      new_v5_closed_outcomes:newV5ClosedOutcomes,
+      v5_close_resolved_samples:this.cognitiveTrainingSamples().filter(row=>row.outcome).length,
+      v5_close_unresolved_samples:this.cognitiveTrainingSamples().filter(row=>!row.outcome).length
     };
   }
 
@@ -835,7 +875,9 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   snapshot(){
-    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
+    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
+      temporalSamples:this.trainingSamples()
+    });
     const publicCognitive=publicCognitiveProfile(internalCognitive);
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
