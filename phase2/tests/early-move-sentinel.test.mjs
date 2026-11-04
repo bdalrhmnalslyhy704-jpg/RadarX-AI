@@ -427,6 +427,63 @@ function makeEarlyFlowWatchCandidate(now){
   };
 }
 
+
+test('watchdog restart clears the previous deep-scan busy timestamp and isolates old scan generations',async()=>{
+  let now=1710010000000;
+  let scannerCount=0,releaseOld,releaseNew;
+  const oldScan=new Promise(resolve=>{releaseOld=resolve;});
+  const newScan=new Promise(resolve=>{releaseNew=resolve;});
+  const store={async init(){},async appendMoveAlert(){}};
+  const rest={async request(path){
+    if(path==='/api/v3/exchangeInfo')return{data:{symbols:[]}};
+    if(path==='/api/v3/ticker/24hr')return{data:[]};
+    throw new Error('UNEXPECTED_REST_PATH:'+path);
+  }};
+  const candidate={symbol:'TESTUSDT',last_price:1,price_change_24h:0.2,data_quality:0,liquidity_quality:0,
+    data_status:{data_valid:false,data_stale:true},pre_move_context:{},bottom_context:{metrics:{},algorithms:{}},strategies:[],accepted_strategies:[]};
+  const sentinel=new EarlyMoveSentinel({
+    rest,store,clock:()=>now,config:{reconcileMs:60000},
+    scannerFactory:()=>({scanSymbol:()=>++scannerCount===1?oldScan:newScan}),
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
+    logger:{info(){},warn(){}}
+  });
+  await sentinel.start();
+  const firstGeneration=sentinel.lifecycleGeneration;
+  sentinel.deepQueue.push({symbol:'OLDUSDT',row:{symbol:'OLDUSDT'},trigger:{movePct:0.8},queuedAt:now,mode:'MOVE'});
+  const oldDrain=sentinel.drainDeepQueue(firstGeneration);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sentinel.deepActive,1);
+  assert.equal(sentinel.health().busy_since_at,now);
+
+  await sentinel.stop();
+  assert.equal(sentinel.deepActive,0);
+  assert.equal(sentinel.deepActiveStartedAt,null);
+  assert.equal(sentinel.health().busy,false);
+  assert.equal(sentinel.health().busy_since_at,null);
+
+  now+=1000;
+  await sentinel.start();
+  const secondGeneration=sentinel.lifecycleGeneration;
+  assert.notEqual(secondGeneration,firstGeneration);
+  sentinel.deepQueue.push({symbol:'NEWUSDT',row:{symbol:'NEWUSDT'},trigger:{movePct:0.8},queuedAt:now,mode:'MOVE'});
+  const newDrain=sentinel.drainDeepQueue(secondGeneration);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(sentinel.deepActive,1);
+  const newBusySince=sentinel.deepActiveStartedAt;
+  assert.equal(newBusySince,now);
+
+  releaseOld(candidate);
+  await oldDrain;
+  assert.equal(sentinel.deepActive,1,'an old-generation completion must not decrement the replacement worker counter');
+  assert.equal(sentinel.deepActiveStartedAt,newBusySince,'an old-generation completion must not clear the replacement worker timestamp');
+
+  releaseNew(candidate);
+  await newDrain;
+  assert.equal(sentinel.deepActive,0);
+  assert.equal(sentinel.deepActiveStartedAt,null);
+  await sentinel.stop();
+});
+
 test('a stalled initial reconciliation times out and releases the worker busy latch',async()=>{
   const never=new Promise(()=>{});
   const sentinel=new EarlyMoveSentinel({

@@ -692,6 +692,14 @@ export class EarlyMoveSentinel {
 
   async start(){
     if(this.running)return;
+    // A watchdog restart starts a new scan generation. Never inherit an old
+    // deep-scan latch/timestamp: stale timestamps can trigger an endless restart
+    // loop even though the replacement worker is healthy.
+    this.deepQueue=[];
+    this.deepActive=0;
+    this.deepActiveStartedAt=null;
+    this.reconciling=false;
+    this.reconcileStartedAt=null;
     this.running=true;
     const generation=++this.lifecycleGeneration;
     await this.store.init();
@@ -712,7 +720,7 @@ export class EarlyMoveSentinel {
       initialBackoffMs:this.config.websocket.initialBackoffMs,
       maxBackoffMs:this.config.websocket.maxBackoffMs,
       jitterRatio:this.config.websocket.jitterRatio,
-      onTicker:t=>this.onTicker(t),
+      onTicker:t=>this.onTicker(t,generation),
       onState:(state,reason)=>this.logger.info?.('MOVE_WS',state,reason||'')
     });
     this.ws.start();
@@ -741,6 +749,7 @@ export class EarlyMoveSentinel {
     this.ws=null;
     this.deepQueue=[];
     this.deepActive=0;
+    this.deepActiveStartedAt=null;
   }
 
   health(){
@@ -791,9 +800,9 @@ export class EarlyMoveSentinel {
       this.lastReconcileAt=this.clock();
       for(const raw of rows){
         const row=normalizeTickerRow(raw,this.config.quote);
-        if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial);
+        if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial,generation);
       }
-      this.queuePreExplosionDiscovery(rows);
+      this.queuePreExplosionDiscovery(rows,generation);
     }catch(error){
       if(generation===this.lifecycleGeneration){
         this.lastError=String(error?.message??error);
@@ -808,8 +817,8 @@ export class EarlyMoveSentinel {
     }
   }
 
-  onTicker(ticker){
-    if(!this.running||!this.eligibleSymbol(ticker?.symbol))return;
+  onTicker(ticker,generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration||!this.eligibleSymbol(ticker?.symbol))return;
     const symbol=String(ticker.symbol).toUpperCase();
     const previous=this.lastTicker.get(symbol);
     const incomingTradeCount=ticker.tradeCount24h;
@@ -833,10 +842,11 @@ export class EarlyMoveSentinel {
       tickerTime:Number(ticker.eventTime)||this.clock(),
       quoteAsset:this.config.quote
     };
-    this.processTicker(row,false);
+    this.processTicker(row,false,generation);
   }
 
-  queuePreExplosionDiscovery(rows){
+  queuePreExplosionDiscovery(rows,generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration)return;
     const discovery=rankPreExplosionTickerRows(rows,[...this.spotSymbols].map(symbol=>({symbol})),{
       minQuoteVolume24h:this.config.minQuoteVolume24h,
       max24hMovePct:this.config.earlyMax24hMovePct,
@@ -874,13 +884,15 @@ export class EarlyMoveSentinel {
         mode:'PRE_EXPLOSION'
       });
     }
-    this.drainDeepQueue().catch(e=>{
+    this.drainDeepQueue(generation).catch(e=>{
+      if(generation!==this.lifecycleGeneration)return;
       this.lastError=String(e?.message??e);
       this.logger.warn?.('PRE_EXPLOSION_DEEP',this.lastError);
     });
   }
 
-  processTicker(row,initial=false){
+  processTicker(row,initial=false,generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration)return;
     const symbol=row.symbol;
     const prev=this.lastTicker.get(symbol);
     this.lastTicker.set(symbol,row);
@@ -905,17 +917,18 @@ export class EarlyMoveSentinel {
     if((wakeCross||wakeImpulse)&&now-lastWakeScan>=this.config.earlyWakeScanCooldownMs){
       this.lastEarlyScanAt.set(wakeScanKey,now);
       this.queueDeep(symbol,row,{movePct:current,previousMovePct:previous,deltaPct:impulseDeltaPct,
-        dailyChangeDeltaPct:delta,priceDeltaPct,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE');
+        dailyChangeDeltaPct:delta,priceDeltaPct,type:'EARLY_WAKE_TICKER_PULSE'},'EARLY_WAKE',generation);
     }
     const crossedUp=previous<this.config.thresholdPct&&current>=this.config.thresholdPct;
     const crossedDown=previous>-this.config.thresholdPct&&current<=-this.config.thresholdPct;
     const rapid=Math.abs(delta)>=this.config.fastRealertDeltaPct;
     const trigger= crossedUp||crossedDown ? {movePct:current,previousMovePct:previous,deltaPct:delta} :
       rapid&&Math.abs(current)>=this.config.thresholdPct ? {movePct:current,previousMovePct:previous,deltaPct:delta}:null;
-    if(trigger)this.queueDeep(symbol,row,trigger,'MOVE');
+    if(trigger)this.queueDeep(symbol,row,trigger,'MOVE',generation);
   }
 
-  queueDeep(symbol,row,trigger,mode='MOVE'){
+  queueDeep(symbol,row,trigger,mode='MOVE',generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration)return;
     const now=this.clock();
     const last=this.lastAlertAt.get(`${symbol}:${mode==='EARLY_WAKE'?'EARLY_WAKE_ALERT':'EARLY_MOVE_ALERT'}`)||0;
     const cooldown=mode==='EARLY_WAKE'?this.config.earlyWakeAlertCooldownMs:this.config.cooldownMs;
@@ -953,13 +966,15 @@ export class EarlyMoveSentinel {
     }else{
       this.deepQueue.push({symbol,row,trigger,queuedAt:now,mode});
     }
-    this.drainDeepQueue().catch(e=>{
+    this.drainDeepQueue(generation).catch(e=>{
+      if(generation!==this.lifecycleGeneration)return;
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_DEEP',this.lastError);
     });
   }
 
-  async recordEarlyWakeWatchOnly(watch,job){
+  async recordEarlyWakeWatchOnly(watch,job,generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration)return null;
     const closeAt=Number(watch?.detected_candle_close_time);
     if(!Number.isFinite(closeAt)||closeAt<=0)return null;
     if(Number(this.lastWatchOnlyCandleAt.get(job.symbol)||0)===closeAt)
@@ -970,10 +985,11 @@ export class EarlyMoveSentinel {
     if(now-last<cooldown)return {...watch,watch_only_suppressed_by_cooldown:true};
     const decorated=decorateRadarAlert(watch,'Radar 1 — Early-Wake / WATCH ONLY');
     await this.store.appendMoveAlert(decorated);
+    if(!this.running||generation!==this.lifecycleGeneration)return null;
     this.lastWatchOnlyCandleAt.set(job.symbol,closeAt);
     this.lastWatchOnlyAt.set(job.symbol,now);
     this.watchOnlyAlertCount++;
-    if(this.pushManager?.notifyRadarWatchOnlyAlert){
+    if(this.pushManager?.notifyRadarWatchOnlyAlert&&this.running&&generation===this.lifecycleGeneration){
       try{
         const result=await this.pushManager.notifyRadarWatchOnlyAlert(decorated);
         this.logger.info?.('[EARLY_WAKE_WATCH_ONLY_RESULT] '+JSON.stringify({
@@ -989,13 +1005,18 @@ export class EarlyMoveSentinel {
     return decorated;
   }
 
-  async drainDeepQueue(){
-    while(this.running&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
+  async drainDeepQueue(generation=this.lifecycleGeneration){
+    const isCurrentGeneration=()=>this.running&&generation===this.lifecycleGeneration;
+    while(isCurrentGeneration()&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
       this.deepActive++;
       if(this.deepActiveStartedAt==null)this.deepActiveStartedAt=this.clock();
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
+        // A scan from a stopped generation may finish after the watchdog has
+        // restarted this worker. Discard its result before it can archive or
+        // notify, and never let its finally block decrement the new generation.
+        if(!isCurrentGeneration())return;
         const wakeAlert=buildEarlyWakeAlert(candidate,job.trigger,{now:this.clock()});
         const preAlert=buildPreExplosionAlert(candidate,job.trigger,{now:this.clock()});
         const moveAlert=job.mode==='MOVE'?buildMoveAlert(candidate,job.trigger,{now:this.clock()}):null;
@@ -1009,7 +1030,8 @@ export class EarlyMoveSentinel {
             now:this.clock(),strictFailures
           });
           if(watch){
-            await this.recordEarlyWakeWatchOnly(watch,job);
+            await this.recordEarlyWakeWatchOnly(watch,job,generation);
+            if(!isCurrentGeneration())return;
           }else{
             this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
               symbol:job.symbol,mode:job.mode,
@@ -1049,7 +1071,8 @@ export class EarlyMoveSentinel {
             now:this.clock(),strictFailures
           });
           if(watch){
-            await this.recordEarlyWakeWatchOnly(watch,job);
+            await this.recordEarlyWakeWatchOnly(watch,job,generation);
+            if(!isCurrentGeneration())return;
           }else{
             this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
               symbol:job.symbol,mode:job.mode,decision:'REJECTED_ELITE_GATE',
@@ -1067,16 +1090,23 @@ export class EarlyMoveSentinel {
         this.lastAlertAt.set(alertKey,this.clock());
         this.lastAlertScore.set(alertKey,alert.opportunity_score);
         const decorated=decorateRadarAlert(alert,alert.event==='PRE_EXPLOSION_ALERT'?'Radar 1 — Early-Wake / Pre-Explosion':'Radar 1 — Early-Wake');
+        if(!isCurrentGeneration())return;
         await this.store.appendMoveAlert(decorated);
+        if(!isCurrentGeneration())return;
         if(this.pushManager?.notifyRadarAlert)await this.pushManager.notifyRadarAlert(decorated);
+        if(!isCurrentGeneration())return;
         this.alertCount++;
       }catch(error){
-        this.lastError=String(error?.message??error);
-        if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
-        this.logger.warn?.('EARLY_MOVE_DEEP_SCAN',this.lastError);
+        if(isCurrentGeneration()){
+          this.lastError=String(error?.message??error);
+          if(job.mode==='PRE_EXPLOSION'&&this.lastEarlyScanAt.get(job.symbol)===job.queuedAt)this.lastEarlyScanAt.delete(job.symbol);
+          this.logger.warn?.('EARLY_MOVE_DEEP_SCAN',this.lastError);
+        }
       }finally{
-        this.deepActive--;
-        if(this.deepActive<=0){this.deepActive=0;this.deepActiveStartedAt=null;}
+        if(generation===this.lifecycleGeneration){
+          this.deepActive=Math.max(0,this.deepActive-1);
+          if(this.deepActive===0)this.deepActiveStartedAt=null;
+        }
       }
     }
   }}
