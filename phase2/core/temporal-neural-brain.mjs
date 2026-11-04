@@ -16,10 +16,10 @@ const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
 const HORIZON_MS = 4 * 60 * 60 * 1000;
 const SEEDS = Object.freeze([13, 29, 47]);
-const MIN_TRAIN = 240;
+const MIN_TRAIN = 160;
 const MAX_TRAIN = 480;
-const MIN_VALIDATION = 40;
-const MIN_HOLDOUT = 50;
+const MIN_VALIDATION = 24;
+const MIN_HOLDOUT = 40;
 const LIVE_HOLDOUT = 100;
 const EPSILON = 1e-8;
 
