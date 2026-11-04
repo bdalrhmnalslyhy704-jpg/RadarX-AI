@@ -437,11 +437,12 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
     ?liveHoldoutSamples:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
-  // Keep at least eight hours of timestamps in the middle block: after purging
-  // the four-hour label-overlap tail, a full four-hour evaluation window remains.
-  const validationTargetSamples=minimumValidationSamples;
+  // Reserve a wider middle block than the final sample minimum. With four-hour
+  // labels and four-hour sampling groups, the group nearest the holdout boundary
+  // is purged; 48 raw outcomes / 12h leaves a usable untouched validation block.
+  const validationTargetSamples=Math.max(minimumValidationSamples*2,48);
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
-    validationTargetSamples,2*HORIZON_MS+1);
+    validationTargetSamples,3*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
   const emptySpecialists=Object.fromEntries(regimes.map(regime=>[regime,{
