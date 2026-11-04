@@ -345,14 +345,19 @@ function predictLogistic(sequence, model) {
 }
 function evaluate(rows, predictFn, baseRate) {
   if (!rows.length) return {
-    evaluated: false, sample_count: 0, model_brier_score: null,
-    base_rate_brier_score: null, beat_base_rate: false
+    evaluated:false,sample_count:0,positive_count:0,negative_count:0,positive_rate_pct:null,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
   };
   const predictions = rows.map(row => predictFn(row.sequence));
-  const targets = rows.map(row => row.target);
+  const targets=rows.map(row=>row.target);
+  const positiveCount=targets.reduce((sum,target)=>sum+(target===1?1:0),0);
+  const negativeCount=targets.length-positiveCount;
+  const positiveRatePct=targets.length?Number((positiveCount/targets.length*100).toFixed(2)):null;
   if (predictions.some(value => !Number.isFinite(value))) return {
-    evaluated: false, sample_count: rows.length, model_brier_score: null,
-    base_rate_brier_score: null, beat_base_rate: false, reason: 'NON_FINITE_TEMPORAL_PREDICTION'
+    evaluated:false,sample_count:rows.length,positive_count:positiveCount,
+    negative_count:negativeCount,positive_rate_pct:positiveRatePct,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    reason:'NON_FINITE_TEMPORAL_PREDICTION'
   };
   const modelBrier = mean(predictions.map((value, index) => (value - targets[index]) ** 2));
   const baseBrier = mean(targets.map(target => (baseRate - target) ** 2));
@@ -364,8 +369,9 @@ function evaluate(rows, predictFn, baseRate) {
   const correct = directional.filter(row =>
     ((predictFn(row.sequence) >= 0.5) === (row.outcome === 'UP'))).length;
   return {
-    evaluated: true, sample_count: rows.length,
-    model_brier_score: Number(modelBrier.toFixed(5)),
+    evaluated:true,sample_count:rows.length,
+    positive_count:positiveCount,negative_count:negativeCount,positive_rate_pct:positiveRatePct,
+    model_brier_score:Number(modelBrier.toFixed(5)),
     base_rate_brier_score: Number(baseBrier.toFixed(5)),
     log_loss: Number(logLoss.toFixed(5)),
     directional_accuracy_pct: directional.length ? Number((correct / directional.length * 100).toFixed(1)) : null,
@@ -477,7 +483,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     required_holdout_samples: minimumHoldoutSamples,
     validation_start_at:validationStart,holdout_start_at:holdoutStart,
     max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
-    training_positive_rate_pct:Number((baseRate*100).toFixed(1)),
+    training_positive_rate_pct:Number((baseRate*100).toFixed(2)),
+    training_positive_count:targets.reduce((sum,target)=>sum+(target===1?1:0),0),
+    training_negative_count:targets.reduce((sum,target)=>sum+(target===0?1:0),0),
     training_prior_probability:Number(fit.training_prior_probability.toFixed(5)),
     trained: true, selected, probability_ready: probabilityReady, live_eligibility_ready: liveReady,
     validation: {
