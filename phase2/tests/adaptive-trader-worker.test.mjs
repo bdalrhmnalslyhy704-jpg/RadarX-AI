@@ -482,6 +482,7 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     id:'HISTORICAL_CLOSED_CANDLE:HISTUSDT:'+String(baselineAt),
     symbol:'HISTUSDT',price:1,at:baselineAt,base_score:72,tier:'EARLY_SETUP',
     observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
+    target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
     quote_volume_24h:4_500_000,change_24h_pct:1.8,
     features:{volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.59,close_location:0.72,
       higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,

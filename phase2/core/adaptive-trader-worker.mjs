@@ -561,6 +561,7 @@ recordServerPaperPortfolio(snapshot,now){
       const sample=sampleById.get(String(label?.sample_id||''));
       const at=finite(label?.at),baselinePrice=finite(label?.baseline_price);
       const markPrice=finite(label?.mark_price),resolvedAt=finite(label?.resolved_at),move=finite(label?.return_pct);
+      const closeReturnPct=finite(label?.close_return_pct);
       if(!sample||sample.closed_candle_baseline!==true||sample.training_eligible!==true||sample.outcome||
          cleanSymbol(sample.symbol)!==cleanSymbol(label?.symbol)||at===null||at!==Number(sample.at)||
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
@@ -571,14 +572,13 @@ recordServerPaperPortfolio(snapshot,now){
          !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
       sample.return_pct=Number(label.return_pct);
-      sample.close_return_pct=move;
+      sample.close_return_pct=closeReturnPct;
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
       sample.first_passage=label.first_passage||null;
       sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
       const v5Sample=v5SampleById.get(String(label?.sample_id||''));
-      const closeReturnPct=finite(label?.close_return_pct);
       const closeOutcome=v5CloseOutcome(closeReturnPct);
       if(v5Sample&&!v5Sample.outcome&&closeReturnPct!==null&&closeOutcome!==null){
         v5Sample.outcome=closeOutcome;v5Sample.mark_price=markPrice;
