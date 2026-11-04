@@ -498,7 +498,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
     const baselineRaw=candles.slice(Math.max(0,index-48),index+1).map(row=>row.raw);
-    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-150).map(row=>row.raw);
+    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-480).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
     const ticker={
       symbol:cleanSymbol,lastPrice:String(baseline.close),
