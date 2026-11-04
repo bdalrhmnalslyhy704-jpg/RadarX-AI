@@ -3,6 +3,7 @@ import {parseFcmServiceAccount} from './fcm-service-account.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {EVENT_CLASS,marketEventClass} from '../core/event-types.mjs';
 import {formatRadarTime12h} from '../core/radar-alert-meta.mjs';
+import {PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT} from '../market/universe-scanner.mjs';
 
 export class PushProvider{async send(){throw new Error('PUSH_PROVIDER_NOT_IMPLEMENTED');}status(){return{provider:'unknown',enabled:false};}}
 export class NoopPushProvider extends PushProvider{
@@ -375,6 +376,7 @@ export class PushManager{
 
   async notifyRadarWatchOnlyAlert(alert){
     const now=Date.now();
+    const tickerWatchContract=PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT;
     const rejected=(reason)=>({status:'REJECTED_WATCH_ONLY',reason,attempted:false,notifications:[],sent_count:0,attempted_count:0});
     const symbol=String(alert?.symbol||'').trim().toUpperCase();
     const event=String(alert?.event||alert?.potential_label||alert?.decision_band||'').trim().toUpperCase();
@@ -505,7 +507,7 @@ export class PushManager{
       const relativeStrengthBuyerTier=alert?.watch_notification_tier==='RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR';
       const tickerActivityTier=alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR';
       if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||
-         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:tickerActivityTier?62:relativeStrengthBuyerTier?68:68)||
+         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:tickerActivityTier?tickerWatchContract.min_score:relativeStrengthBuyerTier?68:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -593,17 +595,17 @@ export class PushManager{
         liquidityQuality!==null&&liquidityQuality>=85&&independentEvidence>=3;
       const tickerActivityMonitor=
         alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'&&
-        tickerActivityScore!==null&&tickerActivityScore>=10&&
-        tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
-        tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
+        tickerActivityScore!==null&&tickerActivityScore>=tickerWatchContract.watch_activity_score_floor&&
+        tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=tickerWatchContract.volume_acceleration_floor&&
+        tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=tickerWatchContract.trade_acceleration_floor&&
         tickerActivityObservedAt!==null&&tickerActivityObservedAt<=now+5000&&
-        now-tickerActivityObservedAt>=-5000&&now-tickerActivityObservedAt<=4*60*1000&&
-        tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=5*60*1000&&
+        now-tickerActivityObservedAt>=-5000&&now-tickerActivityObservedAt<=tickerWatchContract.max_activity_age_ms&&
+        tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=tickerWatchContract.max_baseline_age_ms&&
         quoteVolume24h!==null&&quoteVolume24h>=750000&&dailyMove!==null&&dailyMove>=-5&&dailyMove<=4.5&&
-        score!==null&&score>=62&&session!==null&&session>=-1.25&&session<=4.5&&
+        score!==null&&score>=tickerWatchContract.min_score&&session!==null&&session>=-1.25&&session<=4.5&&
         hour!==null&&hour>=-0.75&&hour<=2.5&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
-        structure!==null&&structure>=45&&tickerActivityFlowChecks>=2;
+        structure!==null&&structure>=tickerWatchContract.min_structure_score&&tickerActivityFlowChecks>=tickerWatchContract.min_independent_flow_checks;
       const participationSurgeChecks=[
         volumeRatio!==null&&volumeRatio>=1.25,
         tradeRatio!==null&&tradeRatio>=1.20,
@@ -691,9 +693,9 @@ export class PushManager{
            accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
            highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      const independentEvidenceFloor=tickerActivityMonitor?2:
+      const independentEvidenceFloor=tickerActivityMonitor?tickerWatchContract.min_independent_flow_checks:
         (compressedBuyerAbsorptionMonitor||participationSurgeMonitor||strongBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
-      const minimumMonitorStructure=tickerActivityMonitor?45:relativeStrengthBuyerAbsorptionMonitor?60:
+      const minimumMonitorStructure=tickerActivityMonitor?tickerWatchContract.min_structure_score:relativeStrengthBuyerAbsorptionMonitor?60:
         (participationSurgeMonitor||strongBuyerAbsorptionMonitor)?55:
         accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
       if(structure===null||(structure<minimumMonitorStructure)||
