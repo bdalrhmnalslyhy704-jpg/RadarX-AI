@@ -171,7 +171,7 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const btcReturn24h=btcCurrent&&btcDayPrior&&btcDayPrior.close>0
       ?(btcCurrent.close/btcDayPrior.close-1)*100:null;
     const btcDayRange=btcDayBaseline.map(row=>(row.high-row.low)/row.close);
-    const btcDayVolatility=btcDayRange.length?Math.sqrt(mean(btcDayRange.map(value=>value*value)):null;
+    const btcDayVolatility=btcDayRange.length?Math.sqrt(mean(btcDayRange.map(value=>value*value))):null;
     const btcDayHigh=btcDayBaseline.length?Math.max(...btcDayBaseline.map(row=>row.high)):null;
     const btcDrawdownFromDayHigh=btcDayHigh>0&&btcCurrent
       ?(btcCurrent.close/btcDayHigh-1)*100:null;
