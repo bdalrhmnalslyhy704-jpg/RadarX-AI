@@ -204,7 +204,7 @@ export const CONFIG = Object.freeze({
     // Defer the first deep cycle until the 12-radar and analyst startup burst
     // settles on the 0.5-CPU DHDTech tier. Deep-check four pairs per cycle in two
     // bounded waves; the durable cursor rotates all eligible Spot symbols.
-    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 4, 1, 4),
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 4, 4, 4),
     // Wait for the 12-radar and 20-analyst startup burst before starting the
     // first deep Pre-Move cycle on the 0.5-CPU hosted tier.
     preMoveBackgroundInitialDelayMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INITIAL_DELAY_MS, 120000),
