@@ -113,6 +113,22 @@ test('mainnet remains locked until the server paper portfolio proves minimum per
   assert.equal(exchange.calls.preflights,0);
   assert.equal(exchange.calls.buys,0);
 });
+test('mainnet remains locked until the neural ensemble beats logistic challengers on a 100-sample untouched holdout',async()=>{
+  const store=fakeStore();const exchange=fakeExchange();
+  const env={...goodEnv,RADARX_ADAPTIVE_TRADER_NETWORK:'LIVE',
+    RADARX_ADAPTIVE_TRADER_LIVE_CONFIRMATION:'RADARX_SPOT_LIVE_TRADING_CONFIRMED'};
+  const controller=new AdaptiveTraderExecutionController({store,env,clientFactory:()=>exchange,logger:{warn(){},error(){}}});
+  const result=await controller.processSnapshot(snapshot(),{
+    learningProfile,
+    paperValidationProfile:{ready:true,resolved_paper_trades:100,evaluation_window_trades:100,
+      win_rate_pct:60,net_pnl_usdt:12,max_drawdown_pct:2}
+  });
+  assert.equal(result.status,'WAITING_FOR_NEURAL_VALIDATION');
+  assert.equal(result.execution.neural_validation_ready,false);
+  assert.equal(exchange.calls.preflights,0,'do not even preflight mainnet while the neural model is unproven');
+  assert.equal(exchange.calls.buys,0);
+});
+
 test('server paper validation requires 100 closed trades, at least 55 percent wins, positive net PnL and bounded drawdown',()=>{
   const trade=(i,profit)=>({closed_at:i+1,net_pnl:profit,net_return_pct:profit, paper_trading:true,real_order_execution:false});
   const notEnough=buildAdaptiveTraderPaperValidationProfile({
