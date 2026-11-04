@@ -741,13 +741,16 @@ export class EarlyMoveSentinel {
         deepConcurrency:this.config.deepConcurrency
       }
     });
+    const websocketConfig=this.config.websocket&&typeof this.config.websocket==='object'?this.config.websocket:{};
+    const websocketUrls=Array.isArray(websocketConfig.urls)&&websocketConfig.urls.length
+      ?websocketConfig.urls:['wss://data-stream.binance.vision/stream'];
     this.ws=this.tickerWsFactory({
-      urls:this.config.websocket.urls,
-      heartbeatTimeoutMs:this.config.websocket.heartbeatTimeoutMs,
-      maxConnectionMs:this.config.websocket.maxConnectionMs,
-      initialBackoffMs:this.config.websocket.initialBackoffMs,
-      maxBackoffMs:this.config.websocket.maxBackoffMs,
-      jitterRatio:this.config.websocket.jitterRatio,
+      urls:websocketUrls,
+      heartbeatTimeoutMs:Number(websocketConfig.heartbeatTimeoutMs)||90000,
+      maxConnectionMs:Number(websocketConfig.maxConnectionMs)||23*60*60*1000,
+      initialBackoffMs:Number(websocketConfig.initialBackoffMs)||1000,
+      maxBackoffMs:Number(websocketConfig.maxBackoffMs)||60000,
+      jitterRatio:Number.isFinite(Number(websocketConfig.jitterRatio))?Number(websocketConfig.jitterRatio):0.2,
       onTicker:t=>this.onTicker(t,generation),
       onState:(state,reason)=>this.logger.info?.('MOVE_WS',state,reason||'')
     });
