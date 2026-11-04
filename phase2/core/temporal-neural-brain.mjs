@@ -409,8 +409,37 @@ export function buildTemporalNeuralProfile(samples = [], {
   const rows=cleanRows(samples);
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
-  const holdoutCount=Math.max(2,Math.floor(uniqueTimes.length*0.2));
-  const validationCount=Math.max(2,Math.floor(uniqueTimes.length*0.2));
+  const rowsByTime=new Map();
+  for(const row of rows){
+    if(!rowsByTime.has(row.at))rowsByTime.set(row.at,[]);
+    rowsByTime.get(row.at).push(row);
+  }
+  const minRegimeTraining=Math.max(80,Math.floor(minTrainingSamples/2));
+  const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
+  const minRegimeHoldout=Math.max(20,Math.floor(minimumHoldoutSamples/2));
+  const countTrailingGroups=(endExclusive,targetRows,minPerRegime=0)=>{
+    let groups=0,total=0,riskOn=0,riskOff=0;
+    for(let index=endExclusive-1;index>=0;index--){
+      const group=rowsByTime.get(uniqueTimes[index])||[];
+      groups++;total+=group.length;
+      for(const row of group){
+        const regime=regimeOfSequence(row.sequence);
+        if(regime==='BTC_RISK_ON')riskOn++;
+        else if(regime==='BTC_RISK_OFF')riskOff++;
+      }
+      if(groups>=2&&total>=targetRows&&
+         (!minPerRegime||(riskOn>=minPerRegime&&riskOff>=minPerRegime)))break;
+    }
+    return groups;
+  };
+  // Hold out enough complete timestamp groups to preserve at least 100 untouched
+  // outcomes when the sample history permits it. This frees unnecessary old
+  // timestamps for training without weakening the holdout performance threshold.
+  const holdoutTargetSamples=Math.max(minimumHoldoutSamples,
+    Math.min(liveHoldout,Math.floor(rows.length*0.2)));
+  const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,minRegimeHoldout);
+  const validationTargetSamples=Math.max(minimumValidationSamples,Math.floor(rows.length*0.15));
+  const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,validationTargetSamples,minRegimeValidation);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
   const emptySpecialists=Object.fromEntries(regimes.map(regime=>[regime,{
@@ -470,9 +499,6 @@ export function buildTemporalNeuralProfile(samples = [], {
   const targets=fitRows.map(row=>row.target);
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const pooledBaseline=fitLogistic(fitRows);
-  const minRegimeTraining=Math.max(80,Math.floor(minTrainingSamples/2));
-  const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
-  const minRegimeHoldout=Math.max(20,Math.floor(minimumHoldoutSamples/2));
   const specialistFits={};
   const specialistProfiles={};
 

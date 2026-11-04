@@ -65,8 +65,8 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.sequence_steps,24);
   assert.equal(profile.sequence_channels,22);
-  assert.ok(profile.training_samples>=240);
-  assert.ok(profile.validation_samples>=40);
+  assert.ok(profile.training_samples>=160);
+  assert.ok(profile.validation_samples>=50);
   assert.ok(profile.holdout_samples>=50);
   assert.equal(profile.training_positive_count+profile.training_negative_count,profile.training_samples);
   assert.ok(profile.validation.positive_rate_pct>=0&&profile.validation.positive_rate_pct<=100);

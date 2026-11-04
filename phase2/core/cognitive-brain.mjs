@@ -545,7 +545,21 @@ export function buildCognitiveLearningProfile(samples = [], {
   const maxSamples = Math.max(0, Math.trunc(Number(maxResolvedSamples) || 0));
   const resolved = maxSamples > 0 ? allResolved.slice(-maxSamples) : allResolved;
   const uniqueTimes = [...new Set(resolved.map(row => row.at))].sort((a, b) => a - b);
-  const holdoutCount = Math.max(minimumHoldoutSamples, Math.floor(uniqueTimes.length * holdoutFraction));
+  const rowsByTime=new Map();
+  for(const row of resolved){
+    if(!rowsByTime.has(row.at))rowsByTime.set(row.at,[]);
+    rowsByTime.get(row.at).push(row);
+  }
+  const holdoutTargetSamples=Math.max(minimumHoldoutSamples,
+    Math.min(100,Math.floor(resolved.length*holdoutFraction)));
+  let holdoutCount=0,holdoutRows=0;
+  for(let index=uniqueTimes.length-1;index>=0&&holdoutRows<holdoutTargetSamples;index--){
+    holdoutCount++;
+    holdoutRows+=(rowsByTime.get(uniqueTimes[index])||[]).length;
+  }
+  holdoutCount=Math.max(2,holdoutCount);
+  // Keep the validation block at its existing chronological fraction; reduce only
+  // excess holdout timestamps after preserving the 100-observation untouched live gate.
   const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * validationFraction));
   const trainingEndIndex = uniqueTimes.length - holdoutCount - validationCount;
   const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0;
