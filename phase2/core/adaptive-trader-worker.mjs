@@ -18,7 +18,7 @@ const MAX_COGNITIVE_JOURNAL=3000;
 
 function publicTemporalProfile(profile){
   if(!profile||typeof profile!=='object')return null;
-  const {_fit,_baseline_fit,...visible}=profile;
+  const {_fit,_baseline_fit,_regime_fits,...visible}=profile;
   return visible;
 }
 function publicCognitiveProfile(profile){
