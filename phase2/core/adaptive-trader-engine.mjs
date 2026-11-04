@@ -104,6 +104,21 @@ const finite = value => {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
+function mergeOlderKlinePage(current,older){
+  const currentRows=Array.isArray(current?.data)?current.data:[];
+  const olderRows=Array.isArray(older?.data)?older.data:[];
+  if(!currentRows.length||!olderRows.length)return current;
+  const earliestOpen=finite(currentRows[0]?.[0]);
+  if(earliestOpen===null)return current;
+  const unique=new Map();
+  for(const row of [...olderRows.filter(row=>finite(row?.[0])!==null&&Number(row[0])<earliestOpen),...currentRows]){
+    const open=finite(row?.[0]);
+    if(open!==null)unique.set(open,row);
+  }
+  const data=[...unique.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
+  return {...current,data,historical_pages_fetched:2,historical_window_candles:data.length,
+    historical_backfill_error:null};
+}
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 const pct = (a, b) => Number.isFinite(a) && Number.isFinite(b) && b > 0 ? (a / b - 1) * 100 : null;
@@ -780,7 +795,22 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
-  const btcKlines = btcResult.value;
+  let btcKlines = btcResult.value;
+  if(Array.isArray(btcKlines?.data)&&btcKlines.data.length){
+    const earliestOpen=finite(btcKlines.data[0]?.[0]);
+    if(earliestOpen!==null){
+      try{
+        const older=await rest.request('/api/v3/klines',{
+          symbol:'BTCUSDT',interval:'15m',limit:1000,endTime:earliestOpen-1
+        });
+        btcKlines=mergeOlderKlinePage(btcKlines,older);
+      }catch(error){
+        btcKlines={...btcKlines,historical_pages_fetched:1,
+          historical_window_candles:btcKlines.data.length,
+          historical_backfill_error:String(error?.message??error).slice(0,120)};
+      }
+    }
+  }
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
   const activeSpot = new Set(symbolInfo.filter(item =>
     item && item.status === 'TRADING' && item.quoteAsset === 'USDT' &&
@@ -977,11 +1007,27 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     pendingBySymbol.get(symbol).push(sample);
   }
   const analyzed = await mapLimit(selected, 5, async ticker => {
-    const [result,fastLatest] = await Promise.all([
+    const [first15m,fastLatest] = await Promise.all([
       rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 1000 }),
       rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 1000 })
         .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
     ]);
+    let result=first15m;
+    if(Array.isArray(first15m?.data)&&first15m.data.length){
+      const earliestOpen=finite(first15m.data[0]?.[0]);
+      if(earliestOpen!==null){
+        try{
+          const older=await rest.request('/api/v3/klines',{
+            symbol:ticker.symbol,interval:'15m',limit:1000,endTime:earliestOpen-1
+          });
+          result=mergeOlderKlinePage(first15m,older);
+        }catch(error){
+          result={...first15m,historical_pages_fetched:1,
+            historical_window_candles:first15m.data.length,
+            historical_backfill_error:String(error?.message??error).slice(0,120)};
+        }
+      }
+    }
     let fastResult=fastLatest;
     if(fastLatest.value&&Array.isArray(fastLatest.value.data)&&fastLatest.value.data.length){
       const latestRows=fastLatest.value.data;
@@ -1168,6 +1214,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       source_host: source,
       btc_benchmark_available: Boolean(btcKlines?.data),
       btc_benchmark_error: btcResult.error,
+      btc_15m_historical_pages:Number(btcKlines?.historical_pages_fetched)||1,
+      btc_15m_historical_window_candles:Number(btcKlines?.historical_window_candles)||btcKlines?.data?.length||0,
       cache_policy: 'SERVER_PUBLIC_REST_CACHE',
       historical_learning_enabled:true
     }
