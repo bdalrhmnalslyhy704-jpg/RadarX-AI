@@ -197,6 +197,11 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   assert.equal(outcomes.length,1);
   assert.equal(outcomes[0].first_passage.path_resolution,'5M');
   assert.equal(outcomes[0].sample_id,sample.id);
+  assert.equal(outcomes[0].outcome,'UP');
+  assert.equal(outcomes[0].return_pct,3,
+    'the model-learning return is the simulated take-profit actually reached first');
+  assert.ok(Number.isFinite(outcomes[0].close_return_pct),
+    'the terminal four-hour close return is preserved separately');
   assert.equal(outcomes[0].baseline_price,baselinePrice);
   assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
   assert.equal(outcomes[0].resolved_at-baselineAt,4*60*60*1000);
