@@ -3,7 +3,7 @@ import {stat as statFile} from 'node:fs/promises';
 import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
-import {MarketUniverseScanner,PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner,PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT} from '../market/universe-scanner.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
@@ -148,6 +148,7 @@ function subscriptionValid(x){
 }
 
 export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now()){
+  const tickerWatchContract=PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT;
   const finite=(...values)=>{
     for(const value of values){
       if(value===null||value===undefined||value===''||typeof value==='boolean')continue;
@@ -200,16 +201,18 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     closeLocation!==null&&closeLocation>=0.52,
     relative!==null&&relative>=0.25
   ].filter(Boolean).length;
-  const tickerActivityMonitor=tickerActivityScore!==null&&tickerActivityScore>=10&&
-    tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=1.35&&
-    tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=1.30&&
+  const tickerActivityMonitor=tickerActivityScore!==null&&tickerActivityScore>=tickerWatchContract.watch_activity_score_floor&&
+    tickerActivityVolumeRatio!==null&&tickerActivityVolumeRatio>=tickerWatchContract.volume_acceleration_floor&&
+    tickerActivityTradeRatio!==null&&tickerActivityTradeRatio>=tickerWatchContract.trade_acceleration_floor&&
     tickerActivityObservedAt!==null&&tickerActivityObservedAt<=Number(now)+5000&&
-    Number(now)-tickerActivityObservedAt>=-5000&&Number(now)-tickerActivityObservedAt<=4*60*1000&&
-    tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=5*60*1000&&
+    Number(now)-tickerActivityObservedAt>=-5000&&Number(now)-tickerActivityObservedAt<=tickerWatchContract.max_activity_age_ms&&
+    tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=tickerWatchContract.max_baseline_age_ms&&
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=75&&
     Number(candidate?.quote_volume_24h)>=750000&&daily!==null&&daily>=-5&&daily<=4.5&&
     session!==null&&session>=-1.25&&session<=4.5&&hour!==null&&hour>=-0.75&&hour<=2.5&&
-    score!==null&&score>=62&&structure!==null&&structure>=45&&tickerActivityFlowChecks>=2;
+    score!==null&&score>=tickerWatchContract.min_score&&
+    structure!==null&&structure>=tickerWatchContract.min_structure_score&&
+    tickerActivityFlowChecks>=tickerWatchContract.min_independent_flow_checks;
   // A separate, explicitly non-entry corridor for exceptional real activity.
   // Allow a narrow neutral/slightly-negative window only when independent closed-candle
   // flow is unusually strong; this catches accumulation before price turns positive.
@@ -844,7 +847,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       hosted_cycle_scan_cap:PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,
       public_deep_scan_hard_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
       max_concurrent_deep_scans:PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,
-      scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(scannerConfig.preMoveScanTimeoutMs)||45000)))
+      scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(scannerConfig.preMoveScanTimeoutMs)||45000))),
+      ticker_activity_watch_contract:{...PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT}
     };
     return {status,scanner_ready:Boolean(preMoveRadarScanner),scanner_contract:scannerContract,worker:{
       enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
@@ -1253,7 +1257,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
             public_deep_scan_hard_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
             max_concurrent_deep_scans:PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,
             background_interval_ms:preMoveBackgroundWorkerState.interval_ms,
-            scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(preMoveRadarScanner.config?.preMoveScanTimeoutMs)||45000)))
+            scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(preMoveRadarScanner.config?.preMoveScanTimeoutMs)||45000))),
+            ticker_activity_watch_contract:{...PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT}
           }:null,
           analyst_system:{
             expected_analysts:MULTI_ANALYST_NAMES.length,
