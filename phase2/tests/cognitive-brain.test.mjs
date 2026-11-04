@@ -452,6 +452,39 @@ test('prequential audit never mixes neural and logistic model variants after mod
     'a newly selected model must not inherit the previous model variant error history');
 });
 
+
+test('prequential audit isolates temporal first-passage forecasts from the legacy four-hour close target',()=>{
+  const journal=[];
+  for(let index=0;index<30;index++){
+    const at=BASE_TIME+index*5*60*60*1000;
+    const outcome=index%2===0?'UP':'DOWN';
+    journal.push({
+      id:'TCN-FWD-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome,
+      predicted_up_probability:outcome==='UP'?80:20
+    });
+  }
+  journal.push({
+    ...journal[0],id:'TCN-WRONG-TARGET',
+    target_definition:'LEGACY_4H_CLOSE_RETURN',outcome_source:'CLOSED_CANDLE_4H'
+  });
+  journal.push({
+    ...journal[0],id:'TCN-WRONG-SOURCE',
+    outcome_source:'CLOSED_CANDLE_4H'
+  });
+  const audit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:10,windowSize:10,modelVariant:'TEMPORAL_TCN'
+  });
+  assert.equal(audit.audited_model_variant,'TEMPORAL_TCN');
+  assert.equal(audit.resolved_forecasts,30);
+  assert.equal(audit.all_v5_resolved_forecasts,30);
+  assert.equal(audit.recent_window.sample_count,10);
+  assert.equal(audit.previous_window.sample_count,10);
+  assert.equal(audit.drift_detected,false);
+});
+
 test('prequential audit scores only immutable, matured V5 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
