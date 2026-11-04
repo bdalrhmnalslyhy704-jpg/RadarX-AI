@@ -170,7 +170,7 @@ function buildTemporalSequence(candles, btcCandles) {
 }
 
 function firstPassageLabel(baseline, future15m, fastCandles = []) {
-  const upLevel = baseline.close * 1.02;
+  const upLevel = baseline.close * 1.03;
   const downLevel = baseline.close * 0.98;
   const endAt = baseline.closeTime + 4 * 60 * 60 * 1000;
   const fastWindow = (Array.isArray(fastCandles) ? fastCandles : [])
@@ -550,7 +550,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
-      target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,return_pct:Number(move.toFixed(3)),
@@ -570,7 +570,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
-       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'||
+       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
        sample?.outcome)continue;
     const at=finite(sample?.at),baselinePrice=finite(sample?.price);
     if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
@@ -584,7 +584,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
       outcome:passage.outcome,first_passage:passage,
-      target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'});
