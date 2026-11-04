@@ -1,4 +1,4 @@
-import {buildTemporalNeuralProfile,predictTemporalProbability} from './temporal-neural-brain.mjs';
+import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
 
 /**
  * RadarX Build 224 — Cognitive Agent V5 (Residual Deep Neural Challenger)
@@ -824,8 +824,11 @@ export function buildCognitivePrequentialProfile(journal = [], {
       finite(row.predicted_up_probability) !== null &&
       Number(row.predicted_up_probability) >= 0 && Number(row.predicted_up_probability) <= 100 &&
       ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
-      ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE',
-        'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source) &&
+      (String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
+        ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
+          ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
+        : !row.target_definition &&
+          ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.trained_through_at) !== null &&
       Number(row.trained_through_at) < Number(row.at) &&
@@ -1115,7 +1118,8 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
       ? 'الأدلة متعارضة؛ يخفض الثقة ويعيد الفحص بعد شمعة مغلقة جديدة.'
       : 'بعض الأدلة موجودة لكنّها لا تكفي؛ ينتظر معلومات جديدة ولا يتعجل.';
   }
-  const counterfactuals = predicted === null ? [] : counterfactualEvidence(features, profile._fit);
+  const counterfactuals = predicted === null || selectedTemporal
+    ? [] : counterfactualEvidence(features, profile._fit);
   return {
     ...base,
     decision,
