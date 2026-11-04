@@ -3,11 +3,29 @@ import {finiteNumberOr} from './finite-number.mjs';
 import {BinanceAllMarketTickerClient} from '../market/binance-market-ticker-ws.mjs';
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
+import {RestClient} from '../market/binance-rest.mjs';
 
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>finiteNumberOr(v,d);
 const avg=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null};
-const withDeadline=(promise,ms,label)=>{let timer;return Promise.race([Promise.resolve(promise),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label)),ms);})]).finally(()=>clearTimeout(timer));};
+const withDeadline=(promise,ms,label,onTimeout=null)=>{let timer;return Promise.race([Promise.resolve(promise),new Promise((_,reject)=>{timer=setTimeout(()=>{try{onTimeout?.();}catch{}reject(new Error(label));},ms);})]).finally(()=>clearTimeout(timer));};
+
+function createDeepScanContext(scanner,rest,deadlineAtMs,signal){
+  if(!scanner||!Array.isArray(rest?.baseUrls)||!rest.baseUrls.length||typeof rest.fetchImpl!=='function')
+    return {scanner,rest:null};
+  const isolatedRest=new RestClient({
+    baseUrls:[...rest.baseUrls],fetchImpl:rest.fetchImpl,
+    timeoutMs:Number(rest.timeoutMs)||9000,
+    minIntervalMs:Number(rest.minIntervalMs)||100,
+    maxRequestsPerMinute:Number(rest.maxRequestsPerMinute)||240,
+    requestClass:'RADAR1_DEEP_SCAN'
+  });
+  isolatedRest.requestDeadlineAtMs=deadlineAtMs;
+  isolatedRest.requestAbortSignal=signal;
+  const isolatedScanner=Object.create(Object.getPrototypeOf(scanner));
+  Object.assign(isolatedScanner,scanner,{rest:isolatedRest,_requests:new Map(),_scanFlights:new Map(),_preMoveScanTails:new Map()});
+  return {scanner:isolatedScanner,rest:isolatedRest};
+}
 
 export const MOVE_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
@@ -23,6 +41,9 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   minLiquidityQuality:60,
   deepKlines:220,
   deepConcurrency:4,
+  // One symbol cannot hold the radar busy latch indefinitely, even if a peer's
+  // shared REST promise stalls. Each symbol gets an isolated abortable budget.
+  deepScanTimeoutMs:120000,
   earlyMax24hMovePct:1.25,
   earlyMin24hMovePct:-8,
   earlyWakeTriggerPct:0.65,
@@ -703,11 +724,13 @@ export class EarlyMoveSentinel {
     this.deepActive=0;
     this.deepActiveStartedAt=null;
     this.deepActiveJobs.clear();
+    this.lastError=null;
     this.reconciling=false;
     this.reconcileStartedAt=null;
     this.running=true;
     const generation=++this.lifecycleGeneration;
     await this.store.init();
+    if(!this.running||generation!==this.lifecycleGeneration)return;
     this.scanner=this.scannerFactory?this.scannerFactory(this.rest):new MarketUniverseScanner({
       rest:this.rest,
       config:{
@@ -770,6 +793,7 @@ export class EarlyMoveSentinel {
       // swarm watchdog can detect a worker stuck while analyzing a symbol.
       busy:this.reconciling||this.deepActive>0,
       busy_since_at:[this.reconcileStartedAt,this.deepActiveStartedAt].filter(x=>Number.isFinite(Number(x))&&Number(x)>0).map(Number).sort((a,b)=>a-b)[0]||null,
+      active_deep_scan_jobs:[...this.deepActiveJobs.entries()].slice(0,8).map(([id,job])=>({id,symbol:job.symbol,started_at:job.startedAt,age_ms:Math.max(0,this.clock()-job.startedAt)})),
       poll_ms:Math.max(10000,Number(this.config.reconcileMs)||15000),
       reconcile_in_flight:this.reconciling,
       reconcile_skipped_count:this.reconcileSkippedCount,
@@ -1016,11 +1040,19 @@ export class EarlyMoveSentinel {
     while(isCurrentGeneration()&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
       const activeId=++this.deepScanSequence;
-      this.deepActiveJobs.set(activeId,this.clock());
+      const scanStartedAt=this.clock();
+      this.deepActiveJobs.set(activeId,{symbol:job.symbol,startedAt:scanStartedAt});
       this.deepActive=this.deepActiveJobs.size;
-      this.deepActiveStartedAt=Math.min(...this.deepActiveJobs.values());
+      this.deepActiveStartedAt=Math.min(...[...this.deepActiveJobs.values()].map(x=>x.startedAt));
+      const scanTimeoutMs=Math.max(15000,Math.min(180000,Number(this.config.deepScanTimeoutMs)||120000));
+      const scanDeadlineAtMs=Date.now()+scanTimeoutMs;
+      const scanAbort=new AbortController();
+      const scanContext=createDeepScanContext(this.scanner,this.rest,scanDeadlineAtMs,scanAbort.signal);
       try{
-        const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
+        const candidate=await withDeadline(
+          scanContext.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines}),
+          scanTimeoutMs,'MOVE_DEEP_SCAN_TIMEOUT:'+job.symbol,()=>scanAbort.abort()
+        );
         // A scan from a stopped generation may finish after the watchdog has
         // restarted this worker. Discard its result before it can archive or
         // notify, and never let its finally block decrement the new generation.
@@ -1115,7 +1147,7 @@ export class EarlyMoveSentinel {
           this.deepActiveJobs.delete(activeId);
           this.deepActive=this.deepActiveJobs.size;
           this.deepActiveStartedAt=this.deepActiveJobs.size
-            ?Math.min(...this.deepActiveJobs.values()):null;
+            ?Math.min(...[...this.deepActiveJobs.values()].map(x=>x.startedAt)):null;
         }
       }
     }
