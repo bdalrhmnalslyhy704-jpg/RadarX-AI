@@ -168,7 +168,19 @@ jobs:
           stat -c "APK_SIZE_BYTES=%s" dist/RadarX-Build224-Paper-Preview.apk
           rm -f "$RUNNER_TEMP/radarx-release.keystore" android/app/google-services.json
 
+      - name: Upload verified signed APK as downloadable Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadarX-Build224-Paper-Preview-${{ github.run_number }}
+          path: |
+            dist/RadarX-Build224-Paper-Preview.apk
+            dist/RadarX-Build224-Paper-Preview.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish clearly labeled Paper Preview release
+        id: publish-release
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -178,6 +190,7 @@ jobs:
           gh release create "$TAG" dist/RadarX-Build224-Paper-Preview.apk dist/RadarX-Build224-Paper-Preview.apk.sha256             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "RadarX Build 224 — Paper Preview 1.6.1 (${GITHUB_RUN_NUMBER})"             --prerelease             --notes "Build 224 Android install preview from exact commit ${GITHUB_SHA}. Signed universal APK, version 1.6.1 (versionCode 18), DHDTech backend only. SPOT/PAPER/READ-ONLY: paper_trading=true; real_order_execution=false. This preview is not approved for real-money trading. The neural model has not yet demonstrated out-of-sample superiority to the baseline and the 100-trade paper-validation gate is not met; neural output remains non-authoritative/learning status. Physical-device push delivery must be verified on a phone; local polling fallback remains available. This preview release does not replace the strict production acceptance workflow."
 
       - name: Verify published HTTPS APK and checksum
+        if: steps.publish-release.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
