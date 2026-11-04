@@ -611,14 +611,9 @@ recordServerPaperPortfolio(snapshot,now){
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
-    // Bound the extra temporal tensor memory on the 512 MiB DHDTech tier.
-    let retainedTemporal=0;
-    for(let index=this.state.samples.length-1;index>=0;index--){
-      const sample=this.state.samples[index];
-      if(!Array.isArray(sample?.temporal_sequence))continue;
-      retainedTemporal++;
-      if(retainedTemporal>1200)sample.temporal_sequence=null;
-    }
+    // Keep the sequence tensor for each retained training row. With a 6,000-row
+    // cap this is bounded and preserves enough chronological groups for the
+    // independent temporal holdout instead of silently discarding most history.
     const closedCandleOutcomeRows=Array.isArray(snapshot.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[];
     this.state.last_learning_capture={
       at:now,
