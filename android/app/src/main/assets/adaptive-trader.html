@@ -577,7 +577,10 @@ function renderCandidates(snapshot){
     const brain=candidate.cognitive_assessment||{};
     const cognitiveRank=num(candidate.cognitive_rank_score);
     const brainProbability=brain.predicted_up_probability===null||brain.predicted_up_probability===undefined
-      ?'احتمال الصعود غير معتمد':'احتمال اختباري '+fmt(brain.predicted_up_probability,1)+'%';
+      ?'احتمال الصعود غير معتمد'
+      :String(brain.confidence_label||'').includes('TEMPORAL_TCN')
+        ?'احتمال الشبكة الزمنية المختبرة '+fmt(brain.predicted_up_probability,1)+'%'
+        :'احتمال النموذج الاحتياطي '+fmt(brain.predicted_up_probability,1)+'% — لا يعتمد كمرشح دخول قبل تحقق TCN';
     const motive=brain.market_motive_assessment||{};
     const motiveLabel=motive.accumulation_hypothesis==='SUPPORTED_BY_CONVERGENT_PUBLIC_EVIDENCE'
       ?'قرائن تدفق وتجميع متوافقة':'فرضية التجميع غير مثبتة';
