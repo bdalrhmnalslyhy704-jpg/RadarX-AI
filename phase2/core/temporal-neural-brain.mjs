@@ -436,7 +436,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   // outcomes when the sample history permits it. This frees unnecessary old
   // timestamps for training without weakening the holdout performance threshold.
   const holdoutTargetSamples=Math.max(minimumHoldoutSamples,
-    Math.min(liveHoldout,Math.floor(rows.length*0.2)));
+    Math.min(liveHoldoutSamples,Math.floor(rows.length*0.2)));
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,minRegimeHoldout);
   const validationTargetSamples=Math.max(minimumValidationSamples,Math.floor(rows.length*0.15));
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,validationTargetSamples,minRegimeValidation);
