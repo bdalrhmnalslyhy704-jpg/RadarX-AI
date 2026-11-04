@@ -216,6 +216,17 @@ jobs:
             temporal_network_holdout_evaluated:temporalNetwork.holdout?.evaluated===true,
             temporal_network_holdout_beats_baseline:temporalNetwork.holdout?.beat_base_rate===true,
             temporal_network_holdout_beats_pooled_logistic:temporalNetwork.holdout_comparison?.beats_pooled_logistic===true,
+            temporal_network_validation_brier:temporalNetwork.validation?.model_brier_score??null,
+            temporal_network_validation_base_rate_brier:temporalNetwork.validation?.base_rate_brier_score??null,
+            temporal_network_validation_pooled_logistic_brier:temporalNetwork.validation?.pooled_logistic_brier_score??null,
+            temporal_network_holdout_brier:temporalNetwork.holdout?.model_brier_score??null,
+            temporal_network_holdout_base_rate_brier:temporalNetwork.holdout?.base_rate_brier_score??null,
+            temporal_network_holdout_pooled_logistic_brier:temporalNetwork.holdout?.pooled_logistic_brier_score??null,
+            temporal_network_improvement_vs_validation_logistic:temporalNetwork.validation?.pooled_logistic_brier_score===null||
+              temporalNetwork.validation?.pooled_logistic_brier_score===undefined||
+              temporalNetwork.validation?.model_brier_score===null||
+              temporalNetwork.validation?.model_brier_score===undefined?null:
+              Number((temporalNetwork.validation.pooled_logistic_brier_score-temporalNetwork.validation.model_brier_score).toFixed(6)),
             temporal_network_validation_start_at:temporalNetwork.validation_start_at??null,
             temporal_network_holdout_start_at:temporalNetwork.holdout_start_at??null,
             temporal_network_max_training_outcome_resolved_at:temporalNetwork.max_training_outcome_resolved_at??null,
