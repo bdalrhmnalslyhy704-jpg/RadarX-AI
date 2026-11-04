@@ -420,7 +420,7 @@ function fitEnsemble(rows, options = {}) {
 export function buildTemporalNeuralProfile(samples = [], {
   minTrainingSamples = MIN_TRAIN, maxTrainingSamples = MAX_TRAIN,
   minimumValidationSamples = MIN_VALIDATION, minimumHoldoutSamples = MIN_HOLDOUT,
-  liveHoldoutSamples = LIVE_HOLDOUT, epochs = 14,
+  liveHoldoutSamples = LIVE_HOLDOUT, epochs = 10,
   learningRate = 0.006, l2 = 0.012, comparisonMargin = 0.003
 } = {}) {
   const rows = cleanRows(samples);
@@ -440,7 +440,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     resolved_samples: rows.length, training_samples: 0, validation_samples: 0, holdout_samples: 0,
     required_training_samples: minTrainingSamples, required_validation_samples: minimumValidationSamples,
     required_holdout_samples: minimumHoldoutSamples, probability_ready: false, live_eligibility_ready: false,
-    validation_start_at:null,holdout_start_at:null,max_training_outcome_resolved_at:null,
     validation_start_at:null,holdout_start_at:null,max_training_outcome_resolved_at:null,
     trained: false, selected: false, validation: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
     holdout: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
@@ -468,6 +467,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     validation_samples: validation.length, holdout_samples: holdout.length,
     required_training_samples: minTrainingSamples, required_validation_samples: minimumValidationSamples,
     required_holdout_samples: minimumHoldoutSamples, probability_ready: false, live_eligibility_ready: false,
+    validation_start_at:validationStart,holdout_start_at:holdoutStart,
+    max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
     trained: false, selected: false, validation: { evaluated: false, reason: 'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET' },
     holdout: { evaluated: false, reason: 'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET' },
     holdout_comparison: { passed: false, required_live_holdout_samples: liveHoldoutSamples },
