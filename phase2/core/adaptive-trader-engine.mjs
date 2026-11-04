@@ -104,6 +104,91 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
   return values;
 }
 
+
+function buildTemporalSequence(candles, btcCandles) {
+  const steps = 24;
+  const start = candles.length - steps;
+  if (!Array.isArray(candles) || start < 24 || !Array.isArray(btcCandles)) return null;
+  const history = candles.slice(start - 24);
+  if (history.length !== 48 || history.some((row,index) =>
+    index > 0 && row.openTime - history[index - 1].openTime !== 15 * 60 * 1000)) return null;
+  const btcByClose = new Map(btcCandles.map(row => [Number(row.closeTime), row]));
+  const sequence = [];
+  for (let index = start; index < candles.length; index++) {
+    const current = candles[index], previous = candles[index - 1];
+    const baseline = candles.slice(index - 24, index);
+    const volumeBase = mean(baseline.map(row => row.quoteVolume));
+    const tradesBase = mean(baseline.map(row => row.trades));
+    const ranges = baseline.map(row => (row.high - row.low) / row.close);
+    const rangeBase = mean(ranges);
+    const rangeNow = (current.high - current.low) / current.close;
+    const buyShare = current.quoteVolume > 0 ? current.takerBuyQuoteVolume / current.quoteVolume : null;
+    const closeLocation = current.high > current.low
+      ? (current.close - current.low) / (current.high - current.low) : 0.5;
+    const body = current.high > current.low ? (current.close - current.open) / (current.high - current.low) : 0;
+    const btcCurrent = btcByClose.get(Number(current.closeTime));
+    const btcPrevious = btcByClose.get(Number(previous.closeTime));
+    if (!(volumeBase > 0) || !(tradesBase > 0) || !(rangeBase > 0) ||
+        !(buyShare >= 0 && buyShare <= 1) || !btcCurrent || !btcPrevious || !(btcPrevious.close > 0)) return null;
+    const assetReturn = (current.close / previous.close - 1) * 100;
+    const btcReturn = (btcCurrent.close / btcPrevious.close - 1) * 100;
+    const relativeReturn = assetReturn - btcReturn;
+    const values = [
+      Math.tanh(assetReturn / 2),
+      clamp(Math.log2(clamp(current.quoteVolume / volumeBase, 0.05, 20)) / 2, -2, 2),
+      clamp(Math.log2(clamp(current.trades / tradesBase, 0.05, 20)) / 2, -2, 2),
+      clamp((buyShare - 0.5) / 0.1, -2, 2),
+      clamp((closeLocation - 0.5) * 2, -1, 1),
+      clamp(body, -1, 1),
+      clamp(Math.log2(clamp(rangeNow / rangeBase, 0.05, 20)), -2, 2),
+      Math.tanh(relativeReturn / 2)
+    ];
+    if (!values.every(Number.isFinite)) return null;
+    sequence.push(values);
+  }
+  return sequence.length === steps ? sequence : null;
+}
+
+function firstPassageLabel(baseline, future15m, fastCandles = []) {
+  const upLevel = baseline.close * 1.02;
+  const downLevel = baseline.close * 0.98;
+  const endAt = baseline.closeTime + 4 * 60 * 60 * 1000;
+  const fastWindow = (Array.isArray(fastCandles) ? fastCandles : [])
+    .filter(row => row.openTime >= baseline.closeTime + 1 && row.closeTime <= endAt)
+    .sort((a,b) => a.openTime - b.openTime);
+  const fastComplete = fastWindow.length === 48 && fastWindow.every((row,index) =>
+    index === 0
+      ? row.openTime === baseline.closeTime + 1
+      : row.openTime - fastWindow[index - 1].openTime === 5 * 60 * 1000);
+  const slowWindow = (Array.isArray(future15m) ? future15m : []).slice(0,16);
+  const slowComplete = slowWindow.length === 16 && slowWindow.every((row,index) =>
+    index === 0
+      ? row.openTime === baseline.closeTime + 1
+      : row.openTime - slowWindow[index - 1].openTime === 15 * 60 * 1000);
+  const path = fastComplete ? fastWindow : slowComplete ? slowWindow : [];
+  if (!path.length) return null;
+  for (const candle of path) {
+    const upHit = candle.high >= upLevel;
+    const downHit = candle.low <= downLevel;
+    if (upHit && downHit) return {
+      outcome:'FLAT', hit:'AMBIGUOUS_BOTH_LEVELS_IN_SAME_CANDLE',
+      target_price:null, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+    };
+    if (upHit) return {
+      outcome:'UP', hit:'TAKE_PROFIT_REACHED_FIRST',
+      target_price:upLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+    };
+    if (downHit) return {
+      outcome:'DOWN', hit:'STOP_LEVEL_REACHED_FIRST',
+      target_price:downLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+    };
+  }
+  return {
+    outcome:'FLAT', hit:'NEITHER_LEVEL_REACHED_WITHIN_4H',
+    target_price:null, target_at:endAt, path_resolution:fastComplete?'5M':'15M'
+  };
+}
+
 export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKlines = null, btcKlines = null, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
   const cleanSymbol = String(symbol || ticker?.symbol || '').trim().toUpperCase();
   const lastPrice = finite(ticker?.lastPrice ?? ticker?.last_price);
@@ -227,6 +312,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
+  const temporalSequence = buildTemporalSequence(candles, btcCandles);
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -294,6 +380,9 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_time: current.closeTime,
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
+    temporal_sequence: temporalSequence,
+    temporal_sequence_steps: temporalSequence?.length || 0,
+    temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
     tier,
     entry_eligible: false,
@@ -408,7 +497,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcCurrent=btcByClose.get(baseline.closeTime);
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
-    const baselineRaw=candles.slice(Math.max(0,index-19),index+1).map(row=>row.raw);
+    const baselineRaw=candles.slice(Math.max(0,index-48),index+1).map(row=>row.raw);
     const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-150).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
     const ticker={
@@ -424,7 +513,9 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     });
     if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
     const move=(future.close/baseline.close-1)*100;
-    const outcome=move>=2?'UP':move<=-2?'DOWN':'FLAT';
+    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle),fastCandles);
+    if(!passage)continue;
+    const outcome=passage.outcome;
     const features={
       ...(candidate.features||{}),
       quote_volume_24h:Number(volume24h.toFixed(2)),
@@ -438,7 +529,10 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
-      outcome_source:'HISTORICAL_CLOSED_CANDLE',
+      temporal_sequence:candidate.temporal_sequence,
+      target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
+      first_passage:passage,
+      outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime
     });
@@ -463,11 +557,16 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
     if(!baseline||!future||future.closeTime-baseline.closeTime!==4*60*60*1000)continue;
     if(Math.abs(baseline.close-baselinePrice)>Math.max(1e-12,Math.abs(baseline.close)*1e-8))continue;
     const move=(future.close/baseline.close-1)*100;
+    const startIndex=candles.findIndex(candle=>candle.closeTime===baseline.closeTime);
+    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17),[]);
+    if(!passage)continue;
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
-      outcome:move>=2?'UP':move<=-2?'DOWN':'FLAT',return_pct:Number(move.toFixed(3)),
+      outcome:passage.outcome,first_passage:passage,
+      target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
+      return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
-      outcome_source:'CLOSED_CANDLE_4H'});
+      outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'});
   }
   return out;
 }
