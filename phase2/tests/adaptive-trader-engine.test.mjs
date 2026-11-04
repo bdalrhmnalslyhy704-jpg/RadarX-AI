@@ -246,17 +246,39 @@ test('adaptive trader gives a strict, explained candidate verdict without enabli
       micro_5m_taker_buy_ratio:0.59,micro_5m_volume_ratio:1.8},
     reason_codes:['VOLUME_ACTIVITY_EXPANDING']
   };
-  const result=buildAdaptiveTraderRecommendation(base,{now});
+  const unvalidated=buildAdaptiveTraderRecommendation(base,{now});
+  assert.equal(unvalidated.decision,'WAIT_FOR_TEMPORAL_VALIDATION');
+  assert.equal(unvalidated.entry_eligible,false);
+  assert.equal(unvalidated.real_order_execution,false);
+  assert.ok(unvalidated.reason_codes.includes('TEMPORAL_MODEL_NOT_OUT_OF_SAMPLE_VALIDATED'));
+
+  const validatedCandidate={
+    ...base,
+    cognitive_assessment:{
+      temporal_model_status:'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
+      temporal_up_probability:78
+    }
+  };
+  const result=buildAdaptiveTraderRecommendation(validatedCandidate,{now});
   assert.equal(result.decision,'ENTRY_CANDIDATE');
   assert.equal(result.symbol,'SETUPUSDT');
-  assert.match(result.label_ar,/مرشّح دخول للمراجعة/);
+  assert.match(result.label_ar,/مرشّح مبكر للمراجعة الورقية/);
   assert.equal(result.entry_eligible,false);
   assert.equal(result.real_order_execution,false);
   assert.equal(result.paper_trading,true);
   assert.ok(result.reason_codes.includes('CLOSED_CANDLE_BREAKOUT'));
+  assert.ok(result.reason_codes.includes('TEMPORAL_TCN_OUT_OF_SAMPLE_VALIDATED'));
   assert.ok(result.next_step_ar.length>20);
 
-  const waiting=buildAdaptiveTraderRecommendation({...base,features:{...base.features,breakout_above_prior_high:false}},{now});
+  const weakTemporal=buildAdaptiveTraderRecommendation({
+    ...validatedCandidate,
+    cognitive_assessment:{temporal_model_status:'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',temporal_up_probability:54}
+  },{now});
+  assert.equal(weakTemporal.decision,'WATCH_ONLY');
+  assert.equal(weakTemporal.entry_eligible,false);
+
+  const waiting=buildAdaptiveTraderRecommendation({...validatedCandidate,
+    features:{...base.features,breakout_above_prior_high:false}},{now});
   assert.equal(waiting.decision,'WAIT_FOR_CONFIRMATION');
   assert.equal(waiting.entry_eligible,false);
 });
