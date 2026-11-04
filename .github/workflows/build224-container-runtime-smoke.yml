@@ -241,6 +241,7 @@ jobs:
               btc_15m_candles:Number(summary?.meta?.btc_15m_historical_window_candles)||0,
               btc_15m_backfill_error:String(summary?.meta?.btc_15m_historical_backfill_error||''),
               btc_benchmark_available:summary?.meta?.btc_benchmark_available===true,
+              btc_benchmark_error:String(summary?.meta?.btc_benchmark_error||''),
               asset_15m_extended_symbols:Number(summary?.universe?.asset_15m_extended_symbols)||0,
               asset_5m_extended_symbols:Number(summary?.universe?.asset_5m_extended_symbols)||0,
               asset_5m_deep_history_symbols:Number(summary?.universe?.asset_5m_deep_history_symbols)||0,
