@@ -1,0 +1,185 @@
+name: RadarX Build 224 Android Paper Preview
+
+on:
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - ".github/workflows/android-build224-paper-preview.yml"
+      - "android/**"
+      - "phase2/**"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: radarx-build224-paper-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-signed-paper-preview:
+    name: Build and publish signed Build 224 Paper Preview
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      RADARX_BACKEND_BASE_URL: ${{ vars.RADARX_BACKEND_BASE_URL || 'https://radarx-backend.dhdtech.site' }}
+
+    steps:
+      - name: Checkout the exact Build 224 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+
+      - name: Verify exact branch and DHDTech-only Android configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME}" = "build224-multi-analyst-20261007"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          test "${RADARX_BACKEND_BASE_URL}" = "https://radarx-backend.dhdtech.site"
+          grep -Fq "DEFAULT_BACKEND_BASE_URL = '${RADARX_BACKEND_BASE_URL}'" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq 'BACKEND_ORIGIN = "https://radarx-backend.dhdtech.site"' android/app/src/main/java/com/radarx/app/MainActivity.java
+          grep -Fq 'versionCode 18' android/app/build.gradle
+          grep -Fq 'versionName "1.6.1"' android/app/build.gradle
+          if grep -RIn --exclude-dir=build -E 'railway\.app|dhdtech-url-required\.invalid|github\.io/RadarX-AI' android/app/src/main; then
+            echo "::error::Legacy backend or placeholder URL found in Android source."
+            exit 1
+          fi
+          if grep -RIn --exclude-dir=build -E 'real_order_execution[[:space:]]*=[[:space:]]*true|REAL_ORDER_EXECUTION[[:space:]]*=[[:space:]]*true' android/app/src/main phase2; then
+            echo "::error::Real order execution enabled in a paper-preview build."
+            exit 1
+          fi
+          echo "Build 224 source pinned to DHDTech; no Railway/placeholder/GitHub Pages fallback; version 1.6.1."
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run Phase 2 regression suite
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          node phase2/tests/run-tests.mjs phase2
+          node --check android/app/src/main/assets/radarx-backend-client.mjs
+          node --check android/app/src/main/assets/radarx-pre-move.mjs
+          node --check android/app/src/main/assets/radarx-radar-screen.mjs
+          node --check phase2/market/universe-scanner.mjs
+          node --check phase2/http/api.mjs
+          node --check phase2/core/adaptive-trader-engine.mjs
+          node --check phase2/core/adaptive-trader-worker.mjs
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Provision Firebase Android client configuration when available
+        env:
+          FIREBASE_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
+            echo "RADARX_FIREBASE_CLIENT_CONFIGURED=false" >> "$GITHUB_ENV"
+            echo "::warning::Firebase client config is not present; local polling remains the notification fallback."
+            exit 0
+          fi
+          printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const config=JSON.parse(fs.readFileSync('android/app/google-services.json','utf8'));
+          const app=config.client?.find(x=>x.client_info?.android_client_info?.package_name==='com.radarx.app');
+          if(config.project_info?.project_id!=='radarx-ai'||!app) throw new Error('FIREBASE_ANDROID_CLIENT_MISMATCH');
+          console.log('Firebase Android client config verified without exposing its contents.');
+          NODE
+          echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
+
+      - name: Verify secure Release signing secrets
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD ANDROID_RELEASE_KEY_ALIAS ANDROID_RELEASE_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing secure signing secret: $name"
+              exit 1
+            fi
+          done
+          umask 077
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/radarx-release.keystore"
+          test -s "$RUNNER_TEMP/radarx-release.keystore"
+          echo "ANDROID_RELEASE_KEYSTORE_FILE=$RUNNER_TEMP/radarx-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build signed universal Android APK
+        env:
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: gradle -p android :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK package, version, and signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          unzip -t "$APK" >/dev/null
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -x "$AAPT"
+          test -x "$APKSIGNER"
+          BADGING="$("$AAPT" dump badging "$APK")"
+          echo "$BADGING" | grep -F "package: name='com.radarx.app' versionCode='18' versionName='1.6.1'"
+          "$APKSIGNER" verify --verbose "$APK"
+          mkdir -p dist
+          cp "$APK" dist/RadarX-Build224-Paper-Preview.apk
+          sha256sum dist/RadarX-Build224-Paper-Preview.apk | tee dist/RadarX-Build224-Paper-Preview.apk.sha256
+          stat -c "APK_SIZE_BYTES=%s" dist/RadarX-Build224-Paper-Preview.apk
+          rm -f "$RUNNER_TEMP/radarx-release.keystore" android/app/google-services.json
+
+      - name: Publish clearly labeled Paper Preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="radarx-build224-paper-preview-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" dist/RadarX-Build224-Paper-Preview.apk dist/RadarX-Build224-Paper-Preview.apk.sha256             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "RadarX Build 224 — Paper Preview 1.6.1 (${GITHUB_RUN_NUMBER})"             --prerelease             --notes "Build 224 Android install preview from exact commit ${GITHUB_SHA}. Signed universal APK, version 1.6.1 (versionCode 18), DHDTech backend only. SPOT/PAPER/READ-ONLY: paper_trading=true; real_order_execution=false. This preview is not approved for real-money trading. The neural model has not yet demonstrated out-of-sample superiority to the baseline and the 100-trade paper-validation gate is not met; neural output remains non-authoritative/learning status. Physical-device push delivery must be verified on a phone; local polling fallback remains available. This preview release does not replace the strict production acceptance workflow."
+
+      - name: Verify published HTTPS APK and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="radarx-build224-paper-preview-${GITHUB_RUN_NUMBER}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/RadarX-Build224-Paper-Preview.apk"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error "$URL" --output "$RUNNER_TEMP/radarx-published.apk"
+          test -s "$RUNNER_TEMP/radarx-published.apk"
+          cmp dist/RadarX-Build224-Paper-Preview.apk "$RUNNER_TEMP/radarx-published.apk"
+          LOCAL="$(sha256sum dist/RadarX-Build224-Paper-Preview.apk | awk '{print $1}')"
+          DOWNLOADED="$(sha256sum "$RUNNER_TEMP/radarx-published.apk" | awk '{print $1}')"
+          test "$LOCAL" = "$DOWNLOADED"
+          echo "PUBLISHED_APK_VERIFIED sha256=$LOCAL"
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/radarx-release.keystore" android/app/google-services.json
