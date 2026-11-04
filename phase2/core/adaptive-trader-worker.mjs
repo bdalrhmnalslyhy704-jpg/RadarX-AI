@@ -1,6 +1,6 @@
 import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvents,applyAdaptiveLearning,buildAdaptiveTraderRecommendation,createPaperPortfolio,openPaperPosition,advancePaperPortfolio,estimatePaperEquity} from './adaptive-trader-engine.mjs';
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
-import {buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
+import {COGNITIVE_MODEL_BUILD_CONTRACT,buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
 import {buildRadarOutcomeLearningSnapshot,applyRadarOutcomeLearningAdjustment} from './radar-outcome-learning.mjs';
 
 const finite=value=>{
@@ -806,6 +806,7 @@ recordServerPaperPortfolio(snapshot,now){
       this.state.last_summary?'RUNNING':'STARTING';
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
+      cognitive_model_contract:COGNITIVE_MODEL_BUILD_CONTRACT,
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,
       active_scan_deadline_at:this.activeScanDeadlineAt?new Date(this.activeScanDeadlineAt).toISOString():null,

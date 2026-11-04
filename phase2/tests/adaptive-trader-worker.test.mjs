@@ -5,10 +5,25 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
 import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
+import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
 
 
-test('TEST_FIXTURE: adaptive trader persistence bypasses a stalled main radar archive queue',async()=>{
+
+test('worker exposes the exact V5 plus TCN source contract without claiming model readiness',()=>{
+  const worker=new AdaptiveTraderWorker({
+    store:{},snapshotProvider:async()=>({}),logger:{info(){},warn(){}}
+  });
+  const status=worker.snapshot();
+  assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
+  assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
+    'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
+  assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
+    'source presence must never be confused with out-of-sample readiness');
+  assert.equal(status.real_order_execution,false);
+});
+
+test'TEST_FIXTURE: adaptive trader persistence bypasses a stalled main radar archive queue',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-trader-independent-store-'));
   const store=await new DurableStore({dir}).init();
   try{
