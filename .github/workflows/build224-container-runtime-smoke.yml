@@ -237,6 +237,10 @@ jobs:
                 holdout_brier:specialist?.holdout?.model_brier_score??null}
             ])),
             spot_history_coverage:{
+              worker_summary_meta_present:Boolean(summary&&summary.meta&&typeof summary.meta==='object'),
+              worker_summary_meta_keys:Object.keys(summary?.meta||{}).sort(),
+              worker_summary_meta_excerpt:JSON.stringify(summary?.meta||{}).slice(0,1800),
+              worker_summary_universe_keys:Object.keys(summary?.universe||{}).sort(),
               btc_15m_pages:Number(summary?.meta?.btc_15m_historical_pages)||1,
               btc_15m_candles:Number(summary?.meta?.btc_15m_historical_window_candles)||0,
               btc_15m_backfill_error:String(summary?.meta?.btc_15m_historical_backfill_error||''),
