@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TEMPORAL_TARGET_DEFINITION,
+  temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS,
   buildTemporalNeuralProfile,
@@ -34,6 +35,12 @@ function sample(group,index,{up=null}={}){
     temporal_sequence:sequenceFor(signal,group+index)
   };
 }
+
+test('temporal target encodes only an actual +3% first-passage as success',()=>{
+  assert.equal(temporalBinaryTarget('UP'),1);
+  assert.equal(temporalBinaryTarget('DOWN'),0);
+  assert.equal(temporalBinaryTarget('FLAT'),0);
+});
 
 test('temporal network fails closed without first-passage tensor samples',()=>{
   const profile=buildTemporalNeuralProfile([]);
