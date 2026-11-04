@@ -209,7 +209,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     quality!==null&&quality>=85&&liquidity!==null&&liquidity>=75&&
     Number(candidate?.quote_volume_24h)>=750000&&daily!==null&&daily>=-5&&daily<=4.5&&
     session!==null&&session>=-1.25&&session<=4.5&&hour!==null&&hour>=-0.75&&hour<=2.5&&
-    score!==null&&score>=68&&structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
+    score!==null&&score>=62&&structure!==null&&structure>=45&&tickerActivityFlowChecks>=2;
   // A separate, explicitly non-entry corridor for exceptional real activity.
   // Allow a narrow neutral/slightly-negative window only when independent closed-candle
   // flow is unusually strong; this catches accumulation before price turns positive.
@@ -378,7 +378,7 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
   if(score===null||score<(relativeStrengthBuyerAbsorptionMonitor?68:
     participationSurgeMonitor||strongBuyerAbsorptionMonitor?58:
     accumulationPrepMonitor?66:compressedBuyerAbsorptionMonitor?70:
-    (tickerActivityMonitor||earlyFlowMonitor)?68:highActivityStructurePending?75:68))
+    tickerActivityMonitor?62:earlyFlowMonitor?68:highActivityStructurePending?75:68))
     return fail('SCORE_BELOW_WATCH_FLOOR');
   if(session===null||session<(relativeStrengthBuyerAbsorptionMonitor?-3:
       participationSurgeMonitor||strongBuyerAbsorptionMonitor?-3:
@@ -400,13 +400,13 @@ export function assessPreMoveWatchOnlyCandidate(candidate,snapshot,now=Date.now(
     return fail('ONE_HOUR_RETURN_OUT_OF_RANGE');
   if(structure===null||(structure<(relativeStrengthBuyerAbsorptionMonitor?60:
       participationSurgeMonitor||strongBuyerAbsorptionMonitor?55:
-      tickerActivityMonitor?50:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
+      tickerActivityMonitor?45:highActivityStructurePending?50:earlyFlowMonitor?50:60)))
     return fail('STRUCTURE_SCORE_BELOW_MINIMUM');
   if(closeAt===null||closeAt>Number(now)+5000||Number(now)-closeAt>20*60*1000)
     return fail('CLOSED_CANDLE_STALE_OR_FUTURE');
   if(risks.some(x=>/ALREADY_EXTENDED|EXTENDED_CHASE|HIGH_RISK|STALE|FUTURE_DATA|DATA_GAP|WIDE_SPREAD|FAILED_BREAKOUT|TRAP_RISK|LOW_LIQUIDITY/.test(x)))
     return fail('RISK_FLAG_BLOCK');
-  if(participation<(accumulationPrepMonitor?4:3))return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
+  if(participation<(tickerActivityMonitor?2:accumulationPrepMonitor?4:3))return fail('INDEPENDENT_PARTICIPATION_BELOW_3');
   return {eligible:true,reason:null,...fields,values:{symbol,p,price,daily,quality,liquidity,quoteVolume,closeAt,risks,
     data_valid:status?.data_valid===true,low_volume_watch_only:lowVolumeWatchOnly,
     watch_notification_tier:watchTier,
