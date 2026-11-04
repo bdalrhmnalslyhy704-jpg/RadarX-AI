@@ -417,18 +417,17 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minRegimeTraining=Math.max(80,Math.floor(minTrainingSamples/2));
   const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
   const minRegimeHoldout=Math.max(20,Math.floor(minimumHoldoutSamples/2));
-  const countTrailingGroups=(endExclusive,targetRows,minPerRegime=0)=>{
-    let groups=0,total=0,riskOn=0,riskOff=0;
+  const countTrailingGroups=(endExclusive,targetRows,minSpanMs=HORIZON_MS+1)=>{
+    let groups=0,total=0;
+    const latestAt=endExclusive>0?uniqueTimes[endExclusive-1]:null;
     for(let index=endExclusive-1;index>=0;index--){
       const group=rowsByTime.get(uniqueTimes[index])||[];
       groups++;total+=group.length;
-      for(const row of group){
-        const regime=regimeOfSequence(row.sequence);
-        if(regime==='BTC_RISK_ON')riskOn++;
-        else if(regime==='BTC_RISK_OFF')riskOff++;
-      }
-      if(groups>=2&&total>=targetRows&&
-         (!minPerRegime||(riskOn>=minPerRegime&&riskOff>=minPerRegime)))break;
+      // Every evaluation block must span the four-hour label horizon plus one
+      // completed timestamp. Otherwise purging correctly removes every row that
+      // would resolve on or after the next block's first timestamp.
+      const span=latestAt===null?0:latestAt-uniqueTimes[index];
+      if(groups>=2&&total>=targetRows&&span>=minSpanMs)break;
     }
     return groups;
   };
