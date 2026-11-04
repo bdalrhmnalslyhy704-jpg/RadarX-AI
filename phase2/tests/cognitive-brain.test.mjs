@@ -485,6 +485,26 @@ test('prequential audit isolates temporal first-passage forecasts from the legac
   assert.equal(audit.drift_detected,false);
 });
 
+
+test('temporal prequential audit counts flat first-passage outcomes as target misses',()=>{
+  const journal=Array.from({length:4},(_,index)=>{
+    const at=BASE_TIME+index*5*60*60*1000;
+    return {
+      id:'TCN-FLAT-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome:'FLAT',
+      predicted_up_probability:10
+    };
+  });
+  const audit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:2,windowSize:2,modelVariant:'TEMPORAL_TCN'
+  });
+  assert.equal(audit.previous_window.brier_score,0.01);
+  assert.equal(audit.recent_window.brier_score,0.01);
+  assert.equal(audit.previous_window.directional_accuracy_pct,null);
+});
+
 test('prequential audit scores only immutable, matured V5 forecasts and detects sustained degradation', () => {
   const journal = Array.from({ length: 60 }, (_, index) => {
     const outcome = index % 2 === 0 ? 'UP' : 'DOWN';
