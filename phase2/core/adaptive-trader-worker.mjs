@@ -262,7 +262,8 @@ export class AdaptiveTraderWorker{
         try{
           this.lastExecutionResult=await withStageTimeout(this.executionController.processSnapshot(executionSnapshot,{
             learningProfile:this.state.learning_profile,
-            paperValidationProfile:this.state.paper_validation_profile
+            paperValidationProfile:this.state.paper_validation_profile,
+            cognitiveProfile:this.state.cognitive_profile
           }),this.executionTimeoutMs,'PAPER_EXECUTION_REVIEW');
         }catch(error){
           this.lastExecutionResult={status:'EXECUTION_CONTROLLER_ERROR',error:String(error?.message??error).slice(0,180)};
