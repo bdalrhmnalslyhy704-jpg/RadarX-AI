@@ -1044,7 +1044,7 @@ export class EarlyMoveSentinel {
       this.deepActiveJobs.set(activeId,{symbol:job.symbol,startedAt:scanStartedAt});
       this.deepActive=this.deepActiveJobs.size;
       this.deepActiveStartedAt=Math.min(...[...this.deepActiveJobs.values()].map(x=>x.startedAt));
-      const scanTimeoutMs=Math.max(15000,Math.min(180000,Number(this.config.deepScanTimeoutMs)||120000));
+      const scanTimeoutMs=Math.max(1000,Math.min(180000,Number(this.config.deepScanTimeoutMs)||120000));
       const scanDeadlineAtMs=Date.now()+scanTimeoutMs;
       const scanAbort=new AbortController();
       const scanContext=createDeepScanContext(this.scanner,this.rest,scanDeadlineAtMs,scanAbort.signal);
