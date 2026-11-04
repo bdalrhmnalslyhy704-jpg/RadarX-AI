@@ -186,10 +186,10 @@ jobs:
             Number(neuralNetwork.ensemble_members_required)===3&&
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
-            temporalNetwork.architecture==='TCN_24x18_DILATED_RESIDUAL_MARKET_REGIME_ENSEMBLE_V3'&&
+            temporalNetwork.architecture==='TCN_24x22_DILATED_RESIDUAL_MULTI_HORIZON_REGIME_ENSEMBLE_V4'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
             Number(temporalNetwork.sequence_steps)===24&&
-            Number(temporalNetwork.sequence_channels)===18&&
+            Number(temporalNetwork.sequence_channels)===22&&
             Number(temporalNetwork.ensemble_members_required)===3&&
             (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)&&
             ['WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
