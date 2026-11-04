@@ -181,10 +181,21 @@ test('matured live samples are labeled only by matching baseline and four-hour c
     price:baselinePrice,at:baselineAt,closed_candle_baseline:true,
     training_eligible:true,target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',outcome:null
   };
+  const fastOriginal=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const fastChanged={
+    ...fastOriginal,
+    data:fastOriginal.data.map(row=>{
+      if(row[0]<=baselineAt)return row;
+      const elapsedBars=Math.max(1,Math.floor((row[0]-(baselineAt+1))/(5*60*1000))+1);
+      const scale=Math.pow(1.003,elapsedBars);
+      return row.map((value,column)=>column>=1&&column<=4?Number(value)*scale:value);
+    })
+  };
   const outcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
-    symbol:'TESTUSDT',klines:changed,pendingSamples:[sample],now
+    symbol:'TESTUSDT',klines:changed,fastKlines:fastChanged,pendingSamples:[sample],now
   });
   assert.equal(outcomes.length,1);
+  assert.equal(outcomes[0].first_passage.path_resolution,'5M');
   assert.equal(outcomes[0].sample_id,sample.id);
   assert.equal(outcomes[0].baseline_price,baselinePrice);
   assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
