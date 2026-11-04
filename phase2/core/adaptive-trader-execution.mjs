@@ -7,6 +7,7 @@ const MAX_ORDER_USDT=25;
 const MAX_DAILY_LOSS_USDT=5;
 const MIN_DAILY_LOSS_USDT=1;
 const MIN_LIVE_OUTCOMES=100;
+const MIN_NEURAL_HOLDOUT_SAMPLES=100;
 const MAX_OPEN_POSITIONS=1;
 const MAX_TRADES_PER_UTC_DAY=2;
 const DEFAULT_STOP_LOSS_PCT=2;
@@ -15,6 +16,19 @@ const FEE_ESTIMATE_RATE=0.001;
 const MAX_SNAPSHOT_AGE_MS=2*60*1000;
 const MAX_ENTRY_CANDLE_AGE_MS=20*60*1000;
 const ALLOWED_ORIGINS=new Set(['https://api.binance.com','https://testnet.binance.vision']);
+function neuralLiveEligibility(profile){
+  const network=profile?.neural_network||{};
+  const comparison=network.holdout_comparison||{};
+  return profile?.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
+    network.selected===true&&network.probability_ready===true&&network.live_eligibility_ready===true&&
+    network.validation?.evaluated===true&&network.validation?.beat_base_rate===true&&
+    network.holdout?.evaluated===true&&network.holdout?.beat_base_rate===true&&
+    Number(network.holdout?.sample_count)>=MIN_NEURAL_HOLDOUT_SAMPLES&&
+    comparison.passed===true&&comparison.beats_base_rate===true&&
+    comparison.beats_same_window_logistic===true&&comparison.beats_global_logistic===true&&
+    (comparison.beats_recent_logistic===true||comparison.beats_recent_logistic===null);
+}
+
 const FINITE=value=>{
   if(value===null||value===undefined||value==='')return null;
   const number=Number(value);
@@ -308,6 +322,7 @@ export class AdaptiveTraderExecutionController{
     this.client=this.config.enabled?clientFactory(this.config):null;
     this.state={version:1,utc_day:null,daily_trade_count:0,daily_realized_pnl_usdt:0,halted:false,halt_reason:null,
       last_event:'NOT_STARTED',last_error:null,last_preflight_at:0,preflight_status:'NOT_CHECKED',
+      neural_validation_ready:false,neural_validation_profile:null,
       pending_buy:null,open_position:null,trade_history:[]};
     this.initialized=false;this.inFlight=false;this.readyInfo=null;this.lastSnapshot=null;
   }
@@ -338,6 +353,8 @@ export class AdaptiveTraderExecutionController{
       resolved_trade_outcomes:tradeLearningProfile.resolved_samples,
       trade_learning_profile:tradeLearningProfile,
       paper_validation_profile:this.state.paper_validation_profile||null,
+      neural_validation_ready:this.state.neural_validation_ready===true,
+      neural_validation_profile:this.state.neural_validation_profile||null,
       open_position:this.state.open_position?{symbol:this.state.open_position.symbol,opened_at:this.state.open_position.opened_at,
         entry_price:this.state.open_position.entry_price,quantity:this.state.open_position.quantity,
         protection_status:this.state.open_position.protection_status,oco_status:this.state.open_position.oco_status}:null,
@@ -354,6 +371,8 @@ export class AdaptiveTraderExecutionController{
     if(this.state.preflight_status==='REJECTED')return 'BLOCKED_EXCHANGE_PERMISSIONS';
     if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position)
       return 'WAITING_FOR_PAPER_VALIDATION';
+    if(this.config.network==='LIVE'&&this.state.neural_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position)
+      return 'WAITING_FOR_NEURAL_VALIDATION';
     if(this.state.preflight_status==='READY'){
       if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true)return 'WAITING_FOR_PAPER_VALIDATION';
       return this.config.network==='LIVE'?'LIVE_SPOT_GATED':'SPOT_TESTNET';
@@ -398,7 +417,7 @@ export class AdaptiveTraderExecutionController{
       return false;
     }
   }
-  async processSnapshot(snapshot,{learningProfile=null,paperValidationProfile=null}={}){
+  async processSnapshot(snapshot,{learningProfile=null,paperValidationProfile=null,cognitiveProfile=null}={}){
     if(this.inFlight)return {status:'BUSY',execution:this.snapshot()};
     if(!this.initialized)await this.initialize();
     this.rollUtcDay();
@@ -421,10 +440,29 @@ export class AdaptiveTraderExecutionController{
     }
     this.state.paper_validation_ready=paperValidationProfile?.ready===true;
     this.state.paper_validation_profile=paperValidationProfile&&typeof paperValidationProfile==='object'?paperValidationProfile:null;
+    this.state.neural_validation_ready=neuralLiveEligibility(cognitiveProfile);
+    const neural=cognitiveProfile?.neural_network||{};
+    const comparison=neural.holdout_comparison||{};
+    this.state.neural_validation_profile={
+      method:String(cognitiveProfile?.method||'UNKNOWN'),
+      selected:neural.selected===true,probability_ready:neural.probability_ready===true,
+      live_eligibility_ready:neural.live_eligibility_ready===true,
+      training_samples:Number(neural.training_samples)||0,
+      validation_samples:Number(neural.validation?.sample_count)||0,
+      holdout_samples:Number(neural.holdout?.sample_count)||0,
+      validation_brier_score:FINITE(neural.validation?.model_brier_score),
+      holdout_brier_score:FINITE(neural.holdout?.model_brier_score),
+      holdout_comparison:comparison
+    };
     if(this.config.network==='LIVE'&&this.state.paper_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position){
       this.state.last_event='WAITING_FOR_PAPER_VALIDATION';
       this.state.last_error=null;await this.persist();
       return {status:'WAITING_FOR_PAPER_VALIDATION',execution:this.snapshot()};
+    }
+    if(this.config.network==='LIVE'&&this.state.neural_validation_ready!==true&&!this.state.pending_buy&&!this.state.open_position){
+      this.state.last_event='WAITING_FOR_NEURAL_OUT_OF_SAMPLE_VALIDATION';
+      this.state.last_error=null;await this.persist();
+      return {status:'WAITING_FOR_NEURAL_VALIDATION',execution:this.snapshot()};
     }
     if(!await this.ensurePreflight())return {status:'BLOCKED',execution:this.snapshot()};
     this.inFlight=true;
