@@ -440,6 +440,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     resolved_samples: rows.length, training_samples: 0, validation_samples: 0, holdout_samples: 0,
     required_training_samples: minTrainingSamples, required_validation_samples: minimumValidationSamples,
     required_holdout_samples: minimumHoldoutSamples, probability_ready: false, live_eligibility_ready: false,
+    validation_start_at:null,holdout_start_at:null,max_training_outcome_resolved_at:null,
+    validation_start_at:null,holdout_start_at:null,max_training_outcome_resolved_at:null,
     trained: false, selected: false, validation: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
     holdout: { evaluated: false, reason: 'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED' },
     holdout_comparison: { passed: false, required_live_holdout_samples: liveHoldoutSamples },
@@ -453,6 +455,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const validationPool = rows.filter(row => row.at >= validationStart && row.at < holdoutStart);
   const validation = validationPool.filter(row => row.resolved_at < holdoutStart);
   const holdout = rows.filter(row => row.at >= holdoutStart);
+  const maxTrainingOutcomeResolvedAt=training.length
+    ?Math.max(...training.map(row=>row.resolved_at)):null;
   if (training.length < minTrainingSamples || validation.length < minimumValidationSamples ||
       holdout.length < minimumHoldoutSamples) return {
     status: 'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
@@ -502,6 +506,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     validation_samples: validation.length, holdout_samples: holdout.length,
     required_training_samples: minTrainingSamples, required_validation_samples: minimumValidationSamples,
     required_holdout_samples: minimumHoldoutSamples,
+    validation_start_at:validationStart,holdout_start_at:holdoutStart,
+    max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
     training_positive_rate_pct: Number((baseRate * 100).toFixed(1)),
     trained: true, selected, probability_ready: probabilityReady, live_eligibility_ready: liveReady,
     validation: {
