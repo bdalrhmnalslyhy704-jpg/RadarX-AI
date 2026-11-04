@@ -753,19 +753,24 @@ function renderLearning(){
   const validationText=validation.evaluated===true
     ?'التحقق الأوسط: Brier '+fmt(validation.model_brier_score,3)+' مقابل خط الأساس '+fmt(validation.base_rate_brier_score,3)
     :'مرحلة التحقق الأوسط لم تكتمل بعد.';
-  const probabilityText=probabilityReady&&Number.isFinite(Number(holdout.model_brier_score))
-    ?'الامتحان الأخير نجح: Brier '+fmt(holdout.model_brier_score,3)+' مقابل خط الأساس '+fmt(holdout.base_rate_brier_score,3)
-    :'لا توجد احتمالات صعود معتمدة؛ لا يُسمح بها قبل النجاح في التحقق الأوسط والاختبار النهائي المستقل.';
-  const selectedModel=modelSelection.selected_model==='NEURAL_GLOBAL'?'الشبكة العصبية العميقة V5':
+  const probabilityText=temporalReady&&Number.isFinite(Number(temporalHoldout.model_brier_score))
+    ?'الشبكة الزمنية اجتازت الاختبار المستقل: Brier '+fmt(temporalHoldout.model_brier_score,3)+' مقابل خط الأساس الخطي '+fmt(temporalHoldout.pooled_logistic_brier_score,3)+' · ورقي فقط.'
+    :probabilityReady&&Number.isFinite(Number(holdout.model_brier_score))
+      ?'النموذج الاحتياطي اجتاز الاختبار الأخير: Brier '+fmt(holdout.model_brier_score,3)+' مقابل خط الأساس '+fmt(holdout.base_rate_brier_score,3)
+      :'لا توجد احتمالات شراء زمنية معتمدة؛ لا تُرفع العملة إلى مرشح دخول قبل اجتياز الشبكة الزمنية للتحقق والاختبار المستقل.';
+  const selectedModel=temporalReady?'الشبكة الزمنية TCN':
+    modelSelection.selected_model==='NEURAL_GLOBAL'?'الشبكة العصبية الاحتياطية V5':
     modelSelection.selected_model==='RECENT_WINDOW'?'الذاكرة الحديثة':
     modelSelection.selected_model==='GLOBAL_HISTORY'?'الذاكرة الطويلة':'لا يوجد نموذج معتمد';
-  const adaptationText=modelSelection.selected_model==='NEURAL_GLOBAL'
-    ?'تكيّف: اختيرت الشبكة العصبية بعد تفوقها على المنافس الخطي في التحقق الأوسط.'
-    :adaptation.status==='RECENT_WINDOW_SELECTED'
-      ?'تكيّف: اختير النموذج الحديث بعد تفوقه في التحقق الأوسط.'
-      :adaptation.status==='GLOBAL_HISTORY_RETAINED'
-        ?'تكيّف: احتُفظ بالنموذج الطويل؛ لم يثبت تفوق المنافس الحديث.'
-        :'التكيّف غير معتمد بعد بسبب نقص الأدلة أو فشل التحقق.';
+  const adaptationText=temporalReady
+    ?'تكيّف: اختيرت الشبكة الزمنية بعد تفوقها على المنافس الخطي في التحقق والاختبار المستقل.'
+    :modelSelection.selected_model==='NEURAL_GLOBAL'
+      ?'تكيّف: اختيرت الشبكة العصبية الاحتياطية بعد تفوقها على المنافس الخطي في التحقق الأوسط.'
+      :adaptation.status==='RECENT_WINDOW_SELECTED'
+        ?'تكيّف: اختير النموذج الحديث بعد تفوقه في التحقق الأوسط.'
+        :adaptation.status==='GLOBAL_HISTORY_RETAINED'
+          ?'تكيّف: احتُفظ بالنموذج الطويل؛ لم يثبت تفوق المنافس الحديث.'
+          :'التكيّف غير معتمد بعد بسبب نقص الأدلة أو فشل التحقق.';
   const neuralStatusText=neuralNetwork.status==='SELECTED_ON_CHRONOLOGICAL_VALIDATION'
     ?'اختيرت الشبكة في التحقق الزمني الأوسط؛ قبول الاحتمالات يظل مشروطًا باختبار زمني نهائي مستقل.'
     :neuralNetwork.status==='VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER'
