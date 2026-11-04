@@ -98,6 +98,15 @@ jobs:
                 const cognitiveProfile=cognitive&&cognitive.profile?cognitive.profile:cognitive||{};
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
+                const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
+                const temporalNetworkContract=Boolean(
+                  temporalNetwork.architecture==='TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1'&&
+                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
+                  Number(temporalNetwork.sequence_steps)===24&&
+                  Number(temporalNetwork.sequence_channels)===8&&
+                  Number(temporalNetwork.ensemble_members_required)===3&&
+                  (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)
+                );
                 const neuralNetworkContract=Boolean(
                   neuralNetwork.architecture==='18-10-6-1+RESIDUAL'&&
                   Number(neuralNetwork.input_neurons)===18&&
@@ -188,6 +197,21 @@ jobs:
                       probability_ready:neuralNetwork.probability_ready===true,
                       validation_evaluated:neuralNetwork.validation?.evaluated===true,
                       holdout_evaluated:neuralNetwork.holdout?.evaluated===true
+                    }:null,
+                    temporal_network:temporalNetwork?{
+                      architecture:String(temporalNetwork.architecture||'unknown'),
+                      target_definition:String(temporalNetwork.target_definition||'unknown'),
+                      status:String(temporalNetwork.status||'unknown'),
+                      resolved_samples:Number(temporalNetwork.resolved_samples)||0,
+                      training_samples:Number(temporalNetwork.training_samples)||0,
+                      validation_samples:Number(temporalNetwork.validation_samples)||0,
+                      holdout_samples:Number(temporalNetwork.holdout_samples)||0,
+                      trained:temporalNetwork.trained===true,
+                      selected:temporalNetwork.selected===true,
+                      probability_ready:temporalNetwork.probability_ready===true,
+                      live_eligibility_ready:temporalNetwork.live_eligibility_ready===true,
+                      validation_evaluated:temporalNetwork.validation?.evaluated===true,
+                      holdout_evaluated:temporalNetwork.holdout?.evaluated===true
                     }:null
                   }:null
                 };
@@ -195,20 +219,18 @@ jobs:
                   Date.now()-scannedAt<=8*60*1000&&
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
                 const cognitiveV5=cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
-                  cognitiveProfile.identifier_features_used===false&&neuralNetworkContract;
-                const probabilityClaimSafe=cognitiveProfile.probability_ready!==true||
-                  (cognitiveProfile.validation?.evaluated===true&&cognitiveProfile.validation?.beat_base_rate===true&&
-                   cognitiveProfile.holdout?.evaluated===true&&cognitiveProfile.holdout?.beat_base_rate===true);
-                const neuralComparison=neuralNetwork.holdout_comparison||{};
-                const neuralLiveReady=neuralNetwork.selected===true&&
-                  neuralNetwork.probability_ready===true&&neuralNetwork.live_eligibility_ready===true&&
-                  neuralNetwork.validation?.evaluated===true&&neuralNetwork.validation?.beat_base_rate===true&&
-                  neuralNetwork.holdout?.evaluated===true&&neuralNetwork.holdout?.beat_base_rate===true&&
-                  Number(neuralNetwork.holdout?.sample_count)>=100&&
-                  neuralComparison.passed===true&&neuralComparison.beats_base_rate===true&&
-                  neuralComparison.beats_same_window_logistic===true&&
-                  neuralComparison.beats_global_logistic===true&&
-                  (neuralComparison.beats_recent_logistic===true||neuralComparison.beats_recent_logistic===null);
+                  cognitiveProfile.identifier_features_used===false&&temporalNetworkContract;
+                const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
+                  (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
+                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true);
+                const temporalComparison=temporalNetwork.holdout_comparison||{};
+                const neuralLiveReady=temporalNetwork.selected===true&&
+                  temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
+                  temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
+                  temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
+                  Number(temporalNetwork.holdout?.sample_count)>=100&&
+                  temporalComparison.passed===true&&temporalComparison.beats_base_rate===true&&
+                  temporalComparison.beats_pooled_logistic===true;
                 const paperValidation=value.paper_validation_profile||{};
                 const paperTradingReady=paperValidation.ready===true&&
                   Number(paperValidation.evaluation_window_trades)>=100&&
@@ -216,7 +238,8 @@ jobs:
                   Number(paperValidation.net_pnl_usdt)>0&&
                   Number(paperValidation.max_drawdown_pct)<=8;
                 lastObserved.neural_live_ready=neuralLiveReady;
-                lastObserved.neural_holdout_comparison=neuralComparison;
+                lastObserved.temporal_network_contract=temporalNetworkContract;
+                lastObserved.neural_holdout_comparison=temporalComparison;
                 lastObserved.paper_trading_readiness={
                   ready:paperTradingReady,evaluation_window_trades:Number(paperValidation.evaluation_window_trades)||0,
                   win_rate_pct:Number(paperValidation.win_rate_pct)||0,
@@ -258,7 +281,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='Live scan, neural out-of-sample superiority, or 100-trade paper validation gate is not ready';
+                lastError='Live scan, temporal TCN out-of-sample superiority, or 100-trade paper validation gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }
