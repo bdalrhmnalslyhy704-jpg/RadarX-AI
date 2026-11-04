@@ -591,6 +591,7 @@ export class DurableStore {
       // Preserve a bounded 2,000-row chronological working set across restarts; 6,000 in-memory
       // rows remain the runtime ceiling. This keeps enough unique candle times for TCN validation.
       samples:Array.isArray(value.samples)?value.samples.filter(x=>x&&typeof x==='object').slice(-2000):[],
+      v5_samples:Array.isArray(value.v5_samples)?value.v5_samples.filter(x=>x&&typeof x==='object').slice(-2000):[],
       price_history:Array.isArray(value.price_history)?value.price_history.filter(x=>x&&typeof x==='object').slice(-15000):[],
       missed_movers:Array.isArray(value.missed_movers)?value.missed_movers.filter(x=>x&&typeof x==='object').slice(-500):[],
       paper_portfolio:(()=>{

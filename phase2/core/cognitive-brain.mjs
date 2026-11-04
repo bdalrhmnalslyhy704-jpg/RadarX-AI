@@ -531,6 +531,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   iterations = 900, learningRate = 0.12,
   minNeuralTrainingSamples = NEURAL_POLICY.minTrainingSamples,
   maxNeuralTrainingSamples = NEURAL_POLICY.maxTrainingSamples,
+  temporalSamples = samples,
   neuralIterations = NEURAL_POLICY.iterations,
   neuralLearningRate = NEURAL_POLICY.learningRate,
   neuralL2 = NEURAL_POLICY.l2,
@@ -538,7 +539,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   maxResolvedSamples = 0
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
-  const temporalNetwork=buildTemporalNeuralProfile(samples);
+  const temporalNetwork=buildTemporalNeuralProfile(temporalSamples);
   const allResolved = validResolvedSamples(samples, {
     outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
   });

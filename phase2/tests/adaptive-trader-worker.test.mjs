@@ -256,6 +256,10 @@ test('background sidecar restores its own memory, resolves outcomes and records 
       base_score:61,tier:'NO_SETUP',closed_candle_baseline:true,training_eligible:true,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       features:{volume_ratio:1.2,taker_buy_ratio:0.49,higher_low:false,compression_ratio:1.1},outcome:null}],
+    v5_samples:[{id:'TESTUSDT:old',symbol:'TESTUSDT',price:1,at:now-5*60*60*1000,
+      tier:'NO_SETUP',closed_candle_baseline:true,training_eligible:true,
+      target_definition:'LEGACY_4H_CLOSE_RETURN',outcome:null,return_pct:null,
+      features:{volume_ratio:1.2,taker_buy_ratio:0.49,higher_low:false,compression_ratio:1.1}}],
     price_history:[{symbol:'TESTUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',score:42,evaluated:true}],
     missed_movers:[]
   });
@@ -284,8 +288,8 @@ test('background sidecar restores its own memory, resolves outcomes and records 
           higher_low:false,breakout_above_prior_high:false,compression_ratio:0.8,relative_strength_vs_btc_pct:2.0}}
     ],
     closed_candle_outcomes:[{sample_id:'TESTUSDT:old',symbol:'TESTUSDT',
-      at:now-5*60*60*1000,baseline_price:1,mark_price:1.08,outcome:'UP',return_pct:3,
-      close_return_pct:8,
+      at:now-5*60*60*1000,baseline_price:1,mark_price:0.992,outcome:'UP',return_pct:3,
+      close_return_pct:-0.8,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       first_passage:{hit:'TAKE_PROFIT_REACHED_FIRST',path_resolution:'5M'},
       resolved_at:now-60*60*1000,horizon_ms:4*60*60*1000,
@@ -325,7 +329,15 @@ test('background sidecar restores its own memory, resolves outcomes and records 
 
     const saved=await store.getAdaptiveTraderState();
     assert.equal(saved.successful_scans,9);
-    assert.ok(saved.samples.some(row=>row.id==='TESTUSDT:old'&&row.outcome==='UP'));
+    const firstPassageSaved=saved.samples.find(row=>row.id==='TESTUSDT:old');
+    const closeDirectionSaved=saved.v5_samples.find(row=>row.id==='TESTUSDT:old');
+    assert.equal(firstPassageSaved.outcome,'UP');
+    assert.equal(firstPassageSaved.return_pct,3);
+    assert.equal(firstPassageSaved.close_return_pct,-0.8);
+    assert.equal(closeDirectionSaved.outcome,'DOWN');
+    assert.equal(closeDirectionSaved.return_pct,-0.8);
+    assert.equal(closeDirectionSaved.target_definition,'LEGACY_4H_CLOSE_RETURN');
+    assert.equal(closeDirectionSaved.outcome_source,'CLOSED_CANDLE_4H');
     assert.ok(saved.price_history.length>=2);
     assert.equal(saved.last_summary.counts.early_setup,0);
     assert.equal((await store.getSubscriptions()).length,0);
@@ -475,7 +487,7 @@ test('worker ingests real closed-candle historical outcomes before collecting li
       higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
       relative_strength_vs_btc_pct:0.8,recent_15m_return_pct:0.4,micro_5m_available:true,
       micro_5m_taker_buy_ratio:0.58,micro_5m_volume_ratio:1.5},
-    outcome:'UP',mark_price:1.035,return_pct:3.5,
+    outcome:'UP',mark_price:1.035,return_pct:3.5,close_return_pct:0.7,
     resolved_at:baselineAt+4*60*60*1000,horizon_ms:4*60*60*1000
   };
   const snapshotProvider=async()=>({
@@ -496,7 +508,9 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     const status=worker.snapshot();
     assert.equal(status.memory.historical_samples,1);
     assert.equal(status.learning_capture.new_historical_samples,1);
+    assert.equal(status.learning_capture.new_historical_v5_close_samples,1);
     assert.equal(status.learning_profile.historical_samples,1);
+    assert.equal(status.cognitive_brain.profile.resolved_samples,1);
     assert.equal(status.learning_profile.outcome_counts.up,1);
     assert.ok(status.memory.resolved_samples>=1);
     assert.equal(status.learning_capture.historical_input_samples,1);
@@ -510,6 +524,8 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     assert.equal(status.real_order_execution,false);
     const saved=await store.getAdaptiveTraderState();
     assert.ok(saved.samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'));
+    assert.ok(saved.v5_samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'&&
+      row.return_pct===0.7&&row.target_definition==='LEGACY_4H_CLOSE_RETURN'));
   }finally{
     await worker.stop();
     await rm(dir,{recursive:true,force:true});
