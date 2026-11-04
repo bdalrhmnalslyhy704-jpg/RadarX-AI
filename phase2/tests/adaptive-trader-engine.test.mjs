@@ -953,21 +953,25 @@ test('historical sample phases give the cognitive learner enough distinct time b
   assert.ok(uniqueTimes.size>=100,'different symbols should populate distinct chronological time blocks');
 
   const profile=buildCognitiveLearningProfile(rows);
-  assert.ok(profile.training_samples>=60,'historical training split must be populated: '+JSON.stringify({
-    resolved:profile.resolved_samples,training:profile.training_samples,validation:profile.validation_samples,
-    holdout:profile.holdout_samples,purged:profile.purged_overlap_samples,
-    unique_times:uniqueTimes.size,validation_start:profile.validation_start_at,
-    holdout_start:profile.holdout_start_at,training_end:profile.max_training_outcome_resolved_at
+  const temporal=profile.temporal_network;
+  assert.equal(profile.resolved_samples,0,
+    'the legacy 4h-close model must not consume first-passage barrier labels');
+  assert.ok(temporal.resolved_samples>=160,'temporal training split must be populated: '+JSON.stringify({
+    resolved:temporal.resolved_samples,training:temporal.training_samples,
+    validation:temporal.validation_samples,holdout:temporal.holdout_samples,
+    unique_times:uniqueTimes.size,validation_start:temporal.validation_start_at,
+    holdout_start:temporal.holdout_start_at,training_end:temporal.max_training_outcome_resolved_at
   }));
-  assert.ok(profile.validation_samples>=20,'middle validation must contain enough matured observations');
-  assert.ok(profile.holdout_samples>=20,'untouched holdout must contain enough matured observations');
-  assert.equal(profile.validation.evaluated,true);
-  assert.equal(profile.holdout.evaluated,true);
-  assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
-  assert.ok(profile.validation_start_at<profile.holdout_start_at);
-  // This constant-trend fixture has no predictive variation, so it must not
-  // unlock probabilities merely because the chronology is now large enough.
-  assert.equal(profile.probability_ready,false);
+  assert.ok(temporal.training_samples>=160,'TCN training must contain enough matured observations');
+  assert.ok(temporal.validation_samples>=24,'middle TCN validation must contain enough matured observations');
+  assert.ok(temporal.holdout_samples>=40,'untouched TCN holdout must contain enough matured observations');
+  assert.equal(temporal.validation.evaluated,true);
+  assert.equal(temporal.holdout.evaluated,true);
+  assert.ok(temporal.max_training_outcome_resolved_at<temporal.validation_start_at);
+  assert.ok(temporal.validation_start_at<temporal.holdout_start_at);
+  // The constant-trend fixture has no predictive variation. Chronological size
+  // alone must never unlock temporal probabilities.
+  assert.equal(temporal.probability_ready,false);
 });
 
 test('screenshot gainer pairs receive quiet-flow priority before daily expansion',async()=>{
