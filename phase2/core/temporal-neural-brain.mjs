@@ -71,7 +71,11 @@ function cleanRows(samples) {
 }
 
 function zerosLike(value) {
-  return Array.isArray(value) ? value.map(zerosLike) : 0;
+  if (Array.isArray(value)) return value.map(zerosLike);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, zerosLike(child)]));
+  }
+  return 0;
 }
 function addTree(target, source) {
   if (Array.isArray(target)) {
@@ -81,6 +85,9 @@ function addTree(target, source) {
 }
 function scaleTree(target, scale) {
   if (Array.isArray(target)) return target.map(value => scaleTree(value, scale));
+  if (target && typeof target === 'object') {
+    return Object.fromEntries(Object.entries(target).map(([key, value]) => [key, scaleTree(value, scale)]));
+  }
   return target * scale;
 }
 function updateAdam(parameters, gradients, moments, variances, step, rate, l2) {
@@ -122,6 +129,14 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
       for (let index = 0; index < parameter.length; index++) {
         const next = walk(parameter[index], gradient[index], moment[index], variance[index]);
         values.push(next.value); moments.push(next.moment); variances.push(next.variance);
+      }
+      return { value: values, moment: moments, variance: variances };
+    }
+    if (parameter && typeof parameter === 'object') {
+      const values = {}, moments = {}, variances = {};
+      for (const key of Object.keys(parameter)) {
+        const next = walk(parameter[key], gradient[key], moment[key], variance[key]);
+        values[key] = next.value; moments[key] = next.moment; variances[key] = next.variance;
       }
       return { value: values, moment: moments, variance: variances };
     }
