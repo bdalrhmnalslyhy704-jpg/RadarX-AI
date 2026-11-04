@@ -195,6 +195,10 @@ jobs:
                       samples_required:Number(neuralNetwork.samples_required)||0,
                       trained:neuralNetwork.trained===true,
                       selected:neuralNetwork.selected===true,
+                      validation_brier:neuralNetwork.validation?.model_brier_score??null,
+                      validation_base_rate_brier:neuralNetwork.validation?.base_rate_brier_score??null,
+                      holdout_brier:neuralNetwork.holdout?.model_brier_score??null,
+                      holdout_base_rate_brier:neuralNetwork.holdout?.base_rate_brier_score??null,
                       probability_ready:neuralNetwork.probability_ready===true,
                       validation_evaluated:neuralNetwork.validation?.evaluated===true,
                       holdout_evaluated:neuralNetwork.holdout?.evaluated===true
@@ -207,6 +211,7 @@ jobs:
                       training_samples:Number(temporalNetwork.training_samples)||0,
                       validation_samples:Number(temporalNetwork.validation_samples)||0,
                       holdout_samples:Number(temporalNetwork.holdout_samples)||0,
+                      regime_specialists:temporalNetwork.regime_specialists||{},
                       trained:temporalNetwork.trained===true,
                       selected:temporalNetwork.selected===true,
                       probability_ready:temporalNetwork.probability_ready===true,
