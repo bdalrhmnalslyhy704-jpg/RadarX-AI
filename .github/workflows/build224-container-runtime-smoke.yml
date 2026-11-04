@@ -202,6 +202,7 @@ jobs:
             Number(temporalNetwork.ensemble_members_required)===3&&
             (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)&&
             ['WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
+             'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE',
              'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE',
              'VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
              'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
