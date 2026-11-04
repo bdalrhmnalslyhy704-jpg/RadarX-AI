@@ -697,7 +697,12 @@ recordServerPaperPortfolio(snapshot,now){
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
-        probability_ready:this.state.cognitive_profile?.probability_ready===true,
+        probability_ready:this.state.cognitive_profile?.probability_ready===true||
+          this.state.cognitive_profile?.temporal_network?.probability_ready===true,
+        temporal_probability_ready:this.state.cognitive_profile?.temporal_network?.probability_ready===true,
+        selected_probability_model:this.state.cognitive_profile?.temporal_network?.probability_ready===true
+          ?'TEMPORAL_TCN':this.state.cognitive_profile?.probability_ready===true
+            ?String(this.state.cognitive_profile?.model_selection?.selected_model||'LEGACY_BASELINE'):'NONE',
         neural_network:this.state.cognitive_profile?.neural_network||null,
         temporal_network:this.state.cognitive_profile?.temporal_network||null,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
@@ -804,7 +809,8 @@ recordServerPaperPortfolio(snapshot,now){
       learning_capture:this.state.last_learning_capture||null,
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
-        status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
+        status:this.state.cognitive_profile?.temporal_network?.probability_ready===true?'TEMPORAL_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
+          this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{
