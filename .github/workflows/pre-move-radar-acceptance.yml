@@ -112,28 +112,47 @@ jobs:
         run: |
           set -euo pipefail
           CODE=""
-          # A push can briefly remove the old container before the new DHDTech
-          # container is healthy. Retry only transport/gateway errors; never
-          # treat a 502 as a successful health check or accept a non-200 result.
-          for attempt in 1 2 3 4 5 6 7 8; do
+          DEPLOYED_CONTRACT=false
+          # DHDTech may need longer than one rollout minute to replace the prior
+          # container after a branch push. Require the new Pre-Move contract itself;
+          # an HTTP 200 from an older Build 224 image is not a deployment success.
+          for attempt in $(seq 1 16); do
             CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info" || true)"
             if [ "$CODE" = "200" ]; then
-              break
+              if node --input-type=module - "$RUNNER_TEMP/deployment-info.json" <<'NODE'
+          import fs from 'node:fs';
+          try {
+            const b=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+            const c=b.pre_move_scanner_contract||{};
+            const ok=b.build_version==='Build 224'&&b.paper_trading===true&&b.real_order_execution===false&&
+              b.storage?.persistent===true&&Number(c.configured_cycle_scan_limit)>=6&&
+              Number(c.hosted_cycle_scan_cap)>=8&&Number(c.max_concurrent_deep_scans)===2&&
+              Number(c.scan_timeout_ms)>0&&Number(c.scan_timeout_ms)<=45000;
+            process.exit(ok?0:1);
+          } catch { process.exit(1); }
+          NODE
+              then
+                DEPLOYED_CONTRACT=true
+                echo "DHDTECH_PRE_MOVE_BUILD_CONTRACT_READY attempt=$attempt"
+                break
+              fi
+              echo "::warning::DHDTech is still serving the previous Build 224 image (HTTP 200 without the new scanner contract), attempt $attempt/16."
+            else
+              case "$CODE" in
+                502|503|504|000)
+                  echo "::warning::DHDTech deployment-info transient HTTP $CODE on attempt $attempt/16."
+                  ;;
+                *)
+                  echo "::error::DHDTech deployment-info returned non-retryable HTTP $CODE"
+                  cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
+                  exit 1
+                  ;;
+              esac
             fi
-            case "$CODE" in
-              502|503|504|000)
-                echo "::warning::DHDTech deployment-info transient HTTP $CODE on attempt $attempt/8."
-                if [ "$attempt" -lt 8 ]; then sleep 15; fi
-                ;;
-              *)
-                echo "::error::DHDTech deployment-info returned non-retryable HTTP $CODE"
-                cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
-                exit 1
-                ;;
-            esac
+            if [ "$attempt" -lt 16 ]; then sleep 15; fi
           done
-          if [ "$CODE" != "200" ]; then
-            echo "::error::DHDTech deployment-info stayed unavailable after 8 bounded attempts (last HTTP $CODE)."
+          if [ "$CODE" != "200" ] || [ "$DEPLOYED_CONTRACT" != "true" ]; then
+            echo "::error::DHDTech did not deploy the new Build 224 Pre-Move contract within the bounded 4-minute rollout window (last HTTP $CODE)."
             cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
             exit 1
           fi

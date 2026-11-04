@@ -846,7 +846,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
       max_concurrent_deep_scans:PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,
       scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(scannerConfig.preMoveScanTimeoutMs)||45000)))
     };
-    return {status,scanner_ready:Boolean(preMoveRadarScanner),scanner_contract,worker:{
+    return {status,scanner_ready:Boolean(preMoveRadarScanner),scanner_contract:scannerContract,worker:{
       enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
       interval_ms:state.interval_ms,initial_delay_ms:state.initial_delay_ms||0,
       scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
