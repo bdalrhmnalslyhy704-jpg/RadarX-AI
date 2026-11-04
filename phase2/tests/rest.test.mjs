@@ -5,6 +5,25 @@ import {RestClient,RestRateLimitError,retryAfterMs,estimateBinanceRequestWeight,
 import {CONFIG} from '../config.mjs';
 
 
+test('TEST_FIXTURE: stalled response JSON body is bounded and fails over to the next official mirror',async()=>{
+  const calls=[];
+  const client=new RestClient({
+    baseUrls:['https://body-stall-primary.test','https://body-stall-backup.test'],
+    timeoutMs:35,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async url=>{
+      const host=new URL(url).host;calls.push(host);
+      if(host==='body-stall-primary.test')
+        return {status:200,ok:true,headers:new Map(),json:()=>new Promise(()=>{})};
+      return {status:200,ok:true,headers:new Map(),json:async()=>({source:'BACKUP_FRESH'})};
+    }
+  });
+  const result=await client.request('/api/v3/ticker/24hr',{symbol:'BODYSTALLUSDT'});
+  assert.deepEqual(calls,['body-stall-primary.test','body-stall-backup.test']);
+  assert.deepEqual(result.data,{source:'BACKUP_FRESH'});
+  assert.equal(client.health().last_request_phase,'COMPLETE');
+  assert.equal(client.health().state,'LIVE');
+});
+
 test('TEST_FIXTURE: configured REST timeouts cannot hold a live scan for a minute',()=>{
   const client=new RestClient({baseUrls:['https://bounded-timeout.test'],timeoutMs:60_000});
   assert.equal(client.timeoutMs,9_000,'one REST host attempt must be bounded to nine seconds');
