@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {buildMoveAlert,buildEarlyWakeAlert,buildPreExplosionAlert,buildPreMoveWatchOnlyAlert,rankPreExplosionTickerRows,EarlyMoveSentinel} from '../core/early-move-sentinel.mjs';
-import {buildFastImpulseContext} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner,buildFastImpulseContext} from '../market/universe-scanner.mjs';
+import {RestClient} from '../market/binance-rest.mjs';
 
 const candidate={
   symbol:'TESTUSDT',
@@ -525,18 +526,24 @@ test('deep-scan watchdog time follows the oldest still-active symbol as other sc
 
 test('a stalled Radar 1 deep scan aborts its isolated REST client and releases the busy latch',async()=>{
   let now=1710012000000;
-  const never=new Promise(()=>{});
-  const store={async init(){},async appendMoveAlert(){}};
-  const rest={
-    async request(path){
-      if(path==='/api/v3/exchangeInfo')return{data:{symbols:[]}};
-      if(path==='/api/v3/ticker/24hr')return{data:[]};
-      return never;
-    }
+  let aborted=0;
+  const response=data=>({ok:true,status:200,headers:{get(){return null;}},async json(){return data;}});
+  const fetchImpl=async(url,{signal}={})=>{
+    const path=new URL(url).pathname;
+    if(path==='/api/v3/exchangeInfo')return response({symbols:[]});
+    if(path==='/api/v3/ticker/24hr')return response([]);
+    if(path==='/api/v3/depth')return response({bids:[],asks:[]});
+    if(path==='/api/v3/klines')return await new Promise((resolve,reject)=>{
+      const onAbort=()=>{aborted++;const error=new Error('TEST_FETCH_ABORTED');error.name='AbortError';reject(error);};
+      signal?.addEventListener('abort',onAbort,{once:true});
+    });
+    throw new Error('UNEXPECTED_TEST_PATH:'+path);
   };
+  const rest=new RestClient({baseUrls:['https://binance.test'],fetchImpl,timeoutMs:30000,minIntervalMs:1,maxRequestsPerMinute:600});
+  const store={async init(){},async appendMoveAlert(){}};
   const sentinel=new EarlyMoveSentinel({
-    rest,store,clock:()=>now,config:{deepScanTimeoutMs:25,reconcileMs:60000},
-    scannerFactory:()=>({config:{},async scanSymbol(){return never;}}),
+    rest,store,clock:()=>now,config:{deepScanTimeoutMs:1000,reconcileMs:60000},
+    scannerFactory:restClient=>new MarketUniverseScanner({rest:restClient,config:{deepKlines:90}}),
     tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
     logger:{info(){},warn(){}}
   });
