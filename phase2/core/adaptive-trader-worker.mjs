@@ -709,7 +709,10 @@ recordServerPaperPortfolio(snapshot,now){
         validation:this.state.cognitive_profile?.validation||null,
         model_selection:this.state.cognitive_profile?.model_selection||null,
         regime_adaptation:this.state.cognitive_profile?.regime_adaptation||null,
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{
+          modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
+            ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
+        }),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         holdout:this.state.cognitive_profile?.holdout||null,
         temporal_network:this.state.cognitive_profile?.temporal_network||null,
@@ -807,7 +810,10 @@ recordServerPaperPortfolio(snapshot,now){
         status:this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
         profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
-        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
+        prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{
+          modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
+            ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
+        }),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         capture:this.state.cognitive_capture||null,journal_rows:(this.state.cognitive_journal||[]).length,
         resolved_journal_rows:(this.state.cognitive_journal||[]).filter(row=>['UP','DOWN','FLAT'].includes(row.outcome)).length,
