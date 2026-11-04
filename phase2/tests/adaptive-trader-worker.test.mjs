@@ -233,6 +233,7 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     last_summary:null,learning_profile:null,
     samples:[{id:'TESTUSDT:old',symbol:'TESTUSDT',price:1,at:now-5*60*60*1000,
       base_score:61,tier:'NO_SETUP',closed_candle_baseline:true,training_eligible:true,
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       features:{volume_ratio:1.2,taker_buy_ratio:0.49,higher_low:false,compression_ratio:1.1},outcome:null}],
     price_history:[{symbol:'TESTUSDT',price:1,at:now-60*60*1000,tier:'NO_SETUP',score:42,evaluated:true}],
     missed_movers:[]
@@ -262,8 +263,12 @@ test('background sidecar restores its own memory, resolves outcomes and records 
           higher_low:false,breakout_above_prior_high:false,compression_ratio:0.8,relative_strength_vs_btc_pct:2.0}}
     ],
     closed_candle_outcomes:[{sample_id:'TESTUSDT:old',symbol:'TESTUSDT',
-      at:now-5*60*60*1000,baseline_price:1,mark_price:1.08,outcome:'UP',return_pct:8,
-      resolved_at:now-60*60*1000,horizon_ms:4*60*60*1000,outcome_source:'CLOSED_CANDLE_4H'}],
+      at:now-5*60*60*1000,baseline_price:1,mark_price:1.08,outcome:'UP',return_pct:3,
+      close_return_pct:8,
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      first_passage:{hit:'TAKE_PROFIT_REACHED_FIRST',path_resolution:'5M'},
+      resolved_at:now-60*60*1000,horizon_ms:4*60*60*1000,
+      outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'}],
     latest_prices:[
       {symbol:'TESTUSDT',price:1.08,quote_volume_24h:5_000_000,change_24h_pct:2},
       {symbol:'BTCUSDT',price:90_000,quote_volume_24h:50_000_000,change_24h_pct:1},
