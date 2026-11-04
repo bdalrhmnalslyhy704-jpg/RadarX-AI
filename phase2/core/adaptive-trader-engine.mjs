@@ -47,9 +47,29 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
       Number(features.micro_5m_taker_buy_ratio)>=0.53&&finite(features.micro_5m_volume_ratio)!==null&&
       Number(features.micro_5m_volume_ratio)>=1.1;
     if(strictSetup) {
-      return out('ENTRY_CANDIDATE','مرشّح دخول للمراجعة — ليس أمر شراء مضمونًا','REVIEW_ENTRY',3,
-        'تحقّق من السعر الحالي والسيولة والسبريد والرسوم وحدّد وقف الخسارة قبل أي قرار؛ التنفيذ الحقيقي متوقف، وهذه النتيجة للمحاكاة والمراجعة فقط.',
-        ['STRICT_EARLY_SETUP','CLOSED_CANDLE_BREAKOUT','BUY_FLOW_AND_ACTIVITY_CONFIRMED']);
+      const temporal=candidate?.cognitive_assessment||{};
+      const temporalStatus=String(temporal.temporal_model_status||candidate?.temporal_model_status||'');
+      const temporalProbability=finite(temporal.temporal_up_probability);
+      const temporalValidated=[
+        'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
+        'LIVE_GATE_PASSED_OUT_OF_SAMPLE'
+      ].includes(temporalStatus);
+      if(!temporalValidated||temporalProbability===null) {
+        return out('WAIT_FOR_TEMPORAL_VALIDATION','نموذج الشموع ما زال يتعلم — لا توصية دخول',
+          'WAIT',1,
+          'تجمعت شروط فنية أولية، لكن الشبكة الزمنية لم تجتز الاختبار المستقل بعد. أبقِ العملة في المراقبة فقط.',
+          ['TEMPORAL_MODEL_NOT_OUT_OF_SAMPLE_VALIDATED']);
+      }
+      if(temporalProbability<65) {
+        return out('WATCH_ONLY','الشبكة لم تؤيد احتمال الصعود الكافي — مراقبة فقط',
+          'WAIT',1,
+          'لا تدخل؛ احتمال النموذج الزمني أقل من حد المراجعة المحدد. انتظر شموعًا جديدة أو تجاوز العملة.',
+          ['TEMPORAL_PROBABILITY_BELOW_REVIEW_THRESHOLD']);
+      }
+      return out('ENTRY_CANDIDATE','مرشّح مبكر للمراجعة الورقية فقط — ليس أمر شراء','REVIEW_ENTRY',3,
+        'اجتازت الشبكة الزمنية اختبارها المستقل وأيدت هذا المرشح. تحقّق من السعر والسيولة والسبريد والرسوم وحدد وقف الخسارة؛ التنفيذ الحقيقي متوقف.',
+        ['STRICT_EARLY_SETUP','CLOSED_CANDLE_BREAKOUT','BUY_FLOW_AND_ACTIVITY_CONFIRMED',
+         'TEMPORAL_TCN_OUT_OF_SAMPLE_VALIDATED']);
     }
     return out('WAIT_FOR_CONFIRMATION','فرصة مبكرة — انتظر تأكيدًا قبل الدخول','WAIT',2,
       'لا تدخل الآن لمجرد ظهور المرشّح؛ انتظر إغلاق شمعة 15 دقيقة يؤكد الاختراق، مع استمرار ضغط الشراء وعدم امتداد السعر.',
