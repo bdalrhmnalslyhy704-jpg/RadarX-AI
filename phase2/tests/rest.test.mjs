@@ -198,7 +198,7 @@ test('TEST_FIXTURE: a stalled shared market-data response cannot block another r
     assert.deepEqual(recovered.data,{symbols:['BTCUSDT'],source:'RECOVERED_FRESH_REQUEST'});
     assert.equal(second.health().last_request_phase,'COMPLETE');
     assert.equal(second.health().state,'LIVE');
-    void stale;
+    void stale.catch(()=>{});
   `;
   const result=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stdout+'\\n'+result.stderr);
@@ -235,7 +235,7 @@ test('TEST_FIXTURE: scan abort while joining a shared request removes the wait i
     await assert.rejects(pending,error=>error?.name==='ScanDeadlineError');
     assert.ok(Date.now()-startedAt<150,'cancelled radar must not remain attached to the stale shared request');
     assert.equal(secondCalls,0,'aborted waiter must not launch a replacement request');
-    void stale;
+    void stale.catch(()=>{});
   `;
   const result=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stdout+'\\n'+result.stderr);
