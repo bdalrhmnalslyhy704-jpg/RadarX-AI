@@ -94,6 +94,67 @@ test('fresh market-wide ticker activity acceleration can produce a separate non-
   assert.equal(alert.ticker_activity_watch_evidence.score,14);
 });
 
+test('SOL-like fresh market-wide activity burst enters the monitor-only lane despite pending candle structure',async()=>{
+  const {snapshot,now}=fixture();
+  const row={
+    symbol:'SOLUSDT',last_price:95.34,price_change_24h:2.2084,
+    quote_volume_24h:275267843.29,data_quality:100,liquidity_quality:98.69,
+    data_status:{source:'Binance Public REST',data_valid:true,candle_data_valid:true,volume_gate_pass:true,
+      data_stale:false,stale:false,future_data_detected:false},
+    risk_flags:[],
+    ticker_activity:{
+      score:16.25,volume_delta_per_minute:268864.15,trade_delta_per_minute:216.99,
+      volume_acceleration_ratio:7.03,trade_acceleration_ratio:2.09,
+      observed_at:now-82400,baseline_age_ms:82400
+    },
+    pre_move_context:{
+      stage:'WATCH_EARLY',watch_only:true,actionable:false,evidence_complete:true,
+      closed_candles_only:true,already_moved:false,session_close:now-82400,
+      score:63.4,session_return_pct:3.0703,one_hour_return_pct:-0.5222,
+      volume_acceleration:0.2863,trade_acceleration:0.2995,
+      taker_buy_ratio:0.5692,taker_buy_acceleration:0.0401,
+      mean_close_location:0.3501,relative_strength_vs_market_pct:0,
+      components:{squeeze:38.46,structure:45.89,buying_pressure:73.65},
+      reasons:['TAKER_BUY_ACCELERATING','NOT_EXTENDED']
+    }
+  };
+  const [candidate]=buildPreMoveWatchCandidates([row],{
+    minQuoteVolume24h:750000,minLiquidityQuality:60,minDataQuality:70
+  });
+  assert.ok(candidate,'fresh high-volume/high-trade ticker burst should survive as a UI watch candidate');
+  assert.equal(candidate.pre_move_context.ticker_activity_monitor_only,true);
+  const alert=buildPreMoveWatchOnlyAlert(candidate,snapshot,now);
+  assert.ok(alert,'two independent buyer-flow observations plus exceptional live ticker activity should qualify');
+  assert.equal(alert.watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+  assert.equal(alert.watch_only,true);
+  assert.equal(alert.entry_eligible,false);
+  assert.equal(alert.data_status.data_valid,true);
+  assert.equal(alert.paper_trading,true);
+  assert.equal(alert.real_order_execution,false);
+  assert.equal(alert.ticker_activity_watch_evidence.score,16.25);
+
+  const dir=await mkdtemp(join(tmpdir(),'radarx-sol-activity-watch-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const manager=new PushManager({provider,store,deduplicator:new SignalDeduplicator({store,windowMs:15*60*1000})});
+    const result=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(result.status,'SENT',JSON.stringify(result));
+    assert.equal(result.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].watch_notification_tier,'TICKER_ACTIVITY_ACCELERATION_MONITOR');
+    assert.equal(sent[0].ticker_activity_watch_evidence.score,16.25);
+    assert.equal(sent[0].real_order_execution,false);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
 test('ticker-activity watch tier rejects weak, stale, low-liquidity and extended setups',()=>{
   const {candidate,snapshot,now}=fixture();
   const base={
