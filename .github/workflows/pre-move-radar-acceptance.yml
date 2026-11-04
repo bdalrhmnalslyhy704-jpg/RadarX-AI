@@ -10,6 +10,8 @@ on:
     paths:
       - '.github/workflows/pre-move-radar-acceptance.yml'
       - 'phase2/http/api.mjs'
+      - 'phase2/market/universe-scanner.mjs'
+      - 'phase2/tests/api.test.mjs'
       - 'phase2/config.mjs'
       - 'phase2/core/multi-analyst-engine.mjs'
       - 'phase2/market/binance-rest.mjs'
@@ -124,10 +126,20 @@ jobs:
           try {
             const b=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
             const c=b.pre_move_scanner_contract||{};
+            const w=c.ticker_activity_watch_contract||{};
+            const watchContractReady=w.version==='TICKER_ACTIVITY_MONITOR_V2'&&
+              Number(w.scanner_activity_score_floor)===12&&
+              Number(w.watch_activity_score_floor)===10&&
+              Number(w.volume_acceleration_floor)===1.35&&
+              Number(w.trade_acceleration_floor)===1.30&&
+              Number(w.min_score)===62&&Number(w.min_structure_score)===45&&
+              Number(w.min_independent_flow_checks)===2&&
+              Number(w.max_activity_age_ms)===240000&&
+              Number(w.max_baseline_age_ms)===300000&&w.entry_eligible===false;
             const ok=b.build_version==='Build 224'&&b.paper_trading===true&&b.real_order_execution===false&&
               b.storage?.persistent===true&&Number(c.configured_cycle_scan_limit)>=6&&
               Number(c.hosted_cycle_scan_cap)>=8&&Number(c.max_concurrent_deep_scans)===2&&
-              Number(c.scan_timeout_ms)>0&&Number(c.scan_timeout_ms)<=45000;
+              Number(c.scan_timeout_ms)>0&&Number(c.scan_timeout_ms)<=45000&&watchContractReady;
             process.exit(ok?0:1);
           } catch { process.exit(1); }
           NODE
@@ -136,7 +148,7 @@ jobs:
                 echo "DHDTECH_PRE_MOVE_BUILD_CONTRACT_READY attempt=$attempt"
                 break
               fi
-              echo "::warning::DHDTech is still serving the previous Build 224 image (HTTP 200 without the new scanner contract), attempt $attempt/16."
+              echo "::warning::DHDTech is still serving a Build 224 image without the versioned ticker-activity monitor contract, attempt $attempt/16."
             else
               case "$CODE" in
                 502|503|504|000)
