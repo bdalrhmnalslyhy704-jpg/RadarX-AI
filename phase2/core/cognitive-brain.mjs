@@ -1,3 +1,5 @@
+import {buildTemporalNeuralProfile,predictTemporalProbability} from './temporal-neural-brain.mjs';
+
 /**
  * RadarX Build 224 — Cognitive Agent V5 (Residual Deep Neural Challenger)
  *
@@ -532,6 +534,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   maxResolvedSamples = 0
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
+  const temporalNetwork=buildTemporalNeuralProfile(samples);
   const allResolved = validResolvedSamples(samples, {
     outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
   });
@@ -587,6 +590,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
       feature_names: [...FEATURE_NAMES],
+      temporal_network:temporalNetwork,
       identifier_features_used: false,
       note: 'INSUFFICIENT_CHRONOLOGICAL_DATA_FOR_NESTED_VALIDATION',
       _fit: fit
@@ -796,6 +800,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     },
     factor_evidence: evidence.factors,
     feature_names: [...FEATURE_NAMES],
+    temporal_network:temporalNetwork,
     identifier_features_used: false,
     note: probabilityReady
       ? 'SELECTED_MODEL_BEAT_VALIDATION_AND_UNTOUCHED_CHRONOLOGICAL_HOLDOUT_BASE_RATES'
@@ -819,7 +824,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
       finite(row.predicted_up_probability) !== null &&
       Number(row.predicted_up_probability) >= 0 && Number(row.predicted_up_probability) <= 100 &&
       ['UP', 'DOWN', 'FLAT'].includes(row.outcome) &&
-      ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source) &&
+      ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE',
+        'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.trained_through_at) !== null &&
       Number(row.trained_through_at) < Number(row.at) &&
@@ -979,7 +985,8 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     entry_eligible: false,
     paper_trading: true,
     real_order_execution: false,
-    probability_status: profile?.probability_ready === true ? 'OUT_OF_SAMPLE_VALIDATED' : 'NOT_VALIDATED'
+    probability_status: profile?.probability_ready === true ||
+      profile?.temporal_network?.probability_ready === true ? 'OUT_OF_SAMPLE_VALIDATED' : 'NOT_VALIDATED'
   };
   if (!validData) return {
     ...base, decision: 'DATA_UNAVAILABLE',
@@ -1071,8 +1078,13 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     (hourly === null || hourly <= 3.5) &&
     (recent15 === null || recent15 <= 1.5) &&
     (micro5 === null || micro5 <= 1.8);
-  const predicted = profile?.probability_ready === true
+  const baselinePredicted = profile?.probability_ready === true
     ? predictFromFit(features, profile._fit) : null;
+  const temporalPredicted = predictTemporalProbability(candidate?.temporal_sequence, profile?.temporal_network);
+  // Use the temporal model only when its own chronological validation and
+  // untouched holdout beat the pooled baseline. Never blend unvalidated scores.
+  const predicted = temporalPredicted !== null ? temporalPredicted : baselinePredicted;
+  const selectedTemporal = temporalPredicted !== null;
   const reasons = [];
   if (flags.volume_expansion) reasons.push('VOLUME_EXPANSION');
   if (flags.trade_expansion) reasons.push('TRADE_ACTIVITY_EXPANSION');
@@ -1082,6 +1094,9 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
   if (flags.relative_strength) reasons.push('RELATIVE_STRENGTH_VS_BTC');
   if (!noChase) reasons.push('ANTI_CHASE_REVIEW_REQUIRED');
   if (contradictions.length) reasons.push('CONTRADICTORY_EVIDENCE_PRESENT');
+  if (selectedTemporal) reasons.push('TEMPORAL_TCN_OUT_OF_SAMPLE_VALIDATED');
+  else if (profile?.temporal_network?.trained === true)
+    reasons.push('TEMPORAL_TCN_NOT_VALIDATED_NO_PROBABILITY_PUBLISHED');
 
   let decision = 'NO_SETUP';
   let summary = 'الأدلة الحالية لا تكفي لتصنيف فرصة مبكرة؛ يواصل المراقبة ولا يفتح أي صفقة.';
@@ -1113,8 +1128,12 @@ export function assessCognitiveCandidate(candidate, profile = {}, now = Date.now
     activity_evidence: activityEvidence,
     anti_chase_passed: noChase,
     predicted_up_probability: predicted === null ? null : Number((predicted * 100).toFixed(1)),
-    confidence_label: predicted === null ? 'UNKNOWN' : profile?.neural_network?.selected === true
-      ? 'VALIDATED_NEURAL_MLP_ON_CHRONOLOGICAL_HOLDOUT' : 'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT',
+    temporal_up_probability:temporalPredicted===null?null:Number((temporalPredicted*100).toFixed(1)),
+    temporal_model_status:profile?.temporal_network?.status||'WAITING_FOR_TEMPORAL_SAMPLES',
+    confidence_label: predicted === null ? 'UNKNOWN' : selectedTemporal
+      ? 'VALIDATED_TEMPORAL_TCN_ON_CHRONOLOGICAL_HOLDOUT'
+      : profile?.neural_network?.selected === true
+        ? 'VALIDATED_NEURAL_MLP_ON_CHRONOLOGICAL_HOLDOUT' : 'VALIDATED_ON_NESTED_WALK_FORWARD_HOLDOUT',
     learning_samples: Number(profile?.resolved_samples) || 0,
     counterfactual_evidence: counterfactuals,
     entry_eligible: false,
