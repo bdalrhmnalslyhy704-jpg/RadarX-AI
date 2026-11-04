@@ -734,12 +734,18 @@ function renderLearning(){
   const neuralNetwork=brainProfile.neural_network||brainCapture.neural_network||{};
   const neuralValidation=neuralNetwork.validation||{};
   const neuralHoldout=neuralNetwork.holdout||{};
+  const temporalNetwork=brainProfile.temporal_network||brainCapture.temporal_network||{};
+  const temporalValidation=temporalNetwork.validation||{};
+  const temporalHoldout=temporalNetwork.holdout||{};
+  const temporalReady=temporalNetwork.probability_ready===true;
   const prequential=brain.prequential||{};
   const holdout=brainProfile.holdout||brainCapture.holdout||{};
   const brainReady=brainProfile.ranking_ready===true;
   const probabilityReady=brainProfile.probability_ready===true;
-  el('cognitiveStatus').textContent=probabilityReady?'اجتاز الاختبار الزمني المتداخل':brainReady?'ترتيب تجريبي فقط':'يجمع الأدلة';
-  el('cognitiveStatus').className='tag '+(probabilityReady?'early':'watch');
+  const anyProbabilityReady=probabilityReady||temporalReady;
+  el('cognitiveStatus').textContent=temporalReady?'الشبكة الزمنية اجتازت الاختبار المستقل':
+    probabilityReady?'نموذج المؤشرات اجتاز الاختبار الزمني':brainReady?'ترتيب تجريبي فقط':'الشبكة الزمنية تجمع عينات';
+  el('cognitiveStatus').className='tag '+(anyProbabilityReady?'early':'watch');
   const factors=brainProfile.factor_evidence||brainProfile.factors||{};
   const covered=Number(brainProfile.covered_factor_buckets)||Object.values(factors).filter(row=>row&&row.evidence_ready===true).length;
   const records=Math.max(0,Number(brain.journal_rows)||0);
@@ -777,6 +783,24 @@ function renderLearning(){
   const neuralHoldoutText=neuralHoldout.evaluated===true
     ?'Brier الاختبار العصبي المستقل '+fmt(neuralHoldout.model_brier_score,3)+' مقابل خط الأساس '+fmt(neuralHoldout.base_rate_brier_score,3)
     :'الشبكة لم تحصل على اختبار نهائي معتمد بعد؛ لا تُنشر احتمالاتها.';
+  const temporalStatusText=temporalNetwork.status==='LIVE_GATE_PASSED_OUT_OF_SAMPLE'
+    ?'اجتازت الاختبار الزمني المستقل وبوابة 100 نتيجة؛ يظل التنفيذ الحقيقي متوقفًا.'
+    :temporalNetwork.status==='OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY'
+      ?'اجتازت التحقق والاختبار المستقل؛ الاحتمال للاستخدام الورقي فقط.'
+      :temporalNetwork.status==='VALIDATION_DID_NOT_BEAT_POOLED_BASELINE'
+        ?'لم تتفوق على النموذج الخطي في التحقق؛ لذلك لا تصدر احتمالًا.'
+        :temporalNetwork.status==='VALIDATION_PASSED_HOLDOUT_NOT_PASSED'
+          ?'التحقق الأوسط نجح لكن الاختبار النهائي لم ينجح؛ لا تصدر احتمالًا.'
+          :'تنتظر عينات زمنية ناضجة كافية؛ لا تستخدم سعرًا لحظيًا لتدريبها.';
+  const temporalValidationText=temporalValidation.evaluated===true
+    ?'Brier التحقق الزمني '+fmt(temporalValidation.model_brier_score,3)+' مقابل الخطي '+fmt(temporalValidation.pooled_logistic_brier_score,3)
+    :'التحقق الزمني لم يكتمل بعد.';
+  const temporalHoldoutText=temporalHoldout.evaluated===true
+    ?'Brier الاختبار المستقل '+fmt(temporalHoldout.model_brier_score,3)+' مقابل الخطي '+fmt(temporalHoldout.pooled_logistic_brier_score,3)
+    :'لا يوجد اختبار نهائي مستقل مكتمل بعد.';
+  const temporalSelectedText=temporalReady?'الاحتمال الزمني صالح للمراقبة الورقية':
+    'الاحتمال محجوب حتى اجتياز الاختبارين؛ عدد 100 في الاختبار شرط جاهزية أعلى.';
+
   const prequentialText=prequential.status==='FORWARD_PERFORMANCE_DEGRADING'
     ?'إنذار: أداء التوقعات المسجلة يتراجع؛ يلزم إعادة التقييم.'
     :prequential.status==='FORWARD_MONITORING_STABLE'
@@ -792,7 +816,8 @@ function renderLearning(){
     :'لا توجد مجموعة أخطاء متكررة كافية لتشخيصها بعد.';
   el('cognitiveSummary').innerHTML=
     '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' تدريب · '+esc(Math.max(0,Number(brainProfile.validation_samples)||0))+' تحقق · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' اختبار نهائي.</p><div class="tiny">عينات تداخل مستبعدة: '+esc(Number(brainProfile.purged_overlap_samples)||0)+' · عوامل مغطاة: '+esc(covered)+' · قرارات مبكرة للمراجعة: '+esc(Number(brainCapture.early_setup_reviews)||0)+'</div></div>'+
-    '<div class="learning-card"><h3>الشبكة العصبية العميقة V5</h3><p>'+esc(neuralNetwork.architecture||'18-10-6-1+RESIDUAL')+' · تجميع '+esc(Number(neuralNetwork.ensemble_members)||0)+' / '+esc(Number(neuralNetwork.ensemble_members_required)||3)+' شبكات مستقلة · '+esc(Number(neuralNetwork.training_samples)||0)+' / '+esc(Number(neuralNetwork.samples_required)||240)+' عينة تدريب ناضجة.</p><div class="tiny">'+esc(neuralStatusText)+'</div><div class="tiny">'+esc(neuralValidationText)+'</div><div class="tiny">'+esc(neuralHoldoutText)+'</div></div>'+
+    '<div class="learning-card"><h3>شبكة المؤشرات الاحتياطية V5</h3><p>'+esc(neuralNetwork.architecture||'18-10-6-1+RESIDUAL')+' · تجميع '+esc(Number(neuralNetwork.ensemble_members)||0)+' / '+esc(Number(neuralNetwork.ensemble_members_required)||3)+' شبكات مستقلة · '+esc(Number(neuralNetwork.training_samples)||0)+' / '+esc(Number(neuralNetwork.samples_required)||240)+' عينة تدريب ناضجة.</p><div class="tiny">'+esc(neuralStatusText)+'</div><div class="tiny">'+esc(neuralValidationText)+'</div><div class="tiny">'+esc(neuralHoldoutText)+'</div></div>'+
+    '<div class="learning-card"><h3>الشبكة الزمنية TCN الجديدة</h3><p>'+esc(temporalNetwork.architecture||'TCN 24×8 · Dilated Residual Ensemble')+' · '+esc(Number(temporalNetwork.ensemble_members)||0)+' / '+esc(Number(temporalNetwork.ensemble_members_required)||3)+' نماذج · تدريب '+esc(Number(temporalNetwork.training_samples)||0)+' / '+esc(Number(temporalNetwork.required_training_samples)||160)+' · تحقق '+esc(Number(temporalNetwork.validation_samples)||0)+' · اختبار مستقل '+esc(Number(temporalNetwork.holdout_samples)||0)+' / 100.</p><div class="tiny">الهدف: +3% قبل −2% خلال 4 ساعات · 24 شمعة مغلقة × 8 خصائص زمنية</div><div class="tiny">'+esc(temporalStatusText)+'</div><div class="tiny">'+esc(temporalValidationText)+'</div><div class="tiny">'+esc(temporalHoldoutText)+'</div><div class="tiny">'+esc(temporalSelectedText)+'</div></div>'+
     '<div class="learning-card"><h3>اختيار النموذج والتكيّف</h3><p>'+esc(selectedModel)+' · '+esc(adaptationText)+'</p><div class="tiny">'+esc(validationText)+'</div></div>'+
     '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null&&Number.isFinite(Number(prequential.recent_window.brier_score))?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div><div class="tiny">'+esc(errorReviewText)+'</div></div>';
 
