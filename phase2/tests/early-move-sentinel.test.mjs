@@ -505,7 +505,7 @@ test('deep-scan watchdog time follows the oldest still-active symbol as other sc
   const secondDrain=sentinel.drainDeepQueue();
   await new Promise(resolve=>setImmediate(resolve));
   const secondStartedAt=sentinel.deepActiveJobs.size===2
-    ?[...sentinel.deepActiveJobs.values()].sort((a,b)=>a-b)[1]:null;
+    ?[...sentinel.deepActiveJobs.values()].map(x=>x.startedAt).sort((a,b)=>a-b)[1]:null;
   assert.equal(sentinel.deepActive,2);
   assert.equal(secondStartedAt,now);
 
@@ -521,6 +521,36 @@ test('deep-scan watchdog time follows the oldest still-active symbol as other sc
   assert.equal(sentinel.deepActiveStartedAt,null);
   assert.equal(sentinel.deepActiveJobs.size,0);
 });
+
+
+test('a stalled Radar 1 deep scan aborts its isolated REST client and releases the busy latch',async()=>{
+  let now=1710012000000;
+  const never=new Promise(()=>{});
+  const store={async init(){},async appendMoveAlert(){}};
+  const rest={
+    async request(path){
+      if(path==='/api/v3/exchangeInfo')return{data:{symbols:[]}};
+      if(path==='/api/v3/ticker/24hr')return{data:[]};
+      return never;
+    }
+  };
+  const sentinel=new EarlyMoveSentinel({
+    rest,store,clock:()=>now,config:{deepScanTimeoutMs:25,reconcileMs:60000},
+    scannerFactory:()=>({config:{},async scanSymbol(){return never;}}),
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
+    logger:{info(){},warn(){}}
+  });
+  await sentinel.start();
+  sentinel.deepQueue.push({symbol:'STUCKUSDT',row:{symbol:'STUCKUSDT'},trigger:{movePct:0.8},queuedAt:now,mode:'MOVE'});
+  await sentinel.drainDeepQueue();
+  assert.equal(sentinel.deepActive,0);
+  assert.equal(sentinel.deepActiveStartedAt,null);
+  assert.equal(sentinel.health().busy,false);
+  assert.match(sentinel.health().last_error,/MOVE_DEEP_SCAN_TIMEOUT:STUCKUSDT/);
+  assert.deepEqual(sentinel.health().active_deep_scan_jobs,[]);
+  await sentinel.stop();
+});
+
 
 test('a stalled initial reconciliation times out and releases the worker busy latch',async()=>{
   const never=new Promise(()=>{});
