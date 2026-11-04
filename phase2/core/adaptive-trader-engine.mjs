@@ -125,16 +125,18 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 }
 
 
-function buildTemporalSequence(candles, btcCandles) {
-  const steps = 24;
-  const start = candles.length - steps;
-  if (!Array.isArray(candles) || start < 24 || !Array.isArray(btcCandles)) return null;
-  const history = candles.slice(start - 24);
-  if (history.length !== 48 || history.some((row,index) =>
-    index > 0 && row.openTime - history[index - 1].openTime !== 15 * 60 * 1000)) return null;
-  const btcByClose = new Map(btcCandles.map(row => [Number(row.closeTime), row]));
-  const sequence = [];
-  for (let index = start; index < candles.length; index++) {
+function buildTemporalSequence(candles, btcCandles, fastCandles) {
+  const steps=24;
+  const start=candles.length-steps;
+  if(!Array.isArray(candles)||start<24||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))return null;
+  const history=candles.slice(start-24);
+  if(history.length!==48||history.some((row,index)=>
+    index>0&&row.openTime-history[index-1].openTime!==15*60*1000))return null;
+  const btcByClose=new Map(btcCandles.map(row=>[Number(row.closeTime),row]));
+  const fastByOpen=new Map(fastCandles.map(row=>[Number(row.openTime),row]));
+  const microStep=5*60*1000;
+  const sequence=[];
+  for(let index=start;index<candles.length;index++){
     const current = candles[index], previous = candles[index - 1];
     const baseline = candles.slice(index - 24, index);
     const volumeBase = mean(baseline.map(row => row.quoteVolume));
@@ -146,22 +148,63 @@ function buildTemporalSequence(candles, btcCandles) {
     const closeLocation = current.high > current.low
       ? (current.close - current.low) / (current.high - current.low) : 0.5;
     const body = current.high > current.low ? (current.close - current.open) / (current.high - current.low) : 0;
-    const btcCurrent = btcByClose.get(Number(current.closeTime));
-    const btcPrevious = btcByClose.get(Number(previous.closeTime));
-    if (!(volumeBase > 0) || !(tradesBase > 0) || !(rangeBase > 0) ||
-        !(buyShare >= 0 && buyShare <= 1) || !btcCurrent || !btcPrevious || !(btcPrevious.close > 0)) return null;
-    const assetReturn = (current.close / previous.close - 1) * 100;
-    const btcReturn = (btcCurrent.close / btcPrevious.close - 1) * 100;
-    const relativeReturn = assetReturn - btcReturn;
-    const values = [
-      Math.tanh(assetReturn / 2),
-      clamp(Math.log2(clamp(current.quoteVolume / volumeBase, 0.05, 20)) / 2, -2, 2),
-      clamp(Math.log2(clamp(current.trades / tradesBase, 0.05, 20)) / 2, -2, 2),
-      clamp((buyShare - 0.5) / 0.1, -2, 2),
-      clamp((closeLocation - 0.5) * 2, -1, 1),
-      clamp(body, -1, 1),
-      clamp(Math.log2(clamp(rangeNow / rangeBase, 0.05, 20)), -2, 2),
-      Math.tanh(relativeReturn / 2)
+    const btcCurrent=btcByClose.get(Number(current.closeTime));
+    const btcPrevious=btcByClose.get(Number(previous.closeTime));
+    // Align three completed 5m candles to this exact 15m candle and compare
+    // them with the preceding 24 completed 5m candles. Missing or gapped micro
+    // data rejects the sequence rather than inventing neutral pressure.
+    const microBase=[];
+    for(let offset=24;offset>=1;offset--){
+      const row=fastByOpen.get(Number(current.openTime)-offset*microStep);
+      if(!row)return null;
+      microBase.push(row);
+    }
+    const microCurrent=[];
+    for(let offset=0;offset<3;offset++){
+      const row=fastByOpen.get(Number(current.openTime)+offset*microStep);
+      if(!row)return null;
+      microCurrent.push(row);
+    }
+    const contiguousMicro=[...microBase,...microCurrent].every((row,slot,rows)=>
+      slot===0||row.openTime-rows[slot-1].openTime===microStep);
+    if(!contiguousMicro||microCurrent[2].closeTime!==current.closeTime)return null;
+    const microBaseVolume=mean(microBase.map(row=>row.quoteVolume));
+    const microBaseTrades=mean(microBase.map(row=>row.trades));
+    const microBaseRange=mean(microBase.map(row=>(row.high-row.low)/row.close));
+    const microBaseBuyVolume=microBase.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0);
+    const microBaseTotalVolume=microBase.reduce((sum,row)=>sum+row.quoteVolume,0);
+    const microBaseBuyShare=microBaseTotalVolume>0?microBaseBuyVolume/microBaseTotalVolume:null;
+    const microCurrentVolume=mean(microCurrent.map(row=>row.quoteVolume));
+    const microCurrentTrades=mean(microCurrent.map(row=>row.trades));
+    const microCurrentRange=mean(microCurrent.map(row=>(row.high-row.low)/row.close));
+    const microBuyVolume=microCurrent.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0);
+    const microTotalVolume=microCurrent.reduce((sum,row)=>sum+row.quoteVolume,0);
+    const microBuyShare=microTotalVolume>0?microBuyVolume/microTotalVolume:null;
+    const microReturnPct=(microCurrent[2].close/microCurrent[0].open-1)*100;
+    if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
+       !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
+       !(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
+       !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||
+       !(microBuyShare>=0&&microBuyShare<=1)||!(microCurrentVolume>0)||
+       !(microCurrentTrades>0)||!(microCurrentRange>0))return null;
+    const assetReturn=(current.close/previous.close-1)*100;
+    const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
+    const relativeReturn=assetReturn-btcReturn;
+    const values=[
+      Math.tanh(assetReturn/2),
+      clamp(Math.log2(clamp(current.quoteVolume/volumeBase,0.05,20))/2,-2,2),
+      clamp(Math.log2(clamp(current.trades/tradesBase,0.05,20))/2,-2,2),
+      clamp((buyShare-0.5)/0.1,-2,2),
+      clamp((closeLocation-0.5)*2,-1,1),
+      clamp(body,-1,1),
+      clamp(Math.log2(clamp(rangeNow/rangeBase,0.05,20)),-2,2),
+      Math.tanh(relativeReturn/2),
+      clamp(Math.log2(clamp(microCurrentVolume/microBaseVolume,0.05,20))/2,-2,2),
+      clamp(Math.log2(clamp(microCurrentTrades/microBaseTrades,0.05,20))/2,-2,2),
+      clamp((microBuyShare-0.5)/0.1,-2,2),
+      clamp((microBuyShare-microBaseBuyShare)/0.1,-2,2),
+      Math.tanh(microReturnPct/1),
+      clamp(Math.log2(clamp(microCurrentRange/microBaseRange,0.05,20)),-2,2)
     ];
     if (!values.every(Number.isFinite)) return null;
     sequence.push(values);
@@ -332,7 +375,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
-  const temporalSequence = buildTemporalSequence(candles, btcCandles);
+  const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
