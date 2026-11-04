@@ -560,12 +560,15 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   return out;
 }
 
-export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pendingSamples=[],now=Date.now()}={}){
+export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fastKlines=null,pendingSamples=[],now=Date.now()}={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
   if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
   const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
   const candles=rows.map(row=>normalizeCandle(row)).filter(candle=>candle&&candle.closeTime<Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
   if(!candles.length)return [];
+  const fastRows=Array.isArray(fastKlines?.data)?fastKlines.data:Array.isArray(fastKlines)?fastKlines:[];
+  const fastCandles=fastRows.map(row=>normalizeCandle(row,5*60*1000))
+    .filter(candle=>candle&&candle.closeTime<Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
   const byClose=new Map(candles.map(candle=>[candle.closeTime,candle]));
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
@@ -579,7 +582,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
     if(Math.abs(baseline.close-baselinePrice)>Math.max(1e-12,Math.abs(baseline.close)*1e-8))continue;
     const move=(future.close/baseline.close-1)*100;
     const startIndex=candles.findIndex(candle=>candle.closeTime===baseline.closeTime);
-    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17),[]);
+    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17),fastCandles);
     if(!passage)continue;
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
@@ -901,7 +904,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:48
     });
     const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
-      symbol:ticker.symbol,klines:result,pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,
+      pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
     });
     return {candidate,historicalSamples,closedCandleOutcomes};
   });
