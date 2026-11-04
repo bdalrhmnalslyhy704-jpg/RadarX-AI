@@ -8,7 +8,7 @@
  * baseline. This module is analysis-only.
  */
 export const TEMPORAL_TARGET_DEFINITION =
-  'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1';
+  'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS = 8;
 
