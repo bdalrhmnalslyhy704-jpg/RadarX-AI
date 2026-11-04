@@ -157,8 +157,12 @@ export async function startServer({
   const adaptiveTraderRest=createRadarRest();
   const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
   const adaptiveTraderExecutionController=new AdaptiveTraderExecutionController({store,env:process.env,logger});
+  // Stagger the 40-symbol learning batch away from the 60s Pre-Move worker
+  // on the 0.5-CPU DHDTech tier. The first learning scan still starts after 25s;
+  // a five-minute interval reduces recurring CPU/REST contention without
+  // reducing the rotating 40-symbol sample size or changing learning gates.
   const adaptiveTraderIntervalMs=Math.max(60_000,Math.min(600_000,
-    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_INTERVAL_MS)||180_000)));
+    Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_INTERVAL_MS)||300_000)));
   // A 40-symbol rotating deep batch is more reliable on the free 512 MB service;
   // market-wide ticker capture still observes the full eligible Spot universe.
   const adaptiveTraderScanLimit=Math.max(40,Math.min(60,
