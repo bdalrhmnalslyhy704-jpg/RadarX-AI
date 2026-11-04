@@ -355,6 +355,9 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.equal(profile.neural_network.ensemble_members, 3);
   assert.equal(profile.neural_network.selected, false);
   assert.equal(profile.neural_network.probability_ready, false);
+  assert.equal(profile.neural_network.live_eligibility_ready, false,
+    'a trained model that was not selected by chronological validation cannot pass the mainnet gate');
+  assert.equal(profile.neural_network.holdout_comparison.passed, false);
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));
 });
 
