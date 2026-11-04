@@ -1076,7 +1076,12 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,
       pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
     });
-    return {candidate,historicalSamples,closedCandleOutcomes};
+    return {candidate,historicalSamples,closedCandleOutcomes,history:{
+      asset_15m_pages:Number(result?.historical_pages_fetched)||1,
+      asset_15m_candles:Array.isArray(result?.data)?result.data.length:0,
+      asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
+      asset_5m_candles:Array.isArray(fastResult.value?.data)?fastResult.value.data.length:0
+    }};
   });
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
   const closedCandleOutcomes=analyzed.flatMap(entry=>Array.isArray(entry?.closedCandleOutcomes)?entry.closedCandleOutcomes:[]);
@@ -1175,6 +1180,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       micro_5m_symbols_available: analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length,
       micro_5m_symbols_unavailable: Math.max(0,candidates.length-analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length),
       historical_training_samples_available: historicalTrainingSamples.length,
+      asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
+      asset_5m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=2).length,
+      asset_5m_deep_history_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=4).length,
+      asset_5m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_5m_candles)||0)),
       previous_snapshot_age_ms: Number.isFinite(previousSnapshotAgeMs)?Math.max(0,Math.trunc(previousSnapshotAgeMs)):null,
       requested_limit: safeLimit,
       scan_offset: scanOffset,

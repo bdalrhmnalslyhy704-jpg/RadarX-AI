@@ -226,6 +226,23 @@ jobs:
             legacy_neural_network_contract:legacyNeuralNetworkContract,
             temporal_network_contract:temporalNetworkContract,
             temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
+            temporal_network_regime_specialists:Object.fromEntries(Object.entries(temporalNetwork.regime_specialists||{}).map(([regime,specialist])=>[
+              regime,{status:String(specialist?.status||'UNKNOWN'),
+                training_samples:Number(specialist?.training_samples)||0,
+                validation_samples:Number(specialist?.validation_samples)||0,
+                holdout_samples:Number(specialist?.holdout_samples)||0,
+                selected:specialist?.selected===true,probability_ready:specialist?.probability_ready===true,
+                validation_brier:specialist?.validation?.model_brier_score??null,
+                holdout_brier:specialist?.holdout?.model_brier_score??null}
+            ])),
+            spot_history_coverage:{
+              btc_15m_pages:Number(summary?.meta?.btc_15m_historical_pages)||1,
+              btc_15m_candles:Number(summary?.meta?.btc_15m_historical_window_candles)||0,
+              asset_15m_extended_symbols:Number(summary?.universe?.asset_15m_extended_symbols)||0,
+              asset_5m_extended_symbols:Number(summary?.universe?.asset_5m_extended_symbols)||0,
+              asset_5m_deep_history_symbols:Number(summary?.universe?.asset_5m_deep_history_symbols)||0,
+              asset_5m_max_history_candles:Number(summary?.universe?.asset_5m_max_history_candles)||0
+            },
             temporal_network_resolved_samples:Number(temporalNetwork.resolved_samples)||0,
             temporal_network_training_samples:Number(temporalNetwork.training_samples)||0,
             temporal_network_required_samples:Number(temporalNetwork.required_training_samples)||0,
