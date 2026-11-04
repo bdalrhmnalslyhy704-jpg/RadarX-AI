@@ -10,11 +10,12 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 
 // The public request cap remains ten for API compatibility.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
-// The 0.5-CPU DHDTech worker can complete one closed-candle/depth pair inside
-// its 45-second budget when competing with the 12-radar and analyst fleet.
-const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 1;
-// Keep DHDTech's 0.5-CPU worker to two concurrent closed-candle/depth pairs.
-// More fan-out increases REST contention and has not improved completion time.
+// Four bounded closed-candle/depth pairs improve market coverage per 45s cycle.
+// Keep at most two pairs in flight on the 0.5-CPU DHDTech tier; the next two
+// are processed as a second wave instead of creating unbounded REST/CPU fan-out.
+const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 4;
+// Do not raise this concurrency with the batch cap: the two-wave limit protects
+// the 12-radar and 20-analyst fleet from a synchronized Pre-Move burst.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 2;
 
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
