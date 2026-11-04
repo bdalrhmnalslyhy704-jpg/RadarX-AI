@@ -7,6 +7,7 @@ import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 const clamp=(n,min=0,max=100)=>Math.max(min,Math.min(max,Number(n)||0));
 const finite=(v,d=null)=>finiteNumberOr(v,d);
 const avg=xs=>{const a=xs.filter(Number.isFinite);return a.length?a.reduce((s,x)=>s+x,0)/a.length:null};
+const withDeadline=(promise,ms,label)=>{let timer;return Promise.race([Promise.resolve(promise),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(label)),ms);})]).finally(()=>clearTimeout(timer));};
 
 export const MOVE_RADAR_DEFAULTS=Object.freeze({
   quote:'USDT',
@@ -14,6 +15,7 @@ export const MOVE_RADAR_DEFAULTS=Object.freeze({
   fastRealertDeltaPct:0.8,
   pollMs:5000,
   reconcileMs:15000,
+  reconcileTimeoutMs:20000,
   cooldownMs:30*60*1000,
   maxDeepPerCycle:4,
   minQuoteVolume24h:750000,
@@ -682,7 +684,7 @@ export class EarlyMoveSentinel {
     this.ws=null;
     this.lastTickAt=null;
     this.lastReconcileAt=null;
-    this.reconciling=false;this.reconcileStartedAt=null;this.reconcileSkippedCount=0;
+    this.reconciling=false;this.reconcileStartedAt=null;this.reconcileSkippedCount=0;this.lifecycleGeneration=0;
     this.alertCount=0;
     this.watchOnlyAlertCount=0;
     this.lastError=null;
@@ -691,6 +693,7 @@ export class EarlyMoveSentinel {
   async start(){
     if(this.running)return;
     this.running=true;
+    const generation=++this.lifecycleGeneration;
     await this.store.init();
     this.scanner=this.scannerFactory?this.scannerFactory(this.rest):new MarketUniverseScanner({
       rest:this.rest,
@@ -713,12 +716,12 @@ export class EarlyMoveSentinel {
       onState:(state,reason)=>this.logger.info?.('MOVE_WS',state,reason||'')
     });
     this.ws.start();
-    this.reconcileTimer=setInterval(()=>this.reconcile(false).catch(e=>{
+    this.reconcileTimer=setInterval(()=>this.reconcile(false,generation).catch(e=>{
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_RECONCILE',this.lastError);
     }),this.config.reconcileMs);
     try{
-      await this.reconcile(true);
+      await this.reconcile(true,generation);
     }catch(e){
       this.lastError=String(e?.message??e);
       this.logger.warn?.('MOVE_BOOTSTRAP',this.lastError);
@@ -727,6 +730,11 @@ export class EarlyMoveSentinel {
 
   async stop(){
     this.running=false;
+    // Invalidate any in-flight REST reconciliation before a watchdog restart.
+    // Its late completion must never mutate the new worker generation.
+    this.lifecycleGeneration++;
+    this.reconciling=false;
+    this.reconcileStartedAt=null;
     if(this.reconcileTimer)clearInterval(this.reconcileTimer);
     this.reconcileTimer=null;
     this.ws?.stop();
@@ -763,19 +771,22 @@ export class EarlyMoveSentinel {
     return this.spotSymbols.has(String(symbol||'').toUpperCase());
   }
 
-  async reconcile(initial=false){
-    if(!this.running)return;
+  async reconcile(initial=false,generation=this.lifecycleGeneration){
+    if(!this.running||generation!==this.lifecycleGeneration)return;
     // The timer fires every 15s, but public REST fallback can take longer.
     // Never overlap exchangeInfo/ticker reconciliations: overlapping runs amplify
     // timeout aborts and race the shared ticker snapshot/candidate queue.
     if(this.reconciling){this.reconcileSkippedCount++;return;}
     this.reconciling=true;
     this.reconcileStartedAt=this.clock();
+    const timeoutMs=Math.max(5000,Math.min(45000,Number(this.config.reconcileTimeoutMs)||20000));
     try{
-      const info=await this.rest.request('/api/v3/exchangeInfo');
+      const info=await withDeadline(this.rest.request('/api/v3/exchangeInfo'),timeoutMs,'MOVE_RECONCILE_TIMEOUT:EXCHANGE_INFO');
+      if(!this.running||generation!==this.lifecycleGeneration)return;
       const universe=buildSpotUniverse(info.data,this.config.quote);
       this.spotSymbols=new Set(universe.map(x=>x.symbol));
-      const tick=await this.rest.request('/api/v3/ticker/24hr');
+      const tick=await withDeadline(this.rest.request('/api/v3/ticker/24hr'),timeoutMs,'MOVE_RECONCILE_TIMEOUT:TICKER_24H');
+      if(!this.running||generation!==this.lifecycleGeneration)return;
       const rows=Array.isArray(tick.data)?tick.data:[];
       this.lastReconcileAt=this.clock();
       for(const raw of rows){
@@ -783,9 +794,17 @@ export class EarlyMoveSentinel {
         if(row&&this.eligibleSymbol(row.symbol))this.processTicker(row,initial);
       }
       this.queuePreExplosionDiscovery(rows);
+    }catch(error){
+      if(generation===this.lifecycleGeneration){
+        this.lastError=String(error?.message??error);
+        this.logger.warn?.('MOVE_RECONCILE',this.lastError);
+      }
+      throw error;
     }finally{
-      this.reconciling=false;
-      this.reconcileStartedAt=null;
+      if(generation===this.lifecycleGeneration){
+        this.reconciling=false;
+        this.reconcileStartedAt=null;
+      }
     }
   }
 
