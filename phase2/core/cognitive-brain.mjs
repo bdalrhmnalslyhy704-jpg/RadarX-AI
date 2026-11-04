@@ -713,8 +713,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   const probabilityReady = rankingReady &&
     selectedValidation.evaluated === true && selectedValidation.beat_base_rate === true &&
     holdoutMetrics.evaluated === true && holdoutMetrics.beat_base_rate === true;
-  const neuralProbabilityReady=neuralSelected&&neuralValidation.evaluated===true&&
-    neuralValidation.beat_base_rate===true&&neuralHoldoutReady&&
+  const neuralProbabilityReady=rankingReady&&probabilityReady&&neuralSelected&&
+    neuralValidation.evaluated===true&&neuralValidation.beat_base_rate===true&&neuralHoldoutReady&&
     holdoutMetrics.evaluated===true&&holdoutMetrics.beat_base_rate===true;
   const neuralLiveReady=neuralProbabilityReady&&neuralTraining.length>=NEURAL_POLICY.minTrainingSamples&&
     holdout.length>=100;
