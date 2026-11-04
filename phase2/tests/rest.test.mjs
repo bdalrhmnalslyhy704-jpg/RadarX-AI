@@ -236,7 +236,7 @@ test('TEST_FIXTURE: scan abort while joining a shared request removes the wait i
     second.requestAbortSignal=controller.signal;
     const startedAt=Date.now();
     const pending=second.request('/api/v3/ticker/24hr',{symbol:'SHAREDABORTUSDT'});
-    setTimeout(()=>controller.abort(),20);
+    controller.abort();
     await assert.rejects(pending,error=>error?.name==='ScanDeadlineError');
     assert.ok(Date.now()-startedAt<150,'cancelled radar must not remain attached to the stale shared request');
     assert.equal(secondCalls,0,'aborted waiter must not launch a replacement request');
