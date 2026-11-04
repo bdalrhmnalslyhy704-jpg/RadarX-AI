@@ -127,7 +127,7 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.training_eligible===true));
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
   assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
-  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===18)));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===22)));
   assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'));
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
 
