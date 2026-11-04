@@ -31,7 +31,12 @@ const finite = value => {
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
-const targetOf = row => row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5;
+export function temporalBinaryTarget(outcome) {
+  // This network estimates the chance of reaching +3% before -2%.
+  // DOWN and FLAT both mean that the success event did not occur.
+  return outcome === 'UP' ? 1 : 0;
+}
+const targetOf = row => temporalBinaryTarget(row.outcome);
 
 function validSequence(sequence) {
   return Array.isArray(sequence) && sequence.length === TEMPORAL_SEQUENCE_STEPS &&
