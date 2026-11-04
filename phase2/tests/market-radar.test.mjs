@@ -1183,7 +1183,7 @@ test('Pre-Move near misses are surfaced as watch-only rows but never promoted to
 });
 
 
-test('Pre-Move defaults to four rotating deep scans per hosted cycle while preserving the public ten-symbol cap',async()=>{
+test('Pre-Move defaults to eight rotating deep scans per hosted cycle while preserving the public ten-symbol cap',async()=>{
   const scanNow=stablePreMoveTestTime();
   const alpha=n=>{
     let value=n,out='';
@@ -1228,23 +1228,31 @@ test('Pre-Move defaults to four rotating deep scans per hosted cycle while prese
   assert.ok(maxActive>=1&&maxActive<=2,'the hosted worker never has more than two deep analyses in flight');
   assert.equal(first.universe.requested,50);
   assert.equal(first.universe.per_cycle_scan_cap,10,'the public API hard cap remains ten');
-  assert.equal(first.universe.discovered,4,'the small hosted runtime deep-scans four pairs by default');
-  assert.equal(first.universe.deep_scanned,4);
+  assert.equal(first.universe.discovered,8,'the small hosted runtime deep-scans eight pairs by default');
+  assert.equal(first.universe.deep_scanned,8);
+  assert.equal(first.universe.configured_cycle_scan_limit,8);
+  assert.equal(first.universe.deep_scan_limit,8);
+  assert.equal(first.universe.hosted_cycle_scan_cap,8);
+  assert.equal(first.universe.ticker_rows_received,70);
+  assert.equal(first.universe.ticker_rows_valid,70);
+  assert.equal(first.universe.eligible_symbols_with_ticker,70);
+  assert.equal(first.universe.eligible_symbols_missing_ticker,0);
+  assert.equal(first.universe.rankable_discovery_symbols,70);
   assert.equal(first.universe.ticker_activity_priority_selected,0,'no measured burst means no activity-priority slot is consumed');
-  assert.equal(first.universe.rotation_width,3,'three rotating slots remain beside the pinned market row when no activity burst is present');
-  assert.equal(seen.length,4);
+  assert.equal(first.universe.rotation_width,7,'seven rotating slots remain beside the pinned market row when no activity burst is present');
+  assert.equal(seen.length,8);
 
   seen=[];
   const second=await scanner.scanPreMove({quote:'USDT',limit:50});
   assert.equal(second.universe.rotation_cycle,1);
-  assert.equal(second.universe.discovered,4);
-  assert.equal(second.universe.deep_scanned,4);
+  assert.equal(second.universe.discovered,8);
+  assert.equal(second.universe.deep_scanned,8);
   const newlyCovered=seen.filter(symbol=>!firstSymbols.has(symbol));
   assert.ok(newlyCovered.length>=1,
     'the scan cap must not cause each cycle to repeat the same top-ranked symbols');
 });
 
-test('DHDTech clamps an operator deep-batch override to four pairs while preserving the public ten-pair hard cap',async()=>{
+test('DHDTech clamps an operator deep-batch override to eight pairs while preserving the public ten-pair hard cap',async()=>{
   const scanNow=stablePreMoveTestTime();
   const alpha=n=>{
     let value=n,out='';
@@ -1277,9 +1285,9 @@ test('DHDTech clamps an operator deep-batch override to four pairs while preserv
   scanner.scanPreMoveSymbol=async ticker=>{seen.push(ticker.symbol);return null;};
   const result=await scanner.scanPreMove({quote:'USDT',limit:50});
   assert.equal(result.universe.per_cycle_scan_cap,10,'the externally reported hard cap remains ten');
-  assert.equal(result.universe.discovered,4,'the hosted worker clamps operator overrides to four pairs per cycle');
-  assert.equal(result.universe.deep_scanned,4);
-  assert.equal(seen.length,4);
+  assert.equal(result.universe.discovered,8,'the hosted worker clamps operator overrides to eight pairs per cycle');
+  assert.equal(result.universe.deep_scanned,8);
+  assert.equal(seen.length,8);
 });
 
 test('Pre-Move scan applies one abortable REST deadline and restores prior client controls',async()=>{

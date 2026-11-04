@@ -10,11 +10,11 @@ import {isDirectionalCandidateSymbol,isSpotMonitorCandidateSymbol,isTokenizedSec
 
 // The public request cap remains ten for API compatibility.
 export const PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE = 10;
-// Four bounded closed-candle/depth pairs improve market coverage per 45s cycle.
-// Keep at most two pairs in flight on the 0.5-CPU DHDTech tier; the next two
-// are processed as a second wave instead of creating unbounded REST/CPU fan-out.
-const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 4;
-// Do not raise this concurrency with the batch cap: the two-wave limit protects
+// Eight bounded closed-candle/depth pairs improve rotating market coverage per 45s cycle.
+// Keep at most two pairs in flight on the 0.5-CPU DHDTech tier; eight pairs
+// are processed in four waves under the absolute scan deadline.
+export const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 8;
+// Do not raise this concurrency with the batch cap: the bounded-wave limit protects
 // the 12-radar and 20-analyst fleet from a synchronized Pre-Move burst.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 2;
 
@@ -25,10 +25,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // Four deep candle/depth pairs per hosted cycle in two bounded waves; full-market
+  // Eight deep candle/depth pairs per hosted cycle in four bounded waves; full-market
   // ticker activity and the durable cursor keep discovery rotating across Spot.
   // The public hard cap remains ten for API compatibility.
-  preMoveCycleScanLimit: 4,
+  preMoveCycleScanLimit: 8,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
@@ -2620,10 +2620,21 @@ export class MarketUniverseScanner {
     assertScanActive();
     const tickerCapturedAt=this.clock();
     const eligibleTickerSymbols=new Set(universe.map(x=>x.symbol));
-    const tickerActivityRows=(Array.isArray(tickerResponse.data)?tickerResponse.data:[])
+    const rawTickerRows=Array.isArray(tickerResponse.data)?tickerResponse.data:[];
+    const normalizedTickerRows=rawTickerRows
       .map(x=>normalizeTickerRow(x,normalizedQuote))
-      .filter(x=>x&&eligibleTickerSymbols.has(x.symbol)&&
-        (x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol)));
+      .filter(x=>x&&eligibleTickerSymbols.has(x.symbol));
+    const tickerSymbolsWithRows=new Set(normalizedTickerRows.map(x=>x.symbol));
+    const tickerRowsWithActivity=normalizedTickerRows.filter(x=>
+      Number(x.quoteVolume24h)>0||Number(x.tradeCount24h)>0
+    ).length;
+    const rankableDiscoverySymbols=normalizedTickerRows.filter(x=>
+      (x.symbol==='BTCUSDT'||isSpotMonitorCandidateSymbol(x.symbol))&&
+      (Number(x.quoteVolume24h)>0||Number(x.tradeCount24h)>0)
+    ).length;
+    const tickerActivityRows=normalizedTickerRows.filter(x=>
+      x.symbol==='BTCUSDT'||isDirectionalCandidateSymbol(x.symbol)
+    );
     const tickerActivityBaselineKey=`RADARX:PRE_MOVE_TICKER_ACTIVITY_BASELINE:V1:${normalizedQuote}`;
     let tickerActivityBaseline=null;
     const tickerActivityStoreReady=typeof this.rotationStateStore?.getDedupKey==='function'&&
@@ -2649,7 +2660,7 @@ export class MarketUniverseScanner {
     // Preserve the public ten-symbol hard cap, while the hosted worker deep-scans
     // six pairs per cycle to finish within its 45s deadline on the small CPU tier.
     // The durable cursor and ticker-activity lane preserve wider-market coverage.
-    const configuredCycleLimit=Math.max(1,Math.min(
+    const configuredCycleLimit=Math.max(6,Math.min(
       PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,
       Math.trunc(Number(this.config.preMoveCycleScanLimit)||PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE)
     ));
@@ -2912,7 +2923,7 @@ export class MarketUniverseScanner {
       as_of:new Date(this.clock()).toISOString(),
       source:'Binance Public REST',
       session:{timezone:'Asia/Aden',window:'04:00 local → latest closed candle',market_median_return_pct:marketMedianReturn,btc_return_pct:Number.isFinite(btcReturn)?btcReturn:null,positive_breadth_pct:returns.length?positiveCount/returns.length*100:null},
-      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_advance_count:rotationAdvanceCount,pinned_fraction:preMovePinnedFraction,activity_priority_slots:preMoveActivityPrioritySlots,ticker_activity_priority_selected:discovery.filter(x=>x.ticker_activity_priority_selected===true).length,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
+      universe:{requested:normalizedLimit,per_cycle_scan_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,discovered:discovery.length,deep_scanned:scanned.length,scanned:valid.length,valid_data:valid.length,observed_candle_data:observed.length,watch_only:watchCandidates.length,evidence_incomplete_excluded:evidenceIncompleteExcluded,extended_excluded:extendedExcluded,no_setup_excluded:noSetupExcluded,actionable:actionable.length,returned:returned.length,eligible_spot_symbols:universe.length,min_quote_volume_24h:this.config.minQuoteVolume24h,discovery_volume_floor:0,ticker_rows_received:rawTickerRows.length,ticker_rows_valid:normalizedTickerRows.length,eligible_symbols_with_ticker:tickerSymbolsWithRows.size,eligible_symbols_missing_ticker:Math.max(0,universe.length-tickerSymbolsWithRows.size),ticker_rows_with_activity:tickerRowsWithActivity,rankable_discovery_symbols:rankableDiscoverySymbols,configured_cycle_scan_limit:configuredCycleLimit,deep_scan_limit:discoveryLimit,hosted_cycle_scan_cap:PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,public_deep_scan_hard_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,rotation_cycle:rotationCycle,rotation_offset:rotationOffset,rotation_width:rotatingWidth,rotation_advance_count:rotationAdvanceCount,pinned_fraction:preMovePinnedFraction,activity_priority_slots:preMoveActivityPrioritySlots,ticker_activity_priority_selected:discovery.filter(x=>x.ticker_activity_priority_selected===true).length,rotation_cursor_source:rotationCursorSource,rotation_cursor_persisted:rotationCursorPersisted,rotation_sequence:'COMPLETED_SCAN_CURSOR_V1',coverage_mode:'PINNED_PLUS_ROTATING_V1',ticker_activity_signal_count:tickerActivitySignals.size,ticker_activity_baseline_source:tickerActivityStoreReady?'DURABLE_STORE':'UNAVAILABLE',ticker_activity_baseline_persisted:tickerActivityBaselinePersisted,ticker_activity_baseline_error:tickerActivityBaselineError,elapsed_ms:Math.max(0,this.clock()-startedAt)},
       candidates:returned,
       watch_candidates:watchCandidates.slice().sort((a,b)=>Number(b.pre_move_context.score)-Number(a.pre_move_context.score)||Number(a.pre_move_context.session_return_pct)-Number(b.pre_move_context.session_return_pct)).slice(0,10),
       near_miss_audit:nearMissAudit

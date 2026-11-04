@@ -131,6 +131,50 @@ test('Pre-Move retry cooldown is a skipped attempt and does not overwrite the la
   }
 });
 
+test('native FCM registration persists server-side and is reflected by delivery status',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-fcm-registration-')),store=await new DurableStore({dir}).init();
+  const installationId='01234567-89ab-4cde-8fab-0123456789ab';
+  const fakeProvider={status:()=>({provider:'fcm',enabled:true})};
+  const config={auth:{secret:'TEST_FIXTURE_AUTH_SECRET',allowedOrigins:[]},
+    api:{maxBodyBytes:65536,rateLimitPerMinute:100},push:{provider:'fcm'}};
+  const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
+  const server=createApiServer({config,store,monitor,pushProvider:fakeProvider});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+server.address().port;
+  try{
+    const register=await fetch(base+'/api/push/device/register',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({installation_id:installationId,token:'TEST_FCM_TOKEN_'.repeat(16),notifications_enabled:true})});
+    assert.equal(register.status,201);
+    const registered=await register.json();
+    assert.equal(registered.registered,true);
+    assert.equal(registered.installation_id,installationId);
+    assert.equal(Object.hasOwn(registered,'fcm_token'),false);
+
+    const statusResponse=await fetch(base+'/api/push/device/status?installation_id='+installationId);
+    assert.equal(statusResponse.status,200);
+    const status=await statusResponse.json();
+    assert.equal(status.provider,'fcm');
+    assert.equal(status.registered,true);
+    assert.equal(status.delivery_verified,false);
+    assert.equal(Object.hasOwn(status,'fcm_token'),false);
+
+    const workerResponse=await fetch(base+'/api/pre-move-radar-status');
+    assert.equal(workerResponse.status,200);
+    const worker=await workerResponse.json();
+    assert.equal(worker.notification_transport.provider,'fcm');
+    assert.equal(worker.notification_transport.enabled,true);
+    assert.equal(worker.notification_transport.active_subscriptions,1);
+    assert.equal(worker.notification_transport.fcm_devices,1);
+    assert.equal(worker.notification_transport.physical_device_delivery_verified,false);
+    assert.equal(Object.hasOwn(worker.notification_transport,'fcm_token'),false);
+  }finally{
+    server.stopPreMoveWatchWorker?.();
+    await new Promise(resolve=>server.close(resolve));
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('TEST_FIXTURE: subscription/settings API requires auth and never returns push keys',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-api-')),store=await new DurableStore({dir}).init();
   const secret='TEST_FIXTURE_AUTH_SECRET';

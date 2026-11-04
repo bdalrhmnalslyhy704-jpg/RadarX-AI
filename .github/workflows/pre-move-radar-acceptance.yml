@@ -149,6 +149,11 @@ jobs:
             source:storage.source||'UNKNOWN',detected_mounts:storage.detected_mounts||[]
           }));
           if(storage.persistent!==true) throw new Error('DHDTECH_PERSISTENT_STORAGE_NOT_MOUNTED:'+JSON.stringify(storage));
+          const scanner=b.pre_move_scanner_contract||{};
+          console.log('DHDTECH_PRE_MOVE_SCANNER_CONTRACT '+JSON.stringify(scanner));
+          if(Number(scanner.configured_cycle_scan_limit)<6||Number(scanner.hosted_cycle_scan_cap)<8||
+             Number(scanner.max_concurrent_deep_scans)!==2||Number(scanner.scan_timeout_ms)>45000)
+            throw new Error('DHDTECH_PRE_MOVE_SCANNER_BUILD_OR_CONFIG_STALE:'+JSON.stringify(scanner));
           const push=b.push||{};
           console.log('DHDTECH_PUSH_PROVIDER_STATUS '+JSON.stringify({
             provider:String(push.provider||'unknown'),enabled:push.enabled===true,
@@ -360,7 +365,11 @@ jobs:
           console.log(JSON.stringify({status:x.status,last_scan_status:w.last_scan_status,
             successful_scans:w.successful_scans,running:w.running,in_flight:w.in_flight,
             elapsed_ms:s.elapsed_ms,scanned:s.scanned,valid_data:s.valid_data,
-            discovered:s.discovered,last_error:w.last_error}));
+            discovered:s.discovered,deep_scanned:s.deep_scanned,
+            rankable_discovery_symbols:s.rankable_discovery_symbols,
+            ticker_rows_valid:s.ticker_rows_valid,
+            eligible_symbols_missing_ticker:s.eligible_symbols_missing_ticker,
+            last_error:w.last_error}));
           NODE
               )"
               echo "PRE_MOVE_WORKER_POLL attempt=$attempt $STATE"
@@ -371,7 +380,10 @@ jobs:
           const valid=x.scanner_ready===true&&w.enabled===true&&
             Number(w.successful_scans)>=1&&w.last_scan_status==='READY'&&
             Number(s.elapsed_ms)>0&&Number(s.elapsed_ms)<=45000&&
-            Number(s.scanned)>0&&Number(s.valid_data)>0&&Number(s.discovered)>0;
+            Number(s.scanned)>0&&Number(s.valid_data)>0&&
+            Number(s.deep_scanned)>=6&&Number(s.discovered)>=6&&
+            Number(s.rankable_discovery_symbols)>=6&&Number(s.ticker_rows_valid)>=6&&
+            Number(s.eligible_symbols_missing_ticker)<=Math.max(2,Math.ceil(Number(s.eligible_spot_symbols||0)*0.02));
           process.exit(valid?0:10);
           NODE
               then
@@ -436,10 +448,23 @@ jobs:
             watch_notification_diagnostics:b.watch_notification_diagnostics||null,
             near_miss_audit:b.near_miss_audit||[]
           }));
-          for (const k of ['scanned','deep_scanned','valid_data','observed_candle_data','watch_only','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width','ticker_activity_signal_count','per_cycle_scan_cap']) {
+          for (const k of ['scanned','deep_scanned','valid_data','observed_candle_data','watch_only','evidence_incomplete_excluded','extended_excluded','no_setup_excluded','eligible_spot_symbols','discovered','actionable','returned','elapsed_ms','rotation_cycle','rotation_offset','rotation_width','ticker_activity_signal_count','per_cycle_scan_cap','ticker_rows_received','ticker_rows_valid','eligible_symbols_with_ticker','eligible_symbols_missing_ticker','ticker_rows_with_activity','rankable_discovery_symbols','configured_cycle_scan_limit','deep_scan_limit','hosted_cycle_scan_cap']) {
             if (typeof u[k] !== 'number' || !Number.isFinite(u[k])) throw new Error('PRE_MOVE_SCHEMA_OUTDATED:'+k);
           }
-          if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 || u.discovered!==4 || u.deep_scanned!==4) throw new Error('PRE_MOVE_EXPECTED_FOUR_LIVE_DEEP_SCANS:'+JSON.stringify({discovered:u.discovered,deep_scanned:u.deep_scanned}));
+          const expectedDeepScans=Math.min(Number(u.deep_scan_limit)||0,Number(u.rankable_discovery_symbols)||0);
+          if (u.scanned<1 || u.valid_data<1 || u.eligible_spot_symbols<1 ||
+              Number(u.configured_cycle_scan_limit)<6 || Number(u.deep_scan_limit)<6 ||
+              Number(u.hosted_cycle_scan_cap)<8 || Number(u.rankable_discovery_symbols)<6 ||
+              u.discovered!==expectedDeepScans || u.deep_scanned!==expectedDeepScans || expectedDeepScans<6)
+            throw new Error('PRE_MOVE_LIVE_UNIVERSE_COVERAGE_INSUFFICIENT:'+JSON.stringify({
+              discovered:u.discovered,deep_scanned:u.deep_scanned,expected_deep_scans:expectedDeepScans,
+              configured_cycle_scan_limit:u.configured_cycle_scan_limit,deep_scan_limit:u.deep_scan_limit,
+              hosted_cycle_scan_cap:u.hosted_cycle_scan_cap,eligible_spot_symbols:u.eligible_spot_symbols,
+              ticker_rows_received:u.ticker_rows_received,ticker_rows_valid:u.ticker_rows_valid,
+              eligible_symbols_with_ticker:u.eligible_symbols_with_ticker,
+              eligible_symbols_missing_ticker:u.eligible_symbols_missing_ticker,
+              rankable_discovery_symbols:u.rankable_discovery_symbols
+            }));
           if (u.per_cycle_scan_cap!==10 || u.discovered>u.per_cycle_scan_cap) throw new Error('PRE_MOVE_SCAN_CAP_CONTRACT_INVALID');
           if (u.coverage_mode !== 'PINNED_PLUS_ROTATING_V1') throw new Error('PRE_MOVE_UNIVERSE_ROTATION_NOT_DEPLOYED');
           if (u.rotation_cursor_source !== 'DURABLE_STORE' || u.rotation_cursor_persisted !== true ||

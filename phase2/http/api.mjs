@@ -3,7 +3,7 @@ import {stat as statFile} from 'node:fs/promises';
 import {verifySessionToken} from '../core/auth.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {DurableStore} from '../core/store.mjs';
-import {MarketUniverseScanner} from '../market/universe-scanner.mjs';
+import {MarketUniverseScanner,PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS} from '../market/universe-scanner.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
 import {RADAR_NAMES,RADAR_PROFILES,formatRadarTime12h,decorateRadarAlert} from '../core/radar-alert-meta.mjs';
 import {SymbolDeepAnalyzer,normalizeDeepScanSymbol} from '../core/symbol-deep-analyzer.mjs';
@@ -785,9 +785,9 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveRadarRefreshFlights=new Map();
   const preMoveRadarRefreshRetryAfter=new Map();
   const preMoveRadarLastError=new Map();
-  const preMoveBackgroundIntervalDefaultMs=60000;
+  const preMoveBackgroundIntervalDefaultMs=45000;
   const preMoveBackgroundWorkerState={
-    enabled:false,running:false,interval_ms:Math.max(60000,Math.min(600000,
+    enabled:false,running:false,interval_ms:Math.max(45000,Math.min(600000,
       Math.trunc(Number(config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs))),
     initial_delay_ms:0,
     scan_attempts:0,successful_scans:0,last_started_at:null,last_scan_at:null,last_scan_status:'NOT_STARTED',
@@ -838,7 +838,15 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     const state=preMoveBackgroundWorkerState,enabled=state.enabled===true;
     const status=!preMoveRadarScanner?'UNAVAILABLE':
       state.running?'SCANNING':!enabled?'IDLE':state.last_error?'DEGRADED':state.last_scan_at?'RUNNING':'STARTING';
-    return {status,scanner_ready:Boolean(preMoveRadarScanner),worker:{
+    const scannerConfig=preMoveRadarScanner?.config||{};
+    const scannerContract={
+      configured_cycle_scan_limit:Math.max(0,Math.trunc(Number(scannerConfig.preMoveCycleScanLimit)||0)),
+      hosted_cycle_scan_cap:PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,
+      public_deep_scan_hard_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
+      max_concurrent_deep_scans:PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,
+      scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(scannerConfig.preMoveScanTimeoutMs)||45000)))
+    };
+    return {status,scanner_ready:Boolean(preMoveRadarScanner),scanner_contract,worker:{
       enabled,running:state.running===true,in_flight:preMoveBackgroundInFlight||preMoveRadarRefreshFlights.has('USDT:50'),
       interval_ms:state.interval_ms,initial_delay_ms:state.initial_delay_ms||0,
       scan_attempts:state.scan_attempts,successful_scans:state.successful_scans,
@@ -916,7 +924,7 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     if(!preMoveRadarScanner)return {status:'UNAVAILABLE',scanner_ready:false,reason:'MARKET_DATA_CLIENT_NOT_INITIALIZED'};
     if(preMoveBackgroundWorkerState.enabled)return preMoveBackgroundWorkerSnapshot();
     const requestedInterval=Number(intervalMs??config.marketRadar?.preMoveBackgroundIntervalMs)||preMoveBackgroundIntervalDefaultMs;
-    const safeInterval=Math.max(60000,Math.min(600000,Math.trunc(requestedInterval)));
+    const safeInterval=Math.max(45000,Math.min(600000,Math.trunc(requestedInterval)));
     // Initial warm-up is independent from the recurring interval. Do not start
     // setInterval before this delay: that would launch an early cycle at 60s and
     // recreate the startup CPU/REST contention the delay is intended to avoid.
@@ -1239,6 +1247,14 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           expected_radars:12,registered_radars:Number(swarm?.registered_count)||0,
           radar_swarm_status:String(swarm?.status||'UNAVAILABLE'),
           pre_move_scanner_ready:Boolean(preMoveRadarScanner),
+          pre_move_scanner_contract:preMoveRadarScanner?{
+            configured_cycle_scan_limit:Math.max(0,Math.trunc(Number(preMoveRadarScanner.config?.preMoveCycleScanLimit)||0)),
+            hosted_cycle_scan_cap:PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE,
+            public_deep_scan_hard_cap:PRE_MOVE_MAX_DEEP_SCAN_PER_CYCLE,
+            max_concurrent_deep_scans:PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS,
+            background_interval_ms:preMoveBackgroundWorkerState.interval_ms,
+            scan_timeout_ms:Math.max(250,Math.min(45000,Math.trunc(Number(preMoveRadarScanner.config?.preMoveScanTimeoutMs)||45000)))
+          }:null,
           analyst_system:{
             expected_analysts:MULTI_ANALYST_NAMES.length,
             engine_configured:Boolean(multiAnalystRadar),

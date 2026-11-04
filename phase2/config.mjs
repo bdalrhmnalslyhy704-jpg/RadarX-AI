@@ -202,14 +202,14 @@ export const CONFIG = Object.freeze({
     maxTriggerAgeMs: 30 * 60 * 1000,
     retryAttempts: 1,
     // Defer the first deep cycle until the 12-radar and analyst startup burst
-    // settles on the 0.5-CPU DHDTech tier. Deep-check four pairs per cycle in two
-    // bounded waves; the durable cursor rotates all eligible Spot symbols.
-    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 4, 4, 4),
+    // settles on the 0.5-CPU DHDTech tier. Deep-check eight pairs per cycle in
+    // four bounded waves; permit a six-pair floor if the host needs lower CPU.
+    preMoveCycleScanLimit: boundedInt(process.env.RADARX_PREMOVE_DEEP_SCAN_LIMIT, 8, 6, 8),
     // Wait for the 12-radar and 20-analyst startup burst before starting the
     // first deep Pre-Move cycle on the 0.5-CPU hosted tier.
     preMoveBackgroundInitialDelayMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INITIAL_DELAY_MS, 120000),
     // Pre-Move background surveillance continues when no Android page is open.
-    preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 60000),
+    preMoveBackgroundIntervalMs: int(process.env.RADARX_PREMOVE_BACKGROUND_INTERVAL_MS, 45000),
     // Absolute market-data deadline prevents a stalled live scan from holding the worker open.
     preMoveScanTimeoutMs: int(process.env.RADARX_PREMOVE_SCAN_TIMEOUT_MS, 45000)
   },
