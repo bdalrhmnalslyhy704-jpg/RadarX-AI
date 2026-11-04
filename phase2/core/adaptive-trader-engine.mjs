@@ -523,7 +523,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       relative_24h_strength_vs_btc_pct:btcDailyReturn===null?null:Number((dailyReturn-btcDailyReturn).toFixed(3))
     };
     out.push({
-      id:'HISTORICAL_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
+      id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
       symbol:cleanSymbol,price:baseline.close,at:baseline.closeTime,
       base_score:Number(candidate.score),tier:String(candidate.tier||'NO_SETUP'),
       observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
@@ -550,7 +550,8 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,pend
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
-       sample?.training_eligible!==true||sample?.outcome)continue;
+       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'||
+       sample?.outcome)continue;
     const at=finite(sample?.at),baselinePrice=finite(sample?.price);
     if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
     const baseline=byClose.get(at),future=byClose.get(at+4*60*60*1000);
@@ -877,7 +878,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     ]);
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:8
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:16
     });
     const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
       symbol:ticker.symbol,klines:result,pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
