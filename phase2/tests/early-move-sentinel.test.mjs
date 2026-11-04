@@ -554,6 +554,7 @@ test('a stalled Radar 1 deep scan aborts its isolated REST client and releases t
   assert.equal(sentinel.deepActiveStartedAt,null);
   assert.equal(sentinel.health().busy,false);
   assert.match(sentinel.health().last_error,/MOVE_DEEP_SCAN_TIMEOUT:STUCKUSDT/);
+  assert.ok(aborted>0,'the isolated RestClient must abort the in-flight Binance fetch');
   assert.deepEqual(sentinel.health().active_deep_scan_jobs,[]);
   await sentinel.stop();
 });
