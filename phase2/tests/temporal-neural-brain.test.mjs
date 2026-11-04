@@ -61,7 +61,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.resolved_samples,16*24);
   assert.equal(profile.trained,true);
-  assert.equal(profile.architecture,'TCN_24x22_DILATED_RESIDUAL_MULTI_HORIZON_REGIME_ENSEMBLE_V4');
+  assert.equal(profile.architecture,'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.sequence_steps,24);
   assert.equal(profile.sequence_channels,22);
