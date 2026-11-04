@@ -670,7 +670,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   const [exchangeInfo, tickerResult, btcResult] = await Promise.all([
     rest.request('/api/v3/exchangeInfo'),
     rest.request('/api/v3/ticker/24hr'),
-    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 240 })
+    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 480 })
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
@@ -872,7 +872,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   }
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const [result,fastResult] = await Promise.all([
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 240 }),
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 480 }),
       rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 720 })
         .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
     ]);
