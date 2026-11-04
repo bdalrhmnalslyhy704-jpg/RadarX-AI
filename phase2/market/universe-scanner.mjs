@@ -18,6 +18,23 @@ export const PRE_MOVE_HOSTED_MAX_DEEP_SCAN_PER_CYCLE = 8;
 // the 12-radar and 20-analyst fleet from a synchronized Pre-Move burst.
 export const PRE_MOVE_MAX_CONCURRENT_DEEP_SCANS = 2;
 
+// Public, versioned contract for the narrow non-entry ticker-activity monitor lane.
+// Release and live-acceptance gates require this exact marker so an old container
+// cannot be mistaken for a deployment that includes the monitor-only thresholds.
+export const PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT = Object.freeze({
+  version:'TICKER_ACTIVITY_MONITOR_V2',
+  scanner_activity_score_floor:12,
+  watch_activity_score_floor:10,
+  volume_acceleration_floor:1.35,
+  trade_acceleration_floor:1.30,
+  min_score:62,
+  min_structure_score:45,
+  min_independent_flow_checks:2,
+  max_activity_age_ms:4*60*1000,
+  max_baseline_age_ms:5*60*1000,
+  entry_eligible:false
+});
+
 export const MARKET_RADAR_DEFAULTS = Object.freeze({
   quote: 'USDT',
   scanLimit: 20,
@@ -1351,20 +1368,24 @@ export function buildPreMoveWatchCandidates(rows,{
       closeLocation>=0.52,
       Number(p.relative_strength_vs_market_pct)>=0.25
     ].filter(Boolean).length;
-    const tickerActivityEarly=tickerActivityScore>=12&&
-      tickerActivityVolumeRatio>=1.35&&tickerActivityTradeRatio>=1.30&&
+    const tickerWatchContract=PRE_MOVE_TICKER_ACTIVITY_WATCH_CONTRACT;
+    const tickerActivityEarly=tickerActivityScore>=tickerWatchContract.scanner_activity_score_floor&&
+      tickerActivityVolumeRatio>=tickerWatchContract.volume_acceleration_floor&&
+      tickerActivityTradeRatio>=tickerWatchContract.trade_acceleration_floor&&
       ds.data_valid===true&&ds.data_stale!==true&&ds.stale!==true&&
       quality>=85&&Number(x?.liquidity_quality)>=75&&
       Number(x?.quote_volume_24h)>=minQuoteVolume24h&&
       Number.isFinite(dailyChange)&&dailyChange>=-5&&dailyChange<=4.5&&
       Number.isFinite(sessionReturn)&&sessionReturn>=-1.25&&sessionReturn<=4.5&&
       Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.75&&oneHourReturn<=2.5&&
-      score>=62&&structure>=45&&tickerActivityFlowChecks>=2&&
+      score>=tickerWatchContract.min_score&&structure>=tickerWatchContract.min_structure_score&&
+      tickerActivityFlowChecks>=tickerWatchContract.min_independent_flow_checks&&
       Number.isFinite(Number(tickerActivity?.observed_at))&&
       Number(tickerActivity.observed_at)<=Date.now()+5000&&
-      Date.now()-Number(tickerActivity.observed_at)<=4*60*1000&&
+      Date.now()-Number(tickerActivity.observed_at)<=tickerWatchContract.max_activity_age_ms&&
       Number.isFinite(Number(tickerActivity?.baseline_age_ms))&&
-      Number(tickerActivity.baseline_age_ms)>=0&&Number(tickerActivity.baseline_age_ms)<=5*60*1000;
+      Number(tickerActivity.baseline_age_ms)>=0&&
+      Number(tickerActivity.baseline_age_ms)<=tickerWatchContract.max_baseline_age_ms;
     const coreChecks=[
       volume>=1.12,
       trades>=1.05,
