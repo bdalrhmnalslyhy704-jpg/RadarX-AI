@@ -131,7 +131,7 @@ export class AdaptiveTraderWorker{
               :createServerPaperPortfolio()
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
-          this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
+          this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
           this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{
         modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
@@ -172,6 +172,40 @@ export class AdaptiveTraderWorker{
   trainingSamples(){
     return this.state.samples.filter(row=>row&&row.training_eligible===true&&
       (row.historical_baseline===true||row.closed_candle_baseline===true));
+  }
+
+  // V5 predicts the direction of the completed four-hour close, while TCN
+  // predicts +3% before -2% first-passage. Keep the same verified candle event
+  // as two separate, immutable training rows; never feed TCN labels into V5.
+  cognitiveTrainingSamples(){
+    const samples=this.trainingSamples();
+    const legacyRows=[];
+    for(const row of samples){
+      const historical=row.historical_baseline===true;
+      const expectedTemporalSource=historical
+        ?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+        :'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
+      if(row.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
+         row.outcome_source!==expectedTemporalSource||
+         !['UP','DOWN','FLAT'].includes(row.outcome))continue;
+      const price=finite(row.price),markPrice=finite(row.mark_price);
+      const recordedCloseReturn=finite(row.close_return_pct);
+      const closeReturn=price!==null&&price>0&&markPrice!==null
+        ?(markPrice/price-1)*100:recordedCloseReturn;
+      const at=finite(row.at),resolvedAt=finite(row.resolved_at),horizon=finite(row.horizon_ms);
+      if(closeReturn===null||at===null||resolvedAt===null||
+         resolvedAt-at!==SAMPLE_HORIZON_MS||horizon!==SAMPLE_HORIZON_MS)continue;
+      legacyRows.push({
+        ...row,
+        id:'V5_4H_CLOSE_RETURN:'+String(row.id),
+        outcome:closeReturn>0?'UP':closeReturn<0?'DOWN':'FLAT',
+        return_pct:Number(closeReturn.toFixed(5)),
+        close_return_pct:Number(closeReturn.toFixed(5)),
+        target_definition:'LEGACY_4H_CLOSE_RETURN',
+        outcome_source:historical?'HISTORICAL_CLOSED_CANDLE':'CLOSED_CANDLE_4H'
+      });
+    }
+    return samples.concat(legacyRows);
   }
 
   async runOnce({limit:requestedLimit}={}){
@@ -224,7 +258,7 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
-      this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
+      this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
       this.activeScanStage='RADAR_OUTCOME_MEMORY';
       if(typeof this.store.getRadarSignalOutcomes==='function'){
         try{
@@ -422,7 +456,7 @@ export class AdaptiveTraderWorker{
       if(decision==='EARLY_SETUP_REVIEW')reviewable++;
       if(Array.isArray(brain.contradictions)&&brain.contradictions.length)contradictory++;
     }
-    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples());
+    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
     const journal=this.state.cognitive_journal||[];
     return {
       at:Number(now),assessed_candidates:rows.length,valid_data_candidates:valid,
@@ -509,7 +543,8 @@ recordServerPaperPortfolio(snapshot,now){
     for(const label of (Array.isArray(snapshot.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[])){
       const sample=sampleById.get(String(label?.sample_id||''));
       const at=finite(label?.at),baselinePrice=finite(label?.baseline_price);
-      const markPrice=finite(label?.mark_price),resolvedAt=finite(label?.resolved_at),move=finite(label?.return_pct);
+      const markPrice=finite(label?.mark_price),resolvedAt=finite(label?.resolved_at);
+      const passageReturn=finite(label?.return_pct),closeReturn=finite(label?.close_return_pct);
       if(!sample||sample.closed_candle_baseline!==true||sample.training_eligible!==true||sample.outcome||
          cleanSymbol(sample.symbol)!==cleanSymbol(label?.symbol)||at===null||at!==Number(sample.at)||
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
@@ -517,10 +552,10 @@ recordServerPaperPortfolio(snapshot,now){
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
          label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
-         !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
+         !['UP','DOWN','FLAT'].includes(label?.outcome)||passageReturn===null||closeReturn===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
-      sample.return_pct=Number(label.return_pct);
-      sample.close_return_pct=move;
+      sample.return_pct=passageReturn;
+      sample.close_return_pct=closeReturn;
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
       sample.first_passage=label.first_passage||null;
@@ -800,7 +835,7 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   snapshot(){
-    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples());
+    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples());
     const publicCognitive=publicCognitiveProfile(internalCognitive);
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
