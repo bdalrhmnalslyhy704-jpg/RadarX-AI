@@ -128,7 +128,7 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
   assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===8)));
-  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'));
+  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'));
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
 
   const target=samples[0];
@@ -179,7 +179,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   const sample={
     id:'LIVE:TESTUSDT:'+String(baselineAt),symbol:'TESTUSDT',
     price:baselinePrice,at:baselineAt,closed_candle_baseline:true,
-    training_eligible:true,target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',outcome:null
+    training_eligible:true,target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',outcome:null
   };
   const outcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
     symbol:'TESTUSDT',klines:changed,pendingSamples:[sample],now
@@ -190,7 +190,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
   assert.equal(outcomes[0].resolved_at-baselineAt,4*60*60*1000);
   assert.equal(outcomes[0].outcome,'UP');
-  assert.equal(outcomes[0].target_definition,'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1');
+  assert.equal(outcomes[0].target_definition,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1');
   assert.equal(outcomes[0].outcome_source,'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1');
 
   const wrongBaseline=buildAdaptiveTraderClosedCandleOutcomeLabels({
