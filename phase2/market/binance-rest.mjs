@@ -583,7 +583,14 @@ export class RestClient {
           }
           recordObservedUsedWeight(r.headers);
           this.lastRequestPhase='PARSE_JSON';
-          const data=await r.json();
+          // The fetch timeout may fire after headers arrive while response.json()
+          // is still stalled reading the body. Race body parsing against the same
+          // per-host deadline so a radar cannot keep its busy latch forever.
+          const data=await awaitBeforeDeadline(r.json(),Date.now()+requestTimeoutMs,()=>{
+            const timeout=new Error(`REST_RESPONSE_BODY_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`);
+            timeout.name='RestTimeoutError';
+            return timeout;
+          },ac.signal);
           const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
           // Do not retain malformed/seconds-based Kline payloads in the short
           // shared cache: another consumer must be able to try REST fallback.
