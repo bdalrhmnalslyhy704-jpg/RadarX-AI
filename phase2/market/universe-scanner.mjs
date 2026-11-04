@@ -1359,7 +1359,7 @@ export function buildPreMoveWatchCandidates(rows,{
       Number.isFinite(dailyChange)&&dailyChange>=-5&&dailyChange<=4.5&&
       Number.isFinite(sessionReturn)&&sessionReturn>=-1.25&&sessionReturn<=4.5&&
       Number.isFinite(oneHourReturn)&&oneHourReturn>=-0.75&&oneHourReturn<=2.5&&
-      score>=68&&structure>=50&&tickerActivityFlowChecks>=2&&
+      score>=62&&structure>=45&&tickerActivityFlowChecks>=2&&
       Number.isFinite(Number(tickerActivity?.observed_at))&&
       Number(tickerActivity.observed_at)<=Date.now()+5000&&
       Date.now()-Number(tickerActivity.observed_at)<=4*60*1000&&
