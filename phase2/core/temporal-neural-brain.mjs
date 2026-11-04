@@ -253,76 +253,10 @@ function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012 }
     for (const row of rows) {
       const cache = forward(row.sequence, model);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
-      const add = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) add(target[index], source[index]);
-        } else return target + source;
-        return undefined;
-      };
-      // Accumulate nested numeric gradients without mutating model weights.
-      const accumulate = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) accumulate(target[index], source[index]);
-        } else return target + source;
-        return target;
-      };
-      const sumInto = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) sumInto(target[index], source[index]);
-        } else {
-          return target + source;
-        }
-        return undefined;
-      };
-      // A separate recursive mutator keeps this full-batch optimizer deterministic.
-      const merge = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) merge(target[index], source[index]);
-        } else {
-          return target + source;
-        }
-      };
-      const addInto = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) addInto(target[index], source[index]);
-        } else {
-          return target + source;
-        }
-      };
-      // Numeric leaves are updated by this recursive traversal.
-      const accumulateTree = (target, source) => {
-        if (Array.isArray(target)) {
-          for (let index = 0; index < target.length; index++) accumulateTree(target[index], source[index]);
-        } else return target + source;
-      };
-      // Explicit field traversal avoids object-order-dependent training state.
+      const plus = (target, source) => Array.isArray(target)
+        ? target.map((value, index) => plus(value, source[index]))
+        : target + source;
       for (const key of ['depthWeights', 'pointWeights', 'biases', 'outputWeights']) {
-        const mergeArrays = (target, source) => {
-          if (Array.isArray(target)) {
-            for (let index = 0; index < target.length; index++) mergeArrays(target[index], source[index]);
-          } else {
-            return target + source;
-          }
-        };
-        // Assigning arrays recursively is done in the mutating helper below.
-        const mutateAdd = (target, source) => {
-          if (Array.isArray(target)) {
-            for (let index = 0; index < target.length; index++) mutateAdd(target[index], source[index]);
-          } else {
-            return target + source;
-          }
-        };
-        const addNumeric = (target, source) => {
-          if (Array.isArray(target)) {
-            for (let index = 0; index < target.length; index++) addNumeric(target[index], source[index]);
-          } else {
-            return target + source;
-          }
-        };
-        // JavaScript numbers are immutable, so use a structure-preserving mapper.
-        const plus = (target, source) => Array.isArray(target)
-          ? target.map((value, index) => plus(value, source[index]))
-          : target + source;
         gradient[key] = plus(gradient[key], itemGradient[key]);
       }
       gradient.outputBias += itemGradient.outputBias;
