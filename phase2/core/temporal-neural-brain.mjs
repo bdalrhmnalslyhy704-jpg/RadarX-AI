@@ -245,7 +245,7 @@ function gradientsFor(sequence, target, model, cache) {
   return gradients;
 }
 
-function fitMember(rows, seed, { epochs = 14, learningRate = 0.006, l2 = 0.012 } = {}) {
+function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012 } = {}) {
   const model = initializeModel(seed);
   let optimizer = { m: zerosLike(model), v: zerosLike(model) };
   for (let epoch = 1; epoch <= epochs; epoch++) {
@@ -425,8 +425,10 @@ export function buildTemporalNeuralProfile(samples = [], {
 } = {}) {
   const rows = cleanRows(samples);
   const uniqueTimes = [...new Set(rows.map(row => row.at))].sort((a, b) => a - b);
-  const holdoutCount = Math.max(minimumHoldoutSamples, Math.floor(uniqueTimes.length * 0.2));
-  const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * 0.2));
+  // minimumValidationSamples/minimumHoldoutSamples count observations, not
+  // timestamps. Keep every symbol observed at one close-time in one block.
+  const holdoutCount = Math.max(2, Math.floor(uniqueTimes.length * 0.2));
+  const validationCount = Math.max(2, Math.floor(uniqueTimes.length * 0.2));
   const trainingEndIndex = uniqueTimes.length - holdoutCount - validationCount;
   const enoughSplit = trainingEndIndex > 0;
   if (!enoughSplit) return {
