@@ -25,10 +25,10 @@ export const MARKET_RADAR_DEFAULTS = Object.freeze({
   returnLimit: 20,
   deepConcurrency: 4,
   deepKlines: 250,
-  // One deep candle/depth pair per hosted cycle; full-market ticker activity and
-  // the durable cursor keep discovery rotating across the entire Spot universe.
+  // Four deep candle/depth pairs per hosted cycle in two bounded waves; full-market
+  // ticker activity and the durable cursor keep discovery rotating across Spot.
   // The public hard cap remains ten for API compatibility.
-  preMoveCycleScanLimit: 1,
+  preMoveCycleScanLimit: 4,
   minQuoteVolume24h: 750000,
   minDataQuality: 70,
   minLiquidityQuality: 60,
