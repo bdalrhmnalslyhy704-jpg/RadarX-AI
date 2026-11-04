@@ -503,7 +503,7 @@ recordServerPaperPortfolio(snapshot,now){
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
          markPrice===null||resolvedAt===null||resolvedAt>Number(now)+5000||
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
-         label?.target_definition!=='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'||
+         label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
          !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;sample.return_pct=move;
@@ -588,7 +588,7 @@ recordServerPaperPortfolio(snapshot,now){
           quote_volume_24h:quoteVolume,change_24h_pct:finite(row?.change_24h_pct),
           selection_lane:candidate.selection_lane||null,features:{...(candidate.features||{})},
           temporal_sequence:Array.isArray(candidate.temporal_sequence)?candidate.temporal_sequence:null,
-          target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
+          target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
           outcome:null,mark_price:null,return_pct:null,outcome_source:null
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
