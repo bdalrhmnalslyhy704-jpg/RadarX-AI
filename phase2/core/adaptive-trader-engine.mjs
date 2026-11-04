@@ -133,6 +133,7 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
   if(history.length!==48||history.some((row,index)=>
     index>0&&row.openTime-history[index-1].openTime!==15*60*1000))return null;
   const btcByClose=new Map(btcCandles.map(row=>[Number(row.closeTime),row]));
+  const btcIndexByClose=new Map(btcCandles.map((row,index)=>[Number(row.closeTime),index]));
   const fastByOpen=new Map(fastCandles.map(row=>[Number(row.openTime),row]));
   const microStep=5*60*1000;
   const sequence=[];
@@ -150,6 +151,16 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const body = current.high > current.low ? (current.close - current.open) / (current.high - current.low) : 0;
     const btcCurrent=btcByClose.get(Number(current.closeTime));
     const btcPrevious=btcByClose.get(Number(previous.closeTime));
+    const btcIndex=btcIndexByClose.get(Number(current.closeTime));
+    const btcBaseline=Number.isInteger(btcIndex)&&btcIndex>=24?btcCandles.slice(btcIndex-24,btcIndex):[];
+    const btcBaselineContiguous=btcBaseline.length===24&&btcBaseline.every((row,index)=>
+      index===0||row.openTime-btcBaseline[index-1].openTime===15*60*1000);
+    const btcRangeBase=mean(btcBaseline.map(row=>(row.high-row.low)/row.close));
+    const btcRangeNow=btcCurrent?(btcCurrent.high-btcCurrent.low)/btcCurrent.close:null;
+    const btcVolumeBase=mean(btcBaseline.map(row=>row.quoteVolume));
+    const btcTradesBase=mean(btcBaseline.map(row=>row.trades));
+    const btcVolumeRatio=btcCurrent&&btcVolumeBase>0?btcCurrent.quoteVolume/btcVolumeBase:null;
+    const btcTradeRatio=btcCurrent&&btcTradesBase>0?btcCurrent.trades/btcTradesBase:null;
     // Align three completed 5m candles to this exact 15m candle and compare
     // them with the preceding 24 completed 5m candles. Missing or gapped micro
     // data rejects the sequence rather than inventing neutral pressure.
@@ -183,6 +194,8 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const microReturnPct=(microCurrent[2].close/microCurrent[0].open-1)*100;
     if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
        !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
+       !btcBaselineContiguous||!(btcRangeBase>0)||!(btcRangeNow>0)||
+       !(btcVolumeRatio>0)||!(btcTradeRatio>0)||
        !(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||
        !(microBuyShare>=0&&microBuyShare<=1)||!(microCurrentVolume>0)||
@@ -204,7 +217,11 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       clamp((microBuyShare-0.5)/0.1,-2,2),
       clamp((microBuyShare-microBaseBuyShare)/0.1,-2,2),
       Math.tanh(microReturnPct/1),
-      clamp(Math.log2(clamp(microCurrentRange/microBaseRange,0.05,20)),-2,2)
+      clamp(Math.log2(clamp(microCurrentRange/microBaseRange,0.05,20)),-2,2),
+      Math.tanh(btcReturn/2),
+      clamp(Math.log2(clamp(btcRangeNow/btcRangeBase,0.05,20)),-2,2),
+      clamp(Math.log2(clamp(btcVolumeRatio,0.05,20))/2,-2,2),
+      clamp(Math.log2(clamp(btcTradeRatio,0.05,20))/2,-2,2)
     ];
     if (!values.every(Number.isFinite)) return null;
     sequence.push(values);
