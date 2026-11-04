@@ -1079,8 +1079,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return {candidate,historicalSamples,closedCandleOutcomes,history:{
       asset_15m_pages:Number(result?.historical_pages_fetched)||1,
       asset_15m_candles:Array.isArray(result?.data)?result.data.length:0,
+      asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
-      asset_5m_candles:Array.isArray(fastResult.value?.data)?fastResult.value.data.length:0
+      asset_5m_candles:Array.isArray(fastResult.value?.data)?fastResult.value.data.length:0,
+      asset_5m_backfill_error:String(fastResult.value?.historical_backfill_error||'')
     }};
   });
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
@@ -1184,6 +1186,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       asset_5m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=2).length,
       asset_5m_deep_history_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=4).length,
       asset_5m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_5m_candles)||0)),
+      asset_15m_backfill_failures:analyzed.filter(row=>Boolean(row?.history?.asset_15m_backfill_error)).length,
+      asset_5m_backfill_failures:analyzed.filter(row=>Boolean(row?.history?.asset_5m_backfill_error)).length,
+      asset_15m_backfill_error_samples:analyzed.filter(row=>row?.history?.asset_15m_backfill_error).slice(0,5).map(row=>({symbol:row.candidate?.symbol||'UNKNOWN',error:row.history.asset_15m_backfill_error})),
+      asset_5m_backfill_error_samples:analyzed.filter(row=>row?.history?.asset_5m_backfill_error).slice(0,5).map(row=>({symbol:row.candidate?.symbol||'UNKNOWN',error:row.history.asset_5m_backfill_error})),
       previous_snapshot_age_ms: Number.isFinite(previousSnapshotAgeMs)?Math.max(0,Math.trunc(previousSnapshotAgeMs)):null,
       requested_limit: safeLimit,
       scan_offset: scanOffset,
@@ -1228,6 +1234,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       btc_benchmark_error: btcResult.error,
       btc_15m_historical_pages:Number(btcKlines?.historical_pages_fetched)||1,
       btc_15m_historical_window_candles:Number(btcKlines?.historical_window_candles)||btcKlines?.data?.length||0,
+      btc_15m_historical_backfill_error:String(btcKlines?.historical_backfill_error||''),
       cache_policy: 'SERVER_PUBLIC_REST_CACHE',
       historical_learning_enabled:true
     }

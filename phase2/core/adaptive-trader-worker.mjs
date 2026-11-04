@@ -787,6 +787,7 @@ recordServerPaperPortfolio(snapshot,now){
     const latestPrices=(Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[]).map(row=>({...row}));
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
+      meta:{...(snapshot.meta||{})},
       universe:{...(snapshot.universe||{})},
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
