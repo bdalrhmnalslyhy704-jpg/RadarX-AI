@@ -442,7 +442,7 @@ test('watchdog restart clears the previous deep-scan busy timestamp and isolates
   const candidate={symbol:'TESTUSDT',last_price:1,price_change_24h:0.2,data_quality:0,liquidity_quality:0,
     data_status:{data_valid:false,data_stale:true},pre_move_context:{},bottom_context:{metrics:{},algorithms:{}},strategies:[],accepted_strategies:[]};
   const sentinel=new EarlyMoveSentinel({
-    rest,store,clock:()=>now,config:{reconcileMs:60000},
+    rest,store,clock:()=>now,config:{reconcileMs:60000,websocket:{urls:[]}},
     scannerFactory:()=>({scanSymbol:()=>++scannerCount===1?oldScan:newScan}),
     tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
     logger:{info(){},warn(){}}
