@@ -51,7 +51,7 @@ jobs:
           fi
           grep -Fq 'paperTrading: true' phase2/config.mjs
           grep -Fq 'realOrderExecution: false' phase2/config.mjs
-          grep -Fq 'real_order_execution:false' android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq 'meta.real_order_execution === false' android/app/src/main/assets/radarx-backend-client.mjs
           echo "Build 224 source pinned to DHDTech; paper trading is true and real order execution is false; version 1.6.1."
 
       - name: Set up Node.js 22
