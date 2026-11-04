@@ -120,7 +120,10 @@ export class AdaptiveTraderWorker{
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
           this.state.cognitive_profile=buildCognitiveLearningProfile(this.trainingSamples());
-          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
+          this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{
+        modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
+          ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
+      });
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
@@ -240,8 +243,14 @@ export class AdaptiveTraderWorker{
         const cognitiveRankScore=fourHourRankScore!==null||outcomeRank.used_horizons.length>0
           ?outcomeRank.score:null;
         const cognitive=assessCognitiveCandidate(ranked,this.state.cognitive_profile,now);
-        const enriched={...ranked,cognitive_rank_score:cognitiveRankScore,
-          cognitive_rank_adjustment:baseScore===null||cognitiveRankScore===null?0:Number((cognitiveRankScore-(learnedScore??baseScore)).toFixed(2)),
+        const temporalProbability=finite(cognitive.temporal_up_probability);
+        const temporalRankAdjustment=temporalProbability===null?0:
+          Math.max(-6,Math.min(6,(temporalProbability-0.5)*16));
+        const finalCognitiveRankScore=temporalProbability===null?cognitiveRankScore:
+          Number(Math.max(0,Math.min(100,(cognitiveRankScore??learnedScore??baseScore??0)+temporalRankAdjustment)).toFixed(2));
+        const enriched={...ranked,cognitive_rank_score:finalCognitiveRankScore,
+          temporal_rank_adjustment:Number(temporalRankAdjustment.toFixed(2)),
+          cognitive_rank_adjustment:baseScore===null||finalCognitiveRankScore===null?0:Number((finalCognitiveRankScore-(learnedScore??baseScore)).toFixed(2)),
           four_hour_cognitive_rank_score:fourHourRankScore,
           outcome_learning_adjustment:Number(outcomeRank.adjustment)||0,
           outcome_learning_horizons:Array.isArray(outcomeRank.used_horizons)?outcomeRank.used_horizons:[],
@@ -252,7 +261,10 @@ export class AdaptiveTraderWorker{
         return enriched;
       }).sort((a,b)=>(Number(b.cognitive_rank_score??b.score)||0)-(Number(a.cognitive_rank_score??a.score)||0));
       this.refreshCognitiveOutcomeLinks();
-      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null});
+      this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{
+        modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
+          ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
+      });
       this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
       const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
       this.recordServerPaperPortfolio(executionSnapshot,now);
@@ -322,7 +334,10 @@ export class AdaptiveTraderWorker{
     const symbol=cleanSymbol(candidate?.symbol);
     const closeAt=finite(candidate?.candle_close_time??candidate?.candle_close_time_ms??candidate?.closed_candle_close_time);
     if(!symbol||closeAt===null||closeAt<=0||closeAt>Number(now)+5000)return;
-    const trainedThrough=finite(this.state.cognitive_profile?.max_training_outcome_resolved_at);
+    const temporalReady=this.state.cognitive_profile?.temporal_network?.probability_ready===true;
+    const trainedThrough=temporalReady
+      ?finite(this.state.cognitive_profile?.temporal_network?.max_training_outcome_resolved_at)
+      :finite(this.state.cognitive_profile?.max_training_outcome_resolved_at);
     // Do not backfill a forecast on a candle whose outcomes were already known
     // to the selected model at forecast time.
     if(trainedThrough!==null&&closeAt<=trainedThrough)return;
