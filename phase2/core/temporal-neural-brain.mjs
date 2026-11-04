@@ -160,7 +160,7 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
   return { parameters: next.value, state: { m: next.moment, v: next.variance } };
 }
 
-function initializeModel(seed) {
+function initializeModel(seed, baseRate = 0.5) {
   const channels = TEMPORAL_SEQUENCE_CHANNELS;
   const layers = DILATIONS.length;
   const offset = Number(seed) * 0.6180339887498949;
@@ -177,7 +177,14 @@ function initializeModel(seed) {
       0.002 * Math.sin((layer + 1) * 5.3 + (channel + 1) * 1.7 + offset)));
   const outputWeights = Array.from({ length: channels }, (_, channel) =>
     0.03 * Math.sin((channel + 1) * 2.47 + offset));
-  return { depthWeights, pointWeights, biases, outputWeights, outputBias: 0 };
+  const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
+  // Start the neural residual at the training-only event prevalence instead of
+  // an arbitrary 50% prior. This prevents a rare +3%-before-stop event from
+  // remaining badly miscalibrated while the small residual layers learn.
+  return {
+    depthWeights,pointWeights,biases,outputWeights,
+    outputBias:Math.log(prior/(1-prior))
+  };
 }
 
 function forward(sequence, model) {
@@ -265,8 +272,8 @@ function gradientsFor(sequence, target, model, cache) {
   return gradients;
 }
 
-function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012 } = {}) {
-  const model = initializeModel(seed);
+function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012, baseRate = 0.5 } = {}) {
+  const model = initializeModel(seed,baseRate);
   let optimizer = { m: zerosLike(model), v: zerosLike(model) };
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(model);
@@ -367,8 +374,15 @@ function evaluate(rows, predictFn, baseRate) {
   };
 }
 function fitEnsemble(rows, options = {}) {
-  const members = SEEDS.map(seed => fitMember(rows, seed, options));
-  return { members, seeds: [...SEEDS], architecture: 'TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1' };
+  const baseRate=Number.isFinite(Number(options.baseRate))
+    ?clamp(Number(options.baseRate),0.02,0.98)
+    :(rows.reduce((sum,row)=>sum+row.target,0)+2)/(rows.length+4);
+  const members = SEEDS.map(seed => fitMember(rows, seed, {...options,baseRate}));
+  return {
+    members,seeds:[...SEEDS],
+    architecture:'TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1',
+    training_prior_probability:baseRate
+  };
 }
 
 export function buildTemporalNeuralProfile(samples = [], {
@@ -432,7 +446,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const fitRows = training.slice(-Math.max(minTrainingSamples, maxTrainingSamples));
   const targets = fitRows.map(row => row.target);
   const baseRate = (targets.reduce((sum, value) => sum + value, 0) + 2) / (targets.length + 4);
-  const fit = fitEnsemble(fitRows, { epochs, learningRate, l2 });
+  const fit = fitEnsemble(fitRows, { epochs, learningRate, l2, baseRate });
   const baseline = fitLogistic(fitRows);
   const tcnValidation = evaluate(validation, sequence => {
     const value = predict(sequence, fit);
@@ -463,7 +477,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     required_holdout_samples: minimumHoldoutSamples,
     validation_start_at:validationStart,holdout_start_at:holdoutStart,
     max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
-    training_positive_rate_pct: Number((baseRate * 100).toFixed(1)),
+    training_positive_rate_pct:Number((baseRate*100).toFixed(1)),
+    training_prior_probability:Number(fit.training_prior_probability.toFixed(5)),
     trained: true, selected, probability_ready: probabilityReady, live_eligibility_ready: liveReady,
     validation: {
       ...tcnValidation,
