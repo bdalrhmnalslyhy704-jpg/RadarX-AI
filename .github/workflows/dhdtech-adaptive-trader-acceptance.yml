@@ -100,10 +100,10 @@ jobs:
                 const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
-                  temporalNetwork.architecture==='TCN_24x8_DILATED_RESIDUAL_DEPTHWISE_ENSEMBLE_V1'&&
+                  temporalNetwork.architecture==='TCN_24x14_DILATED_RESIDUAL_MICROSTRUCTURE_ENSEMBLE_V2'&&
                   temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
                   Number(temporalNetwork.sequence_steps)===24&&
-                  Number(temporalNetwork.sequence_channels)===8&&
+                  Number(temporalNetwork.sequence_channels)===14&&
                   Number(temporalNetwork.ensemble_members_required)===3&&
                   (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)
                 );
