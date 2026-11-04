@@ -16,6 +16,18 @@ const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 const MAX_COGNITIVE_JOURNAL=3000;
 
+function publicTemporalProfile(profile){
+  if(!profile||typeof profile!=='object')return null;
+  const {_fit,_baseline_fit,...visible}=profile;
+  return visible;
+}
+function publicCognitiveProfile(profile){
+  if(!profile||typeof profile!=='object')return null;
+  const {_fit,...visible}=profile;
+  if(visible.temporal_network)visible.temporal_network=publicTemporalProfile(visible.temporal_network);
+  return visible;
+}
+
 function withStageTimeout(pending,timeoutMs,stage){
   const limit=Math.max(1,Math.trunc(Number(timeoutMs)||1));
   let timer=null;
@@ -430,7 +442,7 @@ export class AdaptiveTraderWorker{
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
       holdout:profile.holdout||null,neural_network:profile.neural_network||null,
-      temporal_network:profile.temporal_network||null,method:profile.method
+      temporal_network:publicTemporalProfile(profile.temporal_network),method:profile.method
     };
   }
 
@@ -686,6 +698,8 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   buildSummary(snapshot){
+    const cognitiveProfile=this.state.cognitive_profile||{};
+    const temporalNetwork=publicTemporalProfile(cognitiveProfile.temporal_network);
     const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>{
       const {temporal_sequence,...visible}=row||{};
       return {...visible,trade_decision:buildAdaptiveTraderRecommendation(row)};
@@ -704,7 +718,7 @@ recordServerPaperPortfolio(snapshot,now){
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.probability_ready===true
             ?String(this.state.cognitive_profile?.model_selection?.selected_model||'LEGACY_BASELINE'):'NONE',
         neural_network:this.state.cognitive_profile?.neural_network||null,
-        temporal_network:this.state.cognitive_profile?.temporal_network||null,
+        temporal_network:temporalNetwork,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
         holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
@@ -716,8 +730,7 @@ recordServerPaperPortfolio(snapshot,now){
             ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
         }),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
-        holdout:this.state.cognitive_profile?.holdout||null,
-        temporal_network:this.state.cognitive_profile?.temporal_network||null,
+        holdout:cognitiveProfile.holdout||null,
         capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
         missed_mover_feedback:(this.state.missed_movers||[]).slice(0,30).map(row=>({
           id:row.id,symbol:row.symbol,classification:row.classification,move_pct:row.move_pct,
@@ -787,6 +800,8 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   snapshot(){
+    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples());
+    const publicCognitive=publicCognitiveProfile(internalCognitive);
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
     return {
@@ -812,7 +827,7 @@ recordServerPaperPortfolio(snapshot,now){
         status:this.state.cognitive_profile?.temporal_network?.probability_ready===true?'TEMPORAL_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
           this.state.cognitive_profile?.probability_ready===true?'OUT_OF_SAMPLE_VALIDATED':
           this.state.cognitive_profile?.ranking_ready===true?'RANKING_EVIDENCE_READY':'LEARNING',
-        profile:this.state.cognitive_profile||buildCognitiveLearningProfile(this.trainingSamples()),
+        profile:publicCognitive,
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{
           modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
             ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
