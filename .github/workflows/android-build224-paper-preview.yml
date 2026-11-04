@@ -72,6 +72,8 @@ jobs:
           node --check phase2/http/api.mjs
           node --check phase2/core/adaptive-trader-engine.mjs
           node --check phase2/core/adaptive-trader-worker.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/cognitive-brain.mjs
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
