@@ -359,6 +359,7 @@ export class AdaptiveTraderWorker{
       outcome_learning_adjustment:finite(candidate?.outcome_learning_adjustment),
       outcome_learning_horizons:Array.isArray(candidate?.outcome_learning_horizons)?candidate.outcome_learning_horizons.slice(0,2):[],
       features:candidate?.features&&typeof candidate.features==='object'?{...candidate.features}:{},
+      temporal_sequence:Array.isArray(candidate?.temporal_sequence)?candidate.temporal_sequence:null,
       data_valid:candidate?.data_valid===true,data_stale:candidate?.data_stale===true,
       closed_candles_only:candidate?.closed_candles_only===true,
       entry_eligible:false,paper_trading:true,real_order_execution:false,
@@ -485,9 +486,14 @@ recordServerPaperPortfolio(snapshot,now){
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
          markPrice===null||resolvedAt===null||resolvedAt>Number(now)+5000||
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
-         label?.outcome_source!=='CLOSED_CANDLE_4H'||!['UP','DOWN','FLAT'].includes(label?.outcome)||move===null)continue;
+         label?.target_definition!=='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'||
+         label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
+         !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;sample.return_pct=move;
-      sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;sample.outcome_source='CLOSED_CANDLE_4H';
+      sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
+      sample.target_definition=label.target_definition;
+      sample.first_passage=label.first_passage||null;
+      sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
     }
 
@@ -564,6 +570,8 @@ recordServerPaperPortfolio(snapshot,now){
           observation_type:'DEEP_CANDIDATE',training_eligible:true,closed_candle_baseline:true,
           quote_volume_24h:quoteVolume,change_24h_pct:finite(row?.change_24h_pct),
           selection_lane:candidate.selection_lane||null,features:{...(candidate.features||{})},
+          temporal_sequence:Array.isArray(candidate.temporal_sequence)?candidate.temporal_sequence:null,
+          target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',
           outcome:null,mark_price:null,return_pct:null,outcome_source:null
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
@@ -666,6 +674,7 @@ recordServerPaperPortfolio(snapshot,now){
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
         probability_ready:this.state.cognitive_profile?.probability_ready===true,
         neural_network:this.state.cognitive_profile?.neural_network||null,
+        temporal_network:this.state.cognitive_profile?.temporal_network||null,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
         holdout_samples:Number(this.state.cognitive_profile?.holdout_samples)||0,
