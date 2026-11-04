@@ -518,7 +518,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
     const baselineRaw=candles.slice(Math.max(0,index-48),index+1).map(row=>row.raw);
-    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-480).map(row=>row.raw);
+    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-1000).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
     const ticker={
       symbol:cleanSymbol,lastPrice:String(baseline.close),
@@ -690,7 +690,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   const [exchangeInfo, tickerResult, btcResult] = await Promise.all([
     rest.request('/api/v3/exchangeInfo'),
     rest.request('/api/v3/ticker/24hr'),
-    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 480 })
+    rest.request('/api/v3/klines', { symbol: 'BTCUSDT', interval: '15m', limit: 1000 })
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
@@ -892,13 +892,13 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
   }
   const analyzed = await mapLimit(selected, 5, async ticker => {
     const [result,fastResult] = await Promise.all([
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 480 }),
+      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 1000 }),
       rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 720 })
         .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
     ]);
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:16
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:48
     });
     const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
       symbol:ticker.symbol,klines:result,pendingSamples:pendingBySymbol.get(String(ticker.symbol||'').toUpperCase())||[],now
