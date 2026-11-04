@@ -176,6 +176,7 @@ jobs:
           const brainProfile=brain.profile||{};
           const neuralNetwork=brainProfile.neural_network||{};
           const temporalNetwork=brainProfile.temporal_network||{};
+          const summary=x.last_summary||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V5'||
              temporalNetwork.architecture!=='TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5'||
              temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'){
