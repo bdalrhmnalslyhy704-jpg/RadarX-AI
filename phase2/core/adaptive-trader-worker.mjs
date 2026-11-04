@@ -97,7 +97,7 @@ export class AdaptiveTraderWorker{
               sample.training_eligible=historical||closedBaseline;
               if(historical){
                 sample.outcome_source=sample.outcome_source||'HISTORICAL_CLOSED_CANDLE';
-              }else if(!closedBaseline||sample.outcome_source!=='CLOSED_CANDLE_4H'){
+              }else if(!closedBaseline||!['CLOSED_CANDLE_4H','CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'].includes(sample.outcome_source)){
                 // Earlier Build 224 versions labeled live samples from current ticker prices.
                 // Retract those labels instead of carrying unverified outcomes into learning.
                 sample.outcome=null;sample.resolved_at=null;sample.mark_price=null;
@@ -341,7 +341,8 @@ export class AdaptiveTraderWorker{
       price:finite(candidate?.candle_close_price)??finite(candidate?.price),
       base_score:finite(candidate?.base_score??candidate?.score),
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),
-      selected_model:String(profile.model_selection?.selected_model||'UNVALIDATED'),
+      selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
+        String(profile.model_selection?.selected_model||'UNVALIDATED'),
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,
@@ -379,6 +380,7 @@ export class AdaptiveTraderWorker{
       row.return_pct=finite(sample.return_pct);
       row.resolved_at=finite(sample.resolved_at);
       row.outcome_source=String(sample.outcome_source||'CLOSED_CANDLE_OUTCOME');
+      row.target_definition=String(sample.target_definition||'LEGACY_4H_CLOSE_RETURN');
     }
   }
 
@@ -413,7 +415,8 @@ export class AdaptiveTraderWorker{
       probability_ready:profile.probability_ready===true,
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
-      holdout:profile.holdout||null,neural_network:profile.neural_network||null,method:profile.method
+      holdout:profile.holdout||null,neural_network:profile.neural_network||null,
+      temporal_network:profile.temporal_network||null,method:profile.method
     };
   }
 
@@ -594,6 +597,14 @@ recordServerPaperPortfolio(snapshot,now){
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
+    // Bound the extra temporal tensor memory on the 512 MiB DHDTech tier.
+    let retainedTemporal=0;
+    for(let index=this.state.samples.length-1;index>=0;index--){
+      const sample=this.state.samples[index];
+      if(!Array.isArray(sample?.temporal_sequence))continue;
+      retainedTemporal++;
+      if(retainedTemporal>1200)sample.temporal_sequence=null;
+    }
     const closedCandleOutcomeRows=Array.isArray(snapshot.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[];
     this.state.last_learning_capture={
       at:now,
@@ -684,6 +695,7 @@ recordServerPaperPortfolio(snapshot,now){
         prequential:this.state.cognitive_prequential||buildCognitivePrequentialProfile(this.state.cognitive_journal,{modelVariant:this.state.cognitive_profile?.model_selection?.selected_model||null}),
         radar_outcome_learning:this.state.radar_outcome_learning||null,
         holdout:this.state.cognitive_profile?.holdout||null,
+        temporal_network:this.state.cognitive_profile?.temporal_network||null,
         capture:this.state.cognitive_capture||null,journal_records:(this.state.cognitive_journal||[]).length,
         missed_mover_feedback:(this.state.missed_movers||[]).slice(0,30).map(row=>({
           id:row.id,symbol:row.symbol,classification:row.classification,move_pct:row.move_pct,
