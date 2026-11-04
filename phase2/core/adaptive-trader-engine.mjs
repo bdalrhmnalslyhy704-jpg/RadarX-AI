@@ -161,6 +161,20 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const btcTradesBase=mean(btcBaseline.map(row=>row.trades));
     const btcVolumeRatio=btcCurrent&&btcVolumeBase>0?btcCurrent.quoteVolume/btcVolumeBase:null;
     const btcTradeRatio=btcCurrent&&btcTradesBase>0?btcCurrent.trades/btcTradesBase:null;
+    const btcDayBaseline=Number.isInteger(btcIndex)&&btcIndex>=96?btcCandles.slice(btcIndex-96,btcIndex):[];
+    const btcDayContiguous=btcDayBaseline.length===96&&btcDayBaseline.every((row,index)=>
+      index===0||row.openTime-btcDayBaseline[index-1].openTime===15*60*1000);
+    const btcFourHourPrior=Number.isInteger(btcIndex)&&btcIndex>=16?btcCandles[btcIndex-16]:null;
+    const btcDayPrior=btcDayBaseline[0]||null;
+    const btcReturn4h=btcCurrent&&btcFourHourPrior&&btcFourHourPrior.close>0
+      ?(btcCurrent.close/btcFourHourPrior.close-1)*100:null;
+    const btcReturn24h=btcCurrent&&btcDayPrior&&btcDayPrior.close>0
+      ?(btcCurrent.close/btcDayPrior.close-1)*100:null;
+    const btcDayRange=btcDayBaseline.map(row=>(row.high-row.low)/row.close);
+    const btcDayVolatility=btcDayRange.length?Math.sqrt(mean(btcDayRange.map(value=>value*value)):null;
+    const btcDayHigh=btcDayBaseline.length?Math.max(...btcDayBaseline.map(row=>row.high)):null;
+    const btcDrawdownFromDayHigh=btcDayHigh>0&&btcCurrent
+      ?(btcCurrent.close/btcDayHigh-1)*100:null;
     // Align three completed 5m candles to this exact 15m candle and compare
     // them with the preceding 24 completed 5m candles. Missing or gapped micro
     // data rejects the sequence rather than inventing neutral pressure.
@@ -194,8 +208,10 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const microReturnPct=(microCurrent[2].close/microCurrent[0].open-1)*100;
     if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
        !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
-       !btcBaselineContiguous||!(btcRangeBase>0)||!(btcRangeNow>0)||
+       !btcBaselineContiguous||!btcDayContiguous||!(btcRangeBase>0)||!(btcRangeNow>0)||
        !(btcVolumeRatio>0)||!(btcTradeRatio>0)||
+       !Number.isFinite(btcReturn4h)||!Number.isFinite(btcReturn24h)||
+       !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh)||
        !(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||
        !(microBuyShare>=0&&microBuyShare<=1)||!(microCurrentVolume>0)||
@@ -221,7 +237,11 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       Math.tanh(btcReturn/2),
       clamp(Math.log2(clamp(btcRangeNow/btcRangeBase,0.05,20)),-2,2),
       clamp(Math.log2(clamp(btcVolumeRatio,0.05,20))/2,-2,2),
-      clamp(Math.log2(clamp(btcTradeRatio,0.05,20))/2,-2,2)
+      clamp(Math.log2(clamp(btcTradeRatio,0.05,20))/2,-2,2),
+      Math.tanh(btcReturn4h/5),
+      Math.tanh(btcReturn24h/10),
+      Math.tanh(btcDayVolatility*100),
+      Math.tanh(btcDrawdownFromDayHigh/5)
     ];
     if (!values.every(Number.isFinite)) return null;
     sequence.push(values);
