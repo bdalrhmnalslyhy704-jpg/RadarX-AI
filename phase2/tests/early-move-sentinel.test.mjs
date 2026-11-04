@@ -484,6 +484,44 @@ test('watchdog restart clears the previous deep-scan busy timestamp and isolates
   await sentinel.stop();
 });
 
+
+test('deep-scan watchdog time follows the oldest still-active symbol as other scans complete',async()=>{
+  let now=1710011000000;
+  const releases=[];
+  const sentinel=new EarlyMoveSentinel({
+    rest:{},store:{},clock:()=>now,config:{maxDeepPerCycle:2},logger:{warn(){}}
+  });
+  sentinel.running=true;
+  sentinel.scanner={scanSymbol:()=>new Promise(resolve=>releases.push(resolve))};
+  sentinel.deepQueue.push({symbol:'FIRSTUSDT',row:{symbol:'FIRSTUSDT'},trigger:{},queuedAt:now,mode:'MOVE'});
+  const firstDrain=sentinel.drainDeepQueue();
+  await new Promise(resolve=>setImmediate(resolve));
+  const firstStartedAt=sentinel.deepActiveStartedAt;
+  assert.equal(sentinel.deepActive,1);
+  assert.equal(firstStartedAt,now);
+
+  now+=1000;
+  sentinel.deepQueue.push({symbol:'SECONDUSDT',row:{symbol:'SECONDUSDT'},trigger:{},queuedAt:now,mode:'MOVE'});
+  const secondDrain=sentinel.drainDeepQueue();
+  await new Promise(resolve=>setImmediate(resolve));
+  const secondStartedAt=sentinel.deepActiveJobs.size===2
+    ?[...sentinel.deepActiveJobs.values()].sort((a,b)=>a-b)[1]:null;
+  assert.equal(sentinel.deepActive,2);
+  assert.equal(secondStartedAt,now);
+
+  releases[0](null);
+  await firstDrain;
+  assert.equal(sentinel.deepActive,1);
+  assert.equal(sentinel.deepActiveStartedAt,secondStartedAt,
+    'finishing the first symbol advances watchdog time to the still-active second symbol');
+
+  releases[1](null);
+  await secondDrain;
+  assert.equal(sentinel.deepActive,0);
+  assert.equal(sentinel.deepActiveStartedAt,null);
+  assert.equal(sentinel.deepActiveJobs.size,0);
+});
+
 test('a stalled initial reconciliation times out and releases the worker busy latch',async()=>{
   const never=new Promise(()=>{});
   const sentinel=new EarlyMoveSentinel({

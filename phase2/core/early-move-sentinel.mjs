@@ -681,6 +681,10 @@ export class EarlyMoveSentinel {
     this.deepQueue=[];
     this.deepActive=0;
     this.deepActiveStartedAt=null;
+    // Keep per-symbol start times so a continuously replenished queue does not
+    // look like one five-minute scan when individual symbols are completing.
+    this.deepActiveJobs=new Map();
+    this.deepScanSequence=0;
     this.ws=null;
     this.lastTickAt=null;
     this.lastReconcileAt=null;
@@ -698,6 +702,7 @@ export class EarlyMoveSentinel {
     this.deepQueue=[];
     this.deepActive=0;
     this.deepActiveStartedAt=null;
+    this.deepActiveJobs.clear();
     this.reconciling=false;
     this.reconcileStartedAt=null;
     this.running=true;
@@ -750,6 +755,7 @@ export class EarlyMoveSentinel {
     this.deepQueue=[];
     this.deepActive=0;
     this.deepActiveStartedAt=null;
+    this.deepActiveJobs.clear();
   }
 
   health(){
@@ -1009,8 +1015,10 @@ export class EarlyMoveSentinel {
     const isCurrentGeneration=()=>this.running&&generation===this.lifecycleGeneration;
     while(isCurrentGeneration()&&this.deepActive<this.config.maxDeepPerCycle&&this.deepQueue.length){
       const job=this.deepQueue.shift();
-      this.deepActive++;
-      if(this.deepActiveStartedAt==null)this.deepActiveStartedAt=this.clock();
+      const activeId=++this.deepScanSequence;
+      this.deepActiveJobs.set(activeId,this.clock());
+      this.deepActive=this.deepActiveJobs.size;
+      this.deepActiveStartedAt=Math.min(...this.deepActiveJobs.values());
       try{
         const candidate=await this.scanner.scanSymbol(job.row,1,{exchangeInfo:'Binance Public REST',ticker:'Binance Public REST'},{klinesLimit:this.config.deepKlines,fastInterval:this.config.fastInterval,fastKlines:this.config.fastKlines});
         // A scan from a stopped generation may finish after the watchdog has
@@ -1104,8 +1112,10 @@ export class EarlyMoveSentinel {
         }
       }finally{
         if(generation===this.lifecycleGeneration){
-          this.deepActive=Math.max(0,this.deepActive-1);
-          if(this.deepActive===0)this.deepActiveStartedAt=null;
+          this.deepActiveJobs.delete(activeId);
+          this.deepActive=this.deepActiveJobs.size;
+          this.deepActiveStartedAt=this.deepActiveJobs.size
+            ?Math.min(...this.deepActiveJobs.values()):null;
         }
       }
     }
