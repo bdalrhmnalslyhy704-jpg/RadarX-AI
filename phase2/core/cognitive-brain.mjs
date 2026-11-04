@@ -582,7 +582,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
         second_hidden_neurons:NEURAL_POLICY.secondHiddenUnits,output_neurons: 1,
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
-        probability_ready: false, iterations: neuralIterations,
+        probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
@@ -652,10 +652,49 @@ export function buildCognitiveLearningProfile(samples = [], {
     evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MORE_MATURED_TRAINING_SAMPLES',
     sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
   };
+  // Compare the neural challenger with logistic baselines trained on the exact
+  // same sample window as well as the all-history and recent-window challengers.
+  // The untouched final block is scored only after validation has selected a model.
+  const neuralSameWindowLogisticFit=neuralFit
+    ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
+  const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
+    ?evaluateHoldout(validation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const comparisonMargin=Math.max(0.002,Number(neuralSelectionMargin)||0);
   const neuralWins=neuralFit!==null&&neuralValidation.evaluated===true&&
     neuralValidation.beat_base_rate===true&&
+    neuralSameWindowLogisticValidation.evaluated===true&&
+    neuralValidation.model_brier_score+comparisonMargin<neuralSameWindowLogisticValidation.model_brier_score&&
     (!selectedValidation.evaluated||
-      neuralValidation.model_brier_score+Math.max(0,Number(neuralSelectionMargin)||0)<selectedValidation.model_brier_score);
+      neuralValidation.model_brier_score+comparisonMargin<selectedValidation.model_brier_score);
+  const neuralHoldout=neuralFit?evaluateHoldout(holdout,neuralFit):{
+    sample_count:holdout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
+    log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
+  };
+  const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
+    ?evaluateHoldout(holdout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const globalHoldout=neuralFit?evaluateHoldout(holdout,globalFit):{evaluated:false,model_brier_score:null};
+  const recentHoldout=neuralFit&&recentFit?evaluateHoldout(holdout,recentFit):null;
+  const beatsSameWindowLogistic=neuralHoldout.evaluated===true&&
+    neuralSameWindowLogisticHoldout.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<neuralSameWindowLogisticHoldout.model_brier_score;
+  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&globalHoldout.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<globalHoldout.model_brier_score;
+  const beatsRecentLogistic=!recentFit||(neuralHoldout.evaluated===true&&recentHoldout?.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<recentHoldout.model_brier_score);
+  const neuralHoldoutReady=neuralHoldout.evaluated===true&&neuralHoldout.beat_base_rate===true&&
+    beatsSameWindowLogistic&&beatsGlobalLogistic&&beatsRecentLogistic;
+  const neuralHoldoutComparison={
+    sample_count:holdout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+    neural_brier_score:neuralHoldout.model_brier_score,
+    same_window_logistic_brier_score:neuralSameWindowLogisticHoldout.model_brier_score??null,
+    global_logistic_brier_score:globalHoldout.model_brier_score??null,
+    recent_logistic_brier_score:recentHoldout?.model_brier_score??null,
+    beats_base_rate:neuralHoldout.beat_base_rate===true,
+    beats_same_window_logistic:beatsSameWindowLogistic,
+    beats_global_logistic:beatsGlobalLogistic,
+    beats_recent_logistic:recentFit?beatsRecentLogistic:null,
+    passed:neuralHoldoutReady
+  };
   let neuralSelected=false;
   if(neuralWins){
     selectedModel='NEURAL_GLOBAL';
@@ -674,6 +713,10 @@ export function buildCognitiveLearningProfile(samples = [], {
   const probabilityReady = rankingReady &&
     selectedValidation.evaluated === true && selectedValidation.beat_base_rate === true &&
     holdoutMetrics.evaluated === true && holdoutMetrics.beat_base_rate === true;
+  const neuralProbabilityReady=neuralSelected&&neuralValidation.evaluated===true&&
+    neuralValidation.beat_base_rate===true&&neuralHoldoutReady&&holdoutMetrics===neuralHoldout;
+  const neuralLiveReady=neuralProbabilityReady&&neuralTraining.length>=NEURAL_POLICY.minTrainingSamples&&
+    holdout.length>=100;
   const outcomes = {
     up: training.filter(row => row.outcome === 'UP').length,
     down: training.filter(row => row.outcome === 'DOWN').length,
@@ -711,8 +754,9 @@ export function buildCognitiveLearningProfile(samples = [], {
     validation: selectedValidation,
     holdout: holdoutMetrics,
     neural_network: {
-      status: neuralSelected ? 'SELECTED_ON_CHRONOLOGICAL_VALIDATION' :
-        !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
+      status: !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
+        neuralLiveReady ? 'LIVE_GATE_PASSED_OUT_OF_SAMPLE' :
+        neuralSelected ? 'VALIDATION_SELECTED_BUT_HOLDOUT_COMPARISON_FAILED' :
         neuralValidation.beat_base_rate===true ? 'VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER' : 'VALIDATION_DID_NOT_BEAT_BASE_RATE',
       architecture: neuralFit?.architecture || FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
@@ -722,11 +766,13 @@ export function buildCognitiveLearningProfile(samples = [], {
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       trained: neuralFit!==null, selected: neuralSelected,
-      probability_ready: neuralSelected&&probabilityReady,
+      probability_ready: neuralProbabilityReady,
+      live_eligibility_ready:neuralLiveReady,
       iterations: neuralFit?.iterations??Math.max(20,Math.min(240,Math.trunc(Number(neuralIterations)||NEURAL_POLICY.iterations))),
       validation: neuralValidation,
-      holdout: neuralSelected?holdoutMetrics:null,
-      selection_margin: Math.max(0,Number(neuralSelectionMargin)||0)
+      holdout: neuralHoldout,
+      holdout_comparison:neuralHoldoutComparison,
+      selection_margin: comparisonMargin
     },
     model_selection: {
       selected_model: selectedModel,
