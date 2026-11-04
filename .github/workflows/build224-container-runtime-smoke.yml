@@ -239,10 +239,16 @@ jobs:
             spot_history_coverage:{
               btc_15m_pages:Number(summary?.meta?.btc_15m_historical_pages)||1,
               btc_15m_candles:Number(summary?.meta?.btc_15m_historical_window_candles)||0,
+              btc_15m_backfill_error:String(summary?.meta?.btc_15m_historical_backfill_error||''),
+              btc_benchmark_available:summary?.meta?.btc_benchmark_available===true,
               asset_15m_extended_symbols:Number(summary?.universe?.asset_15m_extended_symbols)||0,
               asset_5m_extended_symbols:Number(summary?.universe?.asset_5m_extended_symbols)||0,
               asset_5m_deep_history_symbols:Number(summary?.universe?.asset_5m_deep_history_symbols)||0,
-              asset_5m_max_history_candles:Number(summary?.universe?.asset_5m_max_history_candles)||0
+              asset_5m_max_history_candles:Number(summary?.universe?.asset_5m_max_history_candles)||0,
+              asset_15m_backfill_failures:Number(summary?.universe?.asset_15m_backfill_failures)||0,
+              asset_5m_backfill_failures:Number(summary?.universe?.asset_5m_backfill_failures)||0,
+              asset_15m_backfill_error_samples:Array.isArray(summary?.universe?.asset_15m_backfill_error_samples)?summary.universe.asset_15m_backfill_error_samples.slice(0,5):[],
+              asset_5m_backfill_error_samples:Array.isArray(summary?.universe?.asset_5m_backfill_error_samples)?summary.universe.asset_5m_backfill_error_samples.slice(0,5):[]
             },
             temporal_network_resolved_samples:Number(temporalNetwork.resolved_samples)||0,
             temporal_network_training_samples:Number(temporalNetwork.training_samples)||0,
