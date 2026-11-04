@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: radarx-build224-paper-preview-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-signed-paper-preview:
@@ -33,6 +33,17 @@ jobs:
         with:
           ref: ${{ github.ref }}
           fetch-depth: 1
+
+      - name: Reject obsolete Build 224 preview commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$GITHUB_REF_NAME"
+          remote_tip="$(git rev-parse "origin/$GITHUB_REF_NAME")"
+          if [ "$remote_tip" != "$GITHUB_SHA" ]; then
+            echo "::error::Refusing to publish an obsolete preview from $GITHUB_SHA; current branch tip is $remote_tip."
+            exit 1
+          fi
 
       - name: Verify exact branch and DHDTech-only Android configuration
         shell: bash
