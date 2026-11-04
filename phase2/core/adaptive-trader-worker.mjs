@@ -529,7 +529,7 @@ recordServerPaperPortfolio(snapshot,now){
     for(const row of historicalRows){
       const id=String(row?.id||''),at=finite(row?.at),resolvedAt=finite(row?.resolved_at),move=finite(row?.return_pct);
       if(!id){historicalRejected.missing_id++;continue;}
-      if(knownIds.has(id)){historicalRejected.duplicate_id++;continue;}
+      const temporalAlreadyKnown=knownIds.has(id);
       if(!['UP','DOWN','FLAT'].includes(row?.outcome)){historicalRejected.invalid_outcome++;continue;}
       if(!row.features||typeof row.features!=='object'){historicalRejected.missing_features++;continue;}
       if(at===null||resolvedAt===null){historicalRejected.invalid_timestamp++;continue;}
@@ -537,9 +537,11 @@ recordServerPaperPortfolio(snapshot,now){
       if(move===null){historicalRejected.invalid_return++;continue;}
       if(resolvedAt>Number(now)+5000){historicalRejected.resolved_in_future++;continue;}
       if(resolvedAt-at<SAMPLE_HORIZON_MS){historicalRejected.horizon_too_short++;continue;}
-      this.state.samples.push({...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
-        training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'});
-      knownIds.add(id);newHistoricalSamples++;
+      if(!temporalAlreadyKnown){
+        this.state.samples.push({...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
+          training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'});
+        knownIds.add(id);newHistoricalSamples++;
+      }else historicalRejected.duplicate_id++;
       const closeReturnPct=finite(row.close_return_pct);
       const v5Outcome=v5CloseOutcome(closeReturnPct);
       if(closeReturnPct!==null&&v5Outcome!==null&&!knownV5Ids.has(id)){
@@ -549,6 +551,7 @@ recordServerPaperPortfolio(snapshot,now){
           target_definition:'LEGACY_4H_CLOSE_RETURN',outcome:v5Outcome,
           return_pct:closeReturnPct,close_return_pct:closeReturnPct,
           close_return_deadband_pct:V5_CLOSE_DIRECTION_DEADBAND_PCT,
+          close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
           resolved_at:resolvedAt,horizon_ms:SAMPLE_HORIZON_MS,
           outcome_source:'HISTORICAL_CLOSED_CANDLE'});
         knownV5Ids.add(id);newHistoricalV5Samples++;
@@ -573,6 +576,7 @@ recordServerPaperPortfolio(snapshot,now){
       sample.outcome=label.outcome;sample.mark_price=markPrice;
       sample.return_pct=Number(label.return_pct);
       sample.close_return_pct=closeReturnPct;
+      sample.close_return_source=closeReturnPct===null?null:'FOUR_HOUR_TERMINAL_CLOSE';
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
       sample.first_passage=label.first_passage||null;
@@ -586,6 +590,7 @@ recordServerPaperPortfolio(snapshot,now){
         v5Sample.resolved_at=resolvedAt;v5Sample.horizon_ms=SAMPLE_HORIZON_MS;
         v5Sample.target_definition='LEGACY_4H_CLOSE_RETURN';
         v5Sample.close_return_deadband_pct=V5_CLOSE_DIRECTION_DEADBAND_PCT;
+        v5Sample.close_return_source='FOUR_HOUR_TERMINAL_CLOSE';
         v5Sample.outcome_source='CLOSED_CANDLE_4H';
         newV5ClosedOutcomes++;
       }

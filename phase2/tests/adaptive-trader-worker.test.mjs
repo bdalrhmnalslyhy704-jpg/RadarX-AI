@@ -474,6 +474,55 @@ test('adaptive trader joins 12-radar outcome memory, records the motive case and
   }
 });
 
+test('worker backfills separate V5 labels for persisted TCN historical rows without duplicating TCN history',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-v5-backfill-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now(),baselineAt=now-6*60*60*1000;
+  const historicalSample={
+    id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:BACKFILLUSDT:'+String(baselineAt),
+    symbol:'BACKFILLUSDT',price:1,at:baselineAt,base_score:70,tier:'EARLY_SETUP',
+    observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
+    target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+    features:{volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.59,close_location:0.72,
+      higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
+      relative_strength_vs_btc_pct:0.8,recent_15m_return_pct:0.4},
+    outcome:'UP',mark_price:1.035,return_pct:3,close_return_pct:0.7,
+    close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
+    resolved_at:baselineAt+4*60*60*1000,horizon_ms:4*60*60*1000,
+    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+  };
+  await store.putAdaptiveTraderState({version:1,enabled:false,scan_count:0,successful_scans:0,
+    samples:[historicalSample],v5_samples:[],price_history:[],missed_movers:[],cognitive_journal:[]});
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
+    universe:{eligible_spot_symbols:1,monitored_spot_symbols:1,analyzed_symbols:0,valid_symbols:0,
+      requested_limit:40,coverage_pct:0,scan_complete:false,scan_offset:0,scan_advance_count:1},
+    candidates:[],latest_prices:[{symbol:'BACKFILLUSDT',price:1.007,quote_volume_24h:4_500_000,change_24h_pct:0.7}],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'},
+    historical_training_samples:[historicalSample]
+  });
+  const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    const status=worker.snapshot();
+    assert.equal(status.learning_capture.new_historical_samples,0);
+    assert.equal(status.learning_capture.new_historical_v5_close_samples,1);
+    assert.equal(status.cognitive_brain.profile.resolved_samples,1);
+    const saved=await store.getAdaptiveTraderState();
+    assert.equal(saved.samples.filter(row=>row.id===historicalSample.id).length,1);
+    assert.equal(saved.v5_samples.filter(row=>row.id===historicalSample.id).length,1);
+    assert.equal(saved.v5_samples[0].outcome,'UP');
+    assert.equal(saved.v5_samples[0].target_definition,'LEGACY_4H_CLOSE_RETURN');
+    assert.equal(saved.v5_samples[0].outcome_source,'HISTORICAL_CLOSED_CANDLE');
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('worker ingests real closed-candle historical outcomes before collecting live samples',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-historical-outcomes-'));
   const store=await new DurableStore({dir}).init();
