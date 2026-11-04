@@ -427,6 +427,48 @@ function makeEarlyFlowWatchCandidate(now){
   };
 }
 
+test('a stalled initial reconciliation times out and releases the worker busy latch',async()=>{
+  const never=new Promise(()=>{});
+  const sentinel=new EarlyMoveSentinel({
+    rest:{request:()=>never},
+    store:{async init(){}},
+    config:{reconcileTimeoutMs:5000,reconcileMs:60000},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
+    scannerFactory:()=>({}),
+    clock:()=>1710000000000,
+    logger:{info(){},warn(){}}
+  });
+  sentinel.running=true;
+  await assert.rejects(sentinel.reconcile(true),/MOVE_RECONCILE_TIMEOUT:EXCHANGE_INFO/);
+  assert.equal(sentinel.health().busy,false);
+  assert.equal(sentinel.health().reconcile_in_flight,false);
+  assert.match(sentinel.health().last_error,/MOVE_RECONCILE_TIMEOUT/);
+  await sentinel.stop();
+});
+
+test('stopping a sentinel invalidates its pending reconciliation generation',async()=>{
+  let release;
+  const pending=new Promise(resolve=>{release=resolve;});
+  const sentinel=new EarlyMoveSentinel({
+    rest:{request:()=>pending},
+    store:{async init(){}},
+    config:{reconcileTimeoutMs:5000,reconcileMs:60000},
+    tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
+    scannerFactory:()=>({}),
+    clock:()=>1710000000000,
+    logger:{info(){},warn(){}}
+  });
+  sentinel.running=true;
+  const work=sentinel.reconcile(true);
+  await new Promise(resolve=>setImmediate(resolve));
+  await sentinel.stop();
+  assert.equal(sentinel.health().busy,false);
+  release({data:{symbols:[]}});
+  await work;
+  assert.equal(sentinel.health().busy,false);
+  assert.equal(sentinel.health().universe,0);
+});
+
 test('qualified early-flow near misses are saved as a separate non-entry watch observation',()=>{
   const now=1710005000000;
   const candidate=makeEarlyFlowWatchCandidate(now);
