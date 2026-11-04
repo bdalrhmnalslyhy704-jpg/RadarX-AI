@@ -513,7 +513,11 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   const cached=await service({limit:20,now:f.now+1000});
   assert.equal(cached.meta.cache_mode,'FRESH_SERVER_CACHE');
   assert.equal(requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='15m').length,2);
-  assert.equal(requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m').length,1);
+  const fastRequests=requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m');
+  assert.equal(fastRequests.length,2);
+  assert.equal(fastRequests[0].query.limit,1000);
+  assert.equal(fastRequests[1].query.endTime,Number(f.klines.data[0][0])-1,
+    'the second Spot 5m request must page strictly before the latest window');
 });
 
 
