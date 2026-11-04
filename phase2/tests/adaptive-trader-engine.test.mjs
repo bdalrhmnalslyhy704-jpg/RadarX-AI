@@ -126,6 +126,10 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.resolved_at-row.at===4*60*60*1000));
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.training_eligible===true));
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
+  assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===8)));
+  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1'));
+  assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
 
   const target=samples[0];
   const baseIndex=klines.data.findIndex(row=>row[6]===target.at);
@@ -139,8 +143,17 @@ test('historical learning examples use only baseline candles and label returns f
         column>=1&&column<=4&&Number.isFinite(Number(value))?Number(value)*scale:value);
     })
   };
+  const revisedFast={
+    ...fastKlines,
+    data:fastKlines.data.map(row=>{
+      if(row[0]<=target.at)return row;
+      const elapsedBars=Math.max(1,Math.floor((row[0]-(target.at+1))/(5*60*1000))+1);
+      const scale=Math.pow(1.003,elapsedBars);
+      return row.map((value,column)=>column>=1&&column<=4?Number(value)*scale:value);
+    })
+  };
   const relabelled=buildAdaptiveTraderHistoricalOutcomeSamples({
-    symbol:'HISTUSDT',klines:revised,fastKlines,btcKlines,now,maxSamples:8
+    symbol:'HISTUSDT',klines:revised,fastKlines:revisedFast,btcKlines,now,maxSamples:8
   }).find(row=>row.id===target.id);
   assert.ok(relabelled);
   assert.equal(relabelled.outcome,'UP');
@@ -166,7 +179,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   const sample={
     id:'LIVE:TESTUSDT:'+String(baselineAt),symbol:'TESTUSDT',
     price:baselinePrice,at:baselineAt,closed_candle_baseline:true,
-    training_eligible:true,outcome:null
+    training_eligible:true,target_definition:'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1',outcome:null
   };
   const outcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
     symbol:'TESTUSDT',klines:changed,pendingSamples:[sample],now
@@ -177,7 +190,8 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
   assert.equal(outcomes[0].resolved_at-baselineAt,4*60*60*1000);
   assert.equal(outcomes[0].outcome,'UP');
-  assert.equal(outcomes[0].outcome_source,'CLOSED_CANDLE_4H');
+  assert.equal(outcomes[0].target_definition,'FIRST_PASSAGE_2PCT_BEFORE_MINUS_2PCT_4H_V1');
+  assert.equal(outcomes[0].outcome_source,'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1');
 
   const wrongBaseline=buildAdaptiveTraderClosedCandleOutcomeLabels({
     symbol:'TESTUSDT',klines:changed,pendingSamples:[{...sample,price:baselinePrice*1.01}],now
