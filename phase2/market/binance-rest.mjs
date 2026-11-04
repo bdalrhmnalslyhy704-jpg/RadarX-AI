@@ -86,6 +86,11 @@ const SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE = 4000;
 // Kline/depth traffic from consuming every discovery slot first.
 const SHARED_DISCOVERY_RESERVED_REQUESTS_PER_MINUTE = 60;
 const SHARED_DISCOVERY_RESERVED_WEIGHT_PER_MINUTE = 600;
+// Preserve enough global headroom for one Pre-Move discovery cycle (exchangeInfo
+// + full-market MINI ticker, with one bounded mirror failover for each request).
+// This is carved out of the existing Binance ceiling; it never raises that ceiling.
+const SHARED_PRE_MOVE_RESERVED_REQUESTS_PER_MINUTE = 4;
+const SHARED_PRE_MOVE_RESERVED_WEIGHT_PER_MINUTE = 200;
 const SHARED_GENERAL_MAX_REQUESTS_PER_MINUTE =
   SHARED_MAX_REQUESTS_PER_MINUTE-SHARED_DISCOVERY_RESERVED_REQUESTS_PER_MINUTE;
 const SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE =
@@ -161,15 +166,18 @@ function isMarketDiscoveryRequest(path,query={}) {
 }
 
 // Pure policy helper for deterministic coverage of the shared Binance budget.
-export function calculateSharedBudgetWait(path,query={},usedAt=[],now=Date.now()) {
+export function calculateSharedBudgetWait(path,query={},usedAt=[],now=Date.now(),requestClass='GENERAL') {
   const active=(Array.isArray(usedAt)?usedAt:[])
     .filter(item=>Number.isFinite(Number(item?.at))&&Number(item.at)>now-60000)
     .sort((a,b)=>Number(a.at)-Number(b.at));
   const discovery=isMarketDiscoveryRequest(path,query);
+  const preMoveDiscovery=discovery&&String(requestClass||'').toUpperCase()==='PRE_MOVE';
   const general=active.filter(item=>item?.discovery!==true);
+  const nonPreMove=active.filter(item=>item?.pre_move_discovery!==true);
   const weight=estimateBinanceRequestWeight(path,query);
   const totalWeight=active.reduce((sum,item)=>sum+(Number(item?.weight)||0),0);
   const generalWeight=general.reduce((sum,item)=>sum+(Number(item?.weight)||0),0);
+  const nonPreMoveWeight=nonPreMove.reduce((sum,item)=>sum+(Number(item?.weight)||0),0);
   const totalRequestWait=active.length>=SHARED_MAX_REQUESTS_PER_MINUTE
     ?waitUntilCountMs(active,now,SHARED_MAX_REQUESTS_PER_MINUTE):0;
   const generalRequestWait=!discovery&&general.length>=SHARED_GENERAL_MAX_REQUESTS_PER_MINUTE
@@ -178,9 +186,18 @@ export function calculateSharedBudgetWait(path,query={},usedAt=[],now=Date.now()
     ?waitUntilMs(active,now,weight,SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE):0;
   const generalWeightWait=!discovery&&generalWeight+weight>SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE
     ?waitUntilMs(general,now,weight,SHARED_GENERAL_MAX_REQUEST_WEIGHT_PER_MINUTE):0;
-  const requestWaitMs=Math.max(totalRequestWait,generalRequestWait);
-  const weightWaitMs=Math.max(totalWeightWait,generalWeightWait);
-  return {discovery,requestWaitMs,weightWaitMs,waitMs:Math.max(requestWaitMs,weightWaitMs)};
+  // Non-Pre-Move clients may use the full existing budget except this small
+  // discovery reserve. A Pre-Move discovery request can use that reserve, but
+  // remains subject to the same absolute 600-request / 4,000-weight ceilings.
+  const protectedRequestLimit=SHARED_MAX_REQUESTS_PER_MINUTE-SHARED_PRE_MOVE_RESERVED_REQUESTS_PER_MINUTE;
+  const protectedWeightLimit=SHARED_MAX_REQUEST_WEIGHT_PER_MINUTE-SHARED_PRE_MOVE_RESERVED_WEIGHT_PER_MINUTE;
+  const preMoveRequestReserveWait=!preMoveDiscovery&&nonPreMove.length>=protectedRequestLimit
+    ?waitUntilCountMs(nonPreMove,now,protectedRequestLimit):0;
+  const preMoveWeightReserveWait=!preMoveDiscovery&&nonPreMoveWeight+weight>protectedWeightLimit
+    ?waitUntilMs(nonPreMove,now,weight,protectedWeightLimit):0;
+  const requestWaitMs=Math.max(totalRequestWait,generalRequestWait,preMoveRequestReserveWait);
+  const weightWaitMs=Math.max(totalWeightWait,generalWeightWait,preMoveWeightReserveWait);
+  return {discovery,preMoveDiscovery,requestWaitMs,weightWaitMs,waitMs:Math.max(requestWaitMs,weightWaitMs)};
 }
 
 function scanDeadlineFailure(onDeadline) {
@@ -255,13 +272,14 @@ async function waitSharedBudget(path, query = {}, controls = {}) {
         waitMs = cooldown;
       } else {
         SHARED.usedAt = SHARED.usedAt.filter(item => item.at > now - 60000);
-        const budget=calculateSharedBudgetWait(path,query,SHARED.usedAt,now);
+        const budget=calculateSharedBudgetWait(path,query,SHARED.usedAt,now,controls.requestClass);
         const spacingWait = Math.max(0, SHARED.lastRequestAt + SHARED_MIN_INTERVAL_MS - now);
         waitMs = Math.max(budget.waitMs, spacingWait);
         if (waitMs === 0) {
           reservedAt = Date.now();
           SHARED.lastRequestAt = reservedAt;
-          SHARED.usedAt.push({ at: reservedAt, weight, discovery:budget.discovery });
+          SHARED.usedAt.push({ at: reservedAt, weight, discovery:budget.discovery,
+            pre_move_discovery:budget.preMoveDiscovery });
         }
       }
     } finally {
@@ -389,8 +407,9 @@ function annotateClientSuccess(client, result, sourceIndex = null) {
 }
 
 export class RestClient {
-  constructor({baseUrls,fetchImpl=globalThis.fetch,timeoutMs=9000,minIntervalMs=100,maxRequestsPerMinute=240}) {
+  constructor({baseUrls,fetchImpl=globalThis.fetch,timeoutMs=9000,minIntervalMs=100,maxRequestsPerMinute=240,requestClass='GENERAL'}) {
     this.baseUrls=[...baseUrls]; this.fetchImpl=fetchImpl;
+    this.requestClass=String(requestClass||'GENERAL').trim().toUpperCase()==='PRE_MOVE'?'PRE_MOVE':'GENERAL';
     // A deployment override must not turn one public REST request into a 60s+
     // blocking wait. Bound each host attempt so the scanner can fail over to the
     // next official Binance Spot endpoint within its absolute scan deadline.
@@ -413,7 +432,7 @@ export class RestClient {
     return ()=>SHARED.klineObservers.delete(observer);
   }
   health(){return {
-    state:this.state,last_success_at:this.lastSuccessAt,last_error:this.lastError,
+    state:this.state,request_class:this.requestClass,last_success_at:this.lastSuccessAt,last_error:this.lastError,
     last_request_path:this.lastRequestPath,last_request_url:this.lastRequestUrl,
     last_request_phase:this.lastRequestPhase,last_request_http_status:this.lastRequestHttpStatus,
     last_request_started_at:this.lastRequestStartedAt,last_request_duration_ms:this.lastRequestDurationMs,
@@ -432,7 +451,8 @@ export class RestClient {
     const waitControls={
       deadlineAtMs:controls.deadlineAtMs??this.requestDeadlineAtMs,
       signal:controls.signal??this.requestAbortSignal,
-      onDeadline:controls.onDeadline
+      onDeadline:controls.onDeadline,
+      requestClass:this.requestClass
     };
     const cooldownUntil=Math.max(this.rateLimitedUntil||0,SHARED.rateLimitedUntil||0);
     const cooldownMs=cooldownUntil-Date.now();

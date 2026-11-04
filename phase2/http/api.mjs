@@ -755,7 +755,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         // scan SLA over budget; the next allowlisted Spot source remains available.
         timeoutMs: Math.min(3500, Number(marketRadarRestClient.timeoutMs) || 3500),
         minIntervalMs: Number(marketRadarRestClient.minIntervalMs) || 100,
-        maxRequestsPerMinute: Math.max(1, Number(marketRadarRestClient.maxRequestsPerMinute) || 240)
+        maxRequestsPerMinute: Math.max(1, Number(marketRadarRestClient.maxRequestsPerMinute) || 240),
+        requestClass:'PRE_MOVE'
       })
     : marketRadarRestClient;
   // Keep Pre-Move rotation state off the shared dedup.json write queue. The
@@ -772,7 +773,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
   const preMoveRadarScanner = preMoveRestClient ? new MarketUniverseScanner({
     rest: preMoveRestClient,
     rotationStateStore: preMoveRotationStateStore,
-    config: config.marketRadar ?? {}
+    // The RestClient already fails over the two allowlisted public mirrors.
+    // Disable a second whole-discovery sweep so the reserved Pre-Move budget
+    // stays bounded to one exchangeInfo + one ticker request with mirror failover.
+    config: {...(config.marketRadar ?? {}),retryAttempts:0}
   }) : null;
   const marketRadarResponseCache=new Map();
   const marketRadarRefreshFlights=new Map();

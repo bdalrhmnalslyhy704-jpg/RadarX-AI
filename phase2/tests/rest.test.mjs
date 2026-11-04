@@ -71,6 +71,9 @@ test('TEST_FIXTURE: each REST client keeps its independent conservative request 
   const client=new RestClient({baseUrls:['https://rest-default-budget.test'],fetchImpl:async()=>({status:200,ok:true,headers:new Map(),json:async()=>({})})});
   assert.equal(client.maxRequestsPerMinute,240);
   assert.equal(CONFIG.rest.maxRequestsPerMinute,240);
+  const preMove=new RestClient({baseUrls:['https://rest-pre-move-class.test'],requestClass:'PRE_MOVE'});
+  assert.equal(preMove.health().request_class,'PRE_MOVE');
+  assert.equal(client.health().request_class,'GENERAL');
 });
 
 test('TEST_FIXTURE: REST weight estimator is conservative for shared market-data endpoints',()=>{
@@ -113,6 +116,39 @@ test('TEST_FIXTURE: discovery reserve cannot exceed Binance global request count
   const entries=Array.from({length:600},(_,i)=>({at:now-1000+i,weight:1,discovery:i>=540}));
   assert.ok(calculateSharedBudgetWait('/api/v3/exchangeInfo',{},entries,now).waitMs>0,
     'priority discovery remains under the overall 600 requests/minute ceiling');
+});
+
+
+test('TEST_FIXTURE: Pre-Move discovery has a protected slot inside the existing global Binance ceiling',()=>{
+  const now=10_000_000;
+  const crowdedDiscovery=Array.from({length:596},(_,i)=>({at:now-1000+i,weight:1,discovery:true}));
+  const ordinary=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},crowdedDiscovery,now);
+  const preMove=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},crowdedDiscovery,now,'PRE_MOVE');
+  assert.ok(ordinary.waitMs>0,'ordinary discovery cannot consume the Pre-Move request reserve');
+  assert.equal(preMove.preMoveDiscovery,true);
+  assert.equal(preMove.waitMs,0,'Pre-Move can use its protected discovery slot');
+
+  const weightCrowded=Array.from({length:150},(_,i)=>({at:now-1000+i,weight:25,discovery:true}));
+  const ordinaryWeight=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},weightCrowded,now);
+  const preMoveWeight=calculateSharedBudgetWait('/api/v3/ticker/24hr',{},weightCrowded,now,'PRE_MOVE');
+  assert.ok(ordinaryWeight.waitMs>0,'ordinary discovery cannot consume the Pre-Move weight reserve');
+  assert.equal(preMoveWeight.waitMs,0,'Pre-Move can use reserved weight without breaching 4,000');
+
+  const globallyFull=Array.from({length:600},(_,i)=>({at:now-1000+i,weight:1,discovery:true}));
+  assert.ok(calculateSharedBudgetWait('/api/v3/ticker/24hr',{},globallyFull,now,'PRE_MOVE').waitMs>0,
+    'Pre-Move remains bound by the absolute global request ceiling');
+  const globalWeightFull=[...Array.from({length:100},(_,i)=>({at:now-1000+i,weight:39,discovery:true})),
+    {at:now-10,weight:100,discovery:true}];
+  assert.ok(calculateSharedBudgetWait('/api/v3/ticker/24hr',{},globalWeightFull,now,'PRE_MOVE').waitMs>0,
+    'Pre-Move remains bound by the absolute global weight ceiling');
+});
+
+test('TEST_FIXTURE: only full-market Pre-Move discovery requests receive the protected class',()=>{
+  const now=10_000_000;
+  const crowdedDiscovery=Array.from({length:596},(_,i)=>({at:now-1000+i,weight:1,discovery:true}));
+  const oneSymbol=calculateSharedBudgetWait('/api/v3/ticker/24hr',{symbol:'BTCUSDT'},crowdedDiscovery,now,'PRE_MOVE');
+  assert.equal(oneSymbol.preMoveDiscovery,false);
+  assert.ok(oneSymbol.waitMs>0,'symbol-scoped requests cannot use the Pre-Move discovery reserve');
 });
 
 test('TEST_FIXTURE: crowded shared request budget defers long waits instead of pinning scans',()=>{
