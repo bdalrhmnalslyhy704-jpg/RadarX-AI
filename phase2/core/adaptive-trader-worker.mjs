@@ -180,7 +180,7 @@ export class AdaptiveTraderWorker{
         Number.isFinite(Number(sample.at))&&scanStartedAt-Number(sample.at)>=SAMPLE_HORIZON_MS&&
         scanStartedAt-Number(sample.at)<=48*60*60*1000
       ).map(sample=>({id:sample.id,symbol:sample.symbol,price:sample.price,at:sample.at,
-        closed_candle_baseline:true,training_eligible:true}));
+        closed_candle_baseline:true,training_eligible:true,target_definition:sample.target_definition}));
       this.activeScanStage='MARKET_SNAPSHOT';
       const snapshot=await withStageTimeout(
         this.snapshotProvider({limit:scanLimit,now:scanStartedAt,offset:this.state.scan_cursor,pendingSamples}),
