@@ -17,7 +17,8 @@ const NEURAL_POLICY = Object.freeze({
   iterations: 100,
   learningRate: 0.012,
   l2: 0.04,
-  selectionMargin: 0.003
+  selectionMargin: 0.003,
+  ensembleSeeds: Object.freeze([11, 29, 47])
 });
 const FEATURE_NAMES = Object.freeze([
   'volume_expansion',
@@ -206,7 +207,8 @@ function fitNeuralNetworkModel(training, {
   secondHiddenUnits = NEURAL_POLICY.secondHiddenUnits,
   iterations = NEURAL_POLICY.iterations,
   learningRate = NEURAL_POLICY.learningRate,
-  l2 = NEURAL_POLICY.l2
+  l2 = NEURAL_POLICY.l2,
+  seed = 1
 } = {}) {
   const rows=(Array.isArray(training)?training:[]).map(row=>({
     vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
@@ -223,16 +225,20 @@ function fitNeuralNetworkModel(training, {
   const rate=clamp(Number(learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
   const regularization=clamp(Number(l2)||NEURAL_POLICY.l2,0.001,0.5);
   const baseRate=betaRate(rows.reduce((sum,row)=>sum+row.target,0),rows.length);
+  const seedValue=Math.max(1,Math.min(997,Math.trunc(Number(seed)||1)));
+  const seedOffset=seedValue*0.6180339887498949;
 
-  // Deterministic symmetry-breaking initialization: reproducible fits and tests.
+  // Each member gets a distinct deterministic initialization. This reduces
+  // sensitivity to one lucky or unlucky weight seed without using validation
+  // or holdout labels to train any member.
   const inputWeights=Array.from({length:inputSize},(_,i)=>
-    Array.from({length:units1},(_,j)=>0.07*Math.sin((i+1)*12.9898+(j+1)*78.233)));
-  const hiddenBias1=Array.from({length:units1},(_,j)=>0.008*Math.cos((j+1)*9.173));
+    Array.from({length:units1},(_,j)=>0.07*Math.sin((i+1)*12.9898+(j+1)*78.233+seedOffset)));
+  const hiddenBias1=Array.from({length:units1},(_,j)=>0.008*Math.cos((j+1)*9.173+seedOffset));
   const hiddenWeights=Array.from({length:units1},(_,i)=>
-    Array.from({length:units2},(_,j)=>0.07*Math.cos((i+1)*5.173+(j+1)*3.117)));
-  const hiddenBias2=Array.from({length:units2},(_,j)=>0.008*Math.sin((j+1)*7.913));
-  const outputWeights=Array.from({length:units2},(_,j)=>0.035*Math.sin((j+1)*4.121));
-  const skipWeights=Array.from({length:inputSize},(_,i)=>0.015*Math.cos((i+1)*2.417));
+    Array.from({length:units2},(_,j)=>0.07*Math.cos((i+1)*5.173+(j+1)*3.117+seedOffset)));
+  const hiddenBias2=Array.from({length:units2},(_,j)=>0.008*Math.sin((j+1)*7.913+seedOffset));
+  const outputWeights=Array.from({length:units2},(_,j)=>0.035*Math.sin((j+1)*4.121+seedOffset));
+  const skipWeights=Array.from({length:inputSize},(_,i)=>0.015*Math.cos((i+1)*2.417+seedOffset));
   let outputBias=logit(baseRate);
 
   const zerosLike=values=>Array.isArray(values)
@@ -341,7 +347,35 @@ function fitNeuralNetworkModel(training, {
   };
 }
 
+function fitNeuralEnsemble(training, options = {}) {
+  const seeds=NEURAL_POLICY.ensembleSeeds;
+  const members=seeds.map(seed=>fitNeuralNetworkModel(training,{...options,seed}));
+  if(members.length!==seeds.length||members.some(member=>!member))return null;
+  return {
+    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+    architecture:members[0].architecture,
+    input_size:FEATURE_NAMES.length,
+    hidden_units:NEURAL_POLICY.hiddenUnits,
+    second_hidden_units:NEURAL_POLICY.secondHiddenUnits,
+    output_size:1,
+    members,
+    ensemble_members:members.length,
+    seeds:[...seeds],
+    base_rate:mean(members.map(member=>member.base_rate)),
+    feature_names:[...FEATURE_NAMES],
+    training_samples:members[0].training_samples,
+    iterations:members[0].iterations,
+    l2:members[0].l2
+  };
+}
+
 function predictFromFit(features, fit) {
+  if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
+    if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
+    const predictions=fit.members.map(member=>predictFromFit(features,member));
+    if(predictions.some(value=>!Number.isFinite(value)))return null;
+    return clamp(mean(predictions),0.02,0.98);
+  }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
     if(!Array.isArray(fit.input_weights)||fit.input_weights.length!==FEATURE_NAMES.length||
        !Array.isArray(fit.hidden_bias_1)||!Array.isArray(fit.hidden_weights)||
@@ -548,7 +582,9 @@ export function buildCognitiveLearningProfile(samples = [], {
         input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
         second_hidden_neurons:NEURAL_POLICY.secondHiddenUnits,output_neurons: 1,
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
-        probability_ready: false, iterations: neuralIterations
+        probability_ready: false, iterations: neuralIterations,
+        model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+        ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
       feature_names: [...FEATURE_NAMES],
       identifier_features_used: false,
@@ -607,7 +643,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
   const neuralTraining=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
   const neuralFit=neuralTraining.length>=neuralMinimum
-    ?fitNeuralNetworkModel(neuralTraining,{
+    ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2
@@ -682,6 +718,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,training_samples: neuralTraining.length,
+      model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+      ensemble_members:neuralFit?.members?.length||0,
+      ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       trained: neuralFit!==null, selected: neuralSelected,
       probability_ready: neuralSelected&&probabilityReady,
       iterations: neuralFit?.iterations??Math.max(20,Math.min(240,Math.trunc(Number(neuralIterations)||NEURAL_POLICY.iterations))),

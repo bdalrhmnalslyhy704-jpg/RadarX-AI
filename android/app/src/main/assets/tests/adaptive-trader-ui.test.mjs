@@ -145,6 +145,8 @@ test('cognitive dashboard exposes the V5 residual neural network and selected mo
   assert.match(html,/الشبكة العصبية العميقة V5/);
   assert.match(html,/neuralNetwork\.architecture/);
   assert.match(html,/neuralNetwork\.samples_required/);
+  assert.match(html,/neuralNetwork\.ensemble_members/);
+  assert.match(html,/neuralNetwork\.ensemble_members_required/);
   assert.match(html,/neuralValidationText/);
   assert.match(html,/neuralHoldoutText/);
   assert.match(html,/modelSelection\.selected_model==='NEURAL_GLOBAL'/);

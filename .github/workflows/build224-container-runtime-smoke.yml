@@ -182,6 +182,8 @@ jobs:
             Number(neuralNetwork.second_hidden_neurons)===6&&
             Number(neuralNetwork.output_neurons)===1&&
             Number(neuralNetwork.samples_required)>=240&&
+            Number(neuralNetwork.ensemble_members_required)===3&&
+            (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3)&&
             ['WAITING_FOR_MATURED_TRAINING_SAMPLES','WAITING_FOR_CHRONOLOGICAL_SPLIT',
              'VALIDATION_DID_NOT_BEAT_BASE_RATE','VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER',
              'SELECTED_ON_CHRONOLOGICAL_VALIDATION'].includes(String(neuralNetwork.status));

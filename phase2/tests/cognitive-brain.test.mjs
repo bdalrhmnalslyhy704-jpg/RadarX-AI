@@ -181,6 +181,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.identifier_features_used, false);
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
+    assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+    assert.equal(profile.neural_network.ensemble_members, 3);
+    assert.equal(profile.neural_network.ensemble_members_required, 3);
     assert.equal(profile.neural_network.input_neurons, 18);
     assert.equal(profile.neural_network.hidden_neurons, 10);
     assert.equal(profile.neural_network.second_hidden_neurons, 6);
@@ -348,6 +351,8 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.equal(profile.probability_ready, false,
     'a model that memorizes alternating pair identities must not pass evidence-only validation');
   assert.equal(profile.neural_network.trained, true);
+  assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+  assert.equal(profile.neural_network.ensemble_members, 3);
   assert.equal(profile.neural_network.selected, false);
   assert.equal(profile.neural_network.probability_ready, false);
   assert.ok(['NO_VALIDATED_MODEL', 'GLOBAL_HISTORY_RETAINED'].includes(profile.regime_adaptation.status));

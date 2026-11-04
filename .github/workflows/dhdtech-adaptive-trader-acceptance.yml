@@ -104,7 +104,9 @@ jobs:
                   Number(neuralNetwork.hidden_neurons)===10&&
                   Number(neuralNetwork.second_hidden_neurons)===6&&
                   Number(neuralNetwork.output_neurons)===1&&
-                  Number(neuralNetwork.samples_required)>=240
+                  Number(neuralNetwork.samples_required)>=240&&
+                  Number(neuralNetwork.ensemble_members_required)===3&&
+                  (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3)
                 );
                 const cognitiveSplitReady=Boolean(
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
