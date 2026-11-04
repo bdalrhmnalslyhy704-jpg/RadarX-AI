@@ -375,7 +375,6 @@ export class AdaptiveTraderWorker{
       outcome_learning_adjustment:finite(candidate?.outcome_learning_adjustment),
       outcome_learning_horizons:Array.isArray(candidate?.outcome_learning_horizons)?candidate.outcome_learning_horizons.slice(0,2):[],
       features:candidate?.features&&typeof candidate.features==='object'?{...candidate.features}:{},
-      temporal_sequence:Array.isArray(candidate?.temporal_sequence)?candidate.temporal_sequence:null,
       data_valid:candidate?.data_valid===true,data_stale:candidate?.data_stale===true,
       closed_candles_only:candidate?.closed_candles_only===true,
       entry_eligible:false,paper_trading:true,real_order_execution:false,
@@ -690,7 +689,10 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   buildSummary(snapshot){
-    const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>({...row,trade_decision:buildAdaptiveTraderRecommendation(row)}));
+    const candidates=(Array.isArray(snapshot.candidates)?snapshot.candidates:[]).map(row=>{
+      const {temporal_sequence,...visible}=row||{};
+      return {...visible,trade_decision:buildAdaptiveTraderRecommendation(row)};
+    });
     const latestPrices=(Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[]).map(row=>({...row}));
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
