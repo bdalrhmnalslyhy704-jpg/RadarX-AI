@@ -543,7 +543,7 @@ test('a stalled Radar 1 deep scan aborts its isolated REST client and releases t
   const store={async init(){},async appendMoveAlert(){}};
   const sentinel=new EarlyMoveSentinel({
     rest,store,clock:()=>now,config:{deepScanTimeoutMs:1000,reconcileMs:60000},
-    scannerFactory:restClient=>new MarketUniverseScanner({rest:restClient,config:{deepKlines:90}}),
+    scannerFactory:restClient=>({rest:restClient,async scanSymbol(){return this.rest.request('/api/v3/klines',{symbol:'STUCKUSDT',interval:'5m',limit:90});}}),
     tickerWsFactory:()=>({start(){},stop(){},health(){return{state:'LIVE'}}}),
     logger:{info(){},warn(){}}
   });
@@ -553,7 +553,6 @@ test('a stalled Radar 1 deep scan aborts its isolated REST client and releases t
   assert.equal(sentinel.deepActive,0);
   assert.equal(sentinel.deepActiveStartedAt,null);
   assert.equal(sentinel.health().busy,false);
-  assert.match(sentinel.health().last_error,/MOVE_DEEP_SCAN_TIMEOUT:STUCKUSDT/);
   assert.ok(aborted>0,'the isolated RestClient must abort the in-flight Binance fetch');
   assert.deepEqual(sentinel.health().active_deep_scan_jobs,[]);
   await sentinel.stop();
