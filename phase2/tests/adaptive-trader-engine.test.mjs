@@ -115,7 +115,7 @@ test('historical learning examples use only baseline candles and label returns f
   const now=Date.now();
   const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
-  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
     symbol:'HISTUSDT',klines,fastKlines,btcKlines,now,maxSamples:8
   });
@@ -564,7 +564,7 @@ test('snapshot service preserves non-enumerable historical training rows on fres
   const now=Date.now();
   const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
-  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const last=klines.data[klines.data.length-1];
   const ticker={
     symbol:'TESTUSDT',lastPrice:String(last[4]),quoteVolume:'5000000',
@@ -939,7 +939,7 @@ test('historical sample phases give the cognitive learner enough distinct time b
   const now=Date.now();
   const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
-  const btcKlines=longClosedCandleFixture(now,240,15*60*1000,90_000,0.00002);
+  const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const rows=[];
   for(let i=0;i<48;i++){
     const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
