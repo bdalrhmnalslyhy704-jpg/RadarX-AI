@@ -17,8 +17,8 @@ function sequenceFor(up,index=0){
   return Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,step)=>{
     const pulse=Math.sin((step+index%7)*0.31)*0.04;
     return up
-      ?[0.9+pulse,1.2,0.8,1.1,0.7,0.5,-0.2,0.9,1.25,1.1,0.8,0.7,0.4,0.5,0.7,0.2,1.1,0.9]
-      :[-0.9-pulse,-1.1,-0.8,-1.0,-0.7,-0.5,0.2,-0.9,-1.0,-0.8,-0.9,-0.7,-0.4,0.5,-0.8,0.9,-0.7,-0.6];
+      ?[0.9+pulse,1.2,0.8,1.1,0.7,0.5,-0.2,0.9,1.25,1.1,0.8,0.7,0.4,0.5,0.7,0.2,1.1,0.9,1.2,1.4,0.6,0.3]
+      :[-0.9-pulse,-1.1,-0.8,-1.0,-0.7,-0.5,0.2,-0.9,-1.0,-0.8,-0.9,-0.7,-0.4,0.5,-0.8,0.9,-0.7,-0.6,-1.1,-1.3,0.7,0.9];
   });
 }
 function sample(group,index,{up=null}={}){
@@ -61,10 +61,10 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.resolved_samples,16*24);
   assert.equal(profile.trained,true);
-  assert.equal(profile.architecture,'TCN_24x18_DILATED_RESIDUAL_MARKET_REGIME_ENSEMBLE_V3');
+  assert.equal(profile.architecture,'TCN_24x22_DILATED_RESIDUAL_MULTI_HORIZON_REGIME_ENSEMBLE_V4');
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.sequence_steps,24);
-  assert.equal(profile.sequence_channels,18);
+  assert.equal(profile.sequence_channels,22);
   assert.ok(profile.training_samples>=240);
   assert.ok(profile.validation_samples>=40);
   assert.ok(profile.holdout_samples>=50);
