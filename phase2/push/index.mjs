@@ -503,8 +503,9 @@ export class PushManager{
       const participationSurgeTier=alert?.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR';
       const strongBuyerTier=alert?.watch_notification_tier==='STRONG_BUYER_ABSORPTION_MONITOR';
       const relativeStrengthBuyerTier=alert?.watch_notification_tier==='RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR';
+      const tickerActivityTier=alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR';
       if(dailyMove===null||Math.abs(dailyMove)>=12||score===null||
-         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:relativeStrengthBuyerTier?68:68)||
+         score<(participationSurgeTier||strongBuyerTier?58:accumulationPrepTier?66:compressedBuyerTier?70:tickerActivityTier?62:relativeStrengthBuyerTier?68:68)||
          session===null||hour===null)
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       // This exception is for unusually strong, real early flow while price is
@@ -599,10 +600,10 @@ export class PushManager{
         now-tickerActivityObservedAt>=-5000&&now-tickerActivityObservedAt<=4*60*1000&&
         tickerActivityBaselineAge!==null&&tickerActivityBaselineAge>=0&&tickerActivityBaselineAge<=5*60*1000&&
         quoteVolume24h!==null&&quoteVolume24h>=750000&&dailyMove!==null&&dailyMove>=-5&&dailyMove<=4.5&&
-        score!==null&&score>=68&&session!==null&&session>=-1.25&&session<=4.5&&
+        score!==null&&score>=62&&session!==null&&session>=-1.25&&session<=4.5&&
         hour!==null&&hour>=-0.75&&hour<=2.5&&
         dataQuality!==null&&dataQuality>=85&&liquidityQuality!==null&&liquidityQuality>=75&&
-        structure!==null&&structure>=50&&tickerActivityFlowChecks>=2;
+        structure!==null&&structure>=45&&tickerActivityFlowChecks>=2;
       const participationSurgeChecks=[
         volumeRatio!==null&&volumeRatio>=1.25,
         tradeRatio!==null&&tradeRatio>=1.20,
@@ -690,9 +691,9 @@ export class PushManager{
            accumulationPrepMonitor?1.5:compressedBuyerAbsorptionMonitor?2.5:
            highActivityStructurePending?3.5:(earlyFlowMonitor||tickerActivityMonitor)?2.5:4.5))
         return rejected('PRE_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
-      const independentEvidenceFloor=(tickerActivityMonitor||compressedBuyerAbsorptionMonitor||
-        participationSurgeMonitor||strongBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
-      const minimumMonitorStructure=relativeStrengthBuyerAbsorptionMonitor?60:
+      const independentEvidenceFloor=tickerActivityMonitor?2:
+        (compressedBuyerAbsorptionMonitor||participationSurgeMonitor||strongBuyerAbsorptionMonitor)?3:preMoveMonitorCorridor?4:3;
+      const minimumMonitorStructure=tickerActivityMonitor?45:relativeStrengthBuyerAbsorptionMonitor?60:
         (participationSurgeMonitor||strongBuyerAbsorptionMonitor)?55:
         accumulationPrepMonitor?60:preMoveMonitorCorridor?50:60;
       if(structure===null||(structure<minimumMonitorStructure)||
