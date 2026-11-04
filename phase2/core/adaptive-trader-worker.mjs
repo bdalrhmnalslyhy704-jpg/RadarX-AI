@@ -505,8 +505,10 @@ recordServerPaperPortfolio(snapshot,now){
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
          label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
-         !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null)continue;
-      sample.outcome=label.outcome;sample.mark_price=markPrice;sample.return_pct=move;
+         !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
+      sample.outcome=label.outcome;sample.mark_price=markPrice;
+      sample.return_pct=Number(label.return_pct);
+      sample.close_return_pct=move;
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
       sample.first_passage=label.first_passage||null;
