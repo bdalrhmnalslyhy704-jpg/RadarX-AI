@@ -73,6 +73,19 @@ test('Pre-Move startup delay is independent from the recurring scan interval',as
     assert.equal(started.worker.scan_attempts,0,
       'the initial timer must not be replaced by an early recurring interval tick');
     assert.equal(started.worker.successful_scans,0);
+    assert.deepEqual(started.scanner_contract.ticker_activity_watch_contract,{
+      version:'TICKER_ACTIVITY_MONITOR_V2',scanner_activity_score_floor:12,
+      watch_activity_score_floor:10,volume_acceleration_floor:1.35,
+      trade_acceleration_floor:1.30,min_score:62,min_structure_score:45,
+      min_independent_flow_checks:2,max_activity_age_ms:240000,
+      max_baseline_age_ms:300000,entry_eligible:false
+    });
+    const deploymentResponse=await fetch('http://127.0.0.1:'+server.address().port+'/api/deployment-info');
+    assert.equal(deploymentResponse.status,200);
+    const deployment=await deploymentResponse.json();
+    assert.deepEqual(deployment.pre_move_scanner_contract.ticker_activity_watch_contract,
+      started.scanner_contract.ticker_activity_watch_contract,
+      'deployment-info must expose the exact watch-tier code version so stale containers cannot pass live acceptance');
   }finally{
     server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
