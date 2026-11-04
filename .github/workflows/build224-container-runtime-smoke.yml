@@ -186,7 +186,7 @@ jobs:
             Number(neuralNetwork.ensemble_members_required)===3&&
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
-            temporalNetwork.architecture==='TCN_24x22_DILATED_RESIDUAL_MULTI_HORIZON_REGIME_ENSEMBLE_V4'&&
+            temporalNetwork.architecture==='TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
             Number(temporalNetwork.sequence_steps)===24&&
             Number(temporalNetwork.sequence_channels)===22&&
