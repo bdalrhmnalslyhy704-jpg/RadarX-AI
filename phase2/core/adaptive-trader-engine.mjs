@@ -553,7 +553,9 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
-      mark_price:future.close,return_pct:Number(move.toFixed(3)),
+      mark_price:future.close,
+      return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),
+      close_return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime
     });
   }
@@ -588,7 +590,8 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
       baseline_price:baseline.close,mark_price:future.close,
       outcome:passage.outcome,first_passage:passage,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
-      return_pct:Number(move.toFixed(3)),
+      return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),
+      close_return_pct:Number(move.toFixed(3)),
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'});
   }
