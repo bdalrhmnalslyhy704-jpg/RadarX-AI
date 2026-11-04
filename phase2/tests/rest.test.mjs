@@ -191,7 +191,9 @@ test('TEST_FIXTURE: a stalled shared market-data response cannot block another r
       }
     });
     const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
-    void stale.catch(()=>{});
+    const staleSettled=stale.then(()=>null,error=>error);
+    const staleError=await staleSettled;
+    assert.equal(staleError?.name,'RestTimeoutError','the original stalled owner must finish with a bounded timeout');
     for(let attempt=0;attempt<200&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
     assert.equal(firstStarted,true,'first radar must own the initial in-flight request');
     const recovered=await second.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
@@ -225,7 +227,9 @@ test('TEST_FIXTURE: scan abort while joining a shared request removes the wait i
       }
     });
     const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDABORTUSDT'});
-    void stale.catch(()=>{});
+    const staleSettled=stale.then(()=>null,error=>error);
+    const staleError=await staleSettled;
+    assert.equal(staleError?.name,'RestTimeoutError','the original stalled owner must eventually release its bounded request');
     for(let attempt=0;attempt<200&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
     assert.equal(firstStarted,true,'first radar must own the shared in-flight request');
     const controller=new AbortController();
