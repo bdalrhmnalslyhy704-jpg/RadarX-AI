@@ -156,7 +156,7 @@ jobs:
           worker_ok=0
           for attempt in $(seq 1 50); do
             curl --connect-timeout 3 --max-time 8 --silent --show-error "$BASE/api/adaptive-trader/status" -o "$RUNNER_TEMP/adaptive-status.json" || true
-            if node --input-type=module -e "import fs from 'node:fs';const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));process.exit(Number(x.successful_scans)>0&&!!x.last_scan_at&&x.last_error===null&&Number(x.memory?.history_rows)>0&&x.real_order_execution===false&&x.paper_trading===true?0:1)" 2>/dev/null; then
+            if node --input-type=module -e "import fs from 'node:fs';const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));process.exit(Number(x.successful_scans)>0&&x.in_flight!==true&&!!x.last_scan_at&&!!x.last_summary?.as_of&&x.last_error===null&&Number(x.memory?.history_rows)>0&&x.real_order_execution===false&&x.paper_trading===true?0:1)" 2>/dev/null; then
               worker_ok=1
               break
             fi

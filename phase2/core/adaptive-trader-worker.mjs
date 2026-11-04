@@ -246,7 +246,6 @@ export class AdaptiveTraderWorker{
       this.resolveSamples(snapshot,now);
       this.collectPriceHistory(snapshot,now);
       this.collectMissedMovers(snapshot,now);
-      this.state.successful_scans=(Number(this.state.successful_scans)||0)+1;
       this.state.last_scan_at=now;
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
@@ -326,6 +325,10 @@ export class AdaptiveTraderWorker{
       this.activeScanStage='BUILD_SCAN_SUMMARY';
       this.state.last_summary=this.buildSummary({...snapshot,candidates:adaptiveCandidates});
       this.activeScanStage='STATE_PERSIST';
+      // Count a successful scan only after the complete summary is built. The
+      // status endpoint must never report success while still exposing an empty
+      // or previous-cycle last_summary.
+      this.state.successful_scans=(Number(this.state.successful_scans)||0)+1;
       await withStageTimeout(this.persist(),this.persistTimeoutMs,'STATE_PERSIST');
       this.logger.info?.('[ADAPTIVE_TRADER_SCAN_COMPLETE] '+JSON.stringify({
         as_of:snapshot.as_of,scan_count:this.state.scan_count,
