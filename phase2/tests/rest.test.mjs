@@ -191,6 +191,7 @@ test('TEST_FIXTURE: a stalled shared market-data response cannot block another r
       }
     });
     const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
+    void stale.catch(()=>{});
     for(let attempt=0;attempt<200&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
     assert.equal(firstStarted,true,'first radar must own the initial in-flight request');
     const recovered=await second.request('/api/v3/ticker/24hr',{symbol:'SHAREDSTALLUSDT'});
@@ -198,7 +199,6 @@ test('TEST_FIXTURE: a stalled shared market-data response cannot block another r
     assert.deepEqual(recovered.data,{symbols:['BTCUSDT'],source:'RECOVERED_FRESH_REQUEST'});
     assert.equal(second.health().last_request_phase,'COMPLETE');
     assert.equal(second.health().state,'LIVE');
-    void stale.catch(()=>{});
   `;
   const result=spawnSync(process.execPath,['--input-type=module','-e',script],{encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stdout+'\\n'+result.stderr);
@@ -225,6 +225,7 @@ test('TEST_FIXTURE: scan abort while joining a shared request removes the wait i
       }
     });
     const stale=first.request('/api/v3/ticker/24hr',{symbol:'SHAREDABORTUSDT'});
+    void stale.catch(()=>{});
     for(let attempt=0;attempt<200&&!firstStarted;attempt++)await new Promise(resolve=>setTimeout(resolve,2));
     assert.equal(firstStarted,true,'first radar must own the shared in-flight request');
     const controller=new AbortController();
