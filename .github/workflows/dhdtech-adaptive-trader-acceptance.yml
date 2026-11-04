@@ -199,6 +199,30 @@ jobs:
                 const probabilityClaimSafe=cognitiveProfile.probability_ready!==true||
                   (cognitiveProfile.validation?.evaluated===true&&cognitiveProfile.validation?.beat_base_rate===true&&
                    cognitiveProfile.holdout?.evaluated===true&&cognitiveProfile.holdout?.beat_base_rate===true);
+                const neuralComparison=neuralNetwork.holdout_comparison||{};
+                const neuralLiveReady=neuralNetwork.selected===true&&
+                  neuralNetwork.probability_ready===true&&neuralNetwork.live_eligibility_ready===true&&
+                  neuralNetwork.validation?.evaluated===true&&neuralNetwork.validation?.beat_base_rate===true&&
+                  neuralNetwork.holdout?.evaluated===true&&neuralNetwork.holdout?.beat_base_rate===true&&
+                  Number(neuralNetwork.holdout?.sample_count)>=100&&
+                  neuralComparison.passed===true&&neuralComparison.beats_base_rate===true&&
+                  neuralComparison.beats_same_window_logistic===true&&
+                  neuralComparison.beats_global_logistic===true&&
+                  (neuralComparison.beats_recent_logistic===true||neuralComparison.beats_recent_logistic===null);
+                const paperValidation=value.paper_validation_profile||{};
+                const paperTradingReady=paperValidation.ready===true&&
+                  Number(paperValidation.evaluation_window_trades)>=100&&
+                  Number(paperValidation.win_rate_pct)>=55&&
+                  Number(paperValidation.net_pnl_usdt)>0&&
+                  Number(paperValidation.max_drawdown_pct)<=8;
+                lastObserved.neural_live_ready=neuralLiveReady;
+                lastObserved.neural_holdout_comparison=neuralComparison;
+                lastObserved.paper_trading_readiness={
+                  ready:paperTradingReady,evaluation_window_trades:Number(paperValidation.evaluation_window_trades)||0,
+                  win_rate_pct:Number(paperValidation.win_rate_pct)||0,
+                  net_pnl_usdt:Number(paperValidation.net_pnl_usdt)||0,
+                  max_drawdown_pct:Number(paperValidation.max_drawdown_pct)||0
+                };
                 const valid=response.ok&&systemHealthy&&workerContract&&value.enabled===true&&value.running===true&&
                   value.in_flight!==true&&value.paper_trading===true&&value.real_order_execution===false&&
                   Number(value.successful_scans)>0&&value.last_error===null&&scanFresh&&
@@ -208,7 +232,7 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV5&&probabilityClaimSafe&&
+                  cognitive&&cognitiveV5&&neuralLiveReady&&paperTradingReady&&probabilityClaimSafe&&
                   Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
@@ -234,7 +258,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='Live worker schema or scan evidence is not ready';
+                lastError='Live scan, neural out-of-sample superiority, or 100-trade paper validation gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }
