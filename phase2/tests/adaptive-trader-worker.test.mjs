@@ -20,7 +20,7 @@ test('worker exposes the exact V5 plus TCN source contract without claiming mode
     const status=worker.snapshot();
     assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
     assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
-      'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
+      'TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5');
     assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
       'source presence must never be confused with out-of-sample readiness');
     assert.equal(status.real_order_execution,false);
