@@ -512,7 +512,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Reserve an untouched final block. Once at least 500 valid sequences exist,
   // the live gate gets at least 100 complete timestamp-group outcomes.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*4
-    ?liveHoldoutSamples:minimumHoldoutSamples;
+    ?liveHoldoutSamples+30:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   const validationTargetSamples=rows.length>=liveHoldoutSamples*5
     ?Math.ceil(liveHoldoutSamples*4/3)
@@ -527,8 +527,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
-    regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
-    model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
+    regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
+    model_scope:'GLOBAL_SHARED_TCN_WITH_REGIME_SPECIFIC_ACCEPTANCE',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minTrainingSamples,
     required_validation_samples:minimumValidationSamples,
@@ -561,8 +561,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
-      regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
-      model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
+      regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
+      model_scope:'GLOBAL_SHARED_TCN_WITH_REGIME_SPECIFIC_ACCEPTANCE',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
@@ -752,7 +752,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     member_training_profiles:fitted.member_training_profiles,
     member_validation_scores:fitted.member_validation_scores,
     selected_member_index:fitted.selected_member_index,
-    member_selection_method:'BEST_MEMBER_BY_CHRONOLOGICAL_VALIDATION_BRIER',
+    member_selection_method:'BEST_MEMBER_BY_REGIME_CHRONOLOGICAL_VALIDATION_BRIER',
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
     model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
@@ -771,6 +771,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     trained:true,selected,probability_ready:probabilityReady,
     live_eligibility_ready:liveReady,
     supported_regimes:supportedRegimes,
+    selected_regimes:selectedRegimes,
     regime_specialists:specialistProfiles,
     regime_data_coverage:{
       training:trainingTargets,validation:validationTargets,holdout:holdoutTargets,
@@ -788,7 +789,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       reason:holdoutReason
     },
     holdout_comparison:{
-      sample_count:holdout.length,
+      sample_count:holdoutModel.sample_count,
       required_live_holdout_samples:liveHoldoutSamples,
       required_brier_margin:comparisonMargin,
       tcn_brier_score:holdoutModel.model_brier_score,
@@ -807,7 +808,8 @@ export function buildTemporalNeuralProfile(samples = [], {
 export function predictTemporalProbability(sequence,profile={}){
   if(profile?.probability_ready!==true||!profile?._fit||!validSequence(sequence))return null;
   const regime=regimeOfSequence(sequence);
-  if(!Array.isArray(profile.supported_regimes)||!profile.supported_regimes.includes(regime))return null;
+  const eligible=Array.isArray(profile.selected_regimes)?profile.selected_regimes:profile.supported_regimes;
+  if(!Array.isArray(eligible)||!eligible.includes(regime))return null;
   return predict(sequence,profile._fit);
 }
 
