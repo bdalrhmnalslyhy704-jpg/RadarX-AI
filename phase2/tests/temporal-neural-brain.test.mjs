@@ -126,6 +126,34 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(profile.holdout_comparison.sample_count>=40);
 });
 
+test('mature history reserves a broad untouched holdout for both BTC regime experts',()=>{
+  const rows=[];
+  for(let group=0;group<50;group++){
+    for(let index=0;index<20;index++){
+      const row=sample(group,index);
+      const btcRiskOn=group%2===0;
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=btcRiskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2});
+  assert.equal(profile.trained,true);
+  assert.ok(profile.holdout_samples>=Math.ceil(rows.length*0.40),
+    'mature history must reserve a sufficiently broad untouched holdout');
+  assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const expert=profile.regime_specialists[regime];
+    assert.ok(expert.holdout_samples>=20);
+    assert.ok(expert.holdout_positive_samples>=5);
+    assert.ok(expert.holdout_negative_samples>=20);
+    assert.ok(expert.validation_start_at<profile.holdout_start_at);
+  }
+});
+
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{
   const valid=sample(0,0);
   const wrongHorizon={...sample(1,0),horizon_ms:FOUR_HOURS/2};
