@@ -127,7 +127,7 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.training_eligible===true));
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
   assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
-  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===28)));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===29)));
   assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'));
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
 
@@ -957,7 +957,7 @@ test('deep historical capture expands to 118 non-overlapping closed-candle outco
   assert.equal(temporalSamples.length,116,
     'two earliest labels remain useful for V5, but lack the 120 closed 15m candles required by TCN');
   assert.ok(temporalSamples.every(row=>row.temporal_sequence.length===24&&
-    row.temporal_sequence.every(step=>step.length===28)));
+    row.temporal_sequence.every(step=>step.length===29)));
   for(let index=1;index<samples.length;index++){
     assert.ok(samples[index].at-samples[index-1].at>=4*60*60*1000,
       'historical outcomes for one symbol must never overlap their four-hour labels');
