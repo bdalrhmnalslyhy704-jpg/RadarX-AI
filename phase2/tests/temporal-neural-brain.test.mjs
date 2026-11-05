@@ -64,8 +64,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V7');
+  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V8');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
+  assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
   assert.equal(profile.member_training_profiles.length,3);
   assert.equal(new Set(profile.member_training_profiles.map(row=>JSON.stringify(row))).size,3,
