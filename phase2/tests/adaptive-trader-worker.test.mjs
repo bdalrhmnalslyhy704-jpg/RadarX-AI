@@ -489,10 +489,14 @@ test('worker backfills separate V5 labels for persisted TCN historical rows with
     outcome:'UP',mark_price:1.035,return_pct:3,close_return_pct:0.7,
     close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
     resolved_at:baselineAt+4*60*60*1000,horizon_ms:4*60*60*1000,
-    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    temporal_sequence:Array.from({length:24},(_,step)=>Array.from({length:22},(_,channel)=>
+      Math.tanh((step-channel)/50)))
   };
+  const persistedHistoricalSample={...historicalSample};
+  delete persistedHistoricalSample.temporal_sequence;
   await store.putAdaptiveTraderState({version:1,enabled:false,scan_count:0,successful_scans:0,
-    samples:[historicalSample],v5_samples:[],price_history:[],missed_movers:[],cognitive_journal:[]});
+    samples:[persistedHistoricalSample],v5_samples:[],price_history:[],missed_movers:[],cognitive_journal:[]});
   const snapshotProvider=async()=>({
     status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date(now).toISOString(),
     universe:{eligible_spot_symbols:1,monitored_spot_symbols:1,analyzed_symbols:0,valid_symbols:0,
@@ -510,9 +514,14 @@ test('worker backfills separate V5 labels for persisted TCN historical rows with
     const status=worker.snapshot();
     assert.equal(status.learning_capture.new_historical_samples,0);
     assert.equal(status.learning_capture.new_historical_v5_close_samples,1);
+    assert.equal(status.learning_capture.historical_sequence_backfills,1);
+    assert.equal(status.learning_capture.temporal_sequence_samples,1);
+    assert.equal(status.learning_capture.temporal_sequence_missing_samples,0);
     assert.equal(status.cognitive_brain.profile.resolved_samples,1);
+    assert.equal(status.cognitive_brain.profile.temporal_network.resolved_samples,1);
     const saved=await store.getAdaptiveTraderState();
     assert.equal(saved.samples.filter(row=>row.id===historicalSample.id).length,1);
+    assert.equal(saved.samples.find(row=>row.id===historicalSample.id).temporal_sequence.length,24);
     assert.equal(saved.v5_samples.filter(row=>row.id===historicalSample.id).length,1);
     assert.equal(saved.v5_samples[0].outcome,'UP');
     assert.equal(saved.v5_samples[0].target_definition,'LEGACY_4H_CLOSE_RETURN');
