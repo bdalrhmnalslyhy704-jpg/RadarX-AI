@@ -1027,11 +1027,12 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return counts;
   },{});
 
-  // The first 12 highest-priority markets get a deeper 5m archive. Earlier
-  // 32-market backfill batches exceeded the scan deadline before BTC/asset
-  // history could finish; a smaller cohort completes the full 21-day pages.
-  // Remaining symbols keep a bounded two-page window to protect REST/heap.
-  const deepTemporalHistorySymbols=new Set(selected.slice(0,12).map(row=>String(row?.symbol||'').toUpperCase()));
+  // The first 8 highest-priority markets get a deeper 5m archive. A 12-market
+  // deep cohort repeatedly hit the hosted scan deadline on the 0.5 CPU service,
+  // leaving several pairs without a complete temporal tensor. Eight deep pairs
+  // prioritize complete 21-day 5m windows; remaining symbols keep a bounded
+  // two-page window so the scan can finish and the TCN gets usable histories.
+  const deepTemporalHistorySymbols=new Set(selected.slice(0,8).map(row=>String(row?.symbol||'').toUpperCase()));
   const pendingBySymbol=new Map();
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     const symbol=String(sample?.symbol||'').trim().toUpperCase();
