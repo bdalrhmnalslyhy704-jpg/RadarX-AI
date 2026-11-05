@@ -121,7 +121,8 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'member selection and reported validation must use disjoint chronological rows');
   assert.ok(expert.validation_start_at<profile.holdout_start_at,
     'final holdout must remain strictly later than all fitting and selection data');
-  assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_HOLDOUT_COVERAGE');
+  assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
+  assert.ok(profile.regime_specialists.BTC_RISK_OFF.support_gaps.includes('HOLDOUT_SAMPLE_COUNT'));
   assert.ok(profile.holdout_comparison.sample_count>=40);
 });
 
