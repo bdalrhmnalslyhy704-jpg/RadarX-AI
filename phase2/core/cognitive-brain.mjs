@@ -369,7 +369,20 @@ function fitNeuralNetworkModel(training, {
 
 function fitNeuralEnsemble(training, options = {}) {
   const seeds=NEURAL_POLICY.ensembleSeeds;
-  const members=seeds.map(seed=>fitNeuralNetworkModel(training,{...options,seed}));
+  const baseIterations=Math.max(30,Math.min(180,Math.trunc(Number(options.iterations)||NEURAL_POLICY.iterations)));
+  const baseLearningRate=clamp(Number(options.learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
+  const baseL2=clamp(Number(options.l2)||NEURAL_POLICY.l2,0.001,0.5);
+  // Keep total optimization work equal to three base schedules while reducing
+  // dependence on one epoch/regularization choice. Selection remains on the
+  // chronological validation block; the untouched holdout is never consulted.
+  const memberProfiles=[
+    {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5},
+    {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2},
+    {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2}
+  ];
+  const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
+    ...options,...memberProfiles[index],seed
+  }));
   if(members.length!==seeds.length||members.some(member=>!member))return null;
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
@@ -381,11 +394,13 @@ function fitNeuralEnsemble(training, options = {}) {
     members,
     ensemble_members:members.length,
     seeds:[...seeds],
+    member_training_profiles:memberProfiles,
+    training_strategy:'DIVERSIFIED_RESIDUAL_MLP_SCHEDULE_V1',
     base_rate:mean(members.map(member=>member.base_rate)),
     feature_names:[...FEATURE_NAMES],
     training_samples:members[0].training_samples,
-    iterations:members[0].iterations,
-    l2:members[0].l2
+    iterations:baseIterations,
+    l2:baseL2
   };
 }
 

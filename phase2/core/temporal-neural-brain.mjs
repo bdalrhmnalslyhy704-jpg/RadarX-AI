@@ -322,6 +322,12 @@ function fitMember(rows, seed, {
 
 function predict(sequence, fitted) {
   if (!validSequence(sequence) || !fitted) return null;
+  const selectedIndex=Number.isInteger(fitted.selected_member_index)
+    ?fitted.selected_member_index:-1;
+  if(selectedIndex>=0&&selectedIndex<fitted.members.length){
+    const value=forward(sequence,fitted.members[selectedIndex]).probability;
+    return Number.isFinite(value)?clamp(value,0.02,0.98):null;
+  }
   const predictions = fitted.members.map(member => forward(sequence, member).probability);
   if (!predictions.length || predictions.some(value => !Number.isFinite(value))) return null;
   return clamp(mean(predictions), 0.02, 0.98);
@@ -556,6 +562,21 @@ export function buildTemporalNeuralProfile(samples = [], {
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const pooledBaseline=fitLogistic(fitRows);
   const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
+  // Treat the three deterministic schedules as genuine validation candidates.
+  // Choose one member using only the middle chronological validation block;
+  // the final holdout remains untouched until after this choice is frozen.
+  const memberValidation=fitted.members.map((member,index)=>({
+    index,
+    metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
+  }));
+  const rankedMembers=memberValidation.filter(row=>row.metrics.evaluated===true)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+  fitted.selected_member_index=rankedMembers.length?rankedMembers[0].index:-1;
+  fitted.member_validation_scores=memberValidation.map(row=>({
+    index:row.index,brier_score:row.metrics.model_brier_score,
+    base_rate_brier_score:row.metrics.base_rate_brier_score,
+    beat_base_rate:row.metrics.beat_base_rate
+  }));
   const validationModel=evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
   const validationLogistic=evaluate(validation,
     sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
@@ -618,6 +639,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
     member_training_profiles:fitted.member_training_profiles,
+    member_validation_scores:fitted.member_validation_scores,
+    selected_member_index:fitted.selected_member_index,
+    member_selection_method:'BEST_MEMBER_BY_CHRONOLOGICAL_VALIDATION_BRIER',
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
     model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
