@@ -137,7 +137,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'member ranking and calibration must use the same selection-only rows');
   assert.ok(['REGIME_SELECTION_ONLY','POOLED_SELECTION_BLOCK_FALLBACK']
     .includes(expert.probability_calibration.fit_on));
-  assert.equal(profile.calibration_fit_scope,'REGIME_SELECTION_BLOCK_ONLY');
+  assert.equal(profile.calibration_fit_scope,'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY');
   assert.ok(expert.selection_start_at<expert.validation_start_at,
     'member selection and reported validation must use disjoint chronological rows');
   assert.ok(expert.validation_start_at<profile.holdout_start_at,
@@ -199,7 +199,8 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,12);
+  assert.equal(expert.selection_samples,24,
+    'the selected chronological window contains two time groups in this fixture');
   assert.equal(expert.selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'POOLED_SELECTION_BLOCK_FALLBACK');
   assert.ok(expert.member_selection_samples>expert.selection_samples);
