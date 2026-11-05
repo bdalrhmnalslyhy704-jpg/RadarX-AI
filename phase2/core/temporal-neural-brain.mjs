@@ -337,7 +337,8 @@ function calibratedProbability(rawProbability, calibrator) {
 // close to the identity transform; under-supported blocks stay uncalibrated.
 function fitSelectionProbabilityCalibrator(rows, predictFn, {
   minimumSamples=18,minimumPositive=4,minimumNegative=10,
-  iterations=240,learningRate=0.05,regularization=0.18
+  iterations=240,learningRate=0.05,regularization=0.18,
+  fitOn='REGIME_SELECTION_ONLY'
 }={}) {
   const predictions=(Array.isArray(rows)?rows:[]).map(row=>({
     probability:predictFn(row.sequence),
@@ -348,7 +349,7 @@ function fitSelectionProbabilityCalibrator(rows, predictFn, {
   const negative=predictions.length-positive;
   const base={
     method:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
-    fit_on:'REGIME_SELECTION_ONLY',
+    fit_on:String(fitOn||'REGIME_SELECTION_ONLY'),
     sample_count:predictions.length,
     positive_count:positive,
     negative_count:negative,
@@ -720,6 +721,18 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minSelectionPositive=3,minSelectionNegative=8;
   fitted.selected_member_by_regime={};
   fitted.probability_calibrators_by_regime={};
+  const pooledSelectionRows=fitRows.filter(row=>
+    row.at>=sharedTrainingCutoffAt&&row.at<sharedSelectionCutoffAt&&
+    row.resolved_at<sharedSelectionCutoffAt)
+    .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const pooledSelectionTargets={
+    samples:pooledSelectionRows.length,
+    positive:pooledSelectionRows.filter(row=>row.target===1).length,
+    negative:pooledSelectionRows.filter(row=>row.target===0).length
+  };
+  const pooledSelectionReady=pooledSelectionTargets.samples>=minSelectionSamples&&
+    pooledSelectionTargets.positive>=minSelectionPositive&&
+    pooledSelectionTargets.negative>=minSelectionNegative;
 
   // All regimes share the same time cutoffs. The shared TCN trains only before
   // sharedTrainingCutoffAt; member selection is later, validation starts at
@@ -747,6 +760,13 @@ export function buildTemporalNeuralProfile(samples = [], {
     const selectTargets=targetsOf(regimeSelection);
     const validTargets=targetsOf(regimeValidation);
     const holdTargets=targetsOf(regimeHoldout);
+    const localSelectionReady=selectTargets.samples>=minSelectionSamples&&
+      selectTargets.positive>=minSelectionPositive&&selectTargets.negative>=minSelectionNegative;
+    const memberSelectionRows=localSelectionReady?regimeSelection:
+      pooledSelectionReady?pooledSelectionRows:regimeSelection;
+    const memberSelectionTargets=targetsOf(memberSelectionRows);
+    const memberSelectionSource=localSelectionReady?'REGIME_SELECTION_BLOCK':
+      pooledSelectionReady?'POOLED_SELECTION_BLOCK_FALLBACK':'REGIME_SELECTION_BLOCK_INSUFFICIENT';
     trainingByRegime[regime]=regimeTraining.length;
     selectionByRegime[regime]=regimeSelection.length;
     validationByRegime[regime]=regimeValidation.length;
@@ -758,13 +778,13 @@ export function buildTemporalNeuralProfile(samples = [], {
 
     const supportGaps=[];
     if(regimeTraining.length<minRegimeTraining)supportGaps.push('TRAINING_SAMPLE_COUNT');
-    if(regimeSelection.length<minSelectionSamples)supportGaps.push('SELECTION_SAMPLE_COUNT');
+    if(memberSelectionTargets.samples<minSelectionSamples)supportGaps.push('SELECTION_SAMPLE_COUNT');
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
     if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
     if(trainTargets.positive<minRegimePositive)supportGaps.push('TRAINING_POSITIVE_CLASS');
     if(trainTargets.negative<minRegimeNegative)supportGaps.push('TRAINING_NEGATIVE_CLASS');
-    if(selectTargets.positive<minSelectionPositive)supportGaps.push('SELECTION_POSITIVE_CLASS');
-    if(selectTargets.negative<minSelectionNegative)supportGaps.push('SELECTION_NEGATIVE_CLASS');
+    if(memberSelectionTargets.positive<minSelectionPositive)supportGaps.push('SELECTION_POSITIVE_CLASS');
+    if(memberSelectionTargets.negative<minSelectionNegative)supportGaps.push('SELECTION_NEGATIVE_CLASS');
     if(validTargets.positive<minRegimePositive)supportGaps.push('VALIDATION_POSITIVE_CLASS');
     if(validTargets.negative<minRegimeNegative)supportGaps.push('VALIDATION_NEGATIVE_CLASS');
     if(holdTargets.positive<minRegimePositive)supportGaps.push('HOLDOUT_POSITIVE_CLASS');
@@ -777,8 +797,11 @@ export function buildTemporalNeuralProfile(samples = [], {
         validation_start_at:regimeValidation[0]?.at??null,
         max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
         training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
+        member_selection_samples:memberSelectionRows.length,member_selection_source:memberSelectionSource,
+        selection_calibration_samples:0,
         validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
         training_targets:trainTargets,selection_targets:selectTargets,
+        member_selection_targets:memberSelectionTargets,
         validation_targets:validTargets,holdout_targets:holdTargets,
         validation_passed:false,holdout_passed:false,
         validation_model:{evaluated:false,sample_count:regimeValidation.length},
@@ -794,7 +817,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     // only from its disjoint selection block; no selection/validation/holdout
     // example is included in the shared model's training rows.
     const memberRanks=fitted.members.map((member,index)=>({
-      index,metrics:evaluate(regimeSelection,sequence=>forward(sequence,member).probability,regimePrior)
+      index,metrics:evaluate(memberSelectionRows,sequence=>forward(sequence,member).probability,regimePrior)
     })).filter(row=>row.metrics.evaluated===true)
       .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
     const selectedMemberIndex=memberRanks.length?memberRanks[0].index:-1;
@@ -805,8 +828,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       beat_base_rate:row.metrics.beat_base_rate
     }));
     const selectionCalibrator=fitSelectionProbabilityCalibrator(
-      regimeSelection,
-      sequence=>forward(sequence,fitted.members[selectedMemberIndex]).probability
+      memberSelectionRows,
+      sequence=>forward(sequence,fitted.members[selectedMemberIndex]).probability,
+      {fitOn:localSelectionReady?'REGIME_SELECTION_ONLY':'POOLED_SELECTION_BLOCK_FALLBACK'}
     );
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
 
@@ -828,6 +852,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_start_at:regimeValidation[0]?.at??null,
       max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
       training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
+      member_selection_samples:memberSelectionRows.length,member_selection_source:memberSelectionSource,
+      selection_calibration_samples:selectionCalibrator.sample_count,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
       validation_model:validationModel,validation_logistic:validationLogistic,
@@ -881,6 +907,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       max_training_outcome_resolved_at:result.max_training_outcome_resolved_at??null,
       training_samples:trainingByRegime[regime],
       selection_samples:selectionByRegime[regime],
+      member_selection_samples:Number(result.member_selection_samples)||0,
+      member_selection_source:result.member_selection_source||null,
+      selection_calibration_samples:Number(result.selection_calibration_samples)||0,
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
       training_positive_samples:trainingTargets[regime].positive,
