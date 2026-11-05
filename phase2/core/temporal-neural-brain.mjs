@@ -441,7 +441,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   };
   // Reserve an untouched final block. Once at least 500 valid sequences exist,
   // the live gate gets at least 100 complete timestamp-group outcomes.
-  const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
+  const holdoutTargetSamples=rows.length>=liveHoldoutSamples*4
     ?liveHoldoutSamples:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   const validationTargetSamples=rows.length>=liveHoldoutSamples*5
