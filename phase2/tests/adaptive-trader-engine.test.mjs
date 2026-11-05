@@ -943,6 +943,25 @@ test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bu
   assert.equal(shock.real_order_execution,false);
 });
 
+test('deep historical capture expands to 72 non-overlapping closed-candle outcomes per symbol',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,2000,15*60*1000,90_000,0.00002);
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DEEP72USDT',klines,fastKlines,btcKlines,now,maxSamples:72
+  });
+  assert.equal(samples.length,72,'deep closed-candle history should supply 72 labels');
+  assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
+  assert.ok(samples.every(row=>row.temporal_sequence?.length===24&&
+    row.temporal_sequence.every(step=>step.length===22)));
+  for(let index=1;index<samples.length;index++){
+    assert.ok(samples[index].at-samples[index-1].at>=4*60*60*1000,
+      'historical outcomes for one symbol must never overlap their four-hour labels');
+  }
+  assert.ok(samples.every(row=>row.at<row.resolved_at&&row.horizon_ms===4*60*60*1000));
+});
+
 test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
