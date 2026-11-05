@@ -2,7 +2,7 @@ import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DE
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
 // contract only; it does not imply that either challenger has passed validation.
-export const COGNITIVE_MODEL_BUILD_CONTRACT = 'RADARX_COGNITIVE_AGENT_V5_TCN_V5';
+export const COGNITIVE_MODEL_BUILD_CONTRACT = 'RADARX_COGNITIVE_AGENT_V5_TCN_V6';
 
 /**
  * RadarX Build 224 — Cognitive Agent V5 (Residual Deep Neural Challenger)
