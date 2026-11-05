@@ -208,36 +208,45 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const assetRelativeReturn24h=assetReturn24h!==null&&btcReturn24h!==null
       ?assetReturn24h-btcReturn24h:null;
     // Align three completed 5m candles to this exact 15m candle and compare
-    // them with the preceding 24 completed 5m candles. Missing or gapped micro
-    // data rejects the sequence rather than inventing neutral pressure.
+    // them with the preceding 24 completed 5m candles. Older historical windows
+    // may not have a full 5m archive. In that case keep the valid 15m/BTC row and
+    // emit an explicit micro-availability mask; zero-filled micro channels are
+    // never interpreted without the final mask channel.
     const microBase=[];
+    const microCurrent=[];
+    let microAvailable=true;
     for(let offset=24;offset>=1;offset--){
       const row=fastByOpen.get(Number(current.openTime)-offset*microStep);
-      if(!row)return null;
+      if(!row){microAvailable=false;break;}
       microBase.push(row);
     }
-    const microCurrent=[];
-    for(let offset=0;offset<3;offset++){
-      const row=fastByOpen.get(Number(current.openTime)+offset*microStep);
-      if(!row)return null;
-      microCurrent.push(row);
+    if(microAvailable){
+      for(let offset=0;offset<3;offset++){
+        const row=fastByOpen.get(Number(current.openTime)+offset*microStep);
+        if(!row){microAvailable=false;break;}
+        microCurrent.push(row);
+      }
     }
-    const contiguousMicro=[...microBase,...microCurrent].every((row,slot,rows)=>
-      slot===0||row.openTime-rows[slot-1].openTime===microStep);
-    if(!contiguousMicro||microCurrent[2].closeTime!==current.closeTime)return null;
-    const microBaseVolume=mean(microBase.map(row=>row.quoteVolume));
-    const microBaseTrades=mean(microBase.map(row=>row.trades));
-    const microBaseRange=mean(microBase.map(row=>(row.high-row.low)/row.close));
-    const microBaseBuyVolume=microBase.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0);
-    const microBaseTotalVolume=microBase.reduce((sum,row)=>sum+row.quoteVolume,0);
-    const microBaseBuyShare=microBaseTotalVolume>0?microBaseBuyVolume/microBaseTotalVolume:null;
-    const microCurrentVolume=mean(microCurrent.map(row=>row.quoteVolume));
-    const microCurrentTrades=mean(microCurrent.map(row=>row.trades));
-    const microCurrentRange=mean(microCurrent.map(row=>(row.high-row.low)/row.close));
-    const microBuyVolume=microCurrent.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0);
-    const microTotalVolume=microCurrent.reduce((sum,row)=>sum+row.quoteVolume,0);
-    const microBuyShare=microTotalVolume>0?microBuyVolume/microTotalVolume:null;
-    const microReturnPct=(microCurrent[2].close/microCurrent[0].open-1)*100;
+    if(microAvailable){
+      const contiguousMicro=[...microBase,...microCurrent].every((row,slot,rows)=>
+        slot===0||row.openTime-rows[slot-1].openTime===microStep);
+      microAvailable=contiguousMicro&&microCurrent.length===3&&
+        microCurrent[2].closeTime===current.closeTime;
+    }
+    if(!microAvailable){microBase.length=0;microCurrent.length=0;}
+    const microBaseVolume=microAvailable?mean(microBase.map(row=>row.quoteVolume)):null;
+    const microBaseTrades=microAvailable?mean(microBase.map(row=>row.trades)):null;
+    const microBaseRange=microAvailable?mean(microBase.map(row=>(row.high-row.low)/row.close)):null;
+    const microBaseBuyVolume=microAvailable?microBase.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0):null;
+    const microBaseTotalVolume=microAvailable?microBase.reduce((sum,row)=>sum+row.quoteVolume,0):null;
+    const microBaseBuyShare=microAvailable&&microBaseTotalVolume>0?microBaseBuyVolume/microBaseTotalVolume:null;
+    const microCurrentVolume=microAvailable?mean(microCurrent.map(row=>row.quoteVolume)):null;
+    const microCurrentTrades=microAvailable?mean(microCurrent.map(row=>row.trades)):null;
+    const microCurrentRange=microAvailable?mean(microCurrent.map(row=>(row.high-row.low)/row.close)):null;
+    const microBuyVolume=microAvailable?microCurrent.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0):null;
+    const microTotalVolume=microAvailable?microCurrent.reduce((sum,row)=>sum+row.quoteVolume,0):null;
+    const microBuyShare=microAvailable&&microTotalVolume>0?microBuyVolume/microTotalVolume:null;
+    const microReturnPct=microAvailable?(microCurrent[2].close/microCurrent[0].open-1)*100:null;
     if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
        !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
        !btcBaselineContiguous||!btcDayContiguous||!(btcRangeBase>0)||!(btcRangeNow>0)||
@@ -247,10 +256,9 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
        !assetDayContiguous||!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
        !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
        !(assetDayVolumeBase>0)||!(assetDayTradesBase>0)||
-       !(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
-       !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||
-       !(microBuyShare>=0&&microBuyShare<=1)||!(microCurrentVolume>0)||
-       !(microCurrentTrades>0)||!(microCurrentRange>0))return null;
+       (microAvailable&&(!(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
+        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||!(microBuyShare>=0&&microBuyShare<=1)||
+        !(microCurrentVolume>0)||!(microCurrentTrades>0)||!(microCurrentRange>0))))return null;
     const assetReturn=(current.close/previous.close-1)*100;
     const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
     const relativeReturn=assetReturn-btcReturn;
@@ -263,12 +271,12 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       clamp(body,-1,1),
       clamp(Math.log2(clamp(rangeNow/rangeBase,0.05,20)),-2,2),
       Math.tanh(relativeReturn/2),
-      clamp(Math.log2(clamp(microCurrentVolume/microBaseVolume,0.05,20))/2,-2,2),
-      clamp(Math.log2(clamp(microCurrentTrades/microBaseTrades,0.05,20))/2,-2,2),
-      clamp((microBuyShare-0.5)/0.1,-2,2),
-      clamp((microBuyShare-microBaseBuyShare)/0.1,-2,2),
-      Math.tanh(microReturnPct/1),
-      clamp(Math.log2(clamp(microCurrentRange/microBaseRange,0.05,20)),-2,2),
+      microAvailable?clamp(Math.log2(clamp(microCurrentVolume/microBaseVolume,0.05,20))/2,-2,2):0,
+      microAvailable?clamp(Math.log2(clamp(microCurrentTrades/microBaseTrades,0.05,20))/2,-2,2):0,
+      microAvailable?clamp((microBuyShare-0.5)/0.1,-2,2):0,
+      microAvailable?clamp((microBuyShare-microBaseBuyShare)/0.1,-2,2):0,
+      microAvailable?Math.tanh(microReturnPct/1):0,
+      microAvailable?clamp(Math.log2(clamp(microCurrentRange/microBaseRange,0.05,20)),-2,2):0,
       Math.tanh(btcReturn/2),
       clamp(Math.log2(clamp(btcRangeNow/btcRangeBase,0.05,20)),-2,2),
       clamp(Math.log2(clamp(btcVolumeRatio,0.05,20))/2,-2,2),
@@ -282,7 +290,8 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       Math.tanh(assetRelativeReturn24h/10),
       clamp(Math.log2(clamp(rangeNow/assetDayVolatility,0.05,20)),-2,2),
       clamp(Math.log2(clamp(current.quoteVolume/assetDayVolumeBase,0.05,20))/2,-2,2),
-      clamp(Math.log2(clamp(current.trades/assetDayTradesBase,0.05,20))/2,-2,2)
+      clamp(Math.log2(clamp(current.trades/assetDayTradesBase,0.05,20))/2,-2,2),
+      microAvailable?1:0
     ];
     if (!values.every(Number.isFinite)) return null;
     sequence.push(values);
