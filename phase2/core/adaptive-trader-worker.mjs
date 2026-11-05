@@ -25,7 +25,7 @@ const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
 function hasValidTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===24&&sequence.every(step=>
     Array.isArray(step)&&step.length===22&&step.every(value=>
-      finite(value)!==null&&Math.abs(Number(value))<=4
+      typeof value==='number'&&Number.isFinite(value)&&Math.abs(value)<=4
     )
   );
 }
