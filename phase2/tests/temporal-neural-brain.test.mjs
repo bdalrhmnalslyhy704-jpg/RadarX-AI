@@ -110,7 +110,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
-  assert.equal(expert.model_scope,'INDEPENDENT_BTC_REGIME_TCN_EXPERT');
+  assert.equal(expert.model_scope,'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION');
   assert.ok(expert.training_samples>=80);
   assert.ok(expert.selection_samples>=10);
   assert.ok(expert.validation_samples>=24);
