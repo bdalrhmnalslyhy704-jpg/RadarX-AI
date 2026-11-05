@@ -590,34 +590,6 @@ export function buildTemporalNeuralProfile(samples = [], {
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const pooledBaseline=fitLogistic(fitRows);
   const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
-  // Treat the three deterministic schedules as genuine validation candidates.
-  // Choose one member using only the middle chronological validation block;
-  // the final holdout remains untouched until after this choice is frozen.
-  const memberValidation=fitted.members.map((member,index)=>({
-    index,
-    metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
-  }));
-  const rankedMembers=memberValidation.filter(row=>row.metrics.evaluated===true)
-    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
-  fitted.selected_member_index=rankedMembers.length?rankedMembers[0].index:-1;
-  fitted.member_validation_scores=memberValidation.map(row=>({
-    index:row.index,brier_score:row.metrics.model_brier_score,
-    base_rate_brier_score:row.metrics.base_rate_brier_score,
-    beat_base_rate:row.metrics.beat_base_rate
-  }));
-  const validationModel=evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
-  const validationLogistic=evaluate(validation,
-    sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const selected=validationModel.evaluated&&validationLogistic.evaluated&&
-    validationModel.beat_base_rate===true&&
-    validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-  const holdoutModel=evaluate(holdout,sequence=>predict(sequence,fitted),baseRate);
-  const holdoutLogistic=evaluate(holdout,
-    sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const holdoutPassed=selected&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
-    holdoutModel.beat_base_rate===true&&
-    holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
-
   const countByRegime=block=>Object.fromEntries(regimes.map(regime=>[
     regime,block.filter(row=>regimeOfSequence(row.sequence)===regime).length
   ]));
@@ -625,11 +597,11 @@ export function buildTemporalNeuralProfile(samples = [], {
   const validationByRegime=countByRegime(validation);
   const holdoutByRegime=countByRegime(holdout);
   const regimeTargets=block=>Object.fromEntries(regimes.map(regime=>{
-    const rows=block.filter(row=>regimeOfSequence(row.sequence)===regime);
+    const regimeRows=block.filter(row=>regimeOfSequence(row.sequence)===regime);
     return [regime,{
-      samples:rows.length,
-      positive:rows.filter(row=>row.target===1).length,
-      negative:rows.filter(row=>row.target===0).length
+      samples:regimeRows.length,
+      positive:regimeRows.filter(row=>row.target===1).length,
+      negative:regimeRows.filter(row=>row.target===0).length
     }];
   }));
   const trainingTargets=regimeTargets(fitRows);
@@ -637,19 +609,90 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutTargets=regimeTargets(holdout);
   const minRegimePositive=Math.max(5,Math.ceil(minimumValidationSamples*0.2));
   const minRegimeNegative=Math.max(20,Math.ceil(minimumValidationSamples*0.8));
-  // A regime is supported only when it is represented in every chronological
-  // block and both validation/holdout contain enough positive and negative
-  // first-passage labels. Counts alone are not proof of predictive superiority.
+  // A regime is supported only when it has both classes in all three
+  // chronological blocks. Performance is then evaluated within that same
+  // predeclared regime against a regime-matched training-only logistic control.
   const supportedRegimes=regimes.filter(regime=>
     trainingByRegime[regime]>=minRegimeTraining&&
     validationByRegime[regime]>=minRegimeValidation&&
     holdoutByRegime[regime]>=minRegimeHoldout&&
+    trainingTargets[regime].positive>=minRegimePositive&&
+    trainingTargets[regime].negative>=minRegimeNegative&&
     validationTargets[regime].positive>=minRegimePositive&&
     validationTargets[regime].negative>=minRegimeNegative&&
     holdoutTargets[regime].positive>=minRegimePositive&&
     holdoutTargets[regime].negative>=minRegimeNegative);
-  const probabilityReady=holdoutPassed&&supportedRegimes.length>0;
-  const liveReady=probabilityReady&&holdout.length>=liveHoldoutSamples;
+
+  // Select the ensemble member separately inside each predeclared BTC regime.
+  // The final holdout is excluded from member selection and all fitting.
+  const memberValidation=fitted.members.map((member,index)=>({
+    index,
+    metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
+  }));
+  const rankedMembers=memberValidation.filter(row=>row.metrics.evaluated===true)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+  fitted.selected_member_index=rankedMembers.length?rankedMembers[0].index:-1;
+  fitted.selected_member_by_regime={};
+  fitted.member_validation_scores=memberValidation.map(row=>({
+    index:row.index,brier_score:row.metrics.model_brier_score,
+    base_rate_brier_score:row.metrics.base_rate_brier_score,
+    beat_base_rate:row.metrics.beat_base_rate
+  }));
+  const regimeResults={};
+  for(const regime of regimes){
+    const regimeTraining=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime);
+    const regimeValidation=validation.filter(row=>regimeOfSequence(row.sequence)===regime);
+    const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime);
+    if(!supportedRegimes.includes(regime)){
+      regimeResults[regime]={supported:false,validation_passed:false,holdout_passed:false,
+        validation_model:{evaluated:false,sample_count:regimeValidation.length},
+        validation_logistic:{evaluated:false,sample_count:regimeValidation.length},
+        holdout_model:{evaluated:false,sample_count:regimeHoldout.length},
+        holdout_logistic:{evaluated:false,sample_count:regimeHoldout.length}};
+      continue;
+    }
+    const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
+    const regimeBaseline=fitLogistic(regimeTraining);
+    const regimeMemberRanks=fitted.members.map((member,index)=>({
+      index,metrics:evaluate(regimeValidation,sequence=>forward(sequence,member).probability,regimePrior)
+    })).filter(row=>row.metrics.evaluated===true)
+      .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+    fitted.selected_member_by_regime[regime]=regimeMemberRanks.length?regimeMemberRanks[0].index:fitted.selected_member_index;
+    const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
+    const validationLogistic=evaluate(regimeValidation,
+      sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
+    const validationPassed=validationModel.evaluated&&validationLogistic.evaluated&&
+      validationModel.beat_base_rate===true&&
+      validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
+    const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
+    const holdoutLogistic=evaluate(regimeHoldout,
+      sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
+    const holdoutPassed=validationPassed&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
+      holdoutModel.beat_base_rate===true&&
+      holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
+    regimeResults[regime]={supported:true,prior:regimePrior,
+      validation_passed:validationPassed,holdout_passed:holdoutPassed,
+      validation_model:validationModel,validation_logistic:validationLogistic,
+      holdout_model:holdoutModel,holdout_logistic:holdoutLogistic};
+  }
+  const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
+  const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
+  // Report only validated regime slices when at least one is eligible. When
+  // none passes, retain supported/validation slices for honest diagnostics.
+  const diagnosticRegimes=selectedRegimes.length?selectedRegimes:
+    validationSelectedRegimes.length?validationSelectedRegimes:supportedRegimes;
+  const validationModel=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_model));
+  const validationLogistic=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_logistic));
+  const holdoutModel=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_model));
+  const holdoutLogistic=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic));
+  const selected=validationSelectedRegimes.length>0&&validationModel.evaluated&&
+    validationModel.beat_base_rate===true&&validationLogistic.evaluated&&
+    validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
+  const holdoutPassed=selectedRegimes.length>0&&holdoutModel.evaluated&&
+    holdoutModel.beat_base_rate===true&&holdoutLogistic.evaluated&&
+    holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
+  const probabilityReady=holdoutPassed;
+  const liveReady=probabilityReady&&holdoutModel.sample_count>=liveHoldoutSamples;
   const specialistProfiles=Object.fromEntries(regimes.map(regime=>{
     const supported=supportedRegimes.includes(regime);
     return [regime,{
