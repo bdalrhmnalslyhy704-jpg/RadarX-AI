@@ -953,7 +953,10 @@ test('deep historical capture expands to 118 non-overlapping closed-candle outco
   });
   assert.equal(samples.length,118,'deep closed-candle history should use all 118 available non-overlapping labels');
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
-  assert.ok(samples.every(row=>row.temporal_sequence?.length===24&&
+  const temporalSamples=samples.filter(row=>Array.isArray(row.temporal_sequence));
+  assert.equal(temporalSamples.length,116,
+    'two earliest labels remain useful for V5, but lack the 120 closed 15m candles required by TCN');
+  assert.ok(temporalSamples.every(row=>row.temporal_sequence.length===24&&
     row.temporal_sequence.every(step=>step.length===28)));
   for(let index=1;index<samples.length;index++){
     assert.ok(samples[index].at-samples[index-1].at>=4*60*60*1000,
