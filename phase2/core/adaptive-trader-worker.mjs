@@ -18,6 +18,17 @@ const MAX_COGNITIVE_JOURNAL=3000;
 // V5 learns four-hour close direction; moves inside this deadband are FLAT.
 // TCN retains its separate +3% before -2% first-passage target.
 const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
+
+// Historical state created before the TCN upgrade may already contain the same
+// baseline ID without its 24x22 tensor. Validate strictly and backfill only from
+// a freshly rebuilt, closed-candle sample; never synthesize missing channels.
+function hasValidTemporalSequence(sequence){
+  return Array.isArray(sequence)&&sequence.length===24&&sequence.every(step=>
+    Array.isArray(step)&&step.length===22&&step.every(value=>
+      finite(value)!==null&&Math.abs(Number(value))<=4
+    )
+  );
+}
 function v5CloseOutcome(value){
   const move=finite(value);
   if(move===null)return null;
@@ -529,6 +540,8 @@ recordServerPaperPortfolio(snapshot,now){
     let newHistoricalSamples=0,newHistoricalV5Samples=0;
     this.state.v5_samples=Array.isArray(this.state.v5_samples)?this.state.v5_samples:[];
     const knownV5Ids=new Set(this.state.v5_samples.map(row=>String(row?.id||'')));
+    const historicalSampleById=new Map(this.state.samples.map(row=>[String(row?.id||''),row]));
+    let historicalSequenceBackfills=0;
     for(const row of historicalRows){
       const id=String(row?.id||''),at=finite(row?.at),resolvedAt=finite(row?.resolved_at),move=finite(row?.return_pct);
       if(!id){historicalRejected.missing_id++;continue;}
@@ -541,10 +554,36 @@ recordServerPaperPortfolio(snapshot,now){
       if(resolvedAt>Number(now)+5000){historicalRejected.resolved_in_future++;continue;}
       if(resolvedAt-at<SAMPLE_HORIZON_MS){historicalRejected.horizon_too_short++;continue;}
       if(!temporalAlreadyKnown){
-        this.state.samples.push({...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
-          training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'});
+        const inserted={...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
+          training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'};
+        this.state.samples.push(inserted);
+        historicalSampleById.set(id,inserted);
         knownIds.add(id);newHistoricalSamples++;
-      }else historicalRejected.duplicate_id++;
+      }else{
+        historicalRejected.duplicate_id++;
+        // Upgrade old persisted historical rows in place. Earlier Build 224
+        // states can have the same baseline ID and outcome but no TCN tensor;
+        // treating that row as an immutable duplicate left the new network with
+        // zero eligible sequences forever. Only overwrite with a fully valid
+        // 24x22 sequence regenerated from verified closed Binance candles.
+        const existing=historicalSampleById.get(id);
+        if(existing){
+          const incomingSequence=hasValidTemporalSequence(row.temporal_sequence);
+          const existingSequence=hasValidTemporalSequence(existing.temporal_sequence);
+          if(incomingSequence&&!existingSequence){
+            existing.temporal_sequence=row.temporal_sequence;
+            historicalSequenceBackfills++;
+          }
+          for(const key of ['target_definition','outcome_source','outcome','resolved_at','horizon_ms',
+            'first_passage','mark_price','return_pct','close_return_pct','close_return_source',
+            'features','base_score','tier','price','quote_volume_24h','change_24h_pct','selection_lane']){
+            if(row[key]!==undefined)existing[key]=row[key];
+          }
+          existing.observation_type='HISTORICAL_CLOSED_CANDLE';
+          existing.historical_baseline=true;
+          existing.training_eligible=true;
+        }
+      }
       const closeReturnPct=finite(row.close_return_pct);
       const v5Outcome=v5CloseOutcome(closeReturnPct);
       if(closeReturnPct!==null&&v5Outcome!==null&&!knownV5Ids.has(id)){
@@ -712,6 +751,9 @@ recordServerPaperPortfolio(snapshot,now){
       at:now,
       historical_input_samples:historicalRows.length,
       new_historical_samples:newHistoricalSamples,
+      historical_sequence_backfills:historicalSequenceBackfills,
+      temporal_sequence_samples:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)).length,
+      temporal_sequence_missing_samples:this.trainingSamples().filter(row=>!hasValidTemporalSequence(row.temporal_sequence)).length,
       new_historical_v5_close_samples:newHistoricalV5Samples,
       historical_rejected:historicalRejected,
       snapshot_historical_samples_available:Math.max(0,Math.trunc(Number(snapshot.universe?.historical_training_samples_available)||0)),
