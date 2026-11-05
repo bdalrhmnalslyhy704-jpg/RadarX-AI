@@ -271,8 +271,9 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV5&&neuralLiveReady&&paperTradingReady&&probabilityClaimSafe&&
-                  Number(cognitiveProfile.resolved_samples)>=0&&
+                  cognitive&&cognitiveV5&&temporalNetworkContract&&temporalNetwork.trained===true&&
+                  Number(temporalNetwork.ensemble_members)===3&&Number(temporalNetwork.training_samples)>=160&&
+                  probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
                   Number(cognitiveProfile.holdout_samples)>=0&&

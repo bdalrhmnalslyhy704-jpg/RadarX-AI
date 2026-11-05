@@ -1,7 +1,7 @@
 # DHDTech Build 224 redeploy trigger: rebuild from the latest pinned Build 224 branch tip.
 # This trigger follows the complete V5/TCN history-window, tensor-backfill and runtime-contract fixes.
 # Keep this Docker context aligned with the current branch; do not ship the earlier TCN image.
-# 2026-11-06 redeploy marker: refresh the DHDTech Build 224 runtime after APK release; run live TCN and Pre-Move acceptance.
+# 2026-11-06 redeploy marker: deploy TCN selection-block calibration and split runtime/predictive acceptance gates.
 # Use the official Node.js 22 slim image directly. The ECR Public mirror has
 # returned 429 Data limit exceeded in CI; this is the equivalent upstream image.
 FROM node:22-bookworm-slim
