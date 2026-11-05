@@ -245,7 +245,7 @@ function gradientsFor(sequence, target, model, cache) {
   const activationGradients = Array(DILATIONS.length + 1);
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-  const error = cache.probability - target;
+  const error = 2 * (cache.probability - target) * cache.probability * (1 - cache.probability);
   // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
@@ -525,9 +525,10 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V7',
+    training_strategy:'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V8',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     training_prior_probability:baseRate
   };
