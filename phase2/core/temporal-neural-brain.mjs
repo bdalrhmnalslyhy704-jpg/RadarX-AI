@@ -511,8 +511,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Reserve a broad, untouched final block once the historical journal is mature.
   // The larger holdout must cover both BTC regimes and both outcome classes; it
   // never relaxes the per-regime sample or performance gates.
-  const holdoutTargetSamples=rows.length>=liveHoldoutSamples*4
-    ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.40)):minimumHoldoutSamples;
+  const holdoutTargetSamples=rows.length>=liveHoldoutSamples*8
+    ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.40))
+    :rows.length>=liveHoldoutSamples*4?liveHoldoutSamples+30:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   const validationTargetSamples=rows.length>=liveHoldoutSamples*5
     ?Math.ceil(liveHoldoutSamples*4/3)
