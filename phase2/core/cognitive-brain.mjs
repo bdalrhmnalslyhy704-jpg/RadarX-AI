@@ -214,7 +214,8 @@ function fitNeuralNetworkModel(training, {
   iterations = NEURAL_POLICY.iterations,
   learningRate = NEURAL_POLICY.learningRate,
   l2 = NEURAL_POLICY.l2,
-  seed = 1
+  seed = 1,
+  baselineFit = null
 } = {}) {
   const rows=(Array.isArray(training)?training:[]).map(row=>({
     vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
@@ -243,9 +244,18 @@ function fitNeuralNetworkModel(training, {
   const hiddenWeights=Array.from({length:units1},(_,i)=>
     Array.from({length:units2},(_,j)=>0.07*Math.cos((i+1)*5.173+(j+1)*3.117+seedOffset)));
   const hiddenBias2=Array.from({length:units2},(_,j)=>0.008*Math.sin((j+1)*7.913+seedOffset));
-  const outputWeights=Array.from({length:units2},(_,j)=>0.035*Math.sin((j+1)*4.121+seedOffset));
-  const skipWeights=Array.from({length:inputSize},(_,i)=>0.015*Math.cos((i+1)*2.417+seedOffset));
-  let outputBias=logit(baseRate);
+  // Start the neural challenger at the same-window logistic model, then
+  // learn nonlinear residuals. This prevents random initialization from
+  // discarding reliable linear market evidence before the first gradient step.
+  // The baseline is fitted on training rows only; validation and holdout labels
+  // never enter initialization.
+  const hasBaseline=baselineFit&&Array.isArray(baselineFit.weights)&&
+    baselineFit.weights.length===inputSize&&Number.isFinite(Number(baselineFit.intercept));
+  const outputWeights=Array(units2).fill(0);
+  const skipWeights=hasBaseline
+    ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
+    :Array(inputSize).fill(0);
+  let outputBias=hasBaseline?Number(baselineFit.intercept):logit(baseRate);
 
   const zerosLike=values=>Array.isArray(values)
     ?values.map(value=>Array.isArray(value)?zerosLike(value):0):0;
@@ -334,7 +344,9 @@ function fitNeuralNetworkModel(training, {
       outputWeights[j]=output.value;mOutput[j]=output.moment;vOutput[j]=output.variance;
     }
     for(let i=0;i<inputSize;i++){
-      const result=update(skipWeights[i],gradSkip[i]/n,mSkip[i],vSkip[i],epoch);
+      // Keep the learned linear anchor free of weight decay; only the gradient
+      // from this training batch may adjust it while hidden layers learn residuals.
+      const result=update(skipWeights[i],gradSkip[i]/n,mSkip[i],vSkip[i],epoch,4,false);
       skipWeights[i]=result.value;mSkip[i]=result.moment;vSkip[i]=result.variance;
     }
     const bias=update(outputBias,gradOutputBias/n,mOutputBias,vOutputBias,epoch,6,false);
@@ -665,21 +677,22 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
   const neuralTraining=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
-  const neuralFit=neuralTraining.length>=neuralMinimum
+  // Fit the same-window linear anchor once, on training data only. Every neural
+  // ensemble member starts from this exact model and learns a nonlinear residual.
+  const neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
+    ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
+  const neuralFit=neuralTraining.length>=neuralMinimum&&neuralSameWindowLogisticFit
     ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-      iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2
+      iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
+      baselineFit:neuralSameWindowLogisticFit
     }):null;
   const neuralValidation=neuralFit?evaluateHoldout(validation,neuralFit):{
     evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MORE_MATURED_TRAINING_SAMPLES',
     sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
   };
-  // Compare the neural challenger with logistic baselines trained on the exact
-  // same sample window as well as the all-history and recent-window challengers.
   // The untouched final block is scored only after validation has selected a model.
-  const neuralSameWindowLogisticFit=neuralFit
-    ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
     ?evaluateHoldout(validation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
   const comparisonMargin=Math.max(0.002,Number(neuralSelectionMargin)||0);
