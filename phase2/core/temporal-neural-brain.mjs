@@ -21,7 +21,7 @@ const MIN_TRAIN = 160;
 const MAX_TRAIN = 960;
 const MIN_VALIDATION = 24;
 const MIN_HOLDOUT = 40;
-const LIVE_HOLDOUT = 100;
+const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
 const finite = value => {
@@ -444,7 +444,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
     ?liveHoldoutSamples:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
-  const validationTargetSamples=Math.max(minimumValidationSamples*2,Math.ceil(liveHoldoutSamples*1.5));
+  const validationTargetSamples=rows.length>=liveHoldoutSamples*5
+    ?Math.ceil(liveHoldoutSamples*4/3)
+    :Math.max(minimumValidationSamples*2,60);
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
     validationTargetSamples,2*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;

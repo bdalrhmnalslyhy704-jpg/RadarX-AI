@@ -245,7 +245,7 @@ jobs:
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
-                  Number(temporalNetwork.holdout?.sample_count)>=100&&
+                  Number(temporalNetwork.holdout?.sample_count)>=150&&
                   temporalComparison.passed===true&&temporalComparison.beats_base_rate===true&&
                   temporalComparison.beats_pooled_logistic===true;
                 const paperValidation=value.paper_validation_profile||{};
