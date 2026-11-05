@@ -61,7 +61,8 @@ test('Pre-Move startup delay is independent from the recurring scan interval',as
       preMoveBackgroundInitialDelayMs:120000}
   };
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
-  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest});
+  const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest,
+    buildInfo:{commit:'TEST_FIXTURE_COMMIT_224',branch:'build224-multi-analyst-20261007'}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
     const started=server.startPreMoveWatchWorker();
@@ -86,6 +87,8 @@ test('Pre-Move startup delay is independent from the recurring scan interval',as
     assert.deepEqual(deployment.pre_move_scanner_contract.ticker_activity_watch_contract,
       started.scanner_contract.ticker_activity_watch_contract,
       'deployment-info must expose the exact watch-tier code version so stale containers cannot pass live acceptance');
+    assert.deepEqual(deployment.build_identity,{commit:'TEST_FIXTURE_COMMIT_224',branch:'build224-multi-analyst-20261007'},
+      'deployment-info must identify the exact source revision running on the service');
   }finally{
     server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});

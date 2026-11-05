@@ -640,7 +640,7 @@ export function mergeArchivedEarlyWakeWatchAlerts(scanWatchAlerts,archivedMoveAl
   return merged;
 }
 
-export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null,storageInfo=null}= {}){
+export function createApiServer({config,store,monitor,pushProvider,pushManager=null,moveSentinel=null,strongMoveRadar=null,rotationLagRadar=null,liquidityAbsorptionRadar=null,kahirRadar=null,professorRadar=null,doomsdayRadar=null,alMuqawimRadar=null,symbolDeepAnalyzer=null,multiAnalystRadar=null,earlyExpansionRadar=null,coinHunterRadar=null,whaleAccumulationRadar=null,falconEyeRadar=null,marketRadarRest=null,radarSwarm=null,radarSignalOutcomeWorker=null,adaptiveTraderSnapshotProvider=null,adaptiveTraderWorker=null,storageInfo=null,buildInfo=null}= {}){
   const counters=new Map();
   const nativePushTestLastAt=new Map();
   let missedMoverAuditCache={at:0,cycles:0,report:null};
@@ -1244,6 +1244,10 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
         try{swarm=typeof radarSwarm?.snapshot==='function'?radarSwarm.snapshot():null;}catch{}
         return send(res,200,{
           service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
+          build_identity:{
+            commit:String(buildInfo?.commit||'').trim()||null,
+            branch:String(buildInfo?.branch||'').trim()||null
+          },
           runtime_environment:String(config.environment||'unknown'),
           radar_autostart_enabled:config.radarControl?.autostart===true||
             (config.radarControl?.autostart!==false&&String(config.environment||'').toLowerCase()!=='staging'),
