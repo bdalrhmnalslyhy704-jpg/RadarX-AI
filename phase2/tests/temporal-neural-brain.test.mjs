@@ -201,7 +201,8 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
   assert.ok(expert.training_samples>=80);
   assert.equal(expert.selection_samples,24,
     'the selected chronological window contains two time groups in this fixture');
-  assert.equal(expert.selection_positive_samples,0);
+  assert.ok(expert.selection_positive_samples<3,
+    'local selection positives are below the specialist minimum and must use pooled selection');
   assert.equal(expert.member_selection_source,'POOLED_SELECTION_BLOCK_FALLBACK');
   assert.ok(expert.member_selection_samples>expert.selection_samples);
   assert.equal(expert.probability_calibration.fit_on,'POOLED_SELECTION_BLOCK_FALLBACK');
