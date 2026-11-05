@@ -129,8 +129,12 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'training labels must resolve before member selection begins');
   assert.equal(expert.probability_calibration.method,'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1');
   assert.equal(expert.probability_calibration.fit_on,'REGIME_SELECTION_ONLY');
-  assert.equal(expert.probability_calibration.sample_count,expert.selection_samples,
-    'probability calibration may use only the disjoint regime-selection block');
+  assert.equal(expert.probability_calibration.sample_count,expert.selection_calibration_samples,
+    'probability calibration may use only the selected chronological selection block');
+  assert.equal(expert.member_selection_samples,expert.selection_calibration_samples,
+    'member ranking and calibration must use the same selection-only rows');
+  assert.ok(['REGIME_SELECTION_ONLY','POOLED_SELECTION_BLOCK_FALLBACK']
+    .includes(expert.probability_calibration.fit_on));
   assert.equal(profile.calibration_fit_scope,'REGIME_SELECTION_BLOCK_ONLY');
   assert.ok(expert.selection_start_at<expert.validation_start_at,
     'member selection and reported validation must use disjoint chronological rows');
