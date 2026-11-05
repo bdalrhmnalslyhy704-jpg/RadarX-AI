@@ -91,7 +91,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
 });
 
-test('shared TCN evaluates mixed market regimes without requiring a separate validation and holdout in every regime',()=>{
+test('TCN trains and validates an independent expert for each supported BTC regime',()=>{
   const rows=[];
   for(let group=0;group<16;group++){
     for(let index=0;index<24;index++){
@@ -109,6 +109,18 @@ test('shared TCN evaluates mixed market regimes without requiring a separate val
   assert.equal(profile.validation.evaluated,true);
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
+  const expert=profile.regime_specialists.BTC_RISK_ON;
+  assert.equal(expert.model_scope,'INDEPENDENT_BTC_REGIME_TCN_EXPERT');
+  assert.ok(expert.training_samples>=80);
+  assert.ok(expert.selection_samples>=10);
+  assert.ok(expert.validation_samples>=24);
+  assert.ok(expert.holdout_samples>=20);
+  assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at,
+    'training labels must resolve before member selection begins');
+  assert.ok(expert.selection_start_at<expert.validation_start_at,
+    'member selection and reported validation must use disjoint chronological rows');
+  assert.ok(expert.validation_start_at<profile.holdout_start_at,
+    'final holdout must remain strictly later than all fitting and selection data');
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_HOLDOUT_COVERAGE');
   assert.ok(profile.holdout_comparison.sample_count>=40);
 });
