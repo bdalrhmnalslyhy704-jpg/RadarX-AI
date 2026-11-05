@@ -128,7 +128,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
 
 test('mature history reserves a broad untouched holdout for both BTC regime experts',()=>{
   const rows=[];
-  for(let group=0;group<50;group++){
+  for(let group=0;group<70;group++){
     for(let index=0;index<20;index++){
       const row=sample(group,index);
       const btcRiskOn=group%2===0;
