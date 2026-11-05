@@ -596,9 +596,30 @@ export function buildTemporalNeuralProfile(samples = [], {
   const trainingByRegime=countByRegime(fitRows);
   const validationByRegime=countByRegime(validation);
   const holdoutByRegime=countByRegime(holdout);
+  const regimeTargets=block=>Object.fromEntries(regimes.map(regime=>{
+    const rows=block.filter(row=>regimeOfSequence(row.sequence)===regime);
+    return [regime,{
+      samples:rows.length,
+      positive:rows.filter(row=>row.target===1).length,
+      negative:rows.filter(row=>row.target===0).length
+    }];
+  }));
+  const trainingTargets=regimeTargets(fitRows);
+  const validationTargets=regimeTargets(validation);
+  const holdoutTargets=regimeTargets(holdout);
+  const minRegimePositive=Math.max(5,Math.ceil(minimumValidationSamples*0.2));
+  const minRegimeNegative=Math.max(20,Math.ceil(minimumValidationSamples*0.8));
+  // A regime is supported only when it is represented in every chronological
+  // block and both validation/holdout contain enough positive and negative
+  // first-passage labels. Counts alone are not proof of predictive superiority.
   const supportedRegimes=regimes.filter(regime=>
     trainingByRegime[regime]>=minRegimeTraining&&
-    holdoutByRegime[regime]>=minRegimeHoldout);
+    validationByRegime[regime]>=minRegimeValidation&&
+    holdoutByRegime[regime]>=minRegimeHoldout&&
+    validationTargets[regime].positive>=minRegimePositive&&
+    validationTargets[regime].negative>=minRegimeNegative&&
+    holdoutTargets[regime].positive>=minRegimePositive&&
+    holdoutTargets[regime].negative>=minRegimeNegative);
   const probabilityReady=holdoutPassed&&supportedRegimes.length>0;
   const liveReady=probabilityReady&&holdout.length>=liveHoldoutSamples;
   const specialistProfiles=Object.fromEntries(regimes.map(regime=>{
@@ -609,9 +630,18 @@ export function buildTemporalNeuralProfile(samples = [], {
       training_samples:trainingByRegime[regime],
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
+      training_positive_samples:trainingTargets[regime].positive,
+      validation_positive_samples:validationTargets[regime].positive,
+      validation_negative_samples:validationTargets[regime].negative,
+      holdout_positive_samples:holdoutTargets[regime].positive,
+      holdout_negative_samples:holdoutTargets[regime].negative,
       required_training_samples:minRegimeTraining,
       required_validation_samples:minRegimeValidation,
       required_holdout_samples:minRegimeHoldout,
+      required_validation_positive_samples:minRegimePositive,
+      required_holdout_positive_samples:minRegimePositive,
+      required_validation_negative_samples:minRegimeNegative,
+      required_holdout_negative_samples:minRegimeNegative,
       selected:supported&&selected,
       probability_ready:supported&&probabilityReady,
       live_eligibility_ready:supported&&liveReady,
@@ -661,6 +691,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     live_eligibility_ready:liveReady,
     supported_regimes:supportedRegimes,
     regime_specialists:specialistProfiles,
+    regime_data_coverage:{
+      training:trainingTargets,validation:validationTargets,holdout:holdoutTargets,
+      minimum_positive_samples:minRegimePositive,
+      minimum_negative_samples:minRegimeNegative
+    },
     validation:{
       ...validationModel,selected_over_pooled_logistic:selected,
       pooled_logistic_brier_score:validationLogistic.model_brier_score,

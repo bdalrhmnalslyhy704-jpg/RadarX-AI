@@ -407,6 +407,9 @@ function fitNeuralEnsemble(training, options = {}) {
 function predictFromFit(features, fit) {
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
+    const selected=Number(fit.selected_member_index);
+    if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length)
+      return predictFromFit(features,fit.members[selected]);
     const predictions=fit.members.map(member=>predictFromFit(features,member));
     if(predictions.some(value=>!Number.isFinite(value)))return null;
     return clamp(mean(predictions),0.02,0.98);
@@ -705,10 +708,20 @@ export function buildCognitiveLearningProfile(samples = [], {
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit
     }):null;
-  const neuralValidation=neuralFit?evaluateHoldout(validation,neuralFit):{
-    evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MORE_MATURED_TRAINING_SAMPLES',
-    sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
-  };
+  // Freeze one ensemble member using only the middle chronological validation
+  // block. Averaging members with conflicting schedules can dilute the strongest
+  // challenger; the untouched holdout remains reserved for the final decision.
+  const neuralMemberValidation=neuralFit?neuralFit.members.map((member,index)=>({
+    index,metrics:evaluateHoldout(validation,member)
+  })):[];
+  const neuralMemberOrder=neuralMemberValidation.filter(row=>row.metrics.evaluated===true)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+  if(neuralFit)neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
+  const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
+    ?evaluateHoldout(validation,neuralFit):{
+      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_VALIDATION_SAMPLES',
+      sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
+    };
   // The untouched final block is scored only after validation has selected a model.
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
     ?evaluateHoldout(validation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
@@ -819,6 +832,12 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
+      selected_member_index:neuralFit?.selected_member_index??null,
+      member_validation_brier_scores:neuralMemberValidation.map(row=>({
+        index:row.index,brier_score:row.metrics.model_brier_score,
+        base_rate_brier_score:row.metrics.base_rate_brier_score,
+        beat_base_rate:row.metrics.beat_base_rate
+      })),
       trained: neuralFit!==null, selected: neuralSelected,
       probability_ready: neuralProbabilityReady,
       live_eligibility_ready:neuralLiveReady,
