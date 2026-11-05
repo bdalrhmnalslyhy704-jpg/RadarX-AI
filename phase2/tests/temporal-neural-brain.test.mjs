@@ -79,7 +79,10 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
-  assert.equal(profile.holdout_comparison.sample_count,profile.holdout_samples);
+  assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
+    'the model comparison must report the exact number of holdout rows it actually scored');
+  assert.ok(profile.holdout_comparison.sample_count>=40,
+    'the scored holdout must meet the research minimum');
   assert.equal(profile.live_eligibility_ready,false,
     'a small research holdout must never satisfy the 100-outcome live gate');
   if(profile.probability_ready){
