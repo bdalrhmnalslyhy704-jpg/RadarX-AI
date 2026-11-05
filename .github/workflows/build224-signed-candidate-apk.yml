@@ -119,9 +119,11 @@ jobs:
           {
             echo "ANDROID_HOME=$SDK"
             echo "ANDROID_SDK_ROOT=$SDK"
+          } >> "$GITHUB_ENV"
+          {
             echo "$SDK/cmdline-tools/16.0/bin"
             echo "$SDK/platform-tools"
-          } >> "$GITHUB_ENV"
+          } >> "$GITHUB_PATH"
           sdkmanager --sdk_root="$SDK" --licenses < <(yes) >/dev/null
           sdkmanager --sdk_root="$SDK" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
           test -x "$SDK/build-tools/35.0.0/apksigner"
