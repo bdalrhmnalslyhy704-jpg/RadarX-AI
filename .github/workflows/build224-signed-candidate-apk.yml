@@ -112,6 +112,9 @@ jobs:
             --output "$RUNNER_TEMP/android-cli.zip"
           unzip -q "$RUNNER_TEMP/android-cli.zip" -d "$SDK/cmdline-tools"
           mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/16.0"
+          export ANDROID_HOME="$SDK"
+          export ANDROID_SDK_ROOT="$SDK"
+          export PATH="$SDK/cmdline-tools/16.0/bin:$SDK/platform-tools:$PATH"
           {
             echo "ANDROID_HOME=$SDK"
             echo "ANDROID_SDK_ROOT=$SDK"
