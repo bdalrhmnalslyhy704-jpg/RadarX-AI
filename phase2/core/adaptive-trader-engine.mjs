@@ -1036,12 +1036,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return counts;
   },{});
 
-  // The first 8 highest-priority markets get a deeper 5m archive. A 12-market
-  // deep cohort repeatedly hit the hosted scan deadline on the 0.5 CPU service,
-  // leaving several pairs without a complete temporal tensor. Eight deep pairs
-  // prioritize complete 21-day 5m windows; remaining symbols keep a bounded
-  // two-page window so the scan can finish and the TCN gets usable histories.
-  const deepTemporalHistorySymbols=new Set(selected.slice(0,8).map(row=>String(row?.symbol||'').toUpperCase()));
+  // Keep 5m REST history bounded to two pages for every selected symbol.
+  // TCN V6 carries an explicit micro-availability mask and learns from valid
+  // closed 15m/BTC history when older 5m bars are absent. Re-fetching 21 days of
+  // 5m bars added dozens of REST calls and repeatedly exhausted the live budget.
   const pendingBySymbol=new Map();
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     const symbol=String(sample?.symbol||'').trim().toUpperCase();
@@ -1078,7 +1076,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       let pagesFetched=1;
       let nextEndTime=Number(latestRows[0]?.[0])-1;
       let backfillError=null;
-      const maxPages=deepTemporalHistorySymbols.has(String(ticker.symbol||'').toUpperCase())?6:2;
+      const maxPages=2;
       while(Number.isFinite(nextEndTime)&&nextEndTime>0&&pagesFetched<maxPages){
         try{
           const older=await rest.request('/api/v3/klines',{
