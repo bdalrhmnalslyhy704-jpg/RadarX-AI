@@ -75,6 +75,13 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.holdout_samples>=40,
     'small research fixtures use the 40-sample research minimum; live readiness still requires 100');
   assert.equal(profile.training_positive_count+profile.training_negative_count,profile.training_samples);
+  assert.equal(profile.shared_model_training_samples,profile.training_samples);
+  assert.equal(profile.shared_model_training_max_outcome_resolved_at<profile.shared_model_training_cutoff_at,true,
+    'only labels resolved before the shared model training cutoff may enter TCN fitting');
+  assert.equal(profile.shared_model_training_cutoff_at<profile.shared_model_selection_cutoff_at,true,
+    'member selection must use rows strictly after the shared TCN training block');
+  assert.equal(profile.shared_model_selection_cutoff_at,profile.validation_start_at,
+    'reported validation starts after member selection finishes');
   assert.ok(profile.validation.positive_rate_pct>=0&&profile.validation.positive_rate_pct<=100);
   assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
