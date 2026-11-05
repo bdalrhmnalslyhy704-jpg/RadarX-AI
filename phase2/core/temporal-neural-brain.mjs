@@ -322,8 +322,11 @@ function fitMember(rows, seed, {
 
 function predict(sequence, fitted) {
   if (!validSequence(sequence) || !fitted) return null;
-  const selectedIndex=Number.isInteger(fitted.selected_member_index)
-    ?fitted.selected_member_index:-1;
+  const regime=regimeOfSequence(sequence);
+  const regimeIndex=Number.isInteger(fitted.selected_member_by_regime?.[regime])
+    ?fitted.selected_member_by_regime[regime]:-1;
+  const selectedIndex=regimeIndex>=0?regimeIndex:
+    Number.isInteger(fitted.selected_member_index)?fitted.selected_member_index:-1;
   if(selectedIndex>=0&&selectedIndex<fitted.members.length){
     const value=forward(sequence,fitted.members[selectedIndex]).probability;
     return Number.isFinite(value)?clamp(value,0.02,0.98):null;
