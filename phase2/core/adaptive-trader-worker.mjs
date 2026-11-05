@@ -20,7 +20,7 @@ const MAX_COGNITIVE_JOURNAL=3000;
 const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
 
 // Historical state created before the TCN upgrade may already contain the same
-// baseline ID without its 24x28 tensor. Validate strictly and backfill only from
+// baseline ID without its 24x29 tensor. Validate strictly and backfill only from
 // a freshly rebuilt, closed-candle sample; never synthesize missing channels.
 function hasValidTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===24&&sequence.every(step=>
