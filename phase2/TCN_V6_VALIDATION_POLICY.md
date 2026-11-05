@@ -47,3 +47,5 @@ hyperparameter updates. The validation/holdout comparison margin and live
 sample requirements remain unchanged.
 
 Regression fixture: a regime with zero positive local selection outcomes may use the pooled selection window, while its own validation and holdout remain regime-specific and later in time.
+
+The sparse-regime regression requires fewer than three local positive selection outcomes before using pooled chronological selection; it does not require a zero-positive local slice.
