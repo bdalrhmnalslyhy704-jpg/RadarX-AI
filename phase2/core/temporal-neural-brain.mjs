@@ -510,7 +510,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     return groups;
   };
   // Reserve an untouched final block. Once at least 500 valid sequences exist,
-  // the live gate gets at least 100 complete timestamp-group outcomes.
+  // reserve an expanded final block so one eligible regime can still supply the full live holdout minimum.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*4
     ?liveHoldoutSamples+30:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
@@ -573,6 +573,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
       trained:false,selected:false,regime_specialists:emptyCoverage,
       supported_regimes:[],
+      selected_regimes:[],
       validation:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
       holdout:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
       holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
