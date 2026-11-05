@@ -409,6 +409,31 @@ function evaluate(rows, predictFn, baseRate) {
     improvement_vs_base_rate: Number((baseBrier - modelBrier).toFixed(5))
   };
 }
+
+function aggregateEvaluations(entries){
+  const valid=(Array.isArray(entries)?entries:[]).filter(row=>row?.evaluated===true&&
+    Number(row.sample_count)>0&&Number.isFinite(Number(row.model_brier_score))&&
+    Number.isFinite(Number(row.base_rate_brier_score)));
+  const count=valid.reduce((sum,row)=>sum+Number(row.sample_count),0);
+  if(!count)return {evaluated:false,sample_count:0,positive_count:0,negative_count:0,
+    positive_rate_pct:null,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false};
+  const weighted=key=>valid.reduce((sum,row)=>sum+Number(row[key])*Number(row.sample_count),0)/count;
+  const model=weighted('model_brier_score'),base=weighted('base_rate_brier_score');
+  const positive=valid.reduce((sum,row)=>sum+Number(row.positive_count||0),0);
+  const negative=count-positive;
+  const directionalRows=valid.filter(row=>Number.isFinite(Number(row.directional_accuracy_pct)));
+  const directionalCount=directionalRows.reduce((sum,row)=>sum+Number(row.sample_count),0);
+  return {
+    evaluated:true,sample_count:count,positive_count:positive,negative_count:negative,
+    positive_rate_pct:Number((positive/count*100).toFixed(2)),
+    model_brier_score:Number(model.toFixed(5)),base_rate_brier_score:Number(base.toFixed(5)),
+    log_loss:valid.every(row=>Number.isFinite(Number(row.log_loss)))?Number(weighted('log_loss').toFixed(5)):null,
+    directional_accuracy_pct:directionalCount?Number((directionalRows.reduce((sum,row)=>sum+
+      Number(row.directional_accuracy_pct)*Number(row.sample_count),0)/directionalCount).toFixed(1)):null,
+    beat_base_rate:model+0.002<base,
+    improvement_vs_base_rate:Number((base-model).toFixed(5))
+  };
+}
 function fitEnsemble(rows, options = {}) {
   const baseRate=Number.isFinite(Number(options.baseRate))
     ?clamp(Number(options.baseRate),0.02,0.98)
