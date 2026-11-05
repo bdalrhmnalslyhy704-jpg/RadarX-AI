@@ -17,3 +17,5 @@ unweighted Brier objective, matching the reported selection, validation, and
 holdout metric. Member choice, residual scale selection, and probability
 calibration remain confined to the chronological selection block. Validation
 and final holdout are not used for optimization or tuning.
+
+The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version.
