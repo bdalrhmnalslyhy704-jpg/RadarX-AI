@@ -838,26 +838,18 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null
     }];
   }));
-  const reportTrainingSamples=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingByRegime[regime]||0),0):fitRows.length;
-  const reportSelectionSamples=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(selectionByRegime[regime]||0),0):0;
-  const reportValidationSamples=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(validationByRegime[regime]||0),0):validation.length;
-  const reportHoldoutSamples=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(holdoutByRegime[regime]||0),0):holdout.length;
-  const reportTrainingPositive=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingTargets[regime]?.positive||0),0)
-    :targets.filter(value=>value===1).length;
-  const reportTrainingNegative=hasDiagnosticRegimes
-    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingTargets[regime]?.negative||0),0)
-    :targets.filter(value=>value===0).length;
+  // Top-level sample counts describe the shared model's actual fit and the
+  // complete chronological evidence blocks. Per-regime scored subsets remain
+  // explicit under regime_specialists and holdout_comparison.
+  const reportTrainingSamples=sharedTrainingRows.length;
+  const reportSelectionSamples=Object.values(selectionByRegime).reduce((sum,value)=>sum+Number(value||0),0);
+  const reportValidationSamples=Object.values(validationByRegime).reduce((sum,value)=>sum+Number(value||0),0);
+  const reportHoldoutSamples=holdout.length;
+  const reportTrainingPositive=targets.filter(value=>value===1).length;
+  const reportTrainingNegative=targets.filter(value=>value===0).length;
   const reportTrainingPrior=(reportTrainingPositive+2)/(reportTrainingSamples+4);
-  // The top-level split reports the shared outer chronological boundary;
-  // each specialist publishes its own earlier training/selection/validation
-  // sub-boundaries separately in regime_specialists.
-  const reportMaxTrainingResolvedAt=maxTrainingOutcomeResolvedAt;
-  const reportValidationStartAt=validationStart;
+  const reportMaxTrainingResolvedAt=sharedTrainingMaxResolvedAt;
+  const reportValidationStartAt=sharedSelectionCutoffAt;
   const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
     !validationModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_BASE_RATE':
     !validationLogistic.evaluated?'REGIME_LOGISTIC_VALIDATION_NOT_EVALUATED':
@@ -886,8 +878,13 @@ export function buildTemporalNeuralProfile(samples = [], {
     model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
     residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
+    shared_model_training_samples:sharedTrainingRows.length,
+    shared_model_selection_samples:reportSelectionSamples,
     selection_samples:reportSelectionSamples,
     validation_samples:reportValidationSamples,holdout_samples:reportHoldoutSamples,
+    shared_model_training_cutoff_at:sharedTrainingCutoffAt,
+    shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
+    shared_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
     required_training_samples:minTrainingSamples,
     required_selection_samples:minSelectionSamples,
     required_validation_samples:minimumValidationSamples,
