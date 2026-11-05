@@ -113,8 +113,8 @@ test('stale, crossed or empty order books fail closed and do not synthesize dept
 
 test('historical learning examples use only baseline candles and label returns four hours later',()=>{
   const now=Date.now();
-  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
-  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,960,5*60*1000,10,0.00003);
   const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
     symbol:'HISTUSDT',klines,fastKlines,btcKlines,now,maxSamples:8
@@ -964,8 +964,8 @@ test('deep historical capture expands to 110 non-overlapping closed-candle outco
 
 test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
   const now=Date.now();
-  const klines=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
-  const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
+  const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,960,5*60*1000,10,0.00003);
   const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const rows=[];
   for(let i=0;i<80;i++){
