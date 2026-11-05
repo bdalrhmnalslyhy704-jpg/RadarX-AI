@@ -229,12 +229,24 @@ jobs:
             temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
             temporal_network_regime_specialists:Object.fromEntries(Object.entries(temporalNetwork.regime_specialists||{}).map(([regime,specialist])=>[
               regime,{status:String(specialist?.status||'UNKNOWN'),
+                support_gaps:Array.isArray(specialist?.support_gaps)?specialist.support_gaps:[],
                 training_samples:Number(specialist?.training_samples)||0,
+                training_positive_samples:Number(specialist?.training_positive_samples)||0,
+                training_negative_samples:Number(specialist?.training_negative_samples)||0,
+                selection_samples:Number(specialist?.selection_samples)||0,
+                selection_positive_samples:Number(specialist?.selection_positive_samples)||0,
+                selection_negative_samples:Number(specialist?.selection_negative_samples)||0,
                 validation_samples:Number(specialist?.validation_samples)||0,
+                validation_positive_samples:Number(specialist?.validation_positive_samples)||0,
+                validation_negative_samples:Number(specialist?.validation_negative_samples)||0,
                 holdout_samples:Number(specialist?.holdout_samples)||0,
+                holdout_positive_samples:Number(specialist?.holdout_positive_samples)||0,
+                holdout_negative_samples:Number(specialist?.holdout_negative_samples)||0,
                 selected:specialist?.selected===true,probability_ready:specialist?.probability_ready===true,
-                validation_brier:specialist?.validation?.model_brier_score??null,
-                holdout_brier:specialist?.holdout?.model_brier_score??null}
+                validation_brier:specialist?.validation_brier??null,
+                validation_logistic_brier:specialist?.validation_pooled_logistic_brier??null,
+                holdout_brier:specialist?.holdout_brier??null,
+                holdout_logistic_brier:specialist?.holdout_pooled_logistic_brier??null}
             ])),
             spot_history_coverage:{
               worker_summary_meta_present:Boolean(summary&&summary.meta&&typeof summary.meta==='object'),
