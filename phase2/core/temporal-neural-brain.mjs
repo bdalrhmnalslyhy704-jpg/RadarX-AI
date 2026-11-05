@@ -197,7 +197,7 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   };
 }
 
-function forward(sequence, model) {
+function forward(sequence, model, residualScale=1) {
   const activations = [sequence];
   const depthCaches = [];
   for (let layer = 0; layer < DILATIONS.length; layer++) {
@@ -235,16 +235,17 @@ function forward(sequence, model) {
   for(let feature=0;feature<baselineFeatures.length;feature++){
     logit+=baselineFeatures[feature]*(Number(model.skipWeights?.[feature])||0);
   }
-  for (let channel = 0; channel < pooled.length; channel++) logit += pooled[channel] * model.outputWeights[channel];
+  const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
+  for (let channel = 0; channel < pooled.length; channel++) logit += pooled[channel] * model.outputWeights[channel] * boundedResidualScale;
   return { probability: logistic(logit), activations, depthCaches, pooled, poolStart, poolCount, baselineFeatures };
 }
 
-function gradientsFor(sequence, target, model, cache, lossWeight=1) {
+function gradientsFor(sequence, target, model, cache) {
   const gradients = zerosLike(model);
   const activationGradients = Array(DILATIONS.length + 1);
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-  const error = (cache.probability - target) * clamp(Number(lossWeight)||1,1,4);
+  const error = cache.probability - target;
   // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
@@ -293,11 +294,6 @@ function fitMember(rows, seed, {
   baseRate = 0.5, baselineFit = null
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
-  const positiveCount=rows.filter(row=>row.target===1).length;
-  const negativeCount=rows.length-positiveCount;
-  // Capped square-root weighting is computed exclusively from the training
-  // block. Evaluation still uses the natural, unweighted outcome prevalence.
-  const positiveClassWeight=clamp(Math.sqrt((negativeCount+1)/(positiveCount+1)),1,4);
   const trainableParameters=()=>({
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
     biases:model.biases,outputWeights:model.outputWeights
@@ -307,8 +303,7 @@ function fitMember(rows, seed, {
     const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
       const cache = forward(row.sequence, model);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,
-        row.target===1?positiveClassWeight:1);
+      const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
       const plus = (target, source) => Array.isArray(target)
         ? target.map((value, index) => plus(value, source[index]))
         : target + source;
@@ -323,7 +318,6 @@ function fitMember(rows, seed, {
     Object.assign(model, step.parameters);
     optimizer = step.state;
   }
-  model.training_positive_class_weight=Number(positiveClassWeight.toFixed(5));
   return model;
 }
 
@@ -400,7 +394,7 @@ function predict(sequence, fitted) {
     :Number.isInteger(fitted.selected_member_index)?fitted.selected_member_index:-1;
   let rawProbability;
   if(selectedIndex>=0&&selectedIndex<fitted.members.length){
-    rawProbability=forward(sequence,fitted.members[selectedIndex]).probability;
+    rawProbability=forward(sequence,fitted.members[selectedIndex],fitted.residual_scales_by_regime?.[regime]??1).probability;
   }else{
     const predictions=fitted.members.map(member=>forward(sequence,member).probability);
     if(!predictions.length||predictions.some(value=>!Number.isFinite(value)))return null;
@@ -531,11 +525,10 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SQRT_CLASS_WEIGHTED_RESIDUAL_TCN_WITH_SELECTION_CALIBRATION_V2',
-    member_training_profiles:memberProfiles.map(profile=>({...profile,positive_class_weight:
-      Number(members[0]?.training_positive_class_weight)||1})),
-    training_positive_class_weight:Number(members[0]?.training_positive_class_weight)||1,
-    training_class_weight_scope:'TRAINING_BLOCK_ONLY',
+    training_strategy:'REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V7',
+    member_training_profiles:memberProfiles,
+    residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
+    candidate_residual_scales:[0,0.25,0.5,0.75,1],
     training_prior_probability:baseRate
   };
 }
@@ -730,6 +723,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minSelectionSamples=Math.max(10,Math.ceil(minimumValidationSamples*0.4));
   const minSelectionPositive=3,minSelectionNegative=8;
   fitted.selected_member_by_regime={};
+  fitted.residual_scales_by_regime={};
   fitted.probability_calibrators_by_regime={};
   const pooledSelectionRows=fitRows.filter(row=>
     row.at>=sharedTrainingCutoffAt&&row.at<sharedSelectionCutoffAt&&
@@ -826,20 +820,29 @@ export function buildTemporalNeuralProfile(samples = [], {
     // Reuse the shared three-member TCN. The active regime selects a member
     // only from its disjoint selection block; no selection/validation/holdout
     // example is included in the shared model's training rows.
-    const memberRanks=fitted.members.map((member,index)=>({
-      index,metrics:evaluate(memberSelectionRows,sequence=>forward(sequence,member).probability,regimePrior)
-    })).filter(row=>row.metrics.evaluated===true)
-      .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+    const candidateResidualScales=[0,0.25,0.5,0.75,1];
+    const memberRanks=fitted.members.flatMap((member,index)=>
+      candidateResidualScales.map(residualScale=>({
+        index,residual_scale:residualScale,
+        metrics:evaluate(memberSelectionRows,
+          sequence=>forward(sequence,member,residualScale).probability,regimePrior)
+      }))
+    ).filter(row=>row.metrics.evaluated===true)
+      .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+        a.index-b.index||b.residual_scale-a.residual_scale);
     const selectedMemberIndex=memberRanks.length?memberRanks[0].index:-1;
+    const selectedResidualScale=memberRanks.length?memberRanks[0].residual_scale:1;
     fitted.selected_member_by_regime[regime]=selectedMemberIndex;
+    fitted.residual_scales_by_regime[regime]=selectedResidualScale;
     const memberSelectionScores=memberRanks.map(row=>({
-      index:row.index,brier_score:row.metrics.model_brier_score,
+      index:row.index,residual_scale:row.residual_scale,
+      brier_score:row.metrics.model_brier_score,
       base_rate_brier_score:row.metrics.base_rate_brier_score,
       beat_base_rate:row.metrics.beat_base_rate
     }));
     const selectionCalibrator=fitSelectionProbabilityCalibrator(
       memberSelectionRows,
-      sequence=>forward(sequence,fitted.members[selectedMemberIndex]).probability,
+      sequence=>forward(sequence,fitted.members[selectedMemberIndex],selectedResidualScale).probability,
       {fitOn:localSelectionReady?'REGIME_SELECTION_ONLY':'POOLED_SELECTION_BLOCK_FALLBACK'}
     );
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
@@ -863,6 +866,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
       training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
       member_selection_samples:memberSelectionRows.length,member_selection_source:memberSelectionSource,
+      selected_member_index:selectedMemberIndex,selected_residual_scale:selectedResidualScale,
       selection_calibration_samples:selectionCalibrator.sample_count,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
@@ -919,6 +923,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       selection_samples:selectionByRegime[regime],
       member_selection_samples:Number(result.member_selection_samples)||0,
       member_selection_source:result.member_selection_source||null,
+      selected_member_index:Number.isInteger(result.selected_member_index)?result.selected_member_index:null,
+      selected_residual_scale:Number(result.selected_residual_scale),
       selection_calibration_samples:Number(result.selection_calibration_samples)||0,
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
@@ -985,15 +991,16 @@ export function buildTemporalNeuralProfile(samples = [], {
     member_training_profiles:fitted.member_training_profiles,
     member_validation_scores:fitted.member_validation_scores,
     selected_member_index:fitted.selected_member_index,
-    member_selection_method:'REGIME_SPECIFIC_CHRONOLOGICAL_SELECTION_BLOCK_BRIER',
+    member_selection_method:'REGIME_SPECIFIC_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
+    residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
+    candidate_residual_scales:[0,0.25,0.5,0.75,1],
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
     model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
     residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
     calibration_fit_scope:'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY',
-    training_positive_class_weight:Number(fitted.training_positive_class_weight)||1,
-    training_class_weight_scope:'TRAINING_BLOCK_ONLY',
+    residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     shared_model_training_samples:sharedTrainingRows.length,
     shared_model_selection_samples:reportSelectionSamples,
