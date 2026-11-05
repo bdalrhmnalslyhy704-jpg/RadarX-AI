@@ -239,12 +239,12 @@ function forward(sequence, model) {
   return { probability: logistic(logit), activations, depthCaches, pooled, poolStart, poolCount, baselineFeatures };
 }
 
-function gradientsFor(sequence, target, model, cache, lossWeight=1) {
+function gradientsFor(sequence, target, model, cache) {
   const gradients = zerosLike(model);
   const activationGradients = Array(DILATIONS.length + 1);
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-  const error = (cache.probability - target) * clamp(Number(lossWeight)||1,1,4);
+  const error = cache.probability - target;
   // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
@@ -293,12 +293,6 @@ function fitMember(rows, seed, {
   baseRate = 0.5, baselineFit = null
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
-  const positiveCount=rows.filter(row=>row.target===1).length;
-  const negativeCount=rows.length-positiveCount;
-  // Training-only square-root class weighting reduces rare-positive underfit
-  // without allowing one class to dominate. Selection-only calibration later
-  // restores the probability scale without touching validation or holdout.
-  const positiveClassWeight=clamp(Math.sqrt((negativeCount+1)/(positiveCount+1)),1,4);
   const trainableParameters=()=>({
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
     biases:model.biases,outputWeights:model.outputWeights
@@ -308,8 +302,7 @@ function fitMember(rows, seed, {
     const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
       const cache = forward(row.sequence, model);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,
-        row.target===1?positiveClassWeight:1);
+      const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
       const plus = (target, source) => Array.isArray(target)
         ? target.map((value, index) => plus(value, source[index]))
         : target + source;
@@ -324,7 +317,6 @@ function fitMember(rows, seed, {
     Object.assign(model, step.parameters);
     optimizer = step.state;
   }
-  model.training_positive_class_weight=Number(positiveClassWeight.toFixed(5));
   return model;
 }
 
@@ -532,11 +524,8 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SQRT_CLASS_WEIGHTED_RESIDUAL_TCN_WITH_SELECTION_CALIBRATION_V2',
-    member_training_profiles:memberProfiles.map(profile=>({...profile,positive_class_weight:
-      Number(members[0]?.training_positive_class_weight)||1})),
-    training_positive_class_weight:Number(members[0]?.training_positive_class_weight)||1,
-    training_class_weight_scope:'TRAINING_BLOCK_ONLY',
+    training_strategy:'DIVERSIFIED_EPOCH_AND_REGULARIZATION_ENSEMBLE_V1',
+    member_training_profiles:memberProfiles,
     training_prior_probability:baseRate
   };
 }
@@ -993,8 +982,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
     calibration_fit_scope:'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY',
-    training_positive_class_weight:Number(fitted.training_positive_class_weight)||1,
-    training_class_weight_scope:'TRAINING_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     shared_model_training_samples:sharedTrainingRows.length,
     shared_model_selection_samples:reportSelectionSamples,
