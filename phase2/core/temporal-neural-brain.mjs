@@ -682,10 +682,21 @@ export function buildTemporalNeuralProfile(samples = [], {
   // none passes, retain supported/validation slices for honest diagnostics.
   const diagnosticRegimes=selectedRegimes.length?selectedRegimes:
     validationSelectedRegimes.length?validationSelectedRegimes:supportedRegimes;
-  const validationModel=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_model));
-  const validationLogistic=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_logistic));
-  const holdoutModel=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_model));
-  const holdoutLogistic=aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic));
+  // Keep global block metrics visible when no regime has enough class support.
+  // These fallback diagnostics can never unlock probability readiness.
+  const hasDiagnosticRegimes=diagnosticRegimes.length>0;
+  const validationModel=hasDiagnosticRegimes
+    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_model))
+    :evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
+  const validationLogistic=hasDiagnosticRegimes
+    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_logistic))
+    :evaluate(validation,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+  const holdoutModel=hasDiagnosticRegimes
+    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_model))
+    :evaluate(holdout,sequence=>predict(sequence,fitted),baseRate);
+  const holdoutLogistic=hasDiagnosticRegimes
+    ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
+    :evaluate(holdout,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
   const selected=validationSelectedRegimes.length>0&&validationModel.evaluated&&
     validationModel.beat_base_rate===true&&validationLogistic.evaluated&&
     validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
