@@ -127,6 +127,11 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(expert.holdout_samples>=20);
   assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at,
     'training labels must resolve before member selection begins');
+  assert.equal(expert.probability_calibration.method,'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1');
+  assert.equal(expert.probability_calibration.fit_on,'REGIME_SELECTION_ONLY');
+  assert.equal(expert.probability_calibration.sample_count,expert.selection_samples,
+    'probability calibration may use only the disjoint regime-selection block');
+  assert.equal(profile.calibration_fit_scope,'REGIME_SELECTION_BLOCK_ONLY');
   assert.ok(expert.selection_start_at<expert.validation_start_at,
     'member selection and reported validation must use disjoint chronological rows');
   assert.ok(expert.validation_start_at<profile.holdout_start_at,
