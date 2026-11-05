@@ -1,0 +1,225 @@
+name: RadarX Build 224 Signed APK Candidate
+
+on:
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: radarx-build224-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RADARX_BACKEND_BASE_URL: https://radarx-backend.dhdtech.site
+    steps:
+      - name: Cancel stale DHDTech, TCN, and production APK gate runs
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$GITHUB_REF_NAME&per_page=100" > "$RUNNER_TEMP/runs.json"
+          mapfile -t STALE < <(jq -r --arg current "$GITHUB_RUN_ID" '
+            .workflow_runs[]
+            | select(.status == "queued" or .status == "in_progress")
+            | select((.id | tostring) != $current)
+            | select(
+                .path == ".github/workflows/pre-move-radar-acceptance.yml" or
+                .path == ".github/workflows/dhdtech-adaptive-trader-acceptance.yml" or
+                .path == ".github/workflows/android-release-apk.yml"
+              )
+            | .id
+          ' "$RUNNER_TEMP/runs.json")
+          for id in "${STALE[@]}"; do
+            echo "Cancel stale run $id"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null || \
+              echo "::warning::Could not cancel run $id"
+          done
+          echo "STALE_PRODUCTION_RUNS_CANCELLED=${#STALE[@]}"
+
+      - name: Checkout exact Build 224 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+        timeout-minutes: 10
+
+      - name: Run full backend test suite
+        run: npm test
+        timeout-minutes: 25
+
+      - name: Run Android UI, backend client, background monitoring, and notification regressions
+        run: |
+          set -euo pipefail
+          node android/backend-client-regression.mjs
+          node android/background-monitor-regression.mjs
+          node android/app/src/main/assets/tests/market-radar-integration.test.mjs
+          node android/fcm-watch-notification-regression.mjs
+          node --test android/app/src/main/assets/tests/adaptive-trader-ui.test.mjs
+        timeout-minutes: 5
+
+      - name: Enforce DHDTech-only and paper-only APK source
+        run: |
+          set -euo pipefail
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radarx-backend-client.mjs
+          grep -Fq "$RADARX_BACKEND_BASE_URL" android/app/src/main/assets/radar8-lightning.html
+          grep -Fq 'const DOOMSDAY_BACKEND=DEFAULT_BACKEND_BASE_URL;' android/app/src/main/assets/radarx-doomsday-radar.mjs
+          if grep -RIn --exclude-dir=build "railway.app" android/app/src/main; then
+            echo "::error::Forbidden legacy Railway URL found in Android source."
+            exit 1
+          fi
+          grep -RInq "paper_trading=true" android/app/src/main/assets
+          grep -RInq "real_order_execution=false" android/app/src/main/assets
+          grep -RInq "confidence_score=UNKNOWN" android/app/src/main/assets
+          echo "DHDTECH_ONLY_PAPER_POLICY_OK"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install pinned Android command-line tools
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          SDK="$RUNNER_TEMP/radarx-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl --fail --location --retry 4 --retry-delay 2 \
+            https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip \
+            --output "$RUNNER_TEMP/android-cli.zip"
+          unzip -q "$RUNNER_TEMP/android-cli.zip" -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/16.0"
+          {
+            echo "ANDROID_HOME=$SDK"
+            echo "ANDROID_SDK_ROOT=$SDK"
+            echo "$SDK/cmdline-tools/16.0/bin"
+            echo "$SDK/platform-tools"
+          } >> "$GITHUB_ENV"
+          sdkmanager --sdk_root="$SDK" --licenses < <(yes) >/dev/null
+          sdkmanager --sdk_root="$SDK" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          test -x "$SDK/build-tools/35.0.0/apksigner"
+          rm -f "$RUNNER_TEMP/android-cli.zip"
+
+      - name: Provision Firebase client config when available
+        env:
+          FIREBASE_GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FIREBASE_GOOGLE_SERVICES_JSON_BASE64:-}" ]]; then
+            echo "RADARX_FIREBASE_CLIENT_CONFIGURED=false" >> "$GITHUB_ENV"
+            echo "::warning::Firebase client config absent; local notification polling fallback remains active."
+          else
+            printf '%s' "$FIREBASE_GOOGLE_SERVICES_JSON_BASE64" | base64 --decode > android/app/google-services.json
+            node --input-type=module -e "import fs from 'node:fs';const c=JSON.parse(fs.readFileSync('android/app/google-services.json','utf8'));if(!c.project_info?.project_id||!c.client?.some(x=>x.client_info?.android_client_info?.package_name==='com.radarx.app'))process.exit(1)"
+            echo "RADARX_FIREBASE_CLIENT_CONFIGURED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Require all Release signing secrets
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in ANDROID_RELEASE_KEYSTORE_BASE64 ANDROID_RELEASE_STORE_PASSWORD ANDROID_RELEASE_KEY_ALIAS ANDROID_RELEASE_KEY_PASSWORD; do
+            [[ -n "${!name:-}" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing signing inputs: ${missing[*]}"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/radarx-release.keystore"
+          test -s "$RUNNER_TEMP/radarx-release.keystore"
+
+      - name: Validate embedded assets and Build 224 screens
+        run: |
+          set -euo pipefail
+          find android/app/src/main/assets -maxdepth 1 -type f -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          for f in index.html manifest.json radar8-lightning.html coin-hunter-radar.html whale-accumulation-radar.html falcon-eye-radar.html multi-analyst.html; do
+            test -s "android/app/src/main/assets/$f"
+          done
+          grep -Fq 'multi-analyst-center.html' android/app/src/main/assets/index.html
+          grep -Fq 'whale-accumulation-radar.html' android/app/src/main/assets/index.html
+          grep -Fq 'falcon-eye-radar.html' android/app/src/main/assets/index.html
+          bash -n android/run-emulator-smoke.sh
+
+      - name: Build signed universal Build 224 APK
+        working-directory: android
+        env:
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          ANDROID_RELEASE_KEYSTORE_FILE: ${{ runner.temp }}/radarx-release.keystore
+        run: gradle --no-daemon --no-parallel :app:assembleRelease
+
+      - name: Verify signature, package, and candidate classification
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          CERTS="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --print-certs "$APK")"
+          ! grep -qi "CN=Android Debug" <<<"$CERTS"
+          PACKAGE="$("$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | sed -n "s/^package: name='\([^']*\)'.*$/\1/p" | head -n 1)"
+          [[ "$PACKAGE" == "com.radarx.app" ]]
+          mkdir -p dist
+          cp "$APK" dist/RadarX-Build224-Signed-Candidate.apk
+          sha256sum dist/RadarX-Build224-Signed-Candidate.apk > dist/RadarX-Build224-Signed-Candidate.apk.sha256
+          cat > dist/BUILD224-CANDIDATE-STATUS.txt <<EOF
+          Build: 224
+          Commit: $GITHUB_SHA
+          Package: com.radarx.app
+          Backend: $RADARX_BACKEND_BASE_URL
+          Market: Binance Spot USDT
+          Mode: paper-only
+          real_order_execution: false
+          confidence_score: UNKNOWN
+          DHDTech live acceptance: NOT INCLUDED IN CANDIDATE BUILD
+          TCN live eligibility: NOT ASSERTED
+          Classification: SIGNED INSTALLABLE CANDIDATE, NOT PRODUCTION-ACCEPTED
+          EOF
+
+      - name: Remove signing key
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/radarx-release.keystore"
+          test ! -e "$RUNNER_TEMP/radarx-release.keystore"
+
+      - name: Upload signed candidate APK and verification details
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadarX-Build224-Signed-APK-Candidate
+          path: |
+            dist/RadarX-Build224-Signed-Candidate.apk
+            dist/RadarX-Build224-Signed-Candidate.apk.sha256
+            dist/BUILD224-CANDIDATE-STATUS.txt
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
