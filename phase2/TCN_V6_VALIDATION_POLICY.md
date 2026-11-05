@@ -1,11 +1,11 @@
 # TCN V6 validation policy — Build 224
 
-- Training target: first passage +3% before -2% over four hours using completed 15-minute Binance Spot USDT candles.
+- Target: +3% first passage before -2% within four hours using completed 15-minute Binance Spot USDT candles.
 - The shared TCN ensemble is fitted only on the purged chronological training block.
-- The positive-class weight is capped square-root inverse frequency and is computed from training labels only. Validation and holdout remain naturally imbalanced and are scored without weights.
-- Member choice and probability calibration use only the disjoint chronological regime-selection block. A pooled selection fallback may be used only when a regime's own selection slice lacks class support; it never pools that regime's validation or final holdout.
-- Validation is later than training and selection. Final holdout is later than validation and is never used for fitting, member selection, calibration, early stopping, or hyperparameter changes.
-- Predictive readiness requires the unchanged Brier margin against both the base-rate predictor and pooled logistic challenger on validation and untouched holdout, plus minimum live holdout support.
-- Training completion, a passing validation slice, or a successful scan alone never authorizes probability output or trading.
+- The BTC-regime member and residual contribution scale are selected only on the disjoint chronological selection block. Candidate residual scales are 0%, 25%, 50%, 75%, and 100%.
+- If a regime's local selection slice has insufficient class support, the pooled selection block may be used only for member/scale selection. That fallback never pools the regime's validation or final holdout.
+- Probability calibration is fitted only from the permitted selection block. Validation and final holdout are strictly later.
+- Final predictive readiness requires the unchanged Brier comparison margin against both the base-rate predictor and pooled logistic challenger on chronological validation and untouched holdout, plus the minimum live holdout sample size.
+- A trained TCN or passing validation alone never constitutes predictive superiority.
 
-Safety: Binance Spot analysis only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN until the full predictive and paper validation gates pass.
+Safety: Binance Spot analysis only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN until all predictive and paper-trading gates pass.
