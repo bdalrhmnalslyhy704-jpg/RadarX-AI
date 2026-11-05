@@ -13,6 +13,33 @@ import {MarketWideLightScan, isDirectionalCandidateSymbol} from './market-wide-l
 import {buildUnifiedFeatureSnapshot} from './unified-feature-engine.mjs';
 import {performance} from 'node:perf_hooks';
 import {finiteNumberOr} from './finite-number.mjs';
+import {DEFAULT_PUBLIC_SPOT_REST_URLS} from '../config.mjs';
+
+const TRUSTED_BINANCE_SPOT_REST_ORIGINS = new Set(DEFAULT_PUBLIC_SPOT_REST_URLS.map(value => {
+  try { return new URL(value).origin.toLowerCase(); } catch { return null; }
+}).filter(Boolean));
+
+function canonicalMicroMarketSource(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const label = raw.toUpperCase().replace(/\s+/g, '_');
+  if (['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(label)) {
+    return label;
+  }
+  // RestClient.klines() preserves the actual Binance REST base URL as its source.
+  // Accept only exact HTTPS origins from the repository's official Spot endpoint
+  // list; never trust arbitrary URLs, lookalike domains, or custom non-Binance feeds.
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port ||
+        url.search || url.hash || !['','/'].includes(url.pathname)) return null;
+    if (!TRUSTED_BINANCE_SPOT_REST_ORIGINS.has(url.origin.toLowerCase())) return null;
+    return 'BINANCE_PUBLIC_REST';
+  } catch {
+    return null;
+  }
+}
+
 
 function normalizeRadarTickerRow(row,quote){
   const normalized=normalizeTickerRow(row,quote);
@@ -1013,9 +1040,8 @@ export function buildMicroEarlyFlowWatchCandidate(micro,now=Date.now(),config=EA
     // expects one canonical trusted source, so do not stringify the array (which
     // would make a valid Binance source fail the trust check).
     source:(Array.isArray(micro?.source)?micro.source:[micro?.source])
-      .map(value=>String(value||'').trim().toUpperCase().replace(/\s+/g,'_'))
-      .find(value=>['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(value))
-      || 'UNKNOWN_MARKET_SOURCE',
+      .map(canonicalMicroMarketSource)
+      .find(Boolean) || 'UNKNOWN_MARKET_SOURCE',
     quote_volume_24h:hasFiniteNumber(row?.quoteVolume24h)?Number(row.quoteVolume24h):null,
     // Micro candle data has been validated, but actual order-book depth is not queried at this stage.
     micro_data_validated:true,
