@@ -20,11 +20,11 @@ const MAX_COGNITIVE_JOURNAL=3000;
 const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
 
 // Historical state created before the TCN upgrade may already contain the same
-// baseline ID without its 24x22 tensor. Validate strictly and backfill only from
+// baseline ID without its 24x28 tensor. Validate strictly and backfill only from
 // a freshly rebuilt, closed-candle sample; never synthesize missing channels.
 function hasValidTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===24&&sequence.every(step=>
-    Array.isArray(step)&&step.length===22&&step.every(value=>
+    Array.isArray(step)&&step.length===28&&step.every(value=>
       typeof value==='number'&&Number.isFinite(value)&&Math.abs(value)<=4
     )
   );
@@ -565,7 +565,7 @@ recordServerPaperPortfolio(snapshot,now){
         // states can have the same baseline ID and outcome but no TCN tensor;
         // treating that row as an immutable duplicate left the new network with
         // zero eligible sequences forever. Only overwrite with a fully valid
-        // 24x22 sequence regenerated from verified closed Binance candles.
+        // 24x28 sequence regenerated from verified closed Binance candles.
         const existing=historicalSampleById.get(id);
         if(existing){
           const incomingSequence=hasValidTemporalSequence(row.temporal_sequence);

@@ -143,7 +143,7 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 function buildTemporalSequence(candles, btcCandles, fastCandles) {
   const steps=24;
   const start=candles.length-steps;
-  if(!Array.isArray(candles)||start<24||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))return null;
+  if(!Array.isArray(candles)||start<96||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))return null;
   const history=candles.slice(start-24);
   if(history.length!==48||history.some((row,index)=>
     index>0&&row.openTime-history[index-1].openTime!==15*60*1000))return null;
@@ -190,6 +190,23 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const btcDayHigh=btcDayBaseline.length?Math.max(...btcDayBaseline.map(row=>row.high)):null;
     const btcDrawdownFromDayHigh=btcDayHigh>0&&btcCurrent
       ?(btcCurrent.close/btcDayHigh-1)*100:null;
+    // Asset's own prior-day context: strictly 96 closed candles before current.
+    const assetDayBaseline=candles.slice(index-96,index);
+    const assetDayContiguous=assetDayBaseline.length===96&&assetDayBaseline.every((row,offset)=>
+      offset===0||row.openTime-assetDayBaseline[offset-1].openTime===15*60*1000);
+    const assetFourHourPrior=candles[index-16]||null;
+    const assetDayPrior=assetDayBaseline[0]||null;
+    const assetReturn4h=assetFourHourPrior&&assetFourHourPrior.close>0
+      ?(current.close/assetFourHourPrior.close-1)*100:null;
+    const assetReturn24h=assetDayPrior&&assetDayPrior.close>0
+      ?(current.close/assetDayPrior.close-1)*100:null;
+    const assetDayRanges=assetDayBaseline.map(row=>(row.high-row.low)/row.close);
+    const assetDayVolatility=assetDayRanges.length
+      ?Math.sqrt(mean(assetDayRanges.map(value=>value*value))):null;
+    const assetDayVolumeBase=mean(assetDayBaseline.map(row=>row.quoteVolume));
+    const assetDayTradesBase=mean(assetDayBaseline.map(row=>row.trades));
+    const assetRelativeReturn24h=assetReturn24h!==null&&btcReturn24h!==null
+      ?assetReturn24h-btcReturn24h:null;
     // Align three completed 5m candles to this exact 15m candle and compare
     // them with the preceding 24 completed 5m candles. Missing or gapped micro
     // data rejects the sequence rather than inventing neutral pressure.
@@ -227,6 +244,9 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
        !(btcVolumeRatio>0)||!(btcTradeRatio>0)||
        !Number.isFinite(btcReturn4h)||!Number.isFinite(btcReturn24h)||
        !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh)||
+       !assetDayContiguous||!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
+       !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
+       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0)||
        !(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||
        !(microBuyShare>=0&&microBuyShare<=1)||!(microCurrentVolume>0)||
@@ -256,7 +276,13 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       Math.tanh(btcReturn4h/5),
       Math.tanh(btcReturn24h/10),
       Math.tanh(btcDayVolatility*100),
-      Math.tanh(btcDrawdownFromDayHigh/5)
+      Math.tanh(btcDrawdownFromDayHigh/5),
+      Math.tanh(assetReturn4h/5),
+      Math.tanh(assetReturn24h/10),
+      Math.tanh(assetRelativeReturn24h/10),
+      clamp(Math.log2(clamp(rangeNow/assetDayVolatility,0.05,20)),-2,2),
+      clamp(Math.log2(clamp(current.quoteVolume/assetDayVolumeBase,0.05,20))/2,-2,2),
+      clamp(Math.log2(clamp(current.trades/assetDayTradesBase,0.05,20))/2,-2,2)
     ];
     if (!values.every(Number.isFinite)) return null;
     sequence.push(values);

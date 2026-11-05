@@ -10,8 +10,8 @@
 export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
-export const TEMPORAL_SEQUENCE_CHANNELS=22;
-export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5';
+export const TEMPORAL_SEQUENCE_CHANNELS=28;
+export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -389,7 +389,7 @@ function fitEnsemble(rows, options = {}) {
   const members = SEEDS.map(seed => fitMember(rows, seed, {...options,baseRate}));
   return {
     members,seeds:[...SEEDS],
-    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5',
+    architecture:'TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5',
     training_prior_probability:baseRate
   };
 }
