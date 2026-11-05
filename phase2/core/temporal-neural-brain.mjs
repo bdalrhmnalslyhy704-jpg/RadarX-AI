@@ -323,17 +323,16 @@ function fitMember(rows, seed, {
 function predict(sequence, fitted) {
   if (!validSequence(sequence) || !fitted) return null;
   const regime=regimeOfSequence(sequence);
-  const regimeIndex=Number.isInteger(fitted.selected_member_by_regime?.[regime])
-    ?fitted.selected_member_by_regime[regime]:-1;
-  const selectedIndex=regimeIndex>=0?regimeIndex:
-    Number.isInteger(fitted.selected_member_index)?fitted.selected_member_index:-1;
-  if(selectedIndex>=0&&selectedIndex<fitted.members.length){
-    const value=forward(sequence,fitted.members[selectedIndex]).probability;
+  const model=fitted.regime_fits?.[regime]||fitted;
+  const selectedIndex=Number.isInteger(model.selected_member_index)?model.selected_member_index:
+    Number.isInteger(fitted.selected_member_by_regime?.[regime])?fitted.selected_member_by_regime[regime]:-1;
+  if(selectedIndex>=0&&selectedIndex<model.members.length){
+    const value=forward(sequence,model.members[selectedIndex]).probability;
     return Number.isFinite(value)?clamp(value,0.02,0.98):null;
   }
-  const predictions = fitted.members.map(member => forward(sequence, member).probability);
-  if (!predictions.length || predictions.some(value => !Number.isFinite(value))) return null;
-  return clamp(mean(predictions), 0.02, 0.98);
+  const predictions=model.members.map(member=>forward(sequence,member).probability);
+  if(!predictions.length||predictions.some(value=>!Number.isFinite(value)))return null;
+  return clamp(mean(predictions),0.02,0.98);
 }
 
 function pooledSequence(sequence) {
