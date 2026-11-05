@@ -179,7 +179,12 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   // The shared TCN starts from a pooled-sequence logistic fit trained only
   // on the chronological training block. The convolutional stack learns an
   // additive temporal residual; it cannot erase the linear anchor.
-  const outputWeights = Array(channels).fill(0);
+  // A zero output head blocks gradients from reaching every temporal layer
+  // during the first epoch. Start with a tiny deterministic seed-shaped head:
+  // it preserves the frozen logistic anchor while allowing full backpropagation
+  // from the first training pass without adding runtime randomness.
+  const outputWeights = Array.from({ length: channels }, (_, channel) =>
+    0.01 * Math.sin((channel + 1) * 4.73 + offset));
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
   const baselineWeights=Array.isArray(baselineFit?.weights)&&baselineFit.weights.length===channels*2
     ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4)):Array(channels*2).fill(0);

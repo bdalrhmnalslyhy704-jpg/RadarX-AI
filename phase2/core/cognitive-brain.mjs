@@ -254,7 +254,12 @@ function fitNeuralNetworkModel(training, {
   // never enter initialization.
   const hasBaseline=baselineFit&&Array.isArray(baselineFit.weights)&&
     baselineFit.weights.length===inputSize&&Number.isFinite(Number(baselineFit.intercept));
-  const outputWeights=Array(units2).fill(0);
+  // Do not zero-initialize the residual output head: doing so makes the
+  // first epoch train only the head while every hidden layer receives zero
+  // gradient. A small deterministic seed-shaped head starts end-to-end
+  // backpropagation on epoch one while the frozen logistic skip path remains intact.
+  const outputWeights=Array.from({length:units2},(_,j)=>
+    0.015*Math.sin((j+1)*4.73+seedOffset));
   const skipWeights=hasBaseline
     ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
     :Array(inputSize).fill(0);
