@@ -136,7 +136,7 @@ test('cognitive dashboard distinguishes nested validation, untouched holdout, ad
   assert.match(html,/أخطاء عالية الثقة/);
   assert.match(html,/هذا ارتباط تشخيصي وليس إثباتًا للسبب/);
   assert.match(html,/لا تُرفع العملة إلى مرشح دخول قبل اجتياز الشبكة الزمنية للتحقق والاختبار المستقل/);
-  assert.match(html,/TCN 24×22|TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5/);
+  assert.match(html,/TCN 24×22|TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5/);
   assert.match(html,/temporalNetwork\.probability_ready/);
   assert.match(html,/OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY/);
 });

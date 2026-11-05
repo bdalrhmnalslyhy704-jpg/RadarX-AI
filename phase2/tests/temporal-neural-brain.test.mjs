@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TEMPORAL_TARGET_DEFINITION,
+  TEMPORAL_MODEL_ARCHITECTURE,
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS,
@@ -61,7 +62,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.resolved_samples,16*24);
   assert.equal(profile.trained,true);
-  assert.equal(profile.architecture,'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5');
+  assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.sequence_steps,24);
   assert.equal(profile.sequence_channels,22);
@@ -84,6 +85,28 @@ test('temporal network trains only on valid tensors and keeps chronological vali
     assert.equal(predictTemporalProbability(sequenceFor(true),profile),null,
       'no temporal probability is published until validation and untouched holdout pass');
   }
+});
+
+test('shared TCN evaluates mixed market regimes without requiring a separate validation and holdout in every regime',()=>{
+  const rows=[];
+  for(let group=0;group<16;group++){
+    for(let index=0;index<24;index++){
+      const row=sample(group,index);
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2});
+  assert.equal(profile.trained,true);
+  assert.equal(profile.validation.evaluated,true);
+  assert.equal(profile.holdout.evaluated,true);
+  assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
+  assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_HOLDOUT_COVERAGE');
+  assert.ok(profile.holdout_comparison.sample_count>=40);
 });
 
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{

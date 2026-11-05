@@ -11,6 +11,7 @@ export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS=22;
+export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -388,7 +389,7 @@ function fitEnsemble(rows, options = {}) {
   const members = SEEDS.map(seed => fitMember(rows, seed, {...options,baseRate}));
   return {
     members,seeds:[...SEEDS],
-    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5',
+    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5',
     training_prior_probability:baseRate
   };
 }
@@ -415,56 +416,59 @@ export function buildTemporalNeuralProfile(samples = [], {
     rowsByTime.get(row.at).push(row);
   }
   const minRegimeTraining=Math.max(80,Math.floor(minTrainingSamples/2));
-  const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
   const minRegimeHoldout=Math.max(20,Math.floor(minimumHoldoutSamples/2));
+  const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
+  const emptyCoverage=Object.fromEntries(regimes.map(regime=>[regime,{
+    status:'WAITING_FOR_GLOBAL_CHRONOLOGICAL_SPLIT',
+    model_scope:'SHARED_TCN',
+    training_samples:0,validation_samples:0,holdout_samples:0,
+    required_training_samples:minRegimeTraining,
+    required_validation_samples:minRegimeValidation,
+    required_holdout_samples:minRegimeHoldout,
+    selected:false,probability_ready:false,live_eligibility_ready:false
+  }]));
+  const architecture=TEMPORAL_MODEL_ARCHITECTURE;
   const countTrailingGroups=(endExclusive,targetRows,minSpanMs=HORIZON_MS+1)=>{
     let groups=0,total=0;
     const latestAt=endExclusive>0?uniqueTimes[endExclusive-1]:null;
     for(let index=endExclusive-1;index>=0;index--){
       const group=rowsByTime.get(uniqueTimes[index])||[];
       groups++;total+=group.length;
-      // Every evaluation block must span the four-hour label horizon plus one
-      // completed timestamp. Otherwise purging correctly removes every row that
-      // would resolve on or after the next block's first timestamp.
       const span=latestAt===null?0:latestAt-uniqueTimes[index];
       if(groups>=2&&total>=targetRows&&span>=minSpanMs)break;
     }
     return groups;
   };
-  // Hold out enough complete timestamp groups to preserve at least 100 untouched
-  // outcomes when the sample history permits it. This frees unnecessary old
-  // timestamps for training without weakening the holdout performance threshold.
+  // Reserve an untouched final block. Once at least 500 valid sequences exist,
+  // the live gate gets at least 100 complete timestamp-group outcomes.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
     ?liveHoldoutSamples:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
-  // Reserve twice the raw sample minimum and at least eight hours in the
-  // middle block. The four-hour overlap group at the holdout boundary is purged;
-  // the wider row target leaves enough usable outcomes without starving training.
   const validationTargetSamples=Math.max(minimumValidationSamples*2,48);
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
     validationTargetSamples,2*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
-  const emptySpecialists=Object.fromEntries(regimes.map(regime=>[regime,{
-    status:'WAITING_FOR_CHRONOLOGICAL_SPLIT',training_samples:0,validation_samples:0,holdout_samples:0,
-    selected:false,probability_ready:false
-  }]));
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5',
-    target_definition:TEMPORAL_TARGET_DEFINITION,
+    architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
-    ensemble_members:0,ensemble_members_required:SEEDS.length,regime_specialist_count:2,
-    regime_selection_mode:'BTC_24H_TREND_SIGNED_TWO_EXPERTS',
+    ensemble_members:0,ensemble_members_required:SEEDS.length,
+    regime_specialist_count:2,
+    regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
+    model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
-    required_training_samples:minTrainingSamples,required_validation_samples:minimumValidationSamples,
-    required_holdout_samples:minimumHoldoutSamples,probability_ready:false,live_eligibility_ready:false,
+    required_training_samples:minTrainingSamples,
+    required_validation_samples:minimumValidationSamples,
+    required_holdout_samples:minimumHoldoutSamples,
+    probability_ready:false,live_eligibility_ready:false,
     validation_start_at:null,holdout_start_at:null,max_training_outcome_resolved_at:null,
-    trained:false,selected:false,regime_specialists:emptySpecialists,
+    trained:false,selected:false,regime_specialists:emptyCoverage,
+    supported_regimes:[],
     validation:{evaluated:false,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED'},
     holdout:{evaluated:false,reason:'THREE_CHRONOLOGICAL_BLOCKS_REQUIRED'},
     holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
-    _fit:null,_regime_fits:null,_baseline_fit:null
+    _fit:null,_baseline_fit:null
   };
 
   const validationStart=uniqueTimes[trainingEndIndex];
@@ -478,128 +482,109 @@ export function buildTemporalNeuralProfile(samples = [], {
   const maxTrainingOutcomeResolvedAt=training.length
     ?Math.max(...training.map(row=>row.resolved_at)):null;
   if(training.length<minTrainingSamples||validation.length<minimumValidationSamples||
-     holdout.length<minimumHoldoutSamples)return{
-    status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5',
-    target_definition:TEMPORAL_TARGET_DEFINITION,
-    sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
-    ensemble_members:0,ensemble_members_required:SEEDS.length,regime_specialist_count:2,
-    regime_selection_mode:'BTC_24H_TREND_SIGNED_TWO_EXPERTS',
-    resolved_samples:rows.length,training_samples:training.length,
-    validation_samples:validation.length,holdout_samples:holdout.length,
-    required_training_samples:minTrainingSamples,required_validation_samples:minimumValidationSamples,
-    required_holdout_samples:minimumHoldoutSamples,probability_ready:false,live_eligibility_ready:false,
-    validation_start_at:validationStart,holdout_start_at:holdoutStart,
-    max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
-    trained:false,selected:false,regime_specialists:emptySpecialists,
-    validation:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
-    holdout:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
-    holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
-    _fit:null,_regime_fits:null,_baseline_fit:null
-  };
-
-  const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
-  const targets=fitRows.map(row=>row.target);
-  const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
-  const pooledBaseline=fitLogistic(fitRows);
-  const specialistFits={};
-  const specialistProfiles={};
-
-  for(const regime of regimes){
-    const regimeTraining=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const regimeValidation=validation.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const enoughRegimeSamples=regimeTraining.length>=minRegimeTraining&&
-      regimeValidation.length>=minRegimeValidation&&regimeHoldout.length>=minRegimeHoldout;
-    if(!enoughRegimeSamples){
-      specialistProfiles[regime]={
-        status:'WAITING_FOR_REGIME_CHRONOLOGICAL_SAMPLES',
-        training_samples:regimeTraining.length,validation_samples:regimeValidation.length,
-        holdout_samples:regimeHoldout.length,required_training_samples:minRegimeTraining,
-        required_validation_samples:minRegimeValidation,required_holdout_samples:minRegimeHoldout,
-        selected:false,probability_ready:false,live_eligibility_ready:false
-      };
-      continue;
-    }
-    const regimeTargets=regimeTraining.map(row=>row.target);
-    const regimePrior=(regimeTargets.reduce((sum,value)=>sum+value,0)+2)/(regimeTargets.length+4);
-    const regimeFit=fitEnsemble(regimeTraining,{epochs,learningRate,l2,baseRate:regimePrior});
-    const regimeBaseline=fitLogistic(regimeTraining);
-    const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,regimeFit),regimePrior);
-    const validationLogistic=evaluate(regimeValidation,sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
-    const selected=validationModel.evaluated&&validationLogistic.evaluated&&
-      validationModel.beat_base_rate===true&&
-      validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,regimeFit),regimePrior);
-    const holdoutLogistic=evaluate(regimeHoldout,sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
-    const holdoutPassed=selected&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
-      holdoutModel.beat_base_rate===true&&
-      holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
-    specialistFits[regime]=regimeFit;
-    specialistProfiles[regime]={
-      status:!selected?'VALIDATION_DID_NOT_BEAT_REGIME_BASELINE':
-        !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
-        regimeHoldout.length>=liveHoldoutSamples?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
-      training_samples:regimeTraining.length,validation_samples:regimeValidation.length,
-      holdout_samples:regimeHoldout.length,training_positive_count:regimeTargets.filter(value=>value===1).length,
-      training_positive_rate_pct:Number((regimePrior*100).toFixed(2)),
-      validation_positive_rate_pct:validationModel.positive_rate_pct,
-      holdout_positive_rate_pct:holdoutModel.positive_rate_pct,
-      ensemble_members:regimeFit.members.length,ensemble_members_required:SEEDS.length,
-      validation:{...validationModel,pooled_logistic_brier_score:validationLogistic.model_brier_score},
-      holdout:{...holdoutModel,pooled_logistic_brier_score:holdoutLogistic.model_brier_score},
-      selected,probability_ready:holdoutPassed,
-      live_eligibility_ready:holdoutPassed&&regimeHoldout.length>=liveHoldoutSamples,
-      holdout_comparison:{
-        beats_base_rate:holdoutModel.beat_base_rate===true,
-        beats_pooled_logistic:holdoutLogistic.evaluated&&holdoutModel.evaluated&&
-          holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score,
-        passed:holdoutPassed
-      }
+     holdout.length<minimumHoldoutSamples){
+    return{
+      status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
+      architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
+      ensemble_members:0,ensemble_members_required:SEEDS.length,
+      regime_specialist_count:2,
+      regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
+      model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
+      resolved_samples:rows.length,training_samples:training.length,
+      validation_samples:validation.length,holdout_samples:holdout.length,
+      required_training_samples:minTrainingSamples,
+      required_validation_samples:minimumValidationSamples,
+      required_holdout_samples:minimumHoldoutSamples,
+      probability_ready:false,live_eligibility_ready:false,
+      validation_start_at:validationStart,holdout_start_at:holdoutStart,
+      max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
+      trained:false,selected:false,regime_specialists:emptyCoverage,
+      supported_regimes:[],
+      validation:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
+      holdout:{evaluated:false,reason:'TEMPORAL_CHRONOLOGICAL_SAMPLE_MINIMUMS_NOT_MET'},
+      holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
+      _fit:null,_baseline_fit:null
     };
   }
 
-  const regimeCoverageReady=regimes.every(regime=>
-    specialistProfiles[regime]?.training_samples>=minRegimeTraining&&
-    specialistProfiles[regime]?.validation_samples>=minRegimeValidation&&
-    specialistProfiles[regime]?.holdout_samples>=minRegimeHoldout);
-  const regimeValidationSelected=regimes.every(regime=>specialistProfiles[regime]?.selected===true);
-  const regimeHoldoutsPassed=regimes.every(regime=>specialistProfiles[regime]?.probability_ready===true);
-  const regimePredict=sequence=>{
-    const regime=regimeOfSequence(sequence);
-    const fit=specialistFits[regime];
-    return fit?predict(sequence,fit):Number.NaN;
-  };
-  const validationModel=evaluate(validation,regimePredict,baseRate);
-  const validationLogistic=evaluate(validation,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const selected=regimeCoverageReady&&regimeValidationSelected&&validationModel.evaluated&&
+  // One shared TCN learns across both BTC regimes. BTC 24h trend, volatility
+  // and drawdown are explicit input channels. A strict per-regime three-block
+  // split can be impossible when BTC changes regime between training,
+  // validation and holdout; validate the shared model on all chronological
+  // blocks, then publish only in regimes with enough training and holdout data.
+  const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
+  const targets=fitRows.map(row=>row.target);
+  const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
+  const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate});
+  const pooledBaseline=fitLogistic(fitRows);
+  const validationModel=evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
+  const validationLogistic=evaluate(validation,
+    sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+  const selected=validationModel.evaluated&&validationLogistic.evaluated&&
+    validationModel.beat_base_rate===true&&
     validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-  const holdoutModel=evaluate(holdout,regimePredict,baseRate);
-  const holdoutLogistic=evaluate(holdout,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const holdoutPassed=selected&&regimeHoldoutsPassed&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
+  const holdoutModel=evaluate(holdout,sequence=>predict(sequence,fitted),baseRate);
+  const holdoutLogistic=evaluate(holdout,
+    sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+  const holdoutPassed=selected&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
+    holdoutModel.beat_base_rate===true&&
     holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
-  const probabilityReady=holdoutPassed===true;
-  const liveReady=probabilityReady&&holdout.length>=liveHoldoutSamples&&
-    regimes.every(regime=>specialistProfiles[regime]?.holdout_samples>=minRegimeHoldout);
-  const validationReason=!regimeCoverageReady?'REGIME_SPECIALIST_SAMPLE_COVERAGE_INCOMPLETE':
-    !regimeValidationSelected?'A_REGIME_SPECIALIST_FAILED_CHRONOLOGICAL_VALIDATION':
-    !selected?'REGIME_ENSEMBLE_DID_NOT_BEAT_POOLED_LOGISTIC':'VALIDATION_PASSED';
+
+  const countByRegime=block=>Object.fromEntries(regimes.map(regime=>[
+    regime,block.filter(row=>regimeOfSequence(row.sequence)===regime).length
+  ]));
+  const trainingByRegime=countByRegime(fitRows);
+  const validationByRegime=countByRegime(validation);
+  const holdoutByRegime=countByRegime(holdout);
+  const supportedRegimes=regimes.filter(regime=>
+    trainingByRegime[regime]>=minRegimeTraining&&
+    holdoutByRegime[regime]>=minRegimeHoldout);
+  const probabilityReady=holdoutPassed&&supportedRegimes.length>0;
+  const liveReady=probabilityReady&&holdout.length>=liveHoldoutSamples;
+  const specialistProfiles=Object.fromEntries(regimes.map(regime=>{
+    const supported=supportedRegimes.includes(regime);
+    return [regime,{
+      status:supported?'GLOBAL_SHARED_TCN_REGIME_SUPPORTED':'WAITING_FOR_REGIME_HOLDOUT_COVERAGE',
+      model_scope:'SHARED_TCN',
+      training_samples:trainingByRegime[regime],
+      validation_samples:validationByRegime[regime],
+      holdout_samples:holdoutByRegime[regime],
+      required_training_samples:minRegimeTraining,
+      required_validation_samples:minRegimeValidation,
+      required_holdout_samples:minRegimeHoldout,
+      selected:supported&&selected,
+      probability_ready:supported&&probabilityReady,
+      live_eligibility_ready:supported&&liveReady,
+      shared_validation_brier:validationModel.model_brier_score,
+      shared_holdout_brier:holdoutModel.model_brier_score
+    }];
+  }));
+  const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
+    !validationModel.beat_base_rate?'GLOBAL_TCN_DID_NOT_BEAT_BASE_RATE':
+    !validationLogistic.evaluated?'POOLED_LOGISTIC_VALIDATION_NOT_EVALUATED':
+    !selected?'GLOBAL_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'VALIDATION_PASSED';
   const holdoutReason=!selected?'VALIDATION_NOT_PASSED':
-    !regimeHoldoutsPassed?'A_REGIME_SPECIALIST_FAILED_UNTOUCHED_HOLDOUT':
-    !holdoutPassed?'REGIME_ENSEMBLE_DID_NOT_BEAT_POOLED_LOGISTIC':'HOLDOUT_PASSED';
+    !holdoutModel.evaluated?'UNTOUCHED_HOLDOUT_NOT_EVALUATED':
+    !holdoutModel.beat_base_rate?'GLOBAL_TCN_DID_NOT_BEAT_HOLDOUT_BASE_RATE':
+    !holdoutLogistic.evaluated?'POOLED_LOGISTIC_HOLDOUT_NOT_EVALUATED':
+    !holdoutPassed?'GLOBAL_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'HOLDOUT_PASSED';
+  const status=!validationModel.evaluated?'VALIDATION_NOT_EVALUATED':
+    !selected?'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE':
+    !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+    !supportedRegimes.length?'WAITING_FOR_REGIME_HOLDOUT_COVERAGE':
+    liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
-    status:!regimeCoverageReady?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
-      !selected?'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE':
-      !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
-      liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
-    architecture:'TCN_24x22_DILATED_RESIDUAL_BTC_REGIME_MIXTURE_OF_EXPERTS_V5',
-    target_definition:TEMPORAL_TARGET_DEFINITION,
+    status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
-    regime_specialist_count:2,regime_selection_mode:'BTC_24H_TREND_SIGNED_TWO_EXPERTS',
+    regime_specialist_count:2,
+    regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
+    model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
     resolved_samples:rows.length,training_samples:fitRows.length,
     validation_samples:validation.length,holdout_samples:holdout.length,
-    required_training_samples:minTrainingSamples,required_validation_samples:minimumValidationSamples,
+    required_training_samples:minTrainingSamples,
+    required_validation_samples:minimumValidationSamples,
     required_holdout_samples:minimumHoldoutSamples,
     validation_start_at:validationStart,holdout_start_at:holdoutStart,
     max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
@@ -607,7 +592,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_positive_count:targets.filter(value=>value===1).length,
     training_negative_count:targets.filter(value=>value===0).length,
     training_prior_probability:Number(baseRate.toFixed(5)),
-    trained:true,selected,probability_ready:probabilityReady,live_eligibility_ready:liveReady,
+    trained:true,selected,probability_ready:probabilityReady,
+    live_eligibility_ready:liveReady,
+    supported_regimes:supportedRegimes,
     regime_specialists:specialistProfiles,
     validation:{
       ...validationModel,selected_over_pooled_logistic:selected,
@@ -615,23 +602,32 @@ export function buildTemporalNeuralProfile(samples = [], {
       reason:validationReason
     },
     holdout:{
-      ...holdoutModel,pooled_logistic_brier_score:holdoutLogistic.model_brier_score,
+      ...holdoutModel,
+      pooled_logistic_brier_score:holdoutLogistic.model_brier_score,
       reason:holdoutReason
     },
     holdout_comparison:{
-      sample_count:holdout.length,required_live_holdout_samples:liveHoldoutSamples,
+      sample_count:holdout.length,
+      required_live_holdout_samples:liveHoldoutSamples,
       required_brier_margin:comparisonMargin,
       tcn_brier_score:holdoutModel.model_brier_score,
       pooled_logistic_brier_score:holdoutLogistic.model_brier_score,
       beats_base_rate:holdoutModel.beat_base_rate===true,
       beats_pooled_logistic:holdoutLogistic.evaluated&&holdoutModel.evaluated&&
         holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score,
-      regime_specialists_passed:regimeHoldoutsPassed,passed:holdoutPassed
+      regime_coverage:{training:trainingByRegime,validation:validationByRegime,holdout:holdoutByRegime},
+      supported_regimes:supportedRegimes,passed:holdoutPassed
     },
-    _fit:null,
-    _regime_fits:probabilityReady?specialistFits:null,
+    _fit:probabilityReady?fitted:null,
     _baseline_fit:pooledBaseline
   };
+}
+
+export function predictTemporalProbability(sequence,profile={}){
+  if(profile?.probability_ready!==true||!profile?._fit||!validSequence(sequence))return null;
+  const regime=regimeOfSequence(sequence);
+  if(!Array.isArray(profile.supported_regimes)||!profile.supported_regimes.includes(regime))return null;
+  return predict(sequence,profile._fit);
 }
 
 export function predictTemporalProbability(sequence,profile={}){
