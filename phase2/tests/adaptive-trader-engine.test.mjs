@@ -968,7 +968,7 @@ test('historical sample phases give the cognitive learner enough distinct time b
   const fastKlines=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
   const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
   const rows=[];
-  for(let i=0;i<48;i++){
+  for(let i=0;i<80;i++){
     const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
     const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
       symbol,klines,fastKlines,btcKlines,now,maxSamples:8
