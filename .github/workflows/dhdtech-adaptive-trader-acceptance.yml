@@ -1,18 +1,12 @@
 name: Build 224 DHDTech Adaptive Trader Live Acceptance
 
+# Production DHDTech/TCN verification is on-demand and cannot block APK packaging.
 on:
-  push:
-    branches:
-      - build224-multi-analyst-20261007
-    paths:
-      - "Dockerfile"
-      - "phase2/**"
-      - "android/**"
-      - ".github/workflows/dhdtech-adaptive-trader-acceptance.yml"
-      - ".github/workflows/android-release-apk.yml"
-      - ".github/workflows/build224-container-runtime-smoke.yml"
-      - ".github/workflows/pre-move-radar-acceptance.yml"
-      - ".github/workflows/phase3-triple-radar-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: dhdtech-adaptive-trader-live-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
