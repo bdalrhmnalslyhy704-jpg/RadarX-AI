@@ -1080,6 +1080,43 @@ export class EarlyMoveSentinel {
               symbol:job.symbol,mode:job.mode,
               decision:'REJECTED_NO_WATCH_ONLY_CORRIDOR',
               strict_failures:strictFailures,
+              strict_failure_details:{
+                pre_explosion:{
+                  eligible:preAlert.eligible===true,
+                  score:preAlert.opportunity_score??null,
+                  required_score:MOVE_RADAR_DEFAULTS.earlyMinExpansionScore,
+                  confirmation_count:preAlert.pre_explosion?.confirmation_count??null,
+                  required_confirmations:MOVE_RADAR_DEFAULTS.earlyMinConfirmations,
+                  strategy_best_score:preAlert.strategy_confluence?.best_score??null,
+                  required_strategy_score:MOVE_RADAR_DEFAULTS.earlyMinStrategyScore,
+                  accepted_strategy_count:preAlert.strategy_confluence?.accepted_count??null,
+                  required_accepted_strategies:MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies,
+                  pre_move_score:preAlert.components?.pre_move??null,
+                  required_pre_move_score:MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore,
+                  calm_enough:preAlert.pre_explosion?.calm_enough??null,
+                  already_moved:preAlert.pre_explosion?.already_moved??null,
+                  components:preAlert.components??null
+                },
+                early_wake:{
+                  eligible:wakeAlert.eligible===true,
+                  score:wakeAlert.opportunity_score??null,
+                  required_score:MOVE_RADAR_DEFAULTS.earlyWakeMinScore,
+                  leader_count:wakeAlert.early_wake?.leader_count??null,
+                  required_leaders:MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders,
+                  hard_leader:wakeAlert.early_wake?.hard_leader??null,
+                  calm_enough:wakeAlert.early_wake?.calm_enough??null,
+                  already_moved:wakeAlert.early_wake?.already_moved??null,
+                  leaders:wakeAlert.early_wake?.leaders??[],
+                  components:wakeAlert.components??null
+                },
+                move:moveAlert?{
+                  eligible:moveAlert.eligible===true,
+                  opportunity_score:moveAlert.opportunity_score??null,
+                  setup_score:moveAlert.setup_score??null,
+                  required_opportunity_score:70,
+                  components:moveAlert.components??null
+                }:null
+              },
               pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[],
               pre_move_score:candidate?.pre_move_context?.score??null,
               data_quality:candidate?.data_quality??null,
@@ -1120,6 +1157,39 @@ export class EarlyMoveSentinel {
             this.logger.info?.('[EARLY_WAKE_SCAN_REVIEW] '+JSON.stringify({
               symbol:job.symbol,mode:job.mode,decision:'REJECTED_ELITE_GATE',
               strict_failures:strictFailures,
+              strict_failure_details:{
+                pre_explosion:{
+                  eligible:preAlert.eligible===true,score:preAlert.opportunity_score??null,
+                  required_score:MOVE_RADAR_DEFAULTS.earlyMinExpansionScore,
+                  confirmation_count:preAlert.pre_explosion?.confirmation_count??null,
+                  required_confirmations:MOVE_RADAR_DEFAULTS.earlyMinConfirmations,
+                  strategy_best_score:preAlert.strategy_confluence?.best_score??null,
+                  required_strategy_score:MOVE_RADAR_DEFAULTS.earlyMinStrategyScore,
+                  accepted_strategy_count:preAlert.strategy_confluence?.accepted_count??null,
+                  required_accepted_strategies:MOVE_RADAR_DEFAULTS.earlyMinAcceptedStrategies,
+                  pre_move_score:preAlert.components?.pre_move??null,
+                  required_pre_move_score:MOVE_RADAR_DEFAULTS.earlyMinPreMoveScore,
+                  calm_enough:preAlert.pre_explosion?.calm_enough??null,
+                  already_moved:preAlert.pre_explosion?.already_moved??null
+                },
+                early_wake:{
+                  eligible:wakeAlert.eligible===true,score:wakeAlert.opportunity_score??null,
+                  required_score:MOVE_RADAR_DEFAULTS.earlyWakeMinScore,
+                  leader_count:wakeAlert.early_wake?.leader_count??null,
+                  required_leaders:MOVE_RADAR_DEFAULTS.earlyWakeMinLeaders,
+                  hard_leader:wakeAlert.early_wake?.hard_leader??null,
+                  calm_enough:wakeAlert.early_wake?.calm_enough??null,
+                  already_moved:wakeAlert.early_wake?.already_moved??null,
+                  leaders:wakeAlert.early_wake?.leaders??[],
+                  components:wakeAlert.components??null
+                },
+                move:moveAlert?{
+                  eligible:moveAlert.eligible===true,
+                  opportunity_score:moveAlert.opportunity_score??null,
+                  setup_score:moveAlert.setup_score??null,
+                  components:moveAlert.components??null
+                }:null
+              },
               pre_move_missing_evidence:candidate?.pre_move_context?.missing_evidence||[]
             }));
           }
