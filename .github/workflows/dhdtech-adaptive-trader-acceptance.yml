@@ -234,7 +234,7 @@ jobs:
                 const scanFresh=Number.isFinite(scannedAt)&&scannedAt<=Date.now()+5000&&
                   Date.now()-scannedAt<=8*60*1000&&
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
-                const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V5'&&
+                const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V6'&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
                   cognitiveProfile.identifier_features_used===false&&temporalNetworkContract;
                 const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
