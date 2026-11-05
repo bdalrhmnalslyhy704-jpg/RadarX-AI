@@ -162,6 +162,24 @@ test('historical learning examples use only baseline candles and label returns f
   assert.deepEqual(relabelled.features,target.features);
 });
 
+test('historical TCN keeps 15m/BTC samples when 5m history is missing and marks micro channels unavailable',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
+  const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'MASKEDMICROUSDT',klines,fastKlines:{data:[],source:'BINANCE_PUBLIC_REST'},
+    btcKlines,now,maxSamples:8
+  });
+  assert.equal(samples.length,8,'complete 15m first-passage windows remain useful without a 5m archive');
+  assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===29)));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.slice(8,14).every(value=>value===0))));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step[28]===0)),
+    'the last tensor channel explicitly marks missing 5m evidence instead of fabricating microstructure');
+  assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'),
+    'four-hour outcome labels remain resolved from complete closed 15m candles');
+});
+
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
