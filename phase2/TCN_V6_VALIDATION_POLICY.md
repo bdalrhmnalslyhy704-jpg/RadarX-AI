@@ -36,15 +36,6 @@ All output remains Binance Spot analysis-only. `paper_trading=true`,
 until the full predictive and paper-trading gates have passed. No change to
 these safety gates is implied by the selection fallback.
 
-## Rare-positive handling
-
-The TCN residual learner uses a capped square-root positive-class weight derived
-only from the chronological training block. This weighting affects gradient
-updates, not reported Brier scores. The selection-block calibrator is fitted
-only after member selection and uses strong shrinkage; validation and final
-holdout never contribute to class weights, calibration, member choice, or
-hyperparameter updates. The validation/holdout comparison margin and live
-sample requirements remain unchanged.
 
 Regression fixture: a regime with zero positive local selection outcomes may use the pooled selection window, while its own validation and holdout remain regime-specific and later in time.
 
