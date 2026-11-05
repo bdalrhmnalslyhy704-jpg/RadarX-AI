@@ -742,11 +742,18 @@ export function buildTemporalNeuralProfile(samples = [], {
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERT',
+      training_start_at:result.training_start_at??null,
+      selection_start_at:result.selection_start_at??null,
+      validation_start_at:result.validation_start_at??null,
+      max_training_outcome_resolved_at:result.max_training_outcome_resolved_at??null,
       training_samples:trainingByRegime[regime],
+      selection_samples:selectionByRegime[regime],
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
       training_positive_samples:trainingTargets[regime].positive,
       training_negative_samples:trainingTargets[regime].negative,
+      selection_positive_samples:selectionTargets[regime].positive,
+      selection_negative_samples:selectionTargets[regime].negative,
       validation_positive_samples:validationTargets[regime].positive,
       validation_negative_samples:validationTargets[regime].negative,
       holdout_positive_samples:holdoutTargets[regime].positive,
@@ -770,15 +777,36 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null
     }];
   }));
+  const reportTrainingSamples=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingByRegime[regime]||0),0):fitRows.length;
+  const reportSelectionSamples=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(selectionByRegime[regime]||0),0):0;
+  const reportValidationSamples=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(validationByRegime[regime]||0),0):validation.length;
+  const reportHoldoutSamples=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(holdoutByRegime[regime]||0),0):holdout.length;
+  const reportTrainingPositive=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingTargets[regime]?.positive||0),0)
+    :targets.filter(value=>value===1).length;
+  const reportTrainingNegative=hasDiagnosticRegimes
+    ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingTargets[regime]?.negative||0),0)
+    :targets.filter(value=>value===0).length;
+  const reportTrainingPrior=(reportTrainingPositive+2)/(reportTrainingSamples+4);
+  const reportMaxTrainingResolvedAt=hasDiagnosticRegimes
+    ?Math.max(...diagnosticRegimes.map(regime=>Number(regimeResults[regime]?.max_training_outcome_resolved_at)||0))
+    :maxTrainingOutcomeResolvedAt;
+  const reportValidationStartAt=hasDiagnosticRegimes
+    ?Math.min(...diagnosticRegimes.map(regime=>Number(regimeResults[regime]?.validation_start_at)||validationStart))
+    :validationStart;
   const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
-    !validationModel.beat_base_rate?'GLOBAL_TCN_DID_NOT_BEAT_BASE_RATE':
-    !validationLogistic.evaluated?'POOLED_LOGISTIC_VALIDATION_NOT_EVALUATED':
-    !selected?'GLOBAL_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'VALIDATION_PASSED';
+    !validationModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_BASE_RATE':
+    !validationLogistic.evaluated?'REGIME_LOGISTIC_VALIDATION_NOT_EVALUATED':
+    !selected?'REGIME_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'VALIDATION_PASSED';
   const holdoutReason=!selected?'VALIDATION_NOT_PASSED':
     !holdoutModel.evaluated?'UNTOUCHED_HOLDOUT_NOT_EVALUATED':
-    !holdoutModel.beat_base_rate?'GLOBAL_TCN_DID_NOT_BEAT_HOLDOUT_BASE_RATE':
-    !holdoutLogistic.evaluated?'POOLED_LOGISTIC_HOLDOUT_NOT_EVALUATED':
-    !holdoutPassed?'GLOBAL_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'HOLDOUT_PASSED';
+    !holdoutModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_HOLDOUT_BASE_RATE':
+    !holdoutLogistic.evaluated?'REGIME_LOGISTIC_HOLDOUT_NOT_EVALUATED':
+    !holdoutPassed?'REGIME_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'HOLDOUT_PASSED';
   const status=!validationModel.evaluated?'VALIDATION_NOT_EVALUATED':
     !selected?'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE':
     !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
@@ -797,24 +825,26 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERTS',
     residual_anchor:'POOLED_SEQUENCE_LOGISTIC_FROZEN',
-    resolved_samples:rows.length,training_samples:fitRows.length,
-    validation_samples:validation.length,holdout_samples:holdout.length,
+    resolved_samples:rows.length,training_samples:reportTrainingSamples,
+    selection_samples:reportSelectionSamples,
+    validation_samples:reportValidationSamples,holdout_samples:reportHoldoutSamples,
     required_training_samples:minTrainingSamples,
+    required_selection_samples:minSelectionSamples,
     required_validation_samples:minimumValidationSamples,
     required_holdout_samples:minimumHoldoutSamples,
-    validation_start_at:validationStart,holdout_start_at:holdoutStart,
-    max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
-    training_positive_rate_pct:Number((baseRate*100).toFixed(2)),
-    training_positive_count:targets.filter(value=>value===1).length,
-    training_negative_count:targets.filter(value=>value===0).length,
-    training_prior_probability:Number(baseRate.toFixed(5)),
+    validation_start_at:reportValidationStartAt,holdout_start_at:holdoutStart,
+    max_training_outcome_resolved_at:reportMaxTrainingResolvedAt,
+    training_positive_rate_pct:Number((reportTrainingPositive/Math.max(1,reportTrainingSamples)*100).toFixed(2)),
+    training_positive_count:reportTrainingPositive,
+    training_negative_count:reportTrainingNegative,
+    training_prior_probability:Number(reportTrainingPrior.toFixed(5)),
     trained:true,selected,probability_ready:probabilityReady,
     live_eligibility_ready:liveReady,
     supported_regimes:supportedRegimes,
     selected_regimes:selectedRegimes,
     regime_specialists:specialistProfiles,
     regime_data_coverage:{
-      training:trainingTargets,validation:validationTargets,holdout:holdoutTargets,
+      training:trainingTargets,selection:selectionTargets,validation:validationTargets,holdout:holdoutTargets,
       minimum_positive_samples:minRegimePositive,
       minimum_negative_samples:minRegimeNegative
     },
@@ -837,7 +867,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       beats_base_rate:holdoutModel.beat_base_rate===true,
       beats_pooled_logistic:holdoutLogistic.evaluated&&holdoutModel.evaluated&&
         holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score,
-      regime_coverage:{training:trainingByRegime,validation:validationByRegime,holdout:holdoutByRegime},
+      regime_coverage:{training:trainingByRegime,selection:selectionByRegime,validation:validationByRegime,holdout:holdoutByRegime},
       supported_regimes:supportedRegimes,passed:holdoutPassed
     },
     _fit:probabilityReady?fitted:null,
