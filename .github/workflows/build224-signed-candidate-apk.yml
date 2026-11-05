@@ -8,7 +8,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: radarx-build224-candidate-v2-${{ github.ref }}
@@ -217,6 +217,32 @@ jobs:
           rm -f "$RUNNER_TEMP/radarx-release.keystore"
           test ! -e "$RUNNER_TEMP/radarx-release.keystore"
 
+      - name: Publish verified signed candidate as a GitHub pre-release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="radarx-build224-candidate-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}"
+          gh release create "$TAG" \
+            dist/RadarX-Build224-Signed-Candidate.apk \
+            dist/RadarX-Build224-Signed-Candidate.apk.sha256 \
+            dist/BUILD224-CANDIDATE-STATUS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "RadarX Build 224 Signed Candidate ${GITHUB_RUN_NUMBER}" \
+            --notes-file dist/BUILD224-CANDIDATE-STATUS.txt \
+            --prerelease
+          mkdir -p "$RUNNER_TEMP/radarx-release-verify"
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "RadarX-Build224-Signed-Candidate.apk" \
+            --dir "$RUNNER_TEMP/radarx-release-verify"
+          EXPECTED="$(awk '{print $1}' dist/RadarX-Build224-Signed-Candidate.apk.sha256)"
+          ACTUAL="$(sha256sum "$RUNNER_TEMP/radarx-release-verify/RadarX-Build224-Signed-Candidate.apk" | awk '{print $1}')"
+          test "$ACTUAL" = "$EXPECTED"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,isPrerelease --jq '"RELEASE_URL=" + .url + " PRERELEASE=" + (.isPrerelease|tostring)'
+          
       - name: Upload signed candidate APK and verification details
         if: success()
         uses: actions/upload-artifact@v4
