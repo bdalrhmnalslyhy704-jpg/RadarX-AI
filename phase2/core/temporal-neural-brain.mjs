@@ -658,9 +658,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   // never enter the shared model's gradient updates.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const fitTimes=[...new Set(fitRows.map(row=>row.at))].sort((a,b)=>a-b);
-  const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-3,Math.floor(fitTimes.length*0.65)));
+  const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-3,Math.floor(fitTimes.length*0.75)));
   const sharedSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
-    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.80)));
+    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.90)));
   const sharedTrainingCutoffAt=fitTimes[sharedTrainCutIndex]??validationStart;
   const sharedSelectionCutoffAt=fitTimes[sharedSelectionCutIndex]??validationStart;
   const sharedTrainingRows=fitRows.filter(row=>
