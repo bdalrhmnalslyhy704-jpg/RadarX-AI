@@ -20,7 +20,7 @@ test('worker exposes the exact V5 plus TCN source contract without claiming mode
     const status=worker.snapshot();
     assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
     assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
-      'TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5');
+      'TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5');
     assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
       'source presence must never be confused with out-of-sample readiness');
     assert.equal(status.real_order_execution,false);
@@ -498,7 +498,7 @@ test('worker backfills separate V5 labels for persisted TCN historical rows with
     close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
     resolved_at:baselineAt+4*60*60*1000,horizon_ms:4*60*60*1000,
     outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
-    temporal_sequence:Array.from({length:24},(_,step)=>Array.from({length:22},(_,channel)=>
+    temporal_sequence:Array.from({length:24},(_,step)=>Array.from({length:28},(_,channel)=>
       Math.tanh((step-channel)/50)))
   };
   const persistedHistoricalSample={...historicalSample};
