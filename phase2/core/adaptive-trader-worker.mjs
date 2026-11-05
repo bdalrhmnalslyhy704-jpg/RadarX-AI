@@ -24,7 +24,7 @@ const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
 // a freshly rebuilt, closed-candle sample; never synthesize missing channels.
 function hasValidTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===24&&sequence.every(step=>
-    Array.isArray(step)&&step.length===28&&step.every(value=>
+    Array.isArray(step)&&step.length===29&&step.every(value=>
       typeof value==='number'&&Number.isFinite(value)&&Math.abs(value)<=4
     )
   );
