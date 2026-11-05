@@ -148,7 +148,9 @@ test('server paper portfolio records isolated trades and persists evidence witho
     candidates:[paperCandidate],
     latest_prices:[{symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2}],
     meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
-      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1',
+      source_host:'data-api.binance.vision',btc_benchmark_available:true,
+      btc_15m_historical_window_candles:1000,historical_learning_enabled:true}
   });
   const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
   try{
