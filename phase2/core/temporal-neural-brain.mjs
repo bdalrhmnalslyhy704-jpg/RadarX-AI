@@ -611,6 +611,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
+    training_strategy:fitted.training_strategy,
+    member_training_profiles:fitted.member_training_profiles,
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
     model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
