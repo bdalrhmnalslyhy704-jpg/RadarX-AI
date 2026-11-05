@@ -402,10 +402,25 @@ function fitEnsemble(rows, options = {}) {
   const baseRate=Number.isFinite(Number(options.baseRate))
     ?clamp(Number(options.baseRate),0.02,0.98)
     :(rows.reduce((sum,row)=>sum+row.target,0)+2)/(rows.length+4);
-  const members = SEEDS.map(seed => fitMember(rows, seed, {...options,baseRate}));
+  // Keep three deterministic members but vary fit duration and regularization.
+  // This reduces dependence on one arbitrary optimizer schedule while retaining
+  // the same training-only logistic anchor for every member.
+  const baseEpochs=Math.max(1,Math.trunc(Number(options.epochs)||10));
+  const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
+  const baseL2=Math.max(0,Number(options.l2)||0.012);
+  const memberProfiles=[
+    {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5},
+    {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2},
+    {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2}
+  ];
+  const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
+    ...options,...memberProfiles[index],baseRate
+  }));
   return {
     members,seeds:[...SEEDS],
     architecture:'TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5',
+    training_strategy:'DIVERSIFIED_EPOCH_AND_REGULARIZATION_ENSEMBLE_V1',
+    member_training_profiles:memberProfiles,
     training_prior_probability:baseRate
   };
 }
