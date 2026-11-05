@@ -45,3 +45,5 @@ only after member selection and uses strong shrinkage; validation and final
 holdout never contribute to class weights, calibration, member choice, or
 hyperparameter updates. The validation/holdout comparison margin and live
 sample requirements remain unchanged.
+
+Regression fixture: a regime with zero positive local selection outcomes may use the pooled selection window, while its own validation and holdout remain regime-specific and later in time.
