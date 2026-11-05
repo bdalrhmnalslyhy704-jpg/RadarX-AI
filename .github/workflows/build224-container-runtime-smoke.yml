@@ -282,6 +282,11 @@ jobs:
             temporal_network_selected:temporalNetwork.selected===true,
             temporal_network_probability_ready:temporalNetwork.probability_ready===true,
             temporal_network_live_eligibility_ready:temporalNetwork.live_eligibility_ready===true,
+            shared_model_training_samples:Number(temporalNetwork.shared_model_training_samples)||0,
+            shared_model_selection_samples:Number(temporalNetwork.shared_model_selection_samples)||0,
+            shared_model_training_cutoff_at:temporalNetwork.shared_model_training_cutoff_at??null,
+            shared_model_selection_cutoff_at:temporalNetwork.shared_model_selection_cutoff_at??null,
+            shared_model_training_max_outcome_resolved_at:temporalNetwork.shared_model_training_max_outcome_resolved_at??null,
             temporal_network_validation_evaluated:temporalNetwork.validation?.evaluated===true,
             temporal_network_validation_beats_baseline:temporalNetwork.validation?.beat_base_rate===true,
             temporal_network_holdout_evaluated:temporalNetwork.holdout?.evaluated===true,
@@ -323,9 +328,15 @@ jobs:
           const temporalTrained=temporalNetwork.trained===true;
           const chronologicalSplitSafe=
             Number(temporalNetwork.training_samples)>=160&&
+            Number(temporalNetwork.shared_model_training_samples)===Number(temporalNetwork.training_samples)&&
             Number(temporalNetwork.validation_samples)>=24&&
             Number(temporalNetwork.holdout_samples)>=40&&
-            Number(temporalNetwork.max_training_outcome_resolved_at)<Number(temporalNetwork.validation_start_at)&&
+            Number(temporalNetwork.shared_model_training_max_outcome_resolved_at)<
+              Number(temporalNetwork.shared_model_training_cutoff_at)&&
+            Number(temporalNetwork.shared_model_training_cutoff_at)<
+              Number(temporalNetwork.shared_model_selection_cutoff_at)&&
+            Number(temporalNetwork.shared_model_selection_cutoff_at)<=
+              Number(temporalNetwork.validation_start_at)&&
             Number(temporalNetwork.validation_start_at)<Number(temporalNetwork.holdout_start_at);
           const probabilityGateSafe=!temporalNetwork.probability_ready||
             (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
