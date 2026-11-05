@@ -227,6 +227,9 @@ jobs:
             legacy_neural_network_contract:legacyNeuralNetworkContract,
             temporal_network_contract:temporalNetworkContract,
             temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
+            temporal_network_training_strategy:String(temporalNetwork.training_strategy||'UNKNOWN'),
+            temporal_network_training_objective:String(temporalNetwork.training_objective||'UNKNOWN'),
+            temporal_network_residual_scale_selection:String(temporalNetwork.residual_scale_selection||'UNKNOWN'),
             temporal_network_regime_specialists:Object.fromEntries(Object.entries(temporalNetwork.regime_specialists||{}).map(([regime,specialist])=>[
               regime,{status:String(specialist?.status||'UNKNOWN'),
                 support_gaps:Array.isArray(specialist?.support_gaps)?specialist.support_gaps:[],
@@ -242,6 +245,17 @@ jobs:
                 holdout_samples:Number(specialist?.holdout_samples)||0,
                 holdout_positive_samples:Number(specialist?.holdout_positive_samples)||0,
                 holdout_negative_samples:Number(specialist?.holdout_negative_samples)||0,
+                selected_member_index:Number.isInteger(specialist?.selected_member_index)?specialist.selected_member_index:null,
+                selected_residual_scale:Number(specialist?.selected_residual_scale),
+                member_selection_source:String(specialist?.member_selection_source||'UNKNOWN'),
+                probability_calibration:{
+                  fit_on:String(specialist?.probability_calibration?.fit_on||'UNKNOWN'),
+                  fitted:specialist?.probability_calibration?.fitted===true,
+                  sample_count:Number(specialist?.probability_calibration?.sample_count)||0,
+                  positive_count:Number(specialist?.probability_calibration?.positive_count)||0,
+                  slope:Number(specialist?.probability_calibration?.slope)||1,
+                  intercept:Number(specialist?.probability_calibration?.intercept)||0
+                },
                 selected:specialist?.selected===true,probability_ready:specialist?.probability_ready===true,
                 validation_brier:specialist?.validation_brier??null,
                 validation_logistic_brier:specialist?.validation_pooled_logistic_brier??null,
