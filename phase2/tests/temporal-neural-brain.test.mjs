@@ -64,9 +64,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'SQRT_CLASS_WEIGHTED_RESIDUAL_TCN_WITH_SELECTION_CALIBRATION_V2');
-  assert.equal(profile.training_class_weight_scope,'TRAINING_BLOCK_ONLY');
-  assert.ok(profile.training_positive_class_weight>=1&&profile.training_positive_class_weight<=4);
+  assert.equal(profile.training_strategy,'REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V7');
+  assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
+  assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
   assert.equal(profile.member_training_profiles.length,3);
   assert.equal(new Set(profile.member_training_profiles.map(row=>JSON.stringify(row))).size,3,
     'ensemble members must use distinct deterministic training schedules');
@@ -169,6 +169,7 @@ test('mature history reserves a broad untouched holdout for both BTC regime expe
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const expert=profile.regime_specialists[regime];
     assert.ok(expert.holdout_samples>=20);
+    assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
     assert.ok(expert.holdout_positive_samples>=5);
     assert.ok(expert.holdout_negative_samples>=20);
     assert.ok(expert.validation_start_at<profile.holdout_start_at);
@@ -204,6 +205,7 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
   assert.ok(expert.selection_positive_samples<3,
     'local selection positives are below the specialist minimum and must use pooled selection');
   assert.equal(expert.member_selection_source,'POOLED_SELECTION_BLOCK_FALLBACK');
+  assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
   assert.ok(expert.member_selection_samples>expert.selection_samples);
   assert.equal(expert.probability_calibration.fit_on,'POOLED_SELECTION_BLOCK_FALLBACK');
   assert.equal(expert.probability_calibration.fitted,true,
