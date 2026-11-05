@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: radarx-build224-candidate-${{ github.ref }}
+  group: radarx-build224-candidate-v2-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,7 +34,8 @@ jobs:
             | select(
                 .path == ".github/workflows/pre-move-radar-acceptance.yml" or
                 .path == ".github/workflows/dhdtech-adaptive-trader-acceptance.yml" or
-                .path == ".github/workflows/android-release-apk.yml"
+                .path == ".github/workflows/android-release-apk.yml" or
+                .path == ".github/workflows/build224-signed-candidate-apk.yml"
               )
             | .id
           ' "$RUNNER_TEMP/runs.json")
