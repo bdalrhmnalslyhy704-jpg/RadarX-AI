@@ -320,19 +320,85 @@ function fitMember(rows, seed, {
   return model;
 }
 
+function calibratedProbability(rawProbability, calibrator) {
+  if(!Number.isFinite(rawProbability))return null;
+  const raw=clamp(rawProbability,0.02,0.98);
+  if(calibrator?.fitted!==true)return raw;
+  const rawLogit=Math.log(raw/(1-raw));
+  return clamp(logistic(
+    clamp(Number(calibrator.slope)||1,0.5,1.5)*rawLogit+
+    clamp(Number(calibrator.intercept)||0,-0.75,0.75)
+  ),0.02,0.98);
+}
+
+// A small two-parameter Brier calibrator is fitted only on the disjoint
+// chronological regime-selection block. Validation and final holdout are
+// never used to fit the slope/intercept. Strong shrinkage keeps small samples
+// close to the identity transform; under-supported blocks stay uncalibrated.
+function fitSelectionProbabilityCalibrator(rows, predictFn, {
+  minimumSamples=18,minimumPositive=4,minimumNegative=10,
+  iterations=240,learningRate=0.05,regularization=0.18
+}={}) {
+  const predictions=(Array.isArray(rows)?rows:[]).map(row=>({
+    probability:predictFn(row.sequence),
+    target:row.target
+  })).filter(row=>Number.isFinite(row.probability)&&
+    Number.isFinite(row.target));
+  const positive=predictions.filter(row=>row.target===1).length;
+  const negative=predictions.length-positive;
+  const base={
+    method:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
+    fit_on:'REGIME_SELECTION_ONLY',
+    sample_count:predictions.length,
+    positive_count:positive,
+    negative_count:negative,
+    slope:1,
+    intercept:0,
+    fitted:false
+  };
+  if(predictions.length<minimumSamples||positive<minimumPositive||negative<minimumNegative){
+    return {...base,reason:'SELECTION_BLOCK_CLASS_SUPPORT_BELOW_CALIBRATION_MINIMUM'};
+  }
+  const points=predictions.map(row=>{
+    const p=clamp(row.probability,0.02,0.98);
+    return {x:Math.log(p/(1-p)),target:row.target};
+  });
+  let slope=1,intercept=0;
+  for(let iteration=0;iteration<iterations;iteration++){
+    let slopeGradient=0,interceptGradient=0;
+    for(const point of points){
+      const prediction=logistic(slope*point.x+intercept);
+      const error=prediction-point.target;
+      const derivative=prediction*(1-prediction);
+      slopeGradient+=2*error*derivative*point.x;
+      interceptGradient+=2*error*derivative;
+    }
+    slopeGradient=slopeGradient/points.length+regularization*(slope-1);
+    interceptGradient=interceptGradient/points.length+regularization*intercept;
+    slope=clamp(slope-learningRate*slopeGradient,0.5,1.5);
+    intercept=clamp(intercept-learningRate*interceptGradient,-0.75,0.75);
+  }
+  return {
+    ...base,fitted:true,slope:Number(slope.toFixed(5)),
+    intercept:Number(intercept.toFixed(5)),reason:null
+  };
+}
+
 function predict(sequence, fitted) {
   if (!validSequence(sequence) || !fitted) return null;
   const regime=regimeOfSequence(sequence);
   const selectedIndex=Number.isInteger(fitted.selected_member_by_regime?.[regime])
     ?fitted.selected_member_by_regime[regime]
     :Number.isInteger(fitted.selected_member_index)?fitted.selected_member_index:-1;
+  let rawProbability;
   if(selectedIndex>=0&&selectedIndex<fitted.members.length){
-    const value=forward(sequence,fitted.members[selectedIndex]).probability;
-    return Number.isFinite(value)?clamp(value,0.02,0.98):null;
+    rawProbability=forward(sequence,fitted.members[selectedIndex]).probability;
+  }else{
+    const predictions=fitted.members.map(member=>forward(sequence,member).probability);
+    if(!predictions.length||predictions.some(value=>!Number.isFinite(value)))return null;
+    rawProbability=mean(predictions);
   }
-  const predictions=fitted.members.map(member=>forward(sequence,member).probability);
-  if(!predictions.length||predictions.some(value=>!Number.isFinite(value)))return null;
-  return clamp(mean(predictions),0.02,0.98);
+  return calibratedProbability(rawProbability,fitted.probability_calibrators_by_regime?.[regime]);
 }
 
 function pooledSequence(sequence) {
@@ -653,6 +719,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minSelectionSamples=Math.max(10,Math.ceil(minimumValidationSamples*0.4));
   const minSelectionPositive=3,minSelectionNegative=8;
   fitted.selected_member_by_regime={};
+  fitted.probability_calibrators_by_regime={};
 
   // All regimes share the same time cutoffs. The shared TCN trains only before
   // sharedTrainingCutoffAt; member selection is later, validation starts at
@@ -737,6 +804,11 @@ export function buildTemporalNeuralProfile(samples = [], {
       base_rate_brier_score:row.metrics.base_rate_brier_score,
       beat_base_rate:row.metrics.beat_base_rate
     }));
+    const selectionCalibrator=fitSelectionProbabilityCalibrator(
+      regimeSelection,
+      sequence=>forward(sequence,fitted.members[selectedMemberIndex]).probability
+    );
+    fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
 
     const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
     const validationLogistic=evaluate(regimeValidation,
@@ -760,7 +832,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
       validation_model:validationModel,validation_logistic:validationLogistic,
       holdout_model:holdoutModel,holdout_logistic:holdoutLogistic,
-      member_selection_scores:memberSelectionScores};
+      member_selection_scores:memberSelectionScores,
+      probability_calibration:selectionCalibrator};
   }
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
@@ -835,7 +908,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_pooled_logistic_brier:result.validation_logistic?.model_brier_score??null,
       holdout_brier:result.holdout_model?.model_brier_score??null,
       holdout_base_rate_brier:result.holdout_model?.base_rate_brier_score??null,
-      holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null
+      holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null,
+      probability_calibration:result.probability_calibration||null
     }];
   }));
   // Top-level sample counts describe the shared model's actual fit and the
@@ -877,6 +951,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
     model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
     residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
+    calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
+    calibration_fit_scope:'REGIME_SELECTION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     shared_model_training_samples:sharedTrainingRows.length,
     shared_model_selection_samples:reportSelectionSamples,
