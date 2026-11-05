@@ -695,13 +695,18 @@ export function buildTemporalNeuralProfile(samples = [], {
   const liveReady=probabilityReady&&holdoutModel.sample_count>=liveHoldoutSamples;
   const specialistProfiles=Object.fromEntries(regimes.map(regime=>{
     const supported=supportedRegimes.includes(regime);
+    const result=regimeResults[regime]||{};
     return [regime,{
-      status:supported?'GLOBAL_SHARED_TCN_REGIME_SUPPORTED':'WAITING_FOR_REGIME_HOLDOUT_COVERAGE',
-      model_scope:'SHARED_TCN',
+      status:!supported?'WAITING_FOR_REGIME_HOLDOUT_COVERAGE':
+        result.holdout_passed?'REGIME_TCN_OUT_OF_SAMPLE_VALIDATED':
+        result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+        'REGIME_TCN_DID_NOT_PASS_VALIDATION',
+      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION',
       training_samples:trainingByRegime[regime],
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
       training_positive_samples:trainingTargets[regime].positive,
+      training_negative_samples:trainingTargets[regime].negative,
       validation_positive_samples:validationTargets[regime].positive,
       validation_negative_samples:validationTargets[regime].negative,
       holdout_positive_samples:holdoutTargets[regime].positive,
@@ -713,11 +718,16 @@ export function buildTemporalNeuralProfile(samples = [], {
       required_holdout_positive_samples:minRegimePositive,
       required_validation_negative_samples:minRegimeNegative,
       required_holdout_negative_samples:minRegimeNegative,
-      selected:supported&&selected,
-      probability_ready:supported&&probabilityReady,
-      live_eligibility_ready:supported&&liveReady,
-      shared_validation_brier:validationModel.model_brier_score,
-      shared_holdout_brier:holdoutModel.model_brier_score
+      selected:result.validation_passed===true,
+      probability_ready:result.holdout_passed===true,
+      live_eligibility_ready:result.holdout_passed===true&&
+        Number(result.holdout_model?.sample_count)>=liveHoldoutSamples,
+      validation_brier:result.validation_model?.model_brier_score??null,
+      validation_base_rate_brier:result.validation_model?.base_rate_brier_score??null,
+      validation_pooled_logistic_brier:result.validation_logistic?.model_brier_score??null,
+      holdout_brier:result.holdout_model?.model_brier_score??null,
+      holdout_base_rate_brier:result.holdout_model?.base_rate_brier_score??null,
+      holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null
     }];
   }));
   const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
