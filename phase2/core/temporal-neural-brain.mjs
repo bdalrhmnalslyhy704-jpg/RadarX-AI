@@ -645,16 +645,31 @@ export function buildTemporalNeuralProfile(samples = [], {
     validationTargets[regime]=validTargets;
     holdoutTargets[regime]=holdTargets;
 
-    const supported=regimeTraining.length>=minRegimeTraining&&
-      regimeSelection.length>=minSelectionSamples&&
-      regimeValidation.length>=minRegimeValidation&&
-      regimeHoldout.length>=minRegimeHoldout&&
-      trainTargets.positive>=minRegimePositive&&trainTargets.negative>=minRegimeNegative&&
-      selectTargets.positive>=minSelectionPositive&&selectTargets.negative>=minSelectionNegative&&
-      validTargets.positive>=minRegimePositive&&validTargets.negative>=minRegimeNegative&&
-      holdTargets.positive>=minRegimePositive&&holdTargets.negative>=minRegimeNegative;
+    const supportGaps=[];
+    if(regimeTraining.length<minRegimeTraining)supportGaps.push('TRAINING_SAMPLE_COUNT');
+    if(regimeSelection.length<minSelectionSamples)supportGaps.push('SELECTION_SAMPLE_COUNT');
+    if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
+    if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
+    if(trainTargets.positive<minRegimePositive)supportGaps.push('TRAINING_POSITIVE_CLASS');
+    if(trainTargets.negative<minRegimeNegative)supportGaps.push('TRAINING_NEGATIVE_CLASS');
+    if(selectTargets.positive<minSelectionPositive)supportGaps.push('SELECTION_POSITIVE_CLASS');
+    if(selectTargets.negative<minSelectionNegative)supportGaps.push('SELECTION_NEGATIVE_CLASS');
+    if(validTargets.positive<minRegimePositive)supportGaps.push('VALIDATION_POSITIVE_CLASS');
+    if(validTargets.negative<minRegimeNegative)supportGaps.push('VALIDATION_NEGATIVE_CLASS');
+    if(holdTargets.positive<minRegimePositive)supportGaps.push('HOLDOUT_POSITIVE_CLASS');
+    if(holdTargets.negative<minRegimeNegative)supportGaps.push('HOLDOUT_NEGATIVE_CLASS');
+    const supported=supportGaps.length===0;
     if(!supported){
-      regimeResults[regime]={supported:false,validation_passed:false,holdout_passed:false,
+      regimeResults[regime]={supported:false,support_gaps:supportGaps,
+        training_start_at:regimeTraining[0]?.at??null,
+        selection_start_at:regimeSelection[0]?.at??null,
+        validation_start_at:regimeValidation[0]?.at??null,
+        max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
+        training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
+        validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
+        training_targets:trainTargets,selection_targets:selectTargets,
+        validation_targets:validTargets,holdout_targets:holdTargets,
+        validation_passed:false,holdout_passed:false,
         validation_model:{evaluated:false,sample_count:regimeValidation.length},
         validation_logistic:{evaluated:false,sample_count:regimeValidation.length},
         holdout_model:{evaluated:false,sample_count:regimeHoldout.length},
@@ -737,10 +752,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     const supported=supportedRegimes.includes(regime);
     const result=regimeResults[regime]||{};
     return [regime,{
-      status:!supported?'WAITING_FOR_REGIME_HOLDOUT_COVERAGE':
+      status:!supported?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
         result.holdout_passed?'REGIME_TCN_OUT_OF_SAMPLE_VALIDATED':
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
+      support_gaps:result.support_gaps||[],
       model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERT',
       training_start_at:result.training_start_at??null,
       selection_start_at:result.selection_start_at??null,
