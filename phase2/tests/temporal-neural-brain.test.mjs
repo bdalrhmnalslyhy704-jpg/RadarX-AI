@@ -64,9 +64,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'SQRT_CLASS_WEIGHTED_RESIDUAL_TCN_WITH_SELECTION_CALIBRATION_V2');
-  assert.equal(profile.training_class_weight_scope,'TRAINING_BLOCK_ONLY');
-  assert.ok(profile.training_positive_class_weight>=1&&profile.training_positive_class_weight<=4);
+  assert.equal(profile.training_strategy,'DIVERSIFIED_EPOCH_AND_REGULARIZATION_ENSEMBLE_V1');
   assert.equal(profile.member_training_profiles.length,3);
   assert.equal(new Set(profile.member_training_profiles.map(row=>JSON.stringify(row))).size,3,
     'ensemble members must use distinct deterministic training schedules');
