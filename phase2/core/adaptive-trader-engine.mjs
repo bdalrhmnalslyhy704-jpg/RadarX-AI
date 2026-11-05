@@ -638,7 +638,9 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcCurrent=btcByClose.get(baseline.closeTime);
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
-    const baselineRaw=candles.slice(Math.max(0,index-48),index+1).map(row=>row.raw);
+    // TCN requires 96 prior closed 15m candles for asset-day context plus 24 model steps.
+    // Keep this historical replay slice wide enough to build the same 24x28 tensor as live scans.
+    const baselineRaw=candles.slice(Math.max(0,index-119),index+1).map(row=>row.raw);
     const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-1000).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
     const ticker={
