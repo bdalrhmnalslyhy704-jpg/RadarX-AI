@@ -161,7 +161,7 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
   return { parameters: next.value, state: { m: next.moment, v: next.variance } };
 }
 
-function initializeModel(seed, baseRate = 0.5) {
+function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   const channels = TEMPORAL_SEQUENCE_CHANNELS;
   const layers = DILATIONS.length;
   const offset = Number(seed) * 0.6180339887498949;
@@ -176,15 +176,19 @@ function initializeModel(seed, baseRate = 0.5) {
   const biases = Array.from({ length: layers }, (_, layer) =>
     Array.from({ length: channels }, (_, channel) =>
       0.002 * Math.sin((layer + 1) * 5.3 + (channel + 1) * 1.7 + offset)));
-  const outputWeights = Array.from({ length: channels }, (_, channel) =>
-    0.03 * Math.sin((channel + 1) * 2.47 + offset));
+  // The shared TCN starts from a pooled-sequence logistic fit trained only
+  // on the chronological training block. The convolutional stack learns an
+  // additive temporal residual; it cannot erase the linear anchor.
+  const outputWeights = Array(channels).fill(0);
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
-  // Start the neural residual at the training-only event prevalence instead of
-  // an arbitrary 50% prior. This prevents a rare +3%-before-stop event from
-  // remaining badly miscalibrated while the small residual layers learn.
+  const baselineWeights=Array.isArray(baselineFit?.weights)&&baselineFit.weights.length===channels*2
+    ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4)):Array(channels*2).fill(0);
+  const baselineBias=Number.isFinite(Number(baselineFit?.bias))
+    ?Number(baselineFit.bias):Math.log(prior/(1-prior));
   return {
     depthWeights,pointWeights,biases,outputWeights,
-    outputBias:Math.log(prior/(1-prior))
+    skipWeights:baselineWeights,outputBias:baselineBias,
+    residual_anchor:baselineFit?'POOLED_SEQUENCE_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
 
@@ -221,9 +225,13 @@ function forward(sequence, model) {
   for (let time = poolStart; time < final.length; time++) {
     for (let channel = 0; channel < pooled.length; channel++) pooled[channel] += final[time][channel] / poolCount;
   }
+  const baselineFeatures=pooledSequence(sequence);
   let logit = model.outputBias;
+  for(let feature=0;feature<baselineFeatures.length;feature++){
+    logit+=baselineFeatures[feature]*(Number(model.skipWeights?.[feature])||0);
+  }
   for (let channel = 0; channel < pooled.length; channel++) logit += pooled[channel] * model.outputWeights[channel];
-  return { probability: logistic(logit), activations, depthCaches, pooled, poolStart, poolCount };
+  return { probability: logistic(logit), activations, depthCaches, pooled, poolStart, poolCount, baselineFeatures };
 }
 
 function gradientsFor(sequence, target, model, cache) {
@@ -232,7 +240,7 @@ function gradientsFor(sequence, target, model, cache) {
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
   const error = cache.probability - target;
-  gradients.outputBias = error;
+  // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
     for (let time = cache.poolStart; time < final.length; time++) {
@@ -275,11 +283,18 @@ function gradientsFor(sequence, target, model, cache) {
   return gradients;
 }
 
-function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012, baseRate = 0.5 } = {}) {
-  const model = initializeModel(seed,baseRate);
-  let optimizer = { m: zerosLike(model), v: zerosLike(model) };
+function fitMember(rows, seed, {
+  epochs = 10, learningRate = 0.006, l2 = 0.012,
+  baseRate = 0.5, baselineFit = null
+} = {}) {
+  const model = initializeModel(seed,baseRate,baselineFit);
+  const trainableParameters=()=>({
+    depthWeights:model.depthWeights,pointWeights:model.pointWeights,
+    biases:model.biases,outputWeights:model.outputWeights
+  });
+  let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   for (let epoch = 1; epoch <= epochs; epoch++) {
-    const gradient = zerosLike(model);
+    const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
       const cache = forward(row.sequence, model);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
@@ -289,10 +304,11 @@ function fitMember(rows, seed, { epochs = 10, learningRate = 0.006, l2 = 0.012, 
       for (const key of ['depthWeights', 'pointWeights', 'biases', 'outputWeights']) {
         gradient[key] = plus(gradient[key], itemGradient[key]);
       }
-      gradient.outputBias += itemGradient.outputBias;
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, rows.length));
-    const step = applyAdam(model, averaged, optimizer, epoch, learningRate, l2);
+    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
+    // Only convolutional trainable parameters are replaced. The pooled logistic
+    // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
     optimizer = step.state;
   }
@@ -518,8 +534,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const targets=fitRows.map(row=>row.target);
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
-  const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate});
   const pooledBaseline=fitLogistic(fitRows);
+  const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
   const validationModel=evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
   const validationLogistic=evaluate(validation,
     sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
@@ -583,6 +599,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_GATED_OUTPUT',
     model_scope:'GLOBAL_SHARED_TEMPORAL_MODEL_WITH_REGIME_SUPPORT_GATES',
+    residual_anchor:'POOLED_SEQUENCE_LOGISTIC_FROZEN',
     resolved_samples:rows.length,training_samples:fitRows.length,
     validation_samples:validation.length,holdout_samples:holdout.length,
     required_training_samples:minTrainingSamples,
