@@ -110,15 +110,15 @@ jobs:
         run: sleep 60
 
       - name: Check DHDTech deployment contract
-        timeout-minutes: 6
+        timeout-minutes: 14
         run: |
           set -euo pipefail
           CODE=""
           DEPLOYED_CONTRACT=false
-          # DHDTech may need longer than one rollout minute to replace the prior
-          # container after a branch push. Require the new Pre-Move contract itself;
+          # DHDTech may need several minutes to replace the prior container after a
+          # branch push. Give the rollout a bounded 12-minute window; keep the gate fail-closed.
           # an HTTP 200 from an older Build 224 image is not a deployment success.
-          for attempt in $(seq 1 16); do
+          for attempt in $(seq 1 44); do
             CODE="$(curl --location --silent --show-error --connect-timeout 10 --max-time 25 -o "$RUNNER_TEMP/deployment-info.json" -w "%{http_code}" "$BASE/api/deployment-info" || true)"
             if [ "$CODE" = "200" ]; then
               if node --input-type=module - "$RUNNER_TEMP/deployment-info.json" <<'NODE'
@@ -148,7 +148,7 @@ jobs:
                 echo "DHDTECH_PRE_MOVE_BUILD_CONTRACT_READY attempt=$attempt"
                 break
               fi
-              echo "::warning::DHDTech is still serving a Build 224 image without the versioned ticker-activity monitor contract, attempt $attempt/16."
+              echo "::warning::DHDTech is still serving a Build 224 image without the versioned ticker-activity monitor contract, attempt $attempt/44."
             else
               case "$CODE" in
                 502|503|504|000)
@@ -161,10 +161,10 @@ jobs:
                   ;;
               esac
             fi
-            if [ "$attempt" -lt 16 ]; then sleep 15; fi
+            if [ "$attempt" -lt 44 ]; then sleep 15; fi
           done
           if [ "$CODE" != "200" ] || [ "$DEPLOYED_CONTRACT" != "true" ]; then
-            echo "::error::DHDTech did not deploy the new Build 224 Pre-Move contract within the bounded 4-minute rollout window (last HTTP $CODE)."
+            echo "::error::DHDTech did not deploy the new Build 224 Pre-Move contract within the bounded 12-minute rollout window (last HTTP $CODE)."
             cat "$RUNNER_TEMP/deployment-info.json" 2>/dev/null || true
             exit 1
           fi
