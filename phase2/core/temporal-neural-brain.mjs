@@ -590,6 +590,17 @@ export function buildTemporalNeuralProfile(samples = [], {
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const pooledBaseline=fitLogistic(fitRows);
   const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
+  const globalMemberValidation=fitted.members.map((member,index)=>({
+    index,metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
+  }));
+  const globalRankedMembers=globalMemberValidation.filter(row=>row.metrics.evaluated===true)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
+  fitted.selected_member_index=globalRankedMembers.length?globalRankedMembers[0].index:-1;
+  fitted.member_validation_scores=globalMemberValidation.map(row=>({
+    index:row.index,brier_score:row.metrics.model_brier_score,
+    base_rate_brier_score:row.metrics.base_rate_brier_score,
+    beat_base_rate:row.metrics.beat_base_rate
+  }));
   const regimeSplits={};
   const regimeResults={};
   const trainingByRegime={},validationByRegime={},holdoutByRegime={};
@@ -674,7 +685,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdoutModel.beat_base_rate===true&&
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
-      validation_start_at:validationCutAt,training_samples:regimeTraining.length,
+      validation_start_at:validationCutAt,
+      max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
+      training_samples:regimeTraining.length,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
       validation_model:validationModel,validation_logistic:validationLogistic,
