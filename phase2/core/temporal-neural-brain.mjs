@@ -809,12 +809,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?diagnosticRegimes.reduce((sum,regime)=>sum+Number(trainingTargets[regime]?.negative||0),0)
     :targets.filter(value=>value===0).length;
   const reportTrainingPrior=(reportTrainingPositive+2)/(reportTrainingSamples+4);
-  const reportMaxTrainingResolvedAt=hasDiagnosticRegimes
-    ?Math.max(...diagnosticRegimes.map(regime=>Number(regimeResults[regime]?.max_training_outcome_resolved_at)||0))
-    :maxTrainingOutcomeResolvedAt;
-  const reportValidationStartAt=hasDiagnosticRegimes
-    ?Math.min(...diagnosticRegimes.map(regime=>Number(regimeResults[regime]?.validation_start_at)||validationStart))
-    :validationStart;
+  // The top-level split reports the shared outer chronological boundary;
+  // each specialist publishes its own earlier training/selection/validation
+  // sub-boundaries separately in regime_specialists.
+  const reportMaxTrainingResolvedAt=maxTrainingOutcomeResolvedAt;
+  const reportValidationStartAt=validationStart;
   const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
     !validationModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_BASE_RATE':
     !validationLogistic.evaluated?'REGIME_LOGISTIC_VALIDATION_NOT_EVALUATED':
