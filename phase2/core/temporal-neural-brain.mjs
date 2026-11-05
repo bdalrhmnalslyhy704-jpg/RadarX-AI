@@ -630,9 +630,3 @@ export function predictTemporalProbability(sequence,profile={}){
   return predict(sequence,profile._fit);
 }
 
-export function predictTemporalProbability(sequence,profile={}){
-  if(profile?.probability_ready!==true||!profile?._regime_fits||!validSequence(sequence))return null;
-  const regime=regimeOfSequence(sequence);
-  const fit=profile._regime_fits[regime];
-  return fit?predict(sequence,fit):null;
-}
