@@ -173,6 +173,42 @@ test('mature history reserves a broad untouched holdout for both BTC regime expe
   }
 });
 
+test('sparse BTC regime uses pooled chronological selection without leaking validation or holdout rows',()=>{
+  const rows=[];
+  for(let group=0;group<32;group++){
+    let riskOn=true;
+    if(group===15||group===16||group===18||group===20||group===23||group===25||group===27||group===31)riskOn=false;
+    for(let index=0;index<12;index++){
+      let up;
+      if(group===14)up=false; // local BTC_RISK_ON selection block has no positive class
+      else if(group===15||group===16)up=index<4; // pooled selection has both classes
+      else if(group>=28&&group<=30)up=index<5;
+      else if(group>=17&&group<=27)up=index<2;
+      else up=index<2;
+      const row=sample(group,index,{up});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2});
+  const expert=profile.regime_specialists.BTC_RISK_ON;
+  assert.ok(expert.training_samples>=80);
+  assert.equal(expert.selection_samples,12);
+  assert.equal(expert.selection_positive_samples,0);
+  assert.equal(expert.member_selection_source,'POOLED_SELECTION_BLOCK_FALLBACK');
+  assert.ok(expert.member_selection_samples>expert.selection_samples);
+  assert.equal(expert.probability_calibration.fit_on,'POOLED_SELECTION_BLOCK_FALLBACK');
+  assert.equal(expert.probability_calibration.sample_count,expert.member_selection_samples);
+  assert.ok(expert.validation_samples>=24);
+  assert.ok(expert.holdout_samples>=20);
+  assert.ok(expert.validation_start_at<profile.holdout_start_at);
+  assert.equal(profile.live_eligibility_ready,false);
+});
+
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{
   const valid=sample(0,0);
   const wrongHorizon={...sample(1,0),horizon_ms:FOUR_HOURS/2};
