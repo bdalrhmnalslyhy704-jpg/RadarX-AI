@@ -565,7 +565,7 @@ recordServerPaperPortfolio(snapshot,now){
         // states can have the same baseline ID and outcome but no TCN tensor;
         // treating that row as an immutable duplicate left the new network with
         // zero eligible sequences forever. Only overwrite with a fully valid
-        // 24x28 sequence regenerated from verified closed Binance candles.
+        // 24x29 sequence regenerated from verified closed Binance candles.
         const existing=historicalSampleById.get(id);
         if(existing){
           const incomingSequence=hasValidTemporalSequence(row.temporal_sequence);
