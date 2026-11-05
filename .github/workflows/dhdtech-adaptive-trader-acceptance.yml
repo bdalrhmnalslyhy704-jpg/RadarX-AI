@@ -2,6 +2,11 @@ name: Build 224 DHDTech Adaptive Trader Live Acceptance
 
 # Production DHDTech/TCN verification is on-demand and cannot block APK packaging.
 on:
+  push:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - 'Dockerfile'
   workflow_dispatch:
 
 concurrency:

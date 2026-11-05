@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+    paths-ignore:
+      - 'Dockerfile'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
