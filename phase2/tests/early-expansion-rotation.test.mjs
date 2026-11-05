@@ -1463,7 +1463,7 @@ test('Radar 8 produces a monitor-only flow alert candidate from validated Micro 
       volume_accel_ratio:1.65,trade_accel_ratio:1.45,volume_delta_quote:45,trade_delta:5},
     oneMinute:[{openTime:now-120_000,closeTime:now-60_001,open:.0079,high:.0081,low:.0078,close:.008,volume:500,tradeCount:20,closed:true}],
     fiveMinute:[{openTime:now-360_000,closeTime:now-60_001,open:.0078,high:.0081,low:.0077,close:.008,volume:2500,tradeCount:100,closed:true}],
-    source:'BINANCE_PUBLIC_REST',
+    source:['https://data-api.binance.vision','https://api-gcp.binance.com'],
     micro_fingerprint:{
       closed_candles_only:true,score:68,confirmation_count:4,stage:'WATCH',
       metrics:{rvol_1m:1.3,rvol_5m:1.2,trade_rvol_1m:1.2,trade_rvol_5m:1.15,
@@ -1476,6 +1476,9 @@ test('Radar 8 produces a monitor-only flow alert candidate from validated Micro 
   assert.equal(candidate.early_flow_watch,true);
   assert.equal(candidate.low_liquidity_burst_bypass,true);
   assert.equal(candidate.data_quality,null,'a Micro-only observation must not fabricate a numerical quality score');
+  assert.equal(candidate.source,'BINANCE_PUBLIC_REST','official Binance REST base URLs must normalize to the trusted Spot source');
+  const untrustedSourceCandidate=buildMicroEarlyFlowWatchCandidate({...micro,source:['https://data-api.binance.vision.attacker.example']},now,{});
+  assert.equal(untrustedSourceCandidate.source,'UNKNOWN_MARKET_SOURCE','lookalike domains must remain untrusted');
   const alert=buildEarlyFlowWatchAlert(candidate,now);
   assert.equal(alert.event,'EARLY_FLOW_WATCH_ONLY');
   assert.equal(alert.watch_only,true);
