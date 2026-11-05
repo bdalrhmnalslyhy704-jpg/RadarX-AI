@@ -444,7 +444,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*5
     ?liveHoldoutSamples:minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
-  const validationTargetSamples=Math.max(minimumValidationSamples*2,liveHoldoutSamples);
+  const validationTargetSamples=Math.max(minimumValidationSamples*2,Math.ceil(liveHoldoutSamples*1.5));
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
     validationTargetSamples,2*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
