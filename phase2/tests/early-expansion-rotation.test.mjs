@@ -287,6 +287,10 @@ test('Radar 8 adaptive Micro concurrency respects cache readiness, shared REST r
   assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:100},
     {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},18),4,
     'high request-count pressure caps workers even when request weight is low');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,null,Math.floor(.35*1024*1024*1024)),3,
+    'RSS above the soft memory budget caps Micro concurrency even when REST is healthy');
+  assert.equal(adaptiveRadar8MicroConcurrency(6,{expected_symbols:100,ready_symbols:80},lowPressure,18,null,Math.floor(.37*1024*1024*1024)),2,
+    'RSS above the hard memory budget uses the smallest bounded Micro pool');
 });
 
 test('Radar 8 adaptive Deep concurrency adds one worker only with full cache readiness and measured REST headroom',()=>{
@@ -302,6 +306,10 @@ test('Radar 8 adaptive Deep concurrency adds one worker only with full cache rea
   assert.equal(adaptiveRadar8DeepConcurrency(4,ready,
     {shared_requests_last_minute:350,shared_max_requests_per_minute:420,shared_estimated_weight_last_minute:1000,shared_max_weight_per_minute:4000},5),4,
     'deep worker promotion is blocked by high shared request-count pressure');
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,5,Math.floor(.35*1024*1024*1024)),3,
+    'RSS above the soft memory budget caps Deep concurrency');
+  assert.equal(adaptiveRadar8DeepConcurrency(4,ready,headroom,5,Math.floor(.37*1024*1024*1024)),2,
+    'RSS above the hard memory budget caps Deep concurrency');
 });
 
 test('Radar 8 reuses only a complete fresh closed 5m cache window and keeps 1m REST fresh',async()=>{
@@ -1477,6 +1485,8 @@ test('Radar 8 produces a monitor-only flow alert candidate from validated Micro 
   assert.equal(candidate.low_liquidity_burst_bypass,true);
   assert.equal(candidate.data_quality,null,'a Micro-only observation must not fabricate a numerical quality score');
   assert.equal(candidate.source,'BINANCE_PUBLIC_REST','official Binance REST base URLs must normalize to the trusted Spot source');
+  const cachedRestSourceCandidate=buildMicroEarlyFlowWatchCandidate({...micro,source:['BINANCE_PUBLIC_REST_CACHE']},now,{});
+  assert.equal(cachedRestSourceCandidate.source,'BINANCE_PUBLIC_REST_CACHE','the verified in-memory cache alias must remain trusted');
   const untrustedSourceCandidate=buildMicroEarlyFlowWatchCandidate({...micro,source:['https://data-api.binance.vision.attacker.example']},now,{});
   assert.equal(untrustedSourceCandidate.source,'UNKNOWN_MARKET_SOURCE','lookalike domains must remain untrusted');
   const alert=buildEarlyFlowWatchAlert(candidate,now);

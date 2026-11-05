@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {WhaleAccumulationRadar,buildWhaleAccumulationAnalysis} from '../core/whale-accumulation-radar.mjs';
+import {WhaleAccumulationRadar,WHALE_ACCUMULATION_DEFAULTS,buildWhaleAccumulationAnalysis} from '../core/whale-accumulation-radar.mjs';
+
+test('Whale radar production defaults keep deep work within a 60-second hosted cycle',()=>{
+  assert.equal(WHALE_ACCUMULATION_DEFAULTS.topAnchors,6);
+  assert.equal(WHALE_ACCUMULATION_DEFAULTS.rotationBatchSize,6);
+  assert.equal(WHALE_ACCUMULATION_DEFAULTS.deepConcurrency,4);
+  assert.equal(WHALE_ACCUMULATION_DEFAULTS.pollMs,60000);
+});
 
 test('Whale radar fills unique rotation slots when patrol overlaps quiet high-volume anchors',()=>{
   const radar=new WhaleAccumulationRadar({

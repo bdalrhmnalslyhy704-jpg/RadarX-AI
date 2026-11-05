@@ -23,7 +23,7 @@ function canonicalMicroMarketSource(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
   const label = raw.toUpperCase().replace(/\s+/g, '_');
-  if (['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(label)) {
+  if (['BINANCE_PUBLIC_REST','BINANCE_PUBLIC_REST_CACHE','BINANCE_PUBLIC_WS','BINANCE_PUBLIC_WEBSOCKET','BINANCE_SPOT_PUBLIC_REST'].includes(label)) {
     return label;
   }
   // RestClient.klines() preserves the actual Binance REST base URL as its source.
@@ -1847,7 +1847,24 @@ function radar8RestPressureRatios(restHealth = {}) {
   return {weightRatio,requestRatio};
 }
 
-export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18, previousCycleDurationMs = null) {
+const RADAR8_MEMORY_SOFT_CAP_BYTES=Math.floor(.34*1024*1024*1024);
+const RADAR8_MEMORY_HARD_CAP_BYTES=Math.floor(.36*1024*1024*1024);
+function currentRadar8RssBytes(){
+  try{
+    return typeof process!=='undefined'&&typeof process.memoryUsage==='function'
+      ?Number(process.memoryUsage().rss)||null:null;
+  }catch{return null;}
+}
+function radar8MemoryConcurrencyCap(rssBytes){
+  if(rssBytes===null||rssBytes===undefined||rssBytes==='')return null;
+  const rss=Number(rssBytes);
+  if(!Number.isFinite(rss)||rss<=0)return null;
+  if(rss>=RADAR8_MEMORY_HARD_CAP_BYTES)return 2;
+  if(rss>=RADAR8_MEMORY_SOFT_CAP_BYTES)return 3;
+  return null;
+}
+
+export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 18, previousCycleDurationMs = null, currentRssBytes = null) {
   const base = Math.max(1, Math.min(12, Math.trunc(Number(configuredConcurrency) || 6)));
   const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
   if (!candidates) return 1;
@@ -1880,6 +1897,8 @@ export function adaptiveRadar8MicroConcurrency(configuredConcurrency, cacheHealt
   const previousDuration=previousCycleDurationMs===null||previousCycleDurationMs===undefined
     ?null:Number(previousCycleDurationMs);
   if(Number.isFinite(previousDuration)&&previousDuration>60_000)target=Math.min(target,4);
+  const memoryCap=radar8MemoryConcurrencyCap(currentRssBytes);
+  if(memoryCap!==null)target=Math.min(target,memoryCap);
   return Math.max(1, Math.min(candidates, target));
 }
 
@@ -1896,7 +1915,7 @@ export function adaptiveRadar8DeepCandidateTarget(configuredCandidateCount, prev
     : configured;
 }
 
-export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 5) {
+export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth = {}, restHealth = {}, candidateCount = 5, currentRssBytes = null) {
   const base = Math.max(1, Math.min(6, Math.trunc(Number(configuredConcurrency) || 4)));
   const candidates = Math.max(0, Math.trunc(Number(candidateCount) || 0));
   if (!candidates) return 1;
@@ -1907,9 +1926,11 @@ export function adaptiveRadar8DeepConcurrency(configuredConcurrency, cacheHealth
   const {weightRatio,requestRatio}=radar8RestPressureRatios(restHealth);
   // Deep scans promote by one worker only with measured headroom in both shared
   // budgets; a healthy weight number alone is not enough under count-based limits.
-  const target = readyRatio >= 0.70 && weightRatio !== null && requestRatio !== null &&
+  let target = readyRatio >= 0.70 && weightRatio !== null && requestRatio !== null &&
       weightRatio < 0.55 && requestRatio < 0.55
     ? Math.min(6, base + 1) : base;
+  const memoryCap=radar8MemoryConcurrencyCap(currentRssBytes);
+  if(memoryCap!==null)target=Math.min(target,memoryCap);
   return Math.max(1, Math.min(candidates, target));
 }
 
@@ -2498,12 +2519,36 @@ export class EarlyExpansionRadar{
         micro5mWindowsRemoved++;
       }
     }
+    const rssBeforePressureTrim=currentRadar8RssBytes();
+    const memoryPressure=radar8MemoryConcurrencyCap(rssBeforePressureTrim);
+    const deepCacheTarget=memoryPressure===2?64:memoryPressure===3?96:RADAR8_DEEP_CANDLE_CACHE_MAX_WINDOWS;
+    const microCacheTarget=memoryPressure===2?24:memoryPressure===3?48:RADAR8_MICRO_5M_CACHE_MAX_WINDOWS;
+    while(this.deepCandleWindowCache.size>deepCacheTarget){
+      const oldest=this.deepCandleWindowCache.keys().next();
+      if(oldest.done)break;
+      const entry=this.deepCandleWindowCache.get(oldest.value);
+      candleRowsReleased+=Array.isArray(entry?.candles)?entry.candles.length:0;
+      this.deepCandleWindowCache.delete(oldest.value);
+      deepWindowsRemoved++;
+    }
+    while(this.microFiveMinuteWindowCache.size>microCacheTarget){
+      const oldest=this.microFiveMinuteWindowCache.keys().next();
+      if(oldest.done)break;
+      const entry=this.microFiveMinuteWindowCache.get(oldest.value);
+      candleRowsReleased+=Array.isArray(entry?.candles)?entry.candles.length:0;
+      this.microFiveMinuteWindowCache.delete(oldest.value);
+      micro5mWindowsRemoved++;
+    }
     return {
       skipped:false,cached_symbols_evaluated:cachedSymbols.size,
       inactive_symbols_removed:inactiveSymbolsRemoved,
       low_momentum_symbols_removed:lowMomentumSymbols.size,
       deep_windows_removed:deepWindowsRemoved,
       micro_5m_windows_removed:micro5mWindowsRemoved,
+      memory_pressure_cap:memoryPressure,
+      deep_cache_target:deepCacheTarget,
+      micro_5m_cache_target:microCacheTarget,
+      rss_before_pressure_trim_bytes:rssBeforePressureTrim,
       candle_rows_released:candleRowsReleased
     };
   }
@@ -3141,9 +3186,10 @@ export class EarlyExpansionRadar{
         shared_cache_entries:numericMetric(restHealthForConcurrency.shared_cache_entries)
       };
       const priorCycleDuration=Number(this.lastCoverage?.scan_duration_ms);
+      const microRssBytes=currentRadar8RssBytes();
       const microConcurrency=adaptiveRadar8MicroConcurrency(
         this.config.microConcurrency,cacheHealthForConcurrency,restHealthForConcurrency,selected.length,
-        Number.isFinite(priorCycleDuration)?priorCycleDuration:null
+        Number.isFinite(priorCycleDuration)?priorCycleDuration:null,microRssBytes
       );
       const microScanPromise=boundedMap(selected,microConcurrency,async row=>{
         const entry=journeyEntries.get(row.symbol),startedAt=this.clock(),lane=row._selection_lane||'score';
@@ -3290,8 +3336,9 @@ export class EarlyExpansionRadar{
       }
       const deepCacheHealthForConcurrency=this.marketWideKlineCache?.health?.()||{};
       const deepRestHealthForConcurrency=this.rest.health?.()||{};
+      const deepRssBytes=currentRadar8RssBytes();
       const deepConcurrency=adaptiveRadar8DeepConcurrency(
-        this.config.deepConcurrency,deepCacheHealthForConcurrency,deepRestHealthForConcurrency,deepTargets.length
+        this.config.deepConcurrency,deepCacheHealthForConcurrency,deepRestHealthForConcurrency,deepTargets.length,deepRssBytes
       );
       const deepScanStartedAt=this.clock();
       const deepWaitBySymbol=new Map();
