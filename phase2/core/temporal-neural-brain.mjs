@@ -582,24 +582,69 @@ export function buildTemporalNeuralProfile(samples = [], {
     };
   }
 
-  // A pooled reference is retained for diagnostics only. Actual probabilities
-  // come from independent chronological experts for the active BTC regime.
+  // One shared TCN ensemble is trained only on the union of chronological
+  // training slices. Regime-specific selection, validation and holdout rows
+  // never enter the shared model's gradient updates.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
-  const targets=fitRows.map(row=>row.target);
+  const fitTimes=[...new Set(fitRows.map(row=>row.at))].sort((a,b)=>a-b);
+  const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-3,Math.floor(fitTimes.length*0.65)));
+  const sharedSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
+    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.80)));
+  const sharedTrainingCutoffAt=fitTimes[sharedTrainCutIndex]??validationStart;
+  const sharedSelectionCutoffAt=fitTimes[sharedSelectionCutIndex]??validationStart;
+  const sharedTrainingRows=fitRows.filter(row=>
+    row.at<sharedTrainingCutoffAt&&row.resolved_at<sharedTrainingCutoffAt)
+    .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const sharedTrainingMaxResolvedAt=sharedTrainingRows.length
+    ?Math.max(...sharedTrainingRows.map(row=>row.resolved_at)):null;
+  if(fitTimes.length<4||sharedTrainingRows.length<minTrainingSamples){
+    return{
+      status:'WAITING_FOR_SHARED_TCN_TRAINING_SAMPLES',
+      architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
+      ensemble_members:0,ensemble_members_required:SEEDS.length,
+      regime_specialist_count:2,
+      regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
+      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
+      resolved_samples:rows.length,training_samples:sharedTrainingRows.length,
+      shared_model_training_samples:sharedTrainingRows.length,
+      selection_samples:0,validation_samples:validation.length,holdout_samples:holdout.length,
+      required_training_samples:minTrainingSamples,
+      required_selection_samples:Math.max(10,Math.ceil(minimumValidationSamples*0.4)),
+      required_validation_samples:minimumValidationSamples,
+      required_holdout_samples:minimumHoldoutSamples,
+      selection_start_at:sharedTrainingCutoffAt,
+      validation_start_at:sharedSelectionCutoffAt,holdout_start_at:holdoutStart,
+      max_training_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+      shared_model_training_cutoff_at:sharedTrainingCutoffAt,
+      shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
+      shared_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+      probability_ready:false,live_eligibility_ready:false,
+      trained:false,selected:false,supported_regimes:[],selected_regimes:[],
+      regime_specialists:emptyCoverage,
+      validation:{evaluated:false,reason:'SHARED_TCN_TRAINING_BLOCK_BELOW_MINIMUM'},
+      holdout:{evaluated:false,reason:'SHARED_TCN_TRAINING_BLOCK_BELOW_MINIMUM'},
+      holdout_comparison:{passed:false,required_live_holdout_samples:liveHoldoutSamples},
+      _fit:null,_baseline_fit:null
+    };
+  }
+
+  const targets=sharedTrainingRows.map(row=>row.target);
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
-  const pooledBaseline=fitLogistic(fitRows);
-  const fitted=fitEnsemble(fitRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
+  const pooledBaseline=fitLogistic(sharedTrainingRows);
+  const fitted=fitEnsemble(sharedTrainingRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
+  // This global member score is diagnostic only. Valid regime probabilities
+  // use the member index selected on that regime's separate selection block.
   const globalMemberValidation=fitted.members.map((member,index)=>({
     index,metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
   }));
-  const globalRankedMembers=globalMemberValidation.filter(row=>row.metrics.evaluated===true)
-    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
-  fitted.selected_member_index=globalRankedMembers.length?globalRankedMembers[0].index:-1;
+  fitted.selected_member_index=-1;
   fitted.member_validation_scores=globalMemberValidation.map(row=>({
     index:row.index,brier_score:row.metrics.model_brier_score,
     base_rate_brier_score:row.metrics.base_rate_brier_score,
     beat_base_rate:row.metrics.beat_base_rate
   }));
+
   const regimeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -609,23 +654,21 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minSelectionPositive=3,minSelectionNegative=8;
   fitted.selected_member_by_regime={};
 
-  // Each BTC regime has four disjoint chronological slices: expert fitting,
-  // member selection, validation, and an untouched global final holdout.
-  // Selection and validation never reuse the same examples.
+  // All regimes share the same time cutoffs. The shared TCN trains only before
+  // sharedTrainingCutoffAt; member selection is later, validation starts at
+  // sharedSelectionCutoffAt, and the final holdout remains untouched.
   for(const regime of regimes){
     const regimeRows=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime)
       .sort((a,b)=>a.at-b.at);
     const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime)
       .sort((a,b)=>a.at-b.at);
-    const trainCutIndex=Math.max(1,Math.min(regimeRows.length-2,Math.floor(regimeRows.length*0.65)));
-    const selectionCutIndex=Math.max(trainCutIndex+1,
-      Math.min(regimeRows.length-1,Math.floor(regimeRows.length*0.80)));
-    const trainCutAt=regimeRows[trainCutIndex]?.at??validationStart;
-    const selectionCutAt=regimeRows[selectionCutIndex]?.at??validationStart;
-    const regimeTraining=regimeRows.filter(row=>row.at<trainCutAt&&row.resolved_at<trainCutAt);
-    const regimeSelection=regimeRows.filter(row=>row.at>=trainCutAt&&row.at<selectionCutAt&&
-      row.resolved_at<selectionCutAt);
-    const innerValidation=regimeRows.filter(row=>row.at>=selectionCutAt&&row.resolved_at<validationStart);
+    const regimeTraining=regimeRows.filter(row=>
+      row.at<sharedTrainingCutoffAt&&row.resolved_at<sharedTrainingCutoffAt);
+    const regimeSelection=regimeRows.filter(row=>
+      row.at>=sharedTrainingCutoffAt&&row.at<sharedSelectionCutoffAt&&
+      row.resolved_at<sharedSelectionCutoffAt);
+    const innerValidation=regimeRows.filter(row=>
+      row.at>=sharedSelectionCutoffAt&&row.resolved_at<validationStart);
     const outerValidation=validation.filter(row=>regimeOfSequence(row.sequence)===regime);
     const regimeValidation=[...innerValidation,...outerValidation].sort((a,b)=>a.at-b.at);
     const targetsOf=block=>({
@@ -680,9 +723,9 @@ export function buildTemporalNeuralProfile(samples = [], {
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
     const regimeBaseline=fitLogistic(regimeTraining);
-    // Reuse the one globally trained three-member TCN ensemble. Only the member
-    // index is selected per BTC regime on its disjoint selection block; no extra
-    // per-regime TCN copies are trained on the constrained 0.5-CPU service.
+    // Reuse the shared three-member TCN. The active regime selects a member
+    // only from its disjoint selection block; no selection/validation/holdout
+    // example is included in the shared model's training rows.
     const memberRanks=fitted.members.map((member,index)=>({
       index,metrics:evaluate(regimeSelection,sequence=>forward(sequence,member).probability,regimePrior)
     })).filter(row=>row.metrics.evaluated===true)
@@ -709,8 +752,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
       training_start_at:regimeTraining[0]?.at??null,
-      validation_start_at:regimeValidation[0]?.at??null,
       selection_start_at:regimeSelection[0]?.at??null,
+      validation_start_at:regimeValidation[0]?.at??null,
       max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
       training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
