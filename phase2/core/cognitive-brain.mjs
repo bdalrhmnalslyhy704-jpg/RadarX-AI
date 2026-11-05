@@ -19,7 +19,10 @@ const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
   minTrainingSamples: 240,
-  maxTrainingSamples: 600,
+  // Use up to 1,200 newest purged training rows; the 18-10-6 ensemble
+  // is small enough for the DHDTech memory budget and needs a wider sample
+  // than the former 600-row cap in the live four-hour outcome stream.
+  maxTrainingSamples: 1200,
   iterations: 100,
   learningRate: 0.012,
   l2: 0.04,
