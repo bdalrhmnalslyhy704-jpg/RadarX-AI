@@ -508,10 +508,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
     return groups;
   };
-  // Reserve an untouched final block. Once at least 500 valid sequences exist,
-  // reserve an expanded final block so one eligible regime can still supply the full live holdout minimum.
+  // Reserve a broad, untouched final block once the historical journal is mature.
+  // The larger holdout must cover both BTC regimes and both outcome classes; it
+  // never relaxes the per-regime sample or performance gates.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*4
-    ?liveHoldoutSamples+30:minimumHoldoutSamples;
+    ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.40)):minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   const validationTargetSamples=rows.length>=liveHoldoutSamples*5
     ?Math.ceil(liveHoldoutSamples*4/3)
