@@ -488,8 +488,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minRegimeHoldout=Math.max(20,Math.floor(minimumHoldoutSamples/2));
   const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
   const emptyCoverage=Object.fromEntries(regimes.map(regime=>[regime,{
-    status:'WAITING_FOR_GLOBAL_CHRONOLOGICAL_SPLIT',
-    model_scope:'SHARED_TCN',
+    status:'WAITING_FOR_REGIME_EXPERT_CHRONOLOGICAL_SPLIT',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERT',
     training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minRegimeTraining,
     required_validation_samples:minRegimeValidation,
@@ -616,9 +616,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       .sort((a,b)=>a.at-b.at);
     const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime)
       .sort((a,b)=>a.at-b.at);
-    const trainCutIndex=Math.max(1,Math.min(regimeRows.length-2,Math.floor(regimeRows.length*0.60)));
+    const trainCutIndex=Math.max(1,Math.min(regimeRows.length-2,Math.floor(regimeRows.length*0.65)));
     const selectionCutIndex=Math.max(trainCutIndex+1,
-      Math.min(regimeRows.length-1,Math.floor(regimeRows.length*0.75)));
+      Math.min(regimeRows.length-1,Math.floor(regimeRows.length*0.80)));
     const trainCutAt=regimeRows[trainCutIndex]?.at??validationStart;
     const selectionCutAt=regimeRows[selectionCutIndex]?.at??validationStart;
     const regimeTraining=regimeRows.filter(row=>row.at<trainCutAt&&row.resolved_at<trainCutAt);
@@ -759,6 +759,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdout_positive_samples:holdoutTargets[regime].positive,
       holdout_negative_samples:holdoutTargets[regime].negative,
       required_training_samples:minRegimeTraining,
+      required_selection_samples:minSelectionSamples,
       required_validation_samples:minRegimeValidation,
       required_holdout_samples:minRegimeHoldout,
       required_validation_positive_samples:minRegimePositive,
@@ -820,11 +821,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     member_training_profiles:fitted.member_training_profiles,
     member_validation_scores:fitted.member_validation_scores,
     selected_member_index:fitted.selected_member_index,
-    member_selection_method:'BEST_MEMBER_BY_REGIME_CHRONOLOGICAL_VALIDATION_BRIER',
+    member_selection_method:'REGIME_SPECIFIC_CHRONOLOGICAL_SELECTION_BLOCK_BRIER',
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERTS',
-    residual_anchor:'POOLED_SEQUENCE_LOGISTIC_FROZEN',
+    residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     selection_samples:reportSelectionSamples,
     validation_samples:reportValidationSamples,holdout_samples:reportHoldoutSamples,
