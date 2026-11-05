@@ -612,7 +612,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     if(dailyReturn===null)continue;
     possible.push({index,volume24h,dailyReturn,baseline,future});
   }
-  const desired=Math.max(1,Math.min(110,Math.trunc(Number(maxSamples)||48)));
+  const desired=Math.max(1,Math.min(118,Math.trunc(Number(maxSamples)||48)));
   const selected=[];
   // Give each symbol a deterministic phase on the 4h sampling grid. This keeps
   // that symbol's own outcomes non-overlapping, while preventing every market
@@ -1100,7 +1100,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     }
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:110
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:118
     });
     const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,
