@@ -283,8 +283,7 @@ function fitNeuralNetworkModel(training, {
   for(let epoch=1;epoch<=steps;epoch++){
     const gradInput=zerosLike(inputWeights),gradHidden=zerosLike(hiddenWeights);
     const gradBias1=Array(units1).fill(0),gradBias2=Array(units2).fill(0);
-    const gradOutput=Array(units2).fill(0),gradSkip=Array(inputSize).fill(0);
-    let gradOutputBias=0;
+    const gradOutput=Array(units2).fill(0);
 
     for(const row of rows){
       const hidden1=new Array(units1);
@@ -305,9 +304,9 @@ function fitNeuralNetworkModel(training, {
       // two nonlinear layers learn interactions between market conditions.
       for(let i=0;i<inputSize;i++)output+=skipWeights[i]*row.vector[i];
       const error=logistic(output)-row.target;
-      gradOutputBias+=error;
-      for(let i=0;i<inputSize;i++)gradSkip[i]+=error*row.vector[i];
-
+      // The same-window logistic path is a frozen anchor. Only the hidden
+      // nonlinear branch is trained, so a weak residual cannot erase the
+      // simpler model that already supplied the initial prediction.
       const hidden2Error=new Array(units2);
       for(let j=0;j<units2;j++){
         gradOutput[j]+=error*hidden2[j];
@@ -343,14 +342,8 @@ function fitNeuralNetworkModel(training, {
       const output=update(outputWeights[j],gradOutput[j]/n,mOutput[j],vOutput[j],epoch);
       outputWeights[j]=output.value;mOutput[j]=output.moment;vOutput[j]=output.variance;
     }
-    for(let i=0;i<inputSize;i++){
-      // Keep the learned linear anchor free of weight decay; only the gradient
-      // from this training batch may adjust it while hidden layers learn residuals.
-      const result=update(skipWeights[i],gradSkip[i]/n,mSkip[i],vSkip[i],epoch,4,false);
-      skipWeights[i]=result.value;mSkip[i]=result.moment;vSkip[i]=result.variance;
-    }
-    const bias=update(outputBias,gradOutputBias/n,mOutputBias,vOutputBias,epoch,6,false);
-    outputBias=bias.value;mOutputBias=bias.moment;vOutputBias=bias.variance;
+    // Keep skipWeights and outputBias frozen at the training-only logistic
+    // anchor. The nonlinear residual may add information but cannot rewrite it.
   }
 
   return {
@@ -361,7 +354,8 @@ function fitNeuralNetworkModel(training, {
     hidden_weights:hiddenWeights,hidden_bias_2:hiddenBias2,
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...FEATURE_NAMES],
-    training_samples:rows.length,iterations:steps,l2:regularization
+    training_samples:rows.length,iterations:steps,l2:regularization,
+    residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
 
