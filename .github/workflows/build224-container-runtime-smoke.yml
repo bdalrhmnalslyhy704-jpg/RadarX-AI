@@ -177,10 +177,10 @@ jobs:
           const neuralNetwork=brainProfile.neural_network||{};
           const temporalNetwork=brainProfile.temporal_network||{};
           const summary=x.last_summary||{};
-          if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V5'||
-             temporalNetwork.architecture!=='TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5'||
+          if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V6'||
+             temporalNetwork.architecture!=='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'||
              temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'){
-            throw new Error('CONTAINER_COGNITIVE_V5_TCN_SOURCE_CONTRACT_INVALID '+JSON.stringify({
+            throw new Error('CONTAINER_COGNITIVE_V5_TCN_V6_SOURCE_CONTRACT_INVALID '+JSON.stringify({
               top_level_contract:x.cognitive_model_contract||null,
               temporal_architecture:temporalNetwork.architecture||null,
               temporal_target:temporalNetwork.target_definition||null
@@ -196,10 +196,10 @@ jobs:
             Number(neuralNetwork.ensemble_members_required)===3&&
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
-            temporalNetwork.architecture==='TCN_24x28_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5'&&
+            temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
             Number(temporalNetwork.sequence_steps)===24&&
-            Number(temporalNetwork.sequence_channels)===28&&
+            Number(temporalNetwork.sequence_channels)===29&&
             Number(temporalNetwork.ensemble_members_required)===3&&
             (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)&&
             ['WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
