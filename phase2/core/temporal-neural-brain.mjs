@@ -527,7 +527,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-    model_scope:'GLOBAL_SHARED_TCN_WITH_REGIME_SPECIFIC_ACCEPTANCE',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERTS',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minTrainingSamples,
     required_validation_samples:minimumValidationSamples,
@@ -561,7 +561,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
       regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-      model_scope:'GLOBAL_SHARED_TCN_WITH_REGIME_SPECIFIC_ACCEPTANCE',
+      model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERTS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
@@ -601,7 +601,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     base_rate_brier_score:row.metrics.base_rate_brier_score,
     beat_base_rate:row.metrics.beat_base_rate
   }));
-  const regimeSplits={};
   const regimeResults={};
   const trainingByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},validationTargets={},holdoutTargets={};
@@ -644,8 +643,6 @@ export function buildTemporalNeuralProfile(samples = [], {
       trainTargets.positive>=minRegimePositive&&trainTargets.negative>=minRegimeNegative&&
       validTargets.positive>=minRegimePositive&&validTargets.negative>=minRegimeNegative&&
       holdTargets.positive>=minRegimePositive&&holdTargets.negative>=minRegimeNegative;
-    regimeSplits[regime]={training:regimeTraining,validation:regimeValidation,holdout:regimeHoldout,
-      validation_start_at:validationCutAt};
     if(!supported){
       regimeResults[regime]={supported:false,validation_passed:false,holdout_passed:false,
         validation_model:{evaluated:false,sample_count:regimeValidation.length},
@@ -732,7 +729,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         result.holdout_passed?'REGIME_TCN_OUT_OF_SAMPLE_VALIDATED':
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
-      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION',
+      model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERT',
       training_samples:trainingByRegime[regime],
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
@@ -786,7 +783,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     member_selection_method:'BEST_MEMBER_BY_REGIME_CHRONOLOGICAL_VALIDATION_BRIER',
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-    model_scope:'GLOBAL_SHARED_TCN_WITH_REGIME_SPECIFIC_ACCEPTANCE',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_EXPERTS',
     residual_anchor:'POOLED_SEQUENCE_LOGISTIC_FROZEN',
     resolved_samples:rows.length,training_samples:fitRows.length,
     validation_samples:validation.length,holdout_samples:holdout.length,
