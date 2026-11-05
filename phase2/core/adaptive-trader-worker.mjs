@@ -832,7 +832,14 @@ recordServerPaperPortfolio(snapshot,now){
     const latestPrices=(Array.isArray(snapshot.latest_prices)?snapshot.latest_prices:[]).map(row=>({...row}));
     return {
       as_of:snapshot.as_of,source:snapshot.source,status:snapshot.status,
-      meta:{...(snapshot.meta||{})},
+      meta:{
+        ...(snapshot.meta||{}),
+        live:snapshot.meta?.live===true,
+        paper_trading:true,
+        real_order_execution:false,
+        closed_candles_only:true,
+        engine:'ADAPTIVE_TRADER_SIDECAR_V1'
+      },
       universe:{...(snapshot.universe||{})},
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
@@ -869,11 +876,6 @@ recordServerPaperPortfolio(snapshot,now){
       // worker's result without starting a second full REST scan from the phone.
       candidates,
       latest_prices:latestPrices,
-      meta:{
-        live:snapshot.meta?.live===true,
-        paper_trading:true,real_order_execution:false,closed_candles_only:true,
-        engine:'ADAPTIVE_TRADER_SIDECAR_V1'
-      },
       counts:{
         valid:candidates.filter(row=>row.data_valid===true&&!row.data_stale).length,
         early_setup:candidates.filter(row=>row.data_valid===true&&row.tier==='EARLY_SETUP').length,

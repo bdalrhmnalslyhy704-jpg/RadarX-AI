@@ -105,7 +105,9 @@ test('TEST_FIXTURE: a stalled persistence write cannot permanently lock the adap
       scan_offset:0,scan_advance_count:0,coverage_pct:0,scan_complete:false},
     candidates:[],latest_prices:[],
     meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
-      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1'}
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1',
+      source_host:'data-api.binance.vision',btc_benchmark_available:true,
+      btc_15m_historical_window_candles:1000,historical_learning_enabled:true}
   });
   const worker=new AdaptiveTraderWorker({
     store,snapshotProvider,intervalMs:60_000,scanLimit:40,scanTimeoutMs:1000,persistTimeoutMs:250,
@@ -158,6 +160,10 @@ test('server paper portfolio records isolated trades and persists evidence witho
     assert.equal(status.last_summary.status,'LIVE_DATA');
     assert.equal(status.last_summary.meta.live,true);
     assert.equal(status.last_summary.meta.real_order_execution,false);
+    assert.equal(status.last_summary.meta.source_host,'data-api.binance.vision');
+    assert.equal(status.last_summary.meta.btc_benchmark_available,true);
+    assert.equal(status.last_summary.meta.btc_15m_historical_window_candles,1000);
+    assert.equal(status.last_summary.meta.historical_learning_enabled,true);
     assert.ok(Array.isArray(status.last_summary.candidates));
     assert.ok(Array.isArray(status.last_summary.latest_prices));
     assert.equal(status.last_summary.current_recommendation.symbol,'PAPERUSDT');
