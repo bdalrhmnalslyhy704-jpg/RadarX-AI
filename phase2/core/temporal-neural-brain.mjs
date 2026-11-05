@@ -580,11 +580,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     };
   }
 
-  // One shared TCN learns across both BTC regimes. BTC 24h trend, volatility
-  // and drawdown are explicit input channels. A strict per-regime three-block
-  // split can be impossible when BTC changes regime between training,
-  // validation and holdout; validate the shared model on all chronological
-  // blocks, then publish only in regimes with enough training and holdout data.
+  // A pooled reference is retained for diagnostics only. Actual probabilities
+  // come from independent chronological experts for the active BTC regime.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const targets=fitRows.map(row=>row.target);
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
@@ -602,24 +599,32 @@ export function buildTemporalNeuralProfile(samples = [], {
     beat_base_rate:row.metrics.beat_base_rate
   }));
   const regimeResults={};
-  const trainingByRegime={},validationByRegime={},holdoutByRegime={};
-  const trainingTargets={},validationTargets={},holdoutTargets={};
+  const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
+  const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
   const minRegimePositive=Math.max(5,Math.ceil(minimumValidationSamples*0.2));
   const minRegimeNegative=Math.max(20,Math.ceil(minimumValidationSamples*0.8));
+  const minSelectionSamples=Math.max(10,Math.ceil(minimumValidationSamples*0.4));
+  const minSelectionPositive=3,minSelectionNegative=8;
   fitted.regime_fits={};
   fitted.selected_member_by_regime={};
 
-  // Each market regime gets its own chronological specialist. The final
-  // global holdout remains last and untouched; a tail slice of the training
-  // period becomes a separate regime-validation block so a regime change does
-  // not leave the active regime with too few validation observations.
+  // Each BTC regime has four disjoint chronological slices: expert fitting,
+  // member selection, validation, and an untouched global final holdout.
+  // Selection and validation never reuse the same examples.
   for(const regime of regimes){
-    const regimeRows=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const cutIndex=Math.max(1,Math.min(regimeRows.length-1,Math.floor(regimeRows.length*0.75)));
-    const validationCutAt=regimeRows[cutIndex]?.at??validationStart;
-    const regimeTraining=regimeRows.filter(row=>row.at<validationCutAt&&row.resolved_at<validationCutAt);
-    const innerValidation=regimeRows.filter(row=>row.at>=validationCutAt&&row.resolved_at<validationStart);
+    const regimeRows=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime)
+      .sort((a,b)=>a.at-b.at);
+    const regimeHoldout=holdout.filter(row=>regimeOfSequence(row.sequence)===regime)
+      .sort((a,b)=>a.at-b.at);
+    const trainCutIndex=Math.max(1,Math.min(regimeRows.length-2,Math.floor(regimeRows.length*0.60)));
+    const selectionCutIndex=Math.max(trainCutIndex+1,
+      Math.min(regimeRows.length-1,Math.floor(regimeRows.length*0.75)));
+    const trainCutAt=regimeRows[trainCutIndex]?.at??validationStart;
+    const selectionCutAt=regimeRows[selectionCutIndex]?.at??validationStart;
+    const regimeTraining=regimeRows.filter(row=>row.at<trainCutAt&&row.resolved_at<trainCutAt);
+    const regimeSelection=regimeRows.filter(row=>row.at>=trainCutAt&&row.at<selectionCutAt&&
+      row.resolved_at<selectionCutAt);
+    const innerValidation=regimeRows.filter(row=>row.at>=selectionCutAt&&row.resolved_at<validationStart);
     const outerValidation=validation.filter(row=>regimeOfSequence(row.sequence)===regime);
     const regimeValidation=[...innerValidation,...outerValidation].sort((a,b)=>a.at-b.at);
     const targetsOf=block=>({
@@ -628,19 +633,24 @@ export function buildTemporalNeuralProfile(samples = [], {
       negative:block.filter(row=>row.target===0).length
     });
     const trainTargets=targetsOf(regimeTraining);
+    const selectTargets=targetsOf(regimeSelection);
     const validTargets=targetsOf(regimeValidation);
     const holdTargets=targetsOf(regimeHoldout);
     trainingByRegime[regime]=regimeTraining.length;
+    selectionByRegime[regime]=regimeSelection.length;
     validationByRegime[regime]=regimeValidation.length;
     holdoutByRegime[regime]=regimeHoldout.length;
     trainingTargets[regime]=trainTargets;
+    selectionTargets[regime]=selectTargets;
     validationTargets[regime]=validTargets;
     holdoutTargets[regime]=holdTargets;
 
     const supported=regimeTraining.length>=minRegimeTraining&&
+      regimeSelection.length>=minSelectionSamples&&
       regimeValidation.length>=minRegimeValidation&&
       regimeHoldout.length>=minRegimeHoldout&&
       trainTargets.positive>=minRegimePositive&&trainTargets.negative>=minRegimeNegative&&
+      selectTargets.positive>=minSelectionPositive&&selectTargets.negative>=minSelectionNegative&&
       validTargets.positive>=minRegimePositive&&validTargets.negative>=minRegimeNegative&&
       holdTargets.positive>=minRegimePositive&&holdTargets.negative>=minRegimeNegative;
     if(!supported){
@@ -657,7 +667,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     const regimeFit=fitEnsemble(regimeTraining,{epochs,learningRate,l2,
       baseRate:regimePrior,baselineFit:regimeBaseline});
     const memberRanks=regimeFit.members.map((member,index)=>({
-      index,metrics:evaluate(regimeValidation,sequence=>forward(sequence,member).probability,regimePrior)
+      index,metrics:evaluate(regimeSelection,sequence=>forward(sequence,member).probability,regimePrior)
     })).filter(row=>row.metrics.evaluated===true)
       .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
     regimeFit.selected_member_index=memberRanks.length?memberRanks[0].index:-1;
@@ -682,14 +692,16 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdoutModel.beat_base_rate===true&&
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
-      validation_start_at:validationCutAt,
+      training_start_at:regimeTraining[0]?.at??null,
+      validation_start_at:regimeValidation[0]?.at??null,
+      selection_start_at:regimeSelection[0]?.at??null,
       max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
-      training_samples:regimeTraining.length,
+      training_samples:regimeTraining.length,selection_samples:regimeSelection.length,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
       validation_model:validationModel,validation_logistic:validationLogistic,
       holdout_model:holdoutModel,holdout_logistic:holdoutLogistic,
-      member_validation_scores:regimeFit.member_validation_scores};
+      member_selection_scores:regimeFit.member_validation_scores};
   }
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
