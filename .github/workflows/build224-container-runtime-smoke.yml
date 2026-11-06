@@ -179,11 +179,13 @@ jobs:
           const summary=x.last_summary||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V6'||
              temporalNetwork.architecture!=='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'||
-             temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'){
+             temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
+             temporalNetwork.temporal_label_resolution!=='15M_ONLY'){
             throw new Error('CONTAINER_COGNITIVE_V5_TCN_V6_SOURCE_CONTRACT_INVALID '+JSON.stringify({
               top_level_contract:x.cognitive_model_contract||null,
               temporal_architecture:temporalNetwork.architecture||null,
-              temporal_target:temporalNetwork.target_definition||null
+              temporal_target:temporalNetwork.target_definition||null,
+              temporal_label_resolution:temporalNetwork.temporal_label_resolution||null
             }));
           }
           const legacyNeuralNetworkContract=
@@ -197,7 +199,8 @@ jobs:
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
             temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-            temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
+            temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
+            temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
             Number(temporalNetwork.sequence_steps)===24&&
             Number(temporalNetwork.sequence_channels)===29&&
             Number(temporalNetwork.ensemble_members_required)===3&&
