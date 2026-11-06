@@ -191,7 +191,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'V5 member and residual selection must finish before outer validation begins');
     assert.ok(profile.neural_network.selection_start_at < profile.validation_start_at);
     assert.ok(profile.neural_network.member_selection_brier_scores.length > 0);
-    assert.equal(profile.neural_network.residual_scale_selection, 'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1');
+    assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.deepEqual(profile.neural_network.candidate_residual_scales, [0, 0.25, 0.5, 0.75, 1]);
     assert.ok([0, 0.25, 0.5, 0.75, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
