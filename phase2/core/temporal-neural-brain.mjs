@@ -1048,7 +1048,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       member_selection_source:result.member_selection_source||null,
       selected_member_index:Number.isInteger(result.selected_member_index)?result.selected_member_index:null,
       selected_residual_scale:Number(result.selected_residual_scale),
+      neural_residual_contributes:result.neural_residual_contributes===true,
       selection_calibration_samples:Number(result.selection_calibration_samples)||0,
+      logistic_calibration_samples:Number(result.logistic_calibration_samples)||0,
       validation_samples:validationByRegime[regime],
       holdout_samples:holdoutByRegime[regime],
       training_positive_samples:trainingTargets[regime].positive,
@@ -1077,7 +1079,14 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdout_brier:result.holdout_model?.model_brier_score??null,
       holdout_base_rate_brier:result.holdout_model?.base_rate_brier_score??null,
       holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null,
-      probability_calibration:result.probability_calibration||null
+      probability_calibration:result.probability_calibration||null,
+      logistic_probability_calibration:result.logistic_probability_calibration?{
+        fit_on:result.logistic_probability_calibration.fit_on||null,
+        fitted:result.logistic_probability_calibration.fitted===true,
+        sample_count:Number(result.logistic_probability_calibration.sample_count)||0,
+        positive_count:Number(result.logistic_probability_calibration.positive_count)||0,
+        negative_count:Number(result.logistic_probability_calibration.negative_count)||0
+      }:null
     }];
   }));
   // Top-level sample counts describe the shared model's actual fit and the
