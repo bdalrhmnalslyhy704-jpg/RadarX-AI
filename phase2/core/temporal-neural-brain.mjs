@@ -883,7 +883,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
     if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
     if(trainTargets.negative<minRegimeNegative)supportGaps.push('TRAINING_NEGATIVE_CLASS');
-shared member selection class gate
     if(calibrationTargets.samples<30)supportGaps.push('CALIBRATION_SAMPLE_COUNT');
     if(calibrationTargets.positive<5)supportGaps.push('CALIBRATION_POSITIVE_CLASS');
     if(calibrationTargets.negative<20)supportGaps.push('CALIBRATION_NEGATIVE_CLASS');
