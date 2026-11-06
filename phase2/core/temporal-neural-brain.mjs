@@ -1079,7 +1079,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
-    calibration_fit_scope:'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY',
+    calibration_fit_scope:'REGIME_OR_POOLED_CALIBRATION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     shared_model_training_samples:sharedTrainingRows.length,
     shared_model_selection_samples:reportSelectionSamples,
