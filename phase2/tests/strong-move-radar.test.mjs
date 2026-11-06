@@ -283,7 +283,8 @@ test('live Strong Move stores every near miss but sends a phone WATCH_ONLY only 
   for(let i=rows.length-6;i<rows.length;i++){
     const row=rows[i],open=price,step=i>=rows.length-3?0.65:0.03,close=open+step;
     Object.assign(row,{open,close,high:close+0.08,low:open-0.02,
-      volume:500_000,tradeCount:4_000,takerBuyBaseVolume:490_000});
+      volume:500_000,tradeCount:4_000,
+      takerBuyBaseVolume:i>=rows.length-3?490_000:360_000});
     price=close;
   }
   const five=make5m();
