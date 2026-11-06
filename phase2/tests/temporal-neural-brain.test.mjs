@@ -58,8 +58,18 @@ test('temporal network fails closed without first-passage tensor samples',()=>{
 
 test('temporal network trains only on valid tensors and keeps chronological validation and holdout separate',()=>{
   const rows=[];
-  for(let group=0;group<16;group++){
-    for(let index=0;index<24;index++)rows.push(sample(group,index));
+  for(let group=0;group<32;group++){
+    for(let index=0;index<24;index++){
+      const row=sample(group,index);
+      // BTC regime is independent of the outcome label: each specialist must
+      // see both UP and DOWN outcomes within its own market regime.
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=group%2===0?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
   }
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
@@ -68,7 +78,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_ANCHORED_MATCHED_LOGISTIC_CHALLENGER_TCN_V12');
+  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
