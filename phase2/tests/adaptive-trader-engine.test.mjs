@@ -507,6 +507,9 @@ test('paper portfolio opens only strict labelled setups, estimates costs and nev
 test('market snapshot service obtains exchange universe, tickers and candles from the injected public REST client',async()=>{
   const f=marketFixture();
   const requests=[];
+  const requestEvents=[];
+  let releaseFastKlines;
+  const fastKlineGate=new Promise(resolve=>{releaseFastKlines=resolve;});
   const rest={async request(path,query={}) {
     requests.push({path,query});
     if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
@@ -517,6 +520,14 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
       {...f.ticker,quoteVolume:'5000000'},
       {symbol:'BADUPUSDT',lastPrice:'1',quoteVolume:'90000000',priceChangePercent:'2'}
     ],source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines'&&query.interval==='5m'){
+      requestEvents.push('5m-start');
+      return fastKlineGate.then(value=>{requestEvents.push('5m-resolved');return value;});
+    }
+    if(path==='/api/v3/klines'&&query.interval==='15m'&&query.symbol==='TESTUSDT'&&query.endTime){
+      requestEvents.push('asset-15m-backfill-start');
+      releaseFastKlines({data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now});
+    }
     if(path==='/api/v3/klines')return {data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now};
     throw new Error('UNEXPECTED_REQUEST');
   }};
@@ -541,6 +552,9 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.equal(fastRequests[0].query.limit,1000);
   assert.equal(fastRequests[0].query.endTime,undefined,
     'the 5m lane keeps only the latest completed-candle window');
+  assert.ok(requestEvents.indexOf('asset-15m-backfill-start')>=0);
+  assert.ok(requestEvents.indexOf('asset-15m-backfill-start')<requestEvents.indexOf('5m-resolved'),
+    'the primary 15m historical page must start before the optional 5m request is awaited');
 });
 
 
