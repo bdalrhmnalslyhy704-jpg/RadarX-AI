@@ -280,6 +280,6 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   ]){
     assert.ok(workflow.includes(gate),'DHDTech model acceptance must verify '+gate);
   }
-  assert.match(workflow,/phase2\\/core\\/cognitive-brain\\.mjs/);
-  assert.match(workflow,/phase2\\/core\\/temporal-neural-brain\\.mjs/);
+  assert.ok(workflow.includes('phase2/core/cognitive-brain.mjs'));
+  assert.ok(workflow.includes('phase2/core/temporal-neural-brain.mjs'));
 });
