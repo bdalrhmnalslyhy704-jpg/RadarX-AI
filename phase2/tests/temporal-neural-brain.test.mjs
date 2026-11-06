@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_MODEL_ARCHITECTURE,
@@ -255,4 +256,30 @@ test('temporal network rejects wrong horizon, wrong target definition and incomp
   const profile=buildTemporalNeuralProfile([valid,wrongHorizon,wrongTarget,invalidSource,invalidTensor]);
   assert.equal(profile.resolved_samples,1);
   assert.equal(profile.probability_ready,false);
+});
+
+
+test('DHDTech production acceptance requires both V5 and TCN scientific live gates',async()=>{
+  const workflow=await readFile(new URL('../../.github/workflows/dhdtech-adaptive-trader-acceptance.yml',import.meta.url),'utf8');
+  const validStart=workflow.indexOf('const valid=');
+  const successBranch=workflow.indexOf('if(valid)',validStart);
+  assert.ok(validStart>=0&&successBranch>validStart,'acceptance success gate must remain explicit');
+  const validExpression=workflow.slice(validStart,successBranch);
+  for(const gate of ['cognitiveSplitReady','neuralNetworkContract','v5NeuralLiveReady','neuralLiveReady','probabilityClaimSafe']){
+    assert.ok(validExpression.includes(gate),'DHDTech success must require '+gate);
+  }
+  for(const gate of [
+    'neuralNetwork.selected===true',
+    'neuralNetwork.probability_ready===true',
+    'neuralNetwork.live_eligibility_ready===true',
+    'neuralNetwork.holdout_comparison?.passed===true',
+    'temporalNetwork.selected===true',
+    'temporalNetwork.probability_ready===true',
+    'temporalNetwork.live_eligibility_ready===true',
+    'temporalComparison.beats_pooled_logistic===true'
+  ]){
+    assert.ok(workflow.includes(gate),'DHDTech model acceptance must verify '+gate);
+  }
+  assert.match(workflow,/phase2\\/core\\/cognitive-brain\\.mjs/);
+  assert.match(workflow,/phase2\\/core\\/temporal-neural-brain\\.mjs/);
 });
