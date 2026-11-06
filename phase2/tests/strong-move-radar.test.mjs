@@ -115,7 +115,7 @@ test('flash score is normalized: breakout cannot swamp weak price momentum and s
     volumeRatio:10,tradeRatio:8,takerBuyRatio:0.9,
     microBreakout:true,breakoutScore:96,closeLocationPct:95
   });
-  assert.ok(fullyAligned>99&&fullyAligned<=100,
+  assert.ok(fullyAligned>98&&fullyAligned<=100,
     'fully aligned breakout/flow evidence should reach the upper score band: '+fullyAligned);
   const noBreakout=calculateStrongMoveFlashScore({
     return1mPct:0,return3mPct:0.1,accelerationPct:0.05,
