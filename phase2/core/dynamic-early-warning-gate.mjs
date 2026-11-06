@@ -93,7 +93,8 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   const unknownStrictFailures=[];
   for(const code of [...new Set((Array.isArray(strictFailures)?strictFailures:[]).map(String))]){
     if(SOFT_STRICT_FAILURES.has(code))softFailures.push(code);
-    else if(code==='BASE_ALERT_NOT_ELIGIBLE'&&fallback)softFailures.push(code);
+    else if((code==='BASE_ALERT_NOT_ELIGIBLE'||code==='STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED')&&fallback)
+      softFailures.push(code);
     else unknownStrictFailures.push(code);
   }
   if(unknownStrictFailures.length)failures.push(...unknownStrictFailures.map(x=>'EARLY_WARNING_STRICT_BLOCKER:'+x));

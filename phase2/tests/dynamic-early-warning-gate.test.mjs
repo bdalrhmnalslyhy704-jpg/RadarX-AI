@@ -58,7 +58,7 @@ test('very strong long-window buy flow may emit only a watch when the completed 
   });
   const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:0.39},{
     now:NOW,alertScore:86.87,minQuoteVolume24h:1_000_000,
-    strictFailures:['BASE_ALERT_NOT_ELIGIBLE'],
+    strictFailures:['BASE_ALERT_NOT_ELIGIBLE','STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED'],
     coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
   });
   assert.equal(result.eligible,true,JSON.stringify(result.failures));
