@@ -20,3 +20,14 @@ calibration remain confined to the chronological selection block. Validation
 and final holdout are not used for optimization or tuning.
 
 The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V9 applies the bounded holdout rule above; all regime-specific sample support and Brier superiority margins remain unchanged.
+
+## V5 nested residual-neural validation
+
+V5 fits its logistic anchor and residual MLP only on the earliest 80% of the
+bounded chronological training window. The remaining 20% of that window is a
+separate member/residual-scale selection block. The model then receives an
+outer chronological validation block and an untouched final holdout. Every
+label must mature before its applicable cutoff; rows crossing a cutoff are
+purged. The V5 member-selection Brier scores are reported separately from
+outer-validation scores. The predictive superiority margin and readiness gates
+are unchanged.
