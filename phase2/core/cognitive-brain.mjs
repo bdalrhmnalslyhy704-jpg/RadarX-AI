@@ -646,11 +646,12 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_VALIDATION_SHRUNK_V2',
+        training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_V3',
         training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-        residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
+        residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[0,0.25,0.5,0.75,1],
-        selected_residual_scale:null,
+        selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
+        max_selection_outcome_resolved_at:null,selected_residual_scale:null,
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
       feature_names: [...FEATURE_NAMES],
@@ -709,42 +710,53 @@ export function buildCognitiveLearningProfile(samples = [], {
 
   const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
-  const neuralTraining=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
-  // Fit the same-window linear anchor once, on training data only. Every neural
-  // ensemble member starts from this exact model and learns a nonlinear residual.
+  const neuralCandidateRows=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
+  const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
+  // V5 now uses four strictly ordered evidence stages: model fit, member/scale
+  // selection, outer validation, then the untouched final holdout. The former
+  // implementation selected members on the same rows it reported as validation.
+  const neuralSelectionCutIndex=neuralCandidateTimes.length>=3
+    ?Math.max(1,Math.min(neuralCandidateTimes.length-1,Math.floor(neuralCandidateTimes.length*0.80))):-1;
+  const neuralSelectionStartAt=neuralSelectionCutIndex>=0
+    ?neuralCandidateTimes[neuralSelectionCutIndex]:null;
+  const neuralTraining=neuralSelectionStartAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at<neuralSelectionStartAt&&row.resolved_at<neuralSelectionStartAt);
+  const neuralSelection=neuralSelectionStartAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at>=neuralSelectionStartAt&&row.resolved_at<validationStartAt);
+  const neuralSelectionMinimum=Math.max(20,minimumValidationSamples);
+  // Fit the logistic anchor and every nonlinear residual on the earliest
+  // chronological training slice only. Selection labels cannot enter gradients.
   const neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
-  const neuralFit=neuralTraining.length>=neuralMinimum&&neuralSameWindowLogisticFit
+  const neuralFit=neuralTraining.length>=neuralMinimum&&
+    neuralSelection.length>=neuralSelectionMinimum&&neuralSameWindowLogisticFit
     ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit
     }):null;
-  // Freeze one ensemble member using only the middle chronological validation
-  // block. Averaging members with conflicting schedules can dilute the strongest
-  // challenger; the untouched holdout remains reserved for the final decision.
-  // Select both the deterministic ensemble member and the amount of nonlinear
-  // residual using only the middle chronological validation block. A lower
-  // residual scale can safely shrink an overconfident fit back toward its
-  // training-only logistic anchor; the final holdout remains untouched.
+  // Select the ensemble member and nonlinear residual contribution exclusively
+  // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=[0,0.25,0.5,0.75,1];
-  const neuralMemberValidation=neuralFit?neuralFit.members.flatMap((member,index)=>
+  const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
     neuralResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
-      metrics:evaluateHoldout(validation,{...member,residual_scale:residualScale})
+      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale})
     }))
   ):[];
-  const neuralMemberOrder=neuralMemberValidation.filter(row=>row.metrics.evaluated===true)
+  const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true)
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
   if(neuralFit){
     neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
     neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
   }
+  // This validation score is now measured on rows later than all model fitting
+  // and selection, so it is an honest pre-holdout comparison.
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
     ?evaluateHoldout(validation,neuralFit):{
-      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_VALIDATION_SAMPLES',
+      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_SELECTION_SAMPLES',
       sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
     };
   // The untouched final block is scored only after validation has selected a model.
@@ -855,15 +867,23 @@ export function buildCognitiveLearningProfile(samples = [], {
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,training_samples: neuralTraining.length,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_VALIDATION_SHRUNK_V2',
+      training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_V3',
       training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
+      residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
+      selection_samples:neuralSelection.length,
+      selection_start_at:neuralSelectionStartAt,
+      max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
+      max_selection_outcome_resolved_at:neuralSelection.length?Math.max(...neuralSelection.map(row=>row.resolved_at)):null,
       selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
-      member_validation_brier_scores:neuralMemberValidation.map(row=>({
+      member_selection_brier_scores:neuralMemberSelection.map(row=>({
+        index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
+        base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate
+      })),
+      member_validation_brier_scores:[],
         index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
         base_rate_brier_score:row.metrics.base_rate_brier_score,
         beat_base_rate:row.metrics.beat_base_rate
