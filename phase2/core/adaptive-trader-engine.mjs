@@ -1042,7 +1042,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     if(!pendingBySymbol.has(symbol))pendingBySymbol.set(symbol,[]);
     pendingBySymbol.get(symbol).push(sample);
   }
-  const analyzed = await mapLimit(selected, 5, async ticker => {
+  const analyzed = await mapLimit(selected, 7, async ticker => {
     // Start the optional 5m request concurrently, but do not await it before
     // extending the primary 15m history. This prevents a slow micro-window
     // response from consuming the remaining shared scan deadline needed for
