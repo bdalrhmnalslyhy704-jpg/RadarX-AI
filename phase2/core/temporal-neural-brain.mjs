@@ -542,7 +542,7 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V19',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
@@ -695,7 +695,12 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      :{training:0.70,memberSelection:0.80,calibration:0.98};
+      // Mature histories retain a larger member-selection block. In the last
+      // live acceptance scan, the old 70/80/98 split left only 93 selection
+      // rows and 5 positives for choosing among 15 member/scale combinations.
+      // Train on 65%, select on 65-85%, calibrate on 85-98%, then validate
+      // and hold out on their existing untouched outer chronological blocks.
+      :{training:0.65,memberSelection:0.85,calibration:0.98};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
@@ -803,7 +808,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V19',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
@@ -1207,6 +1212,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_training_cutoff_at:sharedTrainingCutoffAt,
     shared_model_member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
     shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
+    shared_model_split_fractions:{...splitFractions},
     shared_model_selection_layout:`TRAIN_${Math.round(sharedTrainCutIndex/fitTimes.length*100)}_PERCENT_MEMBER_SELECTION_${Math.round((sharedMemberSelectionCutIndex-sharedTrainCutIndex)/fitTimes.length*100)}_PERCENT_CALIBRATION_${Math.round((sharedSelectionCutIndex-sharedMemberSelectionCutIndex)/fitTimes.length*100)}_PERCENT`,
     shared_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
     required_training_samples:minTrainingSamples,
