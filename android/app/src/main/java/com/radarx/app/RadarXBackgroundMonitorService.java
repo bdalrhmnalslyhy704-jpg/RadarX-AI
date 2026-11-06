@@ -78,6 +78,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;
 
     private ScheduledExecutorService executor;
+    private volatile boolean scanScheduled;
     private volatile boolean stopping;
     private volatile boolean foregroundStarted;
     private volatile boolean loggedFirstScan;
@@ -163,20 +164,28 @@ public final class RadarXBackgroundMonitorService extends Service {
         return START_STICKY;
     }
 
-    private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "RadarX-Background");
-            t.setDaemon(true);
-            return t;
-        });
+    private synchronized void scheduleScan() {
+        if (executor == null || executor.isShutdown()) {
+            executor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "RadarX-Background");
+                t.setDaemon(true);
+                return t;
+            });
+            scanScheduled = false;
+        }
+        // Repeated ACTION_START/onResume calls must not tear down an in-flight
+        // scan: it may be inside the synchronous durable-cursor checkpoint.
+        if (scanScheduled) {
+            Log.d(TAG, "BACKGROUND_SCAN_ALREADY_SCHEDULED");
+            return;
+        }
         long scanInterval = SCAN_MS;
         if (isDebugBuild()) {
             long requestedInterval = prefs().getLong("radarx_test_scan_interval_ms", 0L);
             if (requestedInterval >= 500L && requestedInterval <= 5000L) scanInterval = requestedInterval;
         }
         executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
+        scanScheduled = true;
     }
 
     private boolean isDebugBuild() {
@@ -1285,11 +1294,30 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void stopMonitoring() {
+        if (stopping) return;
         stopping = true;
-        if (executor != null) executor.shutdownNow();
+        ScheduledExecutorService current = executor;
+        if (current != null && !current.isShutdown()) {
+            try {
+                // Queue final service teardown behind the currently running scan.
+                // This lets any accepted notification finish its durable compound
+                // cursor commit before Android destroys the isolated service process.
+                current.execute(this::finishStopAfterCurrentScan);
+                current.shutdown();
+                return;
+            } catch (RuntimeException rejected) {
+                Log.w(TAG, "Unable to queue graceful background shutdown; using immediate teardown", rejected);
+                current.shutdown();
+            }
+        }
+        finishStopAfterCurrentScan();
+    }
+
+    private void finishStopAfterCurrentScan() {
         saveRunning(false);
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
         else stopForeground(true);
+        foregroundStarted = false;
         stopSelf();
     }
 
@@ -1298,7 +1326,8 @@ public final class RadarXBackgroundMonitorService extends Service {
         Log.w(TAG, "BACKGROUND_SERVICE_ON_DESTROY pid=" + android.os.Process.myPid()
             + " stopping=" + stopping + " wasRunning=" + prefs().getBoolean("running", false));
         stopping = true;
-        if (executor != null) executor.shutdownNow();
+        // Graceful shutdown never interrupts a synchronous alert-cursor commit.
+        if (executor != null) executor.shutdown();
         saveRunning(false);
         super.onDestroy();
     }
