@@ -214,6 +214,10 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
   assert.equal(expert.probability_calibration.fit_on,'POOLED_SELECTION_BLOCK_FALLBACK');
   assert.equal(expert.probability_calibration.fitted,true,
     'three selection-block positives are enough for strongly shrunk two-parameter calibration');
+  assert.ok(expert.probability_calibration.positive_count>=3,
+    'pooled fallback must contain the minimum positive-class support');
+  assert.ok(expert.probability_calibration.negative_count>=10,
+    'pooled fallback must contain the minimum negative-class support');
   assert.equal(expert.probability_calibration.sample_count,expert.member_selection_samples);
   assert.ok(expert.validation_samples>=24);
   assert.ok(expert.holdout_samples>=20);
