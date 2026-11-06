@@ -108,10 +108,10 @@ jobs:
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2'&&
+                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
                   Number(temporalNetwork.sequence_steps)===24&&
                   Number(temporalNetwork.sequence_channels)===29&&
-                  temporalNetwork.temporal_label_resolution==='5M_ONLY'&&
+                  temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
                   Number(temporalNetwork.ensemble_members_required)===3&&
                   (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)
                 );
@@ -174,7 +174,7 @@ jobs:
                     new_historical_samples:Number(capture.new_historical_samples)||0,
                     historical_sequence_backfills:Number(capture.historical_sequence_backfills)||0,
                     temporal_sequence_samples:Number(capture.temporal_sequence_samples)||0,
-                    temporal_sequence_non_5m_labels:Number(capture.temporal_sequence_non_5m_labels)||0,
+                    temporal_sequence_non_15m_labels:Number(capture.temporal_sequence_non_15m_labels)||0,
                     temporal_sequence_missing_samples:Number(capture.temporal_sequence_missing_samples)||0,
                     historical_rejected:capture.historical_rejected||{},
                     snapshot_historical_samples_available:Number(capture.snapshot_historical_samples_available)||0,
