@@ -94,7 +94,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.member_selection_method,'SHARED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.shared_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
-  assert.equal(profile.residual_scale_selection,'SHARED_SHARED_TCN_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1');
+  assert.equal(profile.residual_scale_selection,'SHARED_REGIME_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
   assert.equal(profile.member_training_profiles.length,3);
@@ -244,7 +244,7 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   }
 });
 
-test('sparse BTC regime fails closed instead of borrowing selection or calibration rows from the opposite regime',()=>{
+test('sparse BTC regime may use shared member selection but still fails closed without supported calibration',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     let riskOn=true;
@@ -269,9 +269,10 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
   assert.equal(expert.local_selection_samples,48);
-  assert.equal(expert.selection_positive_samples,0);
+  assert.equal(expert.local_selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'SHARED_TCN_MEMBER_SELECTION_BLOCK');
-  assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
+  assert.ok(expert.shared_selection_positive_samples>=3,
+    'the shared residual is selected only from the pooled, strictly later member-selection block');
   assert.equal(expert.local_calibration_samples,24);
   assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
   assert.ok(expert.calibration_samples<30,
@@ -282,7 +283,7 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
   assert.equal(profile.probability_ready,false,
-    'a regime with no local selection positives must remain unavailable even when shared calibration is supported');
+    'shared member selection cannot bypass the separate calibration, validation or untouched-holdout gates');
   assert.equal(profile.live_eligibility_ready,false);
 });
 
