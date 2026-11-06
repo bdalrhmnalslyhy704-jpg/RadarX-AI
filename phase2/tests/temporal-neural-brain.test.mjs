@@ -75,7 +75,17 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
   const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
   assert.equal(profile.resolved_samples,32*24);
-  assert.equal(profile.trained,true);
+  assert.equal(profile.trained,true,JSON.stringify({
+    status:profile.status,
+    training_samples:profile.training_samples,
+    validation_samples:profile.validation_samples,
+    holdout_samples:profile.holdout_samples,
+    shared_model_training_cutoff_at:profile.shared_model_training_cutoff_at,
+    shared_model_member_selection_cutoff_at:profile.shared_model_member_selection_cutoff_at,
+    shared_model_selection_cutoff_at:profile.shared_model_selection_cutoff_at,
+    supported_regimes:profile.supported_regimes,
+    regime_specialists:profile.regime_specialists
+  }));
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
@@ -260,8 +270,8 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
   assert.equal(expert.calibration_samples,24);
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
-  assert.ok(!expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
-    'same-regime calibration has sufficient samples; the missing selection class is the fail-closed reason');
+  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
+    '24 same-regime calibration rows are below the explicit 30-row calibrator minimum');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
