@@ -421,6 +421,8 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
     'paperTradingReady',
     'physicalDeviceDeliveryReady',
     'Number(push.fcm_devices)>=2',
+    'Number(push.physical_device_receipt_count)>=2',
+    'physical_device_receipt_window_ms',
     'push.physical_device_delivery_verified===true'
   ]){
     assert.ok(workflow.includes(gate),'DHDTech production acceptance must require '+gate);

@@ -185,6 +185,8 @@ jobs:
                     active_subscriptions:Number(push.active_subscriptions)||0,
                     provider_subscriptions:Number(push.provider_subscriptions)||0,
                     fcm_devices:Number(push.fcm_devices)||0,
+                    physical_device_receipt_count:Number(push.physical_device_receipt_count)||0,
+                    physical_device_receipt_window_ms:Number(push.physical_device_receipt_window_ms)||0,
                     webpush_subscriptions:Number(push.webpush_subscriptions)||0,
                     physical_device_delivery_verified:push.physical_device_delivery_verified===true},
                   historical_samples_available:Number(universe.historical_training_samples_available)||0,
@@ -329,7 +331,10 @@ jobs:
                   Number(paperValidation.net_pnl_usdt)>0&&
                   Number(paperValidation.max_drawdown_pct)<=8;
                 const physicalDeviceDeliveryReady=push.enabled===true&&
-                  Number(push.fcm_devices)>=2&&push.physical_device_delivery_verified===true;
+                  Number(push.fcm_devices)>=2&&
+                  Number(push.physical_device_receipt_count)>=2&&
+                  Number(push.physical_device_receipt_window_ms)>=7*24*60*60*1000&&
+                  push.physical_device_delivery_verified===true;
                 lastObserved.full_universe_coverage_ready=fullUniverseCoverageReady;
                 lastObserved.paper_trading_ready=paperTradingReady;
                 lastObserved.physical_device_delivery_ready=physicalDeviceDeliveryReady;
