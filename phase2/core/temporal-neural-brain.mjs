@@ -525,7 +525,7 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V8',
+    training_strategy:'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V9',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
@@ -582,9 +582,14 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Reserve a broad, untouched final block once the historical journal is mature.
   // The larger holdout must cover both BTC regimes and both outcome classes; it
   // never relaxes the per-regime sample or performance gates.
+  // Mature datasets reserve a broad untouched holdout of at least twice
+  // the live sample floor, while capping it at 25% so more purged history can
+  // train the shared temporal model. Medium datasets keep a 20%/180-row floor.
   const holdoutTargetSamples=rows.length>=liveHoldoutSamples*8
-    ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.40))
-    :rows.length>=liveHoldoutSamples*4?liveHoldoutSamples+30:minimumHoldoutSamples;
+    ?Math.max(liveHoldoutSamples*2,Math.ceil(rows.length*0.25))
+    :rows.length>=liveHoldoutSamples*4
+      ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.20))
+      :minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   const validationTargetSamples=rows.length>=liveHoldoutSamples*5
     ?Math.ceil(liveHoldoutSamples*4/3)
