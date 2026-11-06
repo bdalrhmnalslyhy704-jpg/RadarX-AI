@@ -184,8 +184,11 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
     if(group===15||group===16||group===18||group===20||group===23||group===25||group===27||group===31)riskOn=false;
     for(let index=0;index<12;index++){
       let up;
-      if(group===14)up=false; // local BTC_RISK_ON selection block has no positive class
-      else if(group===15||group===16)up=index<4; // pooled selection has both classes
+      // The current 75%/90% nested split selects groups 17–19. Keep the
+      // local BTC_RISK_ON selection block (groups 17 and 19) without positives,
+      // while group 18 contributes both classes to the pooled fallback.
+      if(group===17||group===19)up=false;
+      else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
       else if(group>=17&&group<=27)up=index<2;
       else up=index<2;
