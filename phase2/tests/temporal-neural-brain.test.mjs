@@ -258,9 +258,10 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   assert.equal(expert.selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
-  assert.equal(expert.calibration_samples,24);
+  assert.equal(expert.calibration_samples,36);
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
-  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'));
+  assert.ok(!expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
+    'same-regime calibration has sufficient samples; the missing selection class is the fail-closed reason');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
