@@ -24,7 +24,7 @@ test('worker proves and persists a complete 192-pair coverage sweep without coun
       worker.updateScanCoverage({
         universe:{eligible_symbols:eligible,eligible_spot_symbols:192},
         candidates:batch.map((symbol,index)=>({
-          symbol,data_valid:!(cycle===9&&index===19),data_stale:false
+          symbol,data_valid:!(cycle===9&&index===batch.length-1),data_stale:false
         }))
       },now+cycle);
       if(cycle<9)assert.equal(worker.state.scan_coverage.completed_sweeps,0);
