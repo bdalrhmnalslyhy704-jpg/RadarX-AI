@@ -1087,7 +1087,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutReason=!selected?'VALIDATION_NOT_PASSED':
     !selectedRegimes.length?'NO_VALIDATED_REGIME_BEAT_ITS_UNTOUCHED_HOLDOUT_LOGISTIC':
     'AT_LEAST_ONE_REGIME_BEAT_ITS_UNTOUCHED_HOLDOUT_LOGISTIC';
-  const status=!validationSelectedRegimes.length?'VALIDATION_DID_NOT_BEAT_REGIME_LOGISTIC':
+  const status=!supportedRegimes.length?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
+    !validationSelectedRegimes.length?'VALIDATION_DID_NOT_BEAT_REGIME_LOGISTIC':
     !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
     !allSupportedRegimesValidated?'PARTIAL_REGIME_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
@@ -1095,7 +1096,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
     temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
-    ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
+    ensemble_members:Object.keys(fitted.specialists_by_regime).length?SEEDS.length:0,
+    ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
@@ -1135,7 +1137,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_positive_count:reportTrainingPositive,
     training_negative_count:reportTrainingNegative,
     training_prior_probability:Number(reportTrainingPrior.toFixed(5)),
-    trained:true,selected,probability_ready:probabilityReady,
+    trained:Object.keys(fitted.specialists_by_regime).length>0,selected,probability_ready:probabilityReady,
     live_eligibility_ready:liveReady,
     supported_regimes:supportedRegimes,
     selected_regimes:selectedRegimes,
