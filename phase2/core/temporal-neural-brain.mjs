@@ -539,7 +539,7 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'BRIER_OPTIMIZED_REGIME_ANCHORED_NESTED_SELECTION_CALIBRATION_TCN_V11',
+    training_strategy:'BRIER_OPTIMIZED_REGIME_ANCHORED_MATCHED_LOGISTIC_CHALLENGER_TCN_V12',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -1172,7 +1172,10 @@ export function buildTemporalNeuralProfile(samples = [], {
       reason:holdoutReason
     },
     holdout_comparison:{
-      sample_count:selectedRegimeHoldoutSamples,
+      // sample_count is the exact diagnostic holdout sample count; the
+      // selected-regime count is separate and alone contributes to readiness.
+      sample_count:holdoutModel.sample_count,
+      selected_regime_sample_count:selectedRegimeHoldoutSamples,
       required_live_holdout_samples:liveHoldoutSamples,
       required_brier_margin:comparisonMargin,
       tcn_brier_score:holdoutModel.model_brier_score,
