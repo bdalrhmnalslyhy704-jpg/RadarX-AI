@@ -1094,3 +1094,49 @@ test('screenshot gainer pairs receive quiet-flow priority before daily expansion
   }
 });
 
+
+
+test('fresh Binance closed-candle replay builds 24x29 TCN tensors with one 15m first-passage target',()=>{
+  const interval15=15*60*1000,interval5=5*60*1000;
+  const base=Date.UTC(2026,0,1),now=base+600*interval15+60_000;
+  const makeCandle=(openTime,open,close,quoteVolume,trades,buyShare,interval)=>{
+    const high=Math.max(open,close)*1.001,low=Math.min(open,close)*0.999;
+    const baseVolume=quoteVolume/close;
+    return [openTime,open,high,low,close,baseVolume,
+      openTime+interval-1,quoteVolume,trades,baseVolume*buyShare,quoteVolume*buyShare,0];
+  };
+  const asset=Array.from({length:600},(_,index)=>{
+    const openTime=base+index*interval15;
+    const open=1+index*0.00001;
+    const close=open*1.0001;
+    return makeCandle(openTime,open,close,20_000,240,0.56,interval15);
+  });
+  const btc=Array.from({length:600},(_,index)=>{
+    const openTime=base+index*interval15;
+    const open=30_000+index*0.4;
+    const close=open*1.00003;
+    return makeCandle(openTime,open,close,120_000,900,0.52,interval15);
+  });
+  const fast=Array.from({length:1800},(_,index)=>{
+    const openTime=base+index*interval5;
+    const open=1+index*0.0000033;
+    const close=open*1.00002;
+    return makeCandle(openTime,open,close,7_000,80,0.55,interval5);
+  });
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'FRESHDATAUSDT',
+    klines:{data:asset,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    fastKlines:{data:fast,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    btcKlines:{data:btc,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    now,minQuoteVolume24h:750_000,maxSamples:8
+  });
+  assert.ok(samples.length>=5,'the replay must create multiple distinct, mature historical outcomes');
+  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'&&
+    row.first_passage?.outcome===row.outcome));
+  assert.ok(samples.every(row=>Array.isArray(row.temporal_sequence)&&row.temporal_sequence.length===24&&
+    row.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite))),
+    'every eligible historical outcome must carry the same causal 24x29 closed-candle tensor');
+  assert.equal(new Set(samples.map(row=>row.id)).size,samples.length,
+    'rebuild output must not duplicate a symbol/baseline candle');
+});
