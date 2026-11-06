@@ -713,7 +713,7 @@ test('mover-aware scan includes rising and extended Spot pairs outside the highe
   }};
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0})({limit:40,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_FLOW_ACCELERATION_ROTATION_V4');
+  assert.equal(snapshot.universe.selection_strategy,'MOVER_AWARE_FLOW_ACCELERATION_FAIR_ROTATION_V5');
   assert.equal(snapshot.universe.emerging_movers_available,15);
   assert.equal(snapshot.universe.extended_movers_available,9);
   assert.equal(snapshot.universe.selection_lane_counts.EXTENDED_MOVER_AUDIT,9);
