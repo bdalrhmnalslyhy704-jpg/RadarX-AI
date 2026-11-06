@@ -648,7 +648,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
     // TCN requires 96 prior closed 15m candles for asset-day context plus 24 model steps.
-    // Keep this historical replay slice wide enough to build the same 24x28 tensor as live scans.
+    // Keep this historical replay slice wide enough to build the same 24x29 tensor as live scans.
     const baselineRaw=candles.slice(Math.max(0,index-119),index+1).map(row=>row.raw);
     const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-1000).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
@@ -682,7 +682,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,
@@ -707,7 +707,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
-       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
+       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2'||
        sample?.outcome)continue;
     const at=finite(sample?.at),baselinePrice=finite(sample?.price);
     if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
@@ -721,7 +721,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
       outcome:passage.outcome,first_passage:passage,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2',
       return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),
       close_return_pct:Number(move.toFixed(3)),close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
