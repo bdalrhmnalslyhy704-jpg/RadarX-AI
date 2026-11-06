@@ -677,9 +677,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     };
   }
 
-  // One shared TCN ensemble is trained only on the union of chronological
-  // training slices. Regime-specific selection, validation and holdout rows
-  // never enter the shared model's gradient updates.
+  // Independent regime-specific TCN ensembles are trained only on each
+  // regime's chronological training slice. Selection, calibration, validation
+  // and untouched holdout rows never enter their gradient updates.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const fitTimes=[...new Set(fitRows.map(row=>row.at))].sort((a,b)=>a-b);
   // Allocate more of a small/medium fitted history to model estimation while
@@ -687,10 +687,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Large histories have enough observations to reserve wider selection and
   // calibration windows. Outer validation and final holdout remain untouched.
   const splitFractions=fitTimes.length<16
-    ?{training:0.80,memberSelection:0.86,calibration:1.00}
+    ?{training:0.55,memberSelection:0.70,calibration:0.98}
     :rows.length<1200
-      ?{training:0.70,memberSelection:0.85,calibration:0.98}
-      :{training:0.78,memberSelection:0.88,calibration:0.97};
+      ?{training:0.65,memberSelection:0.78,calibration:0.98}
+      :{training:0.72,memberSelection:0.84,calibration:0.98};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
@@ -783,9 +783,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     negative:rows.filter(row=>row.target===0).length
   });
 
-  // All regimes share the same time cutoffs. The shared TCN trains only before
-  // sharedTrainingCutoffAt; member selection is later, validation starts at
-  // sharedSelectionCutoffAt, and the final holdout remains untouched.
+  // All regimes share cutoffs to prevent look-ahead. Each expert trains before
+  // sharedTrainingCutoffAt, selects after it, calibrates later, then validates;
+  // the final holdout remains untouched.
   for(const regime of regimes){
     const regimeRows=fitRows.filter(row=>regimeOfSequence(row.sequence)===regime)
       .sort((a,b)=>a.at-b.at);
