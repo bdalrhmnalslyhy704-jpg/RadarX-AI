@@ -472,7 +472,7 @@ test('prequential audit isolates temporal first-passage forecasts from the legac
     const outcome=index%2===0?'UP':'DOWN';
     journal.push({
       id:'TCN-FWD-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome,
       predicted_up_probability:outcome==='UP'?80:20
@@ -503,7 +503,7 @@ test('temporal prequential audit counts flat first-passage outcomes as target mi
     const at=BASE_TIME+index*5*60*60*1000;
     return {
       id:'TCN-FLAT-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome:'FLAT',
       predicted_up_probability:10
