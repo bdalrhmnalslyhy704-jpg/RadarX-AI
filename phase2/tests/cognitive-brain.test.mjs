@@ -182,6 +182,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+    assert.equal(profile.neural_network.training_objective, 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+    assert.equal(profile.neural_network.residual_scale_selection, 'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1');
+    assert.deepEqual(profile.neural_network.candidate_residual_scales, [0, 0.25, 0.5, 0.75, 1]);
+    assert.ok([0, 0.25, 0.5, 0.75, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
     assert.equal(profile.neural_network.ensemble_members_required, 3);
     assert.equal(profile.neural_network.input_neurons, 18);
