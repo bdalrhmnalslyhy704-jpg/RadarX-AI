@@ -401,20 +401,16 @@ function fitSelectionProbabilityCalibrator(rows, predictFn, {
 }
 
 function predict(sequence, fitted) {
-  if (!validSequence(sequence) || !fitted) return null;
+  if(!validSequence(sequence)||!fitted)return null;
   const regime=regimeOfSequence(sequence);
-  const selectedIndex=Number.isInteger(fitted.selected_member_by_regime?.[regime])
-    ?fitted.selected_member_by_regime[regime]
-    :Number.isInteger(fitted.selected_member_index)?fitted.selected_member_index:-1;
-  let rawProbability;
-  if(selectedIndex>=0&&selectedIndex<fitted.members.length){
-    rawProbability=forward(sequence,fitted.members[selectedIndex],fitted.residual_scales_by_regime?.[regime]??1).probability;
-  }else{
-    const predictions=fitted.members.map(member=>forward(sequence,member).probability);
-    if(!predictions.length||predictions.some(value=>!Number.isFinite(value)))return null;
-    rawProbability=mean(predictions);
-  }
-  return calibratedProbability(rawProbability,fitted.probability_calibrators_by_regime?.[regime]);
+  const specialist=fitted.specialists_by_regime?.[regime];
+  const selectedIndex=Number(specialist?.selected_member_index);
+  if(!specialist||!Number.isInteger(selectedIndex)||selectedIndex<0||
+     selectedIndex>=specialist.members?.length)return null;
+  const residualScale=Number(specialist.selected_residual_scale);
+  if(!(residualScale>0))return null;
+  const rawProbability=forward(sequence,specialist.members[selectedIndex],residualScale).probability;
+  return calibratedProbability(rawProbability,specialist.probability_calibrator);
 }
 
 function pooledSequence(sequence) {
@@ -539,7 +535,7 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'BRIER_OPTIMIZED_REGIME_ANCHORED_MATCHED_LOGISTIC_CHALLENGER_TCN_V12',
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -575,7 +571,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minRegimeValidation=Math.max(12,Math.floor(minimumValidationSamples/2));
   const emptyCoverage=Object.fromEntries(regimes.map(regime=>[regime,{
     status:'WAITING_FOR_REGIME_EXPERT_CHRONOLOGICAL_SPLIT',
-    model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALIST',
     training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minRegimeTraining,
     required_validation_samples:minRegimeValidation,
@@ -625,7 +621,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-    model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minTrainingSamples,
     required_validation_samples:minimumValidationSamples,
@@ -660,7 +656,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
       regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
+      model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
@@ -716,7 +712,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
       regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
+      model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS',
       resolved_samples:rows.length,training_samples:sharedTrainingRows.length,
       shared_model_training_samples:sharedTrainingRows.length,
       selection_samples:0,validation_samples:validation.length,holdout_samples:holdout.length,
@@ -751,25 +747,26 @@ export function buildTemporalNeuralProfile(samples = [], {
     const regimeTrainingRows=sharedTrainingRows.filter(row=>regimeOfSequence(row.sequence)===regime);
     const baseline=regimeTrainingRows.length>=minRegimeTraining
       ?fitLogistic(regimeTrainingRows):pooledBaseline;
-    return [regime,{weights:baseline.weights,bias:baseline.bias,
+    return [regime,{weights:baseline.weights,bias:baseline.bias,base_rate:baseline.base_rate,
       training_samples:regimeTrainingRows.length,
       source:regimeTrainingRows.length>=minRegimeTraining
         ?'REGIME_SPECIFIC_TRAINING_ONLY':'POOLED_TRAINING_ONLY_FALLBACK'}];
   }));
-  const fitted=fitEnsemble(sharedTrainingRows,{
-    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline,baselineByRegime:regimeBaselines
-  });
-  // This global member score is diagnostic only. Valid regime probabilities
-  // use the member index selected on that regime's separate selection block.
-  const globalMemberValidation=fitted.members.map((member,index)=>({
-    index,metrics:evaluate(validation,sequence=>forward(sequence,member).probability,baseRate)
-  }));
-  fitted.selected_member_index=-1;
-  fitted.member_validation_scores=globalMemberValidation.map(row=>({
-    index:row.index,brier_score:row.metrics.model_brier_score,
-    base_rate_brier_score:row.metrics.base_rate_brier_score,
-    beat_base_rate:row.metrics.beat_base_rate
-  }));
+  // Each BTC regime gets its own three-member TCN trained only on that regime's
+  // purged training block. The two specialists share cutoffs and tensor schema,
+  // not weights. This prevents opposite market dynamics from cancelling each
+  // other inside one shared convolutional residual.
+  const fitted={
+    specialists_by_regime:{},
+    selected_member_by_regime:{},
+    residual_scales_by_regime:{},
+    probability_calibrators_by_regime:{},
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13',
+    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
+    candidate_residual_scales:[0,0.25,0.5,0.75,1]
+  };
 
   const regimeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
@@ -778,9 +775,6 @@ export function buildTemporalNeuralProfile(samples = [], {
   const minRegimeNegative=Math.max(20,Math.ceil(minimumValidationSamples*0.8));
   const minSelectionSamples=Math.max(10,Math.ceil(minimumValidationSamples*0.4));
   const minSelectionPositive=3,minSelectionNegative=8;
-  fitted.selected_member_by_regime={};
-  fitted.residual_scales_by_regime={};
-  fitted.probability_calibrators_by_regime={};
   const pooledMemberSelectionRows=fitRows.filter(row=>
     row.at>=sharedTrainingCutoffAt&&row.at<sharedMemberSelectionCutoffAt&&
     row.resolved_at<sharedMemberSelectionCutoffAt)
@@ -899,11 +893,13 @@ export function buildTemporalNeuralProfile(samples = [], {
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
     const regimeBaseline=regimeBaselines[regime]||pooledBaseline;
-    // Reuse the shared three-member TCN. The active regime selects a member
-    // only from its disjoint selection block; no selection/validation/holdout
-    // example is included in the shared model's training rows.
+    const regimeFit=fitEnsemble(regimeTraining,{
+      epochs,learningRate,l2,baseRate:regimePrior,
+      baselineFit:regimeBaseline,
+      baselineByRegime:{[regime]:regimeBaseline}
+    });
     const candidateResidualScales=[0,0.25,0.5,0.75,1];
-    const memberRanks=fitted.members.flatMap((member,index)=>
+    const memberRanks=regimeFit.members.flatMap((member,index)=>
       candidateResidualScales.map(residualScale=>({
         index,residual_scale:residualScale,
         metrics:evaluate(memberSelectionRows,
@@ -927,12 +923,17 @@ export function buildTemporalNeuralProfile(samples = [], {
     // sparse, only the pooled calibration block may be used as a fallback.
     const selectionCalibrator=fitSelectionProbabilityCalibrator(
       calibrationRows,
-      sequence=>forward(sequence,fitted.members[selectedMemberIndex],selectedResidualScale).probability,
+      sequence=>forward(sequence,regimeFit.members[selectedMemberIndex],selectedResidualScale).probability,
       {minimumSamples:30,minimumPositive:5,minimumNegative:20,
        iterations:300,learningRate:0.03,regularization:0.45,
        fitOn:calibrationSource}
     );
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
+    fitted.specialists_by_regime[regime]={
+      ...regimeFit,selected_member_index:selectedMemberIndex,
+      selected_residual_scale:selectedResidualScale,
+      probability_calibrator:selectionCalibrator
+    };
 
     // Fair challenger: calibrate the neural residual and the logistic anchor
     // on the same later, disjoint calibration rows. Otherwise calibration gain
@@ -1030,7 +1031,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       support_gaps:result.support_gaps||[],
-      model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION',
+      model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALIST',
       baseline_anchor_source:regimeBaselines[regime]?.source||'POOLED_TRAINING_ONLY_FALLBACK',
       baseline_anchor_training_samples:Number(regimeBaselines[regime]?.training_samples)||0,
       training_start_at:result.training_start_at??null,
@@ -1119,15 +1120,19 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_strategy:fitted.training_strategy,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
-    member_training_profiles:fitted.member_training_profiles,
-    member_validation_scores:fitted.member_validation_scores,
-    selected_member_index:fitted.selected_member_index,
+    member_training_profiles:Object.values(fitted.specialists_by_regime)[0]?.member_training_profiles||[],
+    member_training_profiles_by_regime:Object.fromEntries(Object.entries(fitted.specialists_by_regime)
+      .map(([regime,specialist])=>[regime,specialist.member_training_profiles])),
+    member_validation_scores:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeResults[regime]?.member_selection_scores||[]
+    ])),
+    selected_member_index:null,
     member_selection_method:'REGIME_SPECIFIC_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
-    model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
     calibration_fit_scope:'REGIME_OR_POOLED_CALIBRATION_BLOCK_ONLY',
