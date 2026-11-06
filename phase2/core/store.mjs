@@ -572,7 +572,9 @@ export class DurableStore {
       }:{automatic_weight_update:false,entry_gate_changes:false,radar_threshold_changes:false,real_order_execution:false,paper_trading:true}
     }:null;
     const safe={
-      version:1,
+      version:2,
+      training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      reset_reason:value.reset_reason==null?null:String(value.reset_reason).slice(0,100),
       updated_at:Date.now(),
       enabled:value.enabled===true,
       scan_count:Math.max(0,Math.trunc(Number(value.scan_count)||0)),
