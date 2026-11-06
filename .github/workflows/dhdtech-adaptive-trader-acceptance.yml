@@ -108,6 +108,8 @@ jobs:
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
+                  temporalNetwork.training_strategy==='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'&&
+                  temporalNetwork.model_scope==='INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS'&&
                   temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
                   Number(temporalNetwork.sequence_steps)===24&&
                   Number(temporalNetwork.sequence_channels)===29&&
@@ -250,7 +252,19 @@ jobs:
                   (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                    temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true);
                 const temporalComparison=temporalNetwork.holdout_comparison||{};
-                const neuralLiveReady=temporalNetwork.selected===true&&
+                const selectedTemporalRegimes=Array.isArray(temporalNetwork.selected_regimes)
+                  ?temporalNetwork.selected_regimes:[];
+                const temporalNeuralContributionSafe=selectedTemporalRegimes.length>0&&
+                  selectedTemporalRegimes.every(regime=>{
+                    const specialist=temporalNetwork.regime_specialists?.[regime];
+                    return specialist?.neural_residual_contributes===true&&
+                      Number(specialist.selected_residual_scale)>0&&
+                      specialist.probability_calibration?.fitted===true&&
+                      specialist.logistic_probability_calibration?.fitted===true;
+                  });
+                const neuralLiveReady=temporalNetwork.training_strategy==='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'&&
+                  temporalNetwork.model_scope==='INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS'&&
+                  temporalNeuralContributionSafe&&temporalNetwork.selected===true&&
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
@@ -329,7 +343,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='DHDTech live scan, V5 neural out-of-sample superiority, TCN V11 live superiority, or 100-trade paper validation gate is not ready';
+                lastError='DHDTech live scan, V5 neural out-of-sample superiority, V13 independent-regime TCN live superiority, or 100-trade paper validation gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }
