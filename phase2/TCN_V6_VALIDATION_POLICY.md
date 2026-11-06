@@ -2,6 +2,7 @@
 
 - Target: +3% first passage before -2% within four hours using completed 15-minute Binance Spot USDT candles.
 - The shared TCN ensemble is fitted only on the purged chronological training block.
+- Mature histories reserve an untouched holdout of at least 2× the live sample floor and 25% of usable rows; medium histories reserve at least the live floor plus 30 rows and 20%. This preserves a broad later test while avoiding the former 40% holdout that unnecessarily reduced the training window.
 - The BTC-regime member and residual contribution scale are selected only on the disjoint chronological selection block. Candidate residual scales are 0%, 25%, 50%, 75%, and 100%.
 - If a regime's local selection slice has insufficient class support, the pooled selection block may be used only for member/scale selection. That fallback never pools the regime's validation or final holdout.
 - Probability calibration is fitted only from the permitted selection block. Validation and final holdout are strictly later.
@@ -18,4 +19,4 @@ holdout metric. Member choice, residual scale selection, and probability
 calibration remain confined to the chronological selection block. Validation
 and final holdout are not used for optimization or tuning.
 
-The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version.
+The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V9 applies the bounded holdout rule above; all regime-specific sample support and Brier superiority margins remain unchanged.
