@@ -11,6 +11,12 @@ on:
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/adaptive-trader-worker.mjs'
+      - 'phase2/core/adaptive-trader-engine.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/historical-replay.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/push/index.mjs'
       - 'phase2/TCN_V6_VALIDATION_POLICY.md'
       - '.github/workflows/dhdtech-adaptive-trader-acceptance.yml'
   workflow_dispatch:
