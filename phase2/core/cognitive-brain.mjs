@@ -795,7 +795,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralCandidateRows=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
   const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
   // V5 now reserves four chronological stages inside its training window:
-  // 70% model fitting, 15% member/residual selection, and 15% probability
+  // 70% model fitting, 10% member/residual selection, and 20% probability
   // calibration (itself split into fit/check blocks), followed by outer
   // validation and the untouched final holdout. Every cutoff purges outcomes
   // that had not matured before that block ended.
@@ -803,7 +803,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     ?Math.max(1,Math.min(neuralCandidateTimes.length-2,Math.floor(neuralCandidateTimes.length*0.70))):-1;
   const neuralSelectionCutIndex=neuralTrainingCutIndex>=0
     ?Math.max(neuralTrainingCutIndex+1,Math.min(neuralCandidateTimes.length-1,
-      Math.floor(neuralCandidateTimes.length*0.85))):-1;
+      Math.floor(neuralCandidateTimes.length*0.80))):-1;
   const neuralSelectionStartAt=neuralTrainingCutIndex>=0
     ?neuralCandidateTimes[neuralTrainingCutIndex]:null;
   const neuralCalibrationStartAt=neuralSelectionCutIndex>=0
