@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,fetchCompletedThreeSecondAggTrades,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,calculateStrongMoveFlashScore,fetchCompletedThreeSecondAggTrades,StrongMoveRadar} from '../core/strong-move-radar.mjs';
 
 const NOW=10_000_000_000;
 
@@ -96,6 +96,34 @@ const openEmergency=makeEmergency5m();openEmergency.at(-1).closed=false;
 assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:openEmergency},NOW),null);
 const staleEmergency=makeEmergency5m().map(row=>({...row,closeTime:row.closeTime-9*60_000,openTime:row.openTime-9*60_000}));
 assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:staleEmergency},NOW),null);
+test('flash score is normalized: breakout cannot swamp weak price momentum and saturate every candidate at 100',()=>{
+  const weakMomentumWithExtremeActivity=calculateStrongMoveFlashScore({
+    return1mPct:0,
+    return3mPct:0.210526,
+    accelerationPct:0.420610,
+    volumeRatio:137.447985,
+    tradeRatio:10.333333,
+    takerBuyRatio:0.546293,
+    microBreakout:true,
+    breakoutScore:96,
+    closeLocationPct:80
+  });
+  assert.ok(weakMomentumWithExtremeActivity>68&&weakMomentumWithExtremeActivity<78,
+    'a breakout plus extreme volume must not swamp sub-0.45% 3m momentum: '+weakMomentumWithExtremeActivity);
+  const fullyAligned=calculateStrongMoveFlashScore({
+    return1mPct:1,return3mPct:2,accelerationPct:1,
+    volumeRatio:10,tradeRatio:8,takerBuyRatio:0.9,
+    microBreakout:true,breakoutScore:96,closeLocationPct:95
+  });
+  assert.equal(fullyAligned,100);
+  const noBreakout=calculateStrongMoveFlashScore({
+    return1mPct:0,return3mPct:0.1,accelerationPct:0.05,
+    volumeRatio:1.1,tradeRatio:1.1,takerBuyRatio:0.51,
+    microBreakout:false,breakoutScore:42,closeLocationPct:null
+  });
+  assert.ok(noBreakout<65,'weak balanced evidence must remain a modest score');
+});
+
 const analysis=buildStrongMoveAnalysis(make1m(),make5m(),ticker,NOW);
 assert.equal(analysis.closed_candles_only,true);
 assert.equal(analysis.eligible,true);

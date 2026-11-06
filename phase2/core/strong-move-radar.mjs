@@ -55,6 +55,38 @@ function strictFinite(value){
  * means the buyer was maker, so aggressive taker buys are m=false. Never infer
  * this feature from OHLCV candles or a partial REST page.
  */
+/**
+ * Compute a normalized flash score. The six legacy signal terms contribute
+ * 0.88 total weight; breakout receives 0.08 and close-location receives 0.04.
+ * The prior formula added the raw breakout value (up to 92) without a weight,
+ * forcing nearly every micro-breakout with elevated volume to 100.
+ */
+export function calculateStrongMoveFlashScore({
+  return1mPct,return3mPct,accelerationPct,volumeRatio,tradeRatio,
+  takerBuyRatio,microBreakout=false,breakoutScore=42,closeLocationPct
+}={}) {
+  const scoreOr=(value,fallback)=>strictFinite(value)??fallback;
+  const r1=scoreOr(return1mPct,null);
+  const r3=scoreOr(return3mPct,null);
+  const acceleration=scoreOr(accelerationPct,null);
+  const volume=scoreOr(volumeRatio,null);
+  const trades=scoreOr(tradeRatio,null);
+  const buy=scoreOr(takerBuyRatio,null);
+  const breakout=scoreOr(breakoutScore,42);
+  const closeLocation=scoreOr(closeLocationPct,45);
+  const breakoutEvidence=microBreakout===true?92:breakout*0.45;
+  return clamp(
+    (r1!==null?clamp(50+r1*80):45)*0.18+
+    (r3!==null?clamp(50+r3*42):45)*0.22+
+    (acceleration!==null?clamp(50+acceleration*46):45)*0.14+
+    (volume!==null?clamp(45+(volume-1)*34):45)*0.16+
+    (trades!==null?clamp(45+(trades-1)*28):45)*0.08+
+    (buy!==null?clamp(50+(buy-0.5)*300):45)*0.10+
+    breakoutEvidence*0.08+
+    clamp(closeLocation)*0.04
+  );
+}
+
 function summarizeThreeSecondAggTrades(aggTrades,coverageComplete,decisionAt){
   const asOf=strictFinite(decisionAt);
   const bucketEnd=asOf===null?null:Math.floor(asOf/3000)*3000;
@@ -253,16 +285,11 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,{
   const bbScore=Number.isFinite(bbExpansion)?clamp(48+(bbExpansion-1)*75):45;
   const efficiencyScore=Number.isFinite(efficiency)?clamp(35+efficiency*80):45;
   const atrScore=Number.isFinite(atrRatio)?clamp(50+(atrRatio-1)*70):45;
-  const flashScore=clamp(
-    (Number.isFinite(r1)?clamp(50+r1*80):45)*.18+
-    (Number.isFinite(r3)?clamp(50+r3*42):45)*.22+
-    (Number.isFinite(accel)?clamp(50+accel*46):45)*.14+
-    (Number.isFinite(volumeRatio)?clamp(45+(volumeRatio-1)*34):45)*.16+
-    (Number.isFinite(tradeRatio)?clamp(45+(tradeRatio-1)*28):45)*.08+
-    (Number.isFinite(buyRatio)?clamp(50+(buyRatio-.5)*300):45)*.10+
-    (microBreak?92:breakoutScore*.45)+
-    (Number.isFinite(closeLocation)&&closeLocation>=70?8:0)
-  );
+  const flashScore=calculateStrongMoveFlashScore({
+    return1mPct:r1,return3mPct:r3,accelerationPct:accel,
+    volumeRatio,tradeRatio,takerBuyRatio:buyRatio,
+    microBreakout:microBreak,breakoutScore,closeLocationPct:closeLocation
+  });
 
   const upScore=clamp(
     velocityScore*.24+volumeScore*.17+tradeScore*.08+takerScore*.14+
