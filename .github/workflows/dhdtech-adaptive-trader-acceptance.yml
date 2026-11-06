@@ -32,7 +32,7 @@ permissions:
 jobs:
   verify-dhdtech:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 65
     steps:
       - name: Wait for the deployed DHDTech worker to complete a verified live scan
         uses: actions/github-script@v7
@@ -50,12 +50,15 @@ jobs:
 
             const started=Date.now();
             const probeRun=context.ref==='refs/heads/verify/build224-tcn-fallback-20261106';
-            const deadline=started+(probeRun?2*60*1000:12*60*1000);
+            const deadline=started+(probeRun?2*60*1000:55*60*1000);
             core.info('DHDTECH_ACCEPTANCE_MODE '+(probeRun?'SHORT_READ_ONLY_PROBE':'FULL_BUILD224_ACCEPTANCE'));
             const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let lastError='No status response yet';
             let lastObserved=null;
-            let manualScanAttempted=false;
+            // A complete eligible Spot universe needs several bounded 40-pair scans.
+            // Trigger the next scan only after the previous scan timestamp advances
+            // and the worker is no longer in flight; never enqueue duplicate scans.
+            let lastManualScanRequestedForScanAt=null;
             let manualScanRequestedAt=null;
             while(Date.now()<deadline){
               try{
@@ -71,13 +74,23 @@ jobs:
                 ]);
                 const [value,deployment]=await Promise.all([response.json(),deploymentResponse.json()]);
                 const currentScanAt=Date.parse(String(value.last_scan_at||''));
+                const scanCoverage=value.scan_coverage||{};
+                const eligibleSymbolCount=Number(scanCoverage.eligible_symbols_count)||0;
+                const completedSweep=scanCoverage.last_completed_sweep||{};
+                const fullUniverseCoverageReady=eligibleSymbolCount>0&&
+                  Number(scanCoverage.completed_sweeps)>=1&&
+                  Number(completedSweep.eligible_symbols)===eligibleSymbolCount&&
+                  Number(completedSweep.attempted_symbols)===eligibleSymbolCount&&
+                  Number(completedSweep.failed_symbols)===0;
                 const currentScanFresh=Number.isFinite(currentScanAt)&&currentScanAt<=Date.now()+5000&&
                   Date.now()-currentScanAt<=8*60*1000&&value.last_error===null;
-                // If the worker has no recent successful scan, request one through
-                // its read-only server endpoint. Never start a duplicate while in flight.
-                if(response.ok&&!currentScanFresh&&!manualScanAttempted&&
-                   value.enabled===true&&value.in_flight!==true){
-                  manualScanAttempted=true;
+                // Keep running bounded scans until one entire current eligible universe
+                // has been attempted with zero data failures. Each request is tied to the
+                // previous completed scan timestamp to prevent duplicate in-flight work.
+                const scanKey=Number.isFinite(currentScanAt)?currentScanAt:0;
+                if(response.ok&&!fullUniverseCoverageReady&&value.enabled===true&&
+                   value.in_flight!==true&&lastManualScanRequestedForScanAt!==scanKey){
+                  lastManualScanRequestedForScanAt=scanKey;
                   const requestedAt=Date.now();
                   const scanResponse=await fetch(url.origin+'/api/adaptive-trader/scan',{
                     method:'POST',
@@ -90,9 +103,13 @@ jobs:
                     manualScanRequestedAt=requestedAt;
                     core.info('DHDTECH_MANUAL_READ_ONLY_SCAN_REQUESTED '+JSON.stringify({
                       http:scanResponse.status,status:scanBody.status||null,
-                      requested_limit:scanBody.requested_limit||40
+                      requested_limit:scanBody.requested_limit||40,
+                      coverage_pct:Number(scanCoverage.progress_pct)||0,
+                      remaining_symbols:Number(scanCoverage.remaining_symbols_count)||eligibleSymbolCount||null,
+                      completed_sweeps:Number(scanCoverage.completed_sweeps)||0
                     }));
                   }else{
+                    lastManualScanRequestedForScanAt=null;
                     core.warning('DHDTECH_MANUAL_READ_ONLY_SCAN_NOT_STARTED '+JSON.stringify({
                       http:scanResponse.status,status:scanBody.status||null,
                       error:scanBody.error||null
@@ -171,6 +188,17 @@ jobs:
                     webpush_subscriptions:Number(push.webpush_subscriptions)||0,
                     physical_device_delivery_verified:push.physical_device_delivery_verified===true},
                   historical_samples_available:Number(universe.historical_training_samples_available)||0,
+                  scan_coverage:{
+                    eligible_symbols:eligibleSymbolCount,
+                    progress_pct:Number(scanCoverage.progress_pct)||0,
+                    attempted_symbols:Number(scanCoverage.attempted_symbols_count)||0,
+                    valid_symbols:Number(scanCoverage.valid_symbols_count)||0,
+                    failed_symbols:Number(scanCoverage.failed_symbols_count)||0,
+                    remaining_symbols:Number(scanCoverage.remaining_symbols_count)||0,
+                    completed_sweeps:Number(scanCoverage.completed_sweeps)||0,
+                    last_completed_sweep:completedSweep,
+                    full_universe_ready:fullUniverseCoverageReady
+                  },
                   learning_profile:learning?{
                     resolved_samples:Number(learning.resolved_samples)||0,
                     required_samples:Number(learning.required_samples)||60,
@@ -300,6 +328,11 @@ jobs:
                   Number(paperValidation.win_rate_pct)>=55&&
                   Number(paperValidation.net_pnl_usdt)>0&&
                   Number(paperValidation.max_drawdown_pct)<=8;
+                const physicalDeviceDeliveryReady=push.enabled===true&&
+                  Number(push.fcm_devices)>=2&&push.physical_device_delivery_verified===true;
+                lastObserved.full_universe_coverage_ready=fullUniverseCoverageReady;
+                lastObserved.paper_trading_ready=paperTradingReady;
+                lastObserved.physical_device_delivery_ready=physicalDeviceDeliveryReady;
                 lastObserved.v5_neural_live_ready=v5NeuralLiveReady;
                 lastObserved.temporal_tcn_live_ready=neuralLiveReady;
                 lastObserved.cognitive_chronological_split_ready=cognitiveSplitReady;
@@ -324,6 +357,7 @@ jobs:
                   cognitive&&cognitiveV5&&cognitiveSplitReady&&neuralNetworkContract&&
                   v5NeuralLiveReady&&temporalNetworkContract&&temporalNetwork.trained===true&&
                   Number(temporalNetwork.ensemble_members)===3&&Number(temporalNetwork.training_samples)>=160&&
+                  fullUniverseCoverageReady&&paperTradingReady&&physicalDeviceDeliveryReady&&
                   neuralLiveReady&&probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
@@ -336,7 +370,7 @@ jobs:
                   (cognitiveProfile.probability_ready!==true||
                     (cognitiveProfile.holdout&&cognitiveProfile.holdout.evaluated===true&&cognitiveProfile.holdout.beat_base_rate===true));
                 if(valid){
-                  const description='Live DHDTech scan verified; '+candidates.length+' analyzed, '+historyRows+' history rows.';
+                  const description='Build 224 accepted: full Spot sweep, V5/TCN, paper validation and two-device FCM receipts verified.';
                   await github.rest.repos.createCommitStatus({
                     owner:context.repo.owner,repo:context.repo.repo,sha:context.sha,
                     state:'success',context:'dhdtech-adaptive-trader-live',
@@ -349,7 +383,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='DHDTech live scan, V5 neural out-of-sample superiority, V13 independent-regime TCN live superiority, or 100-trade paper validation gate is not ready';
+                lastError='DHDTech full-universe Spot sweep, V5/TCN independent superiority, 100-trade paper validation, or two-device physical FCM receipt gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }

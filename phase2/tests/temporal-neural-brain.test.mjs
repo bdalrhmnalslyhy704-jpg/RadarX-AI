@@ -412,6 +412,21 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes("training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V19'"));
   assert.ok(containerWorkflow.includes('neural_residual_contributes===true'));
   assert.ok(workflow.includes('temporalNeuralContributionSafe'));
+  assert.ok(workflow.includes('timeout-minutes: 65'));
+  assert.ok(workflow.includes('55*60*1000'));
+  for(const gate of [
+    'fullUniverseCoverageReady',
+    'completedSweep.attempted_symbols',
+    'completedSweep.failed_symbols',
+    'paperTradingReady',
+    'physicalDeviceDeliveryReady',
+    'Number(push.fcm_devices)>=2',
+    'push.physical_device_delivery_verified===true'
+  ]){
+    assert.ok(workflow.includes(gate),'DHDTech production acceptance must require '+gate);
+  }
+  assert.ok(workflow.includes('lastManualScanRequestedForScanAt'),
+    'acceptance must drive bounded market scans to a complete universe sweep without duplicate requests');
 });
 
 
