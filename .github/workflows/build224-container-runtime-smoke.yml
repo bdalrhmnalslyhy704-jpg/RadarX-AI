@@ -179,7 +179,7 @@ jobs:
           const summary=x.last_summary||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V6'||
              temporalNetwork.architecture!=='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'||
-             temporalNetwork.training_strategy!=='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18'||
+             temporalNetwork.training_strategy!=='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19'||
              temporalNetwork.model_scope!=='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'||
              temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
              temporalNetwork.temporal_label_resolution!=='15M_ONLY'){
@@ -201,7 +201,7 @@ jobs:
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
             temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-            temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18'&&
+            temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19'&&
             temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
             temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
@@ -241,6 +241,9 @@ jobs:
             v5_holdout_comparison:neuralNetwork.holdout_comparison||{},
             v5_member_training_objectives:neuralNetwork.member_training_objectives||[],
             v5_refit_training_samples:Number(neuralNetwork.refit_training_samples)||0,
+            v5_member_selection_brier_scores:neuralNetwork.member_selection_brier_scores||[],
+            v5_member_training_profiles:neuralNetwork.member_training_profiles||[],
+            v5_probability_calibration:neuralNetwork.probability_calibration||{},
             legacy_neural_network_contract:legacyNeuralNetworkContract,
             temporal_network_contract:temporalNetworkContract,
             temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
@@ -270,6 +273,7 @@ jobs:
                 selected_residual_scale:Number(specialist?.selected_residual_scale),
                 neural_residual_contributes:specialist?.neural_residual_contributes===true,
                 member_selection_source:String(specialist?.member_selection_source||'UNKNOWN'),
+                member_selection_scores:specialist?.member_selection_scores||[],
                 probability_calibration:{
                   fit_on:String(specialist?.probability_calibration?.fit_on||'UNKNOWN'),
                   fitted:specialist?.probability_calibration?.fitted===true,

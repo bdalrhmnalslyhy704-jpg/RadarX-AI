@@ -302,7 +302,7 @@ function gradientsFor(sequence, target, model, cache) {
 }
 
 function fitMember(rows, seed, {
-  epochs = 10, learningRate = 0.006, l2 = 0.012,
+  epochs = 20, learningRate = 0.005, l2 = 0.006,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
 } = {}) {
@@ -525,16 +525,16 @@ function fitEnsemble(rows, options = {}) {
   // Keep three deterministic members but vary fit duration and regularization.
   // This reduces dependence on one arbitrary optimizer schedule while retaining
   // the same training-only logistic anchor for every member.
-  const baseEpochs=Math.max(1,Math.trunc(Number(options.epochs)||10));
-  const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
-  const baseL2=Math.max(0,Number(options.l2)||0.012);
+  const baseEpochs=Math.max(1,Math.trunc(Number(options.epochs)||20));
+  const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.005);
+  const baseL2=Math.max(0,Number(options.l2)||0.006);
   const memberProfiles=[
-    {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
+    {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*1.1,l2:baseL2*0.75,
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
-    {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+    {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.8,l2:baseL2*1.5,
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'}
   ];
   const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
     ...options,...memberProfiles[index],baseRate
@@ -542,7 +542,7 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
@@ -562,8 +562,8 @@ function regimeOfSequence(sequence){
 export function buildTemporalNeuralProfile(samples = [], {
   minTrainingSamples=MIN_TRAIN,maxTrainingSamples=MAX_TRAIN,
   minimumValidationSamples=MIN_VALIDATION,minimumHoldoutSamples=MIN_HOLDOUT,
-  liveHoldoutSamples=LIVE_HOLDOUT,epochs=10,
-  learningRate=0.006,l2=0.012,comparisonMargin=0.003
+  liveHoldoutSamples=LIVE_HOLDOUT,epochs=20,
+  learningRate=0.005,l2=0.006,comparisonMargin=0.003
 }={}){
   const rows=cleanRows(samples);
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
@@ -627,7 +627,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
-    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
+    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V19',
     model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minTrainingSamples,
@@ -662,7 +662,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
-      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
+      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V19',
       model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
@@ -725,7 +725,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
-      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
+      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V19',
       model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:sharedTrainingRows.length,
       shared_model_training_samples:sharedTrainingRows.length,
@@ -803,7 +803,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
@@ -1189,11 +1189,11 @@ export function buildTemporalNeuralProfile(samples = [], {
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),
     selected_member_index:null,
-    member_selection_method:'REGIME_PREFERRED_SHARED_FALLBACK_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
+    member_selection_method:'REGIME_PREFERRED_SHARED_FALLBACK_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER_V19',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     regime_specialist_count:2,
-    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
+    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V19',
     model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',

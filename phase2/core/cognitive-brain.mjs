@@ -391,11 +391,11 @@ function fitNeuralEnsemble(training, options = {}) {
   // dependence on one epoch/regularization choice. Selection remains on the
   // chronological validation block; the untouched holdout is never consulted.
   const memberProfiles=[
-    {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.0))),learningRate:baseLearningRate,l2:baseL2*0.25,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
-    {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.2))),learningRate:baseLearningRate*0.9,l2:baseL2*0.4,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
-    {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.5))),learningRate:baseLearningRate*0.8,l2:baseL2*0.5,
       trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
@@ -413,7 +413,7 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:[...seeds],
     member_training_profiles:memberProfiles,
-    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V6',
+    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7',
     training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
@@ -743,7 +743,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_LONGER_FIT_LOWER_DECAY',
         training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
         target_definition:'UP_CLOSE_RETURN_BINARY_V1',
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -853,7 +853,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralSelectionMinimum=Math.max(20,minimumValidationSamples);
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
-  let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
+  const neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
   const neuralFit=neuralTraining.length>=neuralMinimum&&
     neuralSelection.length>=neuralSelectionMinimum&&neuralSameWindowLogisticFit
@@ -863,7 +863,6 @@ export function buildCognitiveLearningProfile(samples = [], {
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit
     }):null;
-  let neuralFinalTraining=neuralTraining;
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=[0,0.25,0.5,0.75,1];
@@ -879,32 +878,6 @@ export function buildCognitiveLearningProfile(samples = [], {
   if(neuralFit){
     neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
     neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
-    // Refit only the selected member on the union of model-fit + selection rows.
-    // All labels must mature before the separate calibration window begins.
-    const selectedIndex=neuralFit.selected_member_index;
-    const refitRows=[...neuralTraining,...neuralSelection]
-      .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
-    const refitBaseline=selectedIndex>=0?fitLogisticModel(refitRows,{l2,iterations,learningRate}):null;
-    const selectedProfile=selectedIndex>=0?neuralFit.member_training_profiles[selectedIndex]||{}:{};
-    const refitMember=selectedIndex>=0&&refitBaseline
-      ?fitNeuralNetworkModel(refitRows,{
-        hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline
-      }):null;
-    if(refitMember&&refitBaseline){
-      neuralFit.members[selectedIndex]=refitMember;
-      neuralSameWindowLogisticFit=refitBaseline;
-      neuralFinalTraining=refitRows;
-      neuralFit.training_samples=refitRows.length;
-      neuralFit.refit_training_samples=refitRows.length;
-      neuralFit.refit_max_outcome_resolved_at=Math.max(...refitRows.map(row=>row.resolved_at));
-    }else{
-      neuralFit.selected_member_index=-1;
-      neuralFit.selected_residual_scale=0;
-      neuralFit.refit_training_samples=0;
-      neuralFit.refit_max_outcome_resolved_at=null;
-    }
-    // Fit calibration only after refitting; the calibration rows remain later.
     neuralFit.probability_calibrator=neuralFit.selected_member_index>=0
       ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,neuralFit)
       :null;
@@ -979,7 +952,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   if(neuralWins){
     selectedModel='NEURAL_GLOBAL';
     selectedFit=neuralFit;
-    selectedTraining=neuralFinalTraining;
+    selectedTraining=neuralTraining;
     selectedValidation=neuralValidation;
     selectionReason='NEURAL_MLP_BEAT_LOGISTIC_CHALLENGER_ON_MIDDLE_CHRONOLOGICAL_VALIDATION';
     neuralSelected=true;
@@ -1043,12 +1016,12 @@ export function buildCognitiveLearningProfile(samples = [], {
       architecture: neuralFit?.architecture || FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
-      samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,
+      samples_required:neuralMinimum,training_samples:neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
-      refit_training_samples:neuralFit?.refit_training_samples??0,
+      refit_training_samples:0,
       maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+      training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_LONGER_FIT_LOWER_DECAY',
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:'UP_CLOSE_RETURN_BINARY_V1',
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -1066,7 +1039,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         reason:'NEURAL_MODEL_NOT_FITTED'
       },
       max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
-      max_refit_training_outcome_resolved_at:neuralFit?.refit_max_outcome_resolved_at??null,
+      max_refit_training_outcome_resolved_at:null,
       max_selection_outcome_resolved_at:neuralSelection.length?Math.max(...neuralSelection.map(row=>row.resolved_at)):null,
       max_calibration_fit_outcome_resolved_at:neuralCalibrationFit.length?Math.max(...neuralCalibrationFit.map(row=>row.resolved_at)):null,
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,

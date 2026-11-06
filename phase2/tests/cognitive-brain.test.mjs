@@ -184,7 +184,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
     assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
     assert.equal(profile.neural_network.training_strategy,
-      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6');
+      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_LONGER_FIT_LOWER_DECAY');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -201,11 +201,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(profile.neural_network.calibration_check_samples>=20);
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.ok(profile.neural_network.selection_samples >= 20);
-    assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
-    assert.ok(profile.neural_network.refit_training_samples<=profile.neural_network.maximum_training_sample_budget);
-    assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
-    assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
-      'all refit labels must mature before the independent calibration block begins');
+    assert.equal(profile.neural_network.refit_training_samples,0,
+      'post-selection refit is disabled after the V18 refit worsened independent Brier scores');
+    assert.equal(profile.neural_network.preselection_training_samples,profile.neural_network.training_samples);
+    assert.equal(profile.neural_network.max_refit_training_outcome_resolved_at,null);
     assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
       'V5 fitting labels must be resolved before the separate selection block');
     assert.ok(profile.neural_network.max_selection_outcome_resolved_at < profile.validation_start_at,
