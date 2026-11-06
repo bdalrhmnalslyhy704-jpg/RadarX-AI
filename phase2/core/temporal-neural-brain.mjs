@@ -361,7 +361,7 @@ function fitSelectionProbabilityCalibrator(rows, predictFn, {
   const positive=predictions.filter(row=>row.target===1).length;
   const negative=predictions.length-positive;
   const base={
-    method:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
+    method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
     fit_on:String(fitOn||'REGIME_SELECTION_ONLY'),
     sample_count:predictions.length,
     positive_count:positive,
@@ -683,7 +683,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
     Math.min(fitTimes.length-3,Math.floor(fitTimes.length*0.80)));
   const sharedSelectionCutIndex=Math.max(sharedMemberSelectionCutIndex+1,
-    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.90)));
+    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.95)));
   const sharedTrainingCutoffAt=fitTimes[sharedTrainCutIndex]??validationStart;
   const sharedMemberSelectionCutoffAt=fitTimes[sharedMemberSelectionCutIndex]??validationStart;
   const sharedSelectionCutoffAt=fitTimes[sharedSelectionCutIndex]??validationStart;
@@ -933,6 +933,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     regimeResults[regime]={supported:true,prior:regimePrior,
       training_start_at:regimeTraining[0]?.at??null,
       selection_start_at:regimeMemberSelection[0]?.at??null,
+      calibration_start_at:regimeCalibration[0]?.at??null,
       validation_start_at:regimeValidation[0]?.at??null,
       max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
       training_samples:regimeTraining.length,selection_samples:regimeMemberSelection.length,
@@ -993,6 +994,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       baseline_anchor_training_samples:Number(regimeBaselines[regime]?.training_samples)||0,
       training_start_at:result.training_start_at??null,
       selection_start_at:result.selection_start_at??null,
+      calibration_start_at:result.calibration_start_at??null,
       validation_start_at:result.validation_start_at??null,
       max_training_outcome_resolved_at:result.max_training_outcome_resolved_at??null,
       training_samples:trainingByRegime[regime],
@@ -1086,7 +1088,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_training_cutoff_at:sharedTrainingCutoffAt,
     shared_model_member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
     shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
-    shared_model_selection_layout:'TRAIN_60_PERCENT_MEMBER_SELECTION_20_PERCENT_CALIBRATION_10_PERCENT',
+    shared_model_selection_layout:'TRAIN_60_PERCENT_MEMBER_SELECTION_20_PERCENT_CALIBRATION_15_PERCENT',
     shared_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
     required_training_samples:minTrainingSamples,
     required_selection_samples:minSelectionSamples,
