@@ -182,9 +182,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
-    assert.equal(profile.neural_network.training_objective, 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT');
+    assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
     assert.equal(profile.neural_network.training_strategy,
-      'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5');
+      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -211,6 +211,11 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.deepEqual(profile.neural_network.candidate_residual_scales, [0, 0.25, 0.5, 0.75, 1]);
     assert.ok([0, 0.25, 0.5, 0.75, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
+    assert.deepEqual(profile.neural_network.member_training_objectives,[
+      'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+      'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+    ]);
     assert.equal(profile.neural_network.ensemble_members_required, 3);
     assert.equal(profile.neural_network.input_neurons, 18);
     assert.equal(profile.neural_network.hidden_neurons, 10);

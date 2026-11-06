@@ -222,7 +222,8 @@ function fitNeuralNetworkModel(training, {
   learningRate = NEURAL_POLICY.learningRate,
   l2 = NEURAL_POLICY.l2,
   seed = 1,
-  baselineFit = null
+  baselineFit = null,
+  trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
 } = {}) {
   const rows=(Array.isArray(training)?training:[]).map(row=>({
     vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
@@ -318,7 +319,13 @@ function fitNeuralNetworkModel(training, {
       const probability=logistic(output);
       // Optimize the same unweighted Brier proper-scoring objective used by
       // chronological validation, model selection, and the untouched holdout.
-      const error=2*(probability-row.target)*probability*(1-probability);
+      const brierGradient=2*(probability-row.target)*probability*(1-probability);
+      const logLossGradient=probability-row.target;
+      const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLossGradient
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*brierGradient+0.5*logLossGradient
+          :brierGradient;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -370,7 +377,7 @@ function fitNeuralNetworkModel(training, {
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...FEATURE_NAMES],
     training_samples:rows.length,iterations:steps,l2:regularization,
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_objective:trainingObjective,
     residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
@@ -384,9 +391,12 @@ function fitNeuralEnsemble(training, options = {}) {
   // dependence on one epoch/regularization choice. Selection remains on the
   // chronological validation block; the untouched holdout is never consulted.
   const memberProfiles=[
-    {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5},
-    {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2},
-    {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2}
+    {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+    {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
+      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
+    {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -403,8 +413,9 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:[...seeds],
     member_training_profiles:memberProfiles,
-    training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_VALIDATION_SHRUNK_V2',
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V6',
+    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+    member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     base_rate:mean(members.map(member=>member.base_rate)),
@@ -732,8 +743,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5',
-        training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT',
+        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+        training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
         target_definition:'UP_CLOSE_RETURN_BINARY_V1',
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[0,0.25,0.5,0.75,1],
@@ -1010,8 +1021,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,training_samples: neuralTraining.length,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5',
-      training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT',
+      training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+      training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:'UP_CLOSE_RETURN_BINARY_V1',
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
@@ -1035,6 +1046,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
+      member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
       member_selection_brier_scores:neuralMemberSelection.map(row=>({
         index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
         base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate

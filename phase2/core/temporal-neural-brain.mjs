@@ -257,7 +257,9 @@ function gradientsFor(sequence, target, model, cache) {
   const activationGradients = Array(DILATIONS.length + 1);
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-  const error = 2 * (cache.probability - target) * cache.probability * (1 - cache.probability);
+  const brierGradient=2*(cache.probability-target)*cache.probability*(1-cache.probability);
+  const logLossGradient=cache.probability-target;
+  const error=0.5*brierGradient+0.5*logLossGradient;
   // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
@@ -303,11 +305,13 @@ function gradientsFor(sequence, target, model, cache) {
 
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
-  baseRate = 0.5, baselineFit = null, baselineByRegime = null
+  baseRate = 0.5, baselineFit = null, baselineByRegime = null,
+  trainingObjective='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
   model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
     ?baselineByRegime:null;
+  model.training_objective=trainingObjective;
   const trainableParameters=()=>({
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
     biases:model.biases,outputWeights:model.outputWeights
@@ -527,9 +531,12 @@ function fitEnsemble(rows, options = {}) {
   const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const memberProfiles=[
-    {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5},
-    {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2},
-    {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2}
+    {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
+    {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
+    {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
   ];
   const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
     ...options,...memberProfiles[index],baseRate
@@ -537,11 +544,11 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_V16',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_MIXED_LOSS_V17',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_objective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE_V17',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     training_prior_probability:baseRate
   };
@@ -789,9 +796,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_V16',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_MIXED_LOSS_V17',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_objective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE_V17',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     candidate_residual_scales:[0,0.25,0.5,0.75,1]
   };
