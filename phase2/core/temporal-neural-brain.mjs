@@ -676,14 +676,21 @@ export function buildTemporalNeuralProfile(samples = [], {
   // never enter the shared model's gradient updates.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const fitTimes=[...new Set(fitRows.map(row=>row.at))].sort((a,b)=>a-b);
-  // Keep three disjoint chronological blocks inside the fitted history:
-  // 60% model fitting, 20% member/scale selection, and 10% probability
-  // calibration. The outer validation and final holdout remain strictly later.
-  const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-4,Math.floor(fitTimes.length*0.60)));
+  // Allocate more of a small/medium fitted history to model estimation while
+  // retaining distinct later blocks for member selection and calibration.
+  // Large histories have enough observations to reserve wider selection and
+  // calibration windows. Outer validation and final holdout remain untouched.
+  const splitFractions=rows.length<600
+    ?{training:0.85,memberSelection:0.92,calibration:0.98}
+    :rows.length<1200
+      ?{training:0.70,memberSelection:0.85,calibration:0.98}
+      :{training:0.75,memberSelection:0.87,calibration:0.96};
+  const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-3,
+    Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
-    Math.min(fitTimes.length-3,Math.floor(fitTimes.length*0.80)));
+    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*splitFractions.memberSelection)));
   const sharedSelectionCutIndex=Math.max(sharedMemberSelectionCutIndex+1,
-    Math.min(fitTimes.length-2,Math.floor(fitTimes.length*0.95)));
+    Math.min(fitTimes.length-1,Math.floor(fitTimes.length*splitFractions.calibration)));
   const sharedTrainingCutoffAt=fitTimes[sharedTrainCutIndex]??validationStart;
   const sharedMemberSelectionCutoffAt=fitTimes[sharedMemberSelectionCutIndex]??validationStart;
   const sharedSelectionCutoffAt=fitTimes[sharedSelectionCutIndex]??validationStart;
@@ -1088,7 +1095,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_training_cutoff_at:sharedTrainingCutoffAt,
     shared_model_member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
     shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
-    shared_model_selection_layout:'TRAIN_60_PERCENT_MEMBER_SELECTION_20_PERCENT_CALIBRATION_15_PERCENT',
+    shared_model_selection_layout:`TRAIN_${Math.round(splitFractions.training*100)}_PERCENT_MEMBER_SELECTION_${Math.round((splitFractions.memberSelection-splitFractions.training)*100)}_PERCENT_CALIBRATION_${Math.round((splitFractions.calibration-splitFractions.memberSelection)*100)}_PERCENT`,
     shared_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
     required_training_samples:minTrainingSamples,
     required_selection_samples:minSelectionSamples,
