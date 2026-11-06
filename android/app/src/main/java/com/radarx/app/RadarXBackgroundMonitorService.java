@@ -669,6 +669,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 Double.isFinite(tickerBaselineAge) && tickerBaselineAge >= 0.0 && tickerBaselineAge <= 5 * 60_000L &&
                 Double.isFinite(quality) && quality >= 85.0 &&
                 Double.isFinite(liquidity) && liquidity >= 75.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
                 Double.isFinite(daily) && daily >= -5.0 && daily <= 4.5 &&
                 Double.isFinite(session) && session >= -1.25 && session <= 4.5 &&
                 Double.isFinite(hour) && hour >= -0.75 && hour <= 2.5 &&
@@ -715,6 +716,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 Double.isFinite(relative) && relative >= 0.75 &&
                 Double.isFinite(quality) && quality >= 95.0 &&
                 Double.isFinite(liquidity) && liquidity >= 90.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
                 Double.isFinite(structure) && structure >= 60.0 && participation >= 4;
         int compressedBuyerChecks = 0;
         if (Double.isFinite(squeeze) && squeeze >= 45.0) compressedBuyerChecks++;
