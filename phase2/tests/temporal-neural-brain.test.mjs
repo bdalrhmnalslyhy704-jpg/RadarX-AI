@@ -35,7 +35,7 @@ function sample(group,index,{up=null}={}){
     outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
     outcome:signal?'UP':'DOWN',return_pct:signal?2.4:-2.2,
     first_passage:{hit:signal?'TAKE_PROFIT_REACHED_FIRST':'STOP_LEVEL_REACHED_FIRST',
-      outcome:signal?'UP':'DOWN',path_resolution:'5M'},
+      outcome:signal?'UP':'DOWN',path_resolution:'15M'},
     temporal_sequence:sequenceFor(signal,group+index)
   };
 }
@@ -53,7 +53,7 @@ test('temporal network fails closed without first-passage tensor samples',()=>{
   assert.equal(profile.trained,false);
   assert.equal(predictTemporalProbability(sequenceFor(true),profile),null);
   assert.equal(profile.target_definition,TEMPORAL_TARGET_DEFINITION);
-  assert.equal(profile.temporal_label_resolution,'5M_ONLY');
+  assert.equal(profile.temporal_label_resolution,'15M_ONLY');
 });
 
 test('temporal network trains only on valid tensors and keeps chronological validation and holdout separate',()=>{
@@ -288,15 +288,15 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
 });
 
 
-test('TCN excludes mixed-resolution 15m first-passage labels from the 5m training target',()=>{
+test('TCN excludes mixed-resolution 5m first-passage labels from the 15m training target',()=>{
   const fiveMinute=sample(0,0,{up:true});
   const fifteenMinute={...sample(1,1,{up:false}),
-    first_passage:{hit:'AMBIGUOUS_BOTH_LEVELS_IN_SAME_CANDLE',outcome:'FLAT',path_resolution:'15M'},
+    first_passage:{hit:'AMBIGUOUS_BOTH_LEVELS_IN_SAME_CANDLE',outcome:'FLAT',path_resolution:'5M'},
     outcome:'FLAT'};
   const profile=buildTemporalNeuralProfile([fiveMinute,fifteenMinute]);
-  assert.equal(TEMPORAL_TARGET_DEFINITION,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2');
+  assert.equal(TEMPORAL_TARGET_DEFINITION,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
   assert.equal(profile.resolved_samples,1,
     '15m OHLC cannot determine which first-passage barrier was touched first');
-  assert.equal(profile.temporal_label_resolution,'5M_ONLY');
+  assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
 });
