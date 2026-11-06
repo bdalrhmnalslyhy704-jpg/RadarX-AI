@@ -7,7 +7,8 @@
 - A separate later chronological calibration block fits the probability calibrator; it never reuses rows used to select a member or residual scale. The inner fit split adapts to available time blocks: small histories reserve about 80% for model fitting, medium histories about 70%, and mature histories about 78%; the remaining pre-validation rows are divided into non-overlapping member-selection and calibration blocks. The outer validation and untouched holdout remain separate and later.
 - If a regime's local selection slice has insufficient class support, the pooled selection block may be used only for member/scale selection. That fallback never pools the regime's validation or final holdout.
 - Probability calibration is fitted only from the separate later calibration block. Validation and final holdout are strictly later.
-- Final predictive readiness requires the unchanged Brier comparison margin against both the base-rate predictor and pooled logistic challenger on chronological validation and untouched holdout, plus the minimum live holdout sample size.
+- Mature history reserves a wider inner validation block of at least 300 observations or 15% of matured labels (whichever is larger), to reduce regime-specific positive-class sparsity. Smaller histories retain the prior minimum-based validation allocation. This inner validation block does not overlap the untouched final holdout.
+- Final predictive readiness requires the unchanged 0.003 Brier comparison margin against both the base-rate predictor and pooled logistic challenger on chronological validation and untouched holdout, plus the minimum live holdout sample size.
 - A trained TCN or passing validation alone never constitutes predictive superiority.
 
 Safety: Binance Spot analysis only; paper_trading=true; real_order_execution=false; confidence_score=UNKNOWN until all predictive and paper-trading gates pass.
