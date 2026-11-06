@@ -273,14 +273,57 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
   assert.equal(expert.local_calibration_samples,24);
   assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
-  assert.ok(expert.calibration_samples>=30,
-    'the later disjoint shared calibration block must meet the calibrator minimum');
+  assert.ok(expert.calibration_samples<30,
+    'the pooled calibration fallback must remain unavailable when the opposite regime has no fitted anchor');
+  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
+    'insufficient shared calibration support must remain an explicit gate');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
   assert.equal(profile.probability_ready,false,
     'a regime with no local selection positives must remain unavailable even when shared calibration is supported');
   assert.equal(profile.live_eligibility_ready,false);
+});
+
+test('TCN uses the later shared calibration block only when both BTC regimes provide real support',()=>{
+  const rows=[];
+  for(let group=0;group<66;group++){
+    const riskOn=group%2===0;
+    for(let index=0;index<7;index++){
+      let up;
+      if(group>=54)up=index===0;          // untouched holdout: six negatives and one positive per group
+      else if(group>=45)up=index<2;       // outer validation: two positives and five negatives per group
+      else if(group>=37)up=index<2;       // local calibration: 28 rows per regime, below 30
+      else up=index%2===0;                // training and member-selection blocks
+      const row=sample(group,index,{up});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
+  assert.equal(profile.trained,true);
+  assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const expert=profile.regime_specialists[regime];
+    assert.equal(expert.local_calibration_samples,28);
+    assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
+    assert.ok(expert.calibration_samples>=30);
+    assert.ok(expert.calibration_targets.positive>=5);
+    assert.ok(expert.calibration_targets.negative>=20);
+    assert.equal(expert.probability_calibration.fit_on,'SHARED_REGIME_CALIBRATION_BLOCK');
+    assert.equal(expert.probability_calibration.fitted,true);
+    assert.equal(expert.logistic_probability_calibration.fitted,true);
+    assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
+    assert.ok(expert.selection_start_at<expert.calibration_start_at);
+    assert.ok(expert.calibration_start_at<expert.validation_start_at);
+    assert.ok(expert.validation_start_at<profile.holdout_start_at);
+  }
+  assert.equal(profile.live_eligibility_ready,false,
+    'a research fixture must not satisfy the 150-outcome live holdout requirement');
 });
 
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{
