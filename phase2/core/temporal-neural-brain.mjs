@@ -604,9 +604,14 @@ export function buildTemporalNeuralProfile(samples = [], {
       ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.20))
       :minimumHoldoutSamples;
   const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
-  const validationTargetSamples=rows.length>=liveHoldoutSamples*5
-    ?Math.ceil(liveHoldoutSamples*4/3)
-    :Math.max(minimumValidationSamples*2,60);
+  // Mature histories use a wider inner validation block because the
+  // first-passage positive class can be sparse and regime-skewed. This widens
+  // sample support without touching the final holdout or reducing its floor.
+  const validationTargetSamples=rows.length>=liveHoldoutSamples*8
+    ?Math.max(liveHoldoutSamples*2,Math.ceil(rows.length*0.15))
+    :rows.length>=liveHoldoutSamples*5
+      ?Math.ceil(liveHoldoutSamples*4/3)
+      :Math.max(minimumValidationSamples*2,60);
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
     validationTargetSamples,2*HORIZON_MS+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
