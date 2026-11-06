@@ -835,6 +835,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     validationTargets[regime]=validTargets;
     holdoutTargets[regime]=holdTargets;
 
+    // Resolve the training-only regime baseline before evaluating specialist support.
+    // Keeping this above the support checks avoids a temporal-dead-zone ReferenceError.
+    const regimeBaseline=regimeBaselines[regime];
     const supportGaps=[];
     if(regimeTraining.length<minRegimeTraining)supportGaps.push('TRAINING_SAMPLE_COUNT');
     if(!regimeBaseline)supportGaps.push('REGIME_LOGISTIC_ANCHOR_UNAVAILABLE');
@@ -878,7 +881,6 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
-    const regimeBaseline=regimeBaselines[regime];
     const regimeFit=fitEnsemble(regimeTraining,{
       epochs,learningRate,l2,baseRate:regimePrior,
       baselineFit:regimeBaseline,
