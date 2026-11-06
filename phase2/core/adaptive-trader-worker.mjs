@@ -75,6 +75,10 @@ function emptyState(){
   return {
     version:2,training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
     reset_reason:null,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
+    scan_coverage:{
+      eligible_symbols:[],attempted_symbols:[],valid_symbols:[],failed_symbols:[],
+      completed_sweeps:0,last_completed_sweep:null,updated_at:null
+    },
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
@@ -225,6 +229,59 @@ export class AdaptiveTraderWorker{
       row.target_definition==='LEGACY_4H_CLOSE_RETURN');
   }
 
+  updateScanCoverage(snapshot,now=Date.now()){
+    const raw=Array.isArray(snapshot?.universe?.eligible_symbols)
+      ?snapshot.universe.eligible_symbols:[];
+    const eligibleSymbols=[...new Set(raw.map(cleanSymbol).filter(Boolean))].sort();
+    if(!eligibleSymbols.length)return this.state.scan_coverage||null;
+    const eligibleSet=new Set(eligibleSymbols);
+    const previous=this.state.scan_coverage||{};
+    const intersect=values=>new Set((Array.isArray(values)?values:[])
+      .map(cleanSymbol).filter(symbol=>eligibleSet.has(symbol)));
+    const attempted=intersect(previous.attempted_symbols);
+    const valid=intersect(previous.valid_symbols);
+    const failed=intersect(previous.failed_symbols);
+    for(const row of (Array.isArray(snapshot?.candidates)?snapshot.candidates:[])){
+      const symbol=cleanSymbol(row?.symbol);
+      if(!eligibleSet.has(symbol))continue;
+      attempted.add(symbol);
+      if(row?.data_valid===true&&row?.data_stale!==true){
+        valid.add(symbol);failed.delete(symbol);
+      }else{
+        valid.delete(symbol);failed.add(symbol);
+      }
+    }
+    let completedSweeps=Math.max(0,Math.trunc(Number(previous.completed_sweeps)||0));
+    let lastCompletedSweep=previous.last_completed_sweep||null;
+    if(attempted.size===eligibleSet.size){
+      completedSweeps++;
+      lastCompletedSweep={
+        sweep_number:completedSweeps,completed_at:Number(now),
+        eligible_symbols:eligibleSet.size,attempted_symbols:attempted.size,
+        valid_symbols:valid.size,failed_symbols:failed.size,
+        failed_symbol_sample:[...failed].sort().slice(0,20)
+      };
+      attempted.clear();valid.clear();failed.clear();
+    }
+    const attemptedCount=attempted.size;
+    this.state.scan_coverage={
+      eligible_symbols:eligibleSymbols,
+      eligible_symbols_count:eligibleSet.size,
+      attempted_symbols:[...attempted].sort(),
+      attempted_symbols_count:attemptedCount,
+      valid_symbols:[...valid].sort(),
+      valid_symbols_count:valid.size,
+      failed_symbols:[...failed].sort(),
+      failed_symbols_count:failed.size,
+      remaining_symbols_count:Math.max(0,eligibleSet.size-attemptedCount),
+      progress_pct:Number((attemptedCount/eligibleSet.size*100).toFixed(1)),
+      completed_sweeps:completedSweeps,
+      last_completed_sweep:lastCompletedSweep,
+      updated_at:Number(now)
+    };
+    return this.state.scan_coverage;
+  }
+
   async runOnce({limit:requestedLimit}={}){
     if(!this.enabled)return {status:'STOPPED',reason:'WORKER_DISABLED'};
     if(this.inFlight)return {status:'SCANNING',reason:'SCAN_ALREADY_IN_FLIGHT'};
@@ -266,6 +323,7 @@ export class AdaptiveTraderWorker{
       if(eligibleCount>0&&Number.isFinite(scanOffset)&&Number.isFinite(advanceCount)){
         this.state.scan_cursor=(Math.max(0,Math.trunc(scanOffset))+Math.max(0,Math.trunc(advanceCount)))%eligibleCount;
       }
+      this.updateScanCoverage(snapshot,now);
       this.activeScanStage='UPDATE_LEARNING_MEMORY';
       this.resolveSamples(snapshot,now);
       this.collectPriceHistory(snapshot,now);
@@ -859,7 +917,7 @@ recordServerPaperPortfolio(snapshot,now){
         closed_candles_only:true,
         engine:'ADAPTIVE_TRADER_SIDECAR_V1'
       },
-      universe:{...(snapshot.universe||{})},
+      universe:{...(snapshot.universe||{}),scan_coverage:this.state.scan_coverage||null},
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
@@ -965,6 +1023,7 @@ recordServerPaperPortfolio(snapshot,now){
       scan_timeout_ms:this.scanTimeoutMs,persist_timeout_ms:this.persistTimeoutMs,
       last_stage_timeout:this.lastStageTimeout,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,scan_cursor:Number(this.state.scan_cursor)||0,
+      scan_coverage:this.state.scan_coverage||null,
       scan_count:Number(this.state.scan_count)||0,
       successful_scans:Number(this.state.successful_scans)||0,
       last_started_at:this.state.last_started_at,

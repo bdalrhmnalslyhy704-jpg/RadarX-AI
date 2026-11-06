@@ -10,6 +10,47 @@ import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
 
 
+test('worker proves and persists a complete 192-pair coverage sweep without counting failed data as valid',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-192-coverage-'));
+  const store=await new DurableStore({dir}).init();
+  const worker=new AdaptiveTraderWorker({
+    store,snapshotProvider:async()=>({}),logger:{info(){},warn(){}}
+  });
+  const eligible=Array.from({length:192},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
+  const now=Date.now();
+  try{
+    for(let cycle=0;cycle<10;cycle++){
+      const batch=eligible.slice(cycle*20,Math.min(192,(cycle+1)*20));
+      worker.updateScanCoverage({
+        universe:{eligible_symbols:eligible,eligible_spot_symbols:192},
+        candidates:batch.map((symbol,index)=>({
+          symbol,data_valid:!(cycle===9&&index===19),data_stale:false
+        }))
+      },now+cycle);
+      if(cycle<9)assert.equal(worker.state.scan_coverage.completed_sweeps,0);
+    }
+    const coverage=worker.state.scan_coverage;
+    assert.equal(coverage.completed_sweeps,1);
+    assert.equal(coverage.last_completed_sweep.eligible_symbols,192);
+    assert.equal(coverage.last_completed_sweep.attempted_symbols,192);
+    assert.equal(coverage.last_completed_sweep.valid_symbols,191);
+    assert.equal(coverage.last_completed_sweep.failed_symbols,1);
+    assert.equal(coverage.last_completed_sweep.failed_symbol_sample[0],'PAIR191USDT');
+    assert.equal(coverage.attempted_symbols_count,0,'a new sweep starts after the completed sweep is recorded');
+    await worker.persist();
+    const restored=new AdaptiveTraderWorker({
+      store,snapshotProvider:async()=>({}),logger:{info(){},warn(){}}
+    });
+    await restored.start({initialDelayMs:60_000});
+    assert.equal(restored.snapshot().scan_coverage.completed_sweeps,1);
+    assert.equal(restored.snapshot().scan_coverage.last_completed_sweep.valid_symbols,191);
+    await restored.stop();
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('worker exposes the exact V5 plus TCN source contract without claiming model readiness',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-contract-'));
   const store=await new DurableStore({dir}).init();

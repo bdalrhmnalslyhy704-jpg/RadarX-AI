@@ -99,6 +99,22 @@ const POLICY = Object.freeze({
   realOrderExecution: false
 });
 
+export function buildAdaptiveTraderCoveragePlan(eligibleCount, scanLimit) {
+  const eligible=Math.max(0,Math.trunc(Number(eligibleCount)||0));
+  const batch=Math.min(eligible,Math.max(0,Math.trunc(Number(scanLimit)||0)));
+  // Half of each bounded batch is reserved for deterministic round-robin
+  // discovery; the other half remains available to event/liquidity priorities.
+  // This gives a finite sweep bound instead of leaving only 15% for rotation.
+  const rotationSlots=batch?Math.min(batch,Math.max(1,Math.ceil(batch/2))):0;
+  return {
+    eligible_symbols:eligible,
+    scan_batch_limit:batch,
+    rotation_slots_per_cycle:rotationSlots,
+    priority_slots_per_cycle:Math.max(0,batch-rotationSlots),
+    estimated_full_sweep_cycles:rotationSlots?Math.ceil(eligible/rotationSlots):0
+  };
+}
+
 const finite = value => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -956,9 +972,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     retrySet.add(clean);
     selectedBySymbol.set(clean,{...row,selection_lane:'RETRY'});
   }
-  const rotationReserve = selectedCount
-    ? Math.min(selectedCount,Math.max(1,Math.ceil(selectedCount*0.15)))
-    : 0;
+  const coveragePlan=buildAdaptiveTraderCoveragePlan(eligible.length,selectedCount);
+  const rotationReserve=coveragePlan.rotation_slots_per_cycle;
   const priorityBudget = Math.max(0,selectedCount-rotationReserve);
   const addLane = (rows,quota,lane) => {
     let added=0;
@@ -1185,6 +1200,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     as_of: new Date(Number(now)).toISOString(),
     universe: {
       quote: 'USDT',
+      eligible_symbols: eligible.map(row=>String(row.symbol||'').toUpperCase()),
       eligible_spot_symbols: eligible.length,
       analyzed_symbols: candidates.length,
       valid_symbols: validCount,
@@ -1206,6 +1222,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       requested_limit: safeLimit,
       scan_offset: scanOffset,
       scan_advance_count: rotationAdvanceCount,
+      rotation_slots_per_cycle:coveragePlan.rotation_slots_per_cycle,
+      priority_slots_per_cycle:coveragePlan.priority_slots_per_cycle,
+      estimated_full_sweep_cycles:coveragePlan.estimated_full_sweep_cycles,
       scan_success_count: analyzed.filter(row=>row?.candidate&&!row.error).length,
       fetch_failed_symbols: fetchFailedSymbols.length,
       retry_symbols_pending: fetchFailedSymbols,
@@ -1220,7 +1239,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       order_book_snapshot_limit:4,
       activity_acceleration_movers_available:activityAccelerationMovers.length,
       activity_acceleration_movers_scanned:candidates.filter(row=>row.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length,
-      selection_strategy: 'MOVER_AWARE_FLOW_ACCELERATION_ROTATION_V4',
+      selection_strategy: 'MOVER_AWARE_FLOW_ACCELERATION_FAIR_ROTATION_V5',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },

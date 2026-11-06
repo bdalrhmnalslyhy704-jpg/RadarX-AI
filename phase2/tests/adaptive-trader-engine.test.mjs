@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
   ADAPTIVE_TRADER_POLICY,
+  buildAdaptiveTraderCoveragePlan,
   scoreAdaptiveTraderCandidate,
   buildAdaptiveTraderHistoricalOutcomeSamples,
   buildAdaptiveTraderClosedCandleOutcomeLabels,
@@ -17,6 +18,18 @@ import {
   advancePaperPortfolio,
   estimatePaperEquity
 } from '../core/adaptive-trader-engine.mjs';
+
+test('fair scan plan reserves half of each bounded batch for complete eligible-universe rotation',()=>{
+  const plan=buildAdaptiveTraderCoveragePlan(192,40);
+  assert.equal(plan.eligible_symbols,192);
+  assert.equal(plan.scan_batch_limit,40);
+  assert.equal(plan.rotation_slots_per_cycle,20);
+  assert.equal(plan.priority_slots_per_cycle,20);
+  assert.equal(plan.estimated_full_sweep_cycles,10);
+  const hostedMaximum=buildAdaptiveTraderCoveragePlan(192,60);
+  assert.equal(hostedMaximum.rotation_slots_per_cycle,30);
+  assert.equal(hostedMaximum.estimated_full_sweep_cycles,7);
+});
 
 function marketFixture({now=Date.now(),change24h=2.3,quoteVolume=5_000_000,currentMove=0.6,lastCloseTime=null}={}) {
   const candles=[];
