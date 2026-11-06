@@ -294,7 +294,8 @@ test('TCN uses the later shared calibration block only when both BTC regimes pro
       if(group>=54)up=index===0;          // untouched holdout: six negatives and one positive per group
       else if(group>=45)up=index<2;       // outer validation: two positives and five negatives per group
       else if(group>=37)up=index<2;       // local calibration: 28 rows per regime, below 30
-      else up=index%2===0;                // training and member-selection blocks
+      else if(group>=24)up=index%2===0;  // member-selection block remains balanced
+      else up=index<2;                    // training has sufficient negative-class support
       const row=sample(group,index,{up});
       row.temporal_sequence=row.temporal_sequence.map(step=>{
         const copy=step.slice();
