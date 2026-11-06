@@ -64,7 +64,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_ANCHORED_SHRUNK_RESIDUAL_TCN_V10');
+  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_ANCHORED_NESTED_SELECTION_CALIBRATION_TCN_V11');
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
@@ -82,10 +82,12 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.shared_model_training_samples,profile.training_samples);
   assert.equal(profile.shared_model_training_max_outcome_resolved_at<profile.shared_model_training_cutoff_at,true,
     'only labels resolved before the shared model training cutoff may enter TCN fitting');
-  assert.equal(profile.shared_model_training_cutoff_at<profile.shared_model_selection_cutoff_at,true,
+  assert.equal(profile.shared_model_training_cutoff_at<profile.shared_model_member_selection_cutoff_at,true,
     'member selection must use rows strictly after the shared TCN training block');
+  assert.equal(profile.shared_model_member_selection_cutoff_at<profile.shared_model_selection_cutoff_at,true,
+    'probability calibration must use a distinct later block after member selection');
   assert.equal(profile.shared_model_selection_cutoff_at,profile.validation_start_at,
-    'reported validation starts after member selection finishes');
+    'reported validation starts after calibration finishes');
   assert.ok(profile.validation.positive_rate_pct>=0&&profile.validation.positive_rate_pct<=100);
   assert.ok(profile.holdout.positive_rate_pct>=0&&profile.holdout.positive_rate_pct<=100);
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
@@ -107,7 +109,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
 
 test('TCN trains and validates an independent expert for each supported BTC regime',()=>{
   const rows=[];
-  for(let group=0;group<16;group++){
+  for(let group=0;group<24;group++){
     for(let index=0;index<24;index++){
       const row=sample(group,index);
       row.temporal_sequence=row.temporal_sequence.map(step=>{
@@ -133,17 +135,20 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(expert.holdout_samples>=20);
   assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at,
     'training labels must resolve before member selection begins');
-  assert.equal(expert.probability_calibration.method,'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1');
-  assert.equal(expert.probability_calibration.fit_on,'REGIME_SELECTION_ONLY');
+  assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
+  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
   assert.equal(expert.probability_calibration.sample_count,expert.selection_calibration_samples,
-    'probability calibration may use only the selected chronological selection block');
-  assert.equal(expert.member_selection_samples,expert.selection_calibration_samples,
-    'member ranking and calibration must use the same selection-only rows');
-  assert.ok(['REGIME_SELECTION_ONLY','POOLED_SELECTION_BLOCK_FALLBACK']
+    'probability calibration may use only the disjoint later calibration block');
+  assert.ok(expert.member_selection_samples>0);
+  assert.ok(expert.selection_calibration_samples>0);
+  assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
+    'member ranking and probability calibration must not reuse the same rows');
+  assert.ok(['REGIME_CALIBRATION_BLOCK','POOLED_CALIBRATION_BLOCK_FALLBACK']
     .includes(expert.probability_calibration.fit_on));
-  assert.equal(profile.calibration_fit_scope,'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY');
-  assert.ok(expert.selection_start_at<expert.validation_start_at,
-    'member selection and reported validation must use disjoint chronological rows');
+  assert.equal(profile.calibration_fit_scope,'REGIME_OR_POOLED_CALIBRATION_BLOCK_ONLY');
+  assert.ok(expert.selection_start_at<expert.calibration_start_at&&
+    expert.calibration_start_at<expert.validation_start_at,
+    'member selection, calibration and reported validation must use three disjoint chronological blocks');
   assert.ok(expert.validation_start_at<profile.holdout_start_at,
     'final holdout must remain strictly later than all fitting and selection data');
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
@@ -182,17 +187,17 @@ test('mature history reserves a broad untouched holdout for both BTC regime expe
   }
 });
 
-test('sparse BTC regime uses pooled chronological selection without leaking validation or holdout rows',()=>{
+test('sparse BTC regime uses pooled member selection and disjoint pooled calibration without leaking later blocks',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     let riskOn=true;
     if(group===15||group===16||group===18||group===20||group===23||group===25||group===27||group===31)riskOn=false;
     for(let index=0;index<12;index++){
       let up;
-      // The current 75%/90% nested split selects groups 17–19. Keep the
-      // local BTC_RISK_ON selection block (groups 17 and 19) without positives,
-      // while group 18 contributes both classes to the pooled fallback.
-      if(group===17||group===19)up=false;
+      // The 60/80/95 nested split uses groups 13–17 for member selection
+      // and groups 18–20 for calibration. Keep local risk-on selection sparse;
+      // risk-off rows supply the pooled member-selection fallback.
+      if(group>=13&&group<=17&&riskOn)up=false;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
       else if(group>=17&&group<=27)up=index<2;
@@ -209,21 +214,29 @@ test('sparse BTC regime uses pooled chronological selection without leaking vali
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,24,
-    'the selected chronological window contains two time groups in this fixture');
-  assert.ok(expert.selection_positive_samples<3,
+  assert.equal(expert.selection_samples,36,
+    'the local risk-on member-selection window spans groups 13–17 for this fixture');
+  assert.equal(expert.selection_positive_samples,0,
     'local selection positives are below the specialist minimum and must use pooled selection');
-  assert.equal(expert.member_selection_source,'POOLED_SELECTION_BLOCK_FALLBACK');
+  assert.equal(expert.member_selection_source,'POOLED_MEMBER_SELECTION_BLOCK_FALLBACK');
   assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
   assert.ok(expert.member_selection_samples>expert.selection_samples);
-  assert.equal(expert.probability_calibration.fit_on,'POOLED_SELECTION_BLOCK_FALLBACK');
+  assert.equal(expert.calibration_samples,12,
+    'the local risk-on calibration window is deliberately too small');
+  assert.equal(expert.calibration_source,'POOLED_CALIBRATION_BLOCK_FALLBACK');
+  assert.equal(expert.probability_calibration.fit_on,'POOLED_CALIBRATION_BLOCK_FALLBACK');
+  assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
   assert.equal(expert.probability_calibration.fitted,true,
-    'three selection-block positives are enough for strongly shrunk two-parameter calibration');
-  assert.ok(expert.probability_calibration.positive_count>=3,
+    'the separate pooled calibration block has enough positive and negative support');
+  assert.ok(expert.probability_calibration.positive_count>=5,
     'pooled fallback must contain the minimum positive-class support');
-  assert.ok(expert.probability_calibration.negative_count>=10,
+  assert.ok(expert.probability_calibration.negative_count>=20,
     'pooled fallback must contain the minimum negative-class support');
-  assert.equal(expert.probability_calibration.sample_count,expert.member_selection_samples);
+  assert.equal(expert.probability_calibration.sample_count,expert.calibration_selection_samples);
+  assert.notEqual(expert.probability_calibration.sample_count,expert.member_selection_samples);
+  assert.ok(expert.selection_start_at<expert.calibration_start_at&&
+    expert.calibration_start_at<expert.validation_start_at,
+    'member selection, calibration and validation must use disjoint chronological blocks');
   assert.ok(expert.validation_samples>=24);
   assert.ok(expert.holdout_samples>=20);
   assert.ok(expert.validation_start_at<profile.holdout_start_at);
