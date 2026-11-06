@@ -64,7 +64,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V8');
+  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V9');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
@@ -164,8 +164,10 @@ test('mature history reserves a broad untouched holdout for both BTC regime expe
   }
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.trained,true);
-  assert.ok(profile.holdout_samples>=Math.ceil(rows.length*0.40),
-    'mature history must reserve a sufficiently broad untouched holdout');
+  assert.ok(profile.holdout_samples>=Math.max(300,Math.ceil(rows.length*0.25)),
+    'mature history must retain at least twice the live holdout floor and 25% untouched samples');
+  assert.ok(profile.shared_model_training_samples>=600,
+    'the bounded holdout must leave a larger purged chronological block for temporal fitting');
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const expert=profile.regime_specialists[regime];
