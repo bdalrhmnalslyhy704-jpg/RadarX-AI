@@ -131,6 +131,9 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.equal(expert.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALIST');
+  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
+  assert.equal(profile.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS');
+  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
   assert.ok(expert.training_samples>=80);
@@ -141,6 +144,11 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'training labels must resolve before member selection begins');
   assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
   assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
+  assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
+  assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
+  assert.equal(expert.neural_residual_contributes,expert.selected_residual_scale>0);
+  assert.equal(expert.logistic_probability_calibration.fitted,true);
+  assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples);
   assert.equal(expert.probability_calibration.sample_count,expert.selection_calibration_samples,
     'probability calibration may use only the disjoint later calibration block');
   assert.ok(expert.member_selection_samples>0);
@@ -290,6 +298,9 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
+  assert.ok(containerWorkflow.includes("training_strategy==='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'"));
+  assert.ok(containerWorkflow.includes('neural_residual_contributes===true'));
+  assert.ok(workflow.includes('temporalNeuralContributionSafe'));
 });
 
 
