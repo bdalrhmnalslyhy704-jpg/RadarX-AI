@@ -778,7 +778,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     }):null;
   const sharedCalibrationRows=fitRows.filter(row=>
     row.at>=sharedMemberSelectionCutoffAt&&row.at<sharedSelectionCutoffAt&&
-    row.resolved_at<sharedSelectionCutoffAt&&regimeBaselines[regimeOfSequence(row.sequence)])
+    row.resolved_at<sharedSelectionCutoffAt)
     .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
   // Each BTC regime gets its own three-member TCN trained only on that regime's
   // purged training block. The two specialists share cutoffs and tensor schema,
@@ -811,7 +811,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const sharedCalibrationTargets=calibrationSupport(sharedCalibrationRows);
   const sharedMemberSelectionRows=fitRows.filter(row=>
     row.at>=sharedTrainingCutoffAt&&row.at<sharedMemberSelectionCutoffAt&&
-    row.resolved_at<sharedMemberSelectionCutoffAt&&regimeBaselines[regimeOfSequence(row.sequence)])
+    row.resolved_at<sharedMemberSelectionCutoffAt)
     .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
   const sharedMemberSelectionTargets=calibrationSupport(sharedMemberSelectionRows);
   const sharedMemberSelectionSupported=sharedMemberSelectionTargets.samples>=minSelectionSamples&&
@@ -962,7 +962,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibrationRows,
       sequence=>{
         const anchor=regimeBaselines[regimeOfSequence(sequence)];
-        return predictLogistic(sequence,anchor||regimeBaseline);
+        return predictLogistic(sequence,anchor||pooledBaseline);
       },
       {minimumSamples:30,minimumPositive:5,minimumNegative:20,
        iterations:300,learningRate:0.03,regularization:0.45,

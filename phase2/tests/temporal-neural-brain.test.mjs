@@ -254,6 +254,7 @@ test('sparse BTC regime may use shared member selection but still fails closed w
       if(group>=12&&group<=17&&riskOn)up=false;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
+      else if(riskOn&&[22,24,26].includes(group))up=false; // force a genuine local validation support gap
       else if(group>=17&&group<=27)up=index<2;
       else up=index<2;
       const row=sample(group,index,{up});
@@ -275,15 +276,18 @@ test('sparse BTC regime may use shared member selection but still fails closed w
     'the shared residual is selected only from the pooled, strictly later member-selection block');
   assert.equal(expert.local_calibration_samples,24);
   assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
-  assert.ok(expert.calibration_samples<30,
-    'the pooled calibration fallback must remain unavailable when the opposite regime has no fitted anchor');
-  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
-    'insufficient shared calibration support must remain an explicit gate');
+  assert.ok(expert.calibration_samples>=30,
+    'the shared calibration fallback must include later matured rows from both market regimes');
+  assert.ok(expert.calibration_targets.positive>=5&&expert.calibration_targets.negative>=20,
+    'pooled calibration fallback must preserve both class-support minimums');
+  assert.ok(expert.support_gaps.includes('VALIDATION_POSITIVE_CLASS'),
+    'the specialist remains unavailable because its own later validation block lacks positive outcomes');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
-  assert.equal(profile.probability_ready,false,
-    'shared member selection cannot bypass the separate calibration, validation or untouched-holdout gates');
+  assert.equal(expert.selected,false);
+  assert.equal(expert.probability_ready,false,
+    'a regime with unsupported validation outcomes must not publish a temporal probability');
   assert.equal(profile.live_eligibility_ready,false);
 });
 
