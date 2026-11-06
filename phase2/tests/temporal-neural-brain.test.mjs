@@ -89,11 +89,12 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }));
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15');
   assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
+  assert.equal(profile.member_selection_method,'SHARED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.shared_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
-  assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
+  assert.equal(profile.residual_scale_selection,'SHARED_SHARED_TCN_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
   assert.equal(profile.member_training_profiles.length,3);
@@ -154,7 +155,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.equal(expert.model_scope,'SHARED_TCN_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHOR');
-  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15');
   assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
@@ -167,7 +168,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'training labels must resolve before member selection begins');
   assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
   assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
-  assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
+  assert.equal(expert.member_selection_source,'SHARED_TCN_MEMBER_SELECTION_BLOCK');
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
   assert.equal(expert.neural_residual_contributes,expert.selected_residual_scale>0);
   assert.equal(expert.logistic_probability_calibration.fitted,true);
@@ -185,7 +186,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
   assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
   assert.equal(profile.calibration_fit_scope,'REGIME_OR_SHARED_CALIBRATION_BLOCK_ONLY');
-  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15');
   assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
   assert.ok(expert.selection_start_at<expert.calibration_start_at&&
     expert.calibration_start_at<expert.validation_start_at,
@@ -267,9 +268,9 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,48);
+  assert.equal(expert.local_selection_samples,48);
   assert.equal(expert.selection_positive_samples,0);
-  assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
+  assert.equal(expert.member_selection_source,'SHARED_TCN_MEMBER_SELECTION_BLOCK');
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
   assert.equal(expert.local_calibration_samples,24);
   assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
@@ -366,7 +367,7 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
-  assert.ok(containerWorkflow.includes("training_strategy==='SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14'"));
+  assert.ok(containerWorkflow.includes("training_strategy==='SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15'"));
   assert.ok(containerWorkflow.includes('neural_residual_contributes===true'));
   assert.ok(workflow.includes('temporalNeuralContributionSafe'));
 });

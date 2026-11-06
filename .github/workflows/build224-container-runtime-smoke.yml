@@ -179,7 +179,7 @@ jobs:
           const summary=x.last_summary||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V6'||
              temporalNetwork.architecture!=='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'||
-             temporalNetwork.training_strategy!=='SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14'||
+             temporalNetwork.training_strategy!=='SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15'||
              temporalNetwork.model_scope!=='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'||
              temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
              temporalNetwork.temporal_label_resolution!=='15M_ONLY'){
@@ -201,7 +201,7 @@ jobs:
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
             temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-            temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14'&&
+            temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15'&&
             temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
             temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
