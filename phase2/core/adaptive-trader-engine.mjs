@@ -1036,10 +1036,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return counts;
   },{});
 
-  // Keep 5m REST history bounded to two pages for every selected symbol.
-  // TCN V6 carries an explicit micro-availability mask and learns from valid
-  // closed 15m/BTC history when older 5m bars are absent. Re-fetching 21 days of
-  // 5m bars added dozens of REST calls and repeatedly exhausted the live budget.
+  // Keep one recent 5m page per selected symbol. This is enough for short-term
+  // flow diagnostics; the explicit micro-availability mask keeps older samples
+  // valid when 5m history is absent. The broader 15m/BTC pages remain the primary
+  // historical training source, avoiding one extra REST request per pair.
   const pendingBySymbol=new Map();
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     const symbol=String(sample?.symbol||'').trim().toUpperCase();
@@ -1069,42 +1069,15 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
         }
       }
     }
-    let fastResult=fastLatest;
-    if(fastLatest.value&&Array.isArray(fastLatest.value.data)&&fastLatest.value.data.length){
-      const latestRows=fastLatest.value.data;
-      let allRows=latestRows.slice();
-      let pagesFetched=1;
-      let nextEndTime=Number(latestRows[0]?.[0])-1;
-      let backfillError=null;
-      const maxPages=2;
-      while(Number.isFinite(nextEndTime)&&nextEndTime>0&&pagesFetched<maxPages){
-        try{
-          const older=await rest.request('/api/v3/klines',{
-            symbol:ticker.symbol,interval:'5m',limit:1000,endTime:nextEndTime
-          });
-          const olderRows=Array.isArray(older?.data)?older.data:[];
-          const olderEarliest=Number(olderRows[0]?.[0]);
-          const currentEarliest=Number(allRows[0]?.[0]);
-          if(!olderRows.length||!Number.isFinite(olderEarliest)||
-             !Number.isFinite(currentEarliest)||olderEarliest>=currentEarliest)break;
-          const strictOlder=olderRows.filter(row=>Number(row?.[0])<currentEarliest);
-          if(!strictOlder.length)break;
-          allRows=[...strictOlder,...allRows];
-          pagesFetched++;
-          nextEndTime=olderEarliest-1;
-          if(olderRows.length<1000)break;
-        }catch(error){
-          backfillError=String(error?.message??error).slice(0,120);
-          break;
-        }
-      }
-      fastResult={value:{
-        ...fastLatest.value,data:allRows,
-        historical_pages_fetched:pagesFetched,
-        historical_window_candles:allRows.length,
-        historical_backfill_error:backfillError
-      },error:null};
-    }
+    const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
+      ?{value:{
+          ...fastLatest.value,
+          data:fastLatest.value.data.slice(),
+          historical_pages_fetched:1,
+          historical_window_candles:fastLatest.value.data.length,
+          historical_backfill_error:null
+        },error:null}
+      :fastLatest;
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:118
@@ -1119,7 +1092,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
       asset_5m_candles:Array.isArray(fastResult.value?.data)?fastResult.value.data.length:0,
-      asset_5m_backfill_error:String(fastResult.value?.historical_backfill_error||'')
+      asset_5m_backfill_error:String(fastResult.value?.historical_backfill_error||fastResult.error||'')
     }};
   });
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
