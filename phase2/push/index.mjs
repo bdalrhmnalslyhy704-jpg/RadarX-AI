@@ -78,7 +78,7 @@ export class FcmPushProvider extends PushProvider{
       const title=String(payload?.title||((payload?.radar_name||'RadarX')+' • '+(payload?.symbol||'تنبيه'))).slice(0,120);
       const body=String(payload?.message||[payload?.symbol,payload?.event||payload?.potential_label||payload?.type].filter(Boolean).join(' • ')||'تنبيه جديد من RadarX').slice(0,220);
       const data={};
-      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','low_volume_watch_only','asset_class','tokenized_security','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','micro_data_validated','liquidity_evidence_status','quote_volume_24h','low_liquidity_burst_bypass','detected_candle_close_time','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
+      for(const key of ['type','event_class','event','notification_mode','notification_gate_mode','notification_gate_eligible','signal_type','watch_only','entry_eligible','requires_follow_up_confirmation','watch_notification_tier','low_volume_watch_only','asset_class','tokenized_security','closed_candles_only','data_valid','data_stale','future_data_detected','data_quality','liquidity_quality','radar','radar_name','symbol','market','direction','price','price_change_24h','opportunity_score','potential_label','risk_flags','reason_codes','early_warning_score','early_warning_mode','early_warning_reason_codes','early_flow_watch_evidence','ticker_activity_watch_evidence','micro_data_validated','liquidity_evidence_status','quote_volume_24h','low_liquidity_burst_bypass','detected_candle_close_time','signal_lifecycle_state','signal_lifecycle_label','signal_lifecycle_transition','signal_lifecycle_reason_codes','detected_at','detected_at_iso','detected_time_12h','detected_timezone','sent_at','sent_at_iso','sent_timezone','server_processed_at','signal_id','source','test_id','event_id','paper_trading','real_order_execution','confidence_score']){
         const value=payload?.[key];
         if(value!==undefined&&value!==null)data[key]=(Array.isArray(value)?value.map(String).join(','):typeof value==='object'?JSON.stringify(value):String(value)).slice(0,500);
       }
@@ -730,6 +730,31 @@ export class PushManager{
         return rejected('STRONG_MOVE_WATCH_ANTI_CHASE_OR_SCORE_GATE');
       if(!flow||!activity||!structure||confirmations<4)
         return rejected('STRONG_MOVE_WATCH_CONFLUENCE_INSUFFICIENT');
+      const early=alert?.early_warning||{};
+      const timing=early?.timing||{};
+      const flowEvidence=early?.flow_evidence||{};
+      const closed3s=flowEvidence.three_second_bucket_available===true&&
+        firstFinite([flowEvidence.taker_buy_ratio_3s])!==null&&
+        Number(flowEvidence.taker_buy_ratio_3s)>0.70;
+      const exceptionalFallback=early.fallback_3s_flow===true&&
+        firstFinite([flowEvidence.taker_buy_ratio_1m_3m])!==null&&
+        Number(flowEvidence.taker_buy_ratio_1m_3m)>=0.90;
+      const sourceAge=firstFinite([timing.source_data_age_ms]);
+      const earlyScore=firstFinite([early.score]),earlyMinimum=firstFinite([early.min_score]);
+      const turnover=firstFinite([alert?.quote_volume_24h]);
+      const sourceClose=firstFinite([alert?.source_candle_close_at,alert?.source_event_at]);
+      const currentAge=sourceClose===null?null:now-sourceClose;
+      const dynamicEarlyWarningQualified=
+        early.eligible===true&&early.mode==='DYNAMIC_EARLY_WARNING'&&
+        earlyScore!==null&&earlyMinimum!==null&&earlyScore>=earlyMinimum&&
+        sourceAge!==null&&sourceAge>=0&&sourceAge<=90_000&&
+        currentAge!==null&&currentAge>=0&&currentAge<=90_000&&
+        (closed3s||exceptionalFallback)&&
+        turnover!==null&&turnover>=750_000&&
+        alert?.paper_trading===true&&alert?.real_order_execution===false;
+      if(early.eligible===true&&!dynamicEarlyWarningQualified)
+        return rejected('STRONG_MOVE_DYNAMIC_EARLY_WARNING_EVIDENCE_INVALID');
+      alert.qualified_dynamic_early_warning=dynamicEarlyWarningQualified;
     }else if(event==='EARLY_FLOW_WATCH_ONLY'){
       const dailyMove=firstFinite([alert?.price_change_24h]);
       if(dailyMove===null||Math.abs(dailyMove)>=18)
@@ -844,10 +869,18 @@ export class PushManager{
       alert?.real_order_execution===false&&alert?.low_liquidity_burst_bypass!==true&&
       alert?.liquidity_evidence_status==='ORDER_BOOK_NOT_CHECKED_AT_MICRO_STAGE'&&
       quoteVolume24h!==null&&quoteVolume24h>=750000;
-    const monitorNotificationMode=isQualifiedRadarEarlyTrackPush
-      ?'RADAR_EARLY_TRACK_WATCH_ONLY'
-      :isQualifiedMicroEarlyFlowPush?'EARLY_FLOW_MICRO_WATCH_ONLY':'PRE_MOVE_WATCH_ONLY';
-    if(!isQualifiedPreMovePush&&!isQualifiedRadarEarlyTrackPush&&!isQualifiedMicroEarlyFlowPush){
+    const isQualifiedStrongMoveDynamicEarlyPush=
+      event==='STRONG_MOVE_WATCH_ONLY'&&alert?.radar==='STRONG_MOVE_RADAR'&&
+      alert?.qualified_dynamic_early_warning===true&&alert?.early_warning?.eligible===true&&
+      alert?.watch_only===true&&alert?.entry_eligible===false&&
+      alert?.paper_trading===true&&alert?.real_order_execution===false;
+    const monitorNotificationMode=isQualifiedStrongMoveDynamicEarlyPush
+      ?'STRONG_MOVE_DYNAMIC_EARLY_WARNING_WATCH_ONLY'
+      :isQualifiedRadarEarlyTrackPush
+        ?'RADAR_EARLY_TRACK_WATCH_ONLY'
+        :isQualifiedMicroEarlyFlowPush?'EARLY_FLOW_MICRO_WATCH_ONLY':'PRE_MOVE_WATCH_ONLY';
+    if(!isQualifiedPreMovePush&&!isQualifiedRadarEarlyTrackPush&&!isQualifiedMicroEarlyFlowPush&&
+       !isQualifiedStrongMoveDynamicEarlyPush){
       const notifications=[];
       for(const sub of recipients){
         const audit={
@@ -922,8 +955,11 @@ export class PushManager{
       push.price_change_24h=firstFinite([alert?.price_change_24h]);
       push.watch_only=true;
       push.entry_eligible=false;
-      if(isQualifiedRadarEarlyTrackPush||isQualifiedMicroEarlyFlowPush)push.data_valid=true;
+      if(isQualifiedRadarEarlyTrackPush||isQualifiedMicroEarlyFlowPush||isQualifiedStrongMoveDynamicEarlyPush)push.data_valid=true;
       push.watch_notification_tier=alert?.watch_notification_tier||null;
+      push.early_warning_score=alert?.early_warning_score??null;
+      push.early_warning_mode=alert?.early_warning_mode??null;
+      push.early_warning_reason_codes=alert?.early_warning_reason_codes??[];
       push.low_volume_watch_only=alert?.low_volume_watch_only===true;
       push.asset_class=alert?.asset_class==='TOKENIZED_SECURITY'?'TOKENIZED_SECURITY':'CRYPTO';
       push.tokenized_security=push.asset_class==='TOKENIZED_SECURITY';
@@ -931,9 +967,11 @@ export class PushManager{
       push.title=(isQualifiedRadarEarlyTrackPush||isQualifiedMicroEarlyFlowPush?radarTitle(alert):'RadarX')+
         (push.tokenized_security?' • bStocks':'')+' • مراقبة مبكرة • '+symbol;
       push.message=[push.tokenized_security?'أصل مُرمّز من فئة bStocks':symbol,
-        isQualifiedMicroEarlyFlowPush
-          ?'تسارع مرصود في شموع 1m/5m؛ دفتر الأوامر لم يُفحص بعد — مراقبة فقط، لا دخول'
-          :alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
+        isQualifiedStrongMoveDynamicEarlyPush
+          ?'تدفق شراء مبكر قوي مؤكد في نافذة 3 ثوانٍ وبيانات Spot مغلقة — مراقبة فقط، لا دخول'
+          :isQualifiedMicroEarlyFlowPush
+            ?'تسارع مرصود في شموع 1m/5m؛ دفتر الأوامر لم يُفحص بعد — مراقبة فقط، لا دخول'
+            :alert?.watch_notification_tier==='TICKER_ACTIVITY_ACCELERATION_MONITOR'
           ?'تسارع موثق في الحجم والصفقات وضغط الشراء — مراقبة فقط، لا دخول'
           :alert?.watch_notification_tier==='PARTICIPATION_SURGE_MONITOR'
             ?'تسارع المشاركة والحجم والصفقات مع دلائل شراء — مراقبة مبكرة فقط، لا دخول'

@@ -434,7 +434,63 @@ test('TEST_FIXTURE: evidence-gated Strong Move near miss sends only a WATCH_ONLY
 
     await rm(dir,{recursive:true,force:true});
 
-});test('TEST_FIXTURE: Strong Move watch-only validator rejects missing buyer-flow evidence',async()=>{
+});test('TEST_FIXTURE: only a complete fresh dynamic 3s Strong Move warning can reach the phone as WATCH_ONLY',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-dynamic-strong-move-push-'));
+  const store=await new DurableStore({dir}).init();
+  try{
+    await store.putUserSettings('u1',{...defaultSettings(),enabled:true,minDataQuality:70,minLiquidityQuality:60});
+    await store.upsertSubscription('u1',pushSubscription());
+    const sent=[],audits=[];
+    const provider={status:()=>({provider:'TEST_FIXTURE',enabled:true}),async send(sub,payload){
+      sent.push(payload);return{ok:true,status:'SENT',httpStatus:201};
+    }};
+    const original=store.appendNotificationAudit.bind(store);
+    store.appendNotificationAudit=async row=>{audits.push(row);return original(row);};
+    const manager=new PushManager({provider,store});
+    const now=Date.now(),closeAt=now-12_000;
+    const alert={
+      id:'STRONG_MOVE_WATCH_ONLY:DYNAMICUSDT:'+closeAt,
+      event:'STRONG_MOVE_WATCH_ONLY',radar:'STRONG_MOVE_RADAR',radar_name:'Radar 2 — Strong-Move',
+      symbol:'DYNAMICUSDT',market:'SPOT',direction:'UP_SURGE',price:1.2,price_change_24h:4.2,
+      opportunity_score:91,quote_volume_24h:8_000_000,data_quality:90,liquidity_quality:86,
+      source:'Binance Public REST',source_candle_close_at:closeAt,source_event_at:closeAt,
+      detected_at:now,processed_at:now,detected_candle_close_time:closeAt,closed_candles_only:true,
+      data_quality:90,data_stale:false,data_status:{status:'LIVE_DATA',stale:false,data_stale:false,
+        data_valid:true,future_data_detected:false,data_quality:90,source:'Binance Public REST'},
+      watch_only:true,entry_eligible:false,eligible:false,paper_trading:true,real_order_execution:false,
+      confidence_score:'UNKNOWN',risk_flags:[],
+      early_warning_score:84,early_warning_mode:'DYNAMIC_EARLY_WARNING',early_warning_reason_codes:[],
+      early_warning:{
+        eligible:true,mode:'DYNAMIC_EARLY_WARNING',score:84,min_score:77.5,fallback_3s_flow:false,
+        timing:{source_data_age_ms:12_000,source_candle_close_at:closeAt,decision_at:now},
+        flow_evidence:{three_second_bucket_available:true,taker_buy_ratio_3s:0.82,taker_buy_ratio_1m_3m:0.84}
+      },
+      strong_move:{eligible:false,watch_only:true,entry_eligible:false,closed_candles_only:true,
+        score:91,data_quality:90,data_stale:false,metrics:{
+          return_1m:0.5,return_3m:0.9,volume_ratio:6,trade_ratio:4.8,
+          taker_buy_ratio:0.84,taker_buy_delta:0.2,close_location_pct:80,
+          breakout_up:true,micro_breakout:true
+        }}
+    };
+    const out=await manager.notifyRadarWatchOnlyAlert(alert);
+    assert.equal(out.status,'SENT',JSON.stringify(out));
+    assert.equal(out.sent_count,1);
+    assert.equal(sent.length,1);
+    assert.equal(sent[0].direction,'NONE');
+    assert.equal(sent[0].signal_type,'WATCH_ONLY');
+    assert.equal(sent[0].watch_only,true);
+    assert.equal(sent[0].entry_eligible,false);
+    assert.equal(sent[0].notification_mode,'STRONG_MOVE_DYNAMIC_EARLY_WARNING_WATCH_ONLY');
+    assert.equal(sent[0].real_order_execution,'false');
+    assert.ok(audits.some(row=>row.status==='SENT'&&row.watch_only===true));
+    const weak={...alert,early_warning:{...alert.early_warning,eligible:false}};
+    const rejected=await manager.notifyRadarWatchOnlyAlert({...weak,id:'STRONG_MOVE_WATCH_ONLY:DYNAMIC2:'+closeAt,
+      symbol:'DYNAMIC2USDT',source_candle_close_at:closeAt,source_event_at:closeAt});
+    assert.equal(rejected.status,'WATCH_ONLY_FEED_ONLY');
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('TEST_FIXTURE: Strong Move watch-only validator rejects missing buyer-flow evidence',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-phase2-strong-move-watch-invalid-')),store=await new DurableStore({dir}).init();
   await store.putUserSettings('u1',{...defaultSettings(),enabled:true});
   await store.upsertSubscription('u1',pushSubscription());

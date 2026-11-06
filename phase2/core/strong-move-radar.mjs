@@ -2,6 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {evaluateDynamicEarlyWarningGate} from './dynamic-early-warning-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
@@ -335,6 +336,7 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,{
       three_second_taker_buy_ratio:threeSecondLiquidity.taker_buy_ratio,
       three_second_liquidity:threeSecondLiquidity,
       micro_breakout:microBreak,close_location_pct:closeLocation,
+      closed_1m_candle_close_time_ms:Number.isFinite(Number(last.closeTime))?Number(last.closeTime):null,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
       breakout_distance_down_pct:breakoutDistanceDown,ema9,ema21,ema55,vwap,vwap_distance_pct:vwapDistance,
@@ -386,6 +388,8 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
     failed_checks:threeSecondFailures
   };
   const ticker=candidate.ticker||{};
+  const sourceCandleCloseAt=strictFinite(a.metrics?.closed_1m_candle_close_time_ms);
+  a.source_candle_close_at=sourceCandleCloseAt;
   return {
     id:'STRONG:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+a.direction+':'+now,
     event:'STRONG_MOVE_ALERT',
@@ -406,6 +410,8 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
       (a.component_scores?.range??0)>90?'VOLATILITY_EXTREME':null
     ].filter(Boolean),
     source:a.source,
+    source_candle_close_at:sourceCandleCloseAt,
+    source_event_at:sourceCandleCloseAt,
     detected_at:now,
     processed_at:now,
     paper_trading:true,
@@ -654,10 +660,13 @@ export class StrongMoveRadar {
     this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:0,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      emergencyAlertCooldownMs:5*60*1000,watchOnlyCooldownMs:10*60*1000,minScore:76, ...config
+      emergencyAlertCooldownMs:5*60*1000,watchOnlyCooldownMs:10*60*1000,
+      dynamicEarlyWarningCooldownMs:30*60*1000,minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
+    this.lastDynamicEarlyWarningAt=new Map();this.dynamicEarlyWarningQualifiedCount=0;
+    this.dynamicEarlyWarningPushAttemptCount=0;
     this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
     this.lastWatchOnlyCandleAt=new Map();this.lastWatchOnlyAt=new Map();this.watchOnlyAlertCount=0;
     this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;this.busySinceAt=null;
@@ -844,6 +853,17 @@ export class StrongMoveRadar {
       ...(alertScore<this.config.minScore?['SCORE_BELOW_STRICT_THRESHOLD']:[]),
       ...(!gate.eligible?(Array.isArray(gate.failures)?gate.failures:['ELITE_GATE_NOT_ELIGIBLE']):[])
     ];
+    const earlyWarning=evaluateDynamicEarlyWarningGate(alert,row,{
+      now:this.clock(),alertScore,
+      minQuoteVolume24h:Math.max(750_000,Number(this.config.minQuoteVolume24h)||0),
+      strictFailures:strictBlockers,
+      coreTriggerFailures:Array.isArray(a.trigger_diagnostics?.failed_checks)
+        ?a.trigger_diagnostics.failed_checks:[],
+      lastAlertAt:Number(this.lastDynamicEarlyWarningAt.get(row.symbol)||0),
+      earlyCooldownMs:Math.max(30*60*1000,Number(this.config.dynamicEarlyWarningCooldownMs)||0)
+    });
+    alert.early_warning=earlyWarning;
+    if(earlyWarning.eligible===true)this.dynamicEarlyWarningQualifiedCount++;
     if(alert.eligible&&alertScore>=this.config.minScore&&gate.eligible){
       const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
       alert.notification_gate=notificationGate;
@@ -868,6 +888,13 @@ export class StrongMoveRadar {
       strictFailures:strictBlockers
     });
     if(!watchOnly)return alert;
+    watchOnly.early_warning=earlyWarning;
+    watchOnly.early_warning_score=Number(earlyWarning.score)||0;
+    watchOnly.early_warning_mode=earlyWarning.mode;
+    watchOnly.early_warning_reason_codes=[...earlyWarning.failures];
+    watchOnly.watch_notification_tier=earlyWarning.eligible===true?'DYNAMIC_EARLY_WARNING':'WATCH_ONLY_REVIEW';
+    watchOnly.source_candle_close_at=alert.source_candle_close_at;
+    watchOnly.strong_move.early_warning=earlyWarning;
     const closeAt=Number(watchOnly.detected_candle_close_time);
     if(Number(this.lastWatchOnlyCandleAt.get(row.symbol)||0)===closeAt)
       return {...watchOnly,watch_only_deduplicated:true};
@@ -883,18 +910,36 @@ export class StrongMoveRadar {
     this.lastWatchOnlyCandleAt.set(row.symbol,closeAt);
     this.lastWatchOnlyAt.set(row.symbol,now);
     this.watchOnlyAlertCount++;
-    if(this.pushManager?.notifyRadarWatchOnlyAlert){
-      try{
-        const result=await this.pushManager.notifyRadarWatchOnlyAlert(decoratedWatch);
-        this.logger.info?.('[STRONG_MOVE_WATCH_ONLY_RESULT] '+JSON.stringify({
-          symbol:row.symbol,status:String(result?.status||'UNKNOWN'),
-          attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
-          reason:result?.reason||null,watch_only:true,entry_eligible:false
+    if(this.pushManager?.notifyRadarWatchOnlyAlert&&earlyWarning.eligible===true){
+      const dynamicCooldown=Math.max(30*60*1000,Number(this.config.dynamicEarlyWarningCooldownMs)||0);
+      const lastDynamic=Number(this.lastDynamicEarlyWarningAt.get(row.symbol)||0);
+      if(now-lastDynamic>=dynamicCooldown){
+        // Reserve before the provider call so concurrent scans cannot duplicate a phone watch.
+        this.lastDynamicEarlyWarningAt.set(row.symbol,now);
+        this.dynamicEarlyWarningPushAttemptCount++;
+        try{
+          const result=await this.pushManager.notifyRadarWatchOnlyAlert(decoratedWatch);
+          this.logger.info?.('[STRONG_MOVE_DYNAMIC_EARLY_WARNING_RESULT] '+JSON.stringify({
+            symbol:row.symbol,status:String(result?.status||'UNKNOWN'),
+            attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+            reason:result?.reason||null,watch_only:true,entry_eligible:false,
+            score:earlyWarning.score,source_age_ms:earlyWarning.timing?.source_data_age_ms
+          }));
+        }catch(error){
+          this.lastError=String(error?.message??error);
+          this.logger.warn?.('STRONG_MOVE_DYNAMIC_EARLY_WARNING_PUSH',this.lastError);
+        }
+      }else{
+        this.logger.info?.('[STRONG_MOVE_DYNAMIC_EARLY_WARNING_SUPPRESSED] '+JSON.stringify({
+          symbol:row.symbol,reason:'THIRTY_MINUTE_SYMBOL_COOLDOWN',
+          retry_after_ms:Math.max(0,dynamicCooldown-(now-lastDynamic)),watch_only:true
         }));
-      }catch(error){
-        this.lastError=String(error?.message??error);
-        this.logger.warn?.('STRONG_MOVE_WATCH_ONLY_PUSH',this.lastError);
       }
+    }else if(earlyWarning.eligible!==true){
+      this.logger.info?.('[STRONG_MOVE_WATCH_ONLY_FEED] '+JSON.stringify({
+        symbol:row.symbol,score:earlyWarning.score,
+        failures:earlyWarning.failures.slice(0,12),watch_only:true,entry_eligible:false
+      }));
     }
     return decoratedWatch;
   }
@@ -927,6 +972,8 @@ export class StrongMoveRadar {
       alerts_emitted:this.alertCount,
       emergency_alerts_emitted:this.emergencyAlertCount,
       watch_only_alerts_emitted:this.watchOnlyAlertCount,
+      dynamic_early_warning_qualified:this.dynamicEarlyWarningQualifiedCount,
+      dynamic_early_warning_push_attempts:this.dynamicEarlyWarningPushAttemptCount,
       emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,

@@ -275,6 +275,69 @@ assert.ok(fiveMinuteGap.reason_codes.includes('FIVE_MINUTE_CLOSED_CANDLE_GAP'));
 console.log('Strong Move Radar tests passed');
 
 
+test('live Strong Move stores every near miss but sends a phone WATCH_ONLY only after the completed 3s dynamic gate passes',async()=>{
+  const rows=make1m().map(row=>({...row}));
+  for(const row of rows.slice(-3))row.takerBuyBaseVolume=490_000;
+  const five=make5m();
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  const trades=[
+    {a:1,T:bucketEnd-2500,p:'1',q:'8',m:false},
+    {a:2,T:bucketEnd-900,p:'1',q:'2',m:true}
+  ];
+  const stored=[],pushed=[],strict=[];
+  const radar=new StrongMoveRadar({
+    rest:{
+      klines:async(_symbol,interval)=>({candles:interval==='1m'?rows:five,source:'TEST'}),
+      request:async()=>({data:trades})
+    },
+    store:{appendStrongMoveAlert:async value=>stored.push(value)},
+    pushManager:{
+      notifyRadarAlert:async value=>strict.push(value),
+      notifyRadarWatchOnlyAlert:async value=>{pushed.push(value);return{status:'SENT',attempted:true,sent_count:1};}
+    },
+    config:{pollMs:15_000,minScore:101,watchOnlyCooldownMs:60_000,dynamicEarlyWarningCooldownMs:30*60_000},
+    clock:()=>NOW,logger:{info(){},warn(){}}
+  });
+  const result=await radar.scanRow({...ticker,priceChange24h:4.2,quoteVolume24h:8_000_000});
+  assert.equal(result.event,'STRONG_MOVE_WATCH_ONLY');
+  assert.equal(result.early_warning?.eligible,true,JSON.stringify(result.early_warning?.failures));
+  assert.equal(result.watch_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(stored.length,1);
+  assert.equal(pushed.length,1);
+  assert.equal(strict.length,0,'the early lane must never use the strict market-push route');
+  assert.equal(pushed[0].early_warning_mode,'DYNAMIC_EARLY_WARNING');
+  assert.equal(pushed[0].real_order_execution,false);
+  assert.equal(radar.health().dynamic_early_warning_push_attempts,1);
+});
+
+test('live Strong Move does not phone-push partial, empty or seller-dominated 3s buckets',async()=>{
+  for(const tradeRows of [
+    [],
+    [{a:1,T:Math.floor(NOW/3000)*3000-2500,p:'1',q:'1',m:false},
+     {a:2,T:Math.floor(NOW/3000)*3000-900,p:'1',q:'9',m:true}]
+  ]){
+    const rows=make1m().map(row=>({...row}));
+    for(const row of rows.slice(-3))row.takerBuyBaseVolume=490_000;
+    const stored=[],pushed=[];
+    const radar=new StrongMoveRadar({
+      rest:{
+        klines:async(_symbol,interval)=>({candles:interval==='1m'?rows:make5m(),source:'TEST'}),
+        request:async()=>({data:tradeRows})
+      },
+      store:{appendStrongMoveAlert:async value=>stored.push(value)},
+      pushManager:{notifyRadarWatchOnlyAlert:async value=>{pushed.push(value);return{status:'SENT',sent_count:1};}},
+      config:{pollMs:15_000,minScore:101,watchOnlyCooldownMs:60_000},
+      clock:()=>NOW,logger:{info(){},warn(){}}
+    });
+    const result=await radar.scanRow({...ticker,priceChange24h:4.2,quoteVolume24h:8_000_000});
+    assert.equal(result.event,'STRONG_MOVE_WATCH_ONLY');
+    assert.equal(result.early_warning?.eligible,false);
+    assert.equal(stored.length,1,'near miss remains visible in the local radar feed');
+    assert.equal(pushed.length,0,'incomplete or weak 3s evidence must not create a phone notification');
+  }
+});
+
 test('near-miss strong-move observations use the separate watch-only lane without lowering strict eligibility',()=>{
   const now=Date.now(),closeAt=now-15_000;
   const alert={
