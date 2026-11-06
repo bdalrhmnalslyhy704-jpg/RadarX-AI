@@ -8,7 +8,7 @@
  * baseline. This module is analysis-only.
  */
 export const TEMPORAL_TARGET_DEFINITION =
-  'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2';
+  'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS=29;
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6';
@@ -51,7 +51,7 @@ function cleanRows(samples) {
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
         row.target_definition !== TEMPORAL_TARGET_DEFINITION ||
-        row.first_passage?.path_resolution !== '5M' ||
+        row.first_passage?.path_resolution !== '15M' ||
         row.first_passage?.outcome !== row.outcome ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
         row.outcome_source !== (row.historical_baseline === true
@@ -620,7 +620,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture,target_definition:TEMPORAL_TARGET_DEFINITION,temporal_label_resolution:'5M_ONLY',
+    architecture,target_definition:TEMPORAL_TARGET_DEFINITION,temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
