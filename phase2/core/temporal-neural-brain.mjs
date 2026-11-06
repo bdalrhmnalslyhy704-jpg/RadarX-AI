@@ -193,7 +193,8 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   return {
     depthWeights,pointWeights,biases,outputWeights,
     skipWeights:baselineWeights,outputBias:baselineBias,
-    residual_anchor:baselineFit?'POOLED_SEQUENCE_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
+    baseline_by_regime:null,
+    residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR'
   };
 }
 
@@ -231,9 +232,18 @@ function forward(sequence, model, residualScale=1) {
     for (let channel = 0; channel < pooled.length; channel++) pooled[channel] += final[time][channel] / poolCount;
   }
   const baselineFeatures=pooledSequence(sequence);
-  let logit = model.outputBias;
+  // Each BTC regime uses its own logistic anchor fitted only on the shared
+  // chronological training block. This matches the regime-specific logistic
+  // challenger used in validation/holdout; the TCN residual learns only what
+  // is additional to that regime's linear signal.
+  const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
+  const baselineWeights=Array.isArray(regimeBaseline?.weights)
+    ?regimeBaseline.weights:model.skipWeights;
+  const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))
+    ?Number(regimeBaseline.bias):model.outputBias;
+  let logit = baselineBias;
   for(let feature=0;feature<baselineFeatures.length;feature++){
-    logit+=baselineFeatures[feature]*(Number(model.skipWeights?.[feature])||0);
+    logit+=baselineFeatures[feature]*(Number(baselineWeights?.[feature])||0);
   }
   const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
   for (let channel = 0; channel < pooled.length; channel++) logit += pooled[channel] * model.outputWeights[channel] * boundedResidualScale;
@@ -291,9 +301,11 @@ function gradientsFor(sequence, target, model, cache) {
 
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
-  baseRate = 0.5, baselineFit = null
+  baseRate = 0.5, baselineFit = null, baselineByRegime = null
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
+  model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
+    ?baselineByRegime:null;
   const trainableParameters=()=>({
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
     biases:model.biases,outputWeights:model.outputWeights
@@ -525,7 +537,8 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'BRIER_OPTIMIZED_REGIME_SELECTED_SHRUNK_RESIDUAL_TCN_V9',
+    training_strategy:'BRIER_OPTIMIZED_REGIME_ANCHORED_SHRUNK_RESIDUAL_TCN_V10',
+    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_SELECTION_BLOCK_BRIER_GRID_V1',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
@@ -708,7 +721,20 @@ export function buildTemporalNeuralProfile(samples = [], {
   const targets=sharedTrainingRows.map(row=>row.target);
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const pooledBaseline=fitLogistic(sharedTrainingRows);
-  const fitted=fitEnsemble(sharedTrainingRows,{epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline});
+  // Fit regime-matched linear anchors from this same purged training block.
+  // Validation, selection and final holdout rows are never used to build anchors.
+  const regimeBaselines=Object.fromEntries(regimes.map(regime=>{
+    const regimeTrainingRows=sharedTrainingRows.filter(row=>regimeOfSequence(row.sequence)===regime);
+    const baseline=regimeTrainingRows.length>=minRegimeTraining
+      ?fitLogistic(regimeTrainingRows):pooledBaseline;
+    return [regime,{weights:baseline.weights,bias:baseline.bias,
+      training_samples:regimeTrainingRows.length,
+      source:regimeTrainingRows.length>=minRegimeTraining
+        ?'REGIME_SPECIFIC_TRAINING_ONLY':'POOLED_TRAINING_ONLY_FALLBACK'}];
+  }));
+  const fitted=fitEnsemble(sharedTrainingRows,{
+    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline,baselineByRegime:regimeBaselines
+  });
   // This global member score is diagnostic only. Valid regime probabilities
   // use the member index selected on that regime's separate selection block.
   const globalMemberValidation=fitted.members.map((member,index)=>({
@@ -822,7 +848,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
-    const regimeBaseline=fitLogistic(regimeTraining);
+    const regimeBaseline=regimeBaselines[regime]||pooledBaseline;
     // Reuse the shared three-member TCN. The active regime selects a member
     // only from its disjoint selection block; no selection/validation/holdout
     // example is included in the shared model's training rows.
@@ -994,6 +1020,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
+    baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:fitted.member_training_profiles,
     member_validation_scores:fitted.member_validation_scores,
@@ -1004,7 +1031,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_specialist_count:2,
     regime_selection_mode:'BTC_24H_CONTEXT_FEATURE_WITH_REGIME_CONDITIONAL_OUT_OF_SAMPLE_GATES',
     model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTIONS',
-    residual_anchor:'REGIME_MATCHED_POOLED_SEQUENCE_LOGISTIC_FROZEN',
+    residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
     calibration_fit_scope:'REGIME_OR_POOLED_SELECTION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
