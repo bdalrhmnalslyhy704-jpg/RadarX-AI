@@ -39,7 +39,10 @@ export function evaluateDynamicEarlyWarningGate(alert={},row={},{
   const tradeRatio=n(m.trade_ratio);
   const takerRatio=n(m.taker_buy_ratio);
   const taker3s=n(m.three_second_taker_buy_ratio??m.three_second_liquidity?.taker_buy_ratio);
-  const confirmations=n(m.independent_confirmations)??0;
+  // Strong Move v1 exposes the component count as flash_confirmations. Prefer
+  // an explicit independent count when supplied, otherwise consume that same
+  // measured count instead of silently treating every candidate as zero.
+  const confirmations=n(m.independent_confirmations)??n(m.flash_confirmations)??0;
   const priceChange24h=n(row?.priceChange24h??alert?.price_change_24h);
   const quoteVolume=n(row?.quoteVolume24h);
   const minQuote=Math.max(1,n(row?.minQuoteVolume24h)??n(minQuoteVolume24h)??1_000_000);

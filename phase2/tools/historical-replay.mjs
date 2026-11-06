@@ -828,7 +828,8 @@ async function main() {
           one_minute: input.oneMinute,
           five_minute: input.fiveMinute,
           ticker: input.ticker,
-          agg_trades: input.aggTrades
+          agg_trades: input.aggTrades,
+          trade_coverage_complete:input.dataPolicy?.tradeCoverageComplete===true
         }, input.now);
         alert.observed_at = input.now;
         alert.source_event_at = alert.source_candle_close_at ?? input.now;

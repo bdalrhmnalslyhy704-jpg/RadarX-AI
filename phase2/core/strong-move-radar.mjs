@@ -43,7 +43,98 @@ function stdev(xs){
   const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)));
 }
 
-export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
+function strictFinite(value){
+  if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
+  const number=Number(value);
+  return Number.isFinite(number)?number:null;
+}
+
+/**
+ * Summarize one fully closed 3-second Spot aggTrade bucket. Binance's m=true
+ * means the buyer was maker, so aggressive taker buys are m=false. Never infer
+ * this feature from OHLCV candles or a partial REST page.
+ */
+function summarizeThreeSecondAggTrades(aggTrades,coverageComplete,decisionAt){
+  const asOf=strictFinite(decisionAt);
+  const bucketEnd=asOf===null?null:Math.floor(asOf/3000)*3000;
+  const bucketStart=bucketEnd===null?null:bucketEnd-3000;
+  const base={
+    available:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+    trade_count:0,quote_turnover:null,taker_buy_quote_volume:null,
+    taker_sell_quote_volume:null,taker_buy_ratio:null,
+    source:'BINANCE_PUBLIC_SPOT_AGGTRADES'
+  };
+  if(coverageComplete!==true||bucketStart===null||bucketEnd===null||bucketStart<0){
+    return {...base,reason:'AGGTRADE_COVERAGE_NOT_VERIFIED'};
+  }
+  const rows=Array.isArray(aggTrades)?aggTrades:[];
+  let buyQuote=0,sellQuote=0,count=0;
+  for(const row of rows){
+    const at=strictFinite(row?.T??row?.time);
+    const price=strictFinite(row?.p??row?.price);
+    const quantity=strictFinite(row?.q??row?.quantity);
+    if(at===null||price===null||quantity===null||price<=0||quantity<0||
+       typeof row?.m!=='boolean'){
+      return {...base,reason:'AGGTRADE_ROW_INVALID'};
+    }
+    if(at<bucketStart||at>=bucketEnd)continue;
+    const notional=price*quantity;
+    if(!Number.isFinite(notional))return {...base,reason:'AGGTRADE_NOTIONAL_INVALID'};
+    if(row.m===false)buyQuote+=notional;
+    else sellQuote+=notional;
+    count++;
+  }
+  const turnover=buyQuote+sellQuote;
+  return {
+    ...base,available:true,reason:count?'COMPLETED_3S_AGGTRADE_BUCKET':'COMPLETED_3S_BUCKET_WITH_NO_TRADES',
+    trade_count:count,
+    quote_turnover:Number(turnover.toFixed(8)),
+    taker_buy_quote_volume:Number(buyQuote.toFixed(8)),
+    taker_sell_quote_volume:Number(sellQuote.toFixed(8)),
+    taker_buy_ratio:turnover>0?Number((buyQuote/turnover).toFixed(6)):null
+  };
+}
+
+/**
+ * Fetch only the last fully closed 3-second bucket. A page at the 1,000-row cap
+ * is ambiguous and deliberately remains unavailable rather than truncated/live.
+ */
+export async function fetchCompletedThreeSecondAggTrades(rest,symbol,decisionAt){
+  const asOf=strictFinite(decisionAt);
+  const bucketEnd=asOf===null?null:Math.floor(asOf/3000)*3000;
+  const bucketStart=bucketEnd===null?null:bucketEnd-3000;
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  if(!rest||typeof rest.request!=='function'||!/^[A-Z0-9]{5,30}USDT$/.test(cleanSymbol)||
+     bucketStart===null||bucketStart<0){
+    return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,reason:'AGGTRADE_REQUEST_INPUT_INVALID'};
+  }
+  try{
+    const response=await rest.request('/api/v3/aggTrades',{
+      symbol:cleanSymbol,startTime:bucketStart,endTime:bucketEnd-1,limit:1000
+    });
+    const rows=Array.isArray(response?.data)?response.data:null;
+    if(!rows)return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,reason:'AGGTRADE_RESPONSE_INVALID'};
+    const valid=rows.every(row=>{
+      const at=strictFinite(row?.T),price=strictFinite(row?.p),quantity=strictFinite(row?.q);
+      return at!==null&&at>=bucketStart&&at<bucketEnd&&price!==null&&price>0&&
+        quantity!==null&&quantity>=0&&typeof row?.m==='boolean';
+    });
+    const complete=rows.length<1000&&valid;
+    return {
+      trades:complete?rows:[],complete,
+      bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+      returned_rows:rows.length,
+      reason:complete?null:rows.length>=1000?'AGGTRADE_PAGE_LIMIT_REACHED':'AGGTRADE_ROWS_INVALID'
+    };
+  }catch(error){
+    return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+      reason:String(error?.message??error).slice(0,160)};
+  }
+}
+
+export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,{
+  aggTrades=[],aggTradeCoverageComplete=false
+}={}){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true};
@@ -197,6 +288,12 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     microBreak||breakUp,
     Number.isFinite(closeLocation)&&closeLocation>=68
   ].filter(Boolean).length;
+  const latestOneMinuteClose=Number(a.at(-1)?.closeTime);
+  const decisionAt=Number.isFinite(latestOneMinuteClose)
+    ?Math.min(Number(now),latestOneMinuteClose+1):Number(now);
+  const threeSecondLiquidity=summarizeThreeSecondAggTrades(
+    aggTrades,aggTradeCoverageComplete,decisionAt
+  );
   const flashTrigger=direction==='UP_SURGE'&&flashScore>=74&&flashConfirmations>=3&&
     ((Number.isFinite(r3)&&r3>=0.45) ||
      (Number.isFinite(volumeRatio)&&volumeRatio>=1.50) ||
@@ -235,6 +332,8 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
       flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
+      three_second_taker_buy_ratio:threeSecondLiquidity.taker_buy_ratio,
+      three_second_liquidity:threeSecondLiquidity,
       micro_breakout:microBreak,close_location_pct:closeLocation,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
@@ -268,7 +367,24 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
 }
 
 export function buildStrongMoveAlert(candidate,now=Date.now()){
-  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now);
+  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now,{
+    aggTrades:candidate.agg_trades,
+    aggTradeCoverageComplete:candidate.trade_coverage_complete===true
+  });
+  const threeSecond=a.metrics?.three_second_liquidity||{};
+  const threeSecondRatio=strictFinite(a.metrics?.three_second_taker_buy_ratio);
+  const threeSecondFailures=!threeSecond.available
+    ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    :threeSecondRatio===null
+      ?['THREE_SECOND_TRADE_BUCKET_EMPTY']
+      :threeSecondRatio<=0.70
+        ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']:[];
+  // The dynamic watch lane may use only one explicit missing-evidence fallback.
+  // It cannot silently treat an empty or seller-dominated completed bucket as missing.
+  a.trigger_diagnostics={
+    eligible:threeSecondFailures.length===0,
+    failed_checks:threeSecondFailures
+  };
   const ticker=candidate.ticker||{};
   return {
     id:'STRONG:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+a.direction+':'+now,
@@ -670,9 +786,31 @@ export class StrongMoveRadar {
     const oneResult=await oneResultPromise;
     if(oneResult.status!=='fulfilled')throw oneResult.reason||new Error('ONE_MINUTE_KLINES_UNAVAILABLE');
     const one=oneResult.value;
-    const alert=buildStrongMoveAlert({
-      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles
+    let alert=buildStrongMoveAlert({
+      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles,
+      trade_coverage_complete:false
     },now);
+    const preliminary=alert?.strong_move||{};
+    const preliminaryMetrics=preliminary.metrics||{};
+    // Spend one bounded Spot aggTrades request only for an already-strong,
+    // upward, participation-backed candidate. Do not burden every universe row.
+    const needsThreeSecondEvidence=preliminary.direction==='UP_SURGE'&&
+      Math.max(Number(preliminary.score)||0,Number(preliminaryMetrics.flash_score)||0)>=68&&
+      ((Number(preliminaryMetrics.volume_ratio)||0)>=1.25||
+       (Number(preliminaryMetrics.trade_ratio)||0)>=1.15)&&
+      (Number(preliminaryMetrics.taker_buy_ratio)||0)>=0.52;
+    if(needsThreeSecondEvidence&&typeof this.rest.request==='function'){
+      const latestClose=Number(one.candles?.at(-1)?.closeTime);
+      const decisionAt=Number.isFinite(latestClose)?Math.min(now,latestClose+1):now;
+      const tradeBucket=await fetchCompletedThreeSecondAggTrades(this.rest,row.symbol,decisionAt);
+      alert=buildStrongMoveAlert({
+        ticker:row,one_minute:one.candles,five_minute:fiveResult.candles,
+        agg_trades:tradeBucket.trades,trade_coverage_complete:tradeBucket.complete
+      },now);
+      if(!tradeBucket.complete){
+        alert.strong_move.metrics.three_second_liquidity.reason=tradeBucket.reason||'AGGTRADE_COVERAGE_NOT_VERIFIED';
+      }
+    }
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0

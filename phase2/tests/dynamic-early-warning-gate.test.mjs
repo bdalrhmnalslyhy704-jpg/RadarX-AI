@@ -150,6 +150,14 @@ test('the smart lane rejects stale source candles, very large 24h extension and 
   assert.ok(downResult.failures.includes('EARLY_WARNING_DIRECTION_NOT_UP'));
 });
 
+test('flash confirmations are used when the explicit independent-confirmations field is absent',()=>{
+  const alert=wLike();
+  delete alert.strong_move.metrics.independent_confirmations;
+  alert.strong_move.metrics.flash_confirmations=9;
+  const result=evaluateDynamicEarlyWarningGate(alert,row,{now:NOW,alertScore:87.33});
+  assert.equal(result.eligible,true,JSON.stringify(result.failures));
+});
+
 test('strict vetoes unrelated to extension remain hard blockers',()=>{
   const alert=wLike();
   const result=evaluateDynamicEarlyWarningGate(alert,row,{

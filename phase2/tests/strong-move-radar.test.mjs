@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,fetchCompletedThreeSecondAggTrades,StrongMoveRadar} from '../core/strong-move-radar.mjs';
 
 const NOW=10_000_000_000;
 
@@ -110,6 +110,65 @@ assert.equal(analysis.metrics.flash_trigger,true);
 assert.ok(['STRONG_MOVE','EXPLOSIVE'].includes(analysis.stage));
 assert.ok(analysis.reasons.includes('volume climax'));
 assert.ok(analysis.reasons.includes('trade-count surge'));
+
+test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can populate buyer-flow evidence',()=>{
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  const trades=[
+    {a:1,T:bucketEnd-2500,p:'1',q:'8',m:false},
+    {a:2,T:bucketEnd-900,p:'1',q:'2',m:true},
+    {a:3,T:bucketEnd+10,p:'9',q:'100',m:false}
+  ];
+  const complete=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:trades,trade_coverage_complete:true
+  },NOW);
+  assert.equal(complete.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(complete.strong_move.metrics.three_second_liquidity.trade_count,2);
+  assert.equal(complete.strong_move.metrics.three_second_taker_buy_ratio,0.8);
+  assert.deepEqual(complete.strong_move.trigger_diagnostics.failed_checks,[]);
+
+  const partial=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:trades,trade_coverage_complete:false
+  },NOW);
+  assert.equal(partial.strong_move.metrics.three_second_liquidity.available,false);
+  assert.equal(partial.strong_move.metrics.three_second_taker_buy_ratio,null);
+  assert.deepEqual(partial.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']);
+
+  const emptyCompleted=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:[],trade_coverage_complete:true
+  },NOW);
+  assert.equal(emptyCompleted.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(emptyCompleted.strong_move.metrics.three_second_taker_buy_ratio,null);
+  assert.deepEqual(emptyCompleted.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TRADE_BUCKET_EMPTY']);
+});
+
+test('live three-second aggTrade fetch is bounded to the last completed bucket and fails closed at the page cap',async()=>{
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  let query=null;
+  const rows=[
+    {a:1,T:bucketEnd-2500,p:'2',q:'3',m:false},
+    {a:2,T:bucketEnd-500,p:'2',q:'1',m:true}
+  ];
+  const fetched=await fetchCompletedThreeSecondAggTrades({
+    request:async(path,args)=>{assert.equal(path,'/api/v3/aggTrades');query=args;return {data:rows};}
+  },'BURSTUSDT',NOW);
+  assert.equal(fetched.complete,true);
+  assert.deepEqual(query,{symbol:'BURSTUSDT',startTime:bucketEnd-3000,endTime:bucketEnd-1,limit:1000});
+  assert.equal(fetched.trades.length,2);
+
+  const capped=await fetchCompletedThreeSecondAggTrades({
+    request:async()=>({data:Array.from({length:1000},(_,i)=>({
+      a:i,T:bucketEnd-2500+i,p:'1',q:'1',m:false
+    }))})
+  },'BURSTUSDT',NOW);
+  assert.equal(capped.complete,false);
+  assert.equal(capped.trades.length,0);
+  assert.equal(capped.reason,'AGGTRADE_PAGE_LIMIT_REACHED');
+});
 
 const alert=buildStrongMoveAlert({one_minute:make1m(),five_minute:make5m(),ticker},NOW);
 assert.equal(alert.event,'STRONG_MOVE_ALERT');

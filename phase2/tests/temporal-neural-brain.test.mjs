@@ -99,6 +99,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
   assert.equal(profile.member_training_profiles.length,3);
+  assert.ok(profile.member_training_profiles.every(row=>
+    row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
+    'member objective metadata must match the Brier-only gradient implemented by V6');
   assert.equal(new Set(profile.member_training_profiles.map(row=>JSON.stringify(row))).size,3,
     'ensemble members must use distinct deterministic training schedules');
   assert.equal(profile.sequence_steps,24);
@@ -160,6 +163,8 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
   assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
+  assert.ok(profile.member_training_profiles_by_regime.BTC_RISK_ON.every(row=>
+    row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'));
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
   assert.ok(expert.training_samples>=80);

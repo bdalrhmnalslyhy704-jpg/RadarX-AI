@@ -530,11 +530,11 @@ function fitEnsemble(rows, options = {}) {
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'},
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'}
   ];
   const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
     ...options,...memberProfiles[index],baseRate
