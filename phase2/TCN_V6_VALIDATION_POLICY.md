@@ -19,7 +19,7 @@ holdout metric. Member choice, residual scale selection, and probability
 calibration remain confined to the chronological selection block. Validation
 and final holdout are not used for optimization or tuning.
 
-The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V9 applies the bounded holdout rule above; all regime-specific sample support and Brier superiority margins remain unchanged.
+The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V10 adds a frozen regime-specific logistic anchor fitted only from the shared chronological training block. Each BTC risk regime therefore starts from the same type of linear challenger used in its own validation and holdout comparison; the TCN residual may add signal but cannot rewrite that anchor. No member selection, calibration, validation or holdout rows enter anchor fitting. All regime-specific sample support and Brier superiority margins remain unchanged.
 
 ## V5 nested residual-neural validation
 
