@@ -19,10 +19,10 @@ const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
   minTrainingSamples: 240,
-  // Use up to 1,200 newest purged training rows; the 18-10-6 ensemble
-  // is small enough for the DHDTech memory budget and needs a wider sample
-  // than the former 600-row cap in the live four-hour outcome stream.
-  maxTrainingSamples: 1200,
+  // Use up to 1,500 newest purged training rows. This widens the model-fit,
+  // member-selection and calibration blocks without consuming outer validation
+  // or the untouched holdout; the 18-10-6 ensemble remains compact.
+  maxTrainingSamples: 1500,
   iterations: 100,
   learningRate: 0.012,
   l2: 0.04,
@@ -806,7 +806,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
   }
 
-  const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
+  const neuralLimit=Math.max(240,Math.min(1500,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
   const upEventTraining=asUpEventRows(training);
   const upEventRecentTraining=asUpEventRows(recentTraining);
@@ -1046,6 +1046,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
       refit_training_samples:neuralFit?.refit_training_samples??0,
+      maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
       training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',

@@ -26,7 +26,9 @@ The public temporal profile exposes its training objective explicitly so runtime
 
 ## V5 nested residual-neural validation
 
-V5 fits its ensemble on the earliest model-training block and selects one
+V5 uses up to 1,500 newest purged training rows (up from 1,200) so its
+model-fit, member-selection and calibration blocks contain more matured data.
+It fits its ensemble on the earliest model-training block and selects one
 member/residual scale on a later disjoint block. It then refits only the selected
 member and its logistic anchor on the union of those blocks. Every refit label
 must mature before the disjoint calibration block; outer validation and final
