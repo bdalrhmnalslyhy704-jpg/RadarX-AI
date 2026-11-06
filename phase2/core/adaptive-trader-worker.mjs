@@ -613,6 +613,7 @@ recordServerPaperPortfolio(snapshot,now){
          markPrice===null||resolvedAt===null||resolvedAt>Number(now)+5000||
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
          label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
+         label?.first_passage?.path_resolution!=='15M'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
          !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
@@ -621,7 +622,7 @@ recordServerPaperPortfolio(snapshot,now){
       sample.close_return_source=closeReturnPct===null?null:'FOUR_HOUR_TERMINAL_CLOSE';
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
-      sample.first_passage=label.first_passage||null;
+      sample.first_passage=label.first_passage?{...label.first_passage,outcome:label.outcome}:null;
       sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
       const v5Sample=v5SampleById.get(String(label?.sample_id||''));
@@ -755,7 +756,7 @@ recordServerPaperPortfolio(snapshot,now){
       temporal_sequence_samples:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
         row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome).length,
       temporal_sequence_non_15m_labels:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
-        row.outcome&&row.first_passage?.path_resolution!=='5M').length,
+        row.outcome&&row.first_passage?.path_resolution!=='15M').length,
       temporal_sequence_missing_samples:this.trainingSamples().filter(row=>!hasValidTemporalSequence(row.temporal_sequence)).length,
       new_historical_v5_close_samples:newHistoricalV5Samples,
       historical_rejected:historicalRejected,
