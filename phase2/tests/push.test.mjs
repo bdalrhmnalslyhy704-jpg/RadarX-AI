@@ -481,7 +481,7 @@ test('TEST_FIXTURE: evidence-gated Strong Move near miss sends only a WATCH_ONLY
     assert.equal(sent[0].watch_only,true);
     assert.equal(sent[0].entry_eligible,false);
     assert.equal(sent[0].notification_mode,'STRONG_MOVE_DYNAMIC_EARLY_WARNING_WATCH_ONLY');
-    assert.equal(sent[0].real_order_execution,'false');
+    assert.equal(sent[0].real_order_execution,false);
     assert.ok(audits.some(row=>row.status==='SENT'&&row.watch_only===true));
     const weak={...alert,early_warning:{...alert.early_warning,eligible:false}};
     const rejected=await manager.notifyRadarWatchOnlyAlert({...weak,id:'STRONG_MOVE_WATCH_ONLY:DYNAMIC2:'+closeAt,
