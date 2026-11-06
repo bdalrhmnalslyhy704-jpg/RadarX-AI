@@ -59,9 +59,10 @@ test('temporal network fails closed without first-passage tensor samples',()=>{
 test('temporal network trains only on valid tensors and keeps chronological validation and holdout separate',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
-    for(let index=0;index<24;index++){
+    for(let index=0;index<36;index++){
       const row=sample(group,index);
-      // BTC regime is independent of the outcome label: each specialist must
+      // Keep enough distinct rows in each chronological regime block for the
+      // independent 30-row probability-calibration gate to be testable.
       // see both UP and DOWN outcomes within its own market regime.
       row.temporal_sequence=row.temporal_sequence.map(step=>{
         const copy=step.slice();
@@ -74,7 +75,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
   const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
-  assert.equal(profile.resolved_samples,32*24);
+  assert.equal(profile.resolved_samples,32*36);
   assert.equal(profile.trained,true,JSON.stringify({
     status:profile.status,
     training_samples:profile.training_samples,
