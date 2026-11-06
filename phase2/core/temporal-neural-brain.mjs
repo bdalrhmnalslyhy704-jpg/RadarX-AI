@@ -408,7 +408,9 @@ function predict(sequence, fitted) {
   if(!specialist||!Number.isInteger(selectedIndex)||selectedIndex<0||
      selectedIndex>=specialist.members?.length)return null;
   const residualScale=Number(specialist.selected_residual_scale);
-  if(!(residualScale>0))return null;
+  if(!Number.isFinite(residualScale)||residualScale<0)return null;
+  // Keep zero-residual output for diagnostic comparison only. The regime's
+  // neuralResidualContributes gate prevents it from being selected or published.
   const rawProbability=forward(sequence,specialist.members[selectedIndex],residualScale).probability;
   return calibratedProbability(rawProbability,specialist.probability_calibrator);
 }
