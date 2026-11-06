@@ -130,7 +130,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
-  assert.equal(expert.model_scope,'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION');
+  assert.equal(expert.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALIST');
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
   assert.ok(expert.training_samples>=80);
@@ -147,9 +147,15 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(expert.selection_calibration_samples>0);
   assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
     'member ranking and probability calibration must not reuse the same rows');
-  assert.ok(['REGIME_CALIBRATION_BLOCK','POOLED_CALIBRATION_BLOCK_FALLBACK']
-    .includes(expert.probability_calibration.fit_on));
-  assert.equal(profile.calibration_fit_scope,'REGIME_OR_POOLED_CALIBRATION_BLOCK_ONLY');
+  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
+  assert.equal(expert.logistic_probability_calibration.fitted,true);
+  assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
+    'the logistic challenger must be calibrated on the exact same regime-local later block');
+  assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
+  assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
+  assert.equal(profile.calibration_fit_scope,'REGIME_CALIBRATION_BLOCK_ONLY');
+  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
+  assert.equal(profile.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS');
   assert.ok(expert.selection_start_at<expert.calibration_start_at&&
     expert.calibration_start_at<expert.validation_start_at,
     'member selection, calibration and reported validation must use three disjoint chronological blocks');
@@ -206,16 +212,13 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   }
 });
 
-test('sparse BTC regime uses pooled member selection and disjoint pooled calibration without leaking later blocks',()=>{
+test('sparse BTC regime fails closed instead of borrowing selection or calibration rows from the opposite regime',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     let riskOn=true;
     if(group===15||group===16||group===18||group===20||group===23||group===25||group===27||group===31)riskOn=false;
     for(let index=0;index<12;index++){
       let up;
-      // The 60/80/95 nested split uses groups 13–17 for member selection
-      // and groups 18–20 for calibration. Keep local risk-on selection sparse;
-      // risk-off rows supply the pooled member-selection fallback.
       if(group>=13&&group<=17&&riskOn)up=false;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
@@ -233,33 +236,18 @@ test('sparse BTC regime uses pooled member selection and disjoint pooled calibra
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,12,
-    'only the risk-on row in the member-selection window contributes to the local specialist slice');
-  assert.equal(expert.selection_positive_samples,0,
-    'local selection positives are below the specialist minimum and must use pooled selection');
-  assert.equal(expert.member_selection_source,'POOLED_MEMBER_SELECTION_BLOCK_FALLBACK');
-  assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
-  assert.ok(expert.member_selection_samples>expert.selection_samples);
-  assert.equal(expert.calibration_samples,24,
-    'the local risk-on calibration window is deliberately below the 30-row calibration minimum');
-  assert.equal(expert.calibration_source,'POOLED_CALIBRATION_BLOCK_FALLBACK');
-  assert.equal(expert.probability_calibration.fit_on,'POOLED_CALIBRATION_BLOCK_FALLBACK');
-  assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
-  assert.equal(expert.probability_calibration.fitted,true,
-    'the separate pooled calibration block has enough positive and negative support');
-  assert.ok(expert.probability_calibration.positive_count>=5,
-    'pooled fallback must contain the minimum positive-class support');
-  assert.ok(expert.probability_calibration.negative_count>=20,
-    'pooled fallback must contain the minimum negative-class support');
-  assert.equal(expert.probability_calibration.sample_count,expert.calibration_selection_samples);
-  assert.ok(expert.calibration_start_at>expert.selection_start_at,
-    'the calibration rows must be chronologically later than member selection');
-  assert.ok(expert.selection_start_at<expert.calibration_start_at&&
-    expert.calibration_start_at<expert.validation_start_at,
-    'member selection, calibration and validation must use disjoint chronological blocks');
-  assert.ok(expert.validation_samples>=24);
-  assert.ok(expert.holdout_samples>=20);
-  assert.ok(expert.validation_start_at<profile.holdout_start_at);
+  assert.equal(expert.selection_samples,12);
+  assert.equal(expert.selection_positive_samples,0);
+  assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
+  assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
+  assert.equal(expert.calibration_samples,24);
+  assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
+  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'));
+  assert.equal(expert.selected,false);
+  assert.equal(expert.probability_ready,false);
+  assert.equal(expert.probability_calibration,null);
+  assert.equal(profile.probability_ready,false,
+    'a regime with insufficient same-regime selection/calibration support must not borrow another regime');
   assert.equal(profile.live_eligibility_ready,false);
 });
 
