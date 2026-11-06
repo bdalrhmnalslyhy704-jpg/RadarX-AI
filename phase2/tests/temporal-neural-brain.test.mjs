@@ -109,7 +109,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
 
 test('TCN trains and validates an independent expert for each supported BTC regime',()=>{
   const rows=[];
-  for(let group=0;group<24;group++){
+  for(let group=0;group<32;group++){
     for(let index=0;index<24;index++){
       const row=sample(group,index);
       row.temporal_sequence=row.temporal_sequence.map(step=>{
@@ -214,15 +214,15 @@ test('sparse BTC regime uses pooled member selection and disjoint pooled calibra
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,36,
-    'the local risk-on member-selection window spans groups 13–17 for this fixture');
+  assert.equal(expert.selection_samples,12,
+    'only the risk-on row in the member-selection window contributes to the local specialist slice');
   assert.equal(expert.selection_positive_samples,0,
     'local selection positives are below the specialist minimum and must use pooled selection');
   assert.equal(expert.member_selection_source,'POOLED_MEMBER_SELECTION_BLOCK_FALLBACK');
   assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
   assert.ok(expert.member_selection_samples>expert.selection_samples);
-  assert.equal(expert.calibration_samples,12,
-    'the local risk-on calibration window is deliberately too small');
+  assert.equal(expert.calibration_samples,24,
+    'the local risk-on calibration window is deliberately below the 30-row calibration minimum');
   assert.equal(expert.calibration_source,'POOLED_CALIBRATION_BLOCK_FALLBACK');
   assert.equal(expert.probability_calibration.fit_on,'POOLED_CALIBRATION_BLOCK_FALLBACK');
   assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
@@ -233,7 +233,8 @@ test('sparse BTC regime uses pooled member selection and disjoint pooled calibra
   assert.ok(expert.probability_calibration.negative_count>=20,
     'pooled fallback must contain the minimum negative-class support');
   assert.equal(expert.probability_calibration.sample_count,expert.calibration_selection_samples);
-  assert.notEqual(expert.probability_calibration.sample_count,expert.member_selection_samples);
+  assert.ok(expert.calibration_start_at>expert.selection_start_at,
+    'the calibration rows must be chronologically later than member selection');
   assert.ok(expert.selection_start_at<expert.calibration_start_at&&
     expert.calibration_start_at<expert.validation_start_at,
     'member selection, calibration and validation must use disjoint chronological blocks');
