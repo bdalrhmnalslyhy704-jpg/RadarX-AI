@@ -43,7 +43,9 @@ jobs:
             }
 
             const started=Date.now();
-            const deadline=started+12*60*1000;
+            const probeRun=context.ref==='refs/heads/verify/build224-tcn-fallback-20261106';
+            const deadline=started+(probeRun?2*60*1000:12*60*1000);
+            core.info('DHDTECH_ACCEPTANCE_MODE '+(probeRun?'SHORT_READ_ONLY_PROBE':'FULL_BUILD224_ACCEPTANCE'));
             const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let lastError='No status response yet';
             let lastObserved=null;
