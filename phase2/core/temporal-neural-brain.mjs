@@ -681,7 +681,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Large histories have enough observations to reserve wider selection and
   // calibration windows. Outer validation and final holdout remain untouched.
   const splitFractions=fitTimes.length<16
-    ?{training:0.85,memberSelection:0.92,calibration:0.98}
+    ?{training:0.80,memberSelection:0.86,calibration:1.00}
     :rows.length<1200
       ?{training:0.70,memberSelection:0.85,calibration:0.98}
       :{training:0.78,memberSelection:0.88,calibration:0.97};
