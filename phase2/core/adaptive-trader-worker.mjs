@@ -116,8 +116,11 @@ export class AdaptiveTraderWorker{
     if(this.enabled)return this.snapshot();
     if(this.starting)return this.starting;
     this.starting=(async()=>{
+      let discardedLegacyState=false;
       try{
         const saved=await this.store.getAdaptiveTraderState();
+        discardedLegacyState=Boolean(saved&&!(saved.version===2&&
+          saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'));
         if(saved&&saved.version===2&&saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'&&
            Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
           this.state={
@@ -174,8 +177,9 @@ export class AdaptiveTraderWorker{
       // old close-direction split are not reused. A schema/dataset mismatch
       // intentionally leaves the initialized empty state in place; the first
       // fresh Binance closed-candle scan rebuilds both datasets from source.
-      if(!this.state.training_dataset_version){
+      if(discardedLegacyState){
         this.state.reset_reason='LEGACY_NEURAL_TRAINING_DATA_PURGED';
+        this.logger.info?.('[ADAPTIVE_TRADER_LEGACY_NEURAL_MEMORY_PURGED] fresh closed-candle dataset required');
       }
       this.enabled=true;this.state.enabled=true;this.state.last_error=null;
       this.interval=setInterval(()=>{void this.runOnce();},this.intervalMs);
