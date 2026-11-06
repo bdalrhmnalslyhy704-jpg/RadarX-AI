@@ -264,6 +264,7 @@ test('temporal network rejects wrong horizon, wrong target definition and incomp
 
 test('DHDTech production acceptance requires both V5 and TCN scientific live gates',async()=>{
   const workflow=await readFile(new URL('../../.github/workflows/dhdtech-adaptive-trader-acceptance.yml',import.meta.url),'utf8');
+  const containerWorkflow=await readFile(new URL('../../.github/workflows/build224-container-runtime-smoke.yml',import.meta.url),'utf8');
   const validStart=workflow.indexOf('const valid=');
   const successBranch=workflow.indexOf('if(valid)',validStart);
   assert.ok(validStart>=0&&successBranch>validStart,'acceptance success gate must remain explicit');
@@ -285,6 +286,9 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   }
   assert.ok(workflow.includes('phase2/core/cognitive-brain.mjs'));
   assert.ok(workflow.includes('phase2/core/temporal-neural-brain.mjs'));
+  assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
+    'container smoke must verify the same uniform 15m target contract');
 });
 
 
@@ -296,7 +300,7 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
   const profile=buildTemporalNeuralProfile([fiveMinute,fifteenMinute]);
   assert.equal(TEMPORAL_TARGET_DEFINITION,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
   assert.equal(profile.resolved_samples,1,
-    '15m OHLC cannot determine which first-passage barrier was touched first');
+    'the model must reject any first-passage sample built at a different candle resolution');
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
 });
