@@ -3,7 +3,8 @@
 - Target: +3% first passage before -2% within four hours using completed 15-minute Binance Spot USDT candles.
 - The shared TCN ensemble is fitted only on the purged chronological training block.
 - Mature histories reserve an untouched holdout of at least 2× the live sample floor and 25% of usable rows; medium histories reserve at least the live floor plus 30 rows and 20%. This preserves a broad later test while avoiding the former 40% holdout that unnecessarily reduced the training window.
-- The BTC-regime member and residual contribution scale are selected only on the disjoint chronological selection block. Candidate residual scales are 0%, 25%, 50%, 75%, and 100%.
+- The BTC-regime member and residual contribution scale are selected only on the disjoint chronological member-selection block. Candidate residual scales are 0%, 25%, 50%, 75%, and 100%.
+- A separate later chronological calibration block fits the probability calibrator; it never reuses rows used to select a member or residual scale. Mature fitted history is partitioned into 60% model fitting, 20% member/scale selection, 15% calibration, and the remaining outer validation and untouched holdout blocks.
 - If a regime's local selection slice has insufficient class support, the pooled selection block may be used only for member/scale selection. That fallback never pools the regime's validation or final holdout.
 - Probability calibration is fitted only from the permitted selection block. Validation and final holdout are strictly later.
 - Final predictive readiness requires the unchanged Brier comparison margin against both the base-rate predictor and pooled logistic challenger on chronological validation and untouched holdout, plus the minimum live holdout sample size.
@@ -19,7 +20,7 @@ holdout metric. Member choice, residual scale selection, and probability
 calibration remain confined to the chronological selection block. Validation
 and final holdout are not used for optimization or tuning.
 
-The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V10 adds a frozen regime-specific logistic anchor fitted only from the shared chronological training block. Each BTC risk regime therefore starts from the same type of linear challenger used in its own validation and holdout comparison; the TCN residual may add signal but cannot rewrite that anchor. No member selection, calibration, validation or holdout rows enter anchor fitting. All regime-specific sample support and Brier superiority margins remain unchanged.
+The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V11 retains the frozen regime-specific logistic anchor fitted only from the shared chronological training block and separates member selection from probability calibration. Each BTC risk regime therefore starts from the same type of linear challenger used in its own validation and holdout comparison; the TCN residual may add signal but cannot rewrite that anchor. No member selection, calibration, validation or holdout rows enter anchor fitting. All regime-specific sample support and Brier superiority margins remain unchanged.
 
 ## V5 nested residual-neural validation
 
