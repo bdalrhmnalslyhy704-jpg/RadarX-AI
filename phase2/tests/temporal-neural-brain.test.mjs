@@ -68,7 +68,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_ANCHORED_NESTED_SELECTION_CALIBRATION_TCN_V11');
+  assert.equal(profile.training_strategy,'BRIER_OPTIMIZED_REGIME_ANCHORED_MATCHED_LOGISTIC_CHALLENGER_TCN_V12');
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
@@ -158,6 +158,19 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
   assert.ok(profile.regime_specialists.BTC_RISK_OFF.support_gaps.includes('HOLDOUT_SAMPLE_COUNT'));
   assert.ok(profile.holdout_comparison.sample_count>=40);
+  assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
+    'comparison sample count must describe rows actually evaluated');
+  for(const regime of profile.supported_regimes){
+    const specialist=profile.regime_specialists[regime];
+    assert.ok(specialist.logistic_calibration_samples>=0);
+    assert.equal(specialist.neural_residual_contributes,
+      specialist.selected_residual_scale>0,
+      'zero residual scale is not a neural-network contribution');
+    if(!specialist.neural_residual_contributes){
+      assert.equal(specialist.selected,false);
+      assert.equal(specialist.probability_ready,false);
+    }
+  }
 });
 
 test('mature history reserves a broad untouched holdout and a wider regime-supported validation block',()=>{
