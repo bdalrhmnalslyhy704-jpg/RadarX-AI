@@ -278,6 +278,11 @@ console.log('Strong Move Radar tests passed');
 test('live Strong Move stores every near miss but sends a phone WATCH_ONLY only after the completed 3s dynamic gate passes',async()=>{
   const rows=make1m().map(row=>({...row}));
   for(const row of rows.slice(-3))row.takerBuyBaseVolume=490_000;
+  // Make the final closed candle clear the live low-baseline 0.45% impulse
+  // floor as well as the 3m momentum/acceleration requirements.
+  const final=rows.at(-1);
+  final.close=Number(final.open)+0.65;
+  final.high=Math.max(Number(final.high),final.close+0.08);
   const five=make5m();
   const bucketEnd=Math.floor(NOW/3000)*3000;
   const trades=[
