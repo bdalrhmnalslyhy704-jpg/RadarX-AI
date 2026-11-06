@@ -22,15 +22,15 @@ member-selection block; probability calibration uses only its separate later
 calibration block. Validation
 and final holdout are not used for optimization or tuning.
 
-The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V17 fits shared temporal residual weights on the common training block, with a separate training-only logistic anchor for each BTC regime. Each regime selects its member/residual scale locally when support allows, otherwise using the shared chronological selection fallback. The temporal residual uses a 50/50 mixture of Brier and log-loss gradients (both strictly proper scoring rules); member selection, calibration, validation and final holdout continue to use Brier on disjoint chronological blocks. Each BTC risk regime therefore starts from the same type of linear challenger used in its own validation and holdout comparison; the TCN residual may add signal but cannot rewrite that anchor. No member selection, calibration, validation or holdout rows enter anchor fitting. All regime-specific sample support and Brier superiority margins remain unchanged.
+The public temporal profile exposes its training objective explicitly so runtime acceptance and the Android diagnostics can verify the exact Brier-optimized model version. Training-strategy V18 fits shared temporal residual weights on the common training block. A regime uses its own logistic anchor when local training has at least three positive and twenty negative examples; otherwise it falls back to a pooled logistic anchor fitted only on the purged shared training block. Member selection, calibration, validation and final holdout remain chronological and regime-specific; all acceptance scores continue to use Brier and the unchanged 0.003 margin. Each BTC risk regime therefore starts from the same type of linear challenger used in its own validation and holdout comparison; the TCN residual may add signal but cannot rewrite that anchor. No member selection, calibration, validation or holdout rows enter anchor fitting. All regime-specific sample support and Brier superiority margins remain unchanged.
 
 ## V5 nested residual-neural validation
 
-V5 fits its logistic anchor and residual MLP only on the earliest 80% of the
-bounded chronological training window. Its three-member ensemble diversifies
-optimization across Brier, log-loss and a 50/50 mixture of the two proper
-scoring rules; member selection, calibration, validation and final holdout
-remain scored with Brier. The remaining 20% of that window is a
+V5 fits its ensemble on the earliest model-training block and selects one
+member/residual scale on a later disjoint block. It then refits only the selected
+member and its logistic anchor on the union of those blocks. Every refit label
+must mature before the disjoint calibration block; outer validation and final
+holdout remain later and untouched. The remaining 20% of that window is a
 separate member/residual-scale selection block. The model then receives an
 outer chronological validation block and an untouched final holdout. Every
 label must mature before its applicable cutoff; rows crossing a cutoff are

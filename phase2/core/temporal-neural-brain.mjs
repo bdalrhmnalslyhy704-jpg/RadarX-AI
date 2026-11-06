@@ -257,9 +257,7 @@ function gradientsFor(sequence, target, model, cache) {
   const activationGradients = Array(DILATIONS.length + 1);
   const final = cache.activations.at(-1);
   activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-  const brierGradient=2*(cache.probability-target)*cache.probability*(1-cache.probability);
-  const logLossGradient=cache.probability-target;
-  const error=0.5*brierGradient+0.5*logLossGradient;
+  const error=2*(cache.probability-target)*cache.probability*(1-cache.probability);
   // outputBias and skipWeights are frozen at the training-only logistic anchor.
   for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
     gradients.outputWeights[channel] = error * cache.pooled[channel];
@@ -306,7 +304,7 @@ function gradientsFor(sequence, target, model, cache) {
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
-  trainingObjective='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
   model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
@@ -544,11 +542,11 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_MIXED_LOSS_V17',
-    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
-    training_objective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE_V17',
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     training_prior_probability:baseRate
   };
@@ -761,10 +759,19 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Validation, selection and final holdout rows are never used to build anchors.
   const regimeBaselines=Object.fromEntries(regimes.map(regime=>{
     const regimeTrainingRows=sharedTrainingRows.filter(row=>regimeOfSequence(row.sequence)===regime);
-    if(regimeTrainingRows.length<minRegimeTraining)return [regime,null];
+    const localPositive=regimeTrainingRows.filter(row=>row.target===1).length;
+    const localNegative=regimeTrainingRows.filter(row=>row.target===0).length;
+    if(regimeTrainingRows.length<minRegimeTraining||localPositive<3||localNegative<20){
+      return [regime,{weights:pooledBaseline.weights,bias:pooledBaseline.bias,base_rate:pooledBaseline.base_rate,
+        training_samples:sharedTrainingRows.length,local_training_samples:regimeTrainingRows.length,
+        local_positive_samples:localPositive,local_negative_samples:localNegative,
+        source:'POOLED_TRAINING_ONLY_FALLBACK'}];
+    }
     const baseline=fitLogistic(regimeTrainingRows);
     return [regime,{weights:baseline.weights,bias:baseline.bias,base_rate:baseline.base_rate,
-      training_samples:regimeTrainingRows.length,source:'REGIME_SPECIFIC_TRAINING_ONLY'}];
+      training_samples:regimeTrainingRows.length,local_training_samples:regimeTrainingRows.length,
+      local_positive_samples:localPositive,local_negative_samples:localNegative,
+      source:'REGIME_SPECIFIC_TRAINING_ONLY'}];
   }));
   const sharedTrainingTargets={
     samples:sharedTrainingRows.length,
@@ -796,9 +803,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_MIXED_LOSS_V17',
-    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
-    training_objective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE_V17',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V18',
+    baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     candidate_residual_scales:[0,0.25,0.5,0.75,1]
   };
@@ -892,7 +899,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(regimeTraining.length<minRegimeTraining)supportGaps.push('TRAINING_SAMPLE_COUNT');
     if(!regimeBaseline)supportGaps.push('REGIME_LOGISTIC_ANCHOR_UNAVAILABLE');
     if(!sharedTrainingSupported||!sharedResidualFit)supportGaps.push('SHARED_TCN_TRAINING_BLOCK_UNSUPPORTED');
-    if(trainTargets.positive<3)supportGaps.push('REGIME_BASELINE_POSITIVE_CLASS_TOO_THIN');
+    if(trainTargets.positive<3&&regimeBaseline?.source!=='POOLED_TRAINING_ONLY_FALLBACK')
+      supportGaps.push('REGIME_BASELINE_POSITIVE_CLASS_TOO_THIN');
     if(!memberSelectionSupported)supportGaps.push('MEMBER_SELECTION_BLOCK_UNSUPPORTED');
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
     if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
@@ -1083,6 +1091,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       local_calibration_samples:Number(result.local_calibration_samples)||0,
       baseline_anchor_source:regimeBaselines[regime]?.source||'POOLED_TRAINING_ONLY_FALLBACK',
       baseline_anchor_training_samples:Number(regimeBaselines[regime]?.training_samples)||0,
+      baseline_anchor_local_training_samples:Number(regimeBaselines[regime]?.local_training_samples)||0,
+      baseline_anchor_local_positive_samples:Number(regimeBaselines[regime]?.local_positive_samples)||0,
+      baseline_anchor_local_negative_samples:Number(regimeBaselines[regime]?.local_negative_samples)||0,
       training_start_at:result.training_start_at??null,
       selection_start_at:result.selection_start_at??null,
       calibration_start_at:result.calibration_start_at??null,

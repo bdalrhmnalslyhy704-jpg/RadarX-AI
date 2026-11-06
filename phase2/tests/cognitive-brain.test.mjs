@@ -201,6 +201,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(profile.neural_network.calibration_check_samples>=20);
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.ok(profile.neural_network.selection_samples >= 20);
+    assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
+    assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
+    assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
+      'all refit labels must mature before the independent calibration block begins');
     assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
       'V5 fitting labels must be resolved before the separate selection block');
     assert.ok(profile.neural_network.max_selection_outcome_resolved_at < profile.validation_start_at,
