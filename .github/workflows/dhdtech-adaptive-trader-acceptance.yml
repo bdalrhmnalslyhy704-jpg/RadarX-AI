@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+      - verify/build224-tcn-fallback-20261106
     paths:
       - 'Dockerfile'
       - 'phase2/core/cognitive-brain.mjs'
