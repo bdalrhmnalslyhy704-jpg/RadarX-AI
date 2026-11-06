@@ -655,6 +655,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     return{
       status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
       architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
@@ -710,6 +711,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     return{
       status:'WAITING_FOR_SHARED_TCN_TRAINING_SAMPLES',
       architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
