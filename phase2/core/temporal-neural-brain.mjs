@@ -1009,6 +1009,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibration_samples:Number(result.calibration_samples)||0,
       calibration_source:result.calibration_source||null,
       calibration_targets:result.calibration_targets||null,
+      calibration_selection_samples:Number(result.calibration_selection_samples)||0,
       member_selection_samples:Number(result.member_selection_samples)||0,
       member_selection_source:result.member_selection_source||null,
       selected_member_index:Number.isInteger(result.selected_member_index)?result.selected_member_index:null,
