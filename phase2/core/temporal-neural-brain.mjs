@@ -690,7 +690,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      :{training:0.58,memberSelection:0.80,calibration:0.98};
+      :{training:0.70,memberSelection:0.80,calibration:0.98};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
@@ -705,9 +705,16 @@ export function buildTemporalNeuralProfile(samples = [], {
     .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
   const sharedTrainingMaxResolvedAt=sharedTrainingRows.length
     ?Math.max(...sharedTrainingRows.map(row=>row.resolved_at)):null;
-  if(fitTimes.length<4||sharedTrainingRows.length<minTrainingSamples){
+  const regimeTrainingCounts=Object.fromEntries(regimes.map(regime=>[
+    regime,sharedTrainingRows.filter(row=>regimeOfSequence(row.sequence)===regime).length
+  ]));
+  const hasTrainableRegime=regimes.some(regime=>regimeTrainingCounts[regime]>=minRegimeTraining);
+  // Independent specialists are gated by their own matured history, not by
+  // the old pooled 160-row floor. A healthy 80+ sample regime must not be
+  // discarded simply because the opposite regime is sparse or absent.
+  if(fitTimes.length<4||!hasTrainableRegime){
     return{
-      status:'WAITING_FOR_SHARED_TCN_TRAINING_SAMPLES',
+      status:'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE',
       architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
       temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
@@ -747,12 +754,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   // Validation, selection and final holdout rows are never used to build anchors.
   const regimeBaselines=Object.fromEntries(regimes.map(regime=>{
     const regimeTrainingRows=sharedTrainingRows.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const baseline=regimeTrainingRows.length>=minRegimeTraining
-      ?fitLogistic(regimeTrainingRows):pooledBaseline;
+    if(regimeTrainingRows.length<minRegimeTraining)return [regime,null];
+    const baseline=fitLogistic(regimeTrainingRows);
     return [regime,{weights:baseline.weights,bias:baseline.bias,base_rate:baseline.base_rate,
-      training_samples:regimeTrainingRows.length,
-      source:regimeTrainingRows.length>=minRegimeTraining
-        ?'REGIME_SPECIFIC_TRAINING_ONLY':'POOLED_TRAINING_ONLY_FALLBACK'}];
+      training_samples:regimeTrainingRows.length,source:'REGIME_SPECIFIC_TRAINING_ONLY'}];
   }));
   // Each BTC regime gets its own three-member TCN trained only on that regime's
   // purged training block. The two specialists share cutoffs and tensor schema,
@@ -832,6 +837,7 @@ export function buildTemporalNeuralProfile(samples = [], {
 
     const supportGaps=[];
     if(regimeTraining.length<minRegimeTraining)supportGaps.push('TRAINING_SAMPLE_COUNT');
+    if(!regimeBaseline)supportGaps.push('REGIME_LOGISTIC_ANCHOR_UNAVAILABLE');
     if(memberSelectionTargets.samples<minSelectionSamples)supportGaps.push('SELECTION_SAMPLE_COUNT');
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
     if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
@@ -872,7 +878,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
-    const regimeBaseline=regimeBaselines[regime]||pooledBaseline;
+    const regimeBaseline=regimeBaselines[regime];
     const regimeFit=fitEnsemble(regimeTraining,{
       epochs,learningRate,l2,baseRate:regimePrior,
       baselineFit:regimeBaseline,
