@@ -1048,11 +1048,17 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     pendingBySymbol.get(symbol).push(sample);
   }
   const analyzed = await mapLimit(selected, 5, async ticker => {
-    const [first15m,fastLatest] = await Promise.all([
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 1000 }),
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 1000 })
-        .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
-    ]);
+    // Start the optional 5m request concurrently, but do not await it before
+    // extending the primary 15m history. This prevents a slow micro-window
+    // response from consuming the remaining shared scan deadline needed for
+    // the older 15m page that feeds historical model training.
+    const fastLatestPromise=rest.request('/api/v3/klines', {
+      symbol:ticker.symbol,interval:'5m',limit:1000
+    }).then(value=>({value,error:null}))
+      .catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}));
+    const first15m=await rest.request('/api/v3/klines', {
+      symbol:ticker.symbol,interval:'15m',limit:1000
+    });
     let result=first15m;
     if(Array.isArray(first15m?.data)&&first15m.data.length){
       const earliestOpen=finite(first15m.data[0]?.[0]);
@@ -1069,6 +1075,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
         }
       }
     }
+    const fastLatest=await fastLatestPromise;
     const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
       ?{value:{
           ...fastLatest.value,
