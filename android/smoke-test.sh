@@ -64,7 +64,7 @@ wait_for_activity_manager() {
   PHASE="wait for Android ActivityManager service"
   local service_status=""
   for attempt in $(seq 1 45); do
-    service_status="$(timeout 8s adb shell service check activity 2>/dev/null | tr -d '\\r' || true)"
+    service_status="$(timeout 8s adb shell service check activity 2>/dev/null | tr -d '\r' || true)"
     if printf '%s' "$service_status" | grep -Eiq 'activity: *found|found'; then
       if timeout 8s adb shell dumpsys activity activities >/dev/null 2>&1; then
         echo "Android ActivityManager is ready (probe $attempt/45)."
@@ -304,7 +304,7 @@ install_apk_with_recovery() {
       timeout 8s adb start-server >/dev/null 2>&1 || true
       timeout 30s adb wait-for-device
       for probe in $(seq 1 6); do
-        if timeout 8s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' | grep -Fxq '1'; then
+        if timeout 8s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -Fxq '1'; then
           break
         fi
         sleep 3
@@ -361,7 +361,7 @@ assert_background_service_declared
 # service. Reopen only the Activity (never force-stop the package) so the offline
 # screen can be checked while preserving the same background-service process.
 OFFLINE_ACTIVITY_STATE="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
-if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null; then
+if ! printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null; then
   echo "Android reclaimed or backgrounded the UI process; reopening MainActivity without stopping the monitor."
   PHASE="reopen offline UI without stopping background service"
   OFFLINE_APP_LOG_FILE="${RUNNER_TEMP:-/tmp}/radarx-offline-ui-logcat.txt"
@@ -373,11 +373,11 @@ if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|Res
   offline_ui_ready=0
   for attempt in $(seq 1 45); do
     offline_logs="$(cat "${OFFLINE_APP_LOG_FILE}" 2>/dev/null || true)"
-    offline_pid="$(timeout 10s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\\r' || true)"
+    offline_pid="$(timeout 10s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
     OFFLINE_ACTIVITY_STATE="$(timeout 10s adb shell dumpsys activity activities 2>/dev/null || true)"
     if [[ -n "${offline_pid}" ]] && \
-       printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null && \
-       printf '%s\\n' "${offline_logs}" | grep -F 'UI_READY' >/dev/null; then
+       printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null && \
+       printf '%s\n' "${offline_logs}" | grep -F 'UI_READY' >/dev/null; then
       offline_ui_ready=1
       break
     fi
@@ -385,7 +385,7 @@ if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|Res
   done
   if [[ "${offline_ui_ready}" -ne 1 ]]; then
     echo "::error::MainActivity could not be reopened in offline mode without stopping background monitoring"
-    printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
+    printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
     tail -n 120 "${OFFLINE_APP_LOG_FILE}" || true
     exit 1
   fi
@@ -588,15 +588,15 @@ for attempt in $(seq 1 120); do
     for stop_attempt in $(seq 1 20); do
       current_service_pid="$(background_service_pid)"
       logs="$(replay_logs)"
-      if printf '%s\\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
+      if printf '%s\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
         stop_request_seen=1
       fi
-      if printf '%s\\n' "${logs}" | grep -F 'BACKGROUND_STOP_ACTION_RECEIVED' >/dev/null; then
+      if printf '%s\n' "${logs}" | grep -F 'BACKGROUND_STOP_ACTION_RECEIVED' >/dev/null; then
         stop_action_seen=1
       fi
       service_state="$(timeout 4s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
       service_registered=1
-      if ! printf '%s\\n' "${service_state}" | grep -F 'RadarXBackgroundMonitorService' >/dev/null; then
+      if ! printf '%s\n' "${service_state}" | grep -F 'RadarXBackgroundMonitorService' >/dev/null; then
         service_registered=0
       fi
       # Android may keep an empty process cached after its ServiceRecord is removed.
