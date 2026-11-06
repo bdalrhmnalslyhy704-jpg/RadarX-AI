@@ -105,7 +105,10 @@ export function buildAdaptiveTraderCoveragePlan(eligibleCount, scanLimit) {
   // Half of each bounded batch is reserved for deterministic round-robin
   // discovery; the other half remains available to event/liquidity priorities.
   // This gives a finite sweep bound instead of leaving only 15% for rotation.
-  const rotationSlots=batch?Math.min(batch,Math.max(1,Math.ceil(batch/2))):0;
+  // Keep roughly half the batch on the fair cursor, while assigning one
+  // explicit slot to the extended-mover audit lane. These rows are audit-only
+  // and never gain entry permission; they must not displace the next rising pair.
+  const rotationSlots=batch?Math.min(batch,Math.max(1,batch>1?Math.ceil(batch/2)-1:1)):0;
   return {
     eligible_symbols:eligible,
     scan_batch_limit:batch,
