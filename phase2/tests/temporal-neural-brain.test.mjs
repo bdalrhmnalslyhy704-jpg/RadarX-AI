@@ -73,7 +73,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
-  const profile=buildTemporalNeuralProfile(rows,{epochs:2});
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
   assert.equal(profile.resolved_samples,32*24);
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
@@ -237,7 +237,7 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
     if(group===15||group===16||group===18||group===20||group===23||group===25||group===27||group===31)riskOn=false;
     for(let index=0;index<12;index++){
       let up;
-      if(group>=13&&group<=17&&riskOn)up=false;
+      if(group>=12&&group<=17&&riskOn)up=false;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
       else if(group>=17&&group<=27)up=index<2;
@@ -254,11 +254,11 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.ok(expert.training_samples>=80);
-  assert.equal(expert.selection_samples,12);
+  assert.equal(expert.selection_samples,48);
   assert.equal(expert.selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
-  assert.equal(expert.calibration_samples,36);
+  assert.equal(expert.calibration_samples,24);
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
   assert.ok(!expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
     'same-regime calibration has sufficient samples; the missing selection class is the fail-closed reason');
