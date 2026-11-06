@@ -947,6 +947,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       support_gaps:result.support_gaps||[],
       model_scope:'SHARED_TCN_WITH_REGIME_CONDITIONAL_MEMBER_SELECTION',
+      baseline_anchor_source:regimeBaselines[regime]?.source||'POOLED_TRAINING_ONLY_FALLBACK',
+      baseline_anchor_training_samples:Number(regimeBaselines[regime]?.training_samples)||0,
       training_start_at:result.training_start_at??null,
       selection_start_at:result.selection_start_at??null,
       validation_start_at:result.validation_start_at??null,
