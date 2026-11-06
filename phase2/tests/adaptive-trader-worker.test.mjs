@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
@@ -9,6 +9,12 @@ import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
 
 
+
+test('signed Build 224 candidate cleanup preserves same-commit live acceptance gates',async()=>{
+  const workflow=await readFile(new URL('../../.github/workflows/build224-signed-candidate-apk.yml',import.meta.url),'utf8');
+  assert.match(workflow,/--arg sha "\$GITHUB_SHA"/);
+  assert.match(workflow,/select\(\.head_sha != \$sha\)/);
+});
 
 test('worker proves and persists a complete 192-pair coverage sweep without counting failed data as valid',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-192-coverage-'));
