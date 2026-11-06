@@ -884,10 +884,6 @@ export function buildCognitiveLearningProfile(samples = [], {
         base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate
       })),
       member_validation_brier_scores:[],
-        index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
-        base_rate_brier_score:row.metrics.base_rate_brier_score,
-        beat_base_rate:row.metrics.beat_base_rate
-      })),
       trained: neuralFit!==null, selected: neuralSelected,
       probability_ready: neuralProbabilityReady,
       live_eligibility_ready:neuralLiveReady,
