@@ -934,16 +934,31 @@ export function buildTemporalNeuralProfile(samples = [], {
     );
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
 
+    // Fair challenger: calibrate the neural residual and the logistic anchor
+    // on the same later, disjoint calibration rows. Otherwise calibration gain
+    // alone can be mislabeled as neural-network superiority when residualScale=0.
+    const logisticProbabilityCalibrator=fitSelectionProbabilityCalibrator(
+      calibrationRows,
+      sequence=>predictLogistic(sequence,regimeBaseline),
+      {minimumSamples:30,minimumPositive:5,minimumNegative:20,
+       iterations:300,learningRate:0.03,regularization:0.45,
+       fitOn:calibrationSource+'_LOGISTIC_CHALLENGER'}
+    );
+    const predictCalibratedLogistic=sequence=>calibratedProbability(
+      predictLogistic(sequence,regimeBaseline),logisticProbabilityCalibrator);
+    const neuralResidualContributes=selectedResidualScale>0;
     const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
     const validationLogistic=evaluate(regimeValidation,
-      sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
-    const validationPassed=validationModel.evaluated&&validationLogistic.evaluated&&
+      predictCalibratedLogistic,regimeBaseline.base_rate);
+    const validationPassed=neuralResidualContributes&&
+      validationModel.evaluated&&validationLogistic.evaluated&&
       validationModel.beat_base_rate===true&&
       validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
     const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
     const holdoutLogistic=evaluate(regimeHoldout,
-      sequence=>predictLogistic(sequence,regimeBaseline),regimeBaseline.base_rate);
-    const holdoutPassed=validationPassed&&holdoutModel.evaluated&&holdoutLogistic.evaluated&&
+      predictCalibratedLogistic,regimeBaseline.base_rate);
+    const holdoutPassed=validationPassed&&neuralResidualContributes&&
+      holdoutModel.evaluated&&holdoutLogistic.evaluated&&
       holdoutModel.beat_base_rate===true&&
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
@@ -958,13 +973,16 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibration_selection_samples:calibrationRows.length,calibration_source:calibrationSource,
       calibration_targets:selectedCalibrationTargets,
       selected_member_index:selectedMemberIndex,selected_residual_scale:selectedResidualScale,
+      neural_residual_contributes:neuralResidualContributes,
       selection_calibration_samples:selectionCalibrator.sample_count,
+      logistic_calibration_samples:logisticProbabilityCalibrator.sample_count,
       validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
       validation_passed:validationPassed,holdout_passed:holdoutPassed,
       validation_model:validationModel,validation_logistic:validationLogistic,
       holdout_model:holdoutModel,holdout_logistic:holdoutLogistic,
       member_selection_scores:memberSelectionScores,
-      probability_calibration:selectionCalibrator};
+      probability_calibration:selectionCalibrator,
+      logistic_probability_calibration:logisticProbabilityCalibrator};
   }
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
