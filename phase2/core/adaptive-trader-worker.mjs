@@ -427,7 +427,9 @@ export class AdaptiveTraderWorker{
       selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
         String(profile.model_selection?.selected_model||'UNVALIDATED'),
       target_definition:profile.temporal_network?.probability_ready===true
-        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2':'LEGACY_4H_CLOSE_RETURN',
+        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'
+        :String(profile.model_selection?.selected_model||'')==='NEURAL_GLOBAL'
+          ?'UP_CLOSE_RETURN_BINARY_V1':'LEGACY_4H_CLOSE_RETURN',
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,

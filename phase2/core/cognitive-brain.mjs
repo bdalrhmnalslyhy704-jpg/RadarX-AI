@@ -78,6 +78,10 @@ const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 const betaRate = (sum, count) => (sum + 2) / (count + 4);
 const targetOf = row => row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5;
+// V5 estimates an upward opportunity; a neutral close is a non-success.
+// The legacy/global learner retains its original soft three-way target.
+const upEventTargetOf = row => row?.outcome === 'UP' ? 1 : 0;
+const asUpEventRows = rows => (Array.isArray(rows)?rows:[]).map(row=>({...row,target:upEventTargetOf(row)}));
 
 function factorValues(features = {}) {
   return Object.fromEntries(FACTORS.map(factor => [factor.key, Boolean(factor.test(features || {}))]));
@@ -728,8 +732,9 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V4',
-        training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+        training_strategy:'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5',
+        training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT',
+        target_definition:'UP_CLOSE_RETURN_BINARY_V1',
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[0,0.25,0.5,0.75,1],
         selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
@@ -792,7 +797,17 @@ export function buildCognitiveLearningProfile(samples = [], {
 
   const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
-  const neuralCandidateRows=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
+  const upEventTraining=asUpEventRows(training);
+  const upEventRecentTraining=asUpEventRows(recentTraining);
+  const upEventValidation=asUpEventRows(validation);
+  const upEventHoldout=asUpEventRows(holdout);
+  // All neural/challenger comparisons use identical binary UP-event labels.
+  const neuralGlobalLogisticFit=upEventTraining.length>=minTrainingSamples
+    ?fitLogisticModel(upEventTraining,{l2,iterations,learningRate}):null;
+  const neuralRecentLogisticFit=upEventRecentTraining.length>=minTrainingSamples
+    ?fitLogisticModel(upEventRecentTraining,{l2,iterations,learningRate}):null;
+  const neuralCandidateRows=training.length>=neuralMinimum
+    ?asUpEventRows(training.slice(-neuralLimit)):[];
   const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
   // V5 now reserves four chronological stages inside its training window:
   // 70% model fitting, 10% member/residual selection, and 20% probability
@@ -862,47 +877,67 @@ export function buildCognitiveLearningProfile(samples = [], {
   // This validation score is now measured on rows later than model fitting,
   // member selection and calibration, so it is an honest outer comparison.
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
-    ?evaluateHoldout(validation,neuralFit):{
+    ?evaluateHoldout(upEventValidation,neuralFit):{
       evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_SELECTION_SAMPLES',
-      sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
+      sample_count:upEventValidation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
     };
-  // The untouched final block is scored only after validation has selected a model.
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
-    ?evaluateHoldout(validation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventValidation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralGlobalLogisticValidation=neuralGlobalLogisticFit
+    ?evaluateHoldout(upEventValidation,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralRecentLogisticValidation=neuralRecentLogisticFit
+    ?evaluateHoldout(upEventValidation,neuralRecentLogisticFit):null;
   const comparisonMargin=Math.max(0.002,Number(neuralSelectionMargin)||0);
+  const neuralValidationComparison={
+    neural_brier_score:neuralValidation.model_brier_score??null,
+    base_rate_brier_score:neuralValidation.base_rate_brier_score??null,
+    same_window_logistic_brier_score:neuralSameWindowLogisticValidation.model_brier_score??null,
+    global_logistic_brier_score:neuralGlobalLogisticValidation.model_brier_score??null,
+    recent_logistic_brier_score:neuralRecentLogisticValidation?.model_brier_score??null,
+    beats_base_rate:neuralValidation.beat_base_rate===true,
+    beats_same_window_logistic:neuralValidation.evaluated===true&&neuralSameWindowLogisticValidation.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralSameWindowLogisticValidation.model_brier_score,
+    beats_global_logistic:neuralValidation.evaluated===true&&neuralGlobalLogisticValidation.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralGlobalLogisticValidation.model_brier_score,
+    beats_recent_logistic:!neuralRecentLogisticFit||(neuralValidation.evaluated===true&&
+      neuralRecentLogisticValidation?.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralRecentLogisticValidation.model_brier_score)
+  };
   const neuralWins=neuralFit!==null&&neuralValidation.evaluated===true&&
-    neuralValidation.beat_base_rate===true&&
-    neuralSameWindowLogisticValidation.evaluated===true&&
-    neuralValidation.model_brier_score+comparisonMargin<neuralSameWindowLogisticValidation.model_brier_score&&
-    (!selectedValidation.evaluated||
-      neuralValidation.model_brier_score+comparisonMargin<selectedValidation.model_brier_score);
-  const neuralHoldout=neuralFit?evaluateHoldout(holdout,neuralFit):{
-    sample_count:holdout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
+    neuralValidationComparison.beats_base_rate===true&&
+    neuralValidationComparison.beats_same_window_logistic===true&&
+    neuralValidationComparison.beats_global_logistic===true&&
+    neuralValidationComparison.beats_recent_logistic===true;
+  const neuralHoldout=neuralFit?evaluateHoldout(upEventHoldout,neuralFit):{
+    sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
     log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
   };
   const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
-    ?evaluateHoldout(holdout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
-  const globalHoldout=neuralFit?evaluateHoldout(holdout,globalFit):{evaluated:false,model_brier_score:null};
-  const recentHoldout=neuralFit&&recentFit?evaluateHoldout(holdout,recentFit):null;
+    ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralGlobalLogisticHoldout=neuralGlobalLogisticFit
+    ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralRecentLogisticHoldout=neuralRecentLogisticFit
+    ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit):null;
   const beatsSameWindowLogistic=neuralHoldout.evaluated===true&&
     neuralSameWindowLogisticHoldout.evaluated===true&&
     neuralHoldout.model_brier_score+comparisonMargin<neuralSameWindowLogisticHoldout.model_brier_score;
-  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&globalHoldout.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<globalHoldout.model_brier_score;
-  const beatsRecentLogistic=!recentFit||(neuralHoldout.evaluated===true&&recentHoldout?.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<recentHoldout.model_brier_score);
+  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&neuralGlobalLogisticHoldout.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<neuralGlobalLogisticHoldout.model_brier_score;
+  const beatsRecentLogistic=!neuralRecentLogisticFit||(neuralHoldout.evaluated===true&&
+    neuralRecentLogisticHoldout?.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<neuralRecentLogisticHoldout.model_brier_score);
   const neuralHoldoutReady=neuralHoldout.evaluated===true&&neuralHoldout.beat_base_rate===true&&
     beatsSameWindowLogistic&&beatsGlobalLogistic&&beatsRecentLogistic;
   const neuralHoldoutComparison={
-    sample_count:holdout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+    sample_count:upEventHoldout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
     neural_brier_score:neuralHoldout.model_brier_score,
     same_window_logistic_brier_score:neuralSameWindowLogisticHoldout.model_brier_score??null,
-    global_logistic_brier_score:globalHoldout.model_brier_score??null,
-    recent_logistic_brier_score:recentHoldout?.model_brier_score??null,
+    global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
+    recent_logistic_brier_score:neuralRecentLogisticHoldout?.model_brier_score??null,
     beats_base_rate:neuralHoldout.beat_base_rate===true,
     beats_same_window_logistic:beatsSameWindowLogistic,
     beats_global_logistic:beatsGlobalLogistic,
-    beats_recent_logistic:recentFit?beatsRecentLogistic:null,
+    beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
     passed:neuralHoldoutReady
   };
   let neuralSelected=false;
@@ -914,7 +949,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason='NEURAL_MLP_BEAT_LOGISTIC_CHALLENGER_ON_MIDDLE_CHRONOLOGICAL_VALIDATION';
     neuralSelected=true;
   }
-  const holdoutMetrics = evaluateHoldout(holdout, selectedFit);
+  const holdoutMetrics = selectedModel==='NEURAL_GLOBAL'
+    ?neuralHoldout:evaluateHoldout(holdout, selectedFit);
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
     validation.length >= minimumValidationSamples &&
@@ -974,8 +1010,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,training_samples: neuralTraining.length,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V4',
-      training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      training_strategy:'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5',
+      training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT',
+      target_definition:'UP_CLOSE_RETURN_BINARY_V1',
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
       selection_samples:neuralSelection.length,
@@ -1008,6 +1045,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       live_eligibility_ready:neuralLiveReady,
       iterations: neuralFit?.iterations??Math.max(20,Math.min(240,Math.trunc(Number(neuralIterations)||NEURAL_POLICY.iterations))),
       validation: neuralValidation,
+      validation_comparison:neuralValidationComparison,
       holdout: neuralHoldout,
       holdout_comparison:neuralHoldoutComparison,
       selection_margin: comparisonMargin
@@ -1060,8 +1098,11 @@ export function buildCognitivePrequentialProfile(journal = [], {
       (String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
         ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
           ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
-        : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
-          ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
+        : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
+          ? String(row.selected_model||row.model_variant||'')==='NEURAL_GLOBAL' &&
+            ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
+          : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
+            ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.trained_through_at) !== null &&
       Number(row.trained_through_at) < Number(row.at) &&
@@ -1070,7 +1111,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ...row,
       model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
-      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
+      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN' ||
+        row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
         ? (row.outcome==='UP'?1:0)
         : row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))

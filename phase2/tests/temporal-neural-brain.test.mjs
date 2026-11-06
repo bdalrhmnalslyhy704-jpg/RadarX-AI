@@ -89,7 +89,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }));
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
+  assert.equal(profile.shared_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1');
   assert.equal(profile.residual_scale_selection,'REGIME_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
@@ -151,9 +153,9 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
-  assert.equal(expert.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALIST');
-  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
-  assert.equal(profile.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS');
+  assert.equal(expert.model_scope,'SHARED_TCN_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHOR');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
@@ -182,9 +184,9 @@ test('TCN trains and validates an independent expert for each supported BTC regi
     'the logistic challenger must be calibrated on the exact same regime-local later block');
   assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
   assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
-  assert.equal(profile.calibration_fit_scope,'REGIME_CALIBRATION_BLOCK_ONLY');
-  assert.equal(profile.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13');
-  assert.equal(profile.model_scope,'INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS');
+  assert.equal(profile.calibration_fit_scope,'REGIME_OR_SHARED_CALIBRATION_BLOCK_ONLY');
+  assert.equal(profile.training_strategy,'SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14');
+  assert.equal(profile.model_scope,'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS');
   assert.ok(expert.selection_start_at<expert.calibration_start_at&&
     expert.calibration_start_at<expert.validation_start_at,
     'member selection, calibration and reported validation must use three disjoint chronological blocks');
@@ -269,15 +271,15 @@ test('sparse BTC regime fails closed instead of borrowing selection or calibrati
   assert.equal(expert.selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
   assert.ok(expert.support_gaps.includes('SELECTION_POSITIVE_CLASS'));
-  assert.equal(expert.calibration_samples,24);
-  assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
-  assert.ok(expert.support_gaps.includes('CALIBRATION_SAMPLE_COUNT'),
-    '24 same-regime calibration rows are below the explicit 30-row calibrator minimum');
+  assert.equal(expert.local_calibration_samples,24);
+  assert.equal(expert.calibration_source,'SHARED_REGIME_CALIBRATION_BLOCK');
+  assert.ok(expert.calibration_samples>=30,
+    'the later disjoint shared calibration block must meet the calibrator minimum');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
   assert.equal(expert.probability_calibration,null);
   assert.equal(profile.probability_ready,false,
-    'a regime with insufficient same-regime selection/calibration support must not borrow another regime');
+    'a regime with no local selection positives must remain unavailable even when shared calibration is supported');
   assert.equal(profile.live_eligibility_ready,false);
 });
 
@@ -320,7 +322,7 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
-  assert.ok(containerWorkflow.includes("training_strategy==='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'"));
+  assert.ok(containerWorkflow.includes("training_strategy==='SHARED_TEMPORAL_TCN_REGIME_CONDITIONED_CHALLENGER_V14'"));
   assert.ok(containerWorkflow.includes('neural_residual_contributes===true'));
   assert.ok(workflow.includes('temporalNeuralContributionSafe'));
 });

@@ -182,9 +182,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
-    assert.equal(profile.neural_network.training_objective, 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+    assert.equal(profile.neural_network.training_objective, 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE_BINARY_UP_EVENT');
     assert.equal(profile.neural_network.training_strategy,
-      'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V4');
+      'UP_EVENT_BINARY_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V5');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -461,6 +461,7 @@ test('prequential audit never mixes neural and logistic model variants after mod
     journal.push({
       id: 'VARIANT-' + index, model_version: 5,
       selected_model: logisticBlock ? 'GLOBAL_HISTORY' : 'NEURAL_GLOBAL',
+      target_definition:logisticBlock?undefined:'UP_CLOSE_RETURN_BINARY_V1',
       at, trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
@@ -568,3 +569,24 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
   assert.equal(audit.recent_window.error_patterns[0].high_confidence_errors, 30);
 });
 
+
+test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
+  const journal=Array.from({length:8},(_,index)=>{
+    const at=BASE_TIME+index*5*60*60*1000;
+    const outcome=index%2===0?'UP':index%4===1?'FLAT':'DOWN';
+    return {
+      id:'V5-UP-EVENT-'+index,model_version:5,selected_model:'NEURAL_GLOBAL',
+      target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+      at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome_source:'CLOSED_CANDLE_4H',outcome,
+      predicted_up_probability:outcome==='UP'?90:10
+    };
+  });
+  const audit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:2,windowSize:4,modelVariant:'NEURAL_GLOBAL'
+  });
+  assert.equal(audit.audited_model_variant,'NEURAL_GLOBAL');
+  assert.equal(audit.resolved_forecasts,8);
+  assert.equal(audit.recent_window.brier_score,0.01);
+  assert.equal(audit.previous_window.brier_score,0.01);
+});
