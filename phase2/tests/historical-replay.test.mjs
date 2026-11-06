@@ -124,6 +124,80 @@ test('historical median accepts four contiguous peers when the requested replay 
   assert.ok(Math.abs(seen[0].median-2.5)<0.00001);
 });
 
+test('04:00 Asia/Aden first decision is a documented warm-up, then peer median becomes available from closed candles',()=>{
+  const sessionStart=Date.UTC(2024,10,6,1,0,0,0);
+  const makeSeries=(offset=0)=>{
+    const rows=[];let price=100+offset;
+    for(let i=-100;i<4;i++){
+      const openTime=sessionStart+i*MINUTE;
+      const open=price,close=open*(1+0.0001*(i+101));
+      rows.push({openTime,closeTime:openTime+MINUTE-1,open,high:close*1.001,
+        low:open*0.999,close,volume:100,quoteVolume:1000,tradeCount:10,
+        takerBuyBaseVolume:55,takerBuyQuoteVolume:550,closed:true});
+      price=close;
+    }
+    return rows;
+  };
+  const target=makeSeries(0);
+  const cohort={
+    TARGETUSDT:target,PEER1USDT:makeSeries(1),PEER2USDT:makeSeries(2),
+    PEER3USDT:makeSeries(3),PEER4USDT:makeSeries(4),PEER5USDT:makeSeries(5),
+    PEER6USDT:makeSeries(6)
+  };
+  const seen=[];
+  const replay=runHistoricalReplay({
+    symbol:'TARGETUSDT',oneMinuteCandles:target,aggTrades:syntheticTrades(target),
+    marketCohortCandles:cohort,
+    startTime:sessionStart-1,endTime:sessionStart+2*MINUTE-1,
+    outcomeEndTime:sessionStart+3*MINUTE,outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    evaluate(input){
+      seen.push({
+        now:input.now,source:input.marketMedianSource,
+        warmup:input.marketMedianWarmup===true,
+        median:input.marketMedianReturnPct,
+        samples:input.marketMedianSampleCount
+      });
+      return {accepted:false,reason_codes:['SESSION_MEDIAN_WARMUP_TEST']};
+    }
+  });
+  assert.equal(replay.steps.length,3);
+  assert.equal(seen[0].now,sessionStart);
+  assert.equal(seen[0].source,'UNAVAILABLE_SESSION_WARMUP');
+  assert.equal(seen[0].warmup,true);
+  assert.equal(seen[0].median,null);
+  assert.equal(seen[0].samples,0);
+  assert.equal(seen[1].source,'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN');
+  assert.equal(seen[1].warmup,false);
+  assert.equal(seen[1].samples,6);
+  assert.equal(replay.steps.filter(row=>row.market_median_source==='UNAVAILABLE_SESSION_WARMUP').length,1);
+});
+
+test('Early Move coverage accepts only the explicit Aden session warm-up and still rejects later missing peer medians',()=>{
+  const requirements=historicalProfileRequirements('EARLY_MOVE_RADAR');
+  const input={
+    oneMinute:Array.from({length:requirements.base.oneMinute},()=>({closed:true})),
+    fiveMinute:Array.from({length:requirements.base.fiveMinute},()=>({closed:true})),
+    timeframes:Object.fromEntries(Object.entries(requirements.frames).map(([key,count])=>
+      [key,Array.from({length:count},()=>({closed:true}))])),
+    dataPolicy:{tradeCoverageComplete:false},
+    marketMedianWarmup:true,
+    marketMedianSource:'UNAVAILABLE_SESSION_WARMUP',
+    marketMedianReturnPct:null,
+    marketMedianSampleCount:0,
+    marketMedianMinimumPeerCount:5
+  };
+  const coverage=Object.fromEntries(Object.entries(requirements.frames).map(([key,count])=>
+    [key,{complete:true,rows:count}]));
+  const warmupFailures=assessHistoricalProfileCoverage('EARLY_MOVE_RADAR',input,coverage);
+  assert.ok(!warmupFailures.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'),JSON.stringify(warmupFailures));
+
+  const genuinelyMissing=assessHistoricalProfileCoverage('EARLY_MOVE_RADAR',{
+    ...input,marketMedianWarmup:false,marketMedianSource:'UNAVAILABLE_INSUFFICIENT_CONTIGUOUS_PEERS'
+  },coverage);
+  assert.ok(genuinelyMissing.includes('HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'));
+});
+
 test('historical replay passes only timeframe candles closed by the current decision timestamp',()=>{
   const rows=candles(240);
   const start=rows[180].openTime,end=rows[184].closeTime,observationEnd=rows[190].closeTime;
