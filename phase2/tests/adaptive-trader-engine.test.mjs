@@ -128,7 +128,9 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
   assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===29)));
-  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'));
+  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'),
+    'the TCN training target uses a uniform 5m first-passage path');
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
 
   const target=samples[0];
@@ -162,7 +164,7 @@ test('historical learning examples use only baseline candles and label returns f
   assert.deepEqual(relabelled.features,target.features);
 });
 
-test('historical TCN keeps 15m/BTC samples when 5m history is missing and marks micro channels unavailable',()=>{
+test('15m-only historical samples remain available to V5 but are marked ineligible for TCN labels',()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
   const btcKlines=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
@@ -176,6 +178,8 @@ test('historical TCN keeps 15m/BTC samples when 5m history is missing and marks 
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.slice(8,14).every(value=>value===0))));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step[28]===0)),
     'the last tensor channel explicitly marks missing 5m evidence instead of fabricating microstructure');
+  assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'),
+    'a 15m candle cannot resolve which first-passage barrier was touched first');
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'),
     'four-hour outcome labels remain resolved from complete closed 15m candles');
 });
@@ -197,7 +201,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   const sample={
     id:'LIVE:TESTUSDT:'+String(baselineAt),symbol:'TESTUSDT',
     price:baselinePrice,at:baselineAt,closed_candle_baseline:true,
-    training_eligible:true,target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',outcome:null
+    training_eligible:true,target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',outcome:null
   };
   const fastOriginal=longClosedCandleFixture(now,720,5*60*1000,10,0.00003);
   const fastChanged={
@@ -213,7 +217,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
     symbol:'TESTUSDT',klines:changed,fastKlines:fastChanged,pendingSamples:[sample],now
   });
   assert.equal(outcomes.length,1);
-  assert.equal(outcomes[0].first_passage.path_resolution,'5M');
+  assert.equal(outcomes[0].first_passage.path_resolution,'15M');
   assert.equal(outcomes[0].sample_id,sample.id);
   assert.equal(outcomes[0].outcome,'UP');
   assert.equal(outcomes[0].return_pct,3,
@@ -224,7 +228,7 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   assert.equal(outcomes[0].horizon_ms,4*60*60*1000);
   assert.equal(outcomes[0].resolved_at-baselineAt,4*60*60*1000);
   assert.equal(outcomes[0].outcome,'UP');
-  assert.equal(outcomes[0].target_definition,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1');
+  assert.equal(outcomes[0].target_definition,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
   assert.equal(outcomes[0].outcome_source,'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1');
 
   const wrongBaseline=buildAdaptiveTraderClosedCandleOutcomeLabels({
@@ -507,6 +511,9 @@ test('paper portfolio opens only strict labelled setups, estimates costs and nev
 test('market snapshot service obtains exchange universe, tickers and candles from the injected public REST client',async()=>{
   const f=marketFixture();
   const requests=[];
+  const requestEvents=[];
+  let releaseFastKlines;
+  const fastKlineGate=new Promise(resolve=>{releaseFastKlines=resolve;});
   const rest={async request(path,query={}) {
     requests.push({path,query});
     if(path==='/api/v3/exchangeInfo')return {data:{symbols:[
@@ -517,6 +524,14 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
       {...f.ticker,quoteVolume:'5000000'},
       {symbol:'BADUPUSDT',lastPrice:'1',quoteVolume:'90000000',priceChangePercent:'2'}
     ],source:'https://data-api.binance.vision',receivedAt:f.now};
+    if(path==='/api/v3/klines'&&query.interval==='5m'){
+      requestEvents.push('5m-start');
+      return fastKlineGate.then(value=>{requestEvents.push('5m-resolved');return value;});
+    }
+    if(path==='/api/v3/klines'&&query.interval==='15m'&&query.symbol==='TESTUSDT'&&query.endTime){
+      requestEvents.push('asset-15m-backfill-start');
+      releaseFastKlines({data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now});
+    }
     if(path==='/api/v3/klines')return {data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now};
     throw new Error('UNEXPECTED_REQUEST');
   }};
@@ -536,10 +551,14 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.ok(fifteenRequests.some(x=>x.query.symbol==='BTCUSDT'&&Number(x.query.endTime)>0));
   assert.ok(fifteenRequests.some(x=>x.query.symbol==='TESTUSDT'&&Number(x.query.endTime)>0));
   const fastRequests=requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m');
-  assert.equal(fastRequests.length,2);
+  assert.equal(fastRequests.length,1,
+    'recent 5m flow is optional and must not consume a second historical REST page');
   assert.equal(fastRequests[0].query.limit,1000);
-  assert.equal(fastRequests[1].query.endTime,Number(f.klines.data[0][0])-1,
-    'the second Spot 5m request must page strictly before the latest window');
+  assert.equal(fastRequests[0].query.endTime,undefined,
+    'the 5m lane keeps only the latest completed-candle window');
+  assert.ok(requestEvents.indexOf('asset-15m-backfill-start')>=0);
+  assert.ok(requestEvents.indexOf('asset-15m-backfill-start')<requestEvents.indexOf('5m-resolved'),
+    'the primary 15m historical page must start before the optional 5m request is awaited');
 });
 
 
@@ -992,9 +1011,9 @@ test('historical sample phases give the cognitive learner enough distinct time b
   for(let i=0;i<140;i++){
     const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
     const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol,klines,fastKlines,btcKlines,now,maxSamples:8
+      symbol,klines,fastKlines,btcKlines,now,maxSamples:12
     });
-    assert.equal(samples.length,8,symbol+' should retain eight independent 4h labels');
+    assert.equal(samples.length,12,symbol+' should retain twelve independent 4h labels');
     for(let j=1;j<samples.length;j++){
       assert.ok(samples[j].at-samples[j-1].at>=4*60*60*1000,
         symbol+' must not contribute overlapping 4h outcome windows');
@@ -1017,8 +1036,15 @@ test('historical sample phases give the cognitive learner enough distinct time b
   assert.ok(temporal.training_samples>=160,'TCN training must contain enough matured observations');
   assert.ok(temporal.validation_samples>=24,'middle TCN validation must contain enough matured observations');
   assert.ok(temporal.holdout_samples>=40,'untouched TCN holdout must contain enough matured observations');
-  assert.equal(temporal.validation.evaluated,true);
-  assert.equal(temporal.holdout.evaluated,true);
+  // The constant-trend fixture lacks two-class support inside the
+  // independently modeled BTC regime. It must remain diagnostic-only instead
+  // of borrowing labels or publishing a global TCN probability.
+  assert.equal(temporal.validation.evaluated,false);
+  assert.equal(temporal.holdout.evaluated,false);
+  assert.equal(temporal.probability_ready,false);
+  assert.equal(temporal.live_eligibility_ready,false);
+  assert.deepEqual(temporal.selected_regimes,[]);
+  assert.equal(temporal.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
   assert.ok(temporal.max_training_outcome_resolved_at<temporal.validation_start_at);
   assert.ok(temporal.validation_start_at<temporal.holdout_start_at);
   // The constant-trend fixture has no predictive variation. Chronological size
@@ -1075,3 +1101,49 @@ test('screenshot gainer pairs receive quiet-flow priority before daily expansion
   }
 });
 
+
+
+test('fresh Binance closed-candle replay builds 24x29 TCN tensors with one 15m first-passage target',()=>{
+  const interval15=15*60*1000,interval5=5*60*1000;
+  const base=Date.UTC(2026,0,1),now=base+600*interval15+60_000;
+  const makeCandle=(openTime,open,close,quoteVolume,trades,buyShare,interval)=>{
+    const high=Math.max(open,close)*1.001,low=Math.min(open,close)*0.999;
+    const baseVolume=quoteVolume/close;
+    return [openTime,open,high,low,close,baseVolume,
+      openTime+interval-1,quoteVolume,trades,baseVolume*buyShare,quoteVolume*buyShare,0];
+  };
+  const asset=Array.from({length:600},(_,index)=>{
+    const openTime=base+index*interval15;
+    const open=1+index*0.00001;
+    const close=open*1.0001;
+    return makeCandle(openTime,open,close,20_000,240,0.56,interval15);
+  });
+  const btc=Array.from({length:600},(_,index)=>{
+    const openTime=base+index*interval15;
+    const open=30_000+index*0.4;
+    const close=open*1.00003;
+    return makeCandle(openTime,open,close,120_000,900,0.52,interval15);
+  });
+  const fast=Array.from({length:1800},(_,index)=>{
+    const openTime=base+index*interval5;
+    const open=1+index*0.0000033;
+    const close=open*1.00002;
+    return makeCandle(openTime,open,close,7_000,80,0.55,interval5);
+  });
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'FRESHDATAUSDT',
+    klines:{data:asset,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    fastKlines:{data:fast,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    btcKlines:{data:btc,source:'BINANCE_PUBLIC_REST',receivedAt:now},
+    now,minQuoteVolume24h:750_000,maxSamples:8
+  });
+  assert.ok(samples.length>=5,'the replay must create multiple distinct, mature historical outcomes');
+  assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'&&
+    row.first_passage?.outcome===row.outcome));
+  assert.ok(samples.every(row=>Array.isArray(row.temporal_sequence)&&row.temporal_sequence.length===24&&
+    row.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite))),
+    'every eligible historical outcome must carry the same causal 24x29 closed-candle tensor');
+  assert.equal(new Set(samples.map(row=>row.id)).size,samples.length,
+    'rebuild output must not duplicate a symbol/baseline candle');
+});

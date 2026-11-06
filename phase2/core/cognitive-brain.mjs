@@ -19,10 +19,10 @@ const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
   minTrainingSamples: 240,
-  // Use up to 1,200 newest purged training rows; the 18-10-6 ensemble
-  // is small enough for the DHDTech memory budget and needs a wider sample
-  // than the former 600-row cap in the live four-hour outcome stream.
-  maxTrainingSamples: 1200,
+  // Use up to 1,500 newest purged training rows. This widens the model-fit,
+  // member-selection and calibration blocks without consuming outer validation
+  // or the untouched holdout; the 18-10-6 ensemble remains compact.
+  maxTrainingSamples: 1500,
   iterations: 100,
   learningRate: 0.012,
   l2: 0.04,
@@ -78,6 +78,10 @@ const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 const betaRate = (sum, count) => (sum + 2) / (count + 4);
 const targetOf = row => row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5;
+// V5 estimates an upward opportunity; a neutral close is a non-success.
+// The legacy/global learner retains its original soft three-way target.
+const upEventTargetOf = row => row?.outcome === 'UP' ? 1 : 0;
+const asUpEventRows = rows => (Array.isArray(rows)?rows:[]).map(row=>({...row,target:upEventTargetOf(row)}));
 
 function factorValues(features = {}) {
   return Object.fromEntries(FACTORS.map(factor => [factor.key, Boolean(factor.test(features || {}))]));
@@ -218,7 +222,8 @@ function fitNeuralNetworkModel(training, {
   learningRate = NEURAL_POLICY.learningRate,
   l2 = NEURAL_POLICY.l2,
   seed = 1,
-  baselineFit = null
+  baselineFit = null,
+  trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
 } = {}) {
   const rows=(Array.isArray(training)?training:[]).map(row=>({
     vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
@@ -311,7 +316,16 @@ function fitNeuralNetworkModel(training, {
       // Residual linear path preserves reliable first-order evidence while the
       // two nonlinear layers learn interactions between market conditions.
       for(let i=0;i<inputSize;i++)output+=skipWeights[i]*row.vector[i];
-      const error=logistic(output)-row.target;
+      const probability=logistic(output);
+      // Optimize the same unweighted Brier proper-scoring objective used by
+      // chronological validation, model selection, and the untouched holdout.
+      const brierGradient=2*(probability-row.target)*probability*(1-probability);
+      const logLossGradient=probability-row.target;
+      const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLossGradient
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*brierGradient+0.5*logLossGradient
+          :brierGradient;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -363,6 +377,7 @@ function fitNeuralNetworkModel(training, {
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...FEATURE_NAMES],
     training_samples:rows.length,iterations:steps,l2:regularization,
+    training_objective:trainingObjective,
     residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
@@ -376,9 +391,12 @@ function fitNeuralEnsemble(training, options = {}) {
   // dependence on one epoch/regularization choice. Selection remains on the
   // chronological validation block; the untouched holdout is never consulted.
   const memberProfiles=[
-    {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5},
-    {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2},
-    {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2}
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.0))),learningRate:baseLearningRate,l2:baseL2*0.25,
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.2))),learningRate:baseLearningRate*0.9,l2:baseL2*0.4,
+      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
+    {iterations:Math.max(30,Math.min(180,Math.ceil(baseIterations*1.5))),learningRate:baseLearningRate*0.8,l2:baseL2*0.5,
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -395,7 +413,11 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:[...seeds],
     member_training_profiles:memberProfiles,
-    training_strategy:'DIVERSIFIED_RESIDUAL_MLP_SCHEDULE_V1',
+    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7',
+    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+    member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
+    residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
+    candidate_residual_scales:[0,0.25,0.5,0.75,1],
     base_rate:mean(members.map(member=>member.base_rate)),
     feature_names:[...FEATURE_NAMES],
     training_samples:members[0].training_samples,
@@ -404,15 +426,24 @@ function fitNeuralEnsemble(training, options = {}) {
   };
 }
 
-function predictFromFit(features, fit) {
+function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
     const selected=Number(fit.selected_member_index);
-    if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length)
-      return predictFromFit(features,fit.members[selected]);
-    const predictions=fit.members.map(member=>predictFromFit(features,member));
-    if(predictions.some(value=>!Number.isFinite(value)))return null;
-    return clamp(mean(predictions),0.02,0.98);
+    let rawPrediction;
+    if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length){
+      rawPrediction=predictFromFit(features,fit.members[selected],finite(fit.selected_residual_scale)??1);
+    }else{
+      const predictions=fit.members.map(member=>predictFromFit(features,member));
+      if(predictions.some(value=>!Number.isFinite(value)))return null;
+      rawPrediction=mean(predictions);
+    }
+    const calibration=fit.probability_calibrator;
+    if(calibration?.accepted!==true||!Number.isFinite(rawPrediction))return clamp(rawPrediction,0.02,0.98);
+    const raw=clamp(rawPrediction,0.02,0.98);
+    const calibratedLogit=clamp(Number(calibration.slope)||1,0.5,1.5)*
+      Math.log(raw/(1-raw))+clamp(Number(calibration.intercept)||0,-0.75,0.75);
+    return clamp(logistic(calibratedLogit),0.02,0.98);
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
     if(!Array.isArray(fit.input_weights)||fit.input_weights.length!==FEATURE_NAMES.length||
@@ -434,7 +465,8 @@ function predictFromFit(features, fit) {
       return Math.tanh(sum);
     });
     let output=Number(fit.output_bias)||0;
-    for(let j=0;j<hidden2.length;j++)output+=(Number(fit.output_weights[j])||0)*hidden2[j];
+    const scale=clamp(finite(fit.residual_scale)??finite(residualScale)??1,0,1);
+    for(let j=0;j<hidden2.length;j++)output+=scale*(Number(fit.output_weights[j])||0)*hidden2[j];
     for(let i=0;i<vector.length;i++)output+=vector[i]*(Number(fit.skip_weights[i])||0);
     return clamp(logistic(output),0.02,0.98);
   }
@@ -457,6 +489,79 @@ function predictFromFit(features, fit) {
   let value = Number(fit.intercept) || 0;
   for (let i = 0; i < fit.weights.length; i++) value += Number(fit.weights[i] || 0) * vector[i];
   return clamp(logistic(value), 0.02, 0.98);
+}
+
+
+function fitAndSelectNeuralProbabilityCalibrator(fitRows,checkRows,fit,{
+  minimumFitSamples=30,minimumFitPositive=6,minimumFitNegative=6,
+  minimumCheckSamples=20,minimumCheckPositive=3,minimumCheckNegative=3,
+  iterations=260,learningRate=0.035,regularization=0.55,
+  improvementMargin=0.00025
+}={}){
+  const makePredictions=(rows)=> (Array.isArray(rows)?rows:[]).map(row=>({
+    probability:predictFromFit(row.features,fit),target:row.target
+  })).filter(row=>Number.isFinite(row.probability)&&Number.isFinite(row.target));
+  const fitPredictions=makePredictions(fitRows);
+  const fitPositive=fitPredictions.filter(row=>row.target>0.5).length;
+  const fitNegative=fitPredictions.filter(row=>row.target<0.5).length;
+  const base={
+    method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',
+    fit_on:'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
+    check_on:'LATER_DISJOINT_CALIBRATION_CHECK_BLOCK',
+    fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
+    check_samples:0,check_positive:0,check_negative:0,
+    slope:1,intercept:0,fitted:false,accepted:false,
+    raw_check_brier:null,calibrated_check_brier:null,improvement:null
+  };
+  if(fitPredictions.length<minimumFitSamples||fitPositive<minimumFitPositive||
+     fitNegative<minimumFitNegative){
+    return {...base,reason:'CALIBRATION_FIT_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
+  }
+  const points=fitPredictions.map(row=>{
+    const probability=clamp(row.probability,0.02,0.98);
+    return {x:Math.log(probability/(1-probability)),target:row.target};
+  });
+  let slope=1,intercept=0;
+  for(let iteration=0;iteration<iterations;iteration++){
+    let slopeGradient=0,interceptGradient=0;
+    for(const point of points){
+      const prediction=logistic(slope*point.x+intercept);
+      const error=prediction-point.target;
+      const derivative=prediction*(1-prediction);
+      slopeGradient+=2*error*derivative*point.x;
+      interceptGradient+=2*error*derivative;
+    }
+    slopeGradient=slopeGradient/points.length+regularization*(slope-1);
+    interceptGradient=interceptGradient/points.length+regularization*intercept;
+    slope=clamp(slope-learningRate*slopeGradient,0.5,1.5);
+    intercept=clamp(intercept-learningRate*interceptGradient,-0.75,0.75);
+  }
+  const checkPredictions=makePredictions(checkRows);
+  const checkPositive=checkPredictions.filter(row=>row.target>0.5).length;
+  const checkNegative=checkPredictions.filter(row=>row.target<0.5).length;
+  const checkBase={
+    ...base,fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
+    check_samples:checkPredictions.length,check_positive:checkPositive,check_negative:checkNegative,
+    slope:Number(slope.toFixed(5)),intercept:Number(intercept.toFixed(5)),fitted:true
+  };
+  if(checkPredictions.length<minimumCheckSamples||checkPositive<minimumCheckPositive||
+     checkNegative<minimumCheckNegative){
+    return {...checkBase,reason:'CALIBRATION_CHECK_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
+  }
+  const rawBrier=mean(checkPredictions.map(row=>(row.probability-row.target)**2));
+  const calibratedBrier=mean(checkPredictions.map(row=>{
+    const raw=clamp(row.probability,0.02,0.98);
+    const adjusted=logistic(slope*Math.log(raw/(1-raw))+intercept);
+    return (adjusted-row.target)**2;
+  }));
+  const improvement=rawBrier-calibratedBrier;
+  const accepted=improvement>improvementMargin;
+  return {
+    ...checkBase,accepted,raw_check_brier:Number(rawBrier.toFixed(5)),
+    calibrated_check_brier:Number(calibratedBrier.toFixed(5)),
+    improvement:Number(improvement.toFixed(5)),
+    reason:accepted?null:'CALIBRATION_DID_NOT_IMPROVE_DISJOINT_CHECK_BLOCK'
+  };
 }
 
 function factorEvidence(training, { minimumBucket = 8 } = {}) {
@@ -638,6 +743,13 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_LONGER_FIT_LOWER_DECAY',
+        training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+        target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+        residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
+        candidate_residual_scales:[0,0.25,0.5,0.75,1],
+        selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
+        max_selection_outcome_resolved_at:null,selected_residual_scale:null,
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
       feature_names: [...FEATURE_NAMES],
@@ -694,71 +806,146 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
   }
 
-  const neuralLimit=Math.max(240,Math.min(1200,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
+  const neuralLimit=Math.max(240,Math.min(1500,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
-  const neuralTraining=training.length>=neuralMinimum?training.slice(-neuralLimit):[];
-  // Fit the same-window linear anchor once, on training data only. Every neural
-  // ensemble member starts from this exact model and learns a nonlinear residual.
+  const upEventTraining=asUpEventRows(training);
+  const upEventRecentTraining=asUpEventRows(recentTraining);
+  const upEventValidation=asUpEventRows(validation);
+  const upEventHoldout=asUpEventRows(holdout);
+  // All neural/challenger comparisons use identical binary UP-event labels.
+  const neuralGlobalLogisticFit=upEventTraining.length>=minTrainingSamples
+    ?fitLogisticModel(upEventTraining,{l2,iterations,learningRate}):null;
+  const neuralRecentLogisticFit=upEventRecentTraining.length>=minTrainingSamples
+    ?fitLogisticModel(upEventRecentTraining,{l2,iterations,learningRate}):null;
+  const neuralCandidateRows=training.length>=neuralMinimum
+    ?asUpEventRows(training.slice(-neuralLimit)):[];
+  const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
+  // V5 now reserves four chronological stages inside its training window:
+  // 70% model fitting, 10% member/residual selection, and 20% probability
+  // calibration (itself split into fit/check blocks), followed by outer
+  // validation and the untouched final holdout. Every cutoff purges outcomes
+  // that had not matured before that block ended.
+  const neuralTrainingCutIndex=neuralCandidateTimes.length>=4
+    ?Math.max(1,Math.min(neuralCandidateTimes.length-2,Math.floor(neuralCandidateTimes.length*0.70))):-1;
+  const neuralSelectionCutIndex=neuralTrainingCutIndex>=0
+    ?Math.max(neuralTrainingCutIndex+1,Math.min(neuralCandidateTimes.length-1,
+      Math.floor(neuralCandidateTimes.length*0.80))):-1;
+  const neuralSelectionStartAt=neuralTrainingCutIndex>=0
+    ?neuralCandidateTimes[neuralTrainingCutIndex]:null;
+  const neuralCalibrationStartAt=neuralSelectionCutIndex>=0
+    ?neuralCandidateTimes[neuralSelectionCutIndex]:null;
+  const neuralTraining=neuralSelectionStartAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at<neuralSelectionStartAt&&row.resolved_at<neuralSelectionStartAt);
+  const neuralSelection=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at>=neuralSelectionStartAt&&row.at<neuralCalibrationStartAt&&
+    row.resolved_at<neuralCalibrationStartAt);
+  const neuralCalibration=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at>=neuralCalibrationStartAt&&row.resolved_at<validationStartAt);
+  const neuralCalibrationTimes=[...new Set(neuralCalibration.map(row=>row.at))].sort((a,b)=>a-b);
+  const neuralCalibrationFitCutIndex=neuralCalibrationTimes.length>=3
+    ?Math.max(1,Math.min(neuralCalibrationTimes.length-1,Math.floor(neuralCalibrationTimes.length*0.70))):-1;
+  const neuralCalibrationCheckStartAt=neuralCalibrationFitCutIndex>=0
+    ?neuralCalibrationTimes[neuralCalibrationFitCutIndex]:null;
+  const neuralCalibrationFit=neuralCalibrationCheckStartAt===null?[]:neuralCalibration.filter(row=>
+    row.at<neuralCalibrationCheckStartAt&&row.resolved_at<neuralCalibrationCheckStartAt);
+  const neuralCalibrationCheck=neuralCalibrationCheckStartAt===null?[]:neuralCalibration.filter(row=>
+    row.at>=neuralCalibrationCheckStartAt&&row.resolved_at<validationStartAt);
+  const neuralSelectionMinimum=Math.max(20,minimumValidationSamples);
+  // Fit the logistic anchor and every nonlinear residual on the earliest
+  // chronological training slice only. Selection labels cannot enter gradients.
   const neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
-  const neuralFit=neuralTraining.length>=neuralMinimum&&neuralSameWindowLogisticFit
+  const neuralFit=neuralTraining.length>=neuralMinimum&&
+    neuralSelection.length>=neuralSelectionMinimum&&neuralSameWindowLogisticFit
     ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit
     }):null;
-  // Freeze one ensemble member using only the middle chronological validation
-  // block. Averaging members with conflicting schedules can dilute the strongest
-  // challenger; the untouched holdout remains reserved for the final decision.
-  const neuralMemberValidation=neuralFit?neuralFit.members.map((member,index)=>({
-    index,metrics:evaluateHoldout(validation,member)
-  })):[];
-  const neuralMemberOrder=neuralMemberValidation.filter(row=>row.metrics.evaluated===true)
-    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
-  if(neuralFit)neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
+  // Select the ensemble member and nonlinear residual contribution exclusively
+  // from the disjoint selection block. Outer validation and holdout stay unused.
+  const neuralResidualScales=[0,0.25,0.5,0.75,1];
+  const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
+    neuralResidualScales.map(residualScale=>({
+      index,residual_scale:residualScale,
+      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale})
+    }))
+  ):[];
+  const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+      a.index-b.index||a.residual_scale-b.residual_scale);
+  if(neuralFit){
+    neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
+    neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
+    neuralFit.probability_calibrator=neuralFit.selected_member_index>=0
+      ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,neuralFit)
+      :null;
+  }
+  // This validation score is now measured on rows later than model fitting,
+  // member selection and calibration, so it is an honest outer comparison.
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
-    ?evaluateHoldout(validation,neuralFit):{
-      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_VALIDATION_SAMPLES',
-      sample_count:validation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
+    ?evaluateHoldout(upEventValidation,neuralFit):{
+      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_SELECTION_SAMPLES',
+      sample_count:upEventValidation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
     };
-  // The untouched final block is scored only after validation has selected a model.
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
-    ?evaluateHoldout(validation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventValidation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralGlobalLogisticValidation=neuralGlobalLogisticFit
+    ?evaluateHoldout(upEventValidation,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralRecentLogisticValidation=neuralRecentLogisticFit
+    ?evaluateHoldout(upEventValidation,neuralRecentLogisticFit):null;
   const comparisonMargin=Math.max(0.002,Number(neuralSelectionMargin)||0);
+  const neuralValidationComparison={
+    neural_brier_score:neuralValidation.model_brier_score??null,
+    base_rate_brier_score:neuralValidation.base_rate_brier_score??null,
+    same_window_logistic_brier_score:neuralSameWindowLogisticValidation.model_brier_score??null,
+    global_logistic_brier_score:neuralGlobalLogisticValidation.model_brier_score??null,
+    recent_logistic_brier_score:neuralRecentLogisticValidation?.model_brier_score??null,
+    beats_base_rate:neuralValidation.beat_base_rate===true,
+    beats_same_window_logistic:neuralValidation.evaluated===true&&neuralSameWindowLogisticValidation.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralSameWindowLogisticValidation.model_brier_score,
+    beats_global_logistic:neuralValidation.evaluated===true&&neuralGlobalLogisticValidation.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralGlobalLogisticValidation.model_brier_score,
+    beats_recent_logistic:!neuralRecentLogisticFit||(neuralValidation.evaluated===true&&
+      neuralRecentLogisticValidation?.evaluated===true&&
+      neuralValidation.model_brier_score+comparisonMargin<neuralRecentLogisticValidation.model_brier_score)
+  };
   const neuralWins=neuralFit!==null&&neuralValidation.evaluated===true&&
-    neuralValidation.beat_base_rate===true&&
-    neuralSameWindowLogisticValidation.evaluated===true&&
-    neuralValidation.model_brier_score+comparisonMargin<neuralSameWindowLogisticValidation.model_brier_score&&
-    (!selectedValidation.evaluated||
-      neuralValidation.model_brier_score+comparisonMargin<selectedValidation.model_brier_score);
-  const neuralHoldout=neuralFit?evaluateHoldout(holdout,neuralFit):{
-    sample_count:holdout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
+    neuralValidationComparison.beats_base_rate===true&&
+    neuralValidationComparison.beats_same_window_logistic===true&&
+    neuralValidationComparison.beats_global_logistic===true&&
+    neuralValidationComparison.beats_recent_logistic===true;
+  const neuralHoldout=neuralFit?evaluateHoldout(upEventHoldout,neuralFit):{
+    sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
     log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
   };
   const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
-    ?evaluateHoldout(holdout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
-  const globalHoldout=neuralFit?evaluateHoldout(holdout,globalFit):{evaluated:false,model_brier_score:null};
-  const recentHoldout=neuralFit&&recentFit?evaluateHoldout(holdout,recentFit):null;
+    ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralGlobalLogisticHoldout=neuralGlobalLogisticFit
+    ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+  const neuralRecentLogisticHoldout=neuralRecentLogisticFit
+    ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit):null;
   const beatsSameWindowLogistic=neuralHoldout.evaluated===true&&
     neuralSameWindowLogisticHoldout.evaluated===true&&
     neuralHoldout.model_brier_score+comparisonMargin<neuralSameWindowLogisticHoldout.model_brier_score;
-  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&globalHoldout.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<globalHoldout.model_brier_score;
-  const beatsRecentLogistic=!recentFit||(neuralHoldout.evaluated===true&&recentHoldout?.evaluated===true&&
-    neuralHoldout.model_brier_score+comparisonMargin<recentHoldout.model_brier_score);
+  const beatsGlobalLogistic=neuralHoldout.evaluated===true&&neuralGlobalLogisticHoldout.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<neuralGlobalLogisticHoldout.model_brier_score;
+  const beatsRecentLogistic=!neuralRecentLogisticFit||(neuralHoldout.evaluated===true&&
+    neuralRecentLogisticHoldout?.evaluated===true&&
+    neuralHoldout.model_brier_score+comparisonMargin<neuralRecentLogisticHoldout.model_brier_score);
   const neuralHoldoutReady=neuralHoldout.evaluated===true&&neuralHoldout.beat_base_rate===true&&
     beatsSameWindowLogistic&&beatsGlobalLogistic&&beatsRecentLogistic;
   const neuralHoldoutComparison={
-    sample_count:holdout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+    sample_count:upEventHoldout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
     neural_brier_score:neuralHoldout.model_brier_score,
     same_window_logistic_brier_score:neuralSameWindowLogisticHoldout.model_brier_score??null,
-    global_logistic_brier_score:globalHoldout.model_brier_score??null,
-    recent_logistic_brier_score:recentHoldout?.model_brier_score??null,
+    global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
+    recent_logistic_brier_score:neuralRecentLogisticHoldout?.model_brier_score??null,
     beats_base_rate:neuralHoldout.beat_base_rate===true,
     beats_same_window_logistic:beatsSameWindowLogistic,
     beats_global_logistic:beatsGlobalLogistic,
-    beats_recent_logistic:recentFit?beatsRecentLogistic:null,
+    beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
     passed:neuralHoldoutReady
   };
   let neuralSelected=false;
@@ -770,7 +957,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason='NEURAL_MLP_BEAT_LOGISTIC_CHALLENGER_ON_MIDDLE_CHRONOLOGICAL_VALIDATION';
     neuralSelected=true;
   }
-  const holdoutMetrics = evaluateHoldout(holdout, selectedFit);
+  const holdoutMetrics = selectedModel==='NEURAL_GLOBAL'
+    ?neuralHoldout:evaluateHoldout(holdout, selectedFit);
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
     validation.length >= minimumValidationSamples &&
@@ -828,21 +1016,49 @@ export function buildCognitiveLearningProfile(samples = [], {
       architecture: neuralFit?.architecture || FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
-      samples_required:neuralMinimum,training_samples: neuralTraining.length,
+      samples_required:neuralMinimum,training_samples:neuralTraining.length,
+      preselection_training_samples:neuralTraining.length,
+      refit_training_samples:0,
+      maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+      training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_LONGER_FIT_LOWER_DECAY',
+      training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+      target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+      residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
+      candidate_residual_scales:[...neuralResidualScales],
+      selection_samples:neuralSelection.length,
+      selection_start_at:neuralSelectionStartAt,
+      calibration_start_at:neuralCalibrationStartAt,
+      calibration_fit_start_at:neuralCalibrationFit[0]?.at??null,
+      calibration_check_start_at:neuralCalibrationCheckStartAt,
+      calibration_samples:neuralCalibration.length,
+      calibration_fit_samples:neuralCalibrationFit.length,
+      calibration_check_samples:neuralCalibrationCheck.length,
+      probability_calibration:neuralFit?.probability_calibrator??{
+        method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',fitted:false,accepted:false,
+        reason:'NEURAL_MODEL_NOT_FITTED'
+      },
+      max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
+      max_refit_training_outcome_resolved_at:null,
+      max_selection_outcome_resolved_at:neuralSelection.length?Math.max(...neuralSelection.map(row=>row.resolved_at)):null,
+      max_calibration_fit_outcome_resolved_at:neuralCalibrationFit.length?Math.max(...neuralCalibrationFit.map(row=>row.resolved_at)):null,
+      max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
+      selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
-      member_validation_brier_scores:neuralMemberValidation.map(row=>({
-        index:row.index,brier_score:row.metrics.model_brier_score,
-        base_rate_brier_score:row.metrics.base_rate_brier_score,
-        beat_base_rate:row.metrics.beat_base_rate
+      member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
+      member_selection_brier_scores:neuralMemberSelection.map(row=>({
+        index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
+        base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate
       })),
+      member_validation_brier_scores:[],
       trained: neuralFit!==null, selected: neuralSelected,
       probability_ready: neuralProbabilityReady,
       live_eligibility_ready:neuralLiveReady,
       iterations: neuralFit?.iterations??Math.max(20,Math.min(240,Math.trunc(Number(neuralIterations)||NEURAL_POLICY.iterations))),
       validation: neuralValidation,
+      validation_comparison:neuralValidationComparison,
       holdout: neuralHoldout,
       holdout_comparison:neuralHoldoutComparison,
       selection_margin: comparisonMargin
@@ -895,8 +1111,11 @@ export function buildCognitivePrequentialProfile(journal = [], {
       (String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
         ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
           ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
-        : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
-          ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
+        : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
+          ? String(row.selected_model||row.model_variant||'')==='NEURAL_GLOBAL' &&
+            ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
+          : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
+            ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.trained_through_at) !== null &&
       Number(row.trained_through_at) < Number(row.at) &&
@@ -905,7 +1124,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ...row,
       model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
-      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
+      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN' ||
+        row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
         ? (row.outcome==='UP'?1:0)
         : row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
     }))

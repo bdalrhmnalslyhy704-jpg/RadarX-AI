@@ -5,8 +5,14 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+      - verify/build224-tcn-fallback-20261106
     paths:
       - 'Dockerfile'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/adaptive-trader-worker.mjs'
+      - 'phase2/TCN_V6_VALIDATION_POLICY.md'
+      - '.github/workflows/dhdtech-adaptive-trader-acceptance.yml'
   workflow_dispatch:
 
 concurrency:
@@ -37,7 +43,9 @@ jobs:
             }
 
             const started=Date.now();
-            const deadline=started+12*60*1000;
+            const probeRun=context.ref==='refs/heads/verify/build224-tcn-fallback-20261106';
+            const deadline=started+(probeRun?2*60*1000:12*60*1000);
+            core.info('DHDTECH_ACCEPTANCE_MODE '+(probeRun?'SHORT_READ_ONLY_PROBE':'FULL_BUILD224_ACCEPTANCE'));
             const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let lastError='No status response yet';
             let lastObserved=null;
@@ -100,9 +108,12 @@ jobs:
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
+                  temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19'&&
+                  temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
+                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
                   Number(temporalNetwork.sequence_steps)===24&&
                   Number(temporalNetwork.sequence_channels)===29&&
+                  temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
                   Number(temporalNetwork.ensemble_members_required)===3&&
                   (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)
                 );
@@ -165,6 +176,7 @@ jobs:
                     new_historical_samples:Number(capture.new_historical_samples)||0,
                     historical_sequence_backfills:Number(capture.historical_sequence_backfills)||0,
                     temporal_sequence_samples:Number(capture.temporal_sequence_samples)||0,
+                    temporal_sequence_non_15m_labels:Number(capture.temporal_sequence_non_15m_labels)||0,
                     temporal_sequence_missing_samples:Number(capture.temporal_sequence_missing_samples)||0,
                     historical_rejected:capture.historical_rejected||{},
                     snapshot_historical_samples_available:Number(capture.snapshot_historical_samples_available)||0,
@@ -235,24 +247,56 @@ jobs:
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
                 const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V6'&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
-                  cognitiveProfile.identifier_features_used===false&&temporalNetworkContract;
+                  cognitiveProfile.identifier_features_used===false&&neuralNetworkContract&&temporalNetworkContract;
                 const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
                   (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                    temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true);
                 const temporalComparison=temporalNetwork.holdout_comparison||{};
-                const neuralLiveReady=temporalNetwork.selected===true&&
+                const selectedTemporalRegimes=Array.isArray(temporalNetwork.selected_regimes)
+                  ?temporalNetwork.selected_regimes:[];
+                const temporalNeuralContributionSafe=selectedTemporalRegimes.length>0&&
+                  selectedTemporalRegimes.every(regime=>{
+                    const specialist=temporalNetwork.regime_specialists?.[regime];
+                    return specialist?.neural_residual_contributes===true&&
+                      Number(specialist.selected_residual_scale)>0&&
+                      specialist.probability_calibration?.fitted===true&&
+                      specialist.logistic_probability_calibration?.fitted===true;
+                  });
+                const neuralLiveReady=temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_LONGER_FIT_V19'&&
+                  temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
+                  temporalNeuralContributionSafe&&temporalNetwork.selected===true&&
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
                   Number(temporalNetwork.holdout?.sample_count)>=150&&
                   temporalComparison.passed===true&&temporalComparison.beats_base_rate===true&&
                   temporalComparison.beats_pooled_logistic===true;
+                // A trained V5 is not an accepted V5: require its own chronological
+                // validation, untouched 100+ outcome holdout, and independent
+                // logistic/base-rate superiority gates before DHDTech can be green.
+                const v5NeuralLiveReady=neuralNetwork.trained===true&&
+                  neuralNetwork.selected===true&&neuralNetwork.probability_ready===true&&
+                  neuralNetwork.live_eligibility_ready===true&&
+                  Number(neuralNetwork.training_samples)>=240&&
+                  neuralNetwork.validation?.evaluated===true&&
+                  neuralNetwork.validation?.beat_base_rate===true&&
+                  neuralNetwork.holdout?.evaluated===true&&
+                  neuralNetwork.holdout?.beat_base_rate===true&&
+                  Number(neuralNetwork.holdout_comparison?.sample_count)>=100&&
+                  neuralNetwork.holdout_comparison?.passed===true&&
+                  neuralNetwork.holdout_comparison?.beats_base_rate===true&&
+                  neuralNetwork.holdout_comparison?.beats_same_window_logistic===true&&
+                  neuralNetwork.holdout_comparison?.beats_global_logistic===true&&
+                  neuralNetwork.holdout_comparison?.beats_recent_logistic!==false;
                 const paperValidation=value.paper_validation_profile||{};
                 const paperTradingReady=paperValidation.ready===true&&
                   Number(paperValidation.evaluation_window_trades)>=100&&
                   Number(paperValidation.win_rate_pct)>=55&&
                   Number(paperValidation.net_pnl_usdt)>0&&
                   Number(paperValidation.max_drawdown_pct)<=8;
+                lastObserved.v5_neural_live_ready=v5NeuralLiveReady;
+                lastObserved.temporal_tcn_live_ready=neuralLiveReady;
+                lastObserved.cognitive_chronological_split_ready=cognitiveSplitReady;
                 lastObserved.neural_live_ready=neuralLiveReady;
                 lastObserved.temporal_network_contract=temporalNetworkContract;
                 lastObserved.neural_holdout_comparison=temporalComparison;
@@ -271,9 +315,10 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV5&&temporalNetworkContract&&temporalNetwork.trained===true&&
+                  cognitive&&cognitiveV5&&cognitiveSplitReady&&neuralNetworkContract&&
+                  v5NeuralLiveReady&&temporalNetworkContract&&temporalNetwork.trained===true&&
                   Number(temporalNetwork.ensemble_members)===3&&Number(temporalNetwork.training_samples)>=160&&
-                  probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
+                  neuralLiveReady&&probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
                   Number(cognitiveProfile.holdout_samples)>=0&&
@@ -298,7 +343,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='Live scan, temporal TCN out-of-sample superiority, or 100-trade paper validation gate is not ready';
+                lastError='DHDTech live scan, V5 neural out-of-sample superiority, V13 independent-regime TCN live superiority, or 100-trade paper validation gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }
