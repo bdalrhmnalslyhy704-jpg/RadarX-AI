@@ -299,43 +299,38 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
   return sequence.length === steps ? sequence : null;
 }
 
-function firstPassageLabel(baseline, future15m, fastCandles = []) {
+function firstPassageLabel(baseline, future15m) {
   const upLevel = baseline.close * 1.03;
   const downLevel = baseline.close * 0.98;
   const endAt = baseline.closeTime + 4 * 60 * 60 * 1000;
-  const fastWindow = (Array.isArray(fastCandles) ? fastCandles : [])
-    .filter(row => row.openTime >= baseline.closeTime + 1 && row.closeTime <= endAt)
-    .sort((a,b) => a.openTime - b.openTime);
-  const fastComplete = fastWindow.length === 48 && fastWindow.every((row,index) =>
+  // TCN target definition is deliberately fixed to 16 closed 15m candles.
+  // 5m candles remain useful model inputs, but must never change label resolution
+  // across samples in the same chronological training/validation/holdout set.
+  const path = (Array.isArray(future15m) ? future15m : []).slice(0,16);
+  const complete = path.length === 16 && path.every((row,index) =>
     index === 0
       ? row.openTime === baseline.closeTime + 1
-      : row.openTime - fastWindow[index - 1].openTime === 5 * 60 * 1000);
-  const slowWindow = (Array.isArray(future15m) ? future15m : []).slice(0,16);
-  const slowComplete = slowWindow.length === 16 && slowWindow.every((row,index) =>
-    index === 0
-      ? row.openTime === baseline.closeTime + 1
-      : row.openTime - slowWindow[index - 1].openTime === 15 * 60 * 1000);
-  const path = fastComplete ? fastWindow : slowComplete ? slowWindow : [];
-  if (!path.length) return null;
+      : row.openTime - path[index - 1].openTime === 15 * 60 * 1000);
+  if (!complete || path[15].closeTime !== endAt) return null;
   for (const candle of path) {
     const upHit = candle.high >= upLevel;
     const downHit = candle.low <= downLevel;
     if (upHit && downHit) return {
       outcome:'FLAT', hit:'AMBIGUOUS_BOTH_LEVELS_IN_SAME_CANDLE',
-      target_price:null, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:null, target_at:candle.closeTime, path_resolution:'15M'
     };
     if (upHit) return {
       outcome:'UP', hit:'TAKE_PROFIT_REACHED_FIRST',
-      target_price:upLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:upLevel, target_at:candle.closeTime, path_resolution:'15M'
     };
     if (downHit) return {
       outcome:'DOWN', hit:'STOP_LEVEL_REACHED_FIRST',
-      target_price:downLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:downLevel, target_at:candle.closeTime, path_resolution:'15M'
     };
   }
   return {
     outcome:'FLAT', hit:'NEITHER_LEVEL_REACHED_WITHIN_4H',
-    target_price:null, target_at:endAt, path_resolution:fastComplete?'5M':'15M'
+    target_price:null, target_at:endAt, path_resolution:'15M'
   };
 }
 
@@ -665,7 +660,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     });
     if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
     const move=(future.close/baseline.close-1)*100;
-    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle),fastCandles);
+    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
     if(!passage)continue;
     const outcome=passage.outcome;
     const features={
@@ -682,7 +677,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,
@@ -707,7 +702,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
-       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2'||
+       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
        sample?.outcome)continue;
     const at=finite(sample?.at),baselinePrice=finite(sample?.price);
     if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
@@ -716,12 +711,12 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
     if(Math.abs(baseline.close-baselinePrice)>Math.max(1e-12,Math.abs(baseline.close)*1e-8))continue;
     const move=(future.close/baseline.close-1)*100;
     const startIndex=candles.findIndex(candle=>candle.closeTime===baseline.closeTime);
-    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17),fastCandles);
+    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17));
     if(!passage)continue;
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
       outcome:passage.outcome,first_passage:passage,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),
       close_return_pct:Number(move.toFixed(3)),close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
