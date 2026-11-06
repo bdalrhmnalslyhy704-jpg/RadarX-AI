@@ -311,7 +311,10 @@ function fitNeuralNetworkModel(training, {
       // Residual linear path preserves reliable first-order evidence while the
       // two nonlinear layers learn interactions between market conditions.
       for(let i=0;i<inputSize;i++)output+=skipWeights[i]*row.vector[i];
-      const error=logistic(output)-row.target;
+      const probability=logistic(output);
+      // Optimize the same unweighted Brier proper-scoring objective used by
+      // chronological validation, model selection, and the untouched holdout.
+      const error=2*(probability-row.target)*probability*(1-probability);
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -363,6 +366,7 @@ function fitNeuralNetworkModel(training, {
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...FEATURE_NAMES],
     training_samples:rows.length,iterations:steps,l2:regularization,
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
@@ -395,7 +399,10 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:[...seeds],
     member_training_profiles:memberProfiles,
-    training_strategy:'DIVERSIFIED_RESIDUAL_MLP_SCHEDULE_V1',
+    training_strategy:'BRIER_OPTIMIZED_RESIDUAL_MLP_VALIDATION_SHRUNK_V2',
+    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
+    candidate_residual_scales:[0,0.25,0.5,0.75,1],
     base_rate:mean(members.map(member=>member.base_rate)),
     feature_names:[...FEATURE_NAMES],
     training_samples:members[0].training_samples,
@@ -404,12 +411,12 @@ function fitNeuralEnsemble(training, options = {}) {
   };
 }
 
-function predictFromFit(features, fit) {
+function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
     const selected=Number(fit.selected_member_index);
     if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length)
-      return predictFromFit(features,fit.members[selected]);
+      return predictFromFit(features,fit.members[selected],finite(fit.selected_residual_scale)??1);
     const predictions=fit.members.map(member=>predictFromFit(features,member));
     if(predictions.some(value=>!Number.isFinite(value)))return null;
     return clamp(mean(predictions),0.02,0.98);
@@ -434,7 +441,8 @@ function predictFromFit(features, fit) {
       return Math.tanh(sum);
     });
     let output=Number(fit.output_bias)||0;
-    for(let j=0;j<hidden2.length;j++)output+=(Number(fit.output_weights[j])||0)*hidden2[j];
+    const scale=clamp(finite(fit.residual_scale)??finite(residualScale)??1,0,1);
+    for(let j=0;j<hidden2.length;j++)output+=scale*(Number(fit.output_weights[j])||0)*hidden2[j];
     for(let i=0;i<vector.length;i++)output+=vector[i]*(Number(fit.skip_weights[i])||0);
     return clamp(logistic(output),0.02,0.98);
   }
@@ -638,6 +646,11 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+        training_strategy:neuralFit?.training_strategy||'BRIER_OPTIMIZED_RESIDUAL_MLP_VALIDATION_SHRUNK_V2',
+        training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+        residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
+        candidate_residual_scales:[...neuralResidualScales],
+        selected_residual_scale:neuralFit?.selected_residual_scale??null,
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
       },
       feature_names: [...FEATURE_NAMES],
@@ -711,12 +724,24 @@ export function buildCognitiveLearningProfile(samples = [], {
   // Freeze one ensemble member using only the middle chronological validation
   // block. Averaging members with conflicting schedules can dilute the strongest
   // challenger; the untouched holdout remains reserved for the final decision.
-  const neuralMemberValidation=neuralFit?neuralFit.members.map((member,index)=>({
-    index,metrics:evaluateHoldout(validation,member)
-  })):[];
+  // Select both the deterministic ensemble member and the amount of nonlinear
+  // residual using only the middle chronological validation block. A lower
+  // residual scale can safely shrink an overconfident fit back toward its
+  // training-only logistic anchor; the final holdout remains untouched.
+  const neuralResidualScales=[0,0.25,0.5,0.75,1];
+  const neuralMemberValidation=neuralFit?neuralFit.members.flatMap((member,index)=>
+    neuralResidualScales.map(residualScale=>({
+      index,residual_scale:residualScale,
+      metrics:evaluateHoldout(validation,{...member,residual_scale:residualScale})
+    }))
+  ):[];
   const neuralMemberOrder=neuralMemberValidation.filter(row=>row.metrics.evaluated===true)
-    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||a.index-b.index);
-  if(neuralFit)neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+      a.index-b.index||a.residual_scale-b.residual_scale);
+  if(neuralFit){
+    neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
+    neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
+  }
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
     ?evaluateHoldout(validation,neuralFit):{
       evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_VALIDATION_SAMPLES',
@@ -834,7 +859,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
       member_validation_brier_scores:neuralMemberValidation.map(row=>({
-        index:row.index,brier_score:row.metrics.model_brier_score,
+        index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
         base_rate_brier_score:row.metrics.base_rate_brier_score,
         beat_base_rate:row.metrics.beat_base_rate
       })),
