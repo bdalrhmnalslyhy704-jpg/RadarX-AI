@@ -156,9 +156,9 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(profile.holdout_comparison.sample_count>=40);
 });
 
-test('mature history reserves a broad untouched holdout for both BTC regime experts',()=>{
+test('mature history reserves a broad untouched holdout and a wider regime-supported validation block',()=>{
   const rows=[];
-  for(let group=0;group<70;group++){
+  for(let group=0;group<80;group++){
     for(let index=0;index<20;index++){
       const row=sample(group,index);
       const btcRiskOn=group%2===0;
@@ -176,6 +176,8 @@ test('mature history reserves a broad untouched holdout for both BTC regime expe
     'mature history must retain at least twice the live holdout floor and 25% untouched samples');
   assert.ok(profile.shared_model_training_samples>=600,
     'the bounded holdout must leave a larger purged chronological block for temporal fitting');
+  assert.ok(profile.validation_samples>=300,
+    'mature histories must reserve at least 300 observations for inner TCN validation');
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const expert=profile.regime_specialists[regime];
