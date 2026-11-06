@@ -23,11 +23,12 @@ test('fair scan plan reserves half of each bounded batch for complete eligible-u
   const plan=buildAdaptiveTraderCoveragePlan(192,40);
   assert.equal(plan.eligible_symbols,192);
   assert.equal(plan.scan_batch_limit,40);
-  assert.equal(plan.rotation_slots_per_cycle,20);
-  assert.equal(plan.priority_slots_per_cycle,20);
-  assert.equal(plan.estimated_full_sweep_cycles,10);
+  assert.equal(plan.rotation_slots_per_cycle,19);
+  assert.equal(plan.priority_slots_per_cycle,21);
+  assert.equal(plan.estimated_full_sweep_cycles,11);
   const hostedMaximum=buildAdaptiveTraderCoveragePlan(192,60);
-  assert.equal(hostedMaximum.rotation_slots_per_cycle,30);
+  assert.equal(hostedMaximum.rotation_slots_per_cycle,29);
+  assert.equal(hostedMaximum.priority_slots_per_cycle,31);
   assert.equal(hostedMaximum.estimated_full_sweep_cycles,7);
 });
 
