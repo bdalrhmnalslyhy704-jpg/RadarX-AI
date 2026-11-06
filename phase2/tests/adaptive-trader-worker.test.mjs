@@ -41,6 +41,8 @@ test('worker proves and persists a complete 192-pair coverage sweep without coun
     assert.equal(coverage.last_completed_sweep.attempted_symbols,192);
     assert.equal(coverage.last_completed_sweep.valid_symbols,191);
     assert.equal(coverage.last_completed_sweep.failed_symbols,1);
+    assert.deepEqual(coverage.last_completed_sweep.eligible_symbols_snapshot,eligible,
+      'the completed sweep must retain the exact sorted eligible-symbol set, not only its count');
     assert.equal(coverage.last_completed_sweep.failed_symbol_sample[0],'PAIR191USDT');
     assert.equal(coverage.attempted_symbols_count,0,'a new sweep starts after the completed sweep is recorded');
     await worker.persist();
@@ -50,6 +52,13 @@ test('worker proves and persists a complete 192-pair coverage sweep without coun
     await restored.start({initialDelayMs:60_000});
     assert.equal(restored.snapshot().scan_coverage.completed_sweeps,1);
     assert.equal(restored.snapshot().scan_coverage.last_completed_sweep.valid_symbols,191);
+    assert.deepEqual(restored.snapshot().scan_coverage.last_completed_sweep.eligible_symbols_snapshot,eligible,
+      'the exact proof of which symbols were swept must survive a container restart');
+    const changedUniverse=eligible.map((symbol,index)=>index===0?'NEWPAIRUSDT':symbol);
+    restored.updateScanCoverage({universe:{eligible_symbols:changedUniverse},candidates:[]},now+20);
+    assert.notDeepEqual(restored.snapshot().scan_coverage.eligible_symbols,
+      restored.snapshot().scan_coverage.last_completed_sweep.eligible_symbols_snapshot,
+      'same symbol count with a replaced pair must not reuse a stale completed-sweep proof');
     await restored.stop();
   }finally{
     await worker.stop();

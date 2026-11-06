@@ -416,6 +416,9 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(workflow.includes('55*60*1000'));
   for(const gate of [
     'fullUniverseCoverageReady',
+    'sameEligibleUniverse',
+    'sweepBelongsToThisAcceptance',
+    'completedSweep.eligible_symbols_snapshot',
     'completedSweep.attempted_symbols',
     'completedSweep.failed_symbols',
     'paperTradingReady',

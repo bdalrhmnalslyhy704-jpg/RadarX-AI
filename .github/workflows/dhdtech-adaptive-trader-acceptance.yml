@@ -77,7 +77,21 @@ jobs:
                 const scanCoverage=value.scan_coverage||{};
                 const eligibleSymbolCount=Number(scanCoverage.eligible_symbols_count)||0;
                 const completedSweep=scanCoverage.last_completed_sweep||{};
-                const fullUniverseCoverageReady=eligibleSymbolCount>0&&
+                const currentEligibleSymbols=Array.isArray(scanCoverage.eligible_symbols)
+                  ?[...scanCoverage.eligible_symbols].map(String).sort():[];
+                const completedEligibleSymbols=Array.isArray(completedSweep.eligible_symbols_snapshot)
+                  ?[...completedSweep.eligible_symbols_snapshot].map(String).sort():[];
+                const sameEligibleUniverse=currentEligibleSymbols.length===eligibleSymbolCount&&
+                  completedEligibleSymbols.length===eligibleSymbolCount&&
+                  currentEligibleSymbols.every((symbol,index)=>symbol===completedEligibleSymbols[index]);
+                const coverageUpdatedAt=Number(scanCoverage.updated_at)||0;
+                const sweepCompletedAt=Number(completedSweep.completed_at)||0;
+                const coverageFresh=coverageUpdatedAt>=Date.now()-8*60*1000&&
+                  coverageUpdatedAt<=Date.now()+5000;
+                const sweepBelongsToThisAcceptance=sweepCompletedAt>=started-5000&&
+                  sweepCompletedAt<=Date.now()+5000;
+                const fullUniverseCoverageReady=eligibleSymbolCount>0&&sameEligibleUniverse&&
+                  coverageFresh&&sweepBelongsToThisAcceptance&&
                   Number(scanCoverage.completed_sweeps)>=1&&
                   Number(completedSweep.eligible_symbols)===eligibleSymbolCount&&
                   Number(completedSweep.attempted_symbols)===eligibleSymbolCount&&
@@ -199,6 +213,9 @@ jobs:
                     remaining_symbols:Number(scanCoverage.remaining_symbols_count)||0,
                     completed_sweeps:Number(scanCoverage.completed_sweeps)||0,
                     last_completed_sweep:completedSweep,
+                    same_eligible_universe:sameEligibleUniverse,
+                    coverage_fresh:coverageFresh,
+                    sweep_belongs_to_acceptance:sweepBelongsToThisAcceptance,
                     full_universe_ready:fullUniverseCoverageReady
                   },
                   learning_profile:learning?{

@@ -259,6 +259,7 @@ export class AdaptiveTraderWorker{
         sweep_number:completedSweeps,completed_at:Number(now),
         eligible_symbols:eligibleSet.size,attempted_symbols:attempted.size,
         valid_symbols:valid.size,failed_symbols:failed.size,
+        eligible_symbols_snapshot:eligibleSymbols,
         failed_symbol_sample:[...failed].sort().slice(0,20)
       };
       attempted.clear();valid.clear();failed.clear();

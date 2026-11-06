@@ -608,6 +608,7 @@ export class DurableStore {
         attempted_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.attempted_symbols)||0)),
         valid_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.valid_symbols)||0)),
         failed_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.failed_symbols)||0)),
+        eligible_symbols_snapshot:coverageSymbols(lastSweepSource.eligible_symbols_snapshot).slice(0,2000),
         failed_symbol_sample:coverageSymbols(lastSweepSource.failed_symbol_sample).slice(0,20)
       }:null,
       updated_at:persistedNumber(coverageSource.updated_at)
