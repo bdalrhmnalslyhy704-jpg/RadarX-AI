@@ -1081,6 +1081,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+    temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:SEEDS.length,ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
