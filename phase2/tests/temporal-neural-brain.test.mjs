@@ -74,7 +74,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
-  assert.equal(profile.resolved_samples,16*24);
+  assert.equal(profile.resolved_samples,32*24);
   assert.equal(profile.trained,true);
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
