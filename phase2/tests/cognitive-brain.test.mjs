@@ -183,6 +183,22 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.trained, true);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
     assert.equal(profile.neural_network.training_objective, 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+    assert.equal(profile.neural_network.training_strategy,
+      'BRIER_OPTIMIZED_RESIDUAL_MLP_NESTED_SELECTION_CALIBRATION_V4');
+    assert.ok(profile.neural_network.calibration_samples>0);
+    assert.ok(profile.neural_network.calibration_fit_samples>0);
+    assert.ok(profile.neural_network.calibration_check_samples>0);
+    assert.ok(profile.neural_network.selection_start_at<profile.neural_network.calibration_start_at);
+    assert.ok(profile.neural_network.max_selection_outcome_resolved_at<
+      profile.neural_network.calibration_start_at,
+      'member/residual selection labels must finish before probability calibration begins');
+    assert.ok(profile.neural_network.max_calibration_fit_outcome_resolved_at<
+      profile.neural_network.calibration_check_start_at,
+      'calibrator fitting labels must finish before its disjoint calibration-check block');
+    assert.ok(profile.neural_network.max_calibration_check_outcome_resolved_at<
+      profile.validation_start_at,
+      'calibration-check labels must mature before outer validation begins');
+    assert.ok(profile.neural_network.calibration_check_samples>=20);
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.ok(profile.neural_network.selection_samples >= 20);
     assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
