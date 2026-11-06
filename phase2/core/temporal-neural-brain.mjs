@@ -684,7 +684,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.85,memberSelection:0.92,calibration:0.98}
     :rows.length<1200
       ?{training:0.70,memberSelection:0.85,calibration:0.98}
-      :{training:0.75,memberSelection:0.87,calibration:0.96};
+      :{training:0.78,memberSelection:0.88,calibration:0.97};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
