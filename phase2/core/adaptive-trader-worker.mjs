@@ -201,7 +201,7 @@ export class AdaptiveTraderWorker{
     // TCN-only first-passage dataset: +3% before -2% within four hours.
     return this.state.samples.filter(row=>row&&row.training_eligible===true&&
       (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2');
+      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
   }
 
   cognitiveTrainingSamples(){
@@ -414,7 +414,7 @@ export class AdaptiveTraderWorker{
       selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
         String(profile.model_selection?.selected_model||'UNVALIDATED'),
       target_definition:profile.temporal_network?.probability_ready===true
-        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2':'LEGACY_4H_CLOSE_RETURN',
+        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2':'LEGACY_4H_CLOSE_RETURN',
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,
@@ -612,7 +612,7 @@ recordServerPaperPortfolio(snapshot,now){
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
          markPrice===null||resolvedAt===null||resolvedAt>Number(now)+5000||
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
-         label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2'||
+         label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
          !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
@@ -712,7 +712,7 @@ recordServerPaperPortfolio(snapshot,now){
           quote_volume_24h:quoteVolume,change_24h_pct:finite(row?.change_24h_pct),
           selection_lane:candidate.selection_lane||null,features:{...(candidate.features||{})},
           temporal_sequence:Array.isArray(candidate.temporal_sequence)?candidate.temporal_sequence:null,
-          target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_5M_V2',
+          target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
           outcome:null,mark_price:null,return_pct:null,outcome_source:null
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
@@ -753,8 +753,8 @@ recordServerPaperPortfolio(snapshot,now){
       new_historical_samples:newHistoricalSamples,
       historical_sequence_backfills:historicalSequenceBackfills,
       temporal_sequence_samples:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
-        row.first_passage?.path_resolution==='5M'&&row.first_passage?.outcome===row.outcome).length,
-      temporal_sequence_non_5m_labels:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
+        row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome).length,
+      temporal_sequence_non_15m_labels:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
         row.outcome&&row.first_passage?.path_resolution!=='5M').length,
       temporal_sequence_missing_samples:this.trainingSamples().filter(row=>!hasValidTemporalSequence(row.temporal_sequence)).length,
       new_historical_v5_close_samples:newHistoricalV5Samples,
