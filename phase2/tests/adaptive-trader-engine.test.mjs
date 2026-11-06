@@ -536,10 +536,11 @@ test('market snapshot service obtains exchange universe, tickers and candles fro
   assert.ok(fifteenRequests.some(x=>x.query.symbol==='BTCUSDT'&&Number(x.query.endTime)>0));
   assert.ok(fifteenRequests.some(x=>x.query.symbol==='TESTUSDT'&&Number(x.query.endTime)>0));
   const fastRequests=requests.filter(x=>x.path==='/api/v3/klines'&&x.query.interval==='5m');
-  assert.equal(fastRequests.length,2);
+  assert.equal(fastRequests.length,1,
+    'recent 5m flow is optional and must not consume a second historical REST page');
   assert.equal(fastRequests[0].query.limit,1000);
-  assert.equal(fastRequests[1].query.endTime,Number(f.klines.data[0][0])-1,
-    'the second Spot 5m request must page strictly before the latest window');
+  assert.equal(fastRequests[0].query.endTime,undefined,
+    'the 5m lane keeps only the latest completed-candle window');
 });
 
 
