@@ -73,7 +73,8 @@ function createServerPaperPortfolio(){
 function emptyState(){
   const paperPortfolio=createServerPaperPortfolio();
   return {
-    version:1,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
+    version:2,training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+    reset_reason:null,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
@@ -117,7 +118,8 @@ export class AdaptiveTraderWorker{
     this.starting=(async()=>{
       try{
         const saved=await this.store.getAdaptiveTraderState();
-        if(saved&&saved.version===1&&Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
+        if(saved&&saved.version===2&&saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'&&
+           Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
           this.state={
             ...emptyState(),...saved,
             scan_cursor:Number.isFinite(Number(saved.scan_cursor))&&Number(saved.scan_cursor)>=0
@@ -167,6 +169,13 @@ export class AdaptiveTraderWorker{
         }
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
+      }
+      // Build 224 neural history before V2 mixed first-passage labels and the
+      // old close-direction split are not reused. A schema/dataset mismatch
+      // intentionally leaves the initialized empty state in place; the first
+      // fresh Binance closed-candle scan rebuilds both datasets from source.
+      if(!this.state.training_dataset_version){
+        this.state.reset_reason='LEGACY_NEURAL_TRAINING_DATA_PURGED';
       }
       this.enabled=true;this.state.enabled=true;this.state.last_error=null;
       this.interval=setInterval(()=>{void this.runOnce();},this.intervalMs);
@@ -941,6 +950,8 @@ recordServerPaperPortfolio(snapshot,now){
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       cognitive_model_contract:COGNITIVE_MODEL_BUILD_CONTRACT,
+      training_dataset_version:this.state.training_dataset_version||'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      training_state_reset_reason:this.state.reset_reason||null,
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,
       active_scan_deadline_at:this.activeScanDeadlineAt?new Date(this.activeScanDeadlineAt).toISOString():null,
