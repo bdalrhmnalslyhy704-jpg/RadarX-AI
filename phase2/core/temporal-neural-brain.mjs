@@ -698,9 +698,11 @@ export function buildTemporalNeuralProfile(samples = [], {
       // Mature histories retain a larger member-selection block. In the last
       // live acceptance scan, the old 70/80/98 split left only 93 selection
       // rows and 5 positives for choosing among 15 member/scale combinations.
-      // Train on 65%, select on 65-85%, calibrate on 85-98%, then validate
+      // Train on 70%, select on 70-86%, calibrate on 86-98%, then validate
       // and hold out on their existing untouched outer chronological blocks.
-      :{training:0.65,memberSelection:0.85,calibration:0.98};
+      // Keeping training at 70% preserves the mature-history >=600-row fitting
+      // floor while widening selection from 10% to 16% of the fit history.
+      :{training:0.70,memberSelection:0.86,calibration:0.98};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,

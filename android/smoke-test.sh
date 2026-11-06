@@ -585,7 +585,12 @@ for attempt in $(seq 1 120); do
     stop_action_seen=0
     current_service_pid="${old_service_pid}"
     service_registered=1
-    for stop_attempt in $(seq 1 20); do
+    # Stop is intentionally queued behind the current serialized scan so the
+    # durable alert cursor can finish committing. A scan can consume up to
+    # 30s for the unified feed, 12s for Falcon Eye history, and 12s for Pre-Move.
+    # Allow 90s for that bounded in-flight work plus the service teardown.
+    stop_started_at=$SECONDS
+    while (( SECONDS - stop_started_at < 90 )); do
       current_service_pid="$(background_service_pid)"
       logs="$(replay_logs)"
       if printf '%s\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
@@ -608,8 +613,8 @@ for attempt in $(seq 1 120); do
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Background service remained registered after MainActivity stop intent"
-      echo "STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
+      echo "::error::Background service remained registered after the 90s graceful-stop deadline"
+      echo "STOP_WAIT_SECONDS=$((SECONDS-stop_started_at)) STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
       exit 1
     fi
