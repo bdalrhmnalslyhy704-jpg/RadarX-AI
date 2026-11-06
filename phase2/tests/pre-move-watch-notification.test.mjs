@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {buildPreMoveWatchOnlyAlert,buildPreMoveWatchOnlyAlerts,diagnosePreMoveWatchOnlyCandidates,mergeArchivedEarlyWakeWatchAlerts} from '../http/api.mjs';
@@ -10,6 +10,42 @@ import {SignalDeduplicator} from '../core/dedup.mjs';
 import {defaultSettings} from '../core/signal-service.mjs';
 import {pushSubscription} from './fixtures.mjs';
 import {buildPreMoveWatchCandidates} from '../market/universe-scanner.mjs';
+
+test('Android local Pre-Move watch contract stays aligned with every server-qualified monitor tier',async()=>{
+  const android=await readFile(new URL('../../android/app/src/main/java/com/radarx/app/RadarXBackgroundMonitorService.java',import.meta.url),'utf8');
+  const start=android.indexOf('private boolean isValidPreMoveWatchOnlyAlert');
+  const end=android.indexOf('private boolean notifyPreMoveWatchOnlyAlert',start);
+  assert.ok(start>=0&&end>start,'Android local watch validator must remain discoverable');
+  const validator=android.slice(start,end);
+  const tiers=[
+    'HIGH_ACTIVITY_STRUCTURE_PENDING',
+    'EARLY_FLOW_MONITOR',
+    'TICKER_ACTIVITY_ACCELERATION_MONITOR',
+    'ACCUMULATION_PREP_MONITOR',
+    'COMPRESSED_BUYER_ABSORPTION_MONITOR',
+    'PARTICIPATION_SURGE_MONITOR',
+    'STRONG_BUYER_ABSORPTION_MONITOR',
+    'RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR'
+  ];
+  for(const tier of tiers){
+    assert.ok(validator.includes('"'+tier+'"'),
+      'Android local monitor gate is missing server tier '+tier);
+  }
+  for(const gate of [
+    'compressedBuyerQualified',
+    'participationSurgeQualified',
+    'strongBuyerAbsorptionQualified',
+    'relativeStrengthBuyerQualified'
+  ]) assert.ok(validator.includes(gate),'Android must independently qualify '+gate);
+  assert.ok(validator.includes('low_volume_watch_only'));
+  assert.ok(validator.includes('candle_data_valid'));
+  assert.ok(validator.includes('volume_gate_pass'));
+  assert.ok(validator.includes('quoteVolume >= 300_000.0 && quoteVolume < 750_000.0'));
+  assert.ok(validator.includes('status.optBoolean("data_valid", false) && !lowVolumeWatchEvidence'),
+    'invalid volume-floor status may pass only through the explicit bounded low-volume watch proof');
+  assert.ok(validator.includes('alert.optBoolean("entry_eligible", true)'));
+  assert.ok(validator.includes('alert.optBoolean("real_order_execution", true)'));
+});
 
 function fixture(now=Date.now()){
   const p={
