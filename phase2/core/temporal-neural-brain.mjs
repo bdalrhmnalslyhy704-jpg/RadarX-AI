@@ -988,14 +988,21 @@ export function buildTemporalNeuralProfile(samples = [], {
   const holdoutLogistic=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
     :evaluate(holdout,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
-  const selected=validationSelectedRegimes.length>0&&validationModel.evaluated&&
-    validationModel.beat_base_rate===true&&validationLogistic.evaluated&&
-    validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-  const holdoutPassed=selectedRegimes.length>0&&holdoutModel.evaluated&&
-    holdoutModel.beat_base_rate===true&&holdoutLogistic.evaluated&&
-    holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
+  // Each BTC regime has already been compared with its own training-only
+  // logistic anchor on disjoint chronological validation and untouched holdout
+  // rows. The deployable predictor is conditional: it must return null in any
+  // regime that did not independently clear both gates. Do not reject a valid
+  // regime merely because a different regime is weaker, and never broaden the
+  // selected regime set using pooled holdout metrics.
+  const selected=validationSelectedRegimes.length>0;
+  const holdoutPassed=selectedRegimes.length>0;
   const probabilityReady=holdoutPassed;
-  const liveReady=probabilityReady&&holdoutModel.sample_count>=liveHoldoutSamples;
+  const allSupportedRegimesValidated=supportedRegimes.length>0&&
+    supportedRegimes.every(regime=>selectedRegimes.includes(regime));
+  const selectedRegimeHoldoutSamples=selectedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeResults[regime]?.holdout_model?.sample_count||0),0);
+  const liveReady=probabilityReady&&allSupportedRegimesValidated&&
+    selectedRegimeHoldoutSamples>=liveHoldoutSamples;
   const specialistProfiles=Object.fromEntries(regimes.map(regime=>{
     const supported=supportedRegimes.includes(regime);
     const result=regimeResults[regime]||{};
@@ -1067,19 +1074,15 @@ export function buildTemporalNeuralProfile(samples = [], {
   const reportTrainingPrior=(reportTrainingPositive+2)/(reportTrainingSamples+4);
   const reportMaxTrainingResolvedAt=sharedTrainingMaxResolvedAt;
   const reportValidationStartAt=sharedSelectionCutoffAt;
-  const validationReason=!validationModel.evaluated?'CHRONOLOGICAL_VALIDATION_NOT_EVALUATED':
-    !validationModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_BASE_RATE':
-    !validationLogistic.evaluated?'REGIME_LOGISTIC_VALIDATION_NOT_EVALUATED':
-    !selected?'REGIME_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'VALIDATION_PASSED';
+  const validationReason=!supportedRegimes.length?'NO_SUPPORTED_BTC_REGIME':
+    !validationSelectedRegimes.length?'NO_REGIME_BEAT_ITS_VALIDATION_LOGISTIC':
+    'AT_LEAST_ONE_REGIME_BEAT_ITS_VALIDATION_LOGISTIC';
   const holdoutReason=!selected?'VALIDATION_NOT_PASSED':
-    !holdoutModel.evaluated?'UNTOUCHED_HOLDOUT_NOT_EVALUATED':
-    !holdoutModel.beat_base_rate?'REGIME_TCN_DID_NOT_BEAT_HOLDOUT_BASE_RATE':
-    !holdoutLogistic.evaluated?'REGIME_LOGISTIC_HOLDOUT_NOT_EVALUATED':
-    !holdoutPassed?'REGIME_TCN_DID_NOT_BEAT_POOLED_LOGISTIC':'HOLDOUT_PASSED';
-  const status=!validationModel.evaluated?'VALIDATION_NOT_EVALUATED':
-    !selected?'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE':
+    !selectedRegimes.length?'NO_VALIDATED_REGIME_BEAT_ITS_UNTOUCHED_HOLDOUT_LOGISTIC':
+    'AT_LEAST_ONE_REGIME_BEAT_ITS_UNTOUCHED_HOLDOUT_LOGISTIC';
+  const status=!validationSelectedRegimes.length?'VALIDATION_DID_NOT_BEAT_REGIME_LOGISTIC':
     !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
-    !supportedRegimes.length?'WAITING_FOR_REGIME_HOLDOUT_COVERAGE':
+    !allSupportedRegimesValidated?'PARTIAL_REGIME_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
@@ -1142,16 +1145,34 @@ export function buildTemporalNeuralProfile(samples = [], {
       reason:holdoutReason
     },
     holdout_comparison:{
-      sample_count:holdoutModel.sample_count,
+      sample_count:selectedRegimeHoldoutSamples,
       required_live_holdout_samples:liveHoldoutSamples,
       required_brier_margin:comparisonMargin,
       tcn_brier_score:holdoutModel.model_brier_score,
       pooled_logistic_brier_score:holdoutLogistic.model_brier_score,
-      beats_base_rate:holdoutModel.beat_base_rate===true,
-      beats_pooled_logistic:holdoutLogistic.evaluated&&holdoutModel.evaluated&&
-        holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score,
+      beats_base_rate:holdoutPassed,
+      // True only when at least one independently selected regime has already
+      // beaten both its own base-rate and logistic challengers on the untouched
+      // holdout. Unselected regimes remain unavailable at prediction time.
+      beats_pooled_logistic:holdoutPassed,
+      selected_regimes:selectedRegimes,
+      regime_comparisons:Object.fromEntries(regimes.map(regime=>{
+        const result=regimeResults[regime]||{};
+        return [regime,{
+          supported:result.supported===true,
+          validation_passed:result.validation_passed===true,
+          holdout_passed:result.holdout_passed===true,
+          sample_count:Number(result.holdout_model?.sample_count)||0,
+          tcn_brier:result.holdout_model?.model_brier_score??null,
+          base_rate_brier:result.holdout_model?.base_rate_brier_score??null,
+          logistic_brier:result.holdout_logistic?.model_brier_score??null
+        }];
+      })),
       regime_coverage:{training:trainingByRegime,selection:selectionByRegime,validation:validationByRegime,holdout:holdoutByRegime},
-      supported_regimes:supportedRegimes,passed:holdoutPassed
+      supported_regimes:supportedRegimes,
+      all_supported_regimes_validated:allSupportedRegimesValidated,
+      partial_regime_validation:holdoutPassed&&!allSupportedRegimesValidated,
+      passed:holdoutPassed
     },
     _fit:probabilityReady?fitted:null,
     _baseline_fit:pooledBaseline
