@@ -1011,9 +1011,9 @@ test('historical sample phases give the cognitive learner enough distinct time b
   for(let i=0;i<140;i++){
     const symbol='PAIR'+String(i).padStart(2,'0')+'USDT';
     const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol,klines,fastKlines,btcKlines,now,maxSamples:8
+      symbol,klines,fastKlines,btcKlines,now,maxSamples:12
     });
-    assert.equal(samples.length,8,symbol+' should retain eight independent 4h labels');
+    assert.equal(samples.length,12,symbol+' should retain twelve independent 4h labels');
     for(let j=1;j<samples.length;j++){
       assert.ok(samples[j].at-samples[j-1].at>=4*60*60*1000,
         symbol+' must not contribute overlapping 4h outcome windows');
