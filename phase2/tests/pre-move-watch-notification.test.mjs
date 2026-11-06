@@ -37,6 +37,13 @@ test('Android local Pre-Move watch contract stays aligned with every server-qual
     'strongBuyerAbsorptionQualified',
     'relativeStrengthBuyerQualified'
   ]) assert.ok(validator.includes(gate),'Android must independently qualify '+gate);
+  for(const gate of ['tickerActivityQualified','accumulationPrepQualified']){
+    const start=validator.indexOf('boolean '+gate);
+    const end=validator.indexOf(';',start);
+    assert.ok(start>=0&&end>start,'Android must define '+gate);
+    assert.ok(validator.slice(start,end).includes('Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0'),
+      gate+' must retain the server 750k USDT turnover floor');
+  }
   assert.ok(validator.includes('low_volume_watch_only'));
   assert.ok(validator.includes('candle_data_valid'));
   assert.ok(validator.includes('volume_gate_pass'));
