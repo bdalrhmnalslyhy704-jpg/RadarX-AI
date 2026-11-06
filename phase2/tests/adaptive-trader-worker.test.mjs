@@ -487,7 +487,7 @@ test('worker purges all legacy neural samples and replaces the persisted state w
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-legacy-purge-'));
   const store=await new DurableStore({dir}).init();
   const now=Date.now();
-  await store.putAdaptiveTraderState({
+  await store.writeJson(store.files.adaptiveTraderState,{
     version:1,enabled:false,scan_count:900,successful_scans:880,scan_cursor:720,
     samples:[{id:'OLD_TCN_LABEL',symbol:'OLDUSDT',price:1,at:now-8*60*60*1000,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
