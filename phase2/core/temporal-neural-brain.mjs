@@ -863,11 +863,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     const calibrationSource=localCalibrationSupported
       ?'REGIME_CALIBRATION_BLOCK':'SHARED_REGIME_CALIBRATION_BLOCK';
     trainingByRegime[regime]=regimeTraining.length;
-    selectionByRegime[regime]=memberSelectionRows.length;
+    selectionByRegime[regime]=regimeMemberSelection.length;
     validationByRegime[regime]=regimeValidation.length;
     holdoutByRegime[regime]=regimeHoldout.length;
     trainingTargets[regime]=trainTargets;
-    selectionTargets[regime]=memberSelectionTargets;
+    selectionTargets[regime]=selectTargets;
     validationTargets[regime]=validTargets;
     holdoutTargets[regime]=holdTargets;
 
