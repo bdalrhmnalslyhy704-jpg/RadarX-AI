@@ -537,10 +537,10 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_V16',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     member_training_profiles:memberProfiles,
-    residual_scale_selection:'SHARED_REGIME_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1',
+    residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     training_prior_probability:baseRate
@@ -622,7 +622,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
-    regime_selection_mode:'SHARED_TCN_REGIME_CONDITIONED_OUT_OF_SAMPLE_GATES',
+    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
     model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
     resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
     required_training_samples:minTrainingSamples,
@@ -657,7 +657,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
-      regime_selection_mode:'SHARED_TCN_REGIME_CONDITIONED_OUT_OF_SAMPLE_GATES',
+      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
       model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
@@ -720,7 +720,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
-      regime_selection_mode:'SHARED_TCN_REGIME_CONDITIONED_OUT_OF_SAMPLE_GATES',
+      regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
       model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:sharedTrainingRows.length,
       shared_model_training_samples:sharedTrainingRows.length,
@@ -789,10 +789,10 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'SHARED_TEMPORAL_TCN_SHARED_SELECTION_CHALLENGER_V15',
+    training_strategy:'SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_V16',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_V1',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-    residual_scale_selection:'SHARED_REGIME_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1',
+    residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     candidate_residual_scales:[0,0.25,0.5,0.75,1]
   };
 
@@ -851,9 +851,16 @@ export function buildTemporalNeuralProfile(samples = [], {
     // selection use one pooled chronological block. Regime anchors and all
     // later calibration, validation and holdout scoring remain regime-specific.
     const localSelectionTargets=selectTargets;
-    const memberSelectionRows=sharedMemberSelectionRows;
-    const memberSelectionTargets=sharedMemberSelectionTargets;
-    const memberSelectionSource='SHARED_TCN_MEMBER_SELECTION_BLOCK';
+    const localSelectionSupported=localSelectionTargets.samples>=minSelectionSamples&&
+      localSelectionTargets.positive>=minSelectionPositive&&
+      localSelectionTargets.negative>=minSelectionNegative;
+    // Prefer local later rows when class support is real; only sparse regimes
+    // fall back to the shared chronological selection block.
+    const memberSelectionRows=localSelectionSupported?regimeMemberSelection:sharedMemberSelectionRows;
+    const memberSelectionTargets=localSelectionSupported?localSelectionTargets:sharedMemberSelectionTargets;
+    const memberSelectionSource=localSelectionSupported
+      ?'REGIME_MEMBER_SELECTION_BLOCK':'SHARED_TCN_MEMBER_SELECTION_BLOCK';
+    const memberSelectionSupported=localSelectionSupported||sharedMemberSelectionSupported;
     const localCalibrationTargets=calibrationSupport(regimeCalibration);
     const localCalibrationSupported=localCalibrationTargets.samples>=30&&
       localCalibrationTargets.positive>=5&&localCalibrationTargets.negative>=20;
@@ -863,11 +870,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     const calibrationSource=localCalibrationSupported
       ?'REGIME_CALIBRATION_BLOCK':'SHARED_REGIME_CALIBRATION_BLOCK';
     trainingByRegime[regime]=regimeTraining.length;
-    selectionByRegime[regime]=regimeMemberSelection.length;
+    selectionByRegime[regime]=memberSelectionRows.length;
     validationByRegime[regime]=regimeValidation.length;
     holdoutByRegime[regime]=regimeHoldout.length;
     trainingTargets[regime]=trainTargets;
-    selectionTargets[regime]=selectTargets;
+    selectionTargets[regime]=memberSelectionTargets;
     validationTargets[regime]=validTargets;
     holdoutTargets[regime]=holdTargets;
 
@@ -879,7 +886,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(!regimeBaseline)supportGaps.push('REGIME_LOGISTIC_ANCHOR_UNAVAILABLE');
     if(!sharedTrainingSupported||!sharedResidualFit)supportGaps.push('SHARED_TCN_TRAINING_BLOCK_UNSUPPORTED');
     if(trainTargets.positive<3)supportGaps.push('REGIME_BASELINE_POSITIVE_CLASS_TOO_THIN');
-    if(!sharedMemberSelectionSupported)supportGaps.push('SHARED_MEMBER_SELECTION_BLOCK_UNSUPPORTED');
+    if(!memberSelectionSupported)supportGaps.push('MEMBER_SELECTION_BLOCK_UNSUPPORTED');
     if(regimeValidation.length<minRegimeValidation)supportGaps.push('VALIDATION_SAMPLE_COUNT');
     if(regimeHoldout.length<minRegimeHoldout)supportGaps.push('HOLDOUT_SAMPLE_COUNT');
     if(trainTargets.negative<minRegimeNegative)supportGaps.push('TRAINING_NEGATIVE_CLASS');
@@ -917,17 +924,18 @@ export function buildTemporalNeuralProfile(samples = [], {
     }
 
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
+    const selectionPrior=localSelectionSupported?regimePrior:baseRate;
     const regimeFit=sharedResidualFit;
     const candidateResidualScales=[0,0.25,0.5,0.75,1];
     const memberRanks=regimeFit.members.flatMap((member,index)=>
       candidateResidualScales.map(residualScale=>({
         index,residual_scale:residualScale,
         metrics:evaluate(memberSelectionRows,
-          sequence=>forward(sequence,member,residualScale).probability,baseRate)
+          sequence=>forward(sequence,member,residualScale).probability,selectionPrior)
       }))
     ).filter(row=>row.metrics.evaluated===true)
       .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
-        a.index-b.index||b.residual_scale-a.residual_scale);
+        a.index-b.index||a.residual_scale-b.residual_scale);
     const selectedMemberIndex=memberRanks.length?memberRanks[0].index:-1;
     const selectedResidualScale=memberRanks.length?memberRanks[0].residual_scale:1;
     fitted.selected_member_by_regime[regime]=selectedMemberIndex;
@@ -1059,6 +1067,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       model_scope:'SHARED_TCN_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHOR',
       local_selection_samples:Number(result.local_selection_samples)||0,
       local_selection_positive_samples:Number(result.local_selection_targets?.positive)||0,
+      local_selection_negative_samples:Number(result.local_selection_targets?.negative)||0,
       shared_selection_samples:sharedMemberSelectionTargets.samples,
       shared_selection_positive_samples:sharedMemberSelectionTargets.positive,
       shared_selection_negative_samples:sharedMemberSelectionTargets.negative,
@@ -1127,7 +1136,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   // complete chronological evidence blocks. Per-regime scored subsets remain
   // explicit under regime_specialists and holdout_comparison.
   const reportTrainingSamples=sharedTrainingRows.length;
-  const reportSelectionSamples=sharedMemberSelectionRows.length;
+  const reportSelectionSamples=Object.values(selectionByRegime).reduce((sum,value)=>sum+Number(value||0),0);
   const reportValidationSamples=Object.values(validationByRegime).reduce((sum,value)=>sum+Number(value||0),0);
   const reportHoldoutSamples=holdout.length;
   const reportTrainingPositive=targets.filter(value=>value===1).length;
@@ -1162,18 +1171,19 @@ export function buildTemporalNeuralProfile(samples = [], {
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),
     selected_member_index:null,
-    member_selection_method:'SHARED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
-    residual_scale_selection:'SHARED_REGIME_MEMBER_SELECTION_BLOCK_BRIER_GRID_V1',
+    member_selection_method:'REGIME_PREFERRED_SHARED_FALLBACK_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
+    residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     candidate_residual_scales:[0,0.25,0.5,0.75,1],
     regime_specialist_count:2,
-    regime_selection_mode:'SHARED_TCN_REGIME_CONDITIONED_OUT_OF_SAMPLE_GATES',
+    regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
     model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V1',
     calibration_fit_scope:'REGIME_OR_SHARED_CALIBRATION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
     shared_model_training_samples:sharedTrainingRows.length,
-    shared_model_selection_samples:reportSelectionSamples,
+    shared_model_selection_samples:sharedMemberSelectionRows.length,
+    member_selection_samples_total:reportSelectionSamples,
     selection_samples:reportSelectionSamples,
     validation_samples:reportValidationSamples,holdout_samples:reportHoldoutSamples,
     shared_model_training_cutoff_at:sharedTrainingCutoffAt,
