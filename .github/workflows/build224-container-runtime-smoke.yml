@@ -179,6 +179,8 @@ jobs:
           const summary=x.last_summary||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V6'||
              temporalNetwork.architecture!=='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'||
+             temporalNetwork.training_strategy!=='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'||
+             temporalNetwork.model_scope!=='INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS'||
              temporalNetwork.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
              temporalNetwork.temporal_label_resolution!=='15M_ONLY'){
             throw new Error('CONTAINER_COGNITIVE_V5_TCN_V6_SOURCE_CONTRACT_INVALID '+JSON.stringify({
@@ -199,6 +201,8 @@ jobs:
             (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3);
           const temporalNetworkContract=
             temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
+            temporalNetwork.training_strategy==='INDEPENDENT_BTC_REGIME_TCN_MATCHED_LOGISTIC_CHALLENGER_V13'&&
+            temporalNetwork.model_scope==='INDEPENDENT_BTC_REGIME_TCN_SPECIALISTS'&&
             temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
             temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
             Number(temporalNetwork.sequence_steps)===24&&
@@ -207,8 +211,10 @@ jobs:
             (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)&&
             ['WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
              'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE',
+             'WAITING_FOR_SHARED_TCN_TRAINING_SAMPLES',
              'VALIDATION_DID_NOT_BEAT_POOLED_BASELINE',
              'VALIDATION_DID_NOT_BEAT_REGIME_LOGISTIC',
+             'NO_SUPPORTED_BTC_REGIME',
              'VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
              'PARTIAL_REGIME_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
              'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
@@ -252,6 +258,7 @@ jobs:
                 holdout_negative_samples:Number(specialist?.holdout_negative_samples)||0,
                 selected_member_index:Number.isInteger(specialist?.selected_member_index)?specialist.selected_member_index:null,
                 selected_residual_scale:Number(specialist?.selected_residual_scale),
+                neural_residual_contributes:specialist?.neural_residual_contributes===true,
                 member_selection_source:String(specialist?.member_selection_source||'UNKNOWN'),
                 probability_calibration:{
                   fit_on:String(specialist?.probability_calibration?.fit_on||'UNKNOWN'),
@@ -357,8 +364,18 @@ jobs:
             Number(temporalNetwork.shared_model_selection_cutoff_at)<=
               Number(temporalNetwork.validation_start_at)&&
             Number(temporalNetwork.validation_start_at)<Number(temporalNetwork.holdout_start_at);
+          const selectedRegimes=Array.isArray(temporalNetwork.selected_regimes)?temporalNetwork.selected_regimes:[];
+          const neuralContributionSafe=!temporalNetwork.probability_ready||
+            (selectedRegimes.length>0&&selectedRegimes.every(regime=>{
+              const specialist=temporalNetwork.regime_specialists?.[regime];
+              return specialist?.neural_residual_contributes===true&&
+                Number(specialist.selected_residual_scale)>0&&
+                specialist.probability_calibration?.fitted===true&&
+                specialist.logistic_probability_calibration?.fitted===true;
+            }));
           const probabilityGateSafe=!temporalNetwork.probability_ready||
-            (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
+            (neuralContributionSafe&&temporalNetwork.validation?.evaluated===true&&
+             temporalNetwork.validation?.beat_base_rate===true&&
              temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
              temporalNetwork.holdout_comparison?.beats_pooled_logistic===true);
           if(temporalTrained&&(!chronologicalSplitSafe||!probabilityGateSafe)){
