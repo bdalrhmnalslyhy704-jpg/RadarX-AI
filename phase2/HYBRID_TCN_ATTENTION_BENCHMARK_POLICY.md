@@ -18,7 +18,7 @@ The classical baseline and the neural challenger are run against the same normal
 
 ## Causal feature tensor
 
-buildHybridSequence constructs a 24-step sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 21 channels include:
+buildHybridSequence constructs a 24-step sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 22 channels include:
 
 1. One-, three-, and twelve-candle log returns.
 2. Candle body, range, close location, and upper/lower wick fractions.
@@ -29,7 +29,7 @@ buildHybridSequence constructs a 24-step sequence from completed candles only. I
 7. Short realized volatility, adaptive short/long volatility ratio, and relative BTC return.
 8. Explicit availability masks for depth and aggregate-trade evidence.
 
-The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle; raw-feed collection and historical backfill remain an upstream data requirement.
+The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction in the 22nd channel; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle; raw-feed collection and historical backfill remain an upstream data requirement.
 
 ## Neural architecture and objective
 
@@ -48,7 +48,7 @@ The benchmark assumes long-only Spot entries, one open position at a time, and a
 The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The dataset must provide one unique row per symbol/decision timestamp with:
 
 - id, symbol, market=BINANCE_SPOT_USDT, outcome_source=BINANCE_SPOT_CLOSED_15M, at, latest_input_at, and resolved_at in epoch milliseconds.
-- sequence: exactly 24 rows by 21 finite normalized features, each value within [-4, 4].
+- sequence: exactly 24 rows by 22 finite normalized features, each value within [-4, 4].
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
