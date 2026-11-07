@@ -506,6 +506,16 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
   return {trades, complete, coverage};
 }
 
+export function compactHistoricalReplayReport(report={}) {
+  const results = Array.isArray(report?.results) ? report.results.map(row => {
+    const {steps, ...summary} = row ?? {};
+    return {...summary, replay_step_details_omitted: true,
+      replay_step_detail_count: Array.isArray(steps) ? steps.length : 0};
+  }) : [];
+  return {...report, results,
+    step_detail_policy: 'OMITTED_FROM_MATRIX_WINDOW_JSON_TO_KEEP_FULL_REPLAY_EVIDENCE_WITHIN_STRING_LIMITS'};
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -1088,12 +1098,10 @@ async function main() {
       process.stderr.write('[REPLAY_ERROR] ' + symbol + ' ' + message + '\n');
     }
   }
-  const dir = dirname(output);
-  await mkdir(dir, {recursive: true});
-  const temp = output + '.tmp-' + process.pid;
-  await writeFile(temp, JSON.stringify(report, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
-  await rename(temp, output);
+  // Persist the fixed benchmark rows before the verbose detector report. This keeps
+  // the core research evidence safe even when optional diagnostic detail is oversized.
   if(hybridBenchmarkOutput){
+    await mkdir(dirname(hybridBenchmarkOutput), {recursive:true});
     const hybridDataset={
       dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1',
       source_commit_sha:String(process.env.GITHUB_SHA||''),
@@ -1101,7 +1109,7 @@ async function main() {
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
       feature_interval:'1M_CLOSED_CANDLES',
       sequence_steps:24,
-      sequence_channels:23,
+      sequence_channels:28,
       outcome_horizon_ms:4*HOUR_MS,
       capture_sampling:'EVERY_10M_DECISION',
       capture_symbols:symbols,
@@ -1124,6 +1132,14 @@ async function main() {
     await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\n',{encoding:'utf8',flag:'wx'});
     await rename(hybridTemp,hybridBenchmarkOutput);
   }
+  const dir = dirname(output);
+  await mkdir(dir, {recursive: true});
+  const temp = output + '.tmp-' + process.pid;
+  const persistedReport = hybridBenchmarkOutput
+    ? compactHistoricalReplayReport(report)
+    : report;
+  await writeFile(temp, JSON.stringify(persistedReport, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
+  await rename(temp, output);
   process.stdout.write(JSON.stringify({
     output, hybrid_benchmark_output:hybridBenchmarkOutput,
     hybrid_benchmark_rows:hybridBenchmarkRows.length, generated_at: report.generated_at,
