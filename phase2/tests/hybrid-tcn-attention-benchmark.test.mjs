@@ -25,6 +25,8 @@ const SOURCE_SHA = '52d0ba535e4c983fa5113bbde8061277555f87a6';
 function makeSequence(direction = 1, seed = 0) {
   return Array.from({ length: HYBRID_SEQUENCE_STEPS }, (_, time) =>
     Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, feature) => {
+      if (feature === 19) return 0; // no historical depth snapshot
+      if (feature === 20 || feature === 21) return 1; // controlled fixture: complete AggTrade evidence
       const trend = direction * (feature === 0 ? 0.7 : feature === 10 ? 0.4 : 0.12);
       const wave = Math.sin((time + 1) * (feature + 1) * 0.13 + seed) * 0.08;
       return Math.max(-3, Math.min(3, trend + wave));
