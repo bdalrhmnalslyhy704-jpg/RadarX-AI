@@ -1094,7 +1094,10 @@ export function runFixedShaBenchmark(inputRows, {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
     throw new Error('FIXED_BENCHMARK_REQUIRES_FULL_SOURCE_COMMIT_SHA');
   }
-  const rows = normalizeBenchmarkRows(inputRows,String(targetDefinition));
+  if(String(targetDefinition)!==DEFAULT_TARGET_DEFINITION) {
+    throw new Error('UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION');
+  }
+  const rows = normalizeBenchmarkRows(inputRows,DEFAULT_TARGET_DEFINITION);
   const outcomeSources=[...new Set(rows.map(row=>row.outcome_source))];
   if(outcomeSources.length>1)throw new Error('FIXED_BENCHMARK_MUST_USE_ONE_CLOSED_SPOT_OUTCOME_SOURCE');
   const datasetSha = sha256Canonical(rows);
