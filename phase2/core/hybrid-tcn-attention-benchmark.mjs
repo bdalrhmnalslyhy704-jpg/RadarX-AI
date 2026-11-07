@@ -248,7 +248,7 @@ function realizedVolatility(returns) {
 }
 
 /**
- * Build a strictly causal 24 x 21 feature tensor from completed Binance Spot
+ * Build a strictly causal 24 x 23 feature tensor from completed Binance Spot
  * candles. Optional book and aggregate-trade fields are consumed only when
  * they are attached to their matching closed candle; absent feeds are masked.
  */
