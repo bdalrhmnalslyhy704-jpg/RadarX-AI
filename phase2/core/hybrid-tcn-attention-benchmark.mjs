@@ -299,8 +299,10 @@ export function buildHybridSequence({
     const baseVol = realizedVolatility(returnSeries.slice(-20));
     const adaptiveVol = baseVol > 1e-10 ? shortVol / baseVol : 0;
     const benchmarkIndex = benchmark.findLastIndex(row => candleTime(row) === closeTime);
+    const candleIntervalMs = Math.max(1,
+      (finite(current.closeTime) ?? closeTime) - (finite(current.openTime) ?? closeTime) + 1);
     const priorBenchmarkMatches = benchmarkIndex > 0 &&
-      candleTime(benchmark[benchmarkIndex - 1]) === closeTime - 60_000;
+      candleTime(benchmark[benchmarkIndex - 1]) === closeTime - candleIntervalMs;
     const relativeBtc = priorBenchmarkMatches
       ? logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
         candleNumber(benchmark[benchmarkIndex - 1], 'close'))
