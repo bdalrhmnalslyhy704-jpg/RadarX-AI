@@ -1145,7 +1145,7 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
+    training_objective: 'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3',
     objective_trace: trace
   };
 }
@@ -1551,7 +1551,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
+    training_objective: 'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3',
     execution_policy: {
       market: 'BINANCE_SPOT_USDT',
       paper_only: true,
