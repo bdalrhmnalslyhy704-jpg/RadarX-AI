@@ -488,10 +488,16 @@ export function buildPurgedWalkForwardFolds(inputRows, {
 
 function zerosLike(value) {
   if (Array.isArray(value)) return value.map(zerosLike);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, zerosLike(child)]));
+  }
   return typeof value === 'number' ? 0 : value;
 }
 function addTrees(left, right) {
   if (Array.isArray(left)) return left.map((value, index) => addTrees(value, right[index]));
+  if (left && typeof left === 'object') {
+    return Object.fromEntries(Object.keys(left).map(key => [key, addTrees(left[key], right[key])]));
+  }
   return left + right;
 }
 function scaleTree(tree, factor) {
@@ -644,6 +650,15 @@ function adamUpdate(parameters, gradients, optimizer, step, learningRate, l2) {
         variance: next.map(row => row.variance)
       };
     }
+    if (parameter && typeof parameter === 'object') {
+      const next = Object.keys(parameter).map(key =>
+        [key, walk(parameter[key], gradient[key], moment[key], variance[key])]);
+      return {
+        value: Object.fromEntries(next.map(([key, row]) => [key, row.value])),
+        moment: Object.fromEntries(next.map(([key, row]) => [key, row.moment])),
+        variance: Object.fromEntries(next.map(([key, row]) => [key, row.variance]))
+      };
+    }
     const g = clamp(gradient, -2.5, 2.5);
     const m = 0.9 * moment + 0.1 * g;
     const v = 0.999 * variance + 0.001 * g * g;
@@ -688,16 +703,18 @@ export function profitDrawdownObjective(probabilities, rows, {
     row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
   const positions = Array(rows.length).fill(0);
-  const portfolioReturns = Array(rows.length).fill(0);
-  const probabilityDerivative = Array(rows.length).fill(0);
-  for (const pair of pairs) {
+  const orderedReturns = Array(rows.length).fill(0);
+  const orderedProbabilityDerivative = Array(rows.length).fill(0);
+  for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
+    const pair = pairs[orderedIndex];
     const allocation = sigmoid((pair.probability - threshold) / temp);
     const net = netReturnPct(pair.row, cost);
     positions[pair.index] = allocation;
-    portfolioReturns[pair.index] = allocation * net * size; // percentage points on total equity
-    probabilityDerivative[pair.index] =
+    orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
+    orderedProbabilityDerivative[orderedIndex] =
       allocation * (1 - allocation) / temp * pair.probability * (1 - pair.probability);
   }
+  const portfolioReturns = orderedReturns;
   const n = portfolioReturns.length;
   const average = mean(portfolioReturns) ?? 0;
   const variance = mean(portfolioReturns.map(value => (value - average) ** 2)) ?? 0;
@@ -740,8 +757,9 @@ export function profitDrawdownObjective(probabilities, rows, {
     );
     if (x < 0) gradient += 2 * downsideWeight * x / n;
     gradient += drawdownGradient[index];
-    const net = netReturnPct(rows[index], cost) * size;
-    logitGradients[index] = gradient * net * probabilityDerivative[index];
+    const pair = pairs[index];
+    const net = netReturnPct(pair.row, cost) * size;
+    logitGradients[pair.index] = gradient * net * orderedProbabilityDerivative[index];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -784,7 +802,6 @@ export function trainHybridTcnAttention(trainingRows, {
         objective.logit_gradients[index]);
       gradients = addTrees(gradients, item);
     }
-    gradients = scaleTree(gradients, 1 / rows.length);
     const update = adamUpdate(parameters(), gradients, optimizer, epoch,
       clamp(Number(learningRate) || 0.003, 0.0001, 0.02), Math.max(0, Number(l2) || 0));
     Object.assign(model, update.parameters);
@@ -826,7 +843,8 @@ export function simulatePaperTrades(decisions, {
     .sort((a, b) => a.at - b.at || b.score - a.score || a.symbol.localeCompare(b.symbol));
   let equity = Math.max(1, Number(initialEquity) || 100);
   let peak = equity, maxDrawdown = 0, availableAt = -Infinity;
-  const trades = [], skippedBusy = 0;
+  const trades = [];
+  let skippedBusy = 0;
   for (const decision of selected) {
     if (decision.at < availableAt) {
       skippedBusy++;
