@@ -151,6 +151,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.ready, true);
   assert.equal(prepared.row.market, 'BINANCE_SPOT_USDT');
   assert.equal(prepared.row.outcome_source, 'BINANCE_SPOT_CLOSED_15M');
+  assert.equal(prepared.row.outcome_definition, 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1');
   assert.equal(prepared.row.latest_input_at, at);
   assert.equal(prepared.row.resolved_at, at + FIFTEEN_MINUTES);
   assert.equal(prepared.row.gross_return_pct, 3);
@@ -170,6 +171,7 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.exit_reason, 'STOP_FIRST_SAME_CANDLE_AMBIGUITY');
   assert.equal(trade.gross_return_pct, -2);
   assert.equal(trade.net_return_pct, -2.3);
+  assert.ok(trade.max_adverse_excursion_pct <= -3);
 });
 
 test('profit/drawdown objective is finite and produces probability gradients', () => {
@@ -244,12 +246,34 @@ test('paper simulator charges round-trip costs, enforces a single open position,
       score: 0.95, threshold: 0.5, gross_return_pct: -2 },
     { id: '3', symbol: 'CUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
       score: 0.9, threshold: 0.5, gross_return_pct: -2 }
-  ], { roundTripCostBps: 30, positionFraction: 0.2 });
+  ], { roundTripCostBps: 30, positionFraction: 1, maxConcurrentPositions: 1 });
   assert.equal(report.trade_count, 2);
-  assert.equal(report.skipped_signals_while_position_open, 1);
+  assert.equal(report.skipped_signals_at_position_capacity, 1);
   assert.equal(report.trades[0].net_return_pct, 2.7);
   assert.equal(report.trades[1].net_return_pct, -2.3);
   assert.ok(report.max_drawdown_pct > 0);
+});
+
+test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital ceiling', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const report = simulatePaperTrades([
+    { id: 'a1', symbol: 'AUSDT', at: base, resolved_at: base + FOUR_HOURS,
+      score: 0.95, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.5 },
+    { id: 'b1', symbol: 'BUSDT', at: base, resolved_at: base + FOUR_HOURS,
+      score: 0.94, threshold: 0.5, gross_return_pct: -2, max_adverse_excursion_pct: -2.1 },
+    { id: 'a2', symbol: 'AUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + 2 * FOUR_HOURS,
+      score: 0.99, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.4 },
+    { id: 'c1', symbol: 'CUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + 2 * FOUR_HOURS,
+      score: 0.98, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.2 },
+    { id: 'd1', symbol: 'DUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
+      score: 0.97, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.3 }
+  ], { positionFraction: 0.5, maxConcurrentPositions: 2 });
+  assert.equal(report.trade_count, 3);
+  assert.equal(report.max_concurrent_positions, 2);
+  assert.equal(report.skipped_signals_same_symbol_position_open, 1);
+  assert.equal(report.skipped_signals_at_position_capacity, 1);
+  assert.ok(report.trades.every(trade => trade.exit_realized === true));
+  assert.ok(report.max_drawdown_pct > 0, 'the losing open position adverse excursion must contribute to drawdown');
 });
 
 test('fixed-SHA benchmark keeps both models on the same OOS events and fails closed without proven superiority', () => {
@@ -268,10 +292,10 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
   assert.equal(report.walk_forward.fold_count, 5);
   assert.equal(report.same_test_event_count, 450);
-  assert.equal(report.neural.trade_count < 100, true);
+  assert.equal(report.classic_baseline.trade_count > 0, true);
   assert.equal(report.status, 'NEURAL_SUPERIORITY_NOT_PROVEN');
   assert.equal(report.superiority, 'NOT_PROVEN');
-  assert.equal(report.acceptance_gates.minimum_100_oos_trades, 'FAIL');
+  assert.equal(report.acceptance_gates.beat_classic_on_net_pnl_sharpe_without_higher_drawdown, 'FAIL');
   assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
   assert.equal(report.execution_policy.paper_only, true);
   assert.equal(report.execution_policy.real_order_execution, false);
