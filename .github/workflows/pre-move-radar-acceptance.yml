@@ -138,7 +138,7 @@ jobs:
               Number(w.min_independent_flow_checks)===2&&
               Number(w.max_activity_age_ms)===240000&&
               Number(w.max_baseline_age_ms)===300000&&w.entry_eligible===false;
-            const ok=b.build_version==='Build 224'&&b.paper_trading===true&&b.real_order_execution===false&&
+            const ok=b.build_version==='Build 224'&&b.build_identity?.deployment_marker==='BUILD224_DHDTECH_TICKER_ACTIVITY_V2_20261107'&&b.paper_trading===true&&b.real_order_execution===false&&
               b.storage?.persistent===true&&Number(c.configured_cycle_scan_limit)>=6&&
               Number(c.hosted_cycle_scan_cap)>=8&&Number(c.max_concurrent_deep_scans)===2&&
               Number(c.scan_timeout_ms)>0&&Number(c.scan_timeout_ms)<=45000&&watchContractReady;
@@ -150,7 +150,7 @@ jobs:
                 echo "DHDTECH_PRE_MOVE_BUILD_CONTRACT_READY attempt=$attempt"
                 break
               fi
-              echo "::warning::DHDTech is still serving a Build 224 image without the versioned ticker-activity monitor contract, attempt $attempt/44."
+              echo "::warning::DHDTech is still serving an image without the Build 224 deployment marker and ticker-activity contract, attempt $attempt/44."
             else
               case "$CODE" in
                 502|503|504|000)
