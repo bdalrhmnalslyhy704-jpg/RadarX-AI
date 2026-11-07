@@ -421,7 +421,13 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.same_test_event_count, 450);
   assert.equal(report.integrity.rows, rows.length);
   assert.equal(report.integrity.rejected_or_duplicate_rows_removed, 0);
-  const normalizedSingleLetterRow = report.walk_forward.folds[0].train.find(row => row.id === 'event-0');
+  const normalizedRows = buildPurgedWalkForwardFolds(rows, {
+    folds: 5, minimumTrainTimes: 160, minimumTrainRows: 80,
+    minimumValidationRows: 50, minimumTestRows: 50, embargoMs: FOUR_HOURS
+  });
+  const normalizedSingleLetterRow = normalizedRows.folds
+    .flatMap(fold => fold.train).find(row => row.id === 'event-0');
+  assert.ok(normalizedSingleLetterRow, 'event must remain eligible for chronological training');
   assert.equal(normalizedSingleLetterRow.symbol, 'WUSDT');
   assert.equal(normalizedSingleLetterRow.max_adverse_excursion_pct, 0,
     'positive raw MAE from a path with no downside is normalized to zero, not discarded');
