@@ -11,6 +11,7 @@ on:
       - 'phase2/tools/historical-replay-matrix.mjs'
       - 'phase2/tools/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/benchmarks/hybrid-tcn-attention-windows.json'
+      - 'phase2/benchmarks/hybrid-tcn-attention-symbols.json'
       - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
       - '.github/workflows/hybrid-tcn-attention-historical-replay.yml'
   workflow_dispatch:
@@ -24,7 +25,7 @@ concurrency:
 
 jobs:
   spot-fixed-sha-replay:
-    name: 30-symbol x 3-regime Binance Spot replay and neural acceptance
+    name: 33-symbol x expanded 3-regime Binance Spot replay and neural acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -55,7 +56,9 @@ jobs:
           node --test phase2/tests/historical-replay-matrix.test.mjs
       - name: Validate three historical regime windows without network
         run: |
+          SYMBOLS="$(node --input-type=module -e "import fs from 'node:fs'; console.log(JSON.parse(fs.readFileSync('phase2/benchmarks/hybrid-tcn-attention-symbols.json','utf8')).join(','))")"
           node phase2/tools/historical-replay-matrix.mjs \
+            --symbols "$SYMBOLS" \
             --windows phase2/benchmarks/hybrid-tcn-attention-windows.json \
             --outcome-horizon-hours 4 \
             --dry-run
@@ -65,11 +68,14 @@ jobs:
         timeout-minutes: 300
         run: |
           mkdir -p "$REPORT_DIR"
+          SYMBOLS="$(node --input-type=module -e "import fs from 'node:fs'; console.log(JSON.parse(fs.readFileSync('phase2/benchmarks/hybrid-tcn-attention-symbols.json','utf8')).join(','))")"
           node phase2/tools/historical-replay-matrix.mjs \
+            --symbols "$SYMBOLS" \
             --windows phase2/benchmarks/hybrid-tcn-attention-windows.json \
             --output "$REPORT_DIR/matrix" \
             --max-trade-pages 500 \
-            --max-trades 500000 \
+            --max-trades 1000000 \
+            --archive-prefetch-concurrency 4 \
             --outcome-horizon-hours 4 \
             --timeout-ms 3600000 \
             --hybrid-benchmark-output "$DATASET_PATH"

@@ -1,20 +1,20 @@
 [
   {
-    "id": "late-2024-rally-candidate",
-    "label": "Late 2024 bull regime — 24h closed Spot replay",
+    "id": "late-2024-bull-expanded",
+    "label": "November 6-8 2024 BTC bull market — 48h",
     "start": "2024-11-06T00:00:00.000Z",
-    "end": "2024-11-07T00:00:00.000Z"
+    "end": "2024-11-08T00:00:00.000Z"
   },
   {
-    "id": "late-2024-range-candidate",
-    "label": "December 1 2024 sideways regime — 12h closed Spot replay",
-    "start": "2024-12-01T00:00:00.000Z",
-    "end": "2024-12-01T12:00:00.000Z"
+    "id": "early-2025-sideways-expanded",
+    "label": "January 11 2025 BTC sideways market — 24h",
+    "start": "2025-01-11T00:00:00.000Z",
+    "end": "2025-01-12T00:00:00.000Z"
   },
   {
-    "id": "early-2025-selloff-candidate",
-    "label": "Early 2025 bear regime — 12h closed Spot replay",
-    "start": "2025-02-25T06:00:00.000Z",
-    "end": "2025-02-25T18:00:00.000Z"
+    "id": "early-2025-bear-expanded",
+    "label": "February 24-26 2025 BTC bear market — 48h",
+    "start": "2025-02-24T00:00:00.000Z",
+    "end": "2025-02-26T00:00:00.000Z"
   }
 ]
