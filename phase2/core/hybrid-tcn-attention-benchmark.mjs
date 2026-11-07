@@ -1293,6 +1293,7 @@ export function runFixedShaBenchmark(inputRows, {
   const flowCoverage = integrity.agg_trade_flow_coverage_pct >= 80;
   const profileCoverage = integrity.trade_level_volume_profile_coverage_pct >= 70;
   const maeCoverage = integrity.adverse_excursion_coverage_pct >= 99.9;
+  const mfeCoverage = integrity.favourable_excursion_coverage_pct >= 99.9;
   const relativeBtcCoverage = integrity.relative_btc_coverage_pct >= 80;
   const riskAdjustedSuperiority = neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
     neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
@@ -1305,6 +1306,7 @@ export function runFixedShaBenchmark(inputRows, {
     agg_trade_flow_coverage_at_least_80_pct: flowCoverage ? 'PASS' : 'FAIL',
     trade_level_volume_profile_coverage_at_least_70_pct: profileCoverage ? 'PASS' : 'FAIL',
     adverse_excursion_coverage_at_least_99_9_pct: maeCoverage ? 'PASS' : 'FAIL',
+    favourable_excursion_coverage_at_least_99_9_pct: mfeCoverage ? 'PASS' : 'FAIL',
     relative_btc_reference_coverage_at_least_80_pct: relativeBtcCoverage ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
