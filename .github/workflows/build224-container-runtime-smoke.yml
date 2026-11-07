@@ -76,6 +76,16 @@ jobs:
           if (x.service !== 'RADARX_BACKEND' || x.build_version !== 'Build 224' || x.deployment_contract !== 'BUILD224_DHDTECH_V1') {
             throw new Error('CONTAINER_DEPLOYMENT_CONTRACT_INVALID');
           }
+          if (x.build_identity?.deployment_marker !== 'BUILD224_DHDTECH_TICKER_ACTIVITY_V2_20261107') {
+            throw new Error('CONTAINER_DHDTECH_IMAGE_MARKER_INVALID ' + String(x.build_identity?.deployment_marker || 'MISSING'));
+          }
+          const watchContract=x.pre_move_scanner_contract?.ticker_activity_watch_contract;
+          if (watchContract?.version !== 'TICKER_ACTIVITY_MONITOR_V2' ||
+              watchContract?.entry_eligible !== false ||
+              Number(watchContract?.volume_acceleration_floor) !== 1.35 ||
+              Number(watchContract?.trade_acceleration_floor) !== 1.30) {
+            throw new Error('CONTAINER_TICKER_ACTIVITY_WATCH_CONTRACT_INVALID ' + JSON.stringify(watchContract || null));
+          }
           if (x.paper_trading !== true || x.real_order_execution !== false || x.confidence_score !== 'UNKNOWN') {
             throw new Error('CONTAINER_READ_ONLY_POLICY_INVALID');
           }
@@ -95,6 +105,8 @@ jobs:
             service: x.service,
             build_version: x.build_version,
             deployment_contract: x.deployment_contract,
+            deployment_marker: x.build_identity.deployment_marker,
+            ticker_activity_watch_contract: x.pre_move_scanner_contract.ticker_activity_watch_contract,
             expected_radars: x.expected_radars,
             registered_radars: x.registered_radars,
             pre_move_scanner_ready: x.pre_move_scanner_ready,
