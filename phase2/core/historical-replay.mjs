@@ -513,6 +513,8 @@ export function runHistoricalReplay({
           gross_return_pct:bracket.gross_return_pct,
           max_adverse_excursion_pct:bracket.max_adverse_excursion_pct,
           max_adverse_excursion_at:bracket.max_adverse_excursion_at,
+          max_favorable_excursion_pct:bracket.max_favorable_excursion_pct,
+          max_favorable_excursion_at:bracket.max_favorable_excursion_at,
           classic_score:Math.max(0,Math.min(1,classicRaw/100)),
           sequence:tensor.sequence,
           feature_snapshot_sha:null,
