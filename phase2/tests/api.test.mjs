@@ -32,6 +32,7 @@ test('Pre-Move background worker fails explicitly when its market-data scanner i
     assert.equal(status.notification_transport.fcm_devices,0);
     assert.equal(status.notification_transport.physical_device_delivery_verified,false);
     assert.equal(Object.hasOwn(status.notification_transport,'fcm_token'),false);
+    process.env.RADARX_BUILD_DEPLOYMENT_MARKER='BUILD224_DHDTECH_TICKER_ACTIVITY_V2_20261107';
     const deploymentResponse=await fetch('http://127.0.0.1:'+server.address().port+'/api/deployment-info');
     assert.equal(deploymentResponse.status,200);
     const deployment=await deploymentResponse.json();
@@ -63,6 +64,7 @@ test('Pre-Move startup delay is independent from the recurring scan interval',as
   const monitor={health:()=>({database:{state:'LIVE'},websocket:{state:'LIVE'},rest:{state:'LIVE'}})};
   const server=createApiServer({config,store,monitor,pushProvider:new NoopPushProvider(),marketRadarRest:marketRest,
     buildInfo:{commit:'TEST_FIXTURE_COMMIT_224',branch:'build224-multi-analyst-20261007'}});
+  const previousDeploymentMarker=process.env.RADARX_BUILD_DEPLOYMENT_MARKER;
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{
     const started=server.startPreMoveWatchWorker();
@@ -87,9 +89,12 @@ test('Pre-Move startup delay is independent from the recurring scan interval',as
     assert.deepEqual(deployment.pre_move_scanner_contract.ticker_activity_watch_contract,
       started.scanner_contract.ticker_activity_watch_contract,
       'deployment-info must expose the exact watch-tier code version so stale containers cannot pass live acceptance');
-    assert.deepEqual(deployment.build_identity,{commit:'TEST_FIXTURE_COMMIT_224',branch:'build224-multi-analyst-20261007'},
+    assert.deepEqual(deployment.build_identity,{commit:'TEST_FIXTURE_COMMIT_224',branch:'build224-multi-analyst-20261007',
+      deployment_marker:'BUILD224_DHDTECH_TICKER_ACTIVITY_V2_20261107'},
       'deployment-info must identify the exact source revision running on the service');
   }finally{
+    if(previousDeploymentMarker===undefined)delete process.env.RADARX_BUILD_DEPLOYMENT_MARKER;
+    else process.env.RADARX_BUILD_DEPLOYMENT_MARKER=previousDeploymentMarker;
     server.stopPreMoveWatchWorker?.();await new Promise(resolve=>server.close(resolve));
     await rm(dir,{recursive:true,force:true});
   }

@@ -19,6 +19,7 @@ on:
       - 'phase2/push/index.mjs'
       - 'phase2/TCN_V6_VALIDATION_POLICY.md'
       - '.github/workflows/dhdtech-adaptive-trader-acceptance.yml'
+      - 'phase2/http/api.mjs'
       - '.github/workflows/pre-move-radar-acceptance.yml'
   workflow_dispatch:
 
@@ -181,6 +182,7 @@ jobs:
                 const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
                   deployment.expected_radars===12&&deployment.registered_radars===12&&
                   deployment.pre_move_scanner_ready===true&&
+                  deployment.build_identity?.deployment_marker==='BUILD224_DHDTECH_TICKER_ACTIVITY_V2_20261107'&&
                   deployment.analyst_system&&deployment.analyst_system.expected_analysts===20&&
                   deployment.analyst_system.engine_configured===true&&
                   deployment.analyst_system.review_bridge_installed===true&&
@@ -192,7 +194,7 @@ jobs:
                   http:response.status,status:value.status,scan_count:value.scan_count,
                   successful_scans:value.successful_scans,last_error:value.last_error,
                   radars:deployment.registered_radars,analysts:deployment.analyst_system&&deployment.analyst_system.expected_analysts,
-                  system_healthy:systemHealthy,worker_contract:value.scanner_contract||null,
+                  system_healthy:systemHealthy,deployment_marker:deployment.build_identity?.deployment_marker||null,worker_contract:value.scanner_contract||null,
                   last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
                   latest_prices:Array.isArray(prices)?prices.length:null,
