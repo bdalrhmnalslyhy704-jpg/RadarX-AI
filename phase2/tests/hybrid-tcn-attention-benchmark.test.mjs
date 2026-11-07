@@ -163,7 +163,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.latest_input_at, at);
   assert.equal(prepared.row.resolved_at, at + FOUR_HOURS);
   assert.equal(prepared.row.gross_return_pct, 3);
-  assert.equal(prepared.row.max_favorable_excursion_pct, 4);
+  assert.equal(prepared.row.max_favorable_excursion_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_at, at + FOUR_HOURS);
 });
 
@@ -255,10 +255,12 @@ test('paper simulator charges round-trip costs, enforces a single open position,
     { id: '1', symbol: 'AUSDT', at: base, resolved_at: base + FOUR_HOURS,
       max_adverse_excursion_at: base + FIFTEEN_MINUTES, max_adverse_excursion_pct: -0.5,
       max_favorable_excursion_at: base + 10 * 60 * 1000, max_favorable_excursion_pct: 1.1,
+      max_favorable_excursion_pct: 1.1, max_favorable_excursion_at: base + 10 * 60 * 1000,
       score: 0.9, threshold: 0.5, gross_return_pct: 3 },
     { id: '2', symbol: 'BUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + FOUR_HOURS,
       max_adverse_excursion_at: base + 2 * FIFTEEN_MINUTES, max_adverse_excursion_pct: -2.1,
       max_favorable_excursion_at: base + 2 * FIFTEEN_MINUTES, max_favorable_excursion_pct: 0.2,
+      max_favorable_excursion_pct: 0.2, max_favorable_excursion_at: base + 2 * FIFTEEN_MINUTES,
       score: 0.95, threshold: 0.5, gross_return_pct: -2 },
     { id: '3', symbol: 'CUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
       max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES, max_adverse_excursion_pct: -2.1,
@@ -272,6 +274,8 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   assert.ok(report.max_drawdown_pct > 0);
   assert.equal(report.trades[0].mae_marked_at, base + FIFTEEN_MINUTES);
   assert.equal(report.trades[1].mae_marked_at, base + FOUR_HOURS + FIFTEEN_MINUTES);
+  assert.equal(report.trades[0].mfe_marked_at, base + 10 * 60 * 1000);
+  assert.equal(report.trades[1].mfe_marked_at, base + FOUR_HOURS + 10 * 60 * 1000);
   assert.equal(report.trades[0].mfe_marked_at, base + 10 * 60 * 1000);
   assert.equal(report.trades[1].mfe_marked_at, base + FOUR_HOURS + 10 * 60 * 1000);
 });
