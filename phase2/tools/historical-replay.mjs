@@ -559,8 +559,12 @@ async function main() {
   const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
   const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 1000000, 'max-trades');
   const output = resolve(flag(args, '--output', './.radarx-data/historical-replay-' + new Date(now).toISOString().replace(/[:.]/g, '-') + '.json'));
+  const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
+  const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
+  if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const config = CONFIG;
   const client = new RestClient({...config.rest, baseUrls: config.rest.baseUrls ?? config.rest.urls});
+  const hybridBenchmarkRows=[];
   const report = {
     engine: 'RADARX_HISTORICAL_REPLAY_BATCH_V1',
     generated_at: new Date(now).toISOString(),
@@ -649,7 +653,7 @@ async function main() {
       // Prefer full, checksum-verified official historical Spot archives for completed
       // UTC days. REST remains the fallback for current/incomplete days and unavailable archives.
       archiveAttempt = await fetchBinanceSpotAggTradesArchive(
-        symbol, start - 65_000, end, {maxTrades}
+        symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxTrades}
       );
       if (archiveAttempt.complete === true) tradeFetch = archiveAttempt;
     } catch (error) {
@@ -664,7 +668,7 @@ async function main() {
     if (!tradeFetch) {
       try {
         const restTradeFetch = await fetchAggregateTrades(
-          client, symbol, start - 65_000, end, {maxPages, maxTrades}
+          client, symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxPages, maxTrades}
         );
         tradeFetch = restTradeFetch.complete === true
           ? restTradeFetch
@@ -702,6 +706,7 @@ async function main() {
       endTime: end,
       outcomeEndTime:observationEnd,
       outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
+      captureHybridBenchmarkRows:hybridBenchmarkOutput!==null,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       timeframeCandles,
@@ -995,6 +1000,10 @@ async function main() {
     if (Number(replay.data_quality.complete_5m_candles) < profileRequirements.base.fiveMinute) {
       profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:fiveMinute');
     }
+    if(hybridBenchmarkOutput){
+      hybridBenchmarkRows.push(...(Array.isArray(replay.hybrid_benchmark_rows)?replay.hybrid_benchmark_rows:[]));
+      delete replay.hybrid_benchmark_rows;
+    }
     replay.data_quality.profile_coverage_complete = windowCandlesComplete &&
       profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0 &&
       profileTradeCoverageFailures.length === 0 && marketMedianCoverageFailures.length === 0;
@@ -1060,8 +1069,38 @@ async function main() {
   const temp = output + '.tmp-' + process.pid;
   await writeFile(temp, JSON.stringify(report, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
   await rename(temp, output);
+  if(hybridBenchmarkOutput){
+    const hybridDataset={
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1',
+      source_commit_sha:String(process.env.GITHUB_SHA||''),
+      market:'BINANCE_SPOT_USDT',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
+      feature_interval:'1M_CLOSED_CANDLES',
+      sequence_steps:24,
+      sequence_channels:22,
+      outcome_horizon_ms:4*HOUR_MS,
+      capture_sampling:'EVERY_REPLAY_DECISION',
+      capture_symbols:symbols,
+      capture_window:{start,start_iso:new Date(start).toISOString(),end,end_iso:new Date(end).toISOString()},
+      capture_summary:{
+        rows:hybridBenchmarkRows.length,
+        distinct_symbols:new Set(hybridBenchmarkRows.map(row=>row.symbol)).size,
+        distinct_decision_times:new Set(hybridBenchmarkRows.map(row=>row.at)).size,
+        agg_trade_flow_rows:hybridBenchmarkRows.filter(row=>row.trade_flow_available).length,
+        trade_level_volume_profile_rows:hybridBenchmarkRows.filter(row=>row.trade_level_volume_profile_available).length
+      },
+      benchmark_options:{folds:5,minimumTrainTimes:160,minimumTrainRows:100,
+        minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
+        targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
+      rows:hybridBenchmarkRows
+    };
+    const hybridTemp=hybridBenchmarkOutput+'.tmp-'+process.pid;
+    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\\n',{encoding:'utf8',flag:'wx'});
+    await rename(hybridTemp,hybridBenchmarkOutput);
+  }
   process.stdout.write(JSON.stringify({
-    output, generated_at: report.generated_at,
+    output, hybrid_benchmark_output:hybridBenchmarkOutput,
+    hybrid_benchmark_rows:hybridBenchmarkRows.length, generated_at: report.generated_at,
     symbols: report.results.map(x => ({
       symbol: x.symbol, steps: x.summary.replay_steps, accepted: x.summary.accepted,
       accepted_modes: x.summary.accepted_mode_counts ?? [],
