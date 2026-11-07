@@ -517,9 +517,12 @@ export function buildPurgedWalkForwardFolds(inputRows, {
     const validationEnd = times[validationEndIndex - 1];
     const testStart = times[testStartIndex];
     const testEnd = times[testEndIndex - 1];
-    const train = rows.filter(row => row.at < validationStart && row.resolved_at < validationStart - embargo);
+    // Purge every label that has not matured by the next boundary. The embargo
+    // is applied to decision timestamps in the earlier block, not subtracted
+    // a second time from resolved_at (which would double-count the outcome horizon).
+    const train = rows.filter(row => row.at < validationStart - embargo && row.resolved_at < validationStart);
     const validation = rows.filter(row => row.at >= validationStart && row.at <= validationEnd &&
-      row.resolved_at < testStart - embargo);
+      row.resolved_at < testStart);
     const test = rows.filter(row => row.at >= testStart && row.at <= testEnd);
     const maxTrainResolvedAt = train.length ? Math.max(...train.map(row => row.resolved_at)) : null;
     const maxValidationResolvedAt = validation.length ? Math.max(...validation.map(row => row.resolved_at)) : null;
@@ -543,9 +546,9 @@ export function buildPurgedWalkForwardFolds(inputRows, {
       validation_count: validation.length,
       test_count: test.length,
       purged_training_rows: rows.filter(row => row.at < validationStart &&
-        row.resolved_at >= validationStart - embargo).length,
+        (row.at >= validationStart - embargo || row.resolved_at >= validationStart)).length,
       purged_validation_rows: rows.filter(row => row.at >= validationStart &&
-        row.at <= validationEnd && row.resolved_at >= testStart - embargo).length,
+        row.at <= validationEnd && row.resolved_at >= testStart).length,
       max_training_outcome_resolved_at: maxTrainResolvedAt,
       max_validation_outcome_resolved_at: maxValidationResolvedAt
     });
