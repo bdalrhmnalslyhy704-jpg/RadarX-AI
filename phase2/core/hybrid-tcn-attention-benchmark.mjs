@@ -415,13 +415,15 @@ function normalizeBenchmarkRows(inputRows) {
  * matured before the next boundary minus the full horizon/embargo.
  */
 export function buildPurgedWalkForwardFolds(inputRows, {
-  folds = 5, minimumTrainTimes = 160, minimumValidationRows = 30,
-  minimumTestRows = 30, embargoMs = 4 * 60 * 60 * 1000
+  folds = 5, minimumTrainTimes = 160, minimumTrainRows = 100,
+  minimumValidationRows = 30, minimumTestRows = 30,
+  embargoMs = 4 * 60 * 60 * 1000
 } = {}) {
   const rows = normalizeBenchmarkRows(inputRows);
   const times = [...new Set(rows.map(row => row.at))].sort((a, b) => a - b);
   const count = Math.max(2, Math.min(10, Math.trunc(Number(folds) || 5)));
   const minimumTrain = Math.max(20, Math.trunc(Number(minimumTrainTimes) || 160));
+  const minimumTrainSampleCount = Math.max(20, Math.trunc(Number(minimumTrainRows) || 100));
   const block = Math.floor((times.length - minimumTrain) / (count + 1));
   if (block <= 0 || block < Math.min(minimumValidationRows, minimumTestRows)) {
     return {
@@ -450,7 +452,7 @@ export function buildPurgedWalkForwardFolds(inputRows, {
     const test = rows.filter(row => row.at >= testStart && row.at <= testEnd);
     const maxTrainResolvedAt = train.length ? Math.max(...train.map(row => row.resolved_at)) : null;
     const maxValidationResolvedAt = validation.length ? Math.max(...validation.map(row => row.resolved_at)) : null;
-    const valid = train.length >= minimumTrain && validation.length >= minimumValidationRows &&
+    const valid = train.length >= minimumTrainSampleCount && validation.length >= minimumValidationRows &&
       test.length >= minimumTestRows && maxTrainResolvedAt < validationStart &&
       maxValidationResolvedAt < testStart;
     result.push({
@@ -466,6 +468,7 @@ export function buildPurgedWalkForwardFolds(inputRows, {
         embargo_ms: embargo
       },
       train_count: train.length,
+      minimum_train_rows: minimumTrainSampleCount,
       validation_count: validation.length,
       test_count: test.length,
       purged_training_rows: rows.filter(row => row.at < validationStart &&
@@ -923,6 +926,7 @@ export function runFixedShaBenchmark(inputRows, {
   sourceCommitSha,
   folds = 5,
   minimumTrainTimes = 160,
+  minimumTrainRows = 100,
   minimumValidationRows = 30,
   minimumTestRows = 30,
   embargoMs = 4 * 60 * 60 * 1000,
@@ -943,7 +947,7 @@ export function runFixedShaBenchmark(inputRows, {
     target: '4H_CLOSED_CANDLE_GROSS_RETURN_WITH_FEE_AND_SLIPPAGE_NETTING'
   });
   const walkForward = buildPurgedWalkForwardFolds(rows, {
-    folds, minimumTrainTimes, minimumValidationRows, minimumTestRows, embargoMs
+    folds, minimumTrainTimes, minimumTrainRows, minimumValidationRows, minimumTestRows, embargoMs
   });
   const integrity = {
     source_commit_sha: String(sourceCommitSha).toLowerCase(),
