@@ -466,6 +466,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
     const gross = finite(raw.gross_return_pct);
+    const adverse = finite(raw.max_adverse_excursion_pct);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
     if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
@@ -473,7 +474,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
         at === null || latestInputAt === null || latestInputAt > at ||
-        resolvedAt === null || resolvedAt <= at || gross === null || classic === null ||
+        resolvedAt === null || resolvedAt <= at || gross === null ||
+        adverse === null || adverse > 0 || adverse < -100 || classic === null ||
         classic < 0 || classic > 1 ||
         !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
         !sequence.every(step => Array.isArray(step) && step.length === HYBRID_SEQUENCE_CHANNELS &&
@@ -486,7 +488,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       id, symbol, market, outcome_source: outcomeSource,
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
       gross_return_pct: gross,
-      max_adverse_excursion_pct:finite(raw.max_adverse_excursion_pct),
+      max_adverse_excursion_pct:adverse,
       classic_score: classic,
       outcome_definition:rowTargetDefinition,
       sequence: sequence.map(step => step.map(Number)),
@@ -1118,7 +1120,17 @@ export function runFixedShaBenchmark(inputRows, {
     distinct_symbols: new Set(rows.map(row => row.symbol)).size,
     distinct_decision_times: new Set(rows.map(row => row.at)).size,
     rejected_or_duplicate_rows_removed: (Array.isArray(inputRows) ? inputRows.length : 0) - rows.length,
-    all_inputs_causal: rows.every(row => row.latest_input_at <= row.at)
+    all_inputs_causal: rows.every(row => row.latest_input_at <= row.at),
+    outcome_definition: String(targetDefinition),
+    outcome_source_count: outcomeSources.length,
+    adverse_excursion_coverage_pct: rows.length
+      ? round(rows.filter(row => finite(row.max_adverse_excursion_pct) !== null).length / rows.length * 100, 4) : 0,
+    agg_trade_flow_coverage_pct: rows.length
+      ? round(rows.filter(row => row.sequence.at(-1)?.[20] === 1).length / rows.length * 100, 4) : 0,
+    trade_level_volume_profile_coverage_pct: rows.length
+      ? round(rows.filter(row => row.sequence.at(-1)?.[21] === 1).length / rows.length * 100, 4) : 0,
+    depth_availability_pct: rows.length
+      ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
   };
   if (walkForward.status !== 'READY') return {
     status: 'INSUFFICIENT_WALK_FORWARD_COVERAGE',
@@ -1172,6 +1184,9 @@ export function runFixedShaBenchmark(inputRows, {
   const winRate = neural.win_rate_pct >= 55;
   const drawdown = neural.max_drawdown_pct <= 8;
   const profit = neural.net_pnl_pct > 0;
+  const flowCoverage = integrity.agg_trade_flow_coverage_pct >= 80;
+  const profileCoverage = integrity.trade_level_volume_profile_coverage_pct >= 70;
+  const maeCoverage = integrity.adverse_excursion_coverage_pct >= 99.9;
   const riskAdjustedSuperiority = neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
     neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
     neural.max_drawdown_pct <= classicBaseline.max_drawdown_pct;
@@ -1180,6 +1195,9 @@ export function runFixedShaBenchmark(inputRows, {
     win_rate_at_least_55_pct: winRate ? 'PASS' : 'FAIL',
     max_drawdown_at_most_8_pct: drawdown ? 'PASS' : 'FAIL',
     net_pnl_positive_after_costs: profit ? 'PASS' : 'FAIL',
+    agg_trade_flow_coverage_at_least_80_pct: flowCoverage ? 'PASS' : 'FAIL',
+    trade_level_volume_profile_coverage_at_least_70_pct: profileCoverage ? 'PASS' : 'FAIL',
+    adverse_excursion_coverage_at_least_99_9_pct: maeCoverage ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
     same_fixed_sha_and_oos_event_rows: 'PASS',
