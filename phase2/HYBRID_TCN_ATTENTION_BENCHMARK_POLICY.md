@@ -31,7 +31,7 @@ buildHybridSequence constructs a causal 24-step × 28-channel sequence from comp
 9. One-candle return acceleration and three-candle momentum reversal versus the preceding three-candle window.
 10. Fast/slow close-mean spread, higher-low reclaim, and close reclaim relative to the preceding three-candle high.
 
-The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction in the 22nd channel; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle and uses only BTC candles closed by the same decision timestamp for relative strength. The replay adapter fetches this BTC reference history separately. Historical order-book snapshots remain unavailable and are represented with an explicit mask; no depth is fabricated.
+The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction through its explicit profile-source and availability masks; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle and uses only BTC candles closed by the same decision timestamp for relative strength. The replay adapter fetches this BTC reference history separately. Historical order-book snapshots remain unavailable and are represented with an explicit mask; no depth is fabricated.
 
 ## Neural architecture and objective
 
@@ -53,7 +53,7 @@ The event adapter prepareHybridBenchmarkEvent builds a normalized row from the d
 
 - id, symbol, market=BINANCE_SPOT_USDT, a single fixed closed-Spot outcome_source (1m replay or 15m), the exact outcome_definition FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1, at, latest_input_at, and resolved_at in epoch milliseconds.
 - max_adverse_excursion_pct / max_adverse_excursion_at and max_favorable_excursion_pct / max_favorable_excursion_at from the completed future candle path, so both portfolio peaks and troughs are marked at their observed event times rather than at entry.
-- sequence: exactly 24 rows by 23 finite normalized features, each value within [-4, 4].
+- sequence: exactly 24 rows by 28 finite normalized features, each value within [-4, 4].
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
@@ -61,7 +61,7 @@ latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/times
 
 ## Walk-forward protocol
 
-The benchmark uses expanding chronological folds. Each fold has a training block, a later threshold-selection/validation block, and a strictly later out-of-sample test block. Training decisions must precede the validation boundary by the configured embargo and their labels must be fully resolved before that boundary; validation labels must be fully resolved before the test boundary. The embargo is applied to decision timestamps once, not double-counted against label maturity. Test blocks do not overlap. Thresholds are fit on validation only; the test scores are never used for fitting, threshold selection, calibration, or model changes.
+The benchmark uses expanding chronological folds. Each fold has a training block, a later threshold-selection/validation block, and a strictly later out-of-sample test block. Training decisions must precede the validation boundary by the configured embargo and their labels must be fully resolved before that boundary; validation labels must be fully resolved before the test boundary. The embargo is applied to decision timestamps once, not double-counted against label maturity. Test blocks do not overlap. Thresholds are selected only from the validation block using the fixed grid plus quantiles of that fold's validation prediction scores. A candidate threshold is eligible only when it yields at least 10 completed validation trades and positive net PnL after costs. If no candidate qualifies, the fold explicitly abstains (threshold > 1), and produces no OOS neural trades; the system must not lower the threshold merely to force trade count. The test scores are never used for fitting, threshold selection, calibration, or model changes.
 
 A fold that fails sample support or a maturity/embargo condition is rejected. A short history returns INSUFFICIENT_WALK_FORWARD_COVERAGE, not a relaxed split.
 
@@ -69,11 +69,11 @@ A fold that fails sample support or a maturity/embargo condition is rejected. A 
 
 The hybrid may be marked accepted only if all these independent gates pass on the combined non-overlapping out-of-sample test rows:
 
-- At least 100 completed test trades.
+- At least 100 completed test trades, and at least 10 profitable-after-cost validation trades to select an active threshold in every walk-forward fold.
 - Net win rate at least 55%, after costs.
 - Portfolio maximum drawdown at most 8%.
 - Net PnL strictly positive, after costs.
-- Higher net PnL and higher per-trade Sharpe than the classic baseline, without higher maximum drawdown.
+- Higher net PnL and higher per-trade Sharpe than the classic baseline, without higher maximum drawdown. The comparison is ineligible unless the neural strategy independently satisfies all of its trade-count, win-rate, drawdown, positive-profit, and validation-threshold gates; zero trades and zero drawdown cannot be reported as superiority over a losing baseline.
 - Identical fixed benchmark SHA, candidate test events, cost assumptions, and position constraints.
 - Zero rejected or duplicate input rows.
 - At least 99.9% of the benchmark rows carry timestamped measured favourable and adverse excursions.
