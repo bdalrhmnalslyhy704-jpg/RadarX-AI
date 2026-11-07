@@ -1356,7 +1356,7 @@ export function runFixedShaBenchmark(inputRows, {
     architecture: HYBRID_TCN_ARCHITECTURE,
     target_definition: String(targetDefinition),
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
-    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_SEMIVARIANCE_AND_DRAWDOWN_V1',
+    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
     execution_policy: {
       market: 'BINANCE_SPOT_USDT',
       paper_only: true,
