@@ -13,6 +13,18 @@ on:
       - 'phase2/benchmarks/hybrid-tcn-attention-windows.json'
       - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
       - '.github/workflows/hybrid-tcn-attention-historical-replay.yml'
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/historical-replay.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/historical-replay-matrix.mjs'
+      - 'phase2/tools/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/benchmarks/hybrid-tcn-attention-windows.json'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - '.github/workflows/hybrid-tcn-attention-historical-replay.yml'
   workflow_dispatch:
 
 permissions:
