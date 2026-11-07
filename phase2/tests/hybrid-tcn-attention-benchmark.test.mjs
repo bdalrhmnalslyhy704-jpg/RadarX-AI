@@ -5,6 +5,7 @@ import {
   HYBRID_SEQUENCE_CHANNELS,
   HYBRID_SEQUENCE_STEPS,
   HYBRID_TCN_ARCHITECTURE,
+  HYBRID_TCN_CONFIGURATION,
   HYBRID_TCN_RECEPTIVE_FIELD,
   buildHybridSequence,
   buildPurgedWalkForwardFolds,
@@ -290,6 +291,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   const fitted = trainHybridTcnAttention(rows, { epochs: 1 });
   assert.equal(fitted.architecture, HYBRID_TCN_ARCHITECTURE);
   assert.equal(fitted.receptive_field_steps, 31);
+  assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
     'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2');
   const predicted = predictHybridTcnAttention(rows.at(-1).sequence, fitted);
