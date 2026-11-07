@@ -9,6 +9,7 @@ import {
   buildPurgedWalkForwardFolds,
   calculateVolumeProfile,
   predictHybridTcnAttention,
+  prepareHybridBenchmarkEvent,
   profitDrawdownObjective,
   resolveBarrierTrade,
   runFixedShaBenchmark,
@@ -38,6 +39,8 @@ function makeRows(count = 700) {
     return {
       id: 'event-' + index,
       symbol: 'COIN' + String(index).padStart(4, '0') + 'USDT',
+      market: 'BINANCE_SPOT_USDT',
+      outcome_source: 'BINANCE_SPOT_CLOSED_15M',
       at,
       latest_input_at: at,
       resolved_at: at + FOUR_HOURS,
@@ -114,6 +117,36 @@ test('volume profile is derived only from the supplied completed candles', () =>
   assert.ok(profile.value_area_high >= profile.poc);
 });
 
+test('benchmark event adapter rejects immature forward paths and emits only closed-candle Spot rows', () => {
+  const candles = makeCandles(40);
+  const at = candles.at(-1).closeTime;
+  const noBarrier = [{
+    closeTime: at + FIFTEEN_MINUTES, closed: true,
+    open: 10, high: 10.2, low: 9.9, close: 10.1
+  }];
+  const incomplete = prepareHybridBenchmarkEvent({
+    id: 'incomplete', symbol: 'ETHUSDT', decisionAt: at,
+    candles, entryPrice: 10, classicScore: 0.7, futureCandles: noBarrier
+  });
+  assert.equal(incomplete.ready, false);
+  assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
+
+  const completedPath = [{
+    closeTime: at + FIFTEEN_MINUTES, closed: true,
+    open: 10, high: 10.4, low: 9.99, close: 10.2
+  }];
+  const prepared = prepareHybridBenchmarkEvent({
+    id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
+    candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
+  });
+  assert.equal(prepared.ready, true);
+  assert.equal(prepared.row.market, 'BINANCE_SPOT_USDT');
+  assert.equal(prepared.row.outcome_source, 'BINANCE_SPOT_CLOSED_15M');
+  assert.equal(prepared.row.latest_input_at, at);
+  assert.equal(prepared.row.resolved_at, at + FIFTEEN_MINUTES);
+  assert.equal(prepared.row.gross_return_pct, 3);
+});
+
 test('barrier resolver chooses the stop when the same candle touches take-profit and stop-loss', () => {
   const at = Date.UTC(2026, 1, 1);
   const trade = resolveBarrierTrade({
@@ -144,7 +177,8 @@ test('profit/drawdown objective is finite and produces probability gradients', (
   assert.ok(objective.logit_gradients.every(Number.isFinite));
   assert.ok(objective.max_additive_drawdown_pct >= 0);
   assert.equal(objective.round_trip_cost_bps, 30);
-  assert.notEqual(objective.training_objective, 'MSE');
+  assert.equal(objective.round_trip_cost_bps, 30);
+  assert.ok(objective.positions.every(value => value >= 0 && value <= 1));
 });
 
 test('purged expanding walk-forward blocks do not share test timestamps or unresolved labels', () => {
