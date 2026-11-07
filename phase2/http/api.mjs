@@ -1257,7 +1257,8 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
           service:'RADARX_BACKEND',build_version:'Build 224',deployment_contract:'BUILD224_DHDTECH_V1',
           build_identity:{
             commit:String(buildInfo?.commit||'').trim()||null,
-            branch:String(buildInfo?.branch||'').trim()||null
+            branch:String(buildInfo?.branch||'').trim()||null,
+            deployment_marker:String(process.env.RADARX_BUILD_DEPLOYMENT_MARKER||'').trim()||null
           },
           runtime_environment:String(config.environment||'unknown'),
           radar_autostart_enabled:config.radarControl?.autostart===true||
