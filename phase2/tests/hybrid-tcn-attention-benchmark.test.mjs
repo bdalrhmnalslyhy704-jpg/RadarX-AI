@@ -434,6 +434,8 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.acceptance_gates.all_input_rows_valid_and_unique, 'PASS');
   assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','SIDEWAYS']);
   assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
+  assert.equal(report.acceptance_gates.each_required_btc_regime_has_30_oos_events, 'PASS');
+  assert.ok(Object.values(report.integrity.out_of_sample_market_regime_counts).every(count => count >= 30));
   assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
   assert.equal(report.acceptance_gates.no_future_features_and_purged_boundaries, 'PASS');
   assert.equal(report.classic_baseline.trade_count > 0, true);
@@ -443,6 +445,26 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
   assert.equal(report.execution_policy.paper_only, true);
   assert.equal(report.execution_policy.real_order_execution, false);
+});
+
+test('fixed-SHA benchmark rejects OOS coverage that omits one market regime', () => {
+  const rows = makeRows(700).map((row, index) => ({
+    ...row,
+    market_regime: index < 250 ? 'SIDEWAYS' : (index < 475 ? 'BULL_TREND' : 'BEAR_TREND'),
+    historical_window_id: index < 250 ? 'sideways-window' : (index < 475 ? 'bull-window' : 'bear-window')
+  }));
+  const report = runFixedShaBenchmark(rows, {
+    sourceCommitSha: SOURCE_SHA, folds: 5, minimumTrainTimes: 160,
+    minimumTrainRows: 80, minimumValidationRows: 50, minimumTestRows: 50,
+    embargoMs: FOUR_HOURS, epochs: 1, thresholdGrid: [0.4, 0.5, 0.6]
+  });
+  assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND', 'BULL_TREND', 'SIDEWAYS']);
+  assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
+  assert.equal(report.integrity.out_of_sample_market_regime_counts.SIDEWAYS, 0);
+  assert.ok(report.integrity.out_of_sample_market_regime_counts.BULL_TREND >= 30);
+  assert.ok(report.integrity.out_of_sample_market_regime_counts.BEAR_TREND >= 30);
+  assert.equal(report.acceptance_gates.each_required_btc_regime_has_30_oos_events, 'FAIL');
+  assert.equal(report.status, 'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
 test('fixed-SHA benchmark rejects missing MAE timing and mixed outcome sources', () => {
@@ -477,6 +499,7 @@ test('fixed-SHA benchmark refuses a dataset missing any observed BTC regime', ()
   assert.equal(report.status, 'INSUFFICIENT_MARKET_REGIME_COVERAGE');
   assert.deepEqual(report.integrity.missing_market_regimes, ['BEAR_TREND', 'SIDEWAYS']);
   assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'FAIL');
+  assert.equal(report.acceptance_gates.each_required_btc_regime_has_30_oos_events, 'FAIL');
   assert.equal(report.neural, null);
 });
 

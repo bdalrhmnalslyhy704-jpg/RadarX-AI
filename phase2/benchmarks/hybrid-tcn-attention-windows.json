@@ -1,15 +1,15 @@
 [
   {
-    "id": "late-2024-range-candidate",
-    "label": "Late 2024 sideways regime — 12h closed Spot replay",
-    "start": "2024-09-10T00:00:00.000Z",
-    "end": "2024-09-10T12:00:00.000Z"
+    "id": "late-2024-rally-candidate",
+    "label": "Late 2024 bull regime — 24h closed Spot replay",
+    "start": "2024-11-06T00:00:00.000Z",
+    "end": "2024-11-07T00:00:00.000Z"
   },
   {
-    "id": "late-2024-rally-candidate",
-    "label": "Late 2024 bull regime — 12h closed Spot replay",
-    "start": "2024-11-06T00:00:00.000Z",
-    "end": "2024-11-06T12:00:00.000Z"
+    "id": "late-2024-range-candidate",
+    "label": "December 1 2024 sideways regime — 12h closed Spot replay",
+    "start": "2024-12-01T00:00:00.000Z",
+    "end": "2024-12-01T12:00:00.000Z"
   },
   {
     "id": "early-2025-selloff-candidate",

@@ -1310,7 +1310,10 @@ export function runFixedShaBenchmark(inputRows, {
   if (!marketRegimeCoverageComplete) return {
     status:'INSUFFICIENT_MARKET_REGIME_COVERAGE',
     integrity,walk_forward:walkForward,
-    acceptance_gates:{all_three_observed_btc_regimes:'FAIL'},
+    acceptance_gates:{
+      all_three_observed_btc_regimes:'FAIL',
+      each_required_btc_regime_has_30_oos_events:'FAIL'
+    },
     neural:null,classic_baseline:null,superiority:'NOT_EVALUATED'
   };
   if (walkForward.status !== 'READY') return {
@@ -1318,7 +1321,8 @@ export function runFixedShaBenchmark(inputRows, {
     integrity, walk_forward: walkForward,
     acceptance_gates: {
       min_test_trades: 100, min_win_rate_pct: 55, max_drawdown_pct: 8,
-      net_pnl_positive: true, beat_classic_baseline: true
+      net_pnl_positive: true, beat_classic_baseline: true,
+      each_required_btc_regime_has_30_oos_events: 'FAIL'
     },
     neural: null, classic_baseline: null, superiority: 'NOT_EVALUATED'
   };
@@ -1387,6 +1391,14 @@ export function runFixedShaBenchmark(inputRows, {
       fold.test.every(row=>row.latest_input_at<=row.at));
   const sameFixedShaAndOosRows = Boolean(integrity.source_commit_sha &&
     integrity.dataset_sha256 && integrity.fixed_benchmark_sha256 && sameOutOfSampleEvents);
+  const outOfSampleMarketRegimeCounts = Object.fromEntries(REQUIRED_MARKET_REGIMES.map(regime => [
+    regime, outOfSampleNeural.filter(row => row.market_regime === regime).length
+  ]));
+  const minimumOosEventsPerRegime = 30;
+  const allRequiredRegimesHaveOosCoverage = REQUIRED_MARKET_REGIMES.every(regime =>
+    outOfSampleMarketRegimeCounts[regime] >= minimumOosEventsPerRegime);
+  integrity.out_of_sample_market_regime_counts = outOfSampleMarketRegimeCounts;
+  integrity.minimum_oos_events_per_regime = minimumOosEventsPerRegime;
   const gates = {
     minimum_100_oos_trades: minimumTrades ? 'PASS' : 'FAIL',
     win_rate_at_least_55_pct: winRate ? 'PASS' : 'FAIL',
@@ -1399,6 +1411,7 @@ export function runFixedShaBenchmark(inputRows, {
     relative_btc_reference_coverage_at_least_80_pct: relativeBtcCoverage ? 'PASS' : 'FAIL',
     all_input_rows_valid_and_unique: uniqueRows ? 'PASS' : 'FAIL',
     all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
+    each_required_btc_regime_has_30_oos_events: allRequiredRegimesHaveOosCoverage ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
     same_fixed_sha_and_oos_event_rows: sameFixedShaAndOosRows ? 'PASS' : 'FAIL',
@@ -1430,6 +1443,8 @@ export function runFixedShaBenchmark(inputRows, {
       fold_count: walkForward.fold_count,
       initial_train_times: walkForward.initial_train_times,
       test_blocks_non_overlapping: walkForward.test_blocks_non_overlapping,
+      out_of_sample_market_regime_counts: outOfSampleMarketRegimeCounts,
+      minimum_oos_events_per_regime: minimumOosEventsPerRegime,
       folds: foldReports
     },
     same_test_event_count: outOfSampleNeural.length,
