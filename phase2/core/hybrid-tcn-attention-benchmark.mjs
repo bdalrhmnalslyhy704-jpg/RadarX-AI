@@ -153,7 +153,18 @@ export function calculateVolumeProfile(candles, { bins = 12, valueAreaFraction =
         (price !== null && quantity !== null ? price * quantity : null);
       return price !== null && price > 0 && quote !== null && quote > 0 ? { price, quote } : null;
     }).filter(Boolean)).slice(-100000);
-  const tradeLevelAvailable = tradePoints.length > 0;
+  const tradeCandleCount = rows.filter(row =>
+    Array.isArray(row.aggTrades) && row.aggTrades.some(trade => {
+      const price=finite(trade.price), quantity=finite(trade.quantity??trade.qty);
+      const quote=finite(trade.quoteQty??trade.quote_qty) ??
+        (price!==null&&quantity!==null?price*quantity:null);
+      return price!==null&&price>0&&quote!==null&&quote>0;
+    })).length;
+  const tradeCandleCoveragePct = rows.length ? tradeCandleCount / rows.length * 100 : 0;
+  // Label a profile as trade-level only when >=80% of its source candles carry
+  // actual executed-price records. A handful of trades must not disguise a
+  // mostly candle-proxy volume profile.
+  const tradeLevelAvailable = tradePoints.length > 0 && tradeCandleCoveragePct >= 80;
   const prices = tradeLevelAvailable
     ? tradePoints.map(trade => trade.price)
     : rows.flatMap(row => [
@@ -201,6 +212,9 @@ export function calculateVolumeProfile(candles, { bins = 12, valueAreaFraction =
     value_area_low: low + left * width,
     value_area_high: low + (right + 1) * width,
     total_quote_volume: totalVolume,
+    trade_candle_count: tradeCandleCount,
+    source_candle_count: rows.length,
+    trade_candle_coverage_pct: round(tradeCandleCoveragePct, 4),
     source: tradeLevelAvailable ? 'AGG_TRADE_PRICE_LEVELS' : 'CANDLE_TYPICAL_PRICE_PROXY'
   };
 }
@@ -1234,11 +1248,15 @@ export function runFixedShaBenchmark(inputRows, {
       ? round(rows.filter(row => finite(row.max_favorable_excursion_pct) !== null &&
         finite(row.max_favorable_excursion_at) !== null).length / rows.length * 100, 4) : 0,
     agg_trade_flow_coverage_pct: rows.length
-      ? round(rows.filter(row => row.sequence.at(-1)?.[20] === 1).length / rows.length * 100, 4) : 0,
+      ? round(rows.filter(row =>
+        row.sequence.filter(step => step[20] === 1).length / row.sequence.length >= 0.8
+      ).length / rows.length * 100, 4) : 0,
     trade_level_volume_profile_coverage_pct: rows.length
       ? round(rows.filter(row => row.sequence.at(-1)?.[21] === 1).length / rows.length * 100, 4) : 0,
     relative_btc_coverage_pct: rows.length
-      ? round(rows.filter(row => row.sequence.at(-1)?.[22] === 1).length / rows.length * 100, 4) : 0,
+      ? round(rows.filter(row =>
+        row.sequence.filter(step => step[22] === 1).length / row.sequence.length >= 0.8
+      ).length / rows.length * 100, 4) : 0,
     depth_availability_pct: rows.length
       ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
   };
