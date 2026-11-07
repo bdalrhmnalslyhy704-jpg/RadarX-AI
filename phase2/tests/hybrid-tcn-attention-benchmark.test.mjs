@@ -101,7 +101,9 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   for (const name of [
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
-    'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available'
+    'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available',
+    'short_return_acceleration', 'three_bar_momentum_reversal', 'fast_slow_mean_spread',
+    'higher_low_reclaim', 'prior_high_reclaim'
   ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
 
   const candles = makeCandles();
