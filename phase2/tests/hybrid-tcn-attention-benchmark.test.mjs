@@ -46,6 +46,8 @@ function makeRows(count = 700) {
       market: 'BINANCE_SPOT_USDT',
       outcome_source: 'BINANCE_SPOT_CLOSED_15M',
       outcome_definition: 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
+      market_regime: ['BULL_TREND','BEAR_TREND','SIDEWAYS'][index % 3],
+      historical_window_id: ['bull-window','bear-window','sideways-window'][index % 3],
       at,
       latest_input_at: at,
       resolved_at: at + FOUR_HOURS,
