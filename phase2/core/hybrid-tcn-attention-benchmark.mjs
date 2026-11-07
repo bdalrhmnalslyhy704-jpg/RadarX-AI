@@ -506,7 +506,6 @@ export function prepareHybridBenchmarkEvent({
       symbol: normalizedSymbol,
       market: 'BINANCE_SPOT_USDT',
       outcome_source: 'BINANCE_SPOT_CLOSED_15M',
-      outcome_definition:DEFAULT_TARGET_DEFINITION,
       at,
       latest_input_at: features.latest_input_at,
       resolved_at: outcome.exit_at,
@@ -1375,6 +1374,19 @@ export function runFixedShaBenchmark(inputRows, {
   const riskAdjustedSuperiority = neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
     neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
     neural.max_drawdown_pct <= classicBaseline.max_drawdown_pct;
+  const sameOutOfSampleEvents = outOfSampleNeural.length === outOfSampleClassic.length &&
+    outOfSampleNeural.every((row,index) => row.id === outOfSampleClassic[index]?.id &&
+      row.symbol === outOfSampleClassic[index]?.symbol && row.at === outOfSampleClassic[index]?.at &&
+      row.resolved_at === outOfSampleClassic[index]?.resolved_at);
+  const noLeakage = integrity.all_inputs_causal && walkForward.test_blocks_non_overlapping &&
+    walkForward.folds.every(fold =>
+      fold.max_training_outcome_resolved_at < fold.boundaries.validation_start &&
+      fold.max_validation_outcome_resolved_at < fold.boundaries.test_start &&
+      fold.train.every(row=>row.latest_input_at<=row.at) &&
+      fold.validation.every(row=>row.latest_input_at<=row.at) &&
+      fold.test.every(row=>row.latest_input_at<=row.at));
+  const sameFixedShaAndOosRows = Boolean(integrity.source_commit_sha &&
+    integrity.dataset_sha256 && integrity.fixed_benchmark_sha256 && sameOutOfSampleEvents);
   const gates = {
     minimum_100_oos_trades: minimumTrades ? 'PASS' : 'FAIL',
     win_rate_at_least_55_pct: winRate ? 'PASS' : 'FAIL',
@@ -1389,8 +1401,8 @@ export function runFixedShaBenchmark(inputRows, {
     all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
-    same_fixed_sha_and_oos_event_rows: 'PASS',
-    no_future_features_and_purged_boundaries: 'PASS'
+    same_fixed_sha_and_oos_event_rows: sameFixedShaAndOosRows ? 'PASS' : 'FAIL',
+    no_future_features_and_purged_boundaries: noLeakage ? 'PASS' : 'FAIL'
   };
   const accepted = Object.values(gates).every(value => value === 'PASS');
   return {
