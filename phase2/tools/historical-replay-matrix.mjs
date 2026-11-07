@@ -139,7 +139,7 @@ async function main(){
       feature_interval:'1M_CLOSED_CANDLES',
       capture_sampling:'EVERY_10M_DECISION',
       sequence_steps:24,
-      sequence_channels:23,
+      sequence_channels:28,
       outcome_horizon_ms:4*HOUR_MS,
       symbols,
       windows:windows.map(window=>({
