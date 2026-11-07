@@ -19,6 +19,7 @@ on:
       - 'phase2/push/index.mjs'
       - 'phase2/TCN_V6_VALIDATION_POLICY.md'
       - '.github/workflows/dhdtech-adaptive-trader-acceptance.yml'
+      - '.github/workflows/pre-move-radar-acceptance.yml'
   workflow_dispatch:
 
 concurrency:
