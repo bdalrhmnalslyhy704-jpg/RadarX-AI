@@ -121,9 +121,11 @@ async function main(){
         rows:hybridRows.length,
         distinct_symbols:new Set(hybridRows.map(row=>row.symbol)).size,
         distinct_decision_times:new Set(hybridRows.map(row=>row.at)).size,
-        agg_trade_flow_rows:hybridRows.filter(row=>row.trade_flow_available).length,
+        agg_trade_flow_rows:hybridRows.filter(row=>
+          Array.isArray(row.sequence)&&row.sequence.filter(step=>step[20]===1).length/row.sequence.length>=0.8).length,
         trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length,
-        relative_btc_rows:hybridRows.filter(row=>row.relative_btc_available).length
+        relative_btc_rows:hybridRows.filter(row=>
+          Array.isArray(row.sequence)&&row.sequence.filter(step=>step[22]===1).length/row.sequence.length>=0.8).length
       },
       rows:hybridRows
     };
