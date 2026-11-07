@@ -35,7 +35,7 @@ const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
-const DEFAULT_MAX_CONCURRENT_POSITIONS = 12;
+const DEFAULT_MAX_CONCURRENT_POSITIONS = 30;
 const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
 const DEFAULT_TRADE_THRESHOLD_GRID = Object.freeze([0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]);
 const DEFAULT_TARGET_DEFINITION = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1';
@@ -785,9 +785,9 @@ function netReturnPct(row, costBps) {
 
 /**
  * Differentiable per-event exposure surrogate. It rewards net return and Sharpe,
- * while penalizing downside semivariance and peak-to-trough drawdown. The hard
- * OOS simulator separately enforces one open position at a time. This is not
- * an MSE/Brier loss and cannot replace the final execution simulation.
+ * while penalizing downside semivariance, measured adverse excursion, and
+ * peak-to-trough drawdown. The OOS simulator separately enforces real position
+ * capacity and event-time mark-to-market. This is not MSE/Brier loss.
  */
 export function profitDrawdownObjective(probabilities, rows, {
   roundTripCostBps = DEFAULT_COST_BPS,
@@ -796,6 +796,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   temperature = 0.10,
   sharpeWeight = 0.15,
   downsideWeight = 0.08,
+  adverseExcursionWeight = 0.04,
   drawdownWeight = 0.08
 } = {}) {
   if (!Array.isArray(probabilities) || probabilities.length !== rows.length || !rows.length) {
@@ -809,6 +810,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
   const positions = Array(rows.length).fill(0);
   const orderedReturns = Array(rows.length).fill(0);
+  const orderedAdverseReturns = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
   for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
     const pair = pairs[orderedIndex];
@@ -816,6 +818,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     const net = netReturnPct(pair.row, cost);
     positions[pair.index] = allocation;
     orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
+    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
+    orderedAdverseReturns[orderedIndex] = allocation * adverse * size;
     orderedProbabilityDerivative[orderedIndex] =
       allocation * (1 - allocation) / temp * pair.probability * (1 - pair.probability);
   }
@@ -825,11 +829,12 @@ export function profitDrawdownObjective(probabilities, rows, {
   const variance = mean(portfolioReturns.map(value => (value - average) ** 2)) ?? 0;
   const standardDeviation = Math.sqrt(variance + 1e-6);
   const sharpe = average / standardDeviation;
-  let downsideSquared = 0, underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
+  let downsideSquared = 0, adverseSquared = 0, underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
   const drawdowns = [], peakIndices = [], drawdownGradient = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const value = portfolioReturns[index];
     if (value < 0) downsideSquared += value * value;
+    adverseSquared += orderedAdverseReturns[index] ** 2;
     cumulative += value;
     if (cumulative > peak) {
       peak = cumulative;
@@ -849,9 +854,11 @@ export function profitDrawdownObjective(probabilities, rows, {
     }
   }
   const downsideMean = downsideSquared / n;
+  const adverseMean = adverseSquared / n;
   const drawdownMean = underwaterSquared / n;
   const loss = -average - sharpeWeight * sharpe +
-    downsideWeight * downsideMean + drawdownWeight * drawdownMean;
+    downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
+    drawdownWeight * drawdownMean;
   const logitGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
@@ -864,7 +871,13 @@ export function profitDrawdownObjective(probabilities, rows, {
     gradient += drawdownGradient[index];
     const pair = pairs[index];
     const net = netReturnPct(pair.row, cost) * size;
-    logitGradients[pair.index] = gradient * net * orderedProbabilityDerivative[index];
+    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ??
+      Math.min(0, netReturnPct(pair.row, cost))) * size;
+    const adverseGradient = 2 * adverseExcursionWeight *
+      orderedAdverseReturns[index] * adverse / n;
+    logitGradients[pair.index] =
+      gradient * net * orderedProbabilityDerivative[index] +
+      adverseGradient * orderedProbabilityDerivative[index];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -872,6 +885,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     mean_net_return_pct: round(average, 6),
     sharpe_per_decision: round(sharpe, 6),
     downside_semivariance: round(downsideMean, 8),
+    adverse_excursion_penalty: round(adverseMean, 8),
     drawdown_penalty: round(drawdownMean, 8),
     max_additive_drawdown_pct: round(maxDrawdown, 6),
     position_fraction: size,
