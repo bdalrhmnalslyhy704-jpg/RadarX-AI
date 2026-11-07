@@ -38,6 +38,7 @@ const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
 const DEFAULT_MAX_CONCURRENT_POSITIONS = 12;
 const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
 const DEFAULT_TRADE_THRESHOLD_GRID = Object.freeze([0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]);
+const DEFAULT_TARGET_DEFINITION = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1';
 
 const finite = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
@@ -436,11 +437,14 @@ export function prepareHybridBenchmarkEvent({
       symbol: normalizedSymbol,
       market: 'BINANCE_SPOT_USDT',
       outcome_source: 'BINANCE_SPOT_CLOSED_15M',
+      outcome_definition:DEFAULT_TARGET_DEFINITION,
       at,
       latest_input_at: features.latest_input_at,
       resolved_at: outcome.exit_at,
       gross_return_pct: outcome.gross_return_pct,
+      max_adverse_excursion_pct: outcome.max_adverse_excursion_pct,
       classic_score: score,
+      outcome_definition: DEFAULT_TARGET_DEFINITION,
       sequence: features.sequence,
       feature_snapshot_sha: typeof featureSnapshotSha === 'string' ? featureSnapshotSha : null,
       outcome_exit_reason: outcome.exit_reason
@@ -448,7 +452,7 @@ export function prepareHybridBenchmarkEvent({
   };
 }
 
-function normalizeBenchmarkRows(inputRows) {
+function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFINITION) {
   const ids = new Set(), events = new Set();
   const rows = [];
   for (const raw of Array.isArray(inputRows) ? inputRows : []) {
@@ -457,6 +461,7 @@ function normalizeBenchmarkRows(inputRows) {
     const symbol = String(raw.symbol ?? '').trim().toUpperCase();
     const market = String(raw.market ?? '').trim().toUpperCase();
     const outcomeSource = String(raw.outcome_source ?? '').trim().toUpperCase();
+    const rowTargetDefinition=String(raw.outcome_definition??'').trim();
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
@@ -466,6 +471,7 @@ function normalizeBenchmarkRows(inputRows) {
     if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
+        rowTargetDefinition!==targetDefinition ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null || classic === null ||
         classic < 0 || classic > 1 ||
@@ -482,6 +488,7 @@ function normalizeBenchmarkRows(inputRows) {
       gross_return_pct: gross,
       max_adverse_excursion_pct:finite(raw.max_adverse_excursion_pct),
       classic_score: classic,
+      outcome_definition:rowTargetDefinition,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
     });
@@ -1082,12 +1089,14 @@ export function runFixedShaBenchmark(inputRows, {
   positionFraction = DEFAULT_POSITION_FRACTION,
   maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
   thresholdGrid = DEFAULT_TRADE_THRESHOLD_GRID,
-  targetDefinition = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'
+  targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
     throw new Error('FIXED_BENCHMARK_REQUIRES_FULL_SOURCE_COMMIT_SHA');
   }
-  const rows = normalizeBenchmarkRows(inputRows);
+  const rows = normalizeBenchmarkRows(inputRows,String(targetDefinition));
+  const outcomeSources=[...new Set(rows.map(row=>row.outcome_source))];
+  if(outcomeSources.length>1)throw new Error('FIXED_BENCHMARK_MUST_USE_ONE_CLOSED_SPOT_OUTCOME_SOURCE');
   const datasetSha = sha256Canonical(rows);
   const fixedSha = sha256Canonical({
     source_commit_sha: String(sourceCommitSha).toLowerCase(),
