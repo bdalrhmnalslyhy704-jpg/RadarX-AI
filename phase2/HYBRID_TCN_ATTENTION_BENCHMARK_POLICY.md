@@ -18,7 +18,7 @@ The classical baseline and the neural challenger are run against the same normal
 
 ## Causal feature tensor
 
-buildHybridSequence constructs a 24-step sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 22 channels include:
+buildHybridSequence constructs a 24-step sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 23 channels include:
 
 1. One-, three-, and twelve-candle log returns.
 2. Candle body, range, close location, and upper/lower wick fractions.
@@ -27,9 +27,9 @@ buildHybridSequence constructs a 24-step sequence from completed candles only. I
 5. Bid/ask depth imbalance and spread.
 6. Volume-profile point-of-control distance and 70% value-area position.
 7. Short realized volatility, adaptive short/long volatility ratio, and relative BTC return.
-8. Explicit availability masks for depth and aggregate-trade evidence.
+8. Explicit availability masks for depth, aggregate-trade price levels, and the timestamp-matched relative-BTC reference.
 
-The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction in the 22nd channel; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle; raw-feed collection and historical backfill remain an upstream data requirement.
+The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction in the 22nd channel; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle and uses only BTC candles closed by the same decision timestamp for relative strength. The replay adapter fetches this BTC reference history separately. Historical order-book snapshots remain unavailable and are represented with an explicit mask; no depth is fabricated.
 
 ## Neural architecture and objective
 
@@ -49,11 +49,11 @@ The event adapter prepareHybridBenchmarkEvent builds a normalized row from the d
 
 - id, symbol, market=BINANCE_SPOT_USDT, a single fixed closed-Spot outcome_source (1m replay or 15m), the exact outcome_definition FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1, at, latest_input_at, and resolved_at in epoch milliseconds.
 - max_adverse_excursion_pct and max_adverse_excursion_at from the completed future candle path, so drawdown is marked when the adverse excursion is observed rather than at entry.
-- sequence: exactly 24 rows by 22 finite normalized features, each value within [-4, 4].
+- sequence: exactly 24 rows by 23 finite normalized features, each value within [-4, 4].
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
-latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. Rows without the explicit Spot market, a single consistent closed-candle outcome source, matching outcome_definition, and finite adverse-excursion evidence are rejected. The final fixed-SHA report separately records AggTrade and tick-level volume-profile coverage; acceptance requires at least 80% AggTrade-flow coverage and at least 70% trade-level volume-profile coverage. Drawdown simulation schedules each observed adverse-excursion timestamp and the exit timestamp, applying the worst adverse mark before the close event. Depth availability is reported independently rather than fabricated or silently imputed. The caller must still source the candles and matching historical market-depth/aggregate-trade records from the public Spot market and must not include future-derived values in the input tensor or classic score.
+latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. Rows without the explicit Spot market, a single consistent closed-candle outcome source, matching outcome_definition, and finite adverse-excursion evidence are rejected. The final fixed-SHA report separately records AggTrade and tick-level volume-profile coverage; acceptance requires at least 80% AggTrade-flow coverage, at least 70% trade-level volume-profile coverage, and at least 80% timestamp-matched relative-BTC coverage. Drawdown simulation schedules each observed adverse-excursion timestamp and the exit timestamp, applying the worst adverse mark before the close event. Depth availability is reported independently rather than fabricated or silently imputed. The caller must still source the candles and matching historical market-depth/aggregate-trade records from the public Spot market and must not include future-derived values in the input tensor or classic score.
 
 ## Walk-forward protocol
 
@@ -72,7 +72,7 @@ The hybrid may be marked accepted only if all these independent gates pass on th
 - Higher net PnL and higher per-trade Sharpe than the classic baseline, without higher maximum drawdown.
 - Identical fixed benchmark SHA, candidate test events, cost assumptions, and position constraints.
 - At least 99.9% of the benchmark rows carry a measured adverse-excursion value.
-- AggTrade flow is present on at least 80% of scored rows, and executed-price volume-profile coverage is at least 70%.
+- AggTrade flow is present on at least 80% of scored rows, executed-price volume-profile coverage is at least 70%, and relative-BTC reference coverage is at least 80%.
 
 Any missing gate yields NEURAL_SUPERIORITY_NOT_PROVEN. Insufficient folds yield INSUFFICIENT_WALK_FORWARD_COVERAGE.
 
