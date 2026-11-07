@@ -1097,7 +1097,7 @@ async function main() {
       rows:hybridBenchmarkRows
     };
     const hybridTemp=hybridBenchmarkOutput+'.tmp-'+process.pid;
-    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\\n',{encoding:'utf8',flag:'wx'});
+    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\n',{encoding:'utf8',flag:'wx'});
     await rename(hybridTemp,hybridBenchmarkOutput);
   }
   process.stdout.write(JSON.stringify({
