@@ -298,8 +298,10 @@ export function buildHybridSequence({
     const shortVol = realizedVolatility(returnSeries.slice(-6));
     const baseVol = realizedVolatility(returnSeries.slice(-20));
     const adaptiveVol = baseVol > 1e-10 ? shortVol / baseVol : 0;
-    const benchmarkIndex = benchmark.findLastIndex(row => candleTime(row) <= closeTime);
-    const relativeBtc = benchmarkIndex > 0
+    const benchmarkIndex = benchmark.findLastIndex(row => candleTime(row) === closeTime);
+    const priorBenchmarkMatches = benchmarkIndex > 0 &&
+      candleTime(benchmark[benchmarkIndex - 1]) === closeTime - 60_000;
+    const relativeBtc = priorBenchmarkMatches
       ? logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
         candleNumber(benchmark[benchmarkIndex - 1], 'close'))
       : 0;
@@ -333,7 +335,7 @@ export function buildHybridSequence({
       depth ? 1 : 0,
       aggImbalance === null ? 0 : 1,
       volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
-      benchmarkIndex > 0 ? 1 : 0
+      priorBenchmarkMatches ? 1 : 0
     ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
     sequence.push(features);
   }
