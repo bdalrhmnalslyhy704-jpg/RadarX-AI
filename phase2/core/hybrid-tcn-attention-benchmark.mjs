@@ -489,7 +489,7 @@ export function prepareHybridBenchmarkEvent({
   const at = finite(decisionAt);
   const normalizedSymbol = String(symbol ?? '').trim().toUpperCase();
   const score = finite(classicScore);
-  if (at === null || !/^[A-Z0-9]{2,26}USDT$/.test(normalizedSymbol) ||
+  if (at === null || !/^[A-Z0-9]{1,26}USDT$/.test(normalizedSymbol) ||
       score === null || score < 0 || score > 1) {
     return { ready: false, reason: 'INVALID_SPOT_DECISION_METADATA' };
   }
@@ -545,7 +545,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
-    if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
+    if (!id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
@@ -553,7 +553,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null ||
-        adverse === null || adverse > 0 || adverse < -100 ||
+        adverse === null || adverse < -100 ||
         adverseAt === null || adverseAt < at || adverseAt > resolvedAt ||
         favourable === null || favourable < 0 || favourable > 1000 ||
         favourableAt === null || favourableAt < at || favourableAt > resolvedAt || classic === null ||
@@ -570,7 +570,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       market_regime:marketRegime,historical_window_id:historicalWindowId,
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
       gross_return_pct: gross,
-      max_adverse_excursion_pct:adverse,
+      max_adverse_excursion_pct:Math.min(0, adverse),
       max_adverse_excursion_at:adverseAt,
       max_favorable_excursion_pct:favourable,
       max_favorable_excursion_at:favourableAt,
@@ -598,7 +598,7 @@ export function buildPurgedWalkForwardFolds(inputRows, {
   const minimumTrain = Math.max(20, Math.trunc(Number(minimumTrainTimes) || 160));
   const minimumTrainSampleCount = Math.max(20, Math.trunc(Number(minimumTrainRows) || 100));
   const block = Math.floor((times.length - minimumTrain) / (count + 1));
-  if (block <= 0 || block < Math.min(minimumValidationRows, minimumTestRows)) {
+  if (block <= 0) {
     return {
       status: 'INSUFFICIENT_WALK_FORWARD_COVERAGE',
       reason: 'NOT_ENOUGH_DISTINCT_DECISION_TIMES_FOR_REQUESTED_FOLDS',

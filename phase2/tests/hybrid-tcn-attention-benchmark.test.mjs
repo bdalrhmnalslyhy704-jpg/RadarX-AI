@@ -186,6 +186,13 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.gross_return_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_at, at + FOUR_HOURS);
+
+  const singleLetter = prepareHybridBenchmarkEvent({
+    id: 'single-letter-symbol', symbol: 'WUSDT', decisionAt: at,
+    candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
+  });
+  assert.equal(singleLetter.ready, true, 'valid one-character Binance base assets must be accepted');
+  assert.equal(singleLetter.row.symbol, 'WUSDT');
 });
 
 test('barrier resolver chooses the stop when the same candle touches take-profit and stop-loss', () => {
@@ -288,6 +295,26 @@ test('purged expanding walk-forward blocks do not share test timestamps or unres
   }
 });
 
+test('walk-forward row thresholds are not compared to the number of distinct time buckets', () => {
+  const rows = makeRows(651).map((row, index) => {
+    const at = Date.UTC(2026, 0, 1) + Math.floor(index / 3) * FIFTEEN_MINUTES;
+    return {
+      ...row, at, latest_input_at: at, resolved_at: at + FOUR_HOURS,
+      max_adverse_excursion_at: at + FIFTEEN_MINUTES,
+      max_favorable_excursion_at: at + 2 * FIFTEEN_MINUTES
+    };
+  });
+  const wf = buildPurgedWalkForwardFolds(rows, {
+    folds: 5, minimumTrainTimes: 40, minimumTrainRows: 20,
+    minimumValidationRows: 30, minimumTestRows: 30, embargoMs: FOUR_HOURS
+  });
+  assert.equal(wf.distinct_times, 217);
+  assert.equal(wf.status, 'READY', JSON.stringify(wf.folds.map(fold => ({
+    train: fold.train_count, validation: fold.validation_count, test: fold.test_count
+  }))));
+  assert.ok(wf.folds.every(fold => fold.validation_count >= 30 && fold.test_count >= 30));
+});
+
 test('hybrid TCN actually uses temporal attention and returns a normalized attention distribution', () => {
   const rows = makeRows(60);
   const fitted = trainHybridTcnAttention(rows, { epochs: 1 });
@@ -375,7 +402,9 @@ test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital c
 });
 
 test('fixed-SHA benchmark keeps both models on the same OOS events and fails closed without proven superiority', () => {
-  const report = runFixedShaBenchmark(makeRows(), {
+  const rows = makeRows();
+  rows[0] = { ...rows[0], symbol: 'WUSDT', max_adverse_excursion_pct: 0.15 };
+  const report = runFixedShaBenchmark(rows, {
     sourceCommitSha: SOURCE_SHA,
     folds: 5,
     minimumTrainTimes: 160,
@@ -390,7 +419,12 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
   assert.equal(report.walk_forward.fold_count, 5);
   assert.equal(report.same_test_event_count, 450);
+  assert.equal(report.integrity.rows, rows.length);
   assert.equal(report.integrity.rejected_or_duplicate_rows_removed, 0);
+  const normalizedSingleLetterRow = report.walk_forward.folds[0].train.find(row => row.id === 'event-0');
+  assert.equal(normalizedSingleLetterRow.symbol, 'WUSDT');
+  assert.equal(normalizedSingleLetterRow.max_adverse_excursion_pct, 0,
+    'positive raw MAE from a path with no downside is normalized to zero, not discarded');
   assert.equal(report.acceptance_gates.all_input_rows_valid_and_unique, 'PASS');
   assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','SIDEWAYS']);
   assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
