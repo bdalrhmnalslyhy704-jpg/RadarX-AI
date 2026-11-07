@@ -252,7 +252,8 @@ export function runHistoricalReplay({
   alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
   candidateResetMs = 5 * 60 * 1000,
   outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}, marketCohortCandles = null,
-  captureHybridBenchmarkRows = false
+  captureHybridBenchmarkRows = false,
+  captureHybridBenchmarkEveryMs = 10 * MINUTE_MS
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -337,6 +338,10 @@ export function runHistoricalReplay({
   if(captureHybridBenchmarkRows===true&&horizon!==4*HOUR_MS) {
     throw new Error('HYBRID_BENCHMARK_REQUIRES_EXACT_4H_OUTCOME_HORIZON');
   }
+  const hybridSampleInterval=Math.max(MINUTE_MS,Math.trunc(Number(captureHybridBenchmarkEveryMs)||10*MINUTE_MS));
+  if(captureHybridBenchmarkRows===true&&hybridSampleInterval%MINUTE_MS!==0) {
+    throw new Error('HYBRID_BENCHMARK_SAMPLING_MUST_ALIGN_TO_CLOSED_MINUTES');
+  }
   const rows = [];
   let priorAcceptedAt = -Infinity;
   let priorCandidateAt = -Infinity;
@@ -353,6 +358,7 @@ export function runHistoricalReplay({
   const candidateReset = Math.max(0, finite(candidateResetMs) ?? 5 * MINUTE_MS);
   let fiveIndex = 0;
   let tradeIndex = 0;
+  let lastHybridSampleBucket=-1;
   let acceptedCount = 0, rejectedCount = 0;
 
   for (const index of activeIndices) {
@@ -368,6 +374,9 @@ export function runHistoricalReplay({
       if (trades[t].T >= boundary - 60_000) tradeWindow.push(trades[t]);
     }
     const ticker = derivedTicker(tickerHistory, sym, at);
+    const hybridSampleBucket=Math.floor((at-start)/hybridSampleInterval);
+    const captureHybridSample=captureHybridBenchmarkRows===true&&hybridSampleBucket>lastHybridSampleBucket;
+    if(captureHybridSample)lastHybridSampleBucket=hybridSampleBucket;
     let raw = null;
     let reasons = [];
     let accepted = false;
@@ -476,7 +485,7 @@ export function runHistoricalReplay({
     const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
     const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
-    if(captureHybridBenchmarkRows===true&&horizonObserved){
+    if(captureHybridSample&&horizonObserved){
       const featureCandles=available1m.slice(-24).map(row=>({
         ...row,
         aggTrades:tradesByMinute.get(row.openTime)||[]
