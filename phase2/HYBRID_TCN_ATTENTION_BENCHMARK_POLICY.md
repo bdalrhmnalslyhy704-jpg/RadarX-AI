@@ -37,7 +37,7 @@ The challenger first projects 23 features to 12 hidden channels, then applies th
 
 Training minimizes a custom differentiable portfolio objective, not MSE or Brier:
 
-loss = -mean(net portfolio return) - 0.15 * Sharpe + 0.08 * downside semivariance + 0.08 * drawdown penalty.
+loss = -mean(net portfolio return) - 0.15 * Sharpe + 0.08 * downside semivariance + 0.04 * adverse-excursion penalty + 0.04 * intratrade peak-to-trough excursion penalty + 0.08 * entry-ordered drawdown proxy.
 
 The gradient flows through a smooth position-allocation function and the attention/TCN layers. This objective is an optimization target, not a guarantee of future profit. Thresholds are selected only on the validation block inside each walk-forward fold.
 
