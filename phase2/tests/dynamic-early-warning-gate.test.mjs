@@ -58,7 +58,7 @@ test('very strong long-window buy flow may emit only a watch when the completed 
   });
   const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:0.39},{
     now:NOW,alertScore:86.87,minQuoteVolume24h:1_000_000,
-    strictFailures:['BASE_ALERT_NOT_ELIGIBLE'],
+    strictFailures:['BASE_ALERT_NOT_ELIGIBLE','STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED'],
     coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
   });
   assert.equal(result.eligible,true,JSON.stringify(result.failures));
@@ -148,6 +148,14 @@ test('the smart lane rejects stale source candles, very large 24h extension and 
   const downResult=evaluateDynamicEarlyWarningGate(downward,row,{now:NOW,alertScore:87.33});
   assert.equal(downResult.eligible,false);
   assert.ok(downResult.failures.includes('EARLY_WARNING_DIRECTION_NOT_UP'));
+});
+
+test('flash confirmations are used when the explicit independent-confirmations field is absent',()=>{
+  const alert=wLike();
+  delete alert.strong_move.metrics.independent_confirmations;
+  alert.strong_move.metrics.flash_confirmations=9;
+  const result=evaluateDynamicEarlyWarningGate(alert,row,{now:NOW,alertScore:87.33});
+  assert.equal(result.eligible,true,JSON.stringify(result.failures));
 });
 
 test('strict vetoes unrelated to extension remain hard blockers',()=>{

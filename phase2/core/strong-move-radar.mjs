@@ -2,6 +2,7 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {decorateRadarAlert} from './radar-alert-meta.mjs';
 import {evaluateEliteGate} from './elite-confluence-gate.mjs';
 import {evaluateRadarNotificationGate} from './radar-notification-gate.mjs';
+import {evaluateDynamicEarlyWarningGate} from './dynamic-early-warning-gate.mjs';
 import {isDirectionalCandidateSymbol} from './market-wide-light-scan.mjs';
 
 const clamp=(x,lo=0,hi=100)=>Math.max(lo,Math.min(hi,Number(x)));
@@ -43,7 +44,130 @@ function stdev(xs){
   const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)));
 }
 
-export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
+function strictFinite(value){
+  if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
+  const number=Number(value);
+  return Number.isFinite(number)?number:null;
+}
+
+/**
+ * Summarize one fully closed 3-second Spot aggTrade bucket. Binance's m=true
+ * means the buyer was maker, so aggressive taker buys are m=false. Never infer
+ * this feature from OHLCV candles or a partial REST page.
+ */
+/**
+ * Compute a normalized flash score. The six legacy signal terms contribute
+ * 0.88 total weight; breakout receives 0.08 and close-location receives 0.04.
+ * The prior formula added the raw breakout value (up to 92) without a weight,
+ * forcing nearly every micro-breakout with elevated volume to 100.
+ */
+export function calculateStrongMoveFlashScore({
+  return1mPct,return3mPct,accelerationPct,volumeRatio,tradeRatio,
+  takerBuyRatio,microBreakout=false,breakoutScore=42,closeLocationPct
+}={}) {
+  const scoreOr=(value,fallback)=>strictFinite(value)??fallback;
+  const r1=scoreOr(return1mPct,null);
+  const r3=scoreOr(return3mPct,null);
+  const acceleration=scoreOr(accelerationPct,null);
+  const volume=scoreOr(volumeRatio,null);
+  const trades=scoreOr(tradeRatio,null);
+  const buy=scoreOr(takerBuyRatio,null);
+  const breakout=scoreOr(breakoutScore,42);
+  const closeLocation=scoreOr(closeLocationPct,45);
+  const breakoutEvidence=microBreakout===true?92:breakout*0.45;
+  return clamp(
+    (r1!==null?clamp(50+r1*80):45)*0.18+
+    (r3!==null?clamp(50+r3*42):45)*0.22+
+    (acceleration!==null?clamp(50+acceleration*46):45)*0.14+
+    (volume!==null?clamp(45+(volume-1)*34):45)*0.16+
+    (trades!==null?clamp(45+(trades-1)*28):45)*0.08+
+    (buy!==null?clamp(50+(buy-0.5)*300):45)*0.10+
+    breakoutEvidence*0.08+
+    clamp(closeLocation)*0.04
+  );
+}
+
+function summarizeThreeSecondAggTrades(aggTrades,coverageComplete,decisionAt){
+  const asOf=strictFinite(decisionAt);
+  const bucketEnd=asOf===null?null:Math.floor(asOf/3000)*3000;
+  const bucketStart=bucketEnd===null?null:bucketEnd-3000;
+  const base={
+    available:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+    trade_count:0,quote_turnover:null,taker_buy_quote_volume:null,
+    taker_sell_quote_volume:null,taker_buy_ratio:null,
+    source:'BINANCE_PUBLIC_SPOT_AGGTRADES'
+  };
+  if(coverageComplete!==true||bucketStart===null||bucketEnd===null||bucketStart<0){
+    return {...base,reason:'AGGTRADE_COVERAGE_NOT_VERIFIED'};
+  }
+  const rows=Array.isArray(aggTrades)?aggTrades:[];
+  let buyQuote=0,sellQuote=0,count=0;
+  for(const row of rows){
+    const at=strictFinite(row?.T??row?.time);
+    const price=strictFinite(row?.p??row?.price);
+    const quantity=strictFinite(row?.q??row?.quantity);
+    if(at===null||price===null||quantity===null||price<=0||quantity<0||
+       typeof row?.m!=='boolean'){
+      return {...base,reason:'AGGTRADE_ROW_INVALID'};
+    }
+    if(at<bucketStart||at>=bucketEnd)continue;
+    const notional=price*quantity;
+    if(!Number.isFinite(notional))return {...base,reason:'AGGTRADE_NOTIONAL_INVALID'};
+    if(row.m===false)buyQuote+=notional;
+    else sellQuote+=notional;
+    count++;
+  }
+  const turnover=buyQuote+sellQuote;
+  return {
+    ...base,available:true,reason:count?'COMPLETED_3S_AGGTRADE_BUCKET':'COMPLETED_3S_BUCKET_WITH_NO_TRADES',
+    trade_count:count,
+    quote_turnover:Number(turnover.toFixed(8)),
+    taker_buy_quote_volume:Number(buyQuote.toFixed(8)),
+    taker_sell_quote_volume:Number(sellQuote.toFixed(8)),
+    taker_buy_ratio:turnover>0?Number((buyQuote/turnover).toFixed(6)):null
+  };
+}
+
+/**
+ * Fetch only the last fully closed 3-second bucket. A page at the 1,000-row cap
+ * is ambiguous and deliberately remains unavailable rather than truncated/live.
+ */
+export async function fetchCompletedThreeSecondAggTrades(rest,symbol,decisionAt){
+  const asOf=strictFinite(decisionAt);
+  const bucketEnd=asOf===null?null:Math.floor(asOf/3000)*3000;
+  const bucketStart=bucketEnd===null?null:bucketEnd-3000;
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  if(!rest||typeof rest.request!=='function'||!/^[A-Z0-9]{5,30}USDT$/.test(cleanSymbol)||
+     bucketStart===null||bucketStart<0){
+    return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,reason:'AGGTRADE_REQUEST_INPUT_INVALID'};
+  }
+  try{
+    const response=await rest.request('/api/v3/aggTrades',{
+      symbol:cleanSymbol,startTime:bucketStart,endTime:bucketEnd-1,limit:1000
+    });
+    const rows=Array.isArray(response?.data)?response.data:null;
+    if(!rows)return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,reason:'AGGTRADE_RESPONSE_INVALID'};
+    const valid=rows.every(row=>{
+      const at=strictFinite(row?.T),price=strictFinite(row?.p),quantity=strictFinite(row?.q);
+      return at!==null&&at>=bucketStart&&at<bucketEnd&&price!==null&&price>0&&
+        quantity!==null&&quantity>=0&&typeof row?.m==='boolean';
+    });
+    const complete=rows.length<1000&&valid;
+    return {
+      trades:complete?rows:[],complete,
+      bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+      returned_rows:rows.length,
+      reason:complete?null:rows.length>=1000?'AGGTRADE_PAGE_LIMIT_REACHED':'AGGTRADE_ROWS_INVALID'
+    };
+  }catch(error){
+    return {trades:[],complete:false,bucket_start_at:bucketStart,bucket_end_at:bucketEnd,
+      reason:String(error?.message??error).slice(0,160)};
+  }
+}
+
+export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now,{
+  aggTrades=[],aggTradeCoverageComplete=false
+}={}){
   const a=closedCandles(oneM,now),b=closedCandles(fiveM,now);
   if(a.length<40||b.length<20){
     return {eligible:false,stage:'INSUFFICIENT_DATA',direction:'NONE',score:null,closed_candles_only:true,one_minute_count:a.length,five_minute_count:b.length,data_quality:0,data_stale:true};
@@ -161,16 +285,11 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
   const bbScore=Number.isFinite(bbExpansion)?clamp(48+(bbExpansion-1)*75):45;
   const efficiencyScore=Number.isFinite(efficiency)?clamp(35+efficiency*80):45;
   const atrScore=Number.isFinite(atrRatio)?clamp(50+(atrRatio-1)*70):45;
-  const flashScore=clamp(
-    (Number.isFinite(r1)?clamp(50+r1*80):45)*.18+
-    (Number.isFinite(r3)?clamp(50+r3*42):45)*.22+
-    (Number.isFinite(accel)?clamp(50+accel*46):45)*.14+
-    (Number.isFinite(volumeRatio)?clamp(45+(volumeRatio-1)*34):45)*.16+
-    (Number.isFinite(tradeRatio)?clamp(45+(tradeRatio-1)*28):45)*.08+
-    (Number.isFinite(buyRatio)?clamp(50+(buyRatio-.5)*300):45)*.10+
-    (microBreak?92:breakoutScore*.45)+
-    (Number.isFinite(closeLocation)&&closeLocation>=70?8:0)
-  );
+  const flashScore=calculateStrongMoveFlashScore({
+    return1mPct:r1,return3mPct:r3,accelerationPct:accel,
+    volumeRatio,tradeRatio,takerBuyRatio:buyRatio,
+    microBreakout:microBreak,breakoutScore,closeLocationPct:closeLocation
+  });
 
   const upScore=clamp(
     velocityScore*.24+volumeScore*.17+tradeScore*.08+takerScore*.14+
@@ -197,6 +316,12 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     microBreak||breakUp,
     Number.isFinite(closeLocation)&&closeLocation>=68
   ].filter(Boolean).length;
+  const latestOneMinuteClose=Number(a.at(-1)?.closeTime);
+  const decisionAt=Number.isFinite(latestOneMinuteClose)
+    ?Math.min(Number(now),latestOneMinuteClose+1):Number(now);
+  const threeSecondLiquidity=summarizeThreeSecondAggTrades(
+    aggTrades,aggTradeCoverageComplete,decisionAt
+  );
   const flashTrigger=direction==='UP_SURGE'&&flashScore>=74&&flashConfirmations>=3&&
     ((Number.isFinite(r3)&&r3>=0.45) ||
      (Number.isFinite(volumeRatio)&&volumeRatio>=1.50) ||
@@ -235,7 +360,10 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
     metrics:{
       return_1m:r1,return_3m:r3,return_5m:r5,return_10m:r10,return_20m:r20,acceleration:accel,
       flash_score:flashScore,flash_trigger:flashTrigger,flash_confirmations:flashConfirmations,
+      three_second_taker_buy_ratio:threeSecondLiquidity.taker_buy_ratio,
+      three_second_liquidity:threeSecondLiquidity,
       micro_breakout:microBreak,close_location_pct:closeLocation,
+      closed_1m_candle_close_time_ms:Number.isFinite(Number(last.closeTime))?Number(last.closeTime):null,
       volume_ratio:volumeRatio,trade_ratio:tradeRatio,taker_buy_ratio:buyRatio,taker_buy_delta:buyDelta,
       range_ratio:rangeRatio,breakout_up:breakUp,breakout_down:breakDown,breakout_distance_up_pct:breakoutDistanceUp,
       breakout_distance_down_pct:breakoutDistanceDown,ema9,ema21,ema55,vwap,vwap_distance_pct:vwapDistance,
@@ -268,8 +396,27 @@ export function buildStrongMoveAnalysis(oneM,fiveM,ticker,now){
 }
 
 export function buildStrongMoveAlert(candidate,now=Date.now()){
-  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now);
+  const a=buildStrongMoveAnalysis(candidate.one_minute,candidate.five_minute,candidate.ticker,now,{
+    aggTrades:candidate.agg_trades,
+    aggTradeCoverageComplete:candidate.trade_coverage_complete===true
+  });
+  const threeSecond=a.metrics?.three_second_liquidity||{};
+  const threeSecondRatio=strictFinite(a.metrics?.three_second_taker_buy_ratio);
+  const threeSecondFailures=!threeSecond.available
+    ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    :threeSecondRatio===null
+      ?['THREE_SECOND_TRADE_BUCKET_EMPTY']
+      :threeSecondRatio<=0.70
+        ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']:[];
+  // The dynamic watch lane may use only one explicit missing-evidence fallback.
+  // It cannot silently treat an empty or seller-dominated completed bucket as missing.
+  a.trigger_diagnostics={
+    eligible:threeSecondFailures.length===0,
+    failed_checks:threeSecondFailures
+  };
   const ticker=candidate.ticker||{};
+  const sourceCandleCloseAt=strictFinite(a.metrics?.closed_1m_candle_close_time_ms);
+  a.source_candle_close_at=sourceCandleCloseAt;
   return {
     id:'STRONG:'+String(ticker.symbol||'UNKNOWN').toUpperCase()+':'+a.direction+':'+now,
     event:'STRONG_MOVE_ALERT',
@@ -290,6 +437,8 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
       (a.component_scores?.range??0)>90?'VOLATILITY_EXTREME':null
     ].filter(Boolean),
     source:a.source,
+    source_candle_close_at:sourceCandleCloseAt,
+    source_event_at:sourceCandleCloseAt,
     detected_at:now,
     processed_at:now,
     paper_trading:true,
@@ -538,10 +687,13 @@ export class StrongMoveRadar {
     this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:30*60*1000,minQuoteVolume24h:0,
       rotationBatchSize:4,topMoverCount:3,alertCooldownMs:12*60*1000,
-      emergencyAlertCooldownMs:5*60*1000,watchOnlyCooldownMs:10*60*1000,minScore:76, ...config
+      emergencyAlertCooldownMs:5*60*1000,watchOnlyCooldownMs:10*60*1000,
+      dynamicEarlyWarningCooldownMs:30*60*1000,minScore:76, ...config
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastTickerMap=new Map();this.lastScanAt=new Map();this.lastAlertAt=new Map();
+    this.lastDynamicEarlyWarningAt=new Map();this.dynamicEarlyWarningQualifiedCount=0;
+    this.dynamicEarlyWarningPushAttemptCount=0;
     this.lastEmergencyCandleAt=new Map();this.lastEmergencyAlertAt=new Map();
     this.lastWatchOnlyCandleAt=new Map();this.lastWatchOnlyAt=new Map();this.watchOnlyAlertCount=0;
     this.emergencyAlertCount=0;this.alertCount=0;this.lastError=null;this.scans=0;this.lastScanAtMs=null;this.busy=false;this.busySinceAt=null;
@@ -670,9 +822,31 @@ export class StrongMoveRadar {
     const oneResult=await oneResultPromise;
     if(oneResult.status!=='fulfilled')throw oneResult.reason||new Error('ONE_MINUTE_KLINES_UNAVAILABLE');
     const one=oneResult.value;
-    const alert=buildStrongMoveAlert({
-      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles
+    let alert=buildStrongMoveAlert({
+      ticker:row,one_minute:one.candles,five_minute:fiveResult.candles,
+      trade_coverage_complete:false
     },now);
+    const preliminary=alert?.strong_move||{};
+    const preliminaryMetrics=preliminary.metrics||{};
+    // Spend one bounded Spot aggTrades request only for an already-strong,
+    // upward, participation-backed candidate. Do not burden every universe row.
+    const needsThreeSecondEvidence=preliminary.direction==='UP_SURGE'&&
+      Math.max(Number(preliminary.score)||0,Number(preliminaryMetrics.flash_score)||0)>=68&&
+      ((Number(preliminaryMetrics.volume_ratio)||0)>=1.25||
+       (Number(preliminaryMetrics.trade_ratio)||0)>=1.15)&&
+      (Number(preliminaryMetrics.taker_buy_ratio)||0)>=0.52;
+    if(needsThreeSecondEvidence&&typeof this.rest.request==='function'){
+      const latestClose=Number(one.candles?.at(-1)?.closeTime);
+      const decisionAt=Number.isFinite(latestClose)?Math.min(now,latestClose+1):now;
+      const tradeBucket=await fetchCompletedThreeSecondAggTrades(this.rest,row.symbol,decisionAt);
+      alert=buildStrongMoveAlert({
+        ticker:row,one_minute:one.candles,five_minute:fiveResult.candles,
+        agg_trades:tradeBucket.trades,trade_coverage_complete:tradeBucket.complete
+      },now);
+      if(!tradeBucket.complete){
+        alert.strong_move.metrics.three_second_liquidity.reason=tradeBucket.reason||'AGGTRADE_COVERAGE_NOT_VERIFIED';
+      }
+    }
     const alertScore=Math.max(
       Number(alert?.strong_move?.score)||0,
       Number(alert?.strong_move?.component_scores?.flash)||0
@@ -706,6 +880,17 @@ export class StrongMoveRadar {
       ...(alertScore<this.config.minScore?['SCORE_BELOW_STRICT_THRESHOLD']:[]),
       ...(!gate.eligible?(Array.isArray(gate.failures)?gate.failures:['ELITE_GATE_NOT_ELIGIBLE']):[])
     ];
+    const earlyWarning=evaluateDynamicEarlyWarningGate(alert,row,{
+      now:this.clock(),alertScore,
+      minQuoteVolume24h:Math.max(750_000,Number(this.config.minQuoteVolume24h)||0),
+      strictFailures:strictBlockers,
+      coreTriggerFailures:Array.isArray(a.trigger_diagnostics?.failed_checks)
+        ?a.trigger_diagnostics.failed_checks:[],
+      lastAlertAt:Number(this.lastDynamicEarlyWarningAt.get(row.symbol)||0),
+      earlyCooldownMs:Math.max(30*60*1000,Number(this.config.dynamicEarlyWarningCooldownMs)||0)
+    });
+    alert.early_warning=earlyWarning;
+    if(earlyWarning.eligible===true)this.dynamicEarlyWarningQualifiedCount++;
     if(alert.eligible&&alertScore>=this.config.minScore&&gate.eligible){
       const notificationGate=evaluateRadarNotificationGate(alert,{now:this.clock(),commit:true});
       alert.notification_gate=notificationGate;
@@ -730,6 +915,13 @@ export class StrongMoveRadar {
       strictFailures:strictBlockers
     });
     if(!watchOnly)return alert;
+    watchOnly.early_warning=earlyWarning;
+    watchOnly.early_warning_score=Number(earlyWarning.score)||0;
+    watchOnly.early_warning_mode=earlyWarning.mode;
+    watchOnly.early_warning_reason_codes=[...earlyWarning.failures];
+    watchOnly.watch_notification_tier=earlyWarning.eligible===true?'DYNAMIC_EARLY_WARNING':'WATCH_ONLY_REVIEW';
+    watchOnly.source_candle_close_at=alert.source_candle_close_at;
+    watchOnly.strong_move.early_warning=earlyWarning;
     const closeAt=Number(watchOnly.detected_candle_close_time);
     if(Number(this.lastWatchOnlyCandleAt.get(row.symbol)||0)===closeAt)
       return {...watchOnly,watch_only_deduplicated:true};
@@ -745,18 +937,36 @@ export class StrongMoveRadar {
     this.lastWatchOnlyCandleAt.set(row.symbol,closeAt);
     this.lastWatchOnlyAt.set(row.symbol,now);
     this.watchOnlyAlertCount++;
-    if(this.pushManager?.notifyRadarWatchOnlyAlert){
-      try{
-        const result=await this.pushManager.notifyRadarWatchOnlyAlert(decoratedWatch);
-        this.logger.info?.('[STRONG_MOVE_WATCH_ONLY_RESULT] '+JSON.stringify({
-          symbol:row.symbol,status:String(result?.status||'UNKNOWN'),
-          attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
-          reason:result?.reason||null,watch_only:true,entry_eligible:false
+    if(this.pushManager?.notifyRadarWatchOnlyAlert&&earlyWarning.eligible===true){
+      const dynamicCooldown=Math.max(30*60*1000,Number(this.config.dynamicEarlyWarningCooldownMs)||0);
+      const lastDynamic=Number(this.lastDynamicEarlyWarningAt.get(row.symbol)||0);
+      if(now-lastDynamic>=dynamicCooldown){
+        // Reserve before the provider call so concurrent scans cannot duplicate a phone watch.
+        this.lastDynamicEarlyWarningAt.set(row.symbol,now);
+        this.dynamicEarlyWarningPushAttemptCount++;
+        try{
+          const result=await this.pushManager.notifyRadarWatchOnlyAlert(decoratedWatch);
+          this.logger.info?.('[STRONG_MOVE_DYNAMIC_EARLY_WARNING_RESULT] '+JSON.stringify({
+            symbol:row.symbol,status:String(result?.status||'UNKNOWN'),
+            attempted:result?.attempted===true,sent_count:Number(result?.sent_count)||0,
+            reason:result?.reason||null,watch_only:true,entry_eligible:false,
+            score:earlyWarning.score,source_age_ms:earlyWarning.timing?.source_data_age_ms
+          }));
+        }catch(error){
+          this.lastError=String(error?.message??error);
+          this.logger.warn?.('STRONG_MOVE_DYNAMIC_EARLY_WARNING_PUSH',this.lastError);
+        }
+      }else{
+        this.logger.info?.('[STRONG_MOVE_DYNAMIC_EARLY_WARNING_SUPPRESSED] '+JSON.stringify({
+          symbol:row.symbol,reason:'THIRTY_MINUTE_SYMBOL_COOLDOWN',
+          retry_after_ms:Math.max(0,dynamicCooldown-(now-lastDynamic)),watch_only:true
         }));
-      }catch(error){
-        this.lastError=String(error?.message??error);
-        this.logger.warn?.('STRONG_MOVE_WATCH_ONLY_PUSH',this.lastError);
       }
+    }else if(earlyWarning.eligible!==true){
+      this.logger.info?.('[STRONG_MOVE_WATCH_ONLY_FEED] '+JSON.stringify({
+        symbol:row.symbol,score:earlyWarning.score,
+        failures:earlyWarning.failures.slice(0,12),watch_only:true,entry_eligible:false
+      }));
     }
     return decoratedWatch;
   }
@@ -789,6 +999,8 @@ export class StrongMoveRadar {
       alerts_emitted:this.alertCount,
       emergency_alerts_emitted:this.emergencyAlertCount,
       watch_only_alerts_emitted:this.watchOnlyAlertCount,
+      dynamic_early_warning_qualified:this.dynamicEarlyWarningQualifiedCount,
+      dynamic_early_warning_push_attempts:this.dynamicEarlyWarningPushAttemptCount,
       emergency_trigger:'CLOSED_5M_MOVE_GTE_7_PERCENT_OR_POSITIVE_MOVE_GTE_1_5_PERCENT_WITH_3X_VOLUME_SPIKE; NO_24H_QUOTE_VOLUME_FLOOR',
       last_error:this.lastError,
       busy:this.busy,

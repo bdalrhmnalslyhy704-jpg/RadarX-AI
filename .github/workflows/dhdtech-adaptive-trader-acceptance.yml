@@ -5,8 +5,20 @@ on:
   push:
     branches:
       - build224-multi-analyst-20261007
+      - verify/build224-tcn-fallback-20261106
     paths:
       - 'Dockerfile'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/adaptive-trader-worker.mjs'
+      - 'phase2/core/adaptive-trader-engine.mjs'
+      - 'phase2/core/strong-move-radar.mjs'
+      - 'phase2/core/dynamic-early-warning-gate.mjs'
+      - 'phase2/core/historical-replay.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/push/index.mjs'
+      - 'phase2/TCN_V6_VALIDATION_POLICY.md'
+      - '.github/workflows/dhdtech-adaptive-trader-acceptance.yml'
   workflow_dispatch:
 
 concurrency:
@@ -20,7 +32,7 @@ permissions:
 jobs:
   verify-dhdtech:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 65
     steps:
       - name: Wait for the deployed DHDTech worker to complete a verified live scan
         uses: actions/github-script@v7
@@ -37,11 +49,16 @@ jobs:
             }
 
             const started=Date.now();
-            const deadline=started+12*60*1000;
+            const probeRun=context.ref==='refs/heads/verify/build224-tcn-fallback-20261106';
+            const deadline=started+(probeRun?2*60*1000:55*60*1000);
+            core.info('DHDTECH_ACCEPTANCE_MODE '+(probeRun?'SHORT_READ_ONLY_PROBE':'FULL_BUILD224_ACCEPTANCE'));
             const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
             let lastError='No status response yet';
             let lastObserved=null;
-            let manualScanAttempted=false;
+            // A complete eligible Spot universe needs several bounded 40-pair scans.
+            // Trigger the next scan only after the previous scan timestamp advances
+            // and the worker is no longer in flight; never enqueue duplicate scans.
+            let lastManualScanRequestedForScanAt=null;
             let manualScanRequestedAt=null;
             while(Date.now()<deadline){
               try{
@@ -57,13 +74,37 @@ jobs:
                 ]);
                 const [value,deployment]=await Promise.all([response.json(),deploymentResponse.json()]);
                 const currentScanAt=Date.parse(String(value.last_scan_at||''));
+                const scanCoverage=value.scan_coverage||{};
+                const eligibleSymbolCount=Number(scanCoverage.eligible_symbols_count)||0;
+                const completedSweep=scanCoverage.last_completed_sweep||{};
+                const currentEligibleSymbols=Array.isArray(scanCoverage.eligible_symbols)
+                  ?[...scanCoverage.eligible_symbols].map(String).sort():[];
+                const completedEligibleSymbols=Array.isArray(completedSweep.eligible_symbols_snapshot)
+                  ?[...completedSweep.eligible_symbols_snapshot].map(String).sort():[];
+                const sameEligibleUniverse=currentEligibleSymbols.length===eligibleSymbolCount&&
+                  completedEligibleSymbols.length===eligibleSymbolCount&&
+                  currentEligibleSymbols.every((symbol,index)=>symbol===completedEligibleSymbols[index]);
+                const coverageUpdatedAt=Number(scanCoverage.updated_at)||0;
+                const sweepCompletedAt=Number(completedSweep.completed_at)||0;
+                const coverageFresh=coverageUpdatedAt>=Date.now()-8*60*1000&&
+                  coverageUpdatedAt<=Date.now()+5000;
+                const sweepBelongsToThisAcceptance=sweepCompletedAt>=started-5000&&
+                  sweepCompletedAt<=Date.now()+5000;
+                const fullUniverseCoverageReady=eligibleSymbolCount>0&&sameEligibleUniverse&&
+                  coverageFresh&&sweepBelongsToThisAcceptance&&
+                  Number(scanCoverage.completed_sweeps)>=1&&
+                  Number(completedSweep.eligible_symbols)===eligibleSymbolCount&&
+                  Number(completedSweep.attempted_symbols)===eligibleSymbolCount&&
+                  Number(completedSweep.failed_symbols)===0;
                 const currentScanFresh=Number.isFinite(currentScanAt)&&currentScanAt<=Date.now()+5000&&
                   Date.now()-currentScanAt<=8*60*1000&&value.last_error===null;
-                // If the worker has no recent successful scan, request one through
-                // its read-only server endpoint. Never start a duplicate while in flight.
-                if(response.ok&&!currentScanFresh&&!manualScanAttempted&&
-                   value.enabled===true&&value.in_flight!==true){
-                  manualScanAttempted=true;
+                // Keep running bounded scans until one entire current eligible universe
+                // has been attempted with zero data failures. Each request is tied to the
+                // previous completed scan timestamp to prevent duplicate in-flight work.
+                const scanKey=Number.isFinite(currentScanAt)?currentScanAt:0;
+                if(response.ok&&!fullUniverseCoverageReady&&value.enabled===true&&
+                   value.in_flight!==true&&lastManualScanRequestedForScanAt!==scanKey){
+                  lastManualScanRequestedForScanAt=scanKey;
                   const requestedAt=Date.now();
                   const scanResponse=await fetch(url.origin+'/api/adaptive-trader/scan',{
                     method:'POST',
@@ -76,9 +117,13 @@ jobs:
                     manualScanRequestedAt=requestedAt;
                     core.info('DHDTECH_MANUAL_READ_ONLY_SCAN_REQUESTED '+JSON.stringify({
                       http:scanResponse.status,status:scanBody.status||null,
-                      requested_limit:scanBody.requested_limit||40
+                      requested_limit:scanBody.requested_limit||40,
+                      coverage_pct:Number(scanCoverage.progress_pct)||0,
+                      remaining_symbols:Number(scanCoverage.remaining_symbols_count)||eligibleSymbolCount||null,
+                      completed_sweeps:Number(scanCoverage.completed_sweeps)||0
                     }));
                   }else{
+                    lastManualScanRequestedForScanAt=null;
                     core.warning('DHDTECH_MANUAL_READ_ONLY_SCAN_NOT_STARTED '+JSON.stringify({
                       http:scanResponse.status,status:scanBody.status||null,
                       error:scanBody.error||null
@@ -100,9 +145,12 @@ jobs:
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
-                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'&&
+                  temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V19'&&
+                  temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
+                  temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
                   Number(temporalNetwork.sequence_steps)===24&&
                   Number(temporalNetwork.sequence_channels)===29&&
+                  temporalNetwork.temporal_label_resolution==='15M_ONLY'&&
                   Number(temporalNetwork.ensemble_members_required)===3&&
                   (!temporalNetwork.trained||Number(temporalNetwork.ensemble_members)===3)
                 );
@@ -151,9 +199,25 @@ jobs:
                     active_subscriptions:Number(push.active_subscriptions)||0,
                     provider_subscriptions:Number(push.provider_subscriptions)||0,
                     fcm_devices:Number(push.fcm_devices)||0,
+                    physical_device_receipt_count:Number(push.physical_device_receipt_count)||0,
+                    physical_device_receipt_window_ms:Number(push.physical_device_receipt_window_ms)||0,
                     webpush_subscriptions:Number(push.webpush_subscriptions)||0,
                     physical_device_delivery_verified:push.physical_device_delivery_verified===true},
                   historical_samples_available:Number(universe.historical_training_samples_available)||0,
+                  scan_coverage:{
+                    eligible_symbols:eligibleSymbolCount,
+                    progress_pct:Number(scanCoverage.progress_pct)||0,
+                    attempted_symbols:Number(scanCoverage.attempted_symbols_count)||0,
+                    valid_symbols:Number(scanCoverage.valid_symbols_count)||0,
+                    failed_symbols:Number(scanCoverage.failed_symbols_count)||0,
+                    remaining_symbols:Number(scanCoverage.remaining_symbols_count)||0,
+                    completed_sweeps:Number(scanCoverage.completed_sweeps)||0,
+                    last_completed_sweep:completedSweep,
+                    same_eligible_universe:sameEligibleUniverse,
+                    coverage_fresh:coverageFresh,
+                    sweep_belongs_to_acceptance:sweepBelongsToThisAcceptance,
+                    full_universe_ready:fullUniverseCoverageReady
+                  },
                   learning_profile:learning?{
                     resolved_samples:Number(learning.resolved_samples)||0,
                     required_samples:Number(learning.required_samples)||60,
@@ -165,6 +229,7 @@ jobs:
                     new_historical_samples:Number(capture.new_historical_samples)||0,
                     historical_sequence_backfills:Number(capture.historical_sequence_backfills)||0,
                     temporal_sequence_samples:Number(capture.temporal_sequence_samples)||0,
+                    temporal_sequence_non_15m_labels:Number(capture.temporal_sequence_non_15m_labels)||0,
                     temporal_sequence_missing_samples:Number(capture.temporal_sequence_missing_samples)||0,
                     historical_rejected:capture.historical_rejected||{},
                     snapshot_historical_samples_available:Number(capture.snapshot_historical_samples_available)||0,
@@ -235,24 +300,64 @@ jobs:
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
                 const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V6'&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
-                  cognitiveProfile.identifier_features_used===false&&temporalNetworkContract;
+                  cognitiveProfile.identifier_features_used===false&&neuralNetworkContract&&temporalNetworkContract;
                 const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
                   (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                    temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true);
                 const temporalComparison=temporalNetwork.holdout_comparison||{};
-                const neuralLiveReady=temporalNetwork.selected===true&&
+                const selectedTemporalRegimes=Array.isArray(temporalNetwork.selected_regimes)
+                  ?temporalNetwork.selected_regimes:[];
+                const temporalNeuralContributionSafe=selectedTemporalRegimes.length>0&&
+                  selectedTemporalRegimes.every(regime=>{
+                    const specialist=temporalNetwork.regime_specialists?.[regime];
+                    return specialist?.neural_residual_contributes===true&&
+                      Number(specialist.selected_residual_scale)>0&&
+                      specialist.probability_calibration?.fitted===true&&
+                      specialist.logistic_probability_calibration?.fitted===true;
+                  });
+                const neuralLiveReady=temporalNetwork.training_strategy==='SHARED_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_SHARED_FALLBACK_POOLED_ANCHOR_V19'&&
+                  temporalNetwork.model_scope==='SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS'&&
+                  temporalNeuralContributionSafe&&temporalNetwork.selected===true&&
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
                   Number(temporalNetwork.holdout?.sample_count)>=150&&
                   temporalComparison.passed===true&&temporalComparison.beats_base_rate===true&&
                   temporalComparison.beats_pooled_logistic===true;
+                // A trained V5 is not an accepted V5: require its own chronological
+                // validation, untouched 100+ outcome holdout, and independent
+                // logistic/base-rate superiority gates before DHDTech can be green.
+                const v5NeuralLiveReady=neuralNetwork.trained===true&&
+                  neuralNetwork.selected===true&&neuralNetwork.probability_ready===true&&
+                  neuralNetwork.live_eligibility_ready===true&&
+                  Number(neuralNetwork.training_samples)>=240&&
+                  neuralNetwork.validation?.evaluated===true&&
+                  neuralNetwork.validation?.beat_base_rate===true&&
+                  neuralNetwork.holdout?.evaluated===true&&
+                  neuralNetwork.holdout?.beat_base_rate===true&&
+                  Number(neuralNetwork.holdout_comparison?.sample_count)>=100&&
+                  neuralNetwork.holdout_comparison?.passed===true&&
+                  neuralNetwork.holdout_comparison?.beats_base_rate===true&&
+                  neuralNetwork.holdout_comparison?.beats_same_window_logistic===true&&
+                  neuralNetwork.holdout_comparison?.beats_global_logistic===true&&
+                  neuralNetwork.holdout_comparison?.beats_recent_logistic!==false;
                 const paperValidation=value.paper_validation_profile||{};
                 const paperTradingReady=paperValidation.ready===true&&
                   Number(paperValidation.evaluation_window_trades)>=100&&
                   Number(paperValidation.win_rate_pct)>=55&&
                   Number(paperValidation.net_pnl_usdt)>0&&
                   Number(paperValidation.max_drawdown_pct)<=8;
+                const physicalDeviceDeliveryReady=push.enabled===true&&
+                  Number(push.fcm_devices)>=2&&
+                  Number(push.physical_device_receipt_count)>=2&&
+                  Number(push.physical_device_receipt_window_ms)>=7*24*60*60*1000&&
+                  push.physical_device_delivery_verified===true;
+                lastObserved.full_universe_coverage_ready=fullUniverseCoverageReady;
+                lastObserved.paper_trading_ready=paperTradingReady;
+                lastObserved.physical_device_delivery_ready=physicalDeviceDeliveryReady;
+                lastObserved.v5_neural_live_ready=v5NeuralLiveReady;
+                lastObserved.temporal_tcn_live_ready=neuralLiveReady;
+                lastObserved.cognitive_chronological_split_ready=cognitiveSplitReady;
                 lastObserved.neural_live_ready=neuralLiveReady;
                 lastObserved.temporal_network_contract=temporalNetworkContract;
                 lastObserved.neural_holdout_comparison=temporalComparison;
@@ -271,9 +376,11 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV5&&temporalNetworkContract&&temporalNetwork.trained===true&&
+                  cognitive&&cognitiveV5&&cognitiveSplitReady&&neuralNetworkContract&&
+                  v5NeuralLiveReady&&temporalNetworkContract&&temporalNetwork.trained===true&&
                   Number(temporalNetwork.ensemble_members)===3&&Number(temporalNetwork.training_samples)>=160&&
-                  probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
+                  fullUniverseCoverageReady&&paperTradingReady&&physicalDeviceDeliveryReady&&
+                  neuralLiveReady&&probabilityClaimSafe&&Number(cognitiveProfile.resolved_samples)>=0&&
                   Number(cognitiveProfile.training_samples)>=0&&
                   Number(cognitiveProfile.validation_samples)>=0&&
                   Number(cognitiveProfile.holdout_samples)>=0&&
@@ -285,7 +392,7 @@ jobs:
                   (cognitiveProfile.probability_ready!==true||
                     (cognitiveProfile.holdout&&cognitiveProfile.holdout.evaluated===true&&cognitiveProfile.holdout.beat_base_rate===true));
                 if(valid){
-                  const description='Live DHDTech scan verified; '+candidates.length+' analyzed, '+historyRows+' history rows.';
+                  const description='Build 224 accepted: full Spot sweep, V5/TCN, paper validation and two-device FCM receipts verified.';
                   await github.rest.repos.createCommitStatus({
                     owner:context.repo.owner,repo:context.repo.repo,sha:context.sha,
                     state:'success',context:'dhdtech-adaptive-trader-live',
@@ -298,7 +405,7 @@ jobs:
                   }));
                   return;
                 }
-                lastError='Live scan, temporal TCN out-of-sample superiority, or 100-trade paper validation gate is not ready';
+                lastError='DHDTech full-universe Spot sweep, V5/TCN independent superiority, 100-trade paper validation, or two-device physical FCM receipt gate is not ready';
               }catch(error){
                 lastError=String(error&&error.message||error).slice(0,180);
               }

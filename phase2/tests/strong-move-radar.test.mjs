@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,StrongMoveRadar} from '../core/strong-move-radar.mjs';
+import {buildStrongMoveAnalysis,buildStrongMoveAlert,buildStrongMoveWatchOnlyAlert,buildEmergencyBreakoutAlert,calculateStrongMoveFlashScore,fetchCompletedThreeSecondAggTrades,StrongMoveRadar} from '../core/strong-move-radar.mjs';
 
 const NOW=10_000_000_000;
 
@@ -96,6 +96,35 @@ const openEmergency=makeEmergency5m();openEmergency.at(-1).closed=false;
 assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:openEmergency},NOW),null);
 const staleEmergency=makeEmergency5m().map(row=>({...row,closeTime:row.closeTime-9*60_000,openTime:row.openTime-9*60_000}));
 assert.equal(buildEmergencyBreakoutAlert({ticker,five_minute:staleEmergency},NOW),null);
+test('flash score is normalized: breakout cannot swamp weak price momentum and saturate every candidate at 100',()=>{
+  const weakMomentumWithExtremeActivity=calculateStrongMoveFlashScore({
+    return1mPct:0,
+    return3mPct:0.210526,
+    accelerationPct:0.420610,
+    volumeRatio:137.447985,
+    tradeRatio:10.333333,
+    takerBuyRatio:0.546293,
+    microBreakout:true,
+    breakoutScore:96,
+    closeLocationPct:80
+  });
+  assert.ok(weakMomentumWithExtremeActivity>68&&weakMomentumWithExtremeActivity<78,
+    'a breakout plus extreme volume must not swamp sub-0.45% 3m momentum: '+weakMomentumWithExtremeActivity);
+  const fullyAligned=calculateStrongMoveFlashScore({
+    return1mPct:1,return3mPct:2,accelerationPct:1,
+    volumeRatio:10,tradeRatio:8,takerBuyRatio:0.9,
+    microBreakout:true,breakoutScore:96,closeLocationPct:95
+  });
+  assert.ok(fullyAligned>98&&fullyAligned<=100,
+    'fully aligned breakout/flow evidence should reach the upper score band: '+fullyAligned);
+  const noBreakout=calculateStrongMoveFlashScore({
+    return1mPct:0,return3mPct:0.1,accelerationPct:0.05,
+    volumeRatio:1.1,tradeRatio:1.1,takerBuyRatio:0.51,
+    microBreakout:false,breakoutScore:42,closeLocationPct:null
+  });
+  assert.ok(noBreakout<65,'weak balanced evidence must remain a modest score');
+});
+
 const analysis=buildStrongMoveAnalysis(make1m(),make5m(),ticker,NOW);
 assert.equal(analysis.closed_candles_only,true);
 assert.equal(analysis.eligible,true);
@@ -110,6 +139,65 @@ assert.equal(analysis.metrics.flash_trigger,true);
 assert.ok(['STRONG_MOVE','EXPLOSIVE'].includes(analysis.stage));
 assert.ok(analysis.reasons.includes('volume climax'));
 assert.ok(analysis.reasons.includes('trade-count surge'));
+
+test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can populate buyer-flow evidence',()=>{
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  const trades=[
+    {a:1,T:bucketEnd-2500,p:'1',q:'8',m:false},
+    {a:2,T:bucketEnd-900,p:'1',q:'2',m:true},
+    {a:3,T:bucketEnd+10,p:'9',q:'100',m:false}
+  ];
+  const complete=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:trades,trade_coverage_complete:true
+  },NOW);
+  assert.equal(complete.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(complete.strong_move.metrics.three_second_liquidity.trade_count,2);
+  assert.equal(complete.strong_move.metrics.three_second_taker_buy_ratio,0.8);
+  assert.deepEqual(complete.strong_move.trigger_diagnostics.failed_checks,[]);
+
+  const partial=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:trades,trade_coverage_complete:false
+  },NOW);
+  assert.equal(partial.strong_move.metrics.three_second_liquidity.available,false);
+  assert.equal(partial.strong_move.metrics.three_second_taker_buy_ratio,null);
+  assert.deepEqual(partial.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']);
+
+  const emptyCompleted=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:[],trade_coverage_complete:true
+  },NOW);
+  assert.equal(emptyCompleted.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(emptyCompleted.strong_move.metrics.three_second_taker_buy_ratio,null);
+  assert.deepEqual(emptyCompleted.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TRADE_BUCKET_EMPTY']);
+});
+
+test('live three-second aggTrade fetch is bounded to the last completed bucket and fails closed at the page cap',async()=>{
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  let query=null;
+  const rows=[
+    {a:1,T:bucketEnd-2500,p:'2',q:'3',m:false},
+    {a:2,T:bucketEnd-500,p:'2',q:'1',m:true}
+  ];
+  const fetched=await fetchCompletedThreeSecondAggTrades({
+    request:async(path,args)=>{assert.equal(path,'/api/v3/aggTrades');query=args;return {data:rows};}
+  },'BURSTUSDT',NOW);
+  assert.equal(fetched.complete,true);
+  assert.deepEqual(query,{symbol:'BURSTUSDT',startTime:bucketEnd-3000,endTime:bucketEnd-1,limit:1000});
+  assert.equal(fetched.trades.length,2);
+
+  const capped=await fetchCompletedThreeSecondAggTrades({
+    request:async()=>({data:Array.from({length:1000},(_,i)=>({
+      a:i,T:bucketEnd-2500+i,p:'1',q:'1',m:false
+    }))})
+  },'BURSTUSDT',NOW);
+  assert.equal(capped.complete,false);
+  assert.equal(capped.trades.length,0);
+  assert.equal(capped.reason,'AGGTRADE_PAGE_LIMIT_REACHED');
+});
 
 const alert=buildStrongMoveAlert({one_minute:make1m(),five_minute:make5m(),ticker},NOW);
 assert.equal(alert.event,'STRONG_MOVE_ALERT');
@@ -215,6 +303,78 @@ assert.ok(fiveMinuteGap.reason_codes.includes('FIVE_MINUTE_CLOSED_CANDLE_GAP'));
 }
 console.log('Strong Move Radar tests passed');
 
+
+test('live Strong Move stores every near miss but sends a phone WATCH_ONLY only after the completed 3s dynamic gate passes',async()=>{
+  const rows=make1m().map(row=>({...row}));
+  // Keep strong buyer participation elevated for six minutes, then make the
+  // latest three closed candles accelerate separately from the prior baseline.
+  let price=Number(rows.at(-7).close);
+  for(let i=rows.length-6;i<rows.length;i++){
+    const row=rows[i],open=price,step=i>=rows.length-3?0.65:0.03,close=open+step;
+    Object.assign(row,{open,close,high:close+0.08,low:open-0.02,
+      volume:500_000,tradeCount:4_000,
+      takerBuyBaseVolume:i>=rows.length-3?490_000:360_000});
+    price=close;
+  }
+  const five=make5m();
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  const trades=[
+    {a:1,T:bucketEnd-2500,p:'1',q:'8',m:false},
+    {a:2,T:bucketEnd-900,p:'1',q:'2',m:true}
+  ];
+  const stored=[],pushed=[],strict=[];
+  const radar=new StrongMoveRadar({
+    rest:{
+      klines:async(_symbol,interval)=>({candles:interval==='1m'?rows:five,source:'TEST'}),
+      request:async()=>({data:trades})
+    },
+    store:{appendStrongMoveAlert:async value=>stored.push(value)},
+    pushManager:{
+      notifyRadarAlert:async value=>strict.push(value),
+      notifyRadarWatchOnlyAlert:async value=>{pushed.push(value);return{status:'SENT',attempted:true,sent_count:1};}
+    },
+    config:{pollMs:15_000,minScore:101,watchOnlyCooldownMs:60_000,dynamicEarlyWarningCooldownMs:30*60_000},
+    clock:()=>NOW,logger:{info(){},warn(){}}
+  });
+  const result=await radar.scanRow({...ticker,priceChange24h:4.2,quoteVolume24h:8_000_000});
+  assert.equal(result.event,'STRONG_MOVE_WATCH_ONLY');
+  assert.equal(result.early_warning?.eligible,true,JSON.stringify(result.early_warning?.failures));
+  assert.equal(result.watch_only,true);
+  assert.equal(result.entry_eligible,false);
+  assert.equal(stored.length,1);
+  assert.equal(pushed.length,1);
+  assert.equal(strict.length,0,'the early lane must never use the strict market-push route');
+  assert.equal(pushed[0].early_warning_mode,'DYNAMIC_EARLY_WARNING');
+  assert.equal(pushed[0].real_order_execution,false);
+  assert.equal(radar.health().dynamic_early_warning_push_attempts,1);
+});
+
+test('live Strong Move does not phone-push partial, empty or seller-dominated 3s buckets',async()=>{
+  for(const tradeRows of [
+    [],
+    [{a:1,T:Math.floor(NOW/3000)*3000-2500,p:'1',q:'1',m:false},
+     {a:2,T:Math.floor(NOW/3000)*3000-900,p:'1',q:'9',m:true}]
+  ]){
+    const rows=make1m().map(row=>({...row}));
+    for(const row of rows.slice(-3))row.takerBuyBaseVolume=490_000;
+    const stored=[],pushed=[];
+    const radar=new StrongMoveRadar({
+      rest:{
+        klines:async(_symbol,interval)=>({candles:interval==='1m'?rows:make5m(),source:'TEST'}),
+        request:async()=>({data:tradeRows})
+      },
+      store:{appendStrongMoveAlert:async value=>stored.push(value)},
+      pushManager:{notifyRadarWatchOnlyAlert:async value=>{pushed.push(value);return{status:'SENT',sent_count:1};}},
+      config:{pollMs:15_000,minScore:101,watchOnlyCooldownMs:60_000},
+      clock:()=>NOW,logger:{info(){},warn(){}}
+    });
+    const result=await radar.scanRow({...ticker,priceChange24h:4.2,quoteVolume24h:8_000_000});
+    assert.equal(result.event,'STRONG_MOVE_WATCH_ONLY');
+    assert.equal(result.early_warning?.eligible,false);
+    assert.equal(stored.length,1,'near miss remains visible in the local radar feed');
+    assert.equal(pushed.length,0,'incomplete or weak 3s evidence must not create a phone notification');
+  }
+});
 
 test('near-miss strong-move observations use the separate watch-only lane without lowering strict eligibility',()=>{
   const now=Date.now(),closeAt=now-15_000;

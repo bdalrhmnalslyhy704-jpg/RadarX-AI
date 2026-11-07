@@ -182,7 +182,45 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+    assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
+    assert.equal(profile.neural_network.training_strategy,
+      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6');
+    assert.ok(profile.neural_network.calibration_samples>0);
+    assert.ok(profile.neural_network.calibration_fit_samples>0);
+    assert.ok(profile.neural_network.calibration_check_samples>0);
+    assert.ok(profile.neural_network.selection_start_at<profile.neural_network.calibration_start_at);
+    assert.ok(profile.neural_network.max_selection_outcome_resolved_at<
+      profile.neural_network.calibration_start_at,
+      'member/residual selection labels must finish before probability calibration begins');
+    assert.ok(profile.neural_network.max_calibration_fit_outcome_resolved_at<
+      profile.neural_network.calibration_check_start_at,
+      'calibrator fitting labels must finish before its disjoint calibration-check block');
+    assert.ok(profile.neural_network.max_calibration_check_outcome_resolved_at<
+      profile.validation_start_at,
+      'calibration-check labels must mature before outer validation begins');
+    assert.ok(profile.neural_network.calibration_check_samples>=20);
+    assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
+    assert.ok(profile.neural_network.selection_samples >= 20);
+    assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
+    assert.ok(profile.neural_network.refit_training_samples<=profile.neural_network.maximum_training_sample_budget);
+    assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
+    assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
+      'all refit labels must mature before the independent calibration block begins');
+    assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
+      'V5 fitting labels must be resolved before the separate selection block');
+    assert.ok(profile.neural_network.max_selection_outcome_resolved_at < profile.validation_start_at,
+      'V5 member and residual selection must finish before outer validation begins');
+    assert.ok(profile.neural_network.selection_start_at < profile.validation_start_at);
+    assert.ok(profile.neural_network.member_selection_brier_scores.length > 0);
+    assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
+    assert.deepEqual(profile.neural_network.candidate_residual_scales, [0, 0.25, 0.5, 0.75, 1]);
+    assert.ok([0, 0.25, 0.5, 0.75, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
+    assert.deepEqual(profile.neural_network.member_training_objectives,[
+      'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+      'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+    ]);
     assert.equal(profile.neural_network.ensemble_members_required, 3);
     assert.equal(profile.neural_network.input_neurons, 18);
     assert.equal(profile.neural_network.hidden_neurons, 10);
@@ -433,6 +471,7 @@ test('prequential audit never mixes neural and logistic model variants after mod
     journal.push({
       id: 'VARIANT-' + index, model_version: 5,
       selected_model: logisticBlock ? 'GLOBAL_HISTORY' : 'NEURAL_GLOBAL',
+      target_definition:logisticBlock?undefined:'UP_CLOSE_RETURN_BINARY_V1',
       at, trained_through_at: at - 60 * 60 * 1000,
       resolved_at: at + FOUR_HOURS,
       outcome_source: 'CLOSED_CANDLE_4H', outcome,
@@ -460,7 +499,7 @@ test('prequential audit isolates temporal first-passage forecasts from the legac
     const outcome=index%2===0?'UP':'DOWN';
     journal.push({
       id:'TCN-FWD-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome,
       predicted_up_probability:outcome==='UP'?80:20
@@ -491,7 +530,7 @@ test('temporal prequential audit counts flat first-passage outcomes as target mi
     const at=BASE_TIME+index*5*60*60*1000;
     return {
       id:'TCN-FLAT-'+index,model_version:5,selected_model:'TEMPORAL_TCN',
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
       outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',outcome:'FLAT',
       predicted_up_probability:10
@@ -540,3 +579,24 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
   assert.equal(audit.recent_window.error_patterns[0].high_confidence_errors, 30);
 });
 
+
+test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
+  const journal=Array.from({length:8},(_,index)=>{
+    const at=BASE_TIME+index*5*60*60*1000;
+    const outcome=index%2===0?'UP':index%4===1?'FLAT':'DOWN';
+    return {
+      id:'V5-UP-EVENT-'+index,model_version:5,selected_model:'NEURAL_GLOBAL',
+      target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+      at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome_source:'CLOSED_CANDLE_4H',outcome,
+      predicted_up_probability:outcome==='UP'?90:10
+    };
+  });
+  const audit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:2,windowSize:4,modelVariant:'NEURAL_GLOBAL'
+  });
+  assert.equal(audit.audited_model_variant,'NEURAL_GLOBAL');
+  assert.equal(audit.resolved_forecasts,8);
+  assert.equal(audit.recent_window.brier_score,0.01);
+  assert.equal(audit.previous_window.brier_score,0.01);
+});

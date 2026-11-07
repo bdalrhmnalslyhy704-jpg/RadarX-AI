@@ -379,7 +379,9 @@ export function assessHistoricalProfileCoverage(profile, input = {}, timeframeCo
   if (requirements.tradeHistoryRequired && input?.dataPolicy?.tradeCoverageComplete !== true) {
     failures.push('HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE');
   }
-  if (String(profile).trim().toUpperCase() === 'EARLY_MOVE_RADAR' &&
+  const expectedSessionWarmup = input?.marketMedianWarmup === true &&
+    input?.marketMedianSource === 'UNAVAILABLE_SESSION_WARMUP';
+  if (String(profile).trim().toUpperCase() === 'EARLY_MOVE_RADAR' && !expectedSessionWarmup &&
       (input?.marketMedianSource !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
        !Number.isFinite(Number(input?.marketMedianReturnPct)) ||
        Number(input?.marketMedianSampleCount) < Number(input?.marketMedianMinimumPeerCount ?? 5))) {
@@ -828,7 +830,8 @@ async function main() {
           one_minute: input.oneMinute,
           five_minute: input.fiveMinute,
           ticker: input.ticker,
-          agg_trades: input.aggTrades
+          agg_trades: input.aggTrades,
+          trade_coverage_complete:input.dataPolicy?.tradeCoverageComplete===true
         }, input.now);
         alert.observed_at = input.now;
         alert.source_event_at = alert.source_candle_close_at ?? input.now;
@@ -971,9 +974,16 @@ async function main() {
     const profileTradeCoverageFailures = profileRequirements.tradeHistoryRequired===true&&!tradeFetch.complete
       ? ['HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE'] : [];
     const requiredMarketMedianPeers = Math.min(5, Math.max(4, Object.keys(marketCohortCandles).length - 1));
+    const marketMedianWarmupSteps = detectorProfile === 'EARLY_MOVE_RADAR'
+      ? replay.steps.filter(step => step.market_median_source === 'UNAVAILABLE_SESSION_WARMUP').length
+      : 0;
+    // The first decision exactly at 04:00 Asia/Aden has no completed in-session
+    // candle yet. Exclude only this explicit warm-up marker; any later absent or
+    // under-supported same-time peer median remains a hard coverage failure.
     const marketMedianMissingSteps = detectorProfile === 'EARLY_MOVE_RADAR'
-      ? replay.steps.filter(step => step.market_median_source !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
-          Number(step.market_median_sample_count) < requiredMarketMedianPeers).length
+      ? replay.steps.filter(step => step.market_median_source !== 'UNAVAILABLE_SESSION_WARMUP' &&
+          (step.market_median_source !== 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' ||
+           Number(step.market_median_sample_count) < requiredMarketMedianPeers)).length
       : 0;
     const marketMedianCoverageFailures = detectorProfile === 'EARLY_MOVE_RADAR' &&
       (replay.steps.length === 0 || marketMedianMissingSteps > 0)
@@ -1010,6 +1020,7 @@ async function main() {
       ? (marketMedianMissingSteps === 0 && replay.steps.length > 0 ? 'HISTORICAL_REQUESTED_SPOT_COHORT_MEDIAN' : 'INCOMPLETE_HISTORICAL_COHORT')
       : null;
     replay.data_quality.market_median_missing_steps = marketMedianMissingSteps;
+    replay.data_quality.market_median_warmup_steps = marketMedianWarmupSteps;
     replay.data_quality.market_median_minimum_peer_count = requiredMarketMedianPeers;
     replay.data_quality.trade_coverage_complete = tradeFetch.complete;
     replay.data_quality.trade_coverage = tradeFetch.coverage;

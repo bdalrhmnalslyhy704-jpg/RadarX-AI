@@ -571,13 +571,62 @@ export class DurableStore {
         entry_gate_changes:false,radar_threshold_changes:false,real_order_execution:false,paper_trading:true
       }:{automatic_weight_update:false,entry_gate_changes:false,radar_threshold_changes:false,real_order_execution:false,paper_trading:true}
     }:null;
+    const coverageSource=value.scan_coverage&&typeof value.scan_coverage==='object'&&!Array.isArray(value.scan_coverage)
+      ?value.scan_coverage:{};
+    const coverageSymbols=input=>[...new Set((Array.isArray(input)?input:[])
+      .map(item=>String(item||'').trim().toUpperCase())
+      .filter(symbol=>/^[A-Z0-9]{5,30}$/.test(symbol)))].sort().slice(0,2000);
+    const eligibleCoverageSymbols=coverageSymbols(coverageSource.eligible_symbols);
+    const eligibleCoverageSet=new Set(eligibleCoverageSymbols);
+    const attemptedCoverageSymbols=coverageSymbols(coverageSource.attempted_symbols)
+      .filter(symbol=>eligibleCoverageSet.has(symbol));
+    const attemptedCoverageSet=new Set(attemptedCoverageSymbols);
+    const validCoverageSymbols=coverageSymbols(coverageSource.valid_symbols)
+      .filter(symbol=>attemptedCoverageSet.has(symbol));
+    const validCoverageSet=new Set(validCoverageSymbols);
+    const failedCoverageSymbols=coverageSymbols(coverageSource.failed_symbols)
+      .filter(symbol=>attemptedCoverageSet.has(symbol)&&!validCoverageSet.has(symbol));
+    const lastSweepSource=coverageSource.last_completed_sweep&&
+      typeof coverageSource.last_completed_sweep==='object'&&!Array.isArray(coverageSource.last_completed_sweep)
+      ?coverageSource.last_completed_sweep:null;
+    const scanCoverage=eligibleCoverageSymbols.length?{
+      eligible_symbols:eligibleCoverageSymbols,
+      eligible_symbols_count:eligibleCoverageSymbols.length,
+      attempted_symbols:attemptedCoverageSymbols,
+      attempted_symbols_count:attemptedCoverageSymbols.length,
+      valid_symbols:validCoverageSymbols,
+      valid_symbols_count:validCoverageSymbols.length,
+      failed_symbols:failedCoverageSymbols,
+      failed_symbols_count:failedCoverageSymbols.length,
+      remaining_symbols_count:Math.max(0,eligibleCoverageSymbols.length-attemptedCoverageSymbols.length),
+      progress_pct:Number((attemptedCoverageSymbols.length/eligibleCoverageSymbols.length*100).toFixed(1)),
+      completed_sweeps:Math.max(0,Math.trunc(Number(coverageSource.completed_sweeps)||0)),
+      last_completed_sweep:lastSweepSource?{
+        sweep_number:Math.max(0,Math.trunc(Number(lastSweepSource.sweep_number)||0)),
+        completed_at:persistedNumber(lastSweepSource.completed_at),
+        eligible_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.eligible_symbols)||0)),
+        attempted_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.attempted_symbols)||0)),
+        valid_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.valid_symbols)||0)),
+        failed_symbols:Math.max(0,Math.trunc(Number(lastSweepSource.failed_symbols)||0)),
+        eligible_symbols_snapshot:coverageSymbols(lastSweepSource.eligible_symbols_snapshot).slice(0,2000),
+        failed_symbol_sample:coverageSymbols(lastSweepSource.failed_symbol_sample).slice(0,20)
+      }:null,
+      updated_at:persistedNumber(coverageSource.updated_at)
+    }:{
+      eligible_symbols:[],eligible_symbols_count:0,attempted_symbols:[],attempted_symbols_count:0,
+      valid_symbols:[],valid_symbols_count:0,failed_symbols:[],failed_symbols_count:0,
+      remaining_symbols_count:0,progress_pct:0,completed_sweeps:0,last_completed_sweep:null,updated_at:null
+    };
     const safe={
-      version:1,
+      version:2,
+      training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      reset_reason:value.reset_reason==null?null:String(value.reset_reason).slice(0,100),
       updated_at:Date.now(),
       enabled:value.enabled===true,
       scan_count:Math.max(0,Math.trunc(Number(value.scan_count)||0)),
       successful_scans:Math.max(0,Math.trunc(Number(value.successful_scans)||0)),
       scan_cursor:Math.max(0,Math.trunc(Number(value.scan_cursor)||0)),
+      scan_coverage:scanCoverage,
       last_started_at:value.last_started_at!==null&&value.last_started_at!==undefined&&Number.isFinite(Number(value.last_started_at))?Number(value.last_started_at):null,
       last_scan_at:value.last_scan_at!==null&&value.last_scan_at!==undefined&&Number.isFinite(Number(value.last_scan_at))?Number(value.last_scan_at):null,
       last_duration_ms:value.last_duration_ms!==null&&value.last_duration_ms!==undefined&&Number.isFinite(Number(value.last_duration_ms))?Math.max(0,Number(value.last_duration_ms)):null,

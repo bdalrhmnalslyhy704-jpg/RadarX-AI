@@ -182,8 +182,37 @@ test('native FCM registration persists server-side and is reflected by delivery 
     assert.equal(worker.notification_transport.enabled,true);
     assert.equal(worker.notification_transport.active_subscriptions,1);
     assert.equal(worker.notification_transport.fcm_devices,1);
+    assert.equal(worker.notification_transport.physical_device_receipt_count,0);
     assert.equal(worker.notification_transport.physical_device_delivery_verified,false);
     assert.equal(Object.hasOwn(worker.notification_transport,'fcm_token'),false);
+
+    const secondInstallation='11234567-89ab-4cde-8fab-0123456789ab';
+    const secondRegistration=await fetch(base+'/api/push/device/register',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({installation_id:secondInstallation,token:'TEST_FCM_TOKEN_SECOND_'.repeat(12),notifications_enabled:true})});
+    assert.equal(secondRegistration.status,201);
+    const secondDevice=await store.getFcmDevice(secondInstallation);
+    const receivedAt=Date.now();
+    await store.appendNotificationAudit({event:'FCM_DEVICE_RECEIPT',event_class:'TEST_FIXTURE',
+      provider:'fcm',subscription_id:registered.subscription_id,installation_id:installationId,
+      event_id:'TWO_DEVICE_TEST',status:'RECEIVED',server_received_at_ms:receivedAt,
+      paper_trading:true,real_order_execution:false});
+    const oneReceiptResponse=await fetch(base+'/api/pre-move-radar-status');
+    const oneReceiptStatus=await oneReceiptResponse.json();
+    assert.equal(oneReceiptStatus.notification_transport.physical_device_receipt_count,1);
+    assert.equal(oneReceiptStatus.notification_transport.physical_device_delivery_verified,false,
+      'one handset receipt must not verify two-device physical delivery');
+
+    await store.appendNotificationAudit({event:'FCM_DEVICE_RECEIPT',event_class:'TEST_FIXTURE',
+      provider:'fcm',subscription_id:secondDevice.id,installation_id:secondInstallation,
+      event_id:'TWO_DEVICE_TEST',status:'RECEIVED',server_received_at_ms:receivedAt+1,
+      paper_trading:true,real_order_execution:false});
+    const twoReceiptResponse=await fetch(base+'/api/pre-move-radar-status');
+    const twoReceiptStatus=await twoReceiptResponse.json();
+    assert.equal(twoReceiptStatus.notification_transport.fcm_devices,2);
+    assert.equal(twoReceiptStatus.notification_transport.physical_device_receipt_count,2);
+    assert.equal(twoReceiptStatus.notification_transport.physical_device_delivery_verified,true);
+    assert.equal(twoReceiptStatus.notification_transport.physical_device_receipt_window_ms,7*24*60*60*1000);
   }finally{
     server.stopPreMoveWatchWorker?.();
     await new Promise(resolve=>server.close(resolve));

@@ -99,6 +99,25 @@ const POLICY = Object.freeze({
   realOrderExecution: false
 });
 
+export function buildAdaptiveTraderCoveragePlan(eligibleCount, scanLimit) {
+  const eligible=Math.max(0,Math.trunc(Number(eligibleCount)||0));
+  const batch=Math.min(eligible,Math.max(0,Math.trunc(Number(scanLimit)||0)));
+  // Half of each bounded batch is reserved for deterministic round-robin
+  // discovery; the other half remains available to event/liquidity priorities.
+  // This gives a finite sweep bound instead of leaving only 15% for rotation.
+  // Keep roughly half the batch on the fair cursor, while assigning one
+  // explicit slot to the extended-mover audit lane. These rows are audit-only
+  // and never gain entry permission; they must not displace the next rising pair.
+  const rotationSlots=batch?Math.min(batch,Math.max(1,batch>1?Math.ceil(batch/2)-1:1)):0;
+  return {
+    eligible_symbols:eligible,
+    scan_batch_limit:batch,
+    rotation_slots_per_cycle:rotationSlots,
+    priority_slots_per_cycle:Math.max(0,batch-rotationSlots),
+    estimated_full_sweep_cycles:rotationSlots?Math.ceil(eligible/rotationSlots):0
+  };
+}
+
 const finite = value => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
@@ -299,43 +318,38 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
   return sequence.length === steps ? sequence : null;
 }
 
-function firstPassageLabel(baseline, future15m, fastCandles = []) {
+function firstPassageLabel(baseline, future15m) {
   const upLevel = baseline.close * 1.03;
   const downLevel = baseline.close * 0.98;
   const endAt = baseline.closeTime + 4 * 60 * 60 * 1000;
-  const fastWindow = (Array.isArray(fastCandles) ? fastCandles : [])
-    .filter(row => row.openTime >= baseline.closeTime + 1 && row.closeTime <= endAt)
-    .sort((a,b) => a.openTime - b.openTime);
-  const fastComplete = fastWindow.length === 48 && fastWindow.every((row,index) =>
+  // TCN target definition is deliberately fixed to 16 closed 15m candles.
+  // 5m candles remain useful model inputs, but must never change label resolution
+  // across samples in the same chronological training/validation/holdout set.
+  const path = (Array.isArray(future15m) ? future15m : []).slice(0,16);
+  const complete = path.length === 16 && path.every((row,index) =>
     index === 0
       ? row.openTime === baseline.closeTime + 1
-      : row.openTime - fastWindow[index - 1].openTime === 5 * 60 * 1000);
-  const slowWindow = (Array.isArray(future15m) ? future15m : []).slice(0,16);
-  const slowComplete = slowWindow.length === 16 && slowWindow.every((row,index) =>
-    index === 0
-      ? row.openTime === baseline.closeTime + 1
-      : row.openTime - slowWindow[index - 1].openTime === 15 * 60 * 1000);
-  const path = fastComplete ? fastWindow : slowComplete ? slowWindow : [];
-  if (!path.length) return null;
+      : row.openTime - path[index - 1].openTime === 15 * 60 * 1000);
+  if (!complete || path[15].closeTime !== endAt) return null;
   for (const candle of path) {
     const upHit = candle.high >= upLevel;
     const downHit = candle.low <= downLevel;
     if (upHit && downHit) return {
       outcome:'FLAT', hit:'AMBIGUOUS_BOTH_LEVELS_IN_SAME_CANDLE',
-      target_price:null, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:null, target_at:candle.closeTime, path_resolution:'15M'
     };
     if (upHit) return {
       outcome:'UP', hit:'TAKE_PROFIT_REACHED_FIRST',
-      target_price:upLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:upLevel, target_at:candle.closeTime, path_resolution:'15M'
     };
     if (downHit) return {
       outcome:'DOWN', hit:'STOP_LEVEL_REACHED_FIRST',
-      target_price:downLevel, target_at:candle.closeTime, path_resolution:fastComplete?'5M':'15M'
+      target_price:downLevel, target_at:candle.closeTime, path_resolution:'15M'
     };
   }
   return {
     outcome:'FLAT', hit:'NEITHER_LEVEL_REACHED_WITHIN_4H',
-    target_price:null, target_at:endAt, path_resolution:fastComplete?'5M':'15M'
+    target_price:null, target_at:endAt, path_resolution:'15M'
   };
 }
 
@@ -648,7 +662,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const btcPrior=btcByClose.get(priorDay.closeTime);
     const btcDailyReturn=btcCurrent&&btcPrior?pct(btcCurrent.close,btcPrior.close):null;
     // TCN requires 96 prior closed 15m candles for asset-day context plus 24 model steps.
-    // Keep this historical replay slice wide enough to build the same 24x28 tensor as live scans.
+    // Keep this historical replay slice wide enough to build the same 24x29 tensor as live scans.
     const baselineRaw=candles.slice(Math.max(0,index-119),index+1).map(row=>row.raw);
     const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-1000).map(row=>row.raw);
     const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
@@ -665,7 +679,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     });
     if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
     const move=(future.close/baseline.close-1)*100;
-    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle),fastCandles);
+    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
     if(!passage)continue;
     const outcome=passage.outcome;
     const features={
@@ -682,7 +696,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,
@@ -707,7 +721,7 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
   const out=[];
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     if(String(sample?.symbol||'').trim().toUpperCase()!==cleanSymbol||sample?.closed_candle_baseline!==true||
-       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
+       sample?.training_eligible!==true||sample?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
        sample?.outcome)continue;
     const at=finite(sample?.at),baselinePrice=finite(sample?.price);
     if(at===null||!(baselinePrice>0)||Number(now)-at<4*60*60*1000)continue;
@@ -716,12 +730,12 @@ export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fast
     if(Math.abs(baseline.close-baselinePrice)>Math.max(1e-12,Math.abs(baseline.close)*1e-8))continue;
     const move=(future.close/baseline.close-1)*100;
     const startIndex=candles.findIndex(candle=>candle.closeTime===baseline.closeTime);
-    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17),fastCandles);
+    const passage=firstPassageLabel(baseline,candles.slice(startIndex+1,startIndex+17));
     if(!passage)continue;
     out.push({sample_id:String(sample.id||''),symbol:cleanSymbol,at:baseline.closeTime,
       baseline_price:baseline.close,mark_price:future.close,
       outcome:passage.outcome,first_passage:passage,
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),
       close_return_pct:Number(move.toFixed(3)),close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime,
@@ -961,9 +975,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     retrySet.add(clean);
     selectedBySymbol.set(clean,{...row,selection_lane:'RETRY'});
   }
-  const rotationReserve = selectedCount
-    ? Math.min(selectedCount,Math.max(1,Math.ceil(selectedCount*0.15)))
-    : 0;
+  const coveragePlan=buildAdaptiveTraderCoveragePlan(eligible.length,selectedCount);
+  const rotationReserve=coveragePlan.rotation_slots_per_cycle;
   const priorityBudget = Math.max(0,selectedCount-rotationReserve);
   const addLane = (rows,quota,lane) => {
     let added=0;
@@ -1036,10 +1049,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return counts;
   },{});
 
-  // Keep 5m REST history bounded to two pages for every selected symbol.
-  // TCN V6 carries an explicit micro-availability mask and learns from valid
-  // closed 15m/BTC history when older 5m bars are absent. Re-fetching 21 days of
-  // 5m bars added dozens of REST calls and repeatedly exhausted the live budget.
+  // Keep one recent 5m page per selected symbol. This is enough for short-term
+  // flow diagnostics; the explicit micro-availability mask keeps older samples
+  // valid when 5m history is absent. The broader 15m/BTC pages remain the primary
+  // historical training source, avoiding one extra REST request per pair.
   const pendingBySymbol=new Map();
   for(const sample of (Array.isArray(pendingSamples)?pendingSamples:[])){
     const symbol=String(sample?.symbol||'').trim().toUpperCase();
@@ -1047,12 +1060,18 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     if(!pendingBySymbol.has(symbol))pendingBySymbol.set(symbol,[]);
     pendingBySymbol.get(symbol).push(sample);
   }
-  const analyzed = await mapLimit(selected, 5, async ticker => {
-    const [first15m,fastLatest] = await Promise.all([
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '15m', limit: 1000 }),
-      rest.request('/api/v3/klines', { symbol: ticker.symbol, interval: '5m', limit: 1000 })
-        .then(value=>({value,error:null})).catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}))
-    ]);
+  const analyzed = await mapLimit(selected, 7, async ticker => {
+    // Start the optional 5m request concurrently, but do not await it before
+    // extending the primary 15m history. This prevents a slow micro-window
+    // response from consuming the remaining shared scan deadline needed for
+    // the older 15m page that feeds historical model training.
+    const fastLatestPromise=rest.request('/api/v3/klines', {
+      symbol:ticker.symbol,interval:'5m',limit:1000
+    }).then(value=>({value,error:null}))
+      .catch(error=>({value:null,error:String(error?.message??error).slice(0,120)}));
+    const first15m=await rest.request('/api/v3/klines', {
+      symbol:ticker.symbol,interval:'15m',limit:1000
+    });
     let result=first15m;
     if(Array.isArray(first15m?.data)&&first15m.data.length){
       const earliestOpen=finite(first15m.data[0]?.[0]);
@@ -1069,42 +1088,16 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
         }
       }
     }
-    let fastResult=fastLatest;
-    if(fastLatest.value&&Array.isArray(fastLatest.value.data)&&fastLatest.value.data.length){
-      const latestRows=fastLatest.value.data;
-      let allRows=latestRows.slice();
-      let pagesFetched=1;
-      let nextEndTime=Number(latestRows[0]?.[0])-1;
-      let backfillError=null;
-      const maxPages=2;
-      while(Number.isFinite(nextEndTime)&&nextEndTime>0&&pagesFetched<maxPages){
-        try{
-          const older=await rest.request('/api/v3/klines',{
-            symbol:ticker.symbol,interval:'5m',limit:1000,endTime:nextEndTime
-          });
-          const olderRows=Array.isArray(older?.data)?older.data:[];
-          const olderEarliest=Number(olderRows[0]?.[0]);
-          const currentEarliest=Number(allRows[0]?.[0]);
-          if(!olderRows.length||!Number.isFinite(olderEarliest)||
-             !Number.isFinite(currentEarliest)||olderEarliest>=currentEarliest)break;
-          const strictOlder=olderRows.filter(row=>Number(row?.[0])<currentEarliest);
-          if(!strictOlder.length)break;
-          allRows=[...strictOlder,...allRows];
-          pagesFetched++;
-          nextEndTime=olderEarliest-1;
-          if(olderRows.length<1000)break;
-        }catch(error){
-          backfillError=String(error?.message??error).slice(0,120);
-          break;
-        }
-      }
-      fastResult={value:{
-        ...fastLatest.value,data:allRows,
-        historical_pages_fetched:pagesFetched,
-        historical_window_candles:allRows.length,
-        historical_backfill_error:backfillError
-      },error:null};
-    }
+    const fastLatest=await fastLatestPromise;
+    const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
+      ?{value:{
+          ...fastLatest.value,
+          data:fastLatest.value.data.slice(),
+          historical_pages_fetched:1,
+          historical_window_candles:fastLatest.value.data.length,
+          historical_backfill_error:null
+        },error:null}
+      :fastLatest;
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:118
@@ -1119,7 +1112,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
       asset_5m_candles:Array.isArray(fastResult.value?.data)?fastResult.value.data.length:0,
-      asset_5m_backfill_error:String(fastResult.value?.historical_backfill_error||'')
+      asset_5m_backfill_error:String(fastResult.value?.historical_backfill_error||fastResult.error||'')
     }};
   });
   const historicalTrainingSamples=analyzed.flatMap(entry=>Array.isArray(entry?.historicalSamples)?entry.historicalSamples:[]);
@@ -1210,6 +1203,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     as_of: new Date(Number(now)).toISOString(),
     universe: {
       quote: 'USDT',
+      eligible_symbols: eligible.map(row=>String(row.symbol||'').toUpperCase()),
       eligible_spot_symbols: eligible.length,
       analyzed_symbols: candidates.length,
       valid_symbols: validCount,
@@ -1231,6 +1225,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       requested_limit: safeLimit,
       scan_offset: scanOffset,
       scan_advance_count: rotationAdvanceCount,
+      rotation_slots_per_cycle:coveragePlan.rotation_slots_per_cycle,
+      priority_slots_per_cycle:coveragePlan.priority_slots_per_cycle,
+      estimated_full_sweep_cycles:coveragePlan.estimated_full_sweep_cycles,
       scan_success_count: analyzed.filter(row=>row?.candidate&&!row.error).length,
       fetch_failed_symbols: fetchFailedSymbols.length,
       retry_symbols_pending: fetchFailedSymbols,
@@ -1245,7 +1242,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       order_book_snapshot_limit:4,
       activity_acceleration_movers_available:activityAccelerationMovers.length,
       activity_acceleration_movers_scanned:candidates.filter(row=>row.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length,
-      selection_strategy: 'MOVER_AWARE_FLOW_ACCELERATION_ROTATION_V4',
+      selection_strategy: 'MOVER_AWARE_FLOW_ACCELERATION_FAIR_ROTATION_V5',
       selection_lane_counts: selectionLaneCounts,
       excluded_leveraged_tokens: true
     },

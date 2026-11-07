@@ -30,10 +30,15 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$GITHUB_REF_NAME&per_page=100" > "$RUNNER_TEMP/runs.json"
-          mapfile -t STALE < <(jq -r --arg current "$GITHUB_RUN_ID" '
+          mapfile -t STALE < <(jq -r --arg current "$GITHUB_RUN_ID" --arg sha "$GITHUB_SHA" '
             .workflow_runs[]
             | select(.status == "queued" or .status == "in_progress")
             | select((.id | tostring) != $current)
+            # Keep acceptance runs for this exact source commit alive. The
+            # signed-candidate workflow and live-acceptance workflows start in
+            # parallel on push; cancelling same-SHA runs prevents the release
+            # gate from ever publishing a successful DHDTech status.
+            | select(.head_sha != $sha)
             | select(
                 .path == ".github/workflows/pre-move-radar-acceptance.yml" or
                 .path == ".github/workflows/dhdtech-adaptive-trader-acceptance.yml" or

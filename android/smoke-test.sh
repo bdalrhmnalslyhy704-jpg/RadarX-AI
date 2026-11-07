@@ -64,7 +64,7 @@ wait_for_activity_manager() {
   PHASE="wait for Android ActivityManager service"
   local service_status=""
   for attempt in $(seq 1 45); do
-    service_status="$(timeout 8s adb shell service check activity 2>/dev/null | tr -d '\\r' || true)"
+    service_status="$(timeout 8s adb shell service check activity 2>/dev/null | tr -d '\r' || true)"
     if printf '%s' "$service_status" | grep -Eiq 'activity: *found|found'; then
       if timeout 8s adb shell dumpsys activity activities >/dev/null 2>&1; then
         echo "Android ActivityManager is ready (probe $attempt/45)."
@@ -304,7 +304,7 @@ install_apk_with_recovery() {
       timeout 8s adb start-server >/dev/null 2>&1 || true
       timeout 30s adb wait-for-device
       for probe in $(seq 1 6); do
-        if timeout 8s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\\r' | grep -Fxq '1'; then
+        if timeout 8s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -Fxq '1'; then
           break
         fi
         sleep 3
@@ -329,11 +329,17 @@ head -c 8 "${RUNNER_TEMP}/radarx-online.png" | od -An -t x1 | tr -d ' ' | grep -
 
 # Background monitoring is continuous by default; the non-exported service must remain registered.
 assert_background_service_declared
-test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
+ONLINE_BACKGROUND_PID="$(background_service_pid)"
+if [[ -z "${ONLINE_BACKGROUND_PID}" ]]; then
+  echo "::error::The isolated RadarX background service has no live process after online startup"
+  exit 1
+fi
+echo "RADARX_BACKGROUND_SERVICE_ONLINE_PID=${ONLINE_BACKGROUND_PID}"
 
-# Offline: remove network access while keeping the already-running Activity and
-# foreground monitor alive. Force-stopping/relaunching here would test a second cold
-# service-process bootstrap under the software-only emulator, not offline continuity.
+# Offline: validate the independent foreground-service process, not the main UI
+# process. Android may reclaim an activity in CACHED_RECENT while a distinct
+# foreground-service process remains alive; that is normal and must not be mistaken
+# for loss of background monitoring. The service PID must remain unchanged here.
 PHASE="simulate offline state"
 timeout 10s adb shell cmd connectivity airplane-mode enable >/dev/null 2>&1 || true
 timeout 10s adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
@@ -341,16 +347,59 @@ timeout 10s adb shell svc wifi disable >/dev/null 2>&1 || true
 timeout 10s adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
 sleep 3
 
-PHASE="verify offline UI and continuous background service"
-OFFLINE_ACTIVITY_STATE="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
-if ! printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null; then
-  echo "::error::RadarX MainActivity did not remain resumed after network loss"
-  printf '%s\\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
+PHASE="verify offline foreground service continuity"
+OFFLINE_BACKGROUND_PID="$(background_service_pid)"
+if [[ -z "${OFFLINE_BACKGROUND_PID}" || "${OFFLINE_BACKGROUND_PID}" != "${ONLINE_BACKGROUND_PID}" ]]; then
+  echo "::error::RadarX background service did not remain in the same live process during network loss"
+  echo "ONLINE_BACKGROUND_PID=${ONLINE_BACKGROUND_PID} OFFLINE_BACKGROUND_PID=${OFFLINE_BACKGROUND_PID:-NONE}"
+  timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 120 || true
   exit 1
 fi
-test -n "$(timeout 12s adb shell pidof com.radarx.app | tr -d '\\r' || true)"
 assert_background_service_declared
 
+# A cached UI process may be reclaimed independently of the isolated foreground
+# service. Reopen only the Activity (never force-stop the package) so the offline
+# screen can be checked while preserving the same background-service process.
+OFFLINE_ACTIVITY_STATE="$(timeout 12s adb shell dumpsys activity activities 2>/dev/null || true)"
+if ! printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null; then
+  echo "Android reclaimed or backgrounded the UI process; reopening MainActivity without stopping the monitor."
+  PHASE="reopen offline UI without stopping background service"
+  OFFLINE_APP_LOG_FILE="${RUNNER_TEMP:-/tmp}/radarx-offline-ui-logcat.txt"
+  : > "${OFFLINE_APP_LOG_FILE}"
+  adb logcat -v brief -s RadarXSmoke:I RadarXWeb:I AndroidRuntime:E ActivityTaskManager:E '*:S' >> "${OFFLINE_APP_LOG_FILE}" 2>&1 &
+  OFFLINE_APP_LOGCAT_PID=$!
+  sleep 1
+  timeout 45s adb shell am start -n com.radarx.app/.MainActivity
+  offline_ui_ready=0
+  for attempt in $(seq 1 45); do
+    offline_logs="$(cat "${OFFLINE_APP_LOG_FILE}" 2>/dev/null || true)"
+    offline_pid="$(timeout 10s adb shell pidof com.radarx.app 2>/dev/null | tr -d '\r' || true)"
+    OFFLINE_ACTIVITY_STATE="$(timeout 10s adb shell dumpsys activity activities 2>/dev/null || true)"
+    if [[ -n "${offline_pid}" ]] && \
+       printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | grep -E '(mResumedActivity|ResumedActivity).*com[.]radarx[.]app/[.]MainActivity' >/dev/null && \
+       printf '%s\n' "${offline_logs}" | grep -F 'UI_READY' >/dev/null; then
+      offline_ui_ready=1
+      break
+    fi
+    sleep 2
+  done
+  if [[ "${offline_ui_ready}" -ne 1 ]]; then
+    echo "::error::MainActivity could not be reopened in offline mode without stopping background monitoring"
+    printf '%s\n' "${OFFLINE_ACTIVITY_STATE}" | tail -n 100
+    tail -n 120 "${OFFLINE_APP_LOG_FILE}" || true
+    exit 1
+  fi
+  timeout 5s kill "${OFFLINE_APP_LOGCAT_PID}" >/dev/null 2>&1 || true
+  wait "${OFFLINE_APP_LOGCAT_PID}" 2>/dev/null || true
+  OFFLINE_BACKGROUND_PID="$(background_service_pid)"
+  if [[ "${OFFLINE_BACKGROUND_PID}" != "${ONLINE_BACKGROUND_PID}" ]]; then
+    echo "::error::Reopening the offline UI changed or restarted the background monitor process"
+    echo "ONLINE_BACKGROUND_PID=${ONLINE_BACKGROUND_PID} OFFLINE_BACKGROUND_PID=${OFFLINE_BACKGROUND_PID:-NONE}"
+    exit 1
+  fi
+fi
+
+assert_background_service_declared
 capture_screenshot offline "${RUNNER_TEMP}/radarx-offline.png"
 test -s "${RUNNER_TEMP}/radarx-offline.png"
 head -c 8 "${RUNNER_TEMP}/radarx-offline.png" | od -An -t x1 | tr -d ' ' | grep -Fq '89504e470d0a1a0a'
@@ -536,18 +585,23 @@ for attempt in $(seq 1 120); do
     stop_action_seen=0
     current_service_pid="${old_service_pid}"
     service_registered=1
-    for stop_attempt in $(seq 1 20); do
+    # Stop is intentionally queued behind the current serialized scan so the
+    # durable alert cursor can finish committing. A scan can consume up to
+    # 30s for the unified feed, 12s for Falcon Eye history, and 12s for Pre-Move.
+    # Allow 90s for that bounded in-flight work plus the service teardown.
+    stop_started_at=$SECONDS
+    while (( SECONDS - stop_started_at < 90 )); do
       current_service_pid="$(background_service_pid)"
       logs="$(replay_logs)"
-      if printf '%s\\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
+      if printf '%s\n' "${logs}" | grep -F 'TEST_STOP_BACKGROUND_MONITOR_REQUEST' >/dev/null; then
         stop_request_seen=1
       fi
-      if printf '%s\\n' "${logs}" | grep -F 'BACKGROUND_STOP_ACTION_RECEIVED' >/dev/null; then
+      if printf '%s\n' "${logs}" | grep -F 'BACKGROUND_STOP_ACTION_RECEIVED' >/dev/null; then
         stop_action_seen=1
       fi
       service_state="$(timeout 4s adb shell dumpsys activity services com.radarx.app 2>/dev/null || true)"
       service_registered=1
-      if ! printf '%s\\n' "${service_state}" | grep -F 'RadarXBackgroundMonitorService' >/dev/null; then
+      if ! printf '%s\n' "${service_state}" | grep -F 'RadarXBackgroundMonitorService' >/dev/null; then
         service_registered=0
       fi
       # Android may keep an empty process cached after its ServiceRecord is removed.
@@ -559,8 +613,8 @@ for attempt in $(seq 1 120); do
       sleep 1
     done
     if [[ "${service_stopped}" -ne 1 ]]; then
-      echo "::error::Background service remained registered after MainActivity stop intent"
-      echo "STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
+      echo "::error::Background service remained registered after the 90s graceful-stop deadline"
+      echo "STOP_WAIT_SECONDS=$((SECONDS-stop_started_at)) STOP_REQUEST_SEEN=${stop_request_seen} STOP_ACTION_SEEN=${stop_action_seen} OLD_PID=${old_service_pid} CURRENT_PID=${current_service_pid:-NONE} SERVICE_REGISTERED=${service_registered:-UNKNOWN}"
       timeout 10s adb shell dumpsys activity services com.radarx.app 2>&1 | tail -n 100 || true
       exit 1
     fi

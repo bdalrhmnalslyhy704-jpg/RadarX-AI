@@ -73,7 +73,12 @@ function createServerPaperPortfolio(){
 function emptyState(){
   const paperPortfolio=createServerPaperPortfolio();
   return {
-    version:1,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
+    version:2,training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+    reset_reason:null,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
+    scan_coverage:{
+      eligible_symbols:[],attempted_symbols:[],valid_symbols:[],failed_symbols:[],
+      completed_sweeps:0,last_completed_sweep:null,updated_at:null
+    },
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
@@ -115,9 +120,13 @@ export class AdaptiveTraderWorker{
     if(this.enabled)return this.snapshot();
     if(this.starting)return this.starting;
     this.starting=(async()=>{
+      let discardedLegacyState=false;
       try{
         const saved=await this.store.getAdaptiveTraderState();
-        if(saved&&saved.version===1&&Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
+        discardedLegacyState=Boolean(saved&&!(saved.version===2&&
+          saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'));
+        if(saved&&saved.version===2&&saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'&&
+           Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
           this.state={
             ...emptyState(),...saved,
             scan_cursor:Number.isFinite(Number(saved.scan_cursor))&&Number(saved.scan_cursor)>=0
@@ -168,6 +177,14 @@ export class AdaptiveTraderWorker{
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
       }
+      // Build 224 neural history before V2 mixed first-passage labels and the
+      // old close-direction split are not reused. A schema/dataset mismatch
+      // intentionally leaves the initialized empty state in place; the first
+      // fresh Binance closed-candle scan rebuilds both datasets from source.
+      if(discardedLegacyState){
+        this.state.reset_reason='LEGACY_NEURAL_TRAINING_DATA_PURGED';
+        this.logger.info?.('[ADAPTIVE_TRADER_LEGACY_NEURAL_MEMORY_PURGED] fresh closed-candle dataset required');
+      }
       this.enabled=true;this.state.enabled=true;this.state.last_error=null;
       this.interval=setInterval(()=>{void this.runOnce();},this.intervalMs);
       this.interval.unref?.();
@@ -201,7 +218,7 @@ export class AdaptiveTraderWorker{
     // TCN-only first-passage dataset: +3% before -2% within four hours.
     return this.state.samples.filter(row=>row&&row.training_eligible===true&&
       (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1');
+      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
   }
 
   cognitiveTrainingSamples(){
@@ -210,6 +227,60 @@ export class AdaptiveTraderWorker{
       row&&row.training_eligible===true&&
       (row.historical_baseline===true||row.closed_candle_baseline===true)&&
       row.target_definition==='LEGACY_4H_CLOSE_RETURN');
+  }
+
+  updateScanCoverage(snapshot,now=Date.now()){
+    const raw=Array.isArray(snapshot?.universe?.eligible_symbols)
+      ?snapshot.universe.eligible_symbols:[];
+    const eligibleSymbols=[...new Set(raw.map(cleanSymbol).filter(Boolean))].sort();
+    if(!eligibleSymbols.length)return this.state.scan_coverage||null;
+    const eligibleSet=new Set(eligibleSymbols);
+    const previous=this.state.scan_coverage||{};
+    const intersect=values=>new Set((Array.isArray(values)?values:[])
+      .map(cleanSymbol).filter(symbol=>eligibleSet.has(symbol)));
+    const attempted=intersect(previous.attempted_symbols);
+    const valid=intersect(previous.valid_symbols);
+    const failed=intersect(previous.failed_symbols);
+    for(const row of (Array.isArray(snapshot?.candidates)?snapshot.candidates:[])){
+      const symbol=cleanSymbol(row?.symbol);
+      if(!eligibleSet.has(symbol))continue;
+      attempted.add(symbol);
+      if(row?.data_valid===true&&row?.data_stale!==true){
+        valid.add(symbol);failed.delete(symbol);
+      }else{
+        valid.delete(symbol);failed.add(symbol);
+      }
+    }
+    let completedSweeps=Math.max(0,Math.trunc(Number(previous.completed_sweeps)||0));
+    let lastCompletedSweep=previous.last_completed_sweep||null;
+    if(attempted.size===eligibleSet.size){
+      completedSweeps++;
+      lastCompletedSweep={
+        sweep_number:completedSweeps,completed_at:Number(now),
+        eligible_symbols:eligibleSet.size,attempted_symbols:attempted.size,
+        valid_symbols:valid.size,failed_symbols:failed.size,
+        eligible_symbols_snapshot:eligibleSymbols,
+        failed_symbol_sample:[...failed].sort().slice(0,20)
+      };
+      attempted.clear();valid.clear();failed.clear();
+    }
+    const attemptedCount=attempted.size;
+    this.state.scan_coverage={
+      eligible_symbols:eligibleSymbols,
+      eligible_symbols_count:eligibleSet.size,
+      attempted_symbols:[...attempted].sort(),
+      attempted_symbols_count:attemptedCount,
+      valid_symbols:[...valid].sort(),
+      valid_symbols_count:valid.size,
+      failed_symbols:[...failed].sort(),
+      failed_symbols_count:failed.size,
+      remaining_symbols_count:Math.max(0,eligibleSet.size-attemptedCount),
+      progress_pct:Number((attemptedCount/eligibleSet.size*100).toFixed(1)),
+      completed_sweeps:completedSweeps,
+      last_completed_sweep:lastCompletedSweep,
+      updated_at:Number(now)
+    };
+    return this.state.scan_coverage;
   }
 
   async runOnce({limit:requestedLimit}={}){
@@ -253,6 +324,7 @@ export class AdaptiveTraderWorker{
       if(eligibleCount>0&&Number.isFinite(scanOffset)&&Number.isFinite(advanceCount)){
         this.state.scan_cursor=(Math.max(0,Math.trunc(scanOffset))+Math.max(0,Math.trunc(advanceCount)))%eligibleCount;
       }
+      this.updateScanCoverage(snapshot,now);
       this.activeScanStage='UPDATE_LEARNING_MEMORY';
       this.resolveSamples(snapshot,now);
       this.collectPriceHistory(snapshot,now);
@@ -414,7 +486,9 @@ export class AdaptiveTraderWorker{
       selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
         String(profile.model_selection?.selected_model||'UNVALIDATED'),
       target_definition:profile.temporal_network?.probability_ready===true
-        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1':'LEGACY_4H_CLOSE_RETURN',
+        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'
+        :String(profile.model_selection?.selected_model||'')==='NEURAL_GLOBAL'
+          ?'UP_CLOSE_RETURN_BINARY_V1':'LEGACY_4H_CLOSE_RETURN',
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,
@@ -612,7 +686,8 @@ recordServerPaperPortfolio(snapshot,now){
          baselinePrice===null||Math.abs(baselinePrice-Number(sample.price))>Math.max(1e-12,Math.abs(baselinePrice)*1e-8)||
          markPrice===null||resolvedAt===null||resolvedAt>Number(now)+5000||
          resolvedAt-at!==SAMPLE_HORIZON_MS||label?.horizon_ms!==SAMPLE_HORIZON_MS||
-         label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1'||
+         label?.target_definition!=='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'||
+         label?.first_passage?.path_resolution!=='15M'||
          label?.outcome_source!=='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'||
          !['UP','DOWN','FLAT'].includes(label?.outcome)||move===null||finite(label?.return_pct)===null)continue;
       sample.outcome=label.outcome;sample.mark_price=markPrice;
@@ -621,7 +696,7 @@ recordServerPaperPortfolio(snapshot,now){
       sample.close_return_source=closeReturnPct===null?null:'FOUR_HOUR_TERMINAL_CLOSE';
       sample.resolved_at=resolvedAt;sample.horizon_ms=SAMPLE_HORIZON_MS;
       sample.target_definition=label.target_definition;
-      sample.first_passage=label.first_passage||null;
+      sample.first_passage=label.first_passage?{...label.first_passage,outcome:label.outcome}:null;
       sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
       const v5Sample=v5SampleById.get(String(label?.sample_id||''));
@@ -712,7 +787,7 @@ recordServerPaperPortfolio(snapshot,now){
           quote_volume_24h:quoteVolume,change_24h_pct:finite(row?.change_24h_pct),
           selection_lane:candidate.selection_lane||null,features:{...(candidate.features||{})},
           temporal_sequence:Array.isArray(candidate.temporal_sequence)?candidate.temporal_sequence:null,
-          target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_V1',
+          target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
           outcome:null,mark_price:null,return_pct:null,outcome_source:null
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
@@ -752,7 +827,10 @@ recordServerPaperPortfolio(snapshot,now){
       historical_input_samples:historicalRows.length,
       new_historical_samples:newHistoricalSamples,
       historical_sequence_backfills:historicalSequenceBackfills,
-      temporal_sequence_samples:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)).length,
+      temporal_sequence_samples:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
+        row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome).length,
+      temporal_sequence_non_15m_labels:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
+        row.outcome&&row.first_passage?.path_resolution!=='15M').length,
       temporal_sequence_missing_samples:this.trainingSamples().filter(row=>!hasValidTemporalSequence(row.temporal_sequence)).length,
       new_historical_v5_close_samples:newHistoricalV5Samples,
       historical_rejected:historicalRejected,
@@ -840,7 +918,7 @@ recordServerPaperPortfolio(snapshot,now){
         closed_candles_only:true,
         engine:'ADAPTIVE_TRADER_SIDECAR_V1'
       },
-      universe:{...(snapshot.universe||{})},
+      universe:{...(snapshot.universe||{}),scan_coverage:this.state.scan_coverage||null},
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         ranking_ready:this.state.cognitive_profile?.ranking_ready===true,
@@ -937,6 +1015,8 @@ recordServerPaperPortfolio(snapshot,now){
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       cognitive_model_contract:COGNITIVE_MODEL_BUILD_CONTRACT,
+      training_dataset_version:this.state.training_dataset_version||'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      training_state_reset_reason:this.state.reset_reason||null,
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,
       active_scan_deadline_at:this.activeScanDeadlineAt?new Date(this.activeScanDeadlineAt).toISOString():null,
@@ -944,6 +1024,7 @@ recordServerPaperPortfolio(snapshot,now){
       scan_timeout_ms:this.scanTimeoutMs,persist_timeout_ms:this.persistTimeoutMs,
       last_stage_timeout:this.lastStageTimeout,
       interval_ms:this.intervalMs,scan_limit:this.scanLimit,scan_cursor:Number(this.state.scan_cursor)||0,
+      scan_coverage:this.state.scan_coverage||null,
       scan_count:Number(this.state.scan_count)||0,
       successful_scans:Number(this.state.successful_scans)||0,
       last_started_at:this.state.last_started_at,

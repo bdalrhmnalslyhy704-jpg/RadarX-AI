@@ -78,6 +78,7 @@ public final class RadarXBackgroundMonitorService extends Service {
     private static final long HEARTBEAT_STALE_MS = 5 * 60_000L;
 
     private ScheduledExecutorService executor;
+    private volatile boolean scanScheduled;
     private volatile boolean stopping;
     private volatile boolean foregroundStarted;
     private volatile boolean loggedFirstScan;
@@ -163,20 +164,28 @@ public final class RadarXBackgroundMonitorService extends Service {
         return START_STICKY;
     }
 
-    private void scheduleScan() {
-        if (executor == null || executor.isShutdown()) return;
-        executor.shutdownNow();
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "RadarX-Background");
-            t.setDaemon(true);
-            return t;
-        });
+    private synchronized void scheduleScan() {
+        if (executor == null || executor.isShutdown()) {
+            executor = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "RadarX-Background");
+                t.setDaemon(true);
+                return t;
+            });
+            scanScheduled = false;
+        }
+        // Repeated ACTION_START/onResume calls must not tear down an in-flight
+        // scan: it may be inside the synchronous durable-cursor checkpoint.
+        if (scanScheduled) {
+            Log.d(TAG, "BACKGROUND_SCAN_ALREADY_SCHEDULED");
+            return;
+        }
         long scanInterval = SCAN_MS;
         if (isDebugBuild()) {
             long requestedInterval = prefs().getLong("radarx_test_scan_interval_ms", 0L);
             if (requestedInterval >= 500L && requestedInterval <= 5000L) scanInterval = requestedInterval;
         }
         executor.scheduleWithFixedDelay(this::scanOnceSafe, 0L, scanInterval, TimeUnit.MILLISECONDS);
+        scanScheduled = true;
     }
 
     private boolean isDebugBuild() {
@@ -560,7 +569,11 @@ public final class RadarXBackgroundMonitorService extends Service {
                 !("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(alert.optString("watch_notification_tier", "")) ||
                   "EARLY_FLOW_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
                   "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
-                  "ACCUMULATION_PREP_MONITOR".equals(alert.optString("watch_notification_tier", ""))) ||
+                  "ACCUMULATION_PREP_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "COMPRESSED_BUYER_ABSORPTION_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "PARTICIPATION_SURGE_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "STRONG_BUYER_ABSORPTION_MONITOR".equals(alert.optString("watch_notification_tier", "")) ||
+                  "RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR".equals(alert.optString("watch_notification_tier", ""))) ||
                 !"PRE_MOVE_RADAR_WATCH_ONLY".equalsIgnoreCase(alert.optString("event", "")) ||
                 !"WATCH_EARLY".equalsIgnoreCase(alert.optString("potential_label", "")) ||
                 !"SPOT".equalsIgnoreCase(alert.optString("market", "")) ||
@@ -571,8 +584,25 @@ public final class RadarXBackgroundMonitorService extends Service {
 
         JSONObject status = alert.optJSONObject("data_status");
         JSONObject context = alert.optJSONObject("pre_move_context");
+        String tier = alert.optString("watch_notification_tier", "");
+        boolean lowVolumeTier =
+                "PARTICIPATION_SURGE_MONITOR".equals(tier) ||
+                "STRONG_BUYER_ABSORPTION_MONITOR".equals(tier);
+        double quoteVolume = alert.optDouble("quote_volume_24h", Double.NaN);
+        double qualityForLowVolume = alert.optDouble("data_quality", Double.NaN);
+        double liquidityForLowVolume = alert.optDouble("liquidity_quality", Double.NaN);
+        boolean lowVolumeWatchEvidence = lowVolumeTier &&
+                alert.optBoolean("low_volume_watch_only", false) &&
+                status != null && status.optBoolean("candle_data_valid", false) &&
+                !status.optBoolean("volume_gate_pass", true) &&
+                !status.optBoolean("data_stale", true) && !status.optBoolean("stale", true) &&
+                !status.optBoolean("future_data_detected", true) &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 300_000.0 && quoteVolume < 750_000.0 &&
+                Double.isFinite(qualityForLowVolume) && qualityForLowVolume >= 85.0 &&
+                Double.isFinite(liquidityForLowVolume) && liquidityForLowVolume >= 65.0;
         if (status == null || context == null ||
-                !status.optBoolean("data_valid", false) || status.optBoolean("data_stale", true) ||
+                (!status.optBoolean("data_valid", false) && !lowVolumeWatchEvidence) ||
+                status.optBoolean("data_stale", true) ||
                 status.optBoolean("stale", true) || status.optBoolean("future_data_detected", true) ||
                 !"Binance Public REST".equals(status.optString("source", "")) ||
                 !"WATCH_EARLY".equalsIgnoreCase(context.optString("stage", "")) ||
@@ -593,8 +623,11 @@ public final class RadarXBackgroundMonitorService extends Service {
         double buyDelta = context.optDouble("taker_buy_acceleration", Double.NaN);
         double closeLocation = context.optDouble("mean_close_location", Double.NaN);
         double relative = context.optDouble("relative_strength_vs_market_pct", Double.NaN);
+        double relativeBtc = context.optDouble("relative_strength_vs_btc_pct", relative);
         JSONObject components = context.optJSONObject("components");
         double structure = components == null ? Double.NaN : components.optDouble("structure", Double.NaN);
+        double squeeze = components == null ? Double.NaN : components.optDouble("squeeze", Double.NaN);
+        double buyingPressure = components == null ? Double.NaN : components.optDouble("buying_pressure", Double.NaN);
         long closeAt = alert.optLong("detected_candle_close_time", status.optLong("close_time", 0L));
 
         int participation = 0;
@@ -609,10 +642,13 @@ public final class RadarXBackgroundMonitorService extends Service {
         // pass with structure 50-59 only when live participation, volume/trade
         // acceleration, relative strength, data quality and liquidity all agree.
         // It remains a local monitor notification, never an entry signal.
-        String tier = alert.optString("watch_notification_tier", "");
         boolean isTickerActivityMonitor = "TICKER_ACTIVITY_ACCELERATION_MONITOR".equals(tier);
         boolean isEarlyFlowMonitor = "EARLY_FLOW_MONITOR".equals(tier);
         boolean isAccumulationPrepMonitor = "ACCUMULATION_PREP_MONITOR".equals(tier);
+        boolean isCompressedBuyerMonitor = "COMPRESSED_BUYER_ABSORPTION_MONITOR".equals(tier);
+        boolean isParticipationSurgeMonitor = "PARTICIPATION_SURGE_MONITOR".equals(tier);
+        boolean isStrongBuyerAbsorptionMonitor = "STRONG_BUYER_ABSORPTION_MONITOR".equals(tier);
+        boolean isRelativeStrengthBuyerMonitor = "RELATIVE_STRENGTH_BUYER_ABSORPTION_MONITOR".equals(tier);
         JSONObject tickerEvidence = alert.optJSONObject("ticker_activity_watch_evidence");
         double tickerScore = tickerEvidence == null ? Double.NaN : tickerEvidence.optDouble("score", Double.NaN);
         double tickerVolumeRatio = tickerEvidence == null ? Double.NaN : tickerEvidence.optDouble("volume_acceleration_ratio", Double.NaN);
@@ -633,6 +669,7 @@ public final class RadarXBackgroundMonitorService extends Service {
                 Double.isFinite(tickerBaselineAge) && tickerBaselineAge >= 0.0 && tickerBaselineAge <= 5 * 60_000L &&
                 Double.isFinite(quality) && quality >= 85.0 &&
                 Double.isFinite(liquidity) && liquidity >= 75.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
                 Double.isFinite(daily) && daily >= -5.0 && daily <= 4.5 &&
                 Double.isFinite(session) && session >= -1.25 && session <= 4.5 &&
                 Double.isFinite(hour) && hour >= -0.75 && hour <= 2.5 &&
@@ -679,36 +716,169 @@ public final class RadarXBackgroundMonitorService extends Service {
                 Double.isFinite(relative) && relative >= 0.75 &&
                 Double.isFinite(quality) && quality >= 95.0 &&
                 Double.isFinite(liquidity) && liquidity >= 90.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
                 Double.isFinite(structure) && structure >= 60.0 && participation >= 4;
+        int compressedBuyerChecks = 0;
+        if (Double.isFinite(squeeze) && squeeze >= 45.0) compressedBuyerChecks++;
+        if (Double.isFinite(structure) && structure >= 60.0) compressedBuyerChecks++;
+        if (Double.isFinite(buyingPressure) && buyingPressure >= 90.0) compressedBuyerChecks++;
+        if (Double.isFinite(buy) && buy >= 0.65) compressedBuyerChecks++;
+        if (Double.isFinite(buyDelta) && buyDelta >= 0.08) compressedBuyerChecks++;
+        if (Double.isFinite(closeLocation) && closeLocation >= 0.55) compressedBuyerChecks++;
+        if (Double.isFinite(relativeBtc) && relativeBtc >= -0.25) compressedBuyerChecks++;
+        boolean compressedBuyerQualified = isCompressedBuyerMonitor &&
+                Double.isFinite(daily) && daily >= -5.0 && daily <= 5.0 &&
+                Double.isFinite(score) && score >= 70.0 &&
+                Double.isFinite(session) && session >= -1.5 && session <= 3.5 &&
+                Double.isFinite(hour) && hour >= -0.5 && hour <= 2.5 &&
+                Double.isFinite(volume) && volume >= 0.25 &&
+                Double.isFinite(trades) && trades >= 0.5 &&
+                Double.isFinite(buy) && buy >= 0.65 &&
+                Double.isFinite(buyDelta) && buyDelta >= 0.08 &&
+                Double.isFinite(closeLocation) && closeLocation >= 0.55 &&
+                Double.isFinite(relativeBtc) && relativeBtc >= -0.25 &&
+                Double.isFinite(squeeze) && squeeze >= 45.0 &&
+                Double.isFinite(structure) && structure >= 60.0 &&
+                Double.isFinite(buyingPressure) && buyingPressure >= 90.0 &&
+                compressedBuyerChecks == 7 && Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
+                Double.isFinite(quality) && quality >= 95.0 &&
+                Double.isFinite(liquidity) && liquidity >= 85.0 && participation >= 3;
+        int participationSurgeChecks = 0;
+        if (Double.isFinite(volume) && volume >= 1.25) participationSurgeChecks++;
+        if (Double.isFinite(trades) && trades >= 1.20) participationSurgeChecks++;
+        if (Double.isFinite(buy) && buy >= 0.50) participationSurgeChecks++;
+        if (Double.isFinite(buyDelta) && buyDelta >= 0.05) participationSurgeChecks++;
+        if (Double.isFinite(closeLocation) && closeLocation >= 0.54) participationSurgeChecks++;
+        if (Double.isFinite(structure) && structure >= 55.0) participationSurgeChecks++;
+        if (Double.isFinite(buyingPressure) && buyingPressure >= 60.0) participationSurgeChecks++;
+        boolean participationSurgeQualified = isParticipationSurgeMonitor &&
+                Double.isFinite(daily) && daily >= -8.0 && daily <= 8.0 &&
+                Double.isFinite(score) && score >= 58.0 &&
+                Double.isFinite(session) && session >= -3.0 && session <= 6.0 &&
+                Double.isFinite(hour) && hour >= -2.0 && hour <= 4.5 &&
+                Double.isFinite(volume) && volume >= 1.25 &&
+                Double.isFinite(trades) && trades >= 1.20 &&
+                Double.isFinite(buy) && buy >= 0.50 &&
+                Double.isFinite(buyDelta) && buyDelta >= 0.05 &&
+                Double.isFinite(closeLocation) && closeLocation >= 0.54 &&
+                Double.isFinite(structure) && structure >= 55.0 &&
+                Double.isFinite(buyingPressure) && buyingPressure >= 60.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 300_000.0 &&
+                Double.isFinite(quality) && quality >= 85.0 &&
+                Double.isFinite(liquidity) && liquidity >= 65.0 && participationSurgeChecks >= 6;
+        int strongBuyerChecks = 0;
+        if (Double.isFinite(volume) && volume >= 0.50) strongBuyerChecks++;
+        if (Double.isFinite(trades) && trades >= 0.75) strongBuyerChecks++;
+        if (Double.isFinite(buy) && buy >= 0.60) strongBuyerChecks++;
+        if (Double.isFinite(buyDelta) && buyDelta >= 0.05) strongBuyerChecks++;
+        if (Double.isFinite(closeLocation) && closeLocation >= 0.55) strongBuyerChecks++;
+        if (Double.isFinite(relativeBtc) && relativeBtc >= -3.5) strongBuyerChecks++;
+        if (Double.isFinite(structure) && structure >= 55.0) strongBuyerChecks++;
+        if (Double.isFinite(buyingPressure) && buyingPressure >= 75.0) strongBuyerChecks++;
+        boolean strongBuyerAbsorptionQualified = isStrongBuyerAbsorptionMonitor &&
+                Double.isFinite(daily) && daily >= -8.0 && daily <= 8.0 &&
+                Double.isFinite(score) && score >= 58.0 &&
+                Double.isFinite(session) && session >= -3.0 && session <= 6.0 &&
+                Double.isFinite(hour) && hour >= -2.0 && hour <= 4.5 &&
+                Double.isFinite(volume) && volume >= 0.50 &&
+                Double.isFinite(trades) && trades >= 0.75 &&
+                Double.isFinite(buy) && buy >= 0.60 &&
+                Double.isFinite(buyDelta) && buyDelta >= 0.05 &&
+                Double.isFinite(closeLocation) && closeLocation >= 0.55 &&
+                Double.isFinite(relativeBtc) && relativeBtc >= -3.5 &&
+                Double.isFinite(structure) && structure >= 55.0 &&
+                Double.isFinite(buyingPressure) && buyingPressure >= 75.0 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 300_000.0 &&
+                Double.isFinite(quality) && quality >= 85.0 &&
+                Double.isFinite(liquidity) && liquidity >= 65.0 && strongBuyerChecks >= 7;
+        int relativeStrengthBuyerChecks = 0;
+        if (Double.isFinite(volume) && volume >= 1.25) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(trades) && trades >= 1.15) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(buy) && buy >= 0.62) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(buyDelta) && buyDelta >= 0.05) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(closeLocation) && closeLocation >= 0.55) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(relative) && relative >= 0.25) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(squeeze) && squeeze >= 35.0) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(structure) && structure >= 60.0) relativeStrengthBuyerChecks++;
+        if (Double.isFinite(buyingPressure) && buyingPressure >= 75.0) relativeStrengthBuyerChecks++;
+        boolean relativeStrengthBuyerQualified = isRelativeStrengthBuyerMonitor &&
+                Double.isFinite(daily) && daily >= -5.0 && daily <= 5.0 &&
+                Double.isFinite(score) && score >= 68.0 &&
+                Double.isFinite(session) && session >= -3.0 && session <= 3.5 &&
+                Double.isFinite(hour) && hour >= -0.5 && hour <= 2.5 &&
+                Double.isFinite(volume) && volume >= 1.25 &&
+                Double.isFinite(trades) && trades >= 1.15 &&
+                Double.isFinite(buy) && buy >= 0.62 &&
+                Double.isFinite(buyDelta) && buyDelta >= 0.05 &&
+                Double.isFinite(closeLocation) && closeLocation >= 0.55 &&
+                Double.isFinite(relative) && relative >= 0.25 &&
+                Double.isFinite(squeeze) && squeeze >= 35.0 &&
+                Double.isFinite(structure) && structure >= 60.0 &&
+                Double.isFinite(buyingPressure) && buyingPressure >= 75.0 &&
+                relativeStrengthBuyerChecks >= 8 &&
+                Double.isFinite(quoteVolume) && quoteVolume >= 750_000.0 &&
+                Double.isFinite(quality) && quality >= 90.0 &&
+                Double.isFinite(liquidity) && liquidity >= 80.0;
         if ((isTickerActivityMonitor && !tickerActivityQualified) ||
                 (isEarlyFlowMonitor && !earlyFlowQualified) ||
                 ("HIGH_ACTIVITY_STRUCTURE_PENDING".equals(tier) && !highActivityStructurePending) ||
-                (isAccumulationPrepMonitor && !accumulationPrepQualified)) return false;
+                (isAccumulationPrepMonitor && !accumulationPrepQualified) ||
+                (isCompressedBuyerMonitor && !compressedBuyerQualified) ||
+                (isParticipationSurgeMonitor && !participationSurgeQualified) ||
+                (isStrongBuyerAbsorptionMonitor && !strongBuyerAbsorptionQualified) ||
+                (isRelativeStrengthBuyerMonitor && !relativeStrengthBuyerQualified)) return false;
 
-        double minimumQuality = isAccumulationPrepMonitor ? 95.0 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? 85.0 : highActivityStructurePending ? 80.0 : 70.0;
-        double minimumLiquidity = isAccumulationPrepMonitor ? 90.0 : isTickerActivityMonitor ? 75.0 :
-                isEarlyFlowMonitor || highActivityStructurePending ? 70.0 : 60.0;
+        double minimumQuality = isAccumulationPrepMonitor || isCompressedBuyerMonitor ? 95.0 :
+                isRelativeStrengthBuyerMonitor ? 90.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor || isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 85.0 :
+                highActivityStructurePending ? 80.0 : 70.0;
+        double minimumLiquidity = isAccumulationPrepMonitor ? 90.0 : isCompressedBuyerMonitor ? 85.0 :
+                isRelativeStrengthBuyerMonitor ? 80.0 : isTickerActivityMonitor ? 75.0 :
+                isEarlyFlowMonitor || highActivityStructurePending ? 70.0 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 65.0 : 60.0;
         double minimumDaily = isAccumulationPrepMonitor ? -3.0 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? -5.0 : highActivityStructurePending ? -5.0 : -12.0;
+                isCompressedBuyerMonitor || isRelativeStrengthBuyerMonitor ? -5.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor || highActivityStructurePending ? -5.0 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? -8.0 : -12.0;
         double maximumDaily = isAccumulationPrepMonitor ? 4.5 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 : highActivityStructurePending ? 6.0 : 12.0;
-        double minimumSession = isAccumulationPrepMonitor ? 0.0 : highActivityStructurePending ? -0.75 :
+                isCompressedBuyerMonitor || isRelativeStrengthBuyerMonitor ? 5.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 :
+                highActivityStructurePending ? 6.0 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 8.0 : 12.0;
+        double minimumSession = isAccumulationPrepMonitor ? 0.0 :
+                isCompressedBuyerMonitor ? -1.5 :
+                isRelativeStrengthBuyerMonitor || isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? -3.0 :
+                highActivityStructurePending ? -0.75 :
                 isTickerActivityMonitor || isEarlyFlowMonitor ? -1.25 : 0.0;
-        double maximumSession = isAccumulationPrepMonitor ? 3.5 : highActivityStructurePending ? 5.0 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 : 6.0;
-        double minimumHour = isAccumulationPrepMonitor ? -0.35 : highActivityStructurePending ? -0.5 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? -0.75 : 0.15;
-        double maximumHour = isAccumulationPrepMonitor ? 1.5 : highActivityStructurePending ? 3.5 :
-                isTickerActivityMonitor || isEarlyFlowMonitor ? 2.5 : 4.5;
-        double minimumStructure = isAccumulationPrepMonitor ? 60.0 :
-                isTickerActivityMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 50.0 : 60.0;
-        int minimumParticipation = isAccumulationPrepMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 4 : 3;
+        double maximumSession = isAccumulationPrepMonitor || isCompressedBuyerMonitor ? 3.5 :
+                isRelativeStrengthBuyerMonitor ? 3.5 :
+                highActivityStructurePending ? 5.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? 4.5 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 6.0 : 6.0;
+        double minimumHour = isAccumulationPrepMonitor ? -0.35 :
+                isCompressedBuyerMonitor || isRelativeStrengthBuyerMonitor ? -0.5 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? -0.75 :
+                highActivityStructurePending ? -0.5 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? -2.0 : 0.15;
+        double maximumHour = isAccumulationPrepMonitor ? 1.5 :
+                isCompressedBuyerMonitor || isRelativeStrengthBuyerMonitor ? 2.5 :
+                isTickerActivityMonitor || isEarlyFlowMonitor ? 2.5 :
+                highActivityStructurePending ? 3.5 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 4.5 : 4.5;
+        double minimumStructure = isAccumulationPrepMonitor || isCompressedBuyerMonitor || isRelativeStrengthBuyerMonitor ? 60.0 :
+                isTickerActivityMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 50.0 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 55.0 : 60.0;
+        int minimumParticipation = isAccumulationPrepMonitor || isEarlyFlowMonitor || highActivityStructurePending ? 4 :
+                isTickerActivityMonitor ? 2 : isRelativeStrengthBuyerMonitor ? 4 : 3;
+        double minimumScore = isAccumulationPrepMonitor ? 66.0 :
+                isCompressedBuyerMonitor ? 70.0 :
+                isParticipationSurgeMonitor || isStrongBuyerAbsorptionMonitor ? 58.0 :
+                isRelativeStrengthBuyerMonitor ? 68.0 : 68.0;
         if (!Double.isFinite(quality) || quality < minimumQuality || quality > 100.0 ||
                 !Double.isFinite(liquidity) || liquidity < minimumLiquidity || liquidity > 100.0 ||
                 !Double.isFinite(price) || price <= 0.0 || !Double.isFinite(daily) ||
                 daily < minimumDaily || daily > maximumDaily ||
-                !Double.isFinite(score) || score < (isAccumulationPrepMonitor ? 66.0 : 68.0) || !Double.isFinite(session) ||
+                !Double.isFinite(score) || score < minimumScore || !Double.isFinite(session) ||
                 session < minimumSession || session > maximumSession ||
                 !Double.isFinite(hour) || hour < minimumHour || hour > maximumHour ||
                 !Double.isFinite(structure) || structure < minimumStructure ||
@@ -1285,11 +1455,30 @@ public final class RadarXBackgroundMonitorService extends Service {
     }
 
     private void stopMonitoring() {
+        if (stopping) return;
         stopping = true;
-        if (executor != null) executor.shutdownNow();
+        ScheduledExecutorService current = executor;
+        if (current != null && !current.isShutdown()) {
+            try {
+                // Queue final service teardown behind the currently running scan.
+                // This lets any accepted notification finish its durable compound
+                // cursor commit before Android destroys the isolated service process.
+                current.execute(this::finishStopAfterCurrentScan);
+                current.shutdown();
+                return;
+            } catch (RuntimeException rejected) {
+                Log.w(TAG, "Unable to queue graceful background shutdown; using immediate teardown", rejected);
+                current.shutdown();
+            }
+        }
+        finishStopAfterCurrentScan();
+    }
+
+    private void finishStopAfterCurrentScan() {
         saveRunning(false);
         if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE);
         else stopForeground(true);
+        foregroundStarted = false;
         stopSelf();
     }
 
@@ -1298,7 +1487,8 @@ public final class RadarXBackgroundMonitorService extends Service {
         Log.w(TAG, "BACKGROUND_SERVICE_ON_DESTROY pid=" + android.os.Process.myPid()
             + " stopping=" + stopping + " wasRunning=" + prefs().getBoolean("running", false));
         stopping = true;
-        if (executor != null) executor.shutdownNow();
+        // Graceful shutdown never interrupts a synchronous alert-cursor commit.
+        if (executor != null) executor.shutdown();
         saveRunning(false);
         super.onDestroy();
     }

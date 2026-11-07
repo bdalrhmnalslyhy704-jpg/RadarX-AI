@@ -825,15 +825,26 @@ export function createApiServer({config,store,monitor,pushProvider,pushManager=n
     const fcmIds=new Set(active.filter(row=>row.provider==='fcm').map(row=>String(row.id||'')));
     const receivedRows=receipts.filter(row=>row?.event==='FCM_DEVICE_RECEIPT'&&
       row?.provider==='fcm'&&row?.status==='RECEIVED'&&fcmIds.has(String(row?.subscription_id||'')));
-    const latestReceipt=receivedRows.reduce((latest,row)=>
+    const receiptWindowMs=7*24*60*60*1000;
+    const receiptCutoff=Date.now()-receiptWindowMs;
+    const recentReceivedRows=receivedRows.filter(row=>{
+      const at=Number(row?.server_received_at_ms)||0;
+      return at>=receiptCutoff&&at<=Date.now()+5000;
+    });
+    const receiptDeviceIds=new Set(recentReceivedRows.map(row=>String(row?.subscription_id||''))
+      .filter(id=>id&&fcmIds.has(id)));
+    const latestReceipt=recentReceivedRows.reduce((latest,row)=>
       Math.max(latest,Number(row?.server_received_at_ms)||0),0);
+    const physicalDeviceReceiptCount=receiptDeviceIds.size;
     return {
       provider,enabled:providerStatus.enabled===true,
       active_subscriptions:active.length,
       provider_subscriptions:providerRows.length,
       fcm_devices:active.filter(row=>row.provider==='fcm').length,
       webpush_subscriptions:active.filter(row=>(row.provider||'webpush')==='webpush').length,
-      physical_device_delivery_verified:latestReceipt>0,
+      physical_device_receipt_count:physicalDeviceReceiptCount,
+      physical_device_receipt_window_ms:receiptWindowMs,
+      physical_device_delivery_verified:physicalDeviceReceiptCount>=2,
       last_device_receipt_at:latestReceipt?new Date(latestReceipt).toISOString():null
     };
   }

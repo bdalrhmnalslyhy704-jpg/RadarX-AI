@@ -31,6 +31,16 @@ function historicalMarketMedianAt(cohortIndex, targetSymbol, at, minimumPeers = 
   }
   const sessionStart = adenSessionStartMs(at);
   const latestOpen = Math.floor((Number(at) - 1) / MINUTE_MS) * MINUTE_MS;
+  // At exactly 04:00 Asia/Aden the session has just begun, but the first
+  // in-session 1m candle is not closed yet. This is a known warm-up interval,
+  // not a missing peer-candle fetch. Do not fabricate a zero/flat benchmark.
+  if (Number(at) === sessionStart && latestOpen < sessionStart) {
+    return {
+      returnPct: null, sampleCount: 0,
+      source: 'UNAVAILABLE_SESSION_WARMUP',
+      reason: 'FIRST_ADEN_SESSION_CANDLE_NOT_CLOSED'
+    };
+  }
   const expectedCount = (latestOpen - sessionStart) / MINUTE_MS + 1;
   if (!Number.isInteger(expectedCount) || expectedCount < 1) {
     return { returnPct: null, sampleCount: 0, source: 'UNAVAILABLE_SESSION_WINDOW' };
@@ -366,6 +376,7 @@ export function runHistoricalReplay({
           marketMedianSampleCount:marketMedian.sampleCount,
           marketMedianMinimumPeerCount:requiredMarketMedianPeers,
           marketMedianSource:marketMedian.source,
+          marketMedianWarmup:marketMedian.source==='UNAVAILABLE_SESSION_WARMUP',
           source: "BINANCE_PUBLIC_HISTORICAL_REPLAY",
           dataPolicy: {
             closedCandlesOnly: true, allowFutureData: false, currentCloseTime: at,
