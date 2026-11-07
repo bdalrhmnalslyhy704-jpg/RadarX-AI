@@ -204,6 +204,30 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_favorable_excursion_at, at);
 });
 
+test('profit-loss logit gradients match a central finite-difference check', () => {
+  const rows = [
+    { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
+      max_adverse_excursion_pct: -1.2, max_favorable_excursion_pct: 4.5 },
+    { at: 2, symbol: 'BUSDT', gross_return_pct: -2,
+      max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.8 },
+    { at: 3, symbol: 'CUSDT', gross_return_pct: 2.2,
+      max_adverse_excursion_pct: -0.5, max_favorable_excursion_pct: 3.4 }
+  ];
+  const probabilities = [0.57, 0.63, 0.48];
+  const options = { temperature: 0.2, threshold: 0.55, roundTripCostBps: 30 };
+  const base = profitDrawdownObjective(probabilities, rows, options);
+  const epsilon = 1e-3;
+  const logit = Math.log(probabilities[0] / (1 - probabilities[0]));
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([
+    sigmoid(value), probabilities[1], probabilities[2]
+  ], rows, options).loss;
+  const numerical = (evaluate(logit + epsilon) - evaluate(logit - epsilon)) / (2 * epsilon);
+  assert.ok(Math.abs(base.logit_gradients[0] - numerical) < 2e-4,
+    'analytical gradient must match central finite difference: ' +
+    base.logit_gradients[0] + ' vs ' + numerical);
+});
+
 test('profit objective explicitly penalizes measured peak-to-trough excursion', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
