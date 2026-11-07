@@ -316,6 +316,7 @@ export function buildHybridSequence({
 /** Resolve a long-only Spot bracket conservatively from completed future candles. */
 export function resolveBarrierTrade({
   entryPrice, decisionAt, futureCandles = [], takeProfitPct = 3, stopLossPct = 2,
+  horizonMs = 4 * 60 * 60 * 1000,
   feeBpsPerSide = 10, slippageBpsPerSide = 5
 } = {}) {
   const entry = finite(entryPrice);
@@ -323,8 +324,9 @@ export function resolveBarrierTrade({
   if (!(entry > 0) || at === null) throw new Error('INVALID_BARRIER_TRADE_ENTRY');
   const take = entry * (1 + Math.max(0.01, Number(takeProfitPct) || 3) / 100);
   const stop = entry * (1 - Math.max(0.01, Number(stopLossPct) || 2) / 100);
+  const horizonEnd = at + Math.max(1, Number(horizonMs) || 4 * 60 * 60 * 1000);
   const path = (Array.isArray(futureCandles) ? futureCandles : [])
-    .filter(row => validClosedCandle(row) && candleTime(row) > at)
+    .filter(row => validClosedCandle(row) && candleTime(row) > at && candleTime(row) <= horizonEnd)
     .sort((a, b) => candleTime(a) - candleTime(b));
   if (!path.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
   let exitPrice = null, exitAt = null, exitReason = null;
@@ -356,6 +358,10 @@ export function resolveBarrierTrade({
   }
   if (exitPrice === null) {
     const last = path.at(-1);
+    if (candleTime(last) < horizonEnd) {
+      return { resolved: false, reason: 'INCOMPLETE_FORWARD_HORIZON',
+        required_through: horizonEnd, observed_through: candleTime(last) };
+    }
     exitPrice = candleNumber(last, 'close');
     exitAt = candleTime(last);
     exitReason = 'HORIZON_CLOSE';
@@ -377,6 +383,45 @@ export function resolveBarrierTrade({
   };
 }
 
+ 
+/** Compose a benchmark row from a decision-time closed-candle window and its
+ * fully matured 4-hour forward path. The neural tensor ends at decisionAt. */
+export function prepareHybridBenchmarkEvent({
+  id, symbol, decisionAt, candles = [], benchmarkCandles = [],
+  futureCandles = [], entryPrice, classicScore, featureSnapshotSha = null
+} = {}) {
+  const at = finite(decisionAt);
+  const normalizedSymbol = String(symbol ?? '').trim().toUpperCase();
+  const score = finite(classicScore);
+  if (at === null || !/^[A-Z0-9]{2,26}USDT$/.test(normalizedSymbol) ||
+      score === null || score < 0 || score > 1) {
+    return { ready: false, reason: 'INVALID_SPOT_DECISION_METADATA' };
+  }
+  const features = buildHybridSequence({ candles, benchmarkCandles, asOf: at });
+  if (features.ready !== true) return { ready: false, reason: features.reason || 'FEATURE_TENSOR_NOT_READY' };
+  const outcome = resolveBarrierTrade({
+    entryPrice, decisionAt: at, futureCandles, horizonMs: 4 * 60 * 60 * 1000
+  });
+  if (outcome.resolved !== true) return { ready: false, reason: outcome.reason, outcome };
+  return {
+    ready: true,
+    row: {
+      id: String(id ?? normalizedSymbol + ':' + at),
+      symbol: normalizedSymbol,
+      market: 'BINANCE_SPOT_USDT',
+      outcome_source: 'BINANCE_SPOT_CLOSED_15M',
+      at,
+      latest_input_at: features.latest_input_at,
+      resolved_at: outcome.exit_at,
+      gross_return_pct: outcome.gross_return_pct,
+      classic_score: score,
+      sequence: features.sequence,
+      feature_snapshot_sha: typeof featureSnapshotSha === 'string' ? featureSnapshotSha : null,
+      outcome_exit_reason: outcome.exit_reason
+    }
+  };
+}
+
 function normalizeBenchmarkRows(inputRows) {
   const ids = new Set(), events = new Set();
   const rows = [];
@@ -384,13 +429,17 @@ function normalizeBenchmarkRows(inputRows) {
     if (!raw || typeof raw !== 'object') continue;
     const id = String(raw.id ?? '').trim();
     const symbol = String(raw.symbol ?? '').trim().toUpperCase();
+    const market = String(raw.market ?? '').trim().toUpperCase();
+    const outcomeSource = String(raw.outcome_source ?? '').trim().toUpperCase();
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
     const gross = finite(raw.gross_return_pct);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
-    if (!id || !symbol || at === null || latestInputAt === null || latestInputAt > at ||
+    if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
+        market !== 'BINANCE_SPOT_USDT' || outcomeSource !== 'BINANCE_SPOT_CLOSED_15M' ||
+        at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null || classic === null ||
         classic < 0 || classic > 1 ||
         !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
@@ -401,7 +450,8 @@ function normalizeBenchmarkRows(inputRows) {
     ids.add(id);
     events.add(eventKey);
     rows.push({
-      id, symbol, at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
+      id, symbol, market, outcome_source: outcomeSource,
+      at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
       gross_return_pct: gross, classic_score: classic,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
