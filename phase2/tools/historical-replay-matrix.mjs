@@ -109,7 +109,7 @@ async function main(){
       feature_interval:'1M_CLOSED_CANDLES',
       capture_sampling:'EVERY_10M_DECISION',
       sequence_steps:24,
-      sequence_channels:22,
+      sequence_channels:23,
       outcome_horizon_ms:4*HOUR_MS,
       symbols,
       windows:windows.map(window=>({id:window.id,start:window.start,end:window.end})),
@@ -122,7 +122,8 @@ async function main(){
         distinct_symbols:new Set(hybridRows.map(row=>row.symbol)).size,
         distinct_decision_times:new Set(hybridRows.map(row=>row.at)).size,
         agg_trade_flow_rows:hybridRows.filter(row=>row.trade_flow_available).length,
-        trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length
+        trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length,
+        relative_btc_rows:hybridRows.filter(row=>row.relative_btc_available).length
       },
       rows:hybridRows
     };
