@@ -513,7 +513,8 @@ async function main() {
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
       '       [--detector-profile one of 12 canonical radars; use --list-profiles]',
-      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path] [--dry-run]',
+      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
+      '       [--hybrid-benchmark-output dataset.json] (4h outcome horizon; optional research export only) [--dry-run]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Candle-only profiles are labeled candidate shadows; missing historical order-book/news data is never synthesized.',
       'Trade-history pagination that reaches a cap is flagged incomplete and fails closed. No orders or credentials are used.'
@@ -707,6 +708,7 @@ async function main() {
       outcomeEndTime:observationEnd,
       outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
       captureHybridBenchmarkRows:hybridBenchmarkOutput!==null,
+      captureHybridBenchmarkEveryMs:10*MINUTE_MS,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       timeframeCandles,
@@ -1079,7 +1081,7 @@ async function main() {
       sequence_steps:24,
       sequence_channels:22,
       outcome_horizon_ms:4*HOUR_MS,
-      capture_sampling:'EVERY_REPLAY_DECISION',
+      capture_sampling:'EVERY_10M_DECISION',
       capture_symbols:symbols,
       capture_window:{start,start_iso:new Date(start).toISOString(),end,end_iso:new Date(end).toISOString()},
       capture_summary:{
