@@ -50,6 +50,8 @@ function makeRows(count = 700) {
       gross_return_pct: positive ? 3 : -2,
       max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       max_adverse_excursion_at: at + FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: positive ? 2.8 : 0.8,
+      max_favorable_excursion_at: at + 2 * FIFTEEN_MINUTES,
       classic_score: positive ? 0.92 : 0.08,
       sequence: makeSequence(1, index % 13),
       feature_snapshot_sha: 'unit-fixture-v1'
@@ -161,6 +163,8 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.latest_input_at, at);
   assert.equal(prepared.row.resolved_at, at + FOUR_HOURS);
   assert.equal(prepared.row.gross_return_pct, 3);
+  assert.equal(prepared.row.max_favorable_excursion_pct, 4);
+  assert.equal(prepared.row.max_favorable_excursion_at, at + FOUR_HOURS);
 });
 
 test('barrier resolver chooses the stop when the same candle touches take-profit and stop-loss', () => {
@@ -179,6 +183,8 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.net_return_pct, -2.3);
   assert.ok(trade.max_adverse_excursion_pct <= -2);
   assert.equal(trade.max_adverse_excursion_at, at + FIFTEEN_MINUTES);
+  assert.equal(trade.max_favorable_excursion_pct, 0);
+  assert.equal(trade.max_favorable_excursion_at, at);
 });
 
 test('profit/drawdown objective is finite and produces probability gradients', () => {
@@ -248,12 +254,15 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   const report = simulatePaperTrades([
     { id: '1', symbol: 'AUSDT', at: base, resolved_at: base + FOUR_HOURS,
       max_adverse_excursion_at: base + FIFTEEN_MINUTES, max_adverse_excursion_pct: -0.5,
+      max_favorable_excursion_at: base + 10 * 60 * 1000, max_favorable_excursion_pct: 1.1,
       score: 0.9, threshold: 0.5, gross_return_pct: 3 },
     { id: '2', symbol: 'BUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + FOUR_HOURS,
       max_adverse_excursion_at: base + 2 * FIFTEEN_MINUTES, max_adverse_excursion_pct: -2.1,
+      max_favorable_excursion_at: base + 2 * FIFTEEN_MINUTES, max_favorable_excursion_pct: 0.2,
       score: 0.95, threshold: 0.5, gross_return_pct: -2 },
     { id: '3', symbol: 'CUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
       max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES, max_adverse_excursion_pct: -2.1,
+      max_favorable_excursion_at: base + FOUR_HOURS + 10 * 60 * 1000, max_favorable_excursion_pct: 0.3,
       score: 0.9, threshold: 0.5, gross_return_pct: -2 }
   ], { roundTripCostBps: 30, positionFraction: 1, maxConcurrentPositions: 1 });
   assert.equal(report.trade_count, 2);
@@ -263,6 +272,8 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   assert.ok(report.max_drawdown_pct > 0);
   assert.equal(report.trades[0].mae_marked_at, base + FIFTEEN_MINUTES);
   assert.equal(report.trades[1].mae_marked_at, base + FOUR_HOURS + FIFTEEN_MINUTES);
+  assert.equal(report.trades[0].mfe_marked_at, base + 10 * 60 * 1000);
+  assert.equal(report.trades[1].mfe_marked_at, base + FOUR_HOURS + 10 * 60 * 1000);
 });
 
 test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital ceiling', () => {
@@ -270,19 +281,24 @@ test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital c
   const report = simulatePaperTrades([
     { id: 'a1', symbol: 'AUSDT', at: base, resolved_at: base + FOUR_HOURS,
       score: 0.95, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.5,
-      max_adverse_excursion_at: base + FIFTEEN_MINUTES },
+      max_adverse_excursion_at: base + FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: 1, max_favorable_excursion_at: base + 10 * 60 * 1000 },
     { id: 'b1', symbol: 'BUSDT', at: base, resolved_at: base + FOUR_HOURS,
       score: 0.94, threshold: 0.5, gross_return_pct: -2, max_adverse_excursion_pct: -2.1,
-      max_adverse_excursion_at: base + 2 * FIFTEEN_MINUTES },
+      max_adverse_excursion_at: base + 2 * FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: 0.4, max_favorable_excursion_at: base + FIFTEEN_MINUTES },
     { id: 'a2', symbol: 'AUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + 2 * FOUR_HOURS,
       score: 0.99, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.4,
-      max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES },
+      max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: 1.5, max_favorable_excursion_at: base + FOUR_HOURS + 10 * 60 * 1000 },
     { id: 'c1', symbol: 'CUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + 2 * FOUR_HOURS,
       score: 0.98, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.2,
-      max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES },
+      max_adverse_excursion_at: base + FOUR_HOURS + FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: 1.4, max_favorable_excursion_at: base + FOUR_HOURS + 10 * 60 * 1000 },
     { id: 'd1', symbol: 'DUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
       score: 0.97, threshold: 0.5, gross_return_pct: 3, max_adverse_excursion_pct: -0.3,
-      max_adverse_excursion_at: base + FOUR_HOURS + 2 * FIFTEEN_MINUTES }
+      max_adverse_excursion_at: base + FOUR_HOURS + 2 * FIFTEEN_MINUTES,
+      max_favorable_excursion_pct: 1.3, max_favorable_excursion_at: base + FOUR_HOURS + 3 * 60 * 1000 }
   ], { positionFraction: 0.5, maxConcurrentPositions: 2 });
   assert.equal(report.trade_count, 3);
   assert.equal(report.max_concurrent_positions, 2);
