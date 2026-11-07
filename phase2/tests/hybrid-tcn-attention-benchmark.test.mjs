@@ -48,7 +48,7 @@ function makeRows(count = 700) {
       gross_return_pct: positive ? 3 : -2,
       max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       classic_score: positive ? 0.92 : 0.08,
-      sequence: makeSequence(positive ? 1 : -1, index % 13),
+      sequence: makeSequence(1, index % 13),
       feature_snapshot_sha: 'unit-fixture-v1'
     };
   });
@@ -143,7 +143,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
 
   const completedPath = [{
-    closeTime: at + FIFTEEN_MINUTES, closed: true,
+    closeTime: at + FOUR_HOURS, closed: true,
     open: 10, high: 10.4, low: 9.99, close: 10.2
   }];
   const prepared = prepareHybridBenchmarkEvent({
@@ -155,7 +155,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.outcome_source, 'BINANCE_SPOT_CLOSED_15M');
   assert.equal(prepared.row.outcome_definition, 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1');
   assert.equal(prepared.row.latest_input_at, at);
-  assert.equal(prepared.row.resolved_at, at + FIFTEEN_MINUTES);
+  assert.equal(prepared.row.resolved_at, at + FOUR_HOURS);
   assert.equal(prepared.row.gross_return_pct, 3);
 });
 
@@ -189,7 +189,6 @@ test('profit/drawdown objective is finite and produces probability gradients', (
   assert.equal(objective.logit_gradients.length, 4);
   assert.ok(objective.logit_gradients.every(Number.isFinite));
   assert.ok(objective.max_additive_drawdown_pct >= 0);
-  assert.equal(objective.round_trip_cost_bps, 30);
   assert.equal(objective.round_trip_cost_bps, 30);
   assert.ok(objective.positions.every(value => value >= 0 && value <= 1));
 });
