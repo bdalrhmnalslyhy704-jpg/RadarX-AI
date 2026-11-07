@@ -1005,6 +1005,7 @@ export function trainHybridTcnAttention(trainingRows, {
   }
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
+    receptive_field_steps: TCN_RECEPTIVE_FIELD,
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
     training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
