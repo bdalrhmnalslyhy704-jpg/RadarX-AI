@@ -71,6 +71,7 @@ The hybrid may be marked accepted only if all these independent gates pass on th
 - Net PnL strictly positive, after costs.
 - Higher net PnL and higher per-trade Sharpe than the classic baseline, without higher maximum drawdown.
 - Identical fixed benchmark SHA, candidate test events, cost assumptions, and position constraints.
+- Zero rejected or duplicate input rows.
 - At least 99.9% of the benchmark rows carry timestamped measured favourable and adverse excursions.
 - All three observed BTC regimes (bull, bear, sideways) are represented by replay rows, with each row traceable to its historical window.
 - AggTrade flow is present on at least 80% of scored rows, executed-price volume-profile coverage is at least 70%, and relative-BTC reference coverage is at least 80%.
