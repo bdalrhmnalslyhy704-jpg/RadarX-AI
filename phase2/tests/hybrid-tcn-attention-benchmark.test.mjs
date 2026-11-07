@@ -114,6 +114,11 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
   assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
+  const sparse = buildHybridSequence({
+    candles: candles.map((row, index) => index < 5 ? row : { ...row, aggTrades: [] }),
+    benchmarkCandles: candles, asOf, sequenceSteps: 24
+  });
+  assert.equal(sparse.sequence.at(-1)[21], 0, 'partial volume profile must be unavailable to the model');
   assert.equal(built.sequence.at(-1)[22], 1, 'relative BTC reference mask should be set');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
@@ -129,6 +134,12 @@ test('volume profile is derived only from the supplied completed candles', () =>
   assert.equal(profile.source, 'AGG_TRADE_PRICE_LEVELS');
   const proxy = calculateVolumeProfile(candles.map(({ aggTrades, ...row }) => row));
   assert.equal(proxy.source, 'CANDLE_TYPICAL_PRICE_PROXY');
+  const sparseTrades = calculateVolumeProfile(candles.map((row, index) =>
+    index < 5 ? row : { ...row, aggTrades: [] }));
+  assert.equal(sparseTrades.source, 'CANDLE_TYPICAL_PRICE_PROXY',
+    'partial AggTrades must not be mislabeled as a complete executed-price profile');
+  assert.ok(sparseTrades.trade_candle_coverage_pct < 80);
+  assert.ok(profile.trade_candle_coverage_pct >= 80);
   assert.ok(profile.poc > 0);
   assert.ok(profile.value_area_low <= profile.poc);
   assert.ok(profile.value_area_high >= profile.poc);
