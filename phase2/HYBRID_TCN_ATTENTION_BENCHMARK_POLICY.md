@@ -18,7 +18,7 @@ The classical baseline and the neural challenger are run against the same normal
 
 ## Causal feature tensor
 
-buildHybridSequence constructs a 24-step sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 23 channels include:
+buildHybridSequence constructs a causal 24-step × 28-channel sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 28 channels include:
 
 1. One-, three-, and twelve-candle log returns.
 2. Candle body, range, close location, and upper/lower wick fractions.
@@ -28,24 +28,28 @@ buildHybridSequence constructs a 24-step sequence from completed candles only. I
 6. Volume-profile point-of-control distance and 70% value-area position.
 7. Short realized volatility, adaptive short/long volatility ratio, and relative BTC return.
 8. Explicit availability masks for depth, aggregate-trade price levels, and the timestamp-matched relative-BTC reference.
+9. One-candle return acceleration and three-candle momentum reversal versus the preceding three-candle window.
+10. Fast/slow close-mean spread, higher-low reclaim, and close reclaim relative to the preceding three-candle high.
 
 The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction in the 22nd channel; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle and uses only BTC candles closed by the same decision timestamp for relative strength. The replay adapter fetches this BTC reference history separately. Historical order-book snapshots remain unavailable and are represented with an explicit mask; no depth is fabricated.
 
 ## Neural architecture and objective
 
-The challenger first projects 23 features to 12 hidden channels, then applies four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps and 12 hidden channels. This gives a theoretical 31-step receptive field, spanning the full 24-step input. The benchmark report records this full architecture configuration. A learned temporal attention query produces a softmax weight over the 24 available historical states; the weighted context feeds the prediction head. No step after the decision timestamp is accessible to the model.
+The challenger first fits per-channel z-score normalization on the training fold only (standard deviation floor 0.05; normalized values clipped to [-4, 4]) and applies the same frozen transform to that fold's validation and test rows. The normalized 28 features are projected to 12 hidden channels, then passed through four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps and 12 hidden channels. This gives a theoretical 31-step receptive field, spanning the full 24-step input. The hidden activation is LeakyReLU (alpha 0.05), avoiding tanh saturation while retaining a negative-side gradient. A learned temporal attention query produces a softmax weight over the 24 available historical states. The output layer learns a bounded dynamic logit scale from training data only; its effective scale is constrained to [0.25, 4.0]. No step after the decision timestamp is accessible to the model.
 
 Training minimizes a custom differentiable portfolio objective, not MSE or Brier:
 
-loss = -mean(net portfolio return) - 0.15 * Sharpe + 0.08 * downside semivariance + 0.04 * adverse-excursion penalty + 0.04 * intratrade peak-to-trough excursion penalty + 0.08 * entry-ordered drawdown proxy.
+loss = -mean(net portfolio return) - 0.15 * Sharpe + 0.08 * downside semivariance + 0.04 * adverse-excursion penalty + 0.04 * intratrade peak-to-trough excursion penalty + 0.08 * entry-ordered drawdown proxy + 0.25 * asymmetric focal loss.
 
-The gradient flows through a smooth position-allocation function and the attention/TCN layers. This objective is an optimization target, not a guarantee of future profit. Thresholds are selected only on the validation block inside each walk-forward fold.
+The focal target is whether each completed paper outcome is profitable after the fixed round-trip cost. Positive outcomes use gamma=1 and weight=1.0; losing outcomes use gamma=2 and weight=1.6, so confident false-positive entries are penalized more heavily. The focal term is combined with the portfolio objective; it does not replace execution costs, drawdown simulation, or out-of-sample acceptance.
+
+The gradient flows through the smooth position-allocation function, asymmetric focal term, dynamic output scale, attention and TCN layers. The focal-loss and portfolio gradients are checked independently against central finite differences. This objective is an optimization target, not a guarantee of future profit. Thresholds are selected only on the validation block inside each walk-forward fold.
 
 ## Execution and outcome rules
 
 The benchmark assumes long-only Binance Spot entries, up to thirty concurrent positions across distinct symbols, and a 1/30 initial-equity allocation per position. A second signal for a symbol is rejected until its prior position resolves; capacity and available cash are both enforced. Default round-trip costs are 30 bps (10 bps fee plus 5 bps slippage per side). All strategies use identical costs. A +3% take-profit and -2% stop-loss are resolved from completed future candles; if one candle touches both levels and OHLC ordering is unknown, the stop is assumed to occur first. This conservative tie rule prevents optimistic look-ahead.
 
-The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The historical replay capture adapter samples one decision every ten minutes from completed 1m candles and resolves the fixed +3% / -2% barrier over the full four-hour forward horizon. It refuses unresolved horizons and keeps order-book depth explicitly unavailable when no historical depth archive exists. The matrix adapter stamps each replay row with its historical window ID and the BTC market regime classified from observed closed BTC candles. Rows with unknown regimes are rejected. All three observed regimes — BULL_TREND, BEAR_TREND, and SIDEWAYS — must be present before model fitting or acceptance. The dataset must provide one unique row per symbol/decision timestamp with:
+The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The historical replay capture adapter samples one decision every ten minutes from completed 1m candles and resolves the fixed +3% / -2% barrier over the full four-hour forward horizon. It refuses unresolved horizons and keeps order-book depth explicitly unavailable when no historical depth archive exists. The matrix adapter stamps each replay row with its historical window ID and the BTC market regime classified from observed closed BTC candles. Rows with unknown regimes are rejected. All three observed regimes — BULL_TREND, BEAR_TREND, and SIDEWAYS — must be present before model fitting or acceptance. The dataset must provide one unique row per symbol/decision timestamp with a 24 × 28 sequence tensor (matching the frozen feature-name order) and:
 
 - id, symbol, market=BINANCE_SPOT_USDT, a single fixed closed-Spot outcome_source (1m replay or 15m), the exact outcome_definition FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1, at, latest_input_at, and resolved_at in epoch milliseconds.
 - max_adverse_excursion_pct / max_adverse_excursion_at and max_favorable_excursion_pct / max_favorable_excursion_at from the completed future candle path, so both portfolio peaks and troughs are marked at their observed event times rather than at entry.
