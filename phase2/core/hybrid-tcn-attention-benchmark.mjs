@@ -1329,20 +1329,97 @@ export function simulatePaperTrades(decisions, {
   };
 }
 
+function quantile(sortedValues, probability) {
+  if (!sortedValues.length) return null;
+  const position = clamp(probability, 0, 1) * (sortedValues.length - 1);
+  const lower = Math.floor(position), upper = Math.ceil(position);
+  const weight = position - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
+function summarizeValidationScores(scores) {
+  const sorted = scores.filter(value => finite(value) !== null)
+    .map(value => clamp(Number(value), 0, 1)).sort((a, b) => a - b);
+  if (!sorted.length) return { count: 0 };
+  return {
+    count: sorted.length,
+    min: round(sorted[0], 8),
+    q25: round(quantile(sorted, 0.25), 8),
+    median: round(quantile(sorted, 0.50), 8),
+    q75: round(quantile(sorted, 0.75), 8),
+    q90: round(quantile(sorted, 0.90), 8),
+    q95: round(quantile(sorted, 0.95), 8),
+    q99: round(quantile(sorted, 0.99), 8),
+    max: round(sorted.at(-1), 8),
+    at_or_above_040: sorted.filter(value => value >= 0.40).length,
+    at_or_above_055: sorted.filter(value => value >= 0.55).length,
+    at_or_above_075: sorted.filter(value => value >= 0.75).length
+  };
+}
+
 function chooseThreshold(validationRows, scoreById, options) {
+  const scores = validationRows.map(row => scoreById.get(row.id))
+    .filter(value => finite(value) !== null).map(Number);
+  const sortedScores = [...scores].sort((a, b) => a - b);
+  const scoreDistribution = summarizeValidationScores(scores);
+  const quantileCandidates = [0.25, 0.50, 0.60, 0.70, 0.80, 0.85, 0.90, 0.95, 0.975, 0.99]
+    .map(probability => quantile(sortedScores, probability))
+    .filter(value => finite(value) !== null);
+  const thresholds = [...new Set([
+    ...(Array.isArray(options.thresholdGrid) ? options.thresholdGrid : []),
+    ...quantileCandidates
+  ].map(value => round(clamp(Number(value), 0, 1), 8)))].sort((a, b) => a - b);
+  const minimumValidationTrades = Math.max(5,
+    Math.min(100, Math.trunc(Number(options.minimumValidationTrades) || 10)));
   let best = null;
-  for (const threshold of options.thresholdGrid) {
+  const candidateTrials = [];
+  for (const threshold of thresholds) {
     const decisions = validationRows.map(row => ({
       ...row, score: scoreById.get(row.id) ?? 0, threshold
     }));
     const report = simulatePaperTrades(decisions, options);
     const utility = report.net_pnl_pct - 0.5 * report.max_drawdown_pct +
       0.1 * report.sharpe_per_trade;
-    const candidate = { threshold, report, utility };
-    if (!best || candidate.utility > best.utility ||
-        (candidate.utility === best.utility && candidate.threshold > best.threshold)) best = candidate;
+    const eligible = report.trade_count >= minimumValidationTrades && report.net_pnl_pct > 0;
+    const candidate = { threshold, report, utility, eligible };
+    candidateTrials.push({
+      threshold,
+      trade_count: report.trade_count,
+      win_rate_pct: report.win_rate_pct,
+      net_pnl_pct: report.net_pnl_pct,
+      max_drawdown_pct: report.max_drawdown_pct,
+      sharpe_per_trade: report.sharpe_per_trade,
+      utility: round(utility, 8),
+      eligible
+    });
+    if (eligible && (!best || candidate.utility > best.utility ||
+        (candidate.utility === best.utility && candidate.threshold > best.threshold))) best = candidate;
   }
-  return best ?? { threshold: options.thresholdGrid[0], report: simulatePaperTrades([], options), utility: -Infinity };
+  if (best) {
+    return {
+      ...best,
+      status: 'SELECTED_PROFITABLE_VALIDATION_THRESHOLD',
+      minimum_validation_trades: minimumValidationTrades,
+      score_distribution: scoreDistribution,
+      candidate_trials: candidateTrials
+    };
+  }
+  // Do not let a zero-trade, zero-drawdown validation fold masquerade as a
+  // winning model. An explicit >1 threshold represents abstention, not a trade.
+  const abstainThreshold = 1.000001;
+  const abstainDecisions = validationRows.map(row => ({
+    ...row, score: scoreById.get(row.id) ?? 0, threshold: abstainThreshold
+  }));
+  return {
+    threshold: abstainThreshold,
+    report: simulatePaperTrades(abstainDecisions, options),
+    utility: 0,
+    eligible: false,
+    status: 'ABSTAINED_NO_PROFITABLE_VALIDATION_THRESHOLD',
+    minimum_validation_trades: minimumValidationTrades,
+    score_distribution: scoreDistribution,
+    candidate_trials: candidateTrials
+  };
 }
 
 function summarizeTrades(report) {
@@ -1374,6 +1451,7 @@ export function runFixedShaBenchmark(inputRows, {
   positionFraction = DEFAULT_POSITION_FRACTION,
   maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
   thresholdGrid = DEFAULT_TRADE_THRESHOLD_GRID,
+  minimumValidationTrades = 10,
   targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
@@ -1453,7 +1531,8 @@ export function runFixedShaBenchmark(inputRows, {
 
   const outOfSampleNeural = [], outOfSampleClassic = [], foldReports = [];
   const executionOptions = {
-    threshold: 0.55, roundTripCostBps, positionFraction, maxConcurrentPositions, thresholdGrid: [...thresholdGrid]
+    threshold: 0.55, roundTripCostBps, positionFraction, maxConcurrentPositions,
+    thresholdGrid: [...thresholdGrid], minimumValidationTrades
   };
   for (const fold of walkForward.folds) {
     const fitted = trainHybridTcnAttention(fold.train, { epochs });
@@ -1484,6 +1563,18 @@ export function runFixedShaBenchmark(inputRows, {
       classic_threshold: classicChoice.threshold,
       neural_validation: summarizeTrades(neuralChoice.report),
       classic_validation: summarizeTrades(classicChoice.report),
+      neural_threshold_selection: {
+        status: neuralChoice.status,
+        minimum_validation_trades: neuralChoice.minimum_validation_trades,
+        score_distribution: neuralChoice.score_distribution,
+        candidate_trials: neuralChoice.candidate_trials
+      },
+      classic_threshold_selection: {
+        status: classicChoice.status,
+        minimum_validation_trades: classicChoice.minimum_validation_trades,
+        score_distribution: classicChoice.score_distribution,
+        candidate_trials: classicChoice.candidate_trials
+      },
       same_test_event_count: testPredictions.length
     });
   }
@@ -1499,7 +1590,11 @@ export function runFixedShaBenchmark(inputRows, {
   const mfeCoverage = integrity.favourable_excursion_coverage_pct >= 99.9;
   const relativeBtcCoverage = integrity.relative_btc_coverage_pct >= 80;
   const uniqueRows = integrity.rejected_or_duplicate_rows_removed === 0;
-  const riskAdjustedSuperiority = neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
+  const validationThresholdsReady = foldReports.every(fold =>
+    fold.neural_threshold_selection?.status === 'SELECTED_PROFITABLE_VALIDATION_THRESHOLD');
+  const riskAdjustedSuperiority = minimumTrades && winRate && drawdown && profit &&
+    validationThresholdsReady &&
+    neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
     neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
     neural.max_drawdown_pct <= classicBaseline.max_drawdown_pct;
   const sameOutOfSampleEvents = outOfSampleNeural.length === outOfSampleClassic.length &&
@@ -1536,6 +1631,8 @@ export function runFixedShaBenchmark(inputRows, {
     all_input_rows_valid_and_unique: uniqueRows ? 'PASS' : 'FAIL',
     all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
     each_required_btc_regime_has_30_oos_events: allRequiredRegimesHaveOosCoverage ? 'PASS' : 'FAIL',
+    neural_validation_thresholds_profitable_with_minimum_samples:
+      validationThresholdsReady ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
     same_fixed_sha_and_oos_event_rows: sameFixedShaAndOosRows ? 'PASS' : 'FAIL',
@@ -1552,6 +1649,12 @@ export function runFixedShaBenchmark(inputRows, {
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
     training_objective: 'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3',
+    threshold_selection_policy: {
+      method: 'STATIC_GRID_PLUS_VALIDATION_SCORE_QUANTILES',
+      minimum_validation_trades: Math.max(5, Math.min(100, Math.trunc(Number(minimumValidationTrades) || 10))),
+      require_positive_validation_net_pnl_after_costs: true,
+      no_profitable_candidate_action: 'ABSTAIN_FROM_TRADING'
+    },
     execution_policy: {
       market: 'BINANCE_SPOT_USDT',
       paper_only: true,
