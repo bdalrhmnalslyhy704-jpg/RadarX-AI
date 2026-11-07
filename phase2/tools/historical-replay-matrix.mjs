@@ -54,7 +54,7 @@ async function main(){
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
       '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 4] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
-      '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x23 causal sequence export) [--dry-run]',
+      '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x28 causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
       'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency and skips slow REST pagination when an archive is unavailable.',
