@@ -21,13 +21,14 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'adaptive_volatility_ratio',
   'relative_btc_return',
   'order_book_available',
-  'agg_trade_available'
+  'agg_trade_available',
+  'volume_profile_trade_level_available'
 ]);
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x21_DILATIONS_1_2_4_WITH_TEMPORAL_ATTENTION_V1';
+  'CAUSAL_TCN_24x22_DILATIONS_1_2_4_WITH_TEMPORAL_ATTENTION_V1';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -141,20 +142,37 @@ export function calculateVolumeProfile(candles, { bins = 12, valueAreaFraction =
     .filter(row => validClosedCandle(row))
     .slice(-48);
   if (!rows.length) return { available: false, poc: null, value_area_low: null, value_area_high: null };
-  const prices = rows.flatMap(row => [
-    candleNumber(row, 'low'),
-    candleNumber(row, 'high'),
-    candleNumber(row, 'close')
-  ]).filter(value => value !== null && value > 0);
+  const tradePoints = rows.flatMap(row => (Array.isArray(row.aggTrades) ? row.aggTrades : [])
+    .map(trade => {
+      const price = finite(trade.price);
+      const quantity = finite(trade.quantity ?? trade.qty);
+      const quote = finite(trade.quoteQty ?? trade.quote_qty) ??
+        (price !== null && quantity !== null ? price * quantity : null);
+      return price !== null && price > 0 && quote !== null && quote > 0 ? { price, quote } : null;
+    }).filter(Boolean)).slice(-100000);
+  const tradeLevelAvailable = tradePoints.length > 0;
+  const prices = tradeLevelAvailable
+    ? tradePoints.map(trade => trade.price)
+    : rows.flatMap(row => [
+      candleNumber(row, 'low'), candleNumber(row, 'high'), candleNumber(row, 'close')
+    ]).filter(value => value !== null && value > 0);
   const low = Math.min(...prices), high = Math.max(...prices);
   if (!(high >= low) || !(high > 0)) return { available: false, poc: null, value_area_low: null, value_area_high: null };
   const count = Math.max(4, Math.min(32, Math.trunc(Number(bins) || 12)));
   const buckets = Array(count).fill(0);
   const width = Math.max((high - low) / count, high * 1e-8);
-  for (const row of rows) {
-    const typical = (candleNumber(row, 'high') + candleNumber(row, 'low') + candleNumber(row, 'close')) / 3;
-    const index = Math.max(0, Math.min(count - 1, Math.floor((typical - low) / width)));
-    buckets[index] += quoteVolume(row);
+  if (tradeLevelAvailable) {
+    for (const trade of tradePoints) {
+      const index = Math.max(0, Math.min(count - 1, Math.floor((trade.price - low) / width)));
+      buckets[index] += trade.quote;
+    }
+  } else {
+    // OHLCV-only fallback: a candle-typical-price volume proxy, not tick-level profile data.
+    for (const row of rows) {
+      const typical = (candleNumber(row, 'high') + candleNumber(row, 'low') + candleNumber(row, 'close')) / 3;
+      const index = Math.max(0, Math.min(count - 1, Math.floor((typical - low) / width)));
+      buckets[index] += quoteVolume(row);
+    }
   }
   const totalVolume = buckets.reduce((sum, value) => sum + value, 0);
   if (!(totalVolume > 0)) return { available: false, poc: null, value_area_low: null, value_area_high: null };
@@ -179,7 +197,8 @@ export function calculateVolumeProfile(candles, { bins = 12, valueAreaFraction =
     poc: center(pocIndex),
     value_area_low: low + left * width,
     value_area_high: low + (right + 1) * width,
-    total_quote_volume: totalVolume
+    total_quote_volume: totalVolume,
+    source: tradeLevelAvailable ? 'AGG_TRADE_PRICE_LEVELS' : 'CANDLE_TYPICAL_PRICE_PROXY'
   };
 }
 
@@ -295,7 +314,8 @@ export function buildHybridSequence({
       adaptiveVol,
       relativeBtc * 100,
       depth ? 1 : 0,
-      aggImbalance === null ? 0 : 1
+      aggImbalance === null ? 0 : 1,
+      volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0
     ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
     sequence.push(features);
   }
