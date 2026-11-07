@@ -94,7 +94,7 @@ function quoteVolume(candle) {
 }
 
 function tradeCount(candle) {
-  return Math.max(0, candleNumber(candle, 'numberOfTrades', 'trade_count') ?? 0);
+  return Math.max(0, finite(candle?.numberOfTrades ?? candle?.trade_count ?? candle?.tradeCount) ?? 0);
 }
 
 function logReturn(current, previous) {
@@ -458,7 +458,8 @@ function normalizeBenchmarkRows(inputRows) {
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
     if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
-        market !== 'BINANCE_SPOT_USDT' || outcomeSource !== 'BINANCE_SPOT_CLOSED_15M' ||
+        market !== 'BINANCE_SPOT_USDT' ||
+        !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null || classic === null ||
         classic < 0 || classic > 1 ||
@@ -1004,7 +1005,8 @@ export function runFixedShaBenchmark(inputRows, {
   epochs = 8,
   roundTripCostBps = DEFAULT_COST_BPS,
   positionFraction = DEFAULT_POSITION_FRACTION,
-  thresholdGrid = DEFAULT_TRADE_THRESHOLD_GRID
+  thresholdGrid = DEFAULT_TRADE_THRESHOLD_GRID,
+  targetDefinition = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'
 } = {}) {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
     throw new Error('FIXED_BENCHMARK_REQUIRES_FULL_SOURCE_COMMIT_SHA');
@@ -1015,7 +1017,7 @@ export function runFixedShaBenchmark(inputRows, {
     source_commit_sha: String(sourceCommitSha).toLowerCase(),
     dataset_sha256: datasetSha,
     row_count: rows.length,
-    target: '4H_CLOSED_CANDLE_GROSS_RETURN_WITH_FEE_AND_SLIPPAGE_NETTING'
+    target: String(targetDefinition)
   });
   const walkForward = buildPurgedWalkForwardFolds(rows, {
     folds, minimumTrainTimes, minimumTrainRows, minimumValidationRows, minimumTestRows, embargoMs
@@ -1100,6 +1102,8 @@ export function runFixedShaBenchmark(inputRows, {
     status: accepted ? 'HYBRID_TCN_ATTENTION_ACCEPTED' : 'NEURAL_SUPERIORITY_NOT_PROVEN',
     integrity,
     architecture: HYBRID_TCN_ARCHITECTURE,
+    target_definition: String(targetDefinition),
+    outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_SEMIVARIANCE_AND_DRAWDOWN_V1',
     execution_policy: {
       market: 'BINANCE_SPOT_USDT',
