@@ -601,6 +601,13 @@ async function main() {
     }
   }
   const marketCohortCandles = Object.fromEntries([...marketCohortFetches.entries()].map(([symbol, fetched]) => [symbol, fetched.candles]));
+  let hybridBenchmarkCandles=[];
+  if(hybridBenchmarkOutput){
+    process.stderr.write('[REPLAY] preloading closed BTCUSDT candles for relative-strength features\\n');
+    const btcFetch=await fetchOneMinute(client,'BTCUSDT',start-24*HOUR_MS-25*MINUTE_MS,observationEnd);
+    hybridBenchmarkCandles=btcFetch.candles;
+    if(!btcFetch.complete)process.stderr.write('[REPLAY] BTC benchmark candle history incomplete; relative_btc_available mask will remain 0 where unsupported\\n');
+  }
 
   for (const symbol of symbols) {
     try {
@@ -709,6 +716,7 @@ async function main() {
       outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
       captureHybridBenchmarkRows:hybridBenchmarkOutput!==null,
       captureHybridBenchmarkEveryMs:10*MINUTE_MS,
+      hybridBenchmarkCandles,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       timeframeCandles,
