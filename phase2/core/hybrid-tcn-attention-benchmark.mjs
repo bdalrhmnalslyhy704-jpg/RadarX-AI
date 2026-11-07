@@ -849,6 +849,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   sharpeWeight = 0.15,
   downsideWeight = 0.08,
   adverseExcursionWeight = 0.04,
+  excursionDrawdownWeight = 0.04,
   drawdownWeight = 0.08
 } = {}) {
   if (!Array.isArray(probabilities) || probabilities.length !== rows.length || !rows.length) {
@@ -863,6 +864,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   const positions = Array(rows.length).fill(0);
   const orderedReturns = Array(rows.length).fill(0);
   const orderedAdverseReturns = Array(rows.length).fill(0);
+  const orderedExcursionDrawdowns = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
   for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
     const pair = pairs[orderedIndex];
@@ -871,7 +873,10 @@ export function profitDrawdownObjective(probabilities, rows, {
     positions[pair.index] = allocation;
     orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
     const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
+    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
     orderedAdverseReturns[orderedIndex] = allocation * adverse * size;
+    orderedExcursionDrawdowns[orderedIndex] =
+      allocation * Math.max(0, favourable - adverse) * size;
     orderedProbabilityDerivative[orderedIndex] =
       allocation * (1 - allocation) / temp * pair.probability * (1 - pair.probability);
   }
@@ -881,12 +886,14 @@ export function profitDrawdownObjective(probabilities, rows, {
   const variance = mean(portfolioReturns.map(value => (value - average) ** 2)) ?? 0;
   const standardDeviation = Math.sqrt(variance + 1e-6);
   const sharpe = average / standardDeviation;
-  let downsideSquared = 0, adverseSquared = 0, underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
+  let downsideSquared = 0, adverseSquared = 0, excursionDrawdownSquared = 0;
+  let underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
   const drawdowns = [], peakIndices = [], drawdownGradient = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const value = portfolioReturns[index];
     if (value < 0) downsideSquared += value * value;
     adverseSquared += orderedAdverseReturns[index] ** 2;
+    excursionDrawdownSquared += orderedExcursionDrawdowns[index] ** 2;
     cumulative += value;
     if (cumulative > peak) {
       peak = cumulative;
@@ -907,10 +914,11 @@ export function profitDrawdownObjective(probabilities, rows, {
   }
   const downsideMean = downsideSquared / n;
   const adverseMean = adverseSquared / n;
+  const excursionDrawdownMean = excursionDrawdownSquared / n;
   const drawdownMean = underwaterSquared / n;
   const loss = -average - sharpeWeight * sharpe +
     downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
-    drawdownWeight * drawdownMean;
+    excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean;
   const logitGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
@@ -927,9 +935,14 @@ export function profitDrawdownObjective(probabilities, rows, {
       Math.min(0, netReturnPct(pair.row, cost))) * size;
     const adverseGradient = 2 * adverseExcursionWeight *
       orderedAdverseReturns[index] * adverse / n;
+    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
+    const excursionRange = Math.max(0, favourable - Math.min(0,
+      finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, netReturnPct(pair.row, cost))));
+    const excursionGradient = 2 * excursionDrawdownWeight *
+      orderedExcursionDrawdowns[index] * excursionRange * size / n;
     logitGradients[pair.index] =
-      gradient * net * orderedProbabilityDerivative[index] +
-      adverseGradient * orderedProbabilityDerivative[index];
+      (gradient * net + adverseGradient + excursionGradient) *
+      orderedProbabilityDerivative[index];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -938,6 +951,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     sharpe_per_decision: round(sharpe, 6),
     downside_semivariance: round(downsideMean, 8),
     adverse_excursion_penalty: round(adverseMean, 8),
+    intratrade_excursion_drawdown_penalty: round(excursionDrawdownMean, 8),
     drawdown_penalty: round(drawdownMean, 8),
     max_additive_drawdown_pct: round(maxDrawdown, 6),
     position_fraction: size,
@@ -985,7 +999,7 @@ export function trainHybridTcnAttention(trainingRows, {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_SEMIVARIANCE_AND_DRAWDOWN_V1',
+    training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
     objective_trace: trace
   };
 }
