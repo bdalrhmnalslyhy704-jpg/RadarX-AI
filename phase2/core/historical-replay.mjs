@@ -269,9 +269,6 @@ export function runHistoricalReplay({
   const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= observationEnd);
   const marketCohortIndex = indexMarketCohort(marketCohortCandles, observationEnd);
   const trades = normalizeTrades(aggTrades, observationEnd);
-  if(captureHybridBenchmarkRows===true&&horizon!==4*HOUR_MS) {
-    throw new Error('HYBRID_BENCHMARK_REQUIRES_EXACT_4H_OUTCOME_HORIZON');
-  }
   const tradesByMinute=new Map();
   if(tradeCoverageComplete){
     for(const trade of trades){
@@ -337,6 +334,9 @@ export function runHistoricalReplay({
     actual70At !== null ? "BINANCE_AGGTRADE_TIMESTAMP" : "NOT_REACHED";
   const cooldown = Math.max(0, finite(alertCooldownMs) ?? 0);
   const horizon = Math.max(0, finite(outcomeHorizonMs) ?? 0);
+  if(captureHybridBenchmarkRows===true&&horizon!==4*HOUR_MS) {
+    throw new Error('HYBRID_BENCHMARK_REQUIRES_EXACT_4H_OUTCOME_HORIZON');
+  }
   const rows = [];
   let priorAcceptedAt = -Infinity;
   let priorCandidateAt = -Infinity;
