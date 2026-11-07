@@ -28,12 +28,14 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
+export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x23_DILATIONS_1_2_4_WITH_TEMPORAL_ATTENTION_V1';
+  'CAUSAL_TCN_24x23_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_WITH_TEMPORAL_ATTENTION_V2';
 
 const HIDDEN = 12;
-const DILATIONS = Object.freeze([1, 2, 4]);
-const KERNEL_TAPS = 2;
+const DILATIONS = Object.freeze([1, 2, 4, 8]);
+const KERNEL_TAPS = 3;
+const TCN_RECEPTIVE_FIELD = 1 + (KERNEL_TAPS - 1) * DILATIONS.reduce((sum, dilation) => sum + dilation, 0);
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
 const DEFAULT_MAX_CONCURRENT_POSITIONS = 30;
@@ -1018,7 +1020,8 @@ export function predictHybridTcnAttention(sequence, fitted) {
   return {
     probability: round(result.probability, 8),
     attention_weights: result.attention.map(value => round(value, 8)),
-    architecture: HYBRID_TCN_ARCHITECTURE
+    architecture: HYBRID_TCN_ARCHITECTURE,
+    receptive_field_steps: TCN_RECEPTIVE_FIELD
   };
 }
 
