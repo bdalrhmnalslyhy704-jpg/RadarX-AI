@@ -43,7 +43,8 @@ async function main(){
     process.stdout.write([
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
-      '       [--max-trade-pages 60] [--max-trades 60000] [--outcome-horizon-hours 24] [--output reports/radarx-matrix] [--dry-run]',
+      '       [--max-trade-pages 60] [--max-trades 60000] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
+      '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x22 causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
       'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
@@ -55,6 +56,9 @@ async function main(){
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
   const outcomeHorizonHours=integer(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours');
+  const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
+  const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
+  if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const timeoutMs=integer(flag(args,'--timeout-ms','1800000'),1800000,60000,7200000,'timeout-ms');
   const outputDir=resolve(flag(args,'--output','./reports/radarx-historical-matrix-'+new Date().toISOString().replace(/[:.]/g,'-')));
   const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
@@ -62,15 +66,28 @@ async function main(){
   await mkdir(outputDir,{recursive:true});
   const client=new RestClient({...CONFIG.rest,baseUrls:CONFIG.rest.baseUrls??CONFIG.rest.urls});
   const results=[];
+  const hybridRows=[];
+  let hybridSourceSha=null;
   for(let i=0;i<windows.length;i++){
     const window=windows[i];
     process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+' ('+(i+1)+'/'+windows.length+')\n');
     const marketRegime=await classifyWindow(client,window);
     const rawPath=resolve(outputDir,window.id+'.json');
+    const hybridWindowPath=resolve(outputDir,window.id+'.hybrid-benchmark.json');
     const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),'--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),'--output',rawPath];
+    if(hybridBenchmarkOutput)childArgs.push('--hybrid-benchmark-output',hybridWindowPath);
     const child=await runChild(childArgs,{timeoutMs,windowId:window.id});
     let rawReport=null,parseError=null;
     try{rawReport=JSON.parse(await readFile(rawPath,'utf8'));}catch(error){parseError=String(error?.message??error);}
+    if(hybridBenchmarkOutput){
+      try{
+        const captured=JSON.parse(await readFile(hybridWindowPath,'utf8'));
+        if(!Array.isArray(captured.rows)||captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1')throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
+        if(hybridSourceSha===null)hybridSourceSha=captured.source_commit_sha;
+        if(captured.source_commit_sha!==hybridSourceSha)throw new Error('HYBRID_CAPTURE_SOURCE_SHA_MISMATCH');
+        hybridRows.push(...captured.rows);
+      }catch(error){parseError=(parseError?parseError+'; ':'')+'HYBRID_CAPTURE_FAILED:'+String(error?.message??error);}
+    }
     const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'};
     results.push({id:window.id,label:window.label,window:{start:window.start,end:window.end},market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,error:child.error??parseError},report_path:rawPath,summary});
   }
@@ -82,7 +99,39 @@ async function main(){
   const status=complete.length!==results.length?'INCOMPLETE_OR_PARTIAL':
     !regimeCoverageComplete?'INCOMPLETE_REGIME_COVERAGE':
       (hasCandleFallback?'COMPLETE_WITH_FALLBACK':'COMPLETE');
-  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,matrix_summary:{
+  let hybridDatasetSummary=null;
+  if(hybridBenchmarkOutput){
+    const hybridDataset={
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1',
+      source_commit_sha:hybridSourceSha,
+      market:'BINANCE_SPOT_USDT',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
+      feature_interval:'1M_CLOSED_CANDLES',
+      capture_sampling:'EVERY_10M_DECISION',
+      sequence_steps:24,
+      sequence_channels:22,
+      outcome_horizon_ms:4*HOUR_MS,
+      symbols,
+      windows:windows.map(window=>({id:window.id,start:window.start,end:window.end})),
+      benchmark_options:{folds:5,minimumTrainTimes:160,minimumTrainRows:100,
+        minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
+        targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
+      capture_summary:{
+        rows:hybridRows.length,
+        distinct_symbols:new Set(hybridRows.map(row=>row.symbol)).size,
+        distinct_decision_times:new Set(hybridRows.map(row=>row.at)).size,
+        agg_trade_flow_rows:hybridRows.filter(row=>row.trade_flow_available).length,
+        trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length
+      },
+      rows:hybridRows
+    };
+    const hybridTemp=hybridBenchmarkOutput+'.tmp-'+process.pid;
+    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\\n',{encoding:'utf8',flag:'wx'});
+    await (await import('node:fs/promises')).rename(hybridTemp,hybridBenchmarkOutput);
+    hybridDatasetSummary={path:hybridBenchmarkOutput,rows:hybridRows.length,source_commit_sha:hybridSourceSha};
+  }
+  const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,
+    hybrid_benchmark_dataset:hybridDatasetSummary,matrix_summary:{
     window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,
     trade_fallback_windows:complete.filter(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK').length,
     regimes_observed:regimesObserved,required_regimes:HISTORICAL_MATRIX_REQUIRED_REGIMES,
