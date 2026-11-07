@@ -45,14 +45,14 @@ The gradient flows through a smooth position-allocation function and the attenti
 
 The benchmark assumes long-only Spot entries, one open position at a time, and a 20% equity allocation per position. Default round-trip costs are 30 bps (10 bps fee plus 5 bps slippage per side). All strategies use identical costs. A +3% take-profit and -2% stop-loss are resolved from completed future candles; if one candle touches both levels and OHLC ordering is unknown, the stop is assumed to occur first. This conservative tie rule prevents optimistic look-ahead.
 
-The dataset must provide one unique row per symbol/decision timestamp with:
+The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The dataset must provide one unique row per symbol/decision timestamp with:
 
-- id, symbol, at, latest_input_at, and resolved_at in epoch milliseconds.
+- id, symbol, market=BINANCE_SPOT_USDT, outcome_source=BINANCE_SPOT_CLOSED_15M, at, latest_input_at, and resolved_at in epoch milliseconds.
 - sequence: exactly 24 rows by 21 finite normalized features, each value within [-4, 4].
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
-latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. The caller must derive outcomes from completed public Spot candles and must not include future-derived values in the input tensor or classic score.
+latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. Rows without the explicit Spot market and closed-15m outcome provenance are rejected. The caller must still source the candles and matching historical market-depth/aggregate-trade records from the public Spot market and must not include future-derived values in the input tensor or classic score.
 
 ## Walk-forward protocol
 
