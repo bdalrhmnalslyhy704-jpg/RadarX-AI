@@ -261,6 +261,8 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   assert.equal(report.trades[0].net_return_pct, 2.7);
   assert.equal(report.trades[1].net_return_pct, -2.3);
   assert.ok(report.max_drawdown_pct > 0);
+  assert.equal(report.trades[0].mae_marked_at, base + FIFTEEN_MINUTES);
+  assert.equal(report.trades[1].mae_marked_at, base + 2 * FIFTEEN_MINUTES);
 });
 
 test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital ceiling', () => {
@@ -313,6 +315,27 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
   assert.equal(report.execution_policy.paper_only, true);
   assert.equal(report.execution_policy.real_order_execution, false);
+});
+
+test('fixed-SHA benchmark rejects missing MAE timing and mixed outcome sources', () => {
+  const rows = makeRows(8);
+  const invalidMae = rows.map(row => ({ ...row }));
+  delete invalidMae[0].max_adverse_excursion_at;
+  const incomplete = runFixedShaBenchmark(invalidMae, {
+    sourceCommitSha: SOURCE_SHA, folds: 5, minimumTrainTimes: 40,
+    minimumTrainRows: 20, minimumValidationRows: 10, minimumTestRows: 10
+  });
+  assert.equal(incomplete.integrity.rows, 7);
+  assert.equal(incomplete.integrity.rejected_or_duplicate_rows_removed, 1);
+  assert.equal(incomplete.integrity.adverse_excursion_coverage_pct, 100);
+
+  const mixed = [...rows, {
+    ...rows[0], id: 'different-source', at: rows[0].at + 1,
+    latest_input_at: rows[0].at + 1, resolved_at: rows[0].resolved_at + 1,
+    outcome_source: 'BINANCE_SPOT_CLOSED_1M_REPLAY'
+  }];
+  assert.throws(() => runFixedShaBenchmark(mixed, { sourceCommitSha: SOURCE_SHA }),
+    /ONE_CLOSED_SPOT_OUTCOME_SOURCE/);
 });
 
 test('benchmark refuses a partial source SHA instead of inventing a fixed reference', () => {
