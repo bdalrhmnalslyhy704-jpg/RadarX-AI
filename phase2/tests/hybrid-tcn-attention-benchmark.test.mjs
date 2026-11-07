@@ -259,7 +259,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   const fitted = trainHybridTcnAttention(rows, { epochs: 1 });
   assert.equal(fitted.architecture, HYBRID_TCN_ARCHITECTURE);
   assert.equal(fitted.training_objective,
-    'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_SEMIVARIANCE_AND_DRAWDOWN_V1');
+    'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2');
   const predicted = predictHybridTcnAttention(rows.at(-1).sequence, fitted);
   assert.ok(predicted);
   assert.ok(predicted.probability >= 0 && predicted.probability <= 1);
