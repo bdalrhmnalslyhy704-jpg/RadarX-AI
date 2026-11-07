@@ -75,18 +75,22 @@ function makeCandles(count = 40) {
         asks: [[close + 0.005, 250], [close + 0.01, 200]]
       },
       aggTradeBuyQuote: 1200,
-      aggTradeSellQuote: 800
+      aggTradeSellQuote: 800,
+      aggTrades: [
+        { price: close - 0.002, quoteQty: 700, isBuyerMaker: false },
+        { price: close + 0.002, quoteQty: 300, isBuyerMaker: true }
+      ]
     };
   });
 }
 
 test('hybrid feature contract includes order flow, depth, volume profile and adaptive volatility', () => {
-  assert.equal(HYBRID_FEATURE_NAMES.length, 21);
-  assert.equal(HYBRID_SEQUENCE_CHANNELS, 21);
+  assert.equal(HYBRID_FEATURE_NAMES.length, 22);
+  assert.equal(HYBRID_SEQUENCE_CHANNELS, 22);
   for (const name of [
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
-    'adaptive_volatility_ratio'
+    'volume_profile_trade_level_available', 'adaptive_volatility_ratio'
   ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
 
   const candles = makeCandles();
@@ -94,7 +98,7 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   const built = buildHybridSequence({ candles, asOf, sequenceSteps: 24 });
   assert.equal(built.ready, true);
   assert.equal(built.sequence.length, 24);
-  assert.equal(built.sequence[0].length, 21);
+  assert.equal(built.sequence[0].length, 22);
   assert.ok(built.latest_input_at <= asOf);
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
@@ -102,6 +106,7 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   assert.ok(built.sequence.at(-1)[12] > 0, 'bid depth imbalance should be represented');
   assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
+  assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
   const beforeFuture = buildHybridSequence({ candles: [...candles, future], asOf, sequenceSteps: 24 });
@@ -110,8 +115,12 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
 });
 
 test('volume profile is derived only from the supplied completed candles', () => {
-  const profile = calculateVolumeProfile(makeCandles(24));
+  const candles = makeCandles(24);
+  const profile = calculateVolumeProfile(candles);
   assert.equal(profile.available, true);
+  assert.equal(profile.source, 'AGG_TRADE_PRICE_LEVELS');
+  const proxy = calculateVolumeProfile(candles.map(({ aggTrades, ...row }) => row));
+  assert.equal(proxy.source, 'CANDLE_TYPICAL_PRICE_PROXY');
   assert.ok(profile.poc > 0);
   assert.ok(profile.value_area_low <= profile.poc);
   assert.ok(profile.value_area_high >= profile.poc);
