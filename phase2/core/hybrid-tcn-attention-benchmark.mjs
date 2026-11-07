@@ -52,6 +52,7 @@ const DEFAULT_MAX_CONCURRENT_POSITIONS = 30;
 const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
 const DEFAULT_TRADE_THRESHOLD_GRID = Object.freeze([0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]);
 const DEFAULT_TARGET_DEFINITION = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1';
+const REQUIRED_MARKET_REGIMES = Object.freeze(['BULL_TREND', 'BEAR_TREND', 'SIDEWAYS']);
 
 const finite = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
@@ -533,6 +534,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const market = String(raw.market ?? '').trim().toUpperCase();
     const outcomeSource = String(raw.outcome_source ?? '').trim().toUpperCase();
     const rowTargetDefinition=String(raw.outcome_definition??'').trim();
+    const marketRegime=String(raw.market_regime??'').trim().toUpperCase();
+    const historicalWindowId=String(raw.historical_window_id??'').trim();
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
@@ -547,6 +550,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
+        !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
+        !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null ||
         adverse === null || adverse > 0 || adverse < -100 ||
@@ -563,6 +568,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     events.add(eventKey);
     rows.push({
       id, symbol, market, outcome_source: outcomeSource,
+      market_regime:marketRegime,historical_window_id:historicalWindowId,
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
       gross_return_pct: gross,
       max_adverse_excursion_pct:adverse,
@@ -1263,6 +1269,9 @@ export function runFixedShaBenchmark(inputRows, {
     row_count: rows.length,
     target: String(targetDefinition)
   });
+  const observedMarketRegimes=[...new Set(rows.map(row=>row.market_regime))].sort();
+  const missingMarketRegimes=REQUIRED_MARKET_REGIMES.filter(regime=>!observedMarketRegimes.includes(regime));
+  const marketRegimeCoverageComplete=missingMarketRegimes.length===0;
   const walkForward = buildPurgedWalkForwardFolds(rows, {
     folds, minimumTrainTimes, minimumTrainRows, minimumValidationRows, minimumTestRows, embargoMs
   });
@@ -1277,6 +1286,9 @@ export function runFixedShaBenchmark(inputRows, {
     all_inputs_causal: rows.every(row => row.latest_input_at <= row.at),
     outcome_definition: String(targetDefinition),
     outcome_source_count: outcomeSources.length,
+    market_regimes:observedMarketRegimes,
+    missing_market_regimes:missingMarketRegimes,
+    historical_window_count:new Set(rows.map(row=>row.historical_window_id)).size,
     adverse_excursion_coverage_pct: rows.length
       ? round(rows.filter(row => finite(row.max_adverse_excursion_pct) !== null &&
         finite(row.max_adverse_excursion_at) !== null).length / rows.length * 100, 4) : 0,
@@ -1295,6 +1307,12 @@ export function runFixedShaBenchmark(inputRows, {
       ).length / rows.length * 100, 4) : 0,
     depth_availability_pct: rows.length
       ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
+  };
+  if (!marketRegimeCoverageComplete) return {
+    status:'INSUFFICIENT_MARKET_REGIME_COVERAGE',
+    integrity,walk_forward:walkForward,
+    acceptance_gates:{all_three_observed_btc_regimes:'FAIL'},
+    neural:null,classic_baseline:null,superiority:'NOT_EVALUATED'
   };
   if (walkForward.status !== 'READY') return {
     status: 'INSUFFICIENT_WALK_FORWARD_COVERAGE',
@@ -1366,6 +1384,7 @@ export function runFixedShaBenchmark(inputRows, {
     adverse_excursion_coverage_at_least_99_9_pct: maeCoverage ? 'PASS' : 'FAIL',
     favourable_excursion_coverage_at_least_99_9_pct: mfeCoverage ? 'PASS' : 'FAIL',
     relative_btc_reference_coverage_at_least_80_pct: relativeBtcCoverage ? 'PASS' : 'FAIL',
+    all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
     same_fixed_sha_and_oos_event_rows: 'PASS',
@@ -1379,6 +1398,8 @@ export function runFixedShaBenchmark(inputRows, {
     architecture_config: HYBRID_TCN_CONFIGURATION,
     target_definition: String(targetDefinition),
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
+    market_regimes:observedMarketRegimes,
+    historical_window_count:integrity.historical_window_count,
     training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
     execution_policy: {
       market: 'BINANCE_SPOT_USDT',
