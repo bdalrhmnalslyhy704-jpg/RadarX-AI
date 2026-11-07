@@ -1051,7 +1051,7 @@ export function simulatePaperTrades(decisions, {
     cash -= capital;
     open.push(position);
     trades.push(position.trade);
-    if (adverseAt < position.resolved_at) pushEvent({ at: adverseAt, type: 'MAE', position });
+    if (adverseAt <= position.resolved_at) pushEvent({ at: adverseAt, type: 'MAE', position });
     pushEvent({ at: position.resolved_at, type: 'EXIT', position });
     updateDrawdown();
   }
