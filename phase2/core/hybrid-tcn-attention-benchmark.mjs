@@ -1433,6 +1433,22 @@ function summarizeTrades(report) {
   };
 }
 
+export function hasRiskAdjustedNeuralSuperiority(neural, classicBaseline, {
+  validationThresholdsReady = false,
+  minimumTrades = 100,
+  minimumWinRatePct = 55,
+  maximumDrawdownPct = 8
+} = {}) {
+  if (!neural || !classicBaseline || !validationThresholdsReady) return false;
+  return Number(neural.trade_count) >= minimumTrades &&
+    Number(neural.win_rate_pct) >= minimumWinRatePct &&
+    Number(neural.max_drawdown_pct) <= maximumDrawdownPct &&
+    Number(neural.net_pnl_pct) > 0 &&
+    Number(neural.net_pnl_pct) > Number(classicBaseline.net_pnl_pct) &&
+    Number(neural.sharpe_per_trade) > Number(classicBaseline.sharpe_per_trade) &&
+    Number(neural.max_drawdown_pct) <= Number(classicBaseline.max_drawdown_pct);
+}
+
 /**
  * Same fixed SHA, same closed-candle opportunity rows and same execution costs
  * for both challengers. Validation only chooses each score threshold; no test
@@ -1592,11 +1608,9 @@ export function runFixedShaBenchmark(inputRows, {
   const uniqueRows = integrity.rejected_or_duplicate_rows_removed === 0;
   const validationThresholdsReady = foldReports.every(fold =>
     fold.neural_threshold_selection?.status === 'SELECTED_PROFITABLE_VALIDATION_THRESHOLD');
-  const riskAdjustedSuperiority = minimumTrades && winRate && drawdown && profit &&
-    validationThresholdsReady &&
-    neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
-    neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
-    neural.max_drawdown_pct <= classicBaseline.max_drawdown_pct;
+  const riskAdjustedSuperiority = hasRiskAdjustedNeuralSuperiority(neural, classicBaseline, {
+    validationThresholdsReady
+  });
   const sameOutOfSampleEvents = outOfSampleNeural.length === outOfSampleClassic.length &&
     outOfSampleNeural.every((row,index) => row.id === outOfSampleClassic[index]?.id &&
       row.symbol === outOfSampleClassic[index]?.symbol && row.at === outOfSampleClassic[index]?.at &&
