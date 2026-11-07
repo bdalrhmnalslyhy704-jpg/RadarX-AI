@@ -33,7 +33,7 @@ The order-book and aggregate-trade fields are optional. A missing feed is encode
 
 ## Neural architecture and objective
 
-The challenger first projects 23 features to 12 hidden channels, then applies four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps. This gives a theoretical 31-step receptive field, spanning the full 24-step input. A learned temporal attention query produces a softmax weight over the 24 available historical states; the weighted context feeds the prediction head. No step after the decision timestamp is accessible to the model.
+The challenger first projects 23 features to 12 hidden channels, then applies four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps and 12 hidden channels. This gives a theoretical 31-step receptive field, spanning the full 24-step input. The benchmark report records this full architecture configuration. A learned temporal attention query produces a softmax weight over the 24 available historical states; the weighted context feeds the prediction head. No step after the decision timestamp is accessible to the model.
 
 Training minimizes a custom differentiable portfolio objective, not MSE or Brier:
 
