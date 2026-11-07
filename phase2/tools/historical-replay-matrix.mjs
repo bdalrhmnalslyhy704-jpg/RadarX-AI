@@ -126,8 +126,8 @@ async function main(){
       rows:hybridRows
     };
     const hybridTemp=hybridBenchmarkOutput+'.tmp-'+process.pid;
-    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\\n',{encoding:'utf8',flag:'wx'});
-    await (await import('node:fs/promises')).rename(hybridTemp,hybridBenchmarkOutput);
+    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\n',{encoding:'utf8',flag:'wx'});
+    await rename(hybridTemp,hybridBenchmarkOutput);
     hybridDatasetSummary={path:hybridBenchmarkOutput,rows:hybridRows.length,source_commit_sha:hybridSourceSha};
   }
   const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,
@@ -138,7 +138,6 @@ async function main(){
     missing_required_regimes:missingRequiredRegimes,regime_coverage_complete:regimeCoverageComplete,status
   }};
   const finalPath=resolve(outputDir,'matrix-summary.json');
-  const {writeFile}=await import('node:fs/promises');
   await writeFile(finalPath,JSON.stringify(matrix,null,2)+'\n');
   process.stdout.write('[MATRIX_SUMMARY] '+finalPath+'\n'+JSON.stringify(matrix.matrix_summary)+'\n');
   if(!['COMPLETE','COMPLETE_WITH_FALLBACK'].includes(matrix.matrix_summary.status)||results.some(x=>x.process.exit_code===1||x.process.timed_out))process.exitCode=2;
