@@ -253,7 +253,8 @@ export function runHistoricalReplay({
   candidateResetMs = 5 * 60 * 1000,
   outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}, marketCohortCandles = null,
   captureHybridBenchmarkRows = false,
-  captureHybridBenchmarkEveryMs = 10 * MINUTE_MS
+  captureHybridBenchmarkEveryMs = 10 * MINUTE_MS,
+  hybridBenchmarkCandles = []
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -490,7 +491,10 @@ export function runHistoricalReplay({
         ...row,
         aggTrades:tradesByMinute.get(row.openTime)||[]
       }));
-      const tensor=buildHybridSequence({candles:featureCandles,asOf:at,sequenceSteps:24});
+      const tensor=buildHybridSequence({
+        candles:featureCandles,benchmarkCandles:hybridBenchmarkCandles,
+        asOf:at,sequenceSteps:24
+      });
       const bracket=resolveBarrierTrade({
         entryPrice:close,decisionAt:at,futureCandles:forwardRows,
         takeProfitPct:3,stopLossPct:2,horizonMs:4*HOUR_MS,
@@ -515,7 +519,8 @@ export function runHistoricalReplay({
           outcome_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
           outcome_exit_reason:bracket.exit_reason,
           trade_flow_available:featureCandles.some(row=>row.aggTrades.length>0),
-          trade_level_volume_profile_available:tensor.sequence.at(-1)?.[21]===1
+          trade_level_volume_profile_available:tensor.sequence.at(-1)?.[21]===1,
+          relative_btc_available:tensor.sequence.at(-1)?.[22]===1
         });
       }
     }
