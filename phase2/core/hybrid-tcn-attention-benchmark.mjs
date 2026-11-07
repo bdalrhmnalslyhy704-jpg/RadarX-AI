@@ -36,6 +36,16 @@ const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
 const KERNEL_TAPS = 3;
 const TCN_RECEPTIVE_FIELD = 1 + (KERNEL_TAPS - 1) * DILATIONS.reduce((sum, dilation) => sum + dilation, 0);
+export const HYBRID_TCN_CONFIGURATION = Object.freeze({
+  sequence_steps: HYBRID_SEQUENCE_STEPS,
+  feature_channels: HYBRID_SEQUENCE_CHANNELS,
+  hidden_channels: HIDDEN,
+  residual_tcn_blocks: DILATIONS.length,
+  dilations: DILATIONS,
+  kernel_taps: KERNEL_TAPS,
+  receptive_field_steps: TCN_RECEPTIVE_FIELD,
+  temporal_attention: 'LEARNED_QUERY_SOFTMAX'
+});
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
 const DEFAULT_MAX_CONCURRENT_POSITIONS = 30;
@@ -1005,6 +1015,7 @@ export function trainHybridTcnAttention(trainingRows, {
   }
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
+    architecture_config: HYBRID_TCN_CONFIGURATION,
     receptive_field_steps: TCN_RECEPTIVE_FIELD,
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
@@ -1022,6 +1033,7 @@ export function predictHybridTcnAttention(sequence, fitted) {
     probability: round(result.probability, 8),
     attention_weights: result.attention.map(value => round(value, 8)),
     architecture: HYBRID_TCN_ARCHITECTURE,
+    architecture_config: HYBRID_TCN_CONFIGURATION,
     receptive_field_steps: TCN_RECEPTIVE_FIELD
   };
 }
@@ -1364,6 +1376,7 @@ export function runFixedShaBenchmark(inputRows, {
     status: accepted ? 'HYBRID_TCN_ATTENTION_ACCEPTED' : 'NEURAL_SUPERIORITY_NOT_PROVEN',
     integrity,
     architecture: HYBRID_TCN_ARCHITECTURE,
+    architecture_config: HYBRID_TCN_CONFIGURATION,
     target_definition: String(targetDefinition),
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
