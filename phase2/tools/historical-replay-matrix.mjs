@@ -113,8 +113,9 @@ async function main(){
       outcome_horizon_ms:4*HOUR_MS,
       symbols,
       windows:windows.map(window=>({id:window.id,start:window.start,end:window.end})),
-      benchmark_options:{folds:5,minimumTrainTimes:160,minimumTrainRows:100,
+      benchmark_options:{folds:5,minimumTrainTimes:40,minimumTrainRows:100,
         minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
+        positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,epochs:8,
         targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
       capture_summary:{
         rows:hybridRows.length,
