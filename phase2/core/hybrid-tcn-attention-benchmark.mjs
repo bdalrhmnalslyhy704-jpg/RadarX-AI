@@ -1228,7 +1228,11 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_definition: String(targetDefinition),
     outcome_source_count: outcomeSources.length,
     adverse_excursion_coverage_pct: rows.length
-      ? round(rows.filter(row => finite(row.max_adverse_excursion_pct) !== null).length / rows.length * 100, 4) : 0,
+      ? round(rows.filter(row => finite(row.max_adverse_excursion_pct) !== null &&
+        finite(row.max_adverse_excursion_at) !== null).length / rows.length * 100, 4) : 0,
+    favourable_excursion_coverage_pct: rows.length
+      ? round(rows.filter(row => finite(row.max_favorable_excursion_pct) !== null &&
+        finite(row.max_favorable_excursion_at) !== null).length / rows.length * 100, 4) : 0,
     agg_trade_flow_coverage_pct: rows.length
       ? round(rows.filter(row => row.sequence.at(-1)?.[20] === 1).length / rows.length * 100, 4) : 0,
     trade_level_volume_profile_coverage_pct: rows.length
