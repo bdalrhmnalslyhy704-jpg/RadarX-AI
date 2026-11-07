@@ -5,15 +5,25 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {CONFIG} from '../config.mjs';
 import {RestClient} from '../market/binance-rest.mjs';
+import {fetchBinanceSpotAggTradesArchive} from '../core/binance-spot-aggtrade-archive.mjs';
 import {withHistoricalRateLimitRetry} from './historical-replay.mjs';
 import {HISTORICAL_MATRIX_DEFAULT_SYMBOLS,HISTORICAL_MATRIX_DEFAULT_WINDOWS,HISTORICAL_MATRIX_REQUIRED_REGIMES,normalizeMatrixSymbols,normalizeMatrixWindows,classifyBtcMarketRegime,summarizeHistoricalWindowReport} from '../core/historical-replay-matrix.mjs';
 
+const MINUTE_MS=60_000;
 const HOUR_MS=60*60*1000;
 const here=dirname(fileURLToPath(import.meta.url));
 const replayScript=resolve(here,'historical-replay.mjs');
 function flag(args,name,fallback=null){const i=args.indexOf(name);return i<0?fallback:(args[i+1]??fallback);}
 function integer(raw,fallback,min,max,label){const n=Math.trunc(Number(raw??fallback));if(!Number.isFinite(n)||n<min||n>max)throw new Error('INVALID_'+label.toUpperCase());return n;}
 function isoArg(value){const n=Date.parse(String(value??''));if(!Number.isFinite(n))throw new Error('INVALID_MATRIX_TIME');return new Date(n).toISOString();}
+async function mapWithConcurrency(items,concurrency,worker){
+  const values=new Array(items.length);let cursor=0;
+  const count=Math.min(items.length,Math.max(1,Math.trunc(Number(concurrency)||1)));
+  await Promise.all(Array.from({length:count},async()=>{
+    while(true){const index=cursor++;if(index>=items.length)return;values[index]=await worker(items[index],index);}
+  }));
+  return values;
+}
 async function loadWindows(path){if(!path)return HISTORICAL_MATRIX_DEFAULT_WINDOWS;const raw=JSON.parse(await readFile(resolve(path),'utf8'));if(!Array.isArray(raw))throw new Error('WINDOWS_JSON_MUST_BE_ARRAY');return raw;}
 async function classifyWindow(client,window){
   try{
@@ -43,10 +53,11 @@ async function main(){
     process.stdout.write([
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
-      '       [--max-trade-pages 60] [--max-trades 60000] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
+      '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 4] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
       '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x23 causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
+      'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency and skips slow REST pagination when an archive is unavailable.',
       'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
     ].join('\n')+'\n');return;
   }
@@ -55,13 +66,14 @@ async function main(){
   const windows=normalizeMatrixWindows(windowsInput,{now:Date.now()});
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
+  const archivePrefetchConcurrency=integer(flag(args,'--archive-prefetch-concurrency','4'),4,1,8,'archive-prefetch-concurrency');
   const outcomeHorizonHours=integer(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours');
   const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
   const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
   if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const timeoutMs=integer(flag(args,'--timeout-ms','1800000'),1800000,60000,7200000,'timeout-ms');
   const outputDir=resolve(flag(args,'--output','./reports/radarx-historical-matrix-'+new Date().toISOString().replace(/[:.]/g,'-')));
-  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,archive_prefetch_concurrency:archivePrefetchConcurrency,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
   if(args.includes('--dry-run')){process.stdout.write(JSON.stringify({...plan,status:'DRY_RUN_NO_NETWORK'},null,2)+'\n');return;}
   await mkdir(outputDir,{recursive:true});
   const client=new RestClient({...CONFIG.rest,baseUrls:CONFIG.rest.baseUrls??CONFIG.rest.urls});
@@ -72,10 +84,24 @@ async function main(){
     const window=windows[i];
     process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+' ('+(i+1)+'/'+windows.length+')\n');
     const marketRegime=await classifyWindow(client,window);
+    if(hybridBenchmarkOutput){
+      const archiveStart=window.startMs-25*MINUTE_MS;
+      const archiveEnd=window.endMs-1;
+      const archiveResults=await mapWithConcurrency(symbols,archivePrefetchConcurrency,async symbol=>{
+        try{
+          const result=await fetchBinanceSpotAggTradesArchive(symbol,archiveStart,archiveEnd,{maxTrades});
+          return {symbol,complete:result.complete===true,rows:Number(result.coverage?.rows)||0,
+            reason:result.complete===true?null:String(result.coverage?.reason||'ARCHIVE_INCOMPLETE')};
+        }catch(error){return {symbol,complete:false,rows:0,reason:String(error?.message??error).slice(0,180)};}
+      });
+      const archiveComplete=archiveResults.filter(item=>item.complete).length;
+      process.stderr.write('[MATRIX_ARCHIVE_PREFETCH] '+window.id+' complete='+archiveComplete+'/'+symbols.length+
+        ' concurrency='+archivePrefetchConcurrency+' incomplete='+JSON.stringify(archiveResults.filter(item=>!item.complete))+'\\n');
+    }
     const rawPath=resolve(outputDir,window.id+'.json');
     const hybridWindowPath=resolve(outputDir,window.id+'.hybrid-benchmark.json');
     const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),'--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),'--output',rawPath];
-    if(hybridBenchmarkOutput)childArgs.push('--hybrid-benchmark-output',hybridWindowPath);
+    if(hybridBenchmarkOutput)childArgs.push('--hybrid-benchmark-output',hybridWindowPath,'--no-aggtrade-rest-fallback');
     const child=await runChild(childArgs,{timeoutMs,windowId:window.id});
     let rawReport=null,parseError=null;
     try{rawReport=JSON.parse(await readFile(rawPath,'utf8'));}catch(error){parseError=String(error?.message??error);}

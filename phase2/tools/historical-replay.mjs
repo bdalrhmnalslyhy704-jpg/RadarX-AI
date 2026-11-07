@@ -656,10 +656,12 @@ async function main() {
       await fetchFrame('BTCUSDT:1h','BTCUSDT','1h',25);
     }
     let tradeFetch;
+    const disableAggTradeRestFallback=args.includes('--no-aggtrade-rest-fallback');
     let archiveAttempt = null;
     try {
       // Prefer full, checksum-verified official historical Spot archives for completed
-      // UTC days. REST remains the fallback for current/incomplete days and unavailable archives.
+      // UTC days. Fixed-SHA hybrid captures disable REST pagination explicitly; missing
+      // archives remain visibly incomplete instead of stalling on hundreds of pages.
       archiveAttempt = await fetchBinanceSpotAggTradesArchive(
         symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxTrades}
       );
@@ -673,7 +675,7 @@ async function main() {
         }
       };
     }
-    if (!tradeFetch) {
+    if (!tradeFetch && !disableAggTradeRestFallback) {
       try {
         const restTradeFetch = await fetchAggregateTrades(
           client, symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxPages, maxTrades}
@@ -691,7 +693,7 @@ async function main() {
           trades: [], complete: false,
           coverage: {
             complete: false, pages: 0, rows: 0,
-            requested_start_time: start - 65_000, requested_end_time: end,
+            requested_start_time: start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), requested_end_time: end,
             last_trade_time: null, limit_reached: false,
             pagination: 'aggTrade ID cursor; unique aggregate trade IDs',
             fallback_reason: String(error?.message ?? error).slice(0, 240),
@@ -699,6 +701,18 @@ async function main() {
           }
         };
       }
+    }
+    if(!tradeFetch){
+      tradeFetch={
+        trades:[],complete:false,
+        coverage:{
+          complete:false,pages:0,rows:0,
+          requested_start_time:start-(hybridBenchmarkOutput?25*MINUTE_MS:65_000),
+          requested_end_time:end,last_trade_time:null,limit_reached:false,
+          reason:'VERIFIED_ARCHIVE_UNAVAILABLE_REST_FALLBACK_DISABLED',
+          archive_attempt:archiveAttempt?.coverage||null
+        }
+      };
     }
     const tickerConfig = config.strongMoveRadar || {};
     const minQuoteVolume24h = Number(tickerConfig.minQuoteVolume24h ?? 1_000_000);

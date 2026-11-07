@@ -34,6 +34,7 @@ test('matrix CLI dry-run validates the 30-symbol by three-window plan without ne
   assert.equal(plan.window_count,3);
   assert.equal(plan.planned_symbol_window_replays,90);
   assert.equal(plan.limits.outcome_horizon_hours,48);
+  assert.equal(plan.limits.archive_prefetch_concurrency,4);
   assert.equal(plan.policy.real_order_execution,false);
 });
 test('matrix reports measured early detections, missed movers, and weak follow-through together',()=>{
