@@ -35,7 +35,8 @@ const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
-const DEFAULT_POSITION_FRACTION = 0.20;
+const DEFAULT_MAX_CONCURRENT_POSITIONS = 12;
+const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
 const DEFAULT_TRADE_THRESHOLD_GRID = Object.freeze([0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]);
 
 const finite = value => {
@@ -387,6 +388,10 @@ export function resolveBarrierTrade({
     exitReason = 'HORIZON_CLOSE';
   }
   const grossReturnPct = (exitPrice / entry - 1) * 100;
+  const executedPath=path.filter(candle=>candleTime(candle)<=exitAt);
+  const lowestPrice=executedPath.length
+    ?Math.min(...executedPath.map(candle=>candleNumber(candle,'low'))):entry;
+  const maxAdverseExcursionPct=(lowestPrice/entry-1)*100;
   const roundTripCostBps = 2 * (Math.max(0, Number(feeBpsPerSide) || 0) +
     Math.max(0, Number(slippageBpsPerSide) || 0));
   return {
@@ -397,6 +402,7 @@ export function resolveBarrierTrade({
     exit_at: exitAt,
     exit_reason: exitReason,
     gross_return_pct: round(grossReturnPct, 6),
+    max_adverse_excursion_pct: round(maxAdverseExcursionPct, 6),
     round_trip_cost_bps: round(roundTripCostBps, 4),
     net_return_pct: round(grossReturnPct - roundTripCostBps / 100, 6),
     conservative_same_candle_rule: true
@@ -473,7 +479,9 @@ function normalizeBenchmarkRows(inputRows) {
     rows.push({
       id, symbol, market, outcome_source: outcomeSource,
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
-      gross_return_pct: gross, classic_score: classic,
+      gross_return_pct: gross,
+      max_adverse_excursion_pct:finite(raw.max_adverse_excursion_pct),
+      classic_score: classic,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
     });
@@ -910,57 +918,121 @@ export function predictHybridTcnAttention(sequence, fitted) {
 }
 
 export function simulatePaperTrades(decisions, {
-  threshold = 0.55, roundTripCostBps = DEFAULT_COST_BPS,
-  positionFraction = DEFAULT_POSITION_FRACTION, initialEquity = 100
+  threshold = 0.55,
+  roundTripCostBps = DEFAULT_COST_BPS,
+  positionFraction = DEFAULT_POSITION_FRACTION,
+  maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
+  initialEquity = 100
 } = {}) {
-  const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.01, 1);
+  const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.001, 1);
+  const maxOpen = Math.max(1, Math.min(30, Math.trunc(Number(maxConcurrentPositions) || DEFAULT_MAX_CONCURRENT_POSITIONS)));
   const costPct = Math.max(0, Number(roundTripCostBps) || 0) / 100;
+  const seedEquity = Math.max(1, Number(initialEquity) || 100);
   const selected = (Array.isArray(decisions) ? decisions : [])
     .filter(row => finite(row.score) !== null && finite(row.threshold ?? threshold) !== null &&
-      row.score >= (row.threshold ?? threshold))
+      row.score >= (row.threshold ?? threshold) &&
+      finite(row.resolved_at) !== null && finite(row.at) !== null &&
+      Number(row.resolved_at) > Number(row.at) &&
+      finite(row.gross_return_pct) !== null)
     .sort((a, b) => a.at - b.at || b.score - a.score || a.symbol.localeCompare(b.symbol));
-  let equity = Math.max(1, Number(initialEquity) || 100);
-  let peak = equity, maxDrawdown = 0, availableAt = -Infinity;
+  let cash = seedEquity;
+  let peakEquity = seedEquity;
+  let maxDrawdown = 0;
+  const open = [];
   const trades = [];
-  let skippedBusy = 0;
+  let skippedSameSymbol = 0, skippedCapacity = 0, skippedInsufficientCash = 0;
+
+  const markedEquity = () => cash + open.reduce((sum, position) =>
+    sum + position.capital * (1 + position.max_adverse_pct / 100), 0);
+  const totalEquity = () => cash + open.reduce((sum, position) => sum + position.capital, 0);
+  const updateDrawdown = () => {
+    const mark = Math.max(0, markedEquity());
+    peakEquity = Math.max(peakEquity, mark, totalEquity());
+    if (peakEquity > 0) maxDrawdown = Math.max(maxDrawdown, (peakEquity - mark) / peakEquity * 100);
+  };
+  const settleOne = position => {
+    const index = open.indexOf(position);
+    if (index >= 0) open.splice(index, 1);
+    const pnl = position.capital * position.net_return_pct / 100;
+    cash += position.capital + pnl;
+    position.trade.pnl = round(pnl, 8);
+    position.trade.equity_after_exit = round(totalEquity(), 8);
+    position.trade.exit_realized = true;
+    updateDrawdown();
+  };
+  const settleUntil = at => {
+    const due = open.filter(position => position.resolved_at <= at)
+      .sort((a, b) => a.resolved_at - b.resolved_at || a.symbol.localeCompare(b.symbol));
+    for (const position of due) settleOne(position);
+  };
+
   for (const decision of selected) {
-    if (decision.at < availableAt) {
-      skippedBusy++;
+    const at = Number(decision.at);
+    settleUntil(at);
+    const symbol = String(decision.symbol || '').toUpperCase();
+    if (open.some(position => position.symbol === symbol)) {
+      skippedSameSymbol++;
+      continue;
+    }
+    if (open.length >= maxOpen) {
+      skippedCapacity++;
+      continue;
+    }
+    const equityAtEntry = totalEquity();
+    const capital = equityAtEntry * size;
+    if (!(capital > 0) || cash + 1e-9 < capital) {
+      skippedInsufficientCash++;
       continue;
     }
     const gross = Number(decision.gross_return_pct);
     const net = gross - costPct;
-    const before = equity;
-    const pnl = equity * size * (net / 100);
-    equity += pnl;
-    peak = Math.max(peak, equity);
-    maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak * 100);
-    availableAt = Number(decision.resolved_at);
-    trades.push({
-      id: decision.id, symbol: decision.symbol, at: decision.at, resolved_at: decision.resolved_at,
-      score: round(decision.score, 6), gross_return_pct: round(gross, 6),
-      net_return_pct: round(net, 6), position_fraction: size,
-      equity_before: round(before, 8), equity_after: round(equity, 8),
-      pnl: round(pnl, 8)
-    });
+    const maxAdverse = finite(decision.max_adverse_excursion_pct);
+    const position = {
+      id: decision.id, symbol, at,
+      resolved_at: Number(decision.resolved_at),
+      capital, gross_return_pct: gross, net_return_pct: net,
+      max_adverse_pct: maxAdverse === null ? Math.min(0, net) : Math.min(0, maxAdverse),
+      score: Number(decision.score), threshold: Number(decision.threshold ?? threshold),
+      trade: {
+        id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
+        score: round(Number(decision.score), 6),
+        gross_return_pct: round(gross, 6), net_return_pct: round(net, 6),
+        max_adverse_excursion_pct: round(maxAdverse, 6),
+        position_fraction: round(capital / Math.max(1e-9, equityAtEntry), 8),
+        allocated_capital: round(capital, 8),
+        equity_before: round(equityAtEntry, 8),
+        equity_after_exit: null, pnl: null, exit_realized: false
+      }
+    };
+    cash -= capital;
+    open.push(position);
+    trades.push(position.trade);
+    updateDrawdown();
   }
-  const netTradeReturns = trades.map(row => row.net_return_pct * size);
+  // Every selected test label is fully matured before it is scored. Settle the
+  // remaining paper positions in exit-time order instead of dropping open trades.
+  for (const position of [...open].sort((a, b) =>
+    a.resolved_at - b.resolved_at || a.symbol.localeCompare(b.symbol))) settleOne(position);
+
+  const netTradeReturns = trades.map(row => row.net_return_pct * row.position_fraction);
   const average = mean(netTradeReturns) ?? 0;
   const sd = Math.sqrt(mean(netTradeReturns.map(value => (value - average) ** 2)) ?? 0);
   const wins = trades.filter(row => row.net_return_pct > 0).length;
-  const losses = trades.length - wins;
   return {
     trade_count: trades.length,
     win_count: wins,
-    loss_or_breakeven_count: losses,
+    loss_or_breakeven_count: trades.length - wins,
     win_rate_pct: trades.length ? round(wins / trades.length * 100, 4) : 0,
-    net_pnl_pct: round((equity / Math.max(1, Number(initialEquity) || 100) - 1) * 100, 6),
-    final_equity: round(equity, 8),
+    net_pnl_pct: round((cash / seedEquity - 1) * 100, 6),
+    final_equity: round(cash, 8),
     max_drawdown_pct: round(maxDrawdown, 6),
     sharpe_per_trade: sd > 1e-9 ? round(average / sd, 6) : 0,
-    skipped_signals_while_position_open: skippedBusy,
-    cost_round_trip_bps: Number(roundTripCostBps),
+    skipped_signals_same_symbol_position_open: skippedSameSymbol,
+    skipped_signals_at_position_capacity: skippedCapacity,
+    skipped_signals_insufficient_cash: skippedInsufficientCash,
+    round_trip_cost_bps: Number(roundTripCostBps),
     position_fraction: size,
+    max_concurrent_positions: maxOpen,
     trades
   };
 }
@@ -1008,6 +1080,7 @@ export function runFixedShaBenchmark(inputRows, {
   epochs = 8,
   roundTripCostBps = DEFAULT_COST_BPS,
   positionFraction = DEFAULT_POSITION_FRACTION,
+  maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
   thresholdGrid = DEFAULT_TRADE_THRESHOLD_GRID,
   targetDefinition = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'
 } = {}) {
@@ -1047,7 +1120,7 @@ export function runFixedShaBenchmark(inputRows, {
 
   const outOfSampleNeural = [], outOfSampleClassic = [], foldReports = [];
   const executionOptions = {
-    threshold: 0.55, roundTripCostBps, positionFraction, thresholdGrid: [...thresholdGrid]
+    threshold: 0.55, roundTripCostBps, positionFraction, maxConcurrentPositions, thresholdGrid: [...thresholdGrid]
   };
   for (const fold of walkForward.folds) {
     const fitted = trainHybridTcnAttention(fold.train, { epochs });
@@ -1114,7 +1187,8 @@ export function runFixedShaBenchmark(inputRows, {
       real_order_execution: false,
       round_trip_cost_bps: roundTripCostBps,
       position_fraction: positionFraction,
-      one_open_position_at_a_time: true,
+      max_concurrent_positions: maxConcurrentPositions,
+      one_open_position_per_symbol: true,
       same_candle_take_profit_stop_loss_tie: 'STOP_FIRST'
     },
     walk_forward: {
