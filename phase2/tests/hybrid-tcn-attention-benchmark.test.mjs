@@ -26,7 +26,7 @@ function makeSequence(direction = 1, seed = 0) {
   return Array.from({ length: HYBRID_SEQUENCE_STEPS }, (_, time) =>
     Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, feature) => {
       if (feature === 19) return 0; // no historical depth snapshot
-      if (feature === 20 || feature === 21) return 1; // controlled fixture: complete AggTrade evidence
+      if (feature === 20 || feature === 21 || feature === 22) return 1; // controlled fixture: flow, profile and BTC reference available
       const trend = direction * (feature === 0 ? 0.7 : feature === 10 ? 0.4 : 0.12);
       const wave = Math.sin((time + 1) * (feature + 1) * 0.13 + seed) * 0.08;
       return Math.max(-3, Math.min(3, trend + wave));
@@ -90,20 +90,20 @@ function makeCandles(count = 40) {
 }
 
 test('hybrid feature contract includes order flow, depth, volume profile and adaptive volatility', () => {
-  assert.equal(HYBRID_FEATURE_NAMES.length, 22);
-  assert.equal(HYBRID_SEQUENCE_CHANNELS, 22);
+  assert.equal(HYBRID_FEATURE_NAMES.length, 23);
+  assert.equal(HYBRID_SEQUENCE_CHANNELS, 23);
   for (const name of [
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
-    'volume_profile_trade_level_available', 'adaptive_volatility_ratio'
+    'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available'
   ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
 
   const candles = makeCandles();
   const asOf = candles.at(-1).closeTime;
-  const built = buildHybridSequence({ candles, asOf, sequenceSteps: 24 });
+  const built = buildHybridSequence({ candles, benchmarkCandles: candles, asOf, sequenceSteps: 24 });
   assert.equal(built.ready, true);
   assert.equal(built.sequence.length, 24);
-  assert.equal(built.sequence[0].length, 22);
+  assert.equal(built.sequence[0].length, 23);
   assert.ok(built.latest_input_at <= asOf);
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
@@ -112,9 +112,10 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
   assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
+  assert.equal(built.sequence.at(-1)[22], 1, 'relative BTC reference mask should be set');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
-  const beforeFuture = buildHybridSequence({ candles: [...candles, future], asOf, sequenceSteps: 24 });
+  const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles: candles, asOf, sequenceSteps: 24 });
   assert.equal(beforeFuture.latest_input_at, asOf, 'future closed candles must not enter the tensor');
   assert.deepEqual(beforeFuture.sequence, built.sequence);
 });
@@ -140,7 +141,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   }];
   const incomplete = prepareHybridBenchmarkEvent({
     id: 'incomplete', symbol: 'ETHUSDT', decisionAt: at,
-    candles, entryPrice: 10, classicScore: 0.7, futureCandles: noBarrier
+    candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: noBarrier
   });
   assert.equal(incomplete.ready, false);
   assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
@@ -151,7 +152,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   }];
   const prepared = prepareHybridBenchmarkEvent({
     id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
-    candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
+    candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
   });
   assert.equal(prepared.ready, true);
   assert.equal(prepared.row.market, 'BINANCE_SPOT_USDT');
