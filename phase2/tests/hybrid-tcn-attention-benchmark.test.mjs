@@ -420,6 +420,20 @@ test('fixed-SHA benchmark rejects missing MAE timing and mixed outcome sources',
     /ONE_CLOSED_SPOT_OUTCOME_SOURCE/);
 });
 
+test('fixed-SHA benchmark refuses a dataset missing any observed BTC regime', () => {
+  const rows = makeRows(18).map(row => ({
+    ...row, market_regime: 'BULL_TREND', historical_window_id: 'only-bull-window'
+  }));
+  const report = runFixedShaBenchmark(rows, {
+    sourceCommitSha: SOURCE_SHA, folds: 5, minimumTrainTimes: 40,
+    minimumTrainRows: 20, minimumValidationRows: 10, minimumTestRows: 10
+  });
+  assert.equal(report.status, 'INSUFFICIENT_MARKET_REGIME_COVERAGE');
+  assert.deepEqual(report.integrity.missing_market_regimes, ['BEAR_TREND', 'SIDEWAYS']);
+  assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'FAIL');
+  assert.equal(report.neural, null);
+});
+
 test('benchmark refuses a partial source SHA instead of inventing a fixed reference', () => {
   assert.throws(() => runFixedShaBenchmark([], { sourceCommitSha: 'abc123' }),
     /FULL_SOURCE_COMMIT_SHA/);
