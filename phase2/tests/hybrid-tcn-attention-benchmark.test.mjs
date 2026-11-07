@@ -120,6 +120,12 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   });
   assert.equal(sparse.sequence.at(-1)[21], 0, 'partial volume profile must be unavailable to the model');
   assert.equal(built.sequence.at(-1)[22], 1, 'relative BTC reference mask should be set');
+  const misalignedBenchmark = candles.slice(0, -1);
+  const missingBtc = buildHybridSequence({
+    candles, benchmarkCandles: misalignedBenchmark, asOf, sequenceSteps: 24
+  });
+  assert.equal(missingBtc.sequence.at(-1)[22], 0,
+    'relative BTC feature must be unavailable without an exact matching close and contiguous prior candle');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
   const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles: candles, asOf, sequenceSteps: 24 });
