@@ -1371,6 +1371,7 @@ export function runFixedShaBenchmark(inputRows, {
   const maeCoverage = integrity.adverse_excursion_coverage_pct >= 99.9;
   const mfeCoverage = integrity.favourable_excursion_coverage_pct >= 99.9;
   const relativeBtcCoverage = integrity.relative_btc_coverage_pct >= 80;
+  const uniqueRows = integrity.rejected_or_duplicate_rows_removed === 0;
   const riskAdjustedSuperiority = neural.net_pnl_pct > classicBaseline.net_pnl_pct &&
     neural.sharpe_per_trade > classicBaseline.sharpe_per_trade &&
     neural.max_drawdown_pct <= classicBaseline.max_drawdown_pct;
@@ -1384,6 +1385,7 @@ export function runFixedShaBenchmark(inputRows, {
     adverse_excursion_coverage_at_least_99_9_pct: maeCoverage ? 'PASS' : 'FAIL',
     favourable_excursion_coverage_at_least_99_9_pct: mfeCoverage ? 'PASS' : 'FAIL',
     relative_btc_reference_coverage_at_least_80_pct: relativeBtcCoverage ? 'PASS' : 'FAIL',
+    all_input_rows_valid_and_unique: uniqueRows ? 'PASS' : 'FAIL',
     all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
     beat_classic_on_net_pnl_sharpe_without_higher_drawdown:
       riskAdjustedSuperiority ? 'PASS' : 'FAIL',
