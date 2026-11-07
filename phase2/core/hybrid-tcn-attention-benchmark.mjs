@@ -400,6 +400,32 @@ export function resolveBarrierTrade({
   const maxAdverseExcursionPct=(adversePrice/entry-1)*100;
   const maxAdverseExcursionAt=exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY'
     ?exitAt:(adverseCandle?candleTime(adverseCandle):at);
+
+  // A stop-first same-candle ambiguity cannot claim a favourable intrabar high
+  // from that exit candle. Prior closed candles and the final candle open remain
+  // observable before a gap/stop exit.
+  const favourablePath=(exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY')
+    ?executedPath.slice(0,-1):executedPath;
+  let favourablePrice=entry, maxFavorableExcursionAt=at;
+  for(const candle of favourablePath){
+    const high=candleNumber(candle,'high');
+    if(high>favourablePrice){
+      favourablePrice=high;
+      maxFavorableExcursionAt=candleTime(candle);
+    }
+  }
+  if(exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY'){
+    const lastOpen=executedPath.length?candleNumber(executedPath.at(-1),'open'):entry;
+    if(lastOpen>favourablePrice){
+      favourablePrice=lastOpen;
+      maxFavorableExcursionAt=exitAt;
+    }
+  }
+  if(exitReason==='TAKE_PROFIT'){
+    favourablePrice=exitPrice;
+    maxFavorableExcursionAt=exitAt;
+  }
+  const maxFavorableExcursionPct=Math.max(0,(favourablePrice/entry-1)*100);
   const roundTripCostBps = 2 * (Math.max(0, Number(feeBpsPerSide) || 0) +
     Math.max(0, Number(slippageBpsPerSide) || 0));
   return {
@@ -412,6 +438,8 @@ export function resolveBarrierTrade({
     gross_return_pct: round(grossReturnPct, 6),
     max_adverse_excursion_pct: round(maxAdverseExcursionPct, 6),
     max_adverse_excursion_at: maxAdverseExcursionAt,
+    max_favorable_excursion_pct: round(maxFavorableExcursionPct, 6),
+    max_favorable_excursion_at: maxFavorableExcursionAt,
     round_trip_cost_bps: round(roundTripCostBps, 4),
     net_return_pct: round(grossReturnPct - roundTripCostBps / 100, 6),
     conservative_same_candle_rule: true
@@ -452,6 +480,8 @@ export function prepareHybridBenchmarkEvent({
       gross_return_pct: outcome.gross_return_pct,
       max_adverse_excursion_pct: outcome.max_adverse_excursion_pct,
       max_adverse_excursion_at: outcome.max_adverse_excursion_at,
+      max_favorable_excursion_pct: outcome.max_favorable_excursion_pct,
+      max_favorable_excursion_at: outcome.max_favorable_excursion_at,
       classic_score: score,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
       sequence: features.sequence,
@@ -477,6 +507,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const gross = finite(raw.gross_return_pct);
     const adverse = finite(raw.max_adverse_excursion_pct);
     const adverseAt = finite(raw.max_adverse_excursion_at);
+    const favourable = finite(raw.max_favorable_excursion_pct);
+    const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
     if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
@@ -486,7 +518,9 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null ||
         adverse === null || adverse > 0 || adverse < -100 ||
-        adverseAt === null || adverseAt < at || adverseAt > resolvedAt || classic === null ||
+        adverseAt === null || adverseAt < at || adverseAt > resolvedAt ||
+        favourable === null || favourable < 0 || favourable > 1000 ||
+        favourableAt === null || favourableAt < at || favourableAt > resolvedAt || classic === null ||
         classic < 0 || classic > 1 ||
         !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
         !sequence.every(step => Array.isArray(step) && step.length === HYBRID_SEQUENCE_CHANNELS &&
@@ -501,6 +535,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       gross_return_pct: gross,
       max_adverse_excursion_pct:adverse,
       max_adverse_excursion_at:adverseAt,
+      max_favorable_excursion_pct:favourable,
+      max_favorable_excursion_at:favourableAt,
       classic_score: classic,
       outcome_definition:rowTargetDefinition,
       sequence: sequence.map(step => step.map(Number)),
@@ -968,10 +1004,15 @@ export function simulatePaperTrades(decisions, {
       row.score >= (row.threshold ?? threshold) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.max_adverse_excursion_at) !== null &&
+      finite(row.max_favorable_excursion_at) !== null &&
       Number(row.resolved_at) > Number(row.at) &&
       Number(row.max_adverse_excursion_at) >= Number(row.at) &&
       Number(row.max_adverse_excursion_at) <= Number(row.resolved_at) &&
-      finite(row.gross_return_pct) !== null && finite(row.max_adverse_excursion_pct) !== null)
+      Number(row.max_favorable_excursion_at) >= Number(row.at) &&
+      Number(row.max_favorable_excursion_at) <= Number(row.resolved_at) &&
+      finite(row.gross_return_pct) !== null &&
+      finite(row.max_adverse_excursion_pct) !== null &&
+      finite(row.max_favorable_excursion_pct) !== null)
     .sort((a, b) => a.at - b.at || b.score - a.score || a.symbol.localeCompare(b.symbol));
 
   let cash = seedEquity;
@@ -991,6 +1032,12 @@ export function simulatePaperTrades(decisions, {
   const processOpenEvent = event => {
     const position = event.position;
     if (!open.includes(position)) return;
+    if (event.type === 'MFE') {
+      position.mark_pct = Math.max(position.mark_pct, position.max_favorable_pct);
+      position.trade.mfe_marked_at = event.at;
+      updateDrawdown();
+      return;
+    }
     if (event.type === 'MAE') {
       position.mark_pct = Math.min(position.mark_pct, position.max_adverse_pct);
       position.trade.mae_marked_at = event.at;
@@ -1009,8 +1056,9 @@ export function simulatePaperTrades(decisions, {
   const eventQueue = [];
   const pushEvent = event => {
     eventQueue.push(event);
+    const priority = type => type === 'MFE' ? 0 : (type === 'MAE' ? 1 : 2);
     eventQueue.sort((a, b) => a.at - b.at ||
-      (a.type === 'MAE' ? 0 : 1) - (b.type === 'MAE' ? 0 : 1) ||
+      priority(a.type) - priority(b.type) ||
       a.position.symbol.localeCompare(b.position.symbol));
   };
   let decisionIndex = 0;
@@ -1051,6 +1099,8 @@ export function simulatePaperTrades(decisions, {
       id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
       capital, gross_return_pct: gross, net_return_pct: net,
       max_adverse_pct: adverse, max_adverse_at: adverseAt,
+      max_favorable_pct: Math.max(0, Number(decision.max_favorable_excursion_pct)),
+      max_favorable_at: Number(decision.max_favorable_excursion_at),
       mark_pct: 0, score: Number(decision.score),
       trade: {
         id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
@@ -1058,15 +1108,20 @@ export function simulatePaperTrades(decisions, {
         gross_return_pct: round(gross, 6), net_return_pct: round(net, 6),
         max_adverse_excursion_pct: round(adverse, 6),
         max_adverse_excursion_at: adverseAt,
+        max_favorable_excursion_pct: round(Math.max(0, Number(decision.max_favorable_excursion_pct)), 6),
+        max_favorable_excursion_at: Number(decision.max_favorable_excursion_at),
         position_fraction: round(capital / Math.max(1e-9, equityAtEntry), 8),
         allocated_capital: round(capital, 8),
         equity_before: round(equityAtEntry, 8),
-        equity_after_exit: null, pnl: null, mae_marked_at: null, exit_realized: false
+        equity_after_exit: null, pnl: null, mfe_marked_at: null, mae_marked_at: null, exit_realized: false
       }
     };
     cash -= capital;
     open.push(position);
     trades.push(position.trade);
+    const favourableAt=Number(decision.max_favorable_excursion_at);
+    if(favourableAt<=position.resolved_at&&Number(decision.max_favorable_excursion_pct)>0)
+      pushEvent({at:favourableAt,type:'MFE',position});
     if (adverseAt <= position.resolved_at) pushEvent({ at: adverseAt, type: 'MAE', position });
     pushEvent({ at: position.resolved_at, type: 'EXIT', position });
     updateDrawdown();
