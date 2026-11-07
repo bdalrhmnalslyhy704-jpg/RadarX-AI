@@ -507,6 +507,7 @@ export function runHistoricalReplay({
           latest_input_at:tensor.latest_input_at,
           resolved_at:bracket.exit_at,
           gross_return_pct:bracket.gross_return_pct,
+          max_adverse_excursion_pct:bracket.max_adverse_excursion_pct,
           classic_score:Math.max(0,Math.min(1,classicRaw/100)),
           sequence:tensor.sequence,
           feature_snapshot_sha:null,
