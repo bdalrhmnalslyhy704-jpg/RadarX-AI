@@ -48,12 +48,12 @@ The benchmark assumes long-only Binance Spot entries, up to thirty concurrent po
 The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The historical replay capture adapter samples one decision every ten minutes from completed 1m candles and resolves the fixed +3% / -2% barrier over the full four-hour forward horizon. It refuses unresolved horizons and keeps order-book depth explicitly unavailable when no historical depth archive exists. The dataset must provide one unique row per symbol/decision timestamp with:
 
 - id, symbol, market=BINANCE_SPOT_USDT, a single fixed closed-Spot outcome_source (1m replay or 15m), the exact outcome_definition FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1, at, latest_input_at, and resolved_at in epoch milliseconds.
-- max_adverse_excursion_pct and max_adverse_excursion_at from the completed future candle path, so drawdown is marked when the adverse excursion is observed rather than at entry.
+- max_adverse_excursion_pct / max_adverse_excursion_at and max_favorable_excursion_pct / max_favorable_excursion_at from the completed future candle path, so both portfolio peaks and troughs are marked at their observed event times rather than at entry.
 - sequence: exactly 24 rows by 23 finite normalized features, each value within [-4, 4].
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
-latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. Rows without the explicit Spot market, a single consistent closed-candle outcome source, matching outcome_definition, and finite adverse-excursion evidence are rejected. The final fixed-SHA report separately records AggTrade and tick-level volume-profile coverage; acceptance requires at least 80% AggTrade-flow coverage, at least 70% trade-level volume-profile coverage, and at least 80% timestamp-matched relative-BTC coverage. Drawdown simulation schedules each observed adverse-excursion timestamp and the exit timestamp, applying the worst adverse mark before the close event. Depth availability is reported independently rather than fabricated or silently imputed. The caller must still source the candles and matching historical market-depth/aggregate-trade records from the public Spot market and must not include future-derived values in the input tensor or classic score.
+latest_input_at <= at and resolved_at > at are mandatory. Duplicate symbol/timestamp events are removed once. Rows without the explicit Spot market, a single consistent closed-candle outcome source, matching outcome_definition, and finite adverse-excursion evidence are rejected. The final fixed-SHA report separately records AggTrade and tick-level volume-profile coverage; acceptance requires at least 80% AggTrade-flow coverage, at least 70% trade-level volume-profile coverage, and at least 80% timestamp-matched relative-BTC coverage. Drawdown simulation schedules each observed favourable peak, adverse trough, and exit timestamp, updating the marked portfolio equity in chronological order. Missing either excursion time fails closed. Depth availability is reported independently rather than fabricated or silently imputed. The caller must still source the candles and matching historical market-depth/aggregate-trade records from the public Spot market and must not include future-derived values in the input tensor or classic score.
 
 ## Walk-forward protocol
 
@@ -71,7 +71,7 @@ The hybrid may be marked accepted only if all these independent gates pass on th
 - Net PnL strictly positive, after costs.
 - Higher net PnL and higher per-trade Sharpe than the classic baseline, without higher maximum drawdown.
 - Identical fixed benchmark SHA, candidate test events, cost assumptions, and position constraints.
-- At least 99.9% of the benchmark rows carry a measured adverse-excursion value.
+- At least 99.9% of the benchmark rows carry timestamped measured favourable and adverse excursions.
 - AggTrade flow is present on at least 80% of scored rows, executed-price volume-profile coverage is at least 70%, and relative-BTC reference coverage is at least 80%.
 
 Any missing gate yields NEURAL_SUPERIORITY_NOT_PROVEN. Insufficient folds yield INSUFFICIENT_WALK_FORWARD_COVERAGE.
