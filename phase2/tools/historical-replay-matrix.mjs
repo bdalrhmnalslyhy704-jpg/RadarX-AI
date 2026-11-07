@@ -85,7 +85,11 @@ async function main(){
         if(!Array.isArray(captured.rows)||captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1')throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
         if(hybridSourceSha===null)hybridSourceSha=captured.source_commit_sha;
         if(captured.source_commit_sha!==hybridSourceSha)throw new Error('HYBRID_CAPTURE_SOURCE_SHA_MISMATCH');
-        hybridRows.push(...captured.rows);
+        hybridRows.push(...captured.rows.map(row=>({
+          ...row,
+          historical_window_id:window.id,
+          market_regime:String(marketRegime?.regime??'UNKNOWN').toUpperCase()
+        })));
       }catch(error){parseError=(parseError?parseError+'; ':'')+'HYBRID_CAPTURE_FAILED:'+String(error?.message??error);}
     }
     const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'};
@@ -112,7 +116,12 @@ async function main(){
       sequence_channels:23,
       outcome_horizon_ms:4*HOUR_MS,
       symbols,
-      windows:windows.map(window=>({id:window.id,start:window.start,end:window.end})),
+      windows:windows.map(window=>({
+        id:window.id,start:window.start,end:window.end,
+        market_regime:String(results.find(result=>result.id===window.id)?.market_regime?.regime??'UNKNOWN').toUpperCase()
+      })),
+      required_market_regimes:HISTORICAL_MATRIX_REQUIRED_REGIMES,
+      observed_market_regimes:[...new Set(results.map(result=>String(result.market_regime?.regime??'UNKNOWN').toUpperCase()))],
       benchmark_options:{folds:5,minimumTrainTimes:40,minimumTrainRows:100,
         minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
         positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,epochs:8,
@@ -121,6 +130,7 @@ async function main(){
         rows:hybridRows.length,
         distinct_symbols:new Set(hybridRows.map(row=>row.symbol)).size,
         distinct_decision_times:new Set(hybridRows.map(row=>row.at)).size,
+        observed_market_regimes:[...new Set(hybridRows.map(row=>row.market_regime))],
         agg_trade_flow_rows:hybridRows.filter(row=>
           Array.isArray(row.sequence)&&row.sequence.filter(step=>step[20]===1).length/row.sequence.length>=0.8).length,
         trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length,
