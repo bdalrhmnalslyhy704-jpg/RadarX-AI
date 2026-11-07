@@ -14,6 +14,7 @@ import {
   prepareHybridBenchmarkEvent,
   profitDrawdownObjective,
   resolveBarrierTrade,
+  hasRiskAdjustedNeuralSuperiority,
   runFixedShaBenchmark,
   sha256Canonical,
   simulatePaperTrades,
@@ -473,6 +474,62 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
   assert.equal(report.execution_policy.paper_only, true);
   assert.equal(report.execution_policy.real_order_execution, false);
+});
+
+test('zero-trade abstention cannot count as risk-adjusted neural superiority', () => {
+  const inactiveNeural = {
+    trade_count: 0, win_rate_pct: 0, net_pnl_pct: 0,
+    max_drawdown_pct: 0, sharpe_per_trade: 0
+  };
+  const losingClassic = {
+    trade_count: 429, win_rate_pct: 27.7389, net_pnl_pct: -12.433706,
+    max_drawdown_pct: 14.028493, sharpe_per_trade: -0.91
+  };
+  assert.equal(hasRiskAdjustedNeuralSuperiority(inactiveNeural, losingClassic, {
+    validationThresholdsReady: false
+  }), false, 'no trades and zero drawdown are not evidence of a better model');
+
+  const profitableNeural = {
+    trade_count: 120, win_rate_pct: 58, net_pnl_pct: 2.1,
+    max_drawdown_pct: 5, sharpe_per_trade: 0.8
+  };
+  const lowerPerformingClassic = {
+    trade_count: 120, win_rate_pct: 51, net_pnl_pct: 0.8,
+    max_drawdown_pct: 6, sharpe_per_trade: 0.4
+  };
+  assert.equal(hasRiskAdjustedNeuralSuperiority(profitableNeural, lowerPerformingClassic, {
+    validationThresholdsReady: true
+  }), true);
+});
+
+test('threshold selection explores validation score quantiles and explicitly abstains without a profitable sample', () => {
+  const rows = makeRows().map(row => ({
+    ...row,
+    gross_return_pct: -2,
+    max_adverse_excursion_pct: -2.1,
+    max_favorable_excursion_pct: 0.8
+  }));
+  const report = runFixedShaBenchmark(rows, {
+    sourceCommitSha: SOURCE_SHA,
+    folds: 5,
+    minimumTrainTimes: 160,
+    minimumTrainRows: 80,
+    minimumValidationRows: 50,
+    minimumTestRows: 50,
+    embargoMs: FOUR_HOURS,
+    epochs: 1,
+    thresholdGrid: [0.4, 0.6],
+    minimumValidationTrades: 10
+  });
+  assert.equal(report.neural.trade_count, 0);
+  assert.equal(report.acceptance_gates.neural_validation_thresholds_profitable_with_minimum_samples, 'FAIL');
+  assert.equal(report.acceptance_gates.beat_classic_on_net_pnl_sharpe_without_higher_drawdown, 'FAIL');
+  assert.ok(report.walk_forward.folds.every(fold =>
+    fold.neural_threshold_selection.status === 'ABSTAINED_NO_PROFITABLE_VALIDATION_THRESHOLD'));
+  assert.ok(report.walk_forward.folds.every(fold =>
+    fold.neural_threshold_selection.candidate_trials.length > 2));
+  assert.ok(report.walk_forward.folds.every(fold =>
+    fold.neural_threshold > 1));
 });
 
 test('fixed-SHA benchmark rejects OOS coverage that omits one market regime', () => {
