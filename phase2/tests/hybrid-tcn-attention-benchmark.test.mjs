@@ -262,7 +262,7 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   assert.equal(report.trades[1].net_return_pct, -2.3);
   assert.ok(report.max_drawdown_pct > 0);
   assert.equal(report.trades[0].mae_marked_at, base + FIFTEEN_MINUTES);
-  assert.equal(report.trades[1].mae_marked_at, base + 2 * FIFTEEN_MINUTES);
+  assert.equal(report.trades[1].mae_marked_at, base + FOUR_HOURS + FIFTEEN_MINUTES);
 });
 
 test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital ceiling', () => {
