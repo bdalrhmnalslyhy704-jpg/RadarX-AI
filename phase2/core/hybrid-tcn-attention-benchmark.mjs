@@ -390,9 +390,14 @@ export function resolveBarrierTrade({
   }
   const grossReturnPct = (exitPrice / entry - 1) * 100;
   const executedPath=path.filter(candle=>candleTime(candle)<=exitAt);
-  const lowestPrice=executedPath.length
-    ?Math.min(...executedPath.map(candle=>candleNumber(candle,'low'))):entry;
-  const maxAdverseExcursionPct=(lowestPrice/entry-1)*100;
+  const adverseCandle=executedPath.reduce((worst,candle)=>
+    !worst||candleNumber(candle,'low')<candleNumber(worst,'low')?candle:worst,null);
+  const adversePrice=exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY'
+    ?exitPrice
+    :(adverseCandle?candleNumber(adverseCandle,'low'):entry);
+  const maxAdverseExcursionPct=(adversePrice/entry-1)*100;
+  const maxAdverseExcursionAt=exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY'
+    ?exitAt:(adverseCandle?candleTime(adverseCandle):at);
   const roundTripCostBps = 2 * (Math.max(0, Number(feeBpsPerSide) || 0) +
     Math.max(0, Number(slippageBpsPerSide) || 0));
   return {
@@ -404,6 +409,7 @@ export function resolveBarrierTrade({
     exit_reason: exitReason,
     gross_return_pct: round(grossReturnPct, 6),
     max_adverse_excursion_pct: round(maxAdverseExcursionPct, 6),
+    max_adverse_excursion_at: maxAdverseExcursionAt,
     round_trip_cost_bps: round(roundTripCostBps, 4),
     net_return_pct: round(grossReturnPct - roundTripCostBps / 100, 6),
     conservative_same_candle_rule: true
@@ -443,6 +449,7 @@ export function prepareHybridBenchmarkEvent({
       resolved_at: outcome.exit_at,
       gross_return_pct: outcome.gross_return_pct,
       max_adverse_excursion_pct: outcome.max_adverse_excursion_pct,
+      max_adverse_excursion_at: outcome.max_adverse_excursion_at,
       classic_score: score,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
       sequence: features.sequence,
@@ -467,6 +474,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const resolvedAt = finite(raw.resolved_at);
     const gross = finite(raw.gross_return_pct);
     const adverse = finite(raw.max_adverse_excursion_pct);
+    const adverseAt = finite(raw.max_adverse_excursion_at);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
     if (!id || !/^[A-Z0-9]{2,26}USDT$/.test(symbol) ||
@@ -475,7 +483,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         rowTargetDefinition!==targetDefinition ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null ||
-        adverse === null || adverse > 0 || adverse < -100 || classic === null ||
+        adverse === null || adverse > 0 || adverse < -100 ||
+        adverseAt === null || adverseAt < at || adverseAt > resolvedAt || classic === null ||
         classic < 0 || classic > 1 ||
         !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
         !sequence.every(step => Array.isArray(step) && step.length === HYBRID_SEQUENCE_CHANNELS &&
@@ -489,6 +498,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
       gross_return_pct: gross,
       max_adverse_excursion_pct:adverse,
+      max_adverse_excursion_at:adverseAt,
       classic_score: classic,
       outcome_definition:rowTargetDefinition,
       sequence: sequence.map(step => step.map(Number)),
@@ -940,10 +950,14 @@ export function simulatePaperTrades(decisions, {
   const selected = (Array.isArray(decisions) ? decisions : [])
     .filter(row => finite(row.score) !== null && finite(row.threshold ?? threshold) !== null &&
       row.score >= (row.threshold ?? threshold) &&
-      finite(row.resolved_at) !== null && finite(row.at) !== null &&
+      finite(row.at) !== null && finite(row.resolved_at) !== null &&
+      finite(row.max_adverse_excursion_at) !== null &&
       Number(row.resolved_at) > Number(row.at) &&
-      finite(row.gross_return_pct) !== null)
+      Number(row.max_adverse_excursion_at) >= Number(row.at) &&
+      Number(row.max_adverse_excursion_at) <= Number(row.resolved_at) &&
+      finite(row.gross_return_pct) !== null && finite(row.max_adverse_excursion_pct) !== null)
     .sort((a, b) => a.at - b.at || b.score - a.score || a.symbol.localeCompare(b.symbol));
+
   let cash = seedEquity;
   let peakEquity = seedEquity;
   let maxDrawdown = 0;
@@ -952,32 +966,52 @@ export function simulatePaperTrades(decisions, {
   let skippedSameSymbol = 0, skippedCapacity = 0, skippedInsufficientCash = 0;
 
   const markedEquity = () => cash + open.reduce((sum, position) =>
-    sum + position.capital * (1 + position.max_adverse_pct / 100), 0);
-  const totalEquity = () => cash + open.reduce((sum, position) => sum + position.capital, 0);
+    sum + position.capital * (1 + position.mark_pct / 100), 0);
   const updateDrawdown = () => {
     const mark = Math.max(0, markedEquity());
-    peakEquity = Math.max(peakEquity, mark, totalEquity());
+    peakEquity = Math.max(peakEquity, mark);
     if (peakEquity > 0) maxDrawdown = Math.max(maxDrawdown, (peakEquity - mark) / peakEquity * 100);
   };
-  const settleOne = position => {
-    const index = open.indexOf(position);
-    if (index >= 0) open.splice(index, 1);
+  const processOpenEvent = event => {
+    const position = event.position;
+    if (!open.includes(position)) return;
+    if (event.type === 'MAE') {
+      position.mark_pct = Math.min(position.mark_pct, position.max_adverse_pct);
+      position.trade.mae_marked_at = event.at;
+      updateDrawdown();
+      return;
+    }
+    position.mark_pct = position.net_return_pct;
     const pnl = position.capital * position.net_return_pct / 100;
     cash += position.capital + pnl;
+    open.splice(open.indexOf(position), 1);
     position.trade.pnl = round(pnl, 8);
-    position.trade.equity_after_exit = round(totalEquity(), 8);
+    position.trade.equity_after_exit = round(markedEquity(), 8);
     position.trade.exit_realized = true;
     updateDrawdown();
   };
-  const settleUntil = at => {
-    const due = open.filter(position => position.resolved_at <= at)
-      .sort((a, b) => a.resolved_at - b.resolved_at || a.symbol.localeCompare(b.symbol));
-    for (const position of due) settleOne(position);
+  const eventQueue = [];
+  const pushEvent = event => {
+    eventQueue.push(event);
+    eventQueue.sort((a, b) => a.at - b.at ||
+      (a.type === 'MAE' ? 0 : 1) - (b.type === 'MAE' ? 0 : 1) ||
+      a.position.symbol.localeCompare(b.position.symbol));
   };
-
-  for (const decision of selected) {
+  let decisionIndex = 0;
+  while (decisionIndex < selected.length || eventQueue.length) {
+    const nextDecision = selected[decisionIndex] ?? null;
+    const nextPositionEvent = eventQueue[0] ?? null;
+    if (nextPositionEvent && (!nextDecision || nextPositionEvent.at <= Number(nextDecision.at))) {
+      const eventAt = nextPositionEvent.at;
+      while (eventQueue.length && eventQueue[0].at === eventAt) {
+        const event = eventQueue.shift();
+        processOpenEvent(event);
+      }
+      continue;
+    }
+    const decision = nextDecision;
+    decisionIndex++;
     const at = Number(decision.at);
-    settleUntil(at);
     const symbol = String(decision.symbol || '').toUpperCase();
     if (open.some(position => position.symbol === symbol)) {
       skippedSameSymbol++;
@@ -987,7 +1021,7 @@ export function simulatePaperTrades(decisions, {
       skippedCapacity++;
       continue;
     }
-    const equityAtEntry = totalEquity();
+    const equityAtEntry = Math.max(0, markedEquity());
     const capital = equityAtEntry * size;
     if (!(capital > 0) || cash + 1e-9 < capital) {
       skippedInsufficientCash++;
@@ -995,33 +1029,32 @@ export function simulatePaperTrades(decisions, {
     }
     const gross = Number(decision.gross_return_pct);
     const net = gross - costPct;
-    const maxAdverse = finite(decision.max_adverse_excursion_pct);
+    const adverse = Math.min(0, Number(decision.max_adverse_excursion_pct));
+    const adverseAt = Number(decision.max_adverse_excursion_at);
     const position = {
-      id: decision.id, symbol, at,
-      resolved_at: Number(decision.resolved_at),
+      id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
       capital, gross_return_pct: gross, net_return_pct: net,
-      max_adverse_pct: maxAdverse === null ? Math.min(0, net) : Math.min(0, maxAdverse),
-      score: Number(decision.score), threshold: Number(decision.threshold ?? threshold),
+      max_adverse_pct: adverse, max_adverse_at: adverseAt,
+      mark_pct: 0, score: Number(decision.score),
       trade: {
         id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
         score: round(Number(decision.score), 6),
         gross_return_pct: round(gross, 6), net_return_pct: round(net, 6),
-        max_adverse_excursion_pct: round(maxAdverse, 6),
+        max_adverse_excursion_pct: round(adverse, 6),
+        max_adverse_excursion_at: adverseAt,
         position_fraction: round(capital / Math.max(1e-9, equityAtEntry), 8),
         allocated_capital: round(capital, 8),
         equity_before: round(equityAtEntry, 8),
-        equity_after_exit: null, pnl: null, exit_realized: false
+        equity_after_exit: null, pnl: null, mae_marked_at: null, exit_realized: false
       }
     };
     cash -= capital;
     open.push(position);
     trades.push(position.trade);
+    if (adverseAt < position.resolved_at) pushEvent({ at: adverseAt, type: 'MAE', position });
+    pushEvent({ at: position.resolved_at, type: 'EXIT', position });
     updateDrawdown();
   }
-  // Every selected test label is fully matured before it is scored. Settle the
-  // remaining paper positions in exit-time order instead of dropping open trades.
-  for (const position of [...open].sort((a, b) =>
-    a.resolved_at - b.resolved_at || a.symbol.localeCompare(b.symbol))) settleOne(position);
 
   const netTradeReturns = trades.map(row => row.net_return_pct * row.position_fraction);
   const average = mean(netTradeReturns) ?? 0;
