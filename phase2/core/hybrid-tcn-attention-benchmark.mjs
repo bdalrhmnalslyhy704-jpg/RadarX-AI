@@ -23,14 +23,19 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'order_book_available',
   'agg_trade_available',
   'volume_profile_trade_level_available',
-  'relative_btc_available'
+  'relative_btc_available',
+  'short_return_acceleration',
+  'three_bar_momentum_reversal',
+  'fast_slow_mean_spread',
+  'higher_low_reclaim',
+  'prior_high_reclaim'
 ]);
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x23_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_WITH_TEMPORAL_ATTENTION_V2';
+  'CAUSAL_TCN_24x28_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_WITH_TRAIN_ONLY_NORMALIZATION_LEAKY_RELU_DYNAMIC_LOGIT_ASYMMETRIC_FOCAL_V3';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -44,7 +49,10 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   dilations: DILATIONS,
   kernel_taps: KERNEL_TAPS,
   receptive_field_steps: TCN_RECEPTIVE_FIELD,
-  temporal_attention: 'LEARNED_QUERY_SOFTMAX'
+  temporal_attention: 'LEARNED_QUERY_SOFTMAX',
+  activation: 'LEAKY_RELU_ALPHA_0_05',
+  input_normalization: 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4',
+  output_logit_scale: 'TRAINED_EXP_BOUNDED_0_25_TO_4'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -64,6 +72,8 @@ const mean = values => values.length
   ? values.reduce((sum, value) => sum + value, 0) / values.length
   : null;
 const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -18, 18)));
+const leakyRelu = value => value >= 0 ? value : value * 0.05;
+const leakyReluDerivative = activated => activated >= 0 ? 1 : 0.05;
 const round = (value, digits = 6) => Number.isFinite(value)
   ? Number(value.toFixed(digits))
   : null;
@@ -322,6 +332,19 @@ export function buildHybridSequence({
       ? logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
         candleNumber(benchmark[benchmarkIndex - 1], 'close'))
       : 0;
+    const oneBarReturn = logReturn(close, candleNumber(prior.at(-2), 'close'));
+    const previousOneBarReturn = logReturn(
+      candleNumber(prior.at(-2), 'close'), candleNumber(prior.at(-3), 'close'));
+    const recentThreeBarReturn = logReturn(close, candleNumber(prior.at(-4), 'close'));
+    const precedingThreeBarReturn = logReturn(
+      candleNumber(prior.at(-4), 'close'), candleNumber(prior.at(-7), 'close'));
+    const fastMeanClose = mean(prior.slice(-3).map(row => candleNumber(row, 'close')).filter(value => value !== null));
+    const slowMeanClose = mean(prior.slice(-12).map(row => candleNumber(row, 'close')).filter(value => value !== null));
+    const previousRange = prior.slice(-4, -1);
+    const previousRangeLow = previousRange.length
+      ? Math.min(...previousRange.map(row => candleNumber(row, 'low')).filter(value => value !== null)) : low;
+    const previousRangeHigh = previousRange.length
+      ? Math.max(...previousRange.map(row => candleNumber(row, 'high')).filter(value => value !== null)) : high;
     const pocDistance = volumeProfile.available && volumeProfile.poc > 0
       ? ((close / volumeProfile.poc) - 1) * 100
       : 0;
@@ -352,7 +375,12 @@ export function buildHybridSequence({
       depth ? 1 : 0,
       aggImbalance === null ? 0 : 1,
       volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
-      priorBenchmarkMatches ? 1 : 0
+      priorBenchmarkMatches ? 1 : 0,
+      (oneBarReturn - previousOneBarReturn) * 100,
+      (recentThreeBarReturn - precedingThreeBarReturn) * 100,
+      fastMeanClose !== null && slowMeanClose > 0 ? ((fastMeanClose / slowMeanClose) - 1) * 100 : 0,
+      ((low - previousRangeLow) / close) * 100,
+      ((close - previousRangeHigh) / close) * 100
     ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
     sequence.push(features);
   }
@@ -699,7 +727,8 @@ function initializeHybridModel(seed = 17) {
       deterministicWeight(layer, channel, seed + 4, 0.002))),
     attentionQuery: Array.from({ length: HIDDEN }, (_, index) => deterministicWeight(index, 0, seed + 5, 0.05)),
     outputWeights: Array.from({ length: HIDDEN }, (_, index) => deterministicWeight(index, 0, seed + 6, 0.04)),
-    outputBias: 0
+    outputBias: 0,
+    logitScaleRaw: 0
   };
 }
 
@@ -710,11 +739,48 @@ function softmax(values) {
   return exponents.map(value => value / total);
 }
 
+function fitHybridFeatureNormalization(rows) {
+  const means = Array(HYBRID_SEQUENCE_CHANNELS).fill(0);
+  const counts = Array(HYBRID_SEQUENCE_CHANNELS).fill(0);
+  const m2 = Array(HYBRID_SEQUENCE_CHANNELS).fill(0);
+  for (const row of rows) {
+    for (const step of row.sequence) {
+      for (let channel = 0; channel < HYBRID_SEQUENCE_CHANNELS; channel++) {
+        const value = Number(step[channel]);
+        counts[channel]++;
+        const delta = value - means[channel];
+        means[channel] += delta / counts[channel];
+        m2[channel] += delta * (value - means[channel]);
+      }
+    }
+  }
+  const standardDeviations = means.map((_, channel) => {
+    const variance = counts[channel] > 1 ? m2[channel] / counts[channel] : 0;
+    return Math.max(0.05, Math.sqrt(Math.max(0, variance)));
+  });
+  return {
+    method: 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4',
+    sample_count_per_channel: counts,
+    means: means.map(value => round(value, 8)),
+    standard_deviations: standardDeviations.map(value => round(value, 8))
+  };
+}
+
+function normalizeHybridSequence(sequence, normalization) {
+  if (!normalization || !Array.isArray(normalization.means) ||
+      !Array.isArray(normalization.standard_deviations)) return sequence;
+  return sequence.map(step => step.map((value, channel) => {
+    const meanValue = Number(normalization.means[channel]) || 0;
+    const scale = Math.max(0.05, Number(normalization.standard_deviations[channel]) || 1);
+    return clamp((Number(value) - meanValue) / scale, -4, 4);
+  }));
+}
+
 function forwardHybrid(sequence, model) {
   const projected = sequence.map(row => Array.from({ length: HIDDEN }, (_, output) => {
     let value = model.inputBias[output];
     for (let input = 0; input < HYBRID_SEQUENCE_CHANNELS; input++) value += row[input] * model.inputWeights[input][output];
-    return Math.tanh(value);
+    return leakyRelu(value);
   }));
   const activations = [projected];
   const depthCaches = [];
@@ -733,7 +799,7 @@ function forwardHybrid(sequence, model) {
       for (let inputChannel = 0; inputChannel < HIDDEN; inputChannel++) {
         value += depth[time][inputChannel] * model.pointWeights[layer][inputChannel][outputChannel];
       }
-      return Math.tanh(value);
+      return leakyRelu(value);
     }));
     depthCaches.push(depth);
     activations.push(output);
@@ -749,21 +815,28 @@ function forwardHybrid(sequence, model) {
   for (let time = 0; time < final.length; time++) {
     for (let channel = 0; channel < HIDDEN; channel++) context[channel] += attention[time] * final[time][channel];
   }
-  let logit = model.outputBias;
-  for (let channel = 0; channel < HIDDEN; channel++) logit += context[channel] * model.outputWeights[channel];
-  return { probability: sigmoid(logit), logit, activations, depthCaches, attention, context, scores };
+  let rawLogit = model.outputBias;
+  for (let channel = 0; channel < HIDDEN; channel++) rawLogit += context[channel] * model.outputWeights[channel];
+  const scaleTanh = Math.tanh(Number(model.logitScaleRaw) || 0);
+  const logitScale = Math.exp(Math.log(4) * scaleTanh);
+  const logit = rawLogit * logitScale;
+  return { probability: sigmoid(logit), logit, rawLogit, logitScale, activations, depthCaches, attention, context, scores };
 }
 
 function gradientsForHybrid(sequence, model, cache, dLossDLogit) {
   const gradients = zerosLike(model);
   const final = cache.activations.at(-1);
-  const contextGradient = model.outputWeights.map(weight => weight * dLossDLogit);
-  gradients.outputBias = dLossDLogit;
+  const scaledLogitGradient = dLossDLogit * cache.logitScale;
+  const contextGradient = model.outputWeights.map(weight => weight * scaledLogitGradient);
+  gradients.outputBias = scaledLogitGradient;
   for (let channel = 0; channel < HIDDEN; channel++) {
-    gradients.outputWeights[channel] = cache.context[channel] * dLossDLogit;
+    gradients.outputWeights[channel] = cache.context[channel] * scaledLogitGradient;
   }
+  const scaleTanh = Math.tanh(Number(model.logitScaleRaw) || 0);
+  gradients.logitScaleRaw = dLossDLogit * cache.rawLogit * cache.logitScale *
+    Math.log(4) * (1 - scaleTanh * scaleTanh);
   const attentionContextProducts = final.map(row =>
-    row.reduce((sum, value, channel) => sum + value * model.outputWeights[channel], 0) * dLossDLogit);
+    row.reduce((sum, value, channel) => sum + value * model.outputWeights[channel], 0) * scaledLogitGradient);
   const weightedAttentionGradient = cache.attention.reduce((sum, weight, index) =>
     sum + weight * attentionContextProducts[index], 0);
   const finalGradient = final.map((row, time) => {
@@ -785,7 +858,7 @@ function gradientsForHybrid(sequence, model, cache, dLossDLogit) {
     for (let time = 0; time < output.length; time++) {
       for (let outputChannel = 0; outputChannel < HIDDEN; outputChannel++) {
         const activation = output[time][outputChannel];
-        const dz = activationGradient[time][outputChannel] * (1 - activation * activation);
+        const dz = activationGradient[time][outputChannel] * leakyReluDerivative(activation);
         gradients.biases[layer][outputChannel] += dz;
         inputGradient[time][outputChannel] += dz; // residual identity
         for (let inputChannel = 0; inputChannel < HIDDEN; inputChannel++) {
@@ -808,7 +881,7 @@ function gradientsForHybrid(sequence, model, cache, dLossDLogit) {
   for (let time = 0; time < sequence.length; time++) {
     for (let output = 0; output < HIDDEN; output++) {
       const dz = activationGradient[time][output] *
-        (1 - cache.activations[0][time][output] ** 2);
+        leakyReluDerivative(cache.activations[0][time][output]);
       gradients.inputBias[output] += dz;
       for (let input = 0; input < HYBRID_SEQUENCE_CHANNELS; input++) {
         gradients.inputWeights[input][output] += sequence[time][input] * dz;
@@ -873,7 +946,12 @@ export function profitDrawdownObjective(probabilities, rows, {
   downsideWeight = 0.08,
   adverseExcursionWeight = 0.04,
   excursionDrawdownWeight = 0.04,
-  drawdownWeight = 0.08
+  drawdownWeight = 0.08,
+  focalLossWeight = 0.25,
+  focalGammaPositive = 1,
+  focalGammaNegative = 2,
+  focalPositiveWeight = 1,
+  focalNegativeWeight = 1.6
 } = {}) {
   if (!Array.isArray(probabilities) || probabilities.length !== rows.length || !rows.length) {
     throw new Error('PROFIT_OBJECTIVE_REQUIRES_MATCHED_NON_EMPTY_ROWS');
@@ -939,9 +1017,39 @@ export function profitDrawdownObjective(probabilities, rows, {
   const adverseMean = adverseSquared / n;
   const excursionDrawdownMean = excursionDrawdownSquared / n;
   const drawdownMean = underwaterSquared / n;
+  const focalWeight = clamp(finite(focalLossWeight) ?? 0.25, 0, 2);
+  const gammaPositive = clamp(finite(focalGammaPositive) ?? 1, 0, 5);
+  const gammaNegative = clamp(finite(focalGammaNegative) ?? 2, 0, 5);
+  const positiveWeight = clamp(finite(focalPositiveWeight) ?? 1, 0.1, 5);
+  const negativeWeight = clamp(finite(focalNegativeWeight) ?? 1.6, 0.1, 8);
+  let focalLossSum = 0;
+  const focalLogitGradients = Array(n).fill(0);
+  for (const pair of pairs) {
+    const probability = clamp(pair.probability, 0.001, 0.999);
+    const positive = netReturnPct(pair.row, cost) > 0;
+    const gamma = positive ? gammaPositive : gammaNegative;
+    const classWeight = positive ? positiveWeight : negativeWeight;
+    let focalLoss, derivativeProbability;
+    if (positive) {
+      const missProbability = 1 - probability;
+      focalLoss = -classWeight * (missProbability ** gamma) * Math.log(probability);
+      const modulationDerivative = gamma > 0 ? gamma * (missProbability ** (gamma - 1)) : 0;
+      derivativeProbability = classWeight * modulationDerivative * Math.log(probability) -
+        classWeight * (missProbability ** gamma) / probability;
+    } else {
+      focalLoss = -classWeight * (probability ** gamma) * Math.log(1 - probability);
+      const modulationDerivative = gamma > 0 ? gamma * (probability ** (gamma - 1)) : 0;
+      derivativeProbability = -classWeight * modulationDerivative * Math.log(1 - probability) +
+        classWeight * (probability ** gamma) / (1 - probability);
+    }
+    focalLossSum += focalLoss;
+    focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / n;
+  }
+  const asymmetricFocalLoss = focalLossSum / n;
   const loss = -average - sharpeWeight * sharpe +
     downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
-    excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean;
+    excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean +
+    focalWeight * asymmetricFocalLoss;
   const logitGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
@@ -965,7 +1073,7 @@ export function profitDrawdownObjective(probabilities, rows, {
       orderedExcursionDrawdowns[index] * excursionRange * size / n;
     logitGradients[pair.index] =
       (gradient * net + adverseGradient + excursionGradient) *
-      orderedProbabilityDerivative[index];
+      orderedProbabilityDerivative[index] + focalWeight * focalLogitGradients[pair.index];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -976,6 +1084,11 @@ export function profitDrawdownObjective(probabilities, rows, {
     adverse_excursion_penalty: round(adverseMean, 8),
     intratrade_excursion_drawdown_penalty: round(excursionDrawdownMean, 8),
     drawdown_penalty: round(drawdownMean, 8),
+    asymmetric_focal_loss: round(asymmetricFocalLoss, 8),
+    focal_loss_weight: focalWeight,
+    focal_negative_class_weight: negativeWeight,
+    focal_gamma_positive: gammaPositive,
+    focal_gamma_negative: gammaNegative,
     max_additive_drawdown_pct: round(maxDrawdown, 6),
     position_fraction: size,
     round_trip_cost_bps: cost,
@@ -991,22 +1104,27 @@ export function trainHybridTcnAttention(trainingRows, {
 } = {}) {
   const rows = normalizeBenchmarkRows(trainingRows);
   if (rows.length < 20) throw new Error('HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS');
+  const normalization = fitHybridFeatureNormalization(rows);
+  const normalizedRows = rows.map(row => ({
+    ...row, sequence: normalizeHybridSequence(row.sequence, normalization)
+  }));
   const model = initializeHybridModel(seed);
   const parameters = () => ({
     inputWeights: model.inputWeights, inputBias: model.inputBias,
     depthWeights: model.depthWeights, pointWeights: model.pointWeights,
     biases: model.biases, attentionQuery: model.attentionQuery,
-    outputWeights: model.outputWeights, outputBias: model.outputBias
+    outputWeights: model.outputWeights, outputBias: model.outputBias,
+    logitScaleRaw: model.logitScaleRaw
   });
   let optimizer = { m: zerosLike(parameters()), v: zerosLike(parameters()) };
   const totalEpochs = Math.max(1, Math.min(50, Math.trunc(Number(epochs) || 8)));
   const trace = [];
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
-    const caches = rows.map(row => forwardHybrid(row.sequence, model));
-    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), rows, objectiveOptions);
+    const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
+    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, objectiveOptions);
     let gradients = zerosLike(parameters());
-    for (let index = 0; index < rows.length; index++) {
-      const item = gradientsForHybrid(rows[index].sequence, model, caches[index],
+    for (let index = 0; index < normalizedRows.length; index++) {
+      const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
         objective.logit_gradients[index]);
       gradients = addTrees(gradients, item);
     }
@@ -1022,6 +1140,9 @@ export function trainHybridTcnAttention(trainingRows, {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
     architecture_config: HYBRID_TCN_CONFIGURATION,
     receptive_field_steps: TCN_RECEPTIVE_FIELD,
+    normalization,
+    activation: 'LEAKY_RELU_ALPHA_0_05',
+    trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
     training_objective: 'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2',
@@ -1033,9 +1154,12 @@ export function predictHybridTcnAttention(sequence, fitted) {
   if (!fitted?.model || !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
       !sequence.every(step => Array.isArray(step) && step.length === HYBRID_SEQUENCE_CHANNELS &&
         step.every(value => finite(value) !== null))) return null;
-  const result = forwardHybrid(sequence, fitted.model);
+  const normalizedSequence = normalizeHybridSequence(sequence, fitted.normalization);
+  const result = forwardHybrid(normalizedSequence, fitted.model);
   return {
     probability: round(result.probability, 8),
+    raw_logit: round(result.rawLogit, 8),
+    logit_scale: round(result.logitScale, 8),
     attention_weights: result.attention.map(value => round(value, 8)),
     architecture: HYBRID_TCN_ARCHITECTURE,
     architecture_config: HYBRID_TCN_CONFIGURATION,
