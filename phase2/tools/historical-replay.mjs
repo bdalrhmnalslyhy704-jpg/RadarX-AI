@@ -1087,7 +1087,7 @@ async function main() {
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
       feature_interval:'1M_CLOSED_CANDLES',
       sequence_steps:24,
-      sequence_channels:22,
+      sequence_channels:23,
       outcome_horizon_ms:4*HOUR_MS,
       capture_sampling:'EVERY_10M_DECISION',
       capture_symbols:symbols,
@@ -1097,10 +1097,12 @@ async function main() {
         distinct_symbols:new Set(hybridBenchmarkRows.map(row=>row.symbol)).size,
         distinct_decision_times:new Set(hybridBenchmarkRows.map(row=>row.at)).size,
         agg_trade_flow_rows:hybridBenchmarkRows.filter(row=>row.trade_flow_available).length,
-        trade_level_volume_profile_rows:hybridBenchmarkRows.filter(row=>row.trade_level_volume_profile_available).length
+        trade_level_volume_profile_rows:hybridBenchmarkRows.filter(row=>row.trade_level_volume_profile_available).length,
+        relative_btc_rows:hybridBenchmarkRows.filter(row=>row.relative_btc_available).length
       },
-      benchmark_options:{folds:5,minimumTrainTimes:160,minimumTrainRows:100,
+      benchmark_options:{folds:5,minimumTrainTimes:40,minimumTrainRows:100,
         minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
+        positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,epochs:8,
         targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
       rows:hybridBenchmarkRows
     };
