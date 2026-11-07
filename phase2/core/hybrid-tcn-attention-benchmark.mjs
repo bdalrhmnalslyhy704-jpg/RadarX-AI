@@ -22,13 +22,14 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'relative_btc_return',
   'order_book_available',
   'agg_trade_available',
-  'volume_profile_trade_level_available'
+  'volume_profile_trade_level_available',
+  'relative_btc_available'
 ]);
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x22_DILATIONS_1_2_4_WITH_TEMPORAL_ATTENTION_V1';
+  'CAUSAL_TCN_24x23_DILATIONS_1_2_4_WITH_TEMPORAL_ATTENTION_V1';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -317,7 +318,8 @@ export function buildHybridSequence({
       relativeBtc * 100,
       depth ? 1 : 0,
       aggImbalance === null ? 0 : 1,
-      volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0
+      volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
+      benchmarkIndex > 0 ? 1 : 0
     ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
     sequence.push(features);
   }
