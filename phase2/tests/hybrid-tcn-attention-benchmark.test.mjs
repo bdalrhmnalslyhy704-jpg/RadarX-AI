@@ -41,10 +41,12 @@ function makeRows(count = 700) {
       symbol: 'COIN' + String(index).padStart(4, '0') + 'USDT',
       market: 'BINANCE_SPOT_USDT',
       outcome_source: 'BINANCE_SPOT_CLOSED_15M',
+      outcome_definition: 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
       at,
       latest_input_at: at,
       resolved_at: at + FOUR_HOURS,
       gross_return_pct: positive ? 3 : -2,
+      max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       classic_score: positive ? 0.92 : 0.08,
       sequence: makeSequence(positive ? 1 : -1, index % 13),
       feature_snapshot_sha: 'unit-fixture-v1'
