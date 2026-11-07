@@ -518,7 +518,7 @@ function initializeHybridModel(seed = 17) {
     depthWeights: DILATIONS.map((_, layer) => Array.from({ length: KERNEL_TAPS }, (_, tap) =>
       Array.from({ length: HIDDEN }, (_, channel) => deterministicWeight(layer * 7 + tap, channel, seed + 2, 0.02)))),
     pointWeights: DILATIONS.map((_, layer) => Array.from({ length: HIDDEN }, (_, input) =>
-      Array.from({ length: HIDDEN }, (_, output) => deterministicWeight(layer * 19 + input, output, seed + 3, 0.025))),
+      Array.from({ length: HIDDEN }, (_, output) => deterministicWeight(layer * 19 + input, output, seed + 3, 0.025)))),
     biases: DILATIONS.map((_, layer) => Array.from({ length: HIDDEN }, (_, channel) =>
       deterministicWeight(layer, channel, seed + 4, 0.002))),
     attentionQuery: Array.from({ length: HIDDEN }, (_, index) => deterministicWeight(index, 0, seed + 5, 0.05)),
@@ -683,9 +683,10 @@ function netReturnPct(row, costBps) {
 }
 
 /**
- * Differentiable portfolio objective. It rewards net return and Sharpe, while
- * penalizing downside semivariance and peak-to-trough drawdown. The returned
- * logit gradients are used for neural training; this is not an MSE/Brier loss.
+ * Differentiable per-event exposure surrogate. It rewards net return and Sharpe,
+ * while penalizing downside semivariance and peak-to-trough drawdown. The hard
+ * OOS simulator separately enforces one open position at a time. This is not
+ * an MSE/Brier loss and cannot replace the final execution simulation.
  */
 export function profitDrawdownObjective(probabilities, rows, {
   roundTripCostBps = DEFAULT_COST_BPS,
@@ -956,7 +957,7 @@ export function runFixedShaBenchmark(inputRows, {
     rows: rows.length,
     distinct_symbols: new Set(rows.map(row => row.symbol)).size,
     distinct_decision_times: new Set(rows.map(row => row.at)).size,
-    duplicate_symbol_timestamps_removed: (Array.isArray(inputRows) ? inputRows.length : 0) - rows.length,
+    rejected_or_duplicate_rows_removed: (Array.isArray(inputRows) ? inputRows.length : 0) - rows.length,
     all_inputs_causal: rows.every(row => row.latest_input_at <= row.at)
   };
   if (walkForward.status !== 'READY') return {
