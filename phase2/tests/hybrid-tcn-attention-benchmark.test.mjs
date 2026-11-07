@@ -96,8 +96,8 @@ function makeCandles(count = 40) {
 }
 
 test('hybrid feature contract includes order flow, depth, volume profile and adaptive volatility', () => {
-  assert.equal(HYBRID_FEATURE_NAMES.length, 23);
-  assert.equal(HYBRID_SEQUENCE_CHANNELS, 23);
+  assert.equal(HYBRID_FEATURE_NAMES.length, 28);
+  assert.equal(HYBRID_SEQUENCE_CHANNELS, 28);
   for (const name of [
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
@@ -109,7 +109,7 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   const built = buildHybridSequence({ candles, benchmarkCandles: candles, asOf, sequenceSteps: 24 });
   assert.equal(built.ready, true);
   assert.equal(built.sequence.length, 24);
-  assert.equal(built.sequence[0].length, 23);
+  assert.equal(built.sequence[0].length, 28);
   assert.ok(built.latest_input_at <= asOf);
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
@@ -239,6 +239,26 @@ test('profit-loss logit gradients match a central finite-difference check', () =
     base.logit_gradients[0] + ' vs ' + numerical);
 });
 
+test('asymmetric focal loss gives a stronger gradient to overconfident losing-direction predictions', () => {
+  const losingRows = [
+    { at: 1, symbol: 'LOSSUSDT', gross_return_pct: -2,
+      max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.7 }
+  ];
+  const highWrong = profitDrawdownObjective([0.9], losingRows, { focalLossWeight: 1 }).asymmetric_focal_loss;
+  const lowWrong = profitDrawdownObjective([0.1], losingRows, { focalLossWeight: 1 }).asymmetric_focal_loss;
+  assert.ok(highWrong > lowWrong * 100, 'high-confidence false positives must receive materially higher focal penalty');
+  const p = 0.72;
+  const base = profitDrawdownObjective([p], losingRows, { focalLossWeight: 0.7, focalNegativeWeight: 1.8 });
+  const z = Math.log(p / (1 - p));
+  const epsilon = 1e-3;
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([sigmoid(value)], losingRows,
+    { focalLossWeight: 0.7, focalNegativeWeight: 1.8 }).loss;
+  const numerical = (evaluate(z + epsilon) - evaluate(z - epsilon)) / (2 * epsilon);
+  assert.ok(Math.abs(base.logit_gradients[0] - numerical) < 2e-4,
+    'asymmetric focal analytical gradient must match central finite difference');
+});
+
 test('profit objective explicitly penalizes measured peak-to-trough excursion', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
@@ -322,10 +342,16 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_MAE_MFE_DRAWDOWN_V2');
+    'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3');
+  assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
+  assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
+  assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
+  assert.ok(fitted.trained_logit_scale >= 0.25 && fitted.trained_logit_scale <= 4);
   const predicted = predictHybridTcnAttention(rows.at(-1).sequence, fitted);
   assert.ok(predicted);
   assert.ok(predicted.probability >= 0 && predicted.probability <= 1);
+  assert.ok(predicted.logit_scale >= 0.25 && predicted.logit_scale <= 4);
+  assert.ok(Number.isFinite(predicted.raw_logit));
   assert.equal(predicted.attention_weights.length, 24);
   assert.ok(Math.abs(predicted.attention_weights.reduce((sum, value) => sum + value, 0) - 1) < 1e-5);
   assert.ok(predicted.attention_weights.every(value => value >= 0 && value <= 1));
