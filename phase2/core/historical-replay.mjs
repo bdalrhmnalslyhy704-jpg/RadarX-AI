@@ -520,9 +520,9 @@ export function runHistoricalReplay({
           feature_snapshot_sha:null,
           outcome_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
           outcome_exit_reason:bracket.exit_reason,
-          trade_flow_available:featureCandles.some(row=>row.aggTrades.length>0),
+          trade_flow_available:tensor.sequence.filter(step=>step[20]===1).length/tensor.sequence.length>=0.8,
           trade_level_volume_profile_available:tensor.sequence.at(-1)?.[21]===1,
-          relative_btc_available:tensor.sequence.at(-1)?.[22]===1
+          relative_btc_available:tensor.sequence.filter(step=>step[22]===1).length/tensor.sequence.length>=0.8
         });
       }
     }
