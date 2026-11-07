@@ -198,6 +198,21 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_favorable_excursion_at, at);
 });
 
+test('profit objective explicitly penalizes measured peak-to-trough excursion', () => {
+  const rows = [
+    { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
+      max_adverse_excursion_pct: -1, max_favorable_excursion_pct: 5 },
+    { at: 2, symbol: 'BUSDT', gross_return_pct: 2,
+      max_adverse_excursion_pct: -0.2, max_favorable_excursion_pct: 0.5 }
+  ];
+  const low = profitDrawdownObjective([0.6, 0.6], rows, { excursionDrawdownWeight: 0.04 });
+  const high = profitDrawdownObjective([0.6, 0.6], rows.map(row => ({
+    ...row, max_favorable_excursion_pct: row.max_favorable_excursion_pct + 5
+  })), { excursionDrawdownWeight: 0.04 });
+  assert.ok(high.intratrade_excursion_drawdown_penalty > low.intratrade_excursion_drawdown_penalty);
+  assert.ok(low.logit_gradients.every(Number.isFinite));
+});
+
 test('profit/drawdown objective is finite and produces probability gradients', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3 },
