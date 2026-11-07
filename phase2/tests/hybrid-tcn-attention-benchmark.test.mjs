@@ -390,6 +390,10 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
   assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
   assert.equal(report.walk_forward.fold_count, 5);
   assert.equal(report.same_test_event_count, 450);
+  assert.equal(report.integrity.rejected_or_duplicate_rows_removed, 0);
+  assert.equal(report.acceptance_gates.all_input_rows_valid_and_unique, 'PASS');
+  assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','SIDEWAYS']);
+  assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
   assert.equal(report.classic_baseline.trade_count > 0, true);
   assert.equal(report.status, 'NEURAL_SUPERIORITY_NOT_PROVEN');
   assert.equal(report.superiority, 'NOT_PROVEN');
