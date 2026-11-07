@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  HYBRID_FEATURE_NAMES,
+  HYBRID_SEQUENCE_CHANNELS,
+  HYBRID_SEQUENCE_STEPS,
+  HYBRID_TCN_ARCHITECTURE,
+  buildHybridSequence,
+  buildPurgedWalkForwardFolds,
+  calculateVolumeProfile,
+  predictHybridTcnAttention,
+  profitDrawdownObjective,
+  resolveBarrierTrade,
+  runFixedShaBenchmark,
+  sha256Canonical,
+  simulatePaperTrades,
+  trainHybridTcnAttention
+} from '../core/hybrid-tcn-attention-benchmark.mjs';
+
+const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const FOUR_HOURS = 4 * 60 * 60 * 1000;
+const SOURCE_SHA = '52d0ba535e4c983fa5113bbde8061277555f87a6';
+
+function makeSequence(direction = 1, seed = 0) {
+  return Array.from({ length: HYBRID_SEQUENCE_STEPS }, (_, time) =>
+    Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, feature) => {
+      const trend = direction * (feature === 0 ? 0.7 : feature === 10 ? 0.4 : 0.12);
+      const wave = Math.sin((time + 1) * (feature + 1) * 0.13 + seed) * 0.08;
+      return Math.max(-3, Math.min(3, trend + wave));
+    }));
+}
+
+function makeRows(count = 700) {
+  const start = Date.UTC(2026, 0, 1);
+  return Array.from({ length: count }, (_, index) => {
+    const positive = index % 3 !== 0;
+    const at = start + index * FIFTEEN_MINUTES;
+    return {
+      id: 'event-' + index,
+      symbol: 'COIN' + String(index).padStart(4, '0') + 'USDT',
+      at,
+      latest_input_at: at,
+      resolved_at: at + FOUR_HOURS,
+      gross_return_pct: positive ? 3 : -2,
+      classic_score: positive ? 0.92 : 0.08,
+      sequence: makeSequence(positive ? 1 : -1, index % 13),
+      feature_snapshot_sha: 'unit-fixture-v1'
+    };
+  });
+}
+
+function makeCandles(count = 40) {
+  const start = Date.UTC(2026, 2, 1);
+  return Array.from({ length: count }, (_, index) => {
+    const close = 10 + index * 0.03 + Math.sin(index / 3) * 0.05;
+    return {
+      openTime: start + index * FIFTEEN_MINUTES - FIFTEEN_MINUTES,
+      closeTime: start + index * FIFTEEN_MINUTES,
+      closed: true,
+      open: close - 0.015,
+      high: close + 0.06,
+      low: close - 0.06,
+      close,
+      volume: 1000 + index * 3,
+      quoteVolume: (1000 + index * 3) * close,
+      numberOfTrades: 100 + index,
+      takerBuyQuoteVolume: (1000 + index * 3) * close * 0.56,
+      orderBook: {
+        bidPrice: close - 0.005,
+        askPrice: close + 0.005,
+        bids: [[close - 0.005, 500], [close - 0.01, 300]],
+        asks: [[close + 0.005, 250], [close + 0.01, 200]]
+      },
+      aggTradeBuyQuote: 1200,
+      aggTradeSellQuote: 800
+    };
+  });
+}
+
+test('hybrid feature contract includes order flow, depth, volume profile and adaptive volatility', () => {
+  assert.equal(HYBRID_FEATURE_NAMES.length, 21);
+  assert.equal(HYBRID_SEQUENCE_CHANNELS, 21);
+  for (const name of [
+    'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
+    'volume_profile_poc_distance', 'volume_profile_value_area_position',
+    'adaptive_volatility_ratio'
+  ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
+
+  const candles = makeCandles();
+  const asOf = candles.at(-1).closeTime;
+  const built = buildHybridSequence({ candles, asOf, sequenceSteps: 24 });
+  assert.equal(built.ready, true);
+  assert.equal(built.sequence.length, 24);
+  assert.equal(built.sequence[0].length, 21);
+  assert.ok(built.latest_input_at <= asOf);
+  assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
+  assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
+  assert.ok(built.sequence.at(-1)[11] > 0, 'aggregate trade buy imbalance should be represented');
+  assert.ok(built.sequence.at(-1)[12] > 0, 'bid depth imbalance should be represented');
+  assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
+  assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
+
+  const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
+  const beforeFuture = buildHybridSequence({ candles: [...candles, future], asOf, sequenceSteps: 24 });
+  assert.equal(beforeFuture.latest_input_at, asOf, 'future closed candles must not enter the tensor');
+  assert.deepEqual(beforeFuture.sequence, built.sequence);
+});
+
+test('volume profile is derived only from the supplied completed candles', () => {
+  const profile = calculateVolumeProfile(makeCandles(24));
+  assert.equal(profile.available, true);
+  assert.ok(profile.poc > 0);
+  assert.ok(profile.value_area_low <= profile.poc);
+  assert.ok(profile.value_area_high >= profile.poc);
+});
+
+test('barrier resolver chooses the stop when the same candle touches take-profit and stop-loss', () => {
+  const at = Date.UTC(2026, 1, 1);
+  const trade = resolveBarrierTrade({
+    entryPrice: 100,
+    decisionAt: at,
+    futureCandles: [{
+      closeTime: at + FIFTEEN_MINUTES, closed: true,
+      open: 100, high: 104, low: 97, close: 101
+    }]
+  });
+  assert.equal(trade.resolved, true);
+  assert.equal(trade.exit_reason, 'STOP_FIRST_SAME_CANDLE_AMBIGUITY');
+  assert.equal(trade.gross_return_pct, -2);
+  assert.equal(trade.net_return_pct, -2.3);
+});
+
+test('profit/drawdown objective is finite and produces probability gradients', () => {
+  const rows = [
+    { at: 1, symbol: 'AUSDT', gross_return_pct: 3 },
+    { at: 2, symbol: 'BUSDT', gross_return_pct: -2 },
+    { at: 3, symbol: 'CUSDT', gross_return_pct: 2 },
+    { at: 4, symbol: 'DUSDT', gross_return_pct: -1.5 }
+  ];
+  const objective = profitDrawdownObjective([0.8, 0.3, 0.7, 0.2], rows);
+  assert.ok(Number.isFinite(objective.loss));
+  assert.ok(Number.isFinite(objective.sharpe_per_decision));
+  assert.equal(objective.logit_gradients.length, 4);
+  assert.ok(objective.logit_gradients.every(Number.isFinite));
+  assert.ok(objective.max_additive_drawdown_pct >= 0);
+  assert.equal(objective.round_trip_cost_bps, 30);
+  assert.notEqual(objective.training_objective, 'MSE');
+});
+
+test('purged expanding walk-forward blocks do not share test timestamps or unresolved labels', () => {
+  const rows = makeRows();
+  const wf = buildPurgedWalkForwardFolds(rows, {
+    folds: 5,
+    minimumTrainTimes: 160,
+    minimumTrainRows: 80,
+    minimumValidationRows: 50,
+    minimumTestRows: 50,
+    embargoMs: FOUR_HOURS
+  });
+  assert.equal(wf.status, 'READY', JSON.stringify(wf.folds.map(row => ({
+    fold: row.fold, train: row.train_count, validation: row.validation_count, test: row.test_count
+  }))));
+  assert.equal(wf.fold_count, 5);
+  assert.equal(wf.test_blocks_non_overlapping, true);
+  for (const fold of wf.folds) {
+    assert.ok(fold.max_training_outcome_resolved_at < fold.boundaries.validation_start);
+    assert.ok(fold.max_validation_outcome_resolved_at < fold.boundaries.test_start);
+    assert.ok(fold.train.every(row => row.latest_input_at <= row.at));
+    assert.ok(fold.validation.every(row => row.latest_input_at <= row.at));
+    assert.ok(fold.test.every(row => row.latest_input_at <= row.at));
+  }
+});
+
+test('hybrid TCN actually uses temporal attention and returns a normalized attention distribution', () => {
+  const rows = makeRows(60);
+  const fitted = trainHybridTcnAttention(rows, { epochs: 1 });
+  assert.equal(fitted.architecture, HYBRID_TCN_ARCHITECTURE);
+  assert.equal(fitted.training_objective,
+    'NET_PROFIT_PLUS_SHARPE_MINUS_DOWNSIDE_SEMIVARIANCE_AND_DRAWDOWN_V1');
+  const predicted = predictHybridTcnAttention(rows.at(-1).sequence, fitted);
+  assert.ok(predicted);
+  assert.ok(predicted.probability >= 0 && predicted.probability <= 1);
+  assert.equal(predicted.attention_weights.length, 24);
+  assert.ok(Math.abs(predicted.attention_weights.reduce((sum, value) => sum + value, 0) - 1) < 1e-5);
+  assert.ok(predicted.attention_weights.every(value => value >= 0 && value <= 1));
+});
+
+test('same fixed dataset produces a deterministic SHA-256 manifest', () => {
+  const rows = makeRows(30);
+  assert.equal(sha256Canonical(rows), sha256Canonical(rows));
+  assert.notEqual(sha256Canonical(rows), sha256Canonical([...rows].reverse()));
+  assert.equal(sha256Canonical({ a: 1, b: 2 }), sha256Canonical({ b: 2, a: 1 }));
+});
+
+test('paper simulator charges round-trip costs, enforces a single open position, and measures drawdown', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const report = simulatePaperTrades([
+    { id: '1', symbol: 'AUSDT', at: base, resolved_at: base + FOUR_HOURS,
+      score: 0.9, threshold: 0.5, gross_return_pct: 3 },
+    { id: '2', symbol: 'BUSDT', at: base + FIFTEEN_MINUTES, resolved_at: base + FOUR_HOURS,
+      score: 0.95, threshold: 0.5, gross_return_pct: -2 },
+    { id: '3', symbol: 'CUSDT', at: base + FOUR_HOURS, resolved_at: base + 2 * FOUR_HOURS,
+      score: 0.9, threshold: 0.5, gross_return_pct: -2 }
+  ], { roundTripCostBps: 30, positionFraction: 0.2 });
+  assert.equal(report.trade_count, 2);
+  assert.equal(report.skipped_signals_while_position_open, 1);
+  assert.equal(report.trades[0].net_return_pct, 2.7);
+  assert.equal(report.trades[1].net_return_pct, -2.3);
+  assert.ok(report.max_drawdown_pct > 0);
+});
+
+test('fixed-SHA benchmark keeps both models on the same OOS events and fails closed without proven superiority', () => {
+  const report = runFixedShaBenchmark(makeRows(), {
+    sourceCommitSha: SOURCE_SHA,
+    folds: 5,
+    minimumTrainTimes: 160,
+    minimumTrainRows: 80,
+    minimumValidationRows: 50,
+    minimumTestRows: 50,
+    embargoMs: FOUR_HOURS,
+    epochs: 1,
+    thresholdGrid: [0.4, 0.5, 0.6]
+  });
+  assert.ok(report.integrity.dataset_sha256);
+  assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
+  assert.equal(report.walk_forward.fold_count, 5);
+  assert.equal(report.same_test_event_count, 450);
+  assert.equal(report.neural.trade_count < 100, true);
+  assert.equal(report.status, 'NEURAL_SUPERIORITY_NOT_PROVEN');
+  assert.equal(report.superiority, 'NOT_PROVEN');
+  assert.equal(report.acceptance_gates.minimum_100_oos_trades, 'FAIL');
+  assert.equal(report.acceptance_gates.same_fixed_sha_and_oos_event_rows, 'PASS');
+  assert.equal(report.execution_policy.paper_only, true);
+  assert.equal(report.execution_policy.real_order_execution, false);
+});
+
+test('benchmark refuses a partial source SHA instead of inventing a fixed reference', () => {
+  assert.throws(() => runFixedShaBenchmark([], { sourceCommitSha: 'abc123' }),
+    /FULL_SOURCE_COMMIT_SHA/);
+});
