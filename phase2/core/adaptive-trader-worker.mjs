@@ -225,7 +225,7 @@ export class AdaptiveTraderWorker{
               ?Math.trunc(Number(saved.scan_cursor))
               :Math.max(0,Math.trunc(Number(saved.last_summary?.universe?.scan_offset)||0)+
                 Math.trunc(Number(saved.last_summary?.universe?.scan_advance_count)||0)),
-            samples:retainAdaptiveTraderSamples(saved.samples,{now:Date.now()}).samples.map(row=>{
+            samples:retainAdaptiveTraderSamples(saved.samples.map(row=>{
               const sample={...row,observation_type:row.observation_type||'DEEP_CANDIDATE'};
               const historical=sample.observation_type==='HISTORICAL_CLOSED_CANDLE'&&sample.historical_baseline===true;
               const closedBaseline=sample.closed_candle_baseline===true;
@@ -240,7 +240,7 @@ export class AdaptiveTraderWorker{
                 sample.outcome_source=null;
               }
               return sample;
-            }),
+            }),{now:Date.now()}).samples,
             v5_samples:retainAdaptiveTraderSamples(
               (Array.isArray(saved.v5_samples)?saved.v5_samples:[]).filter(row=>
                 row&&row.training_eligible===true&&
@@ -252,15 +252,15 @@ export class AdaptiveTraderWorker{
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
             cognitive_journal:Array.isArray(saved.cognitive_journal)?saved.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL):[],
             cognitive_capture:saved.cognitive_capture&&typeof saved.cognitive_capture==='object'?saved.cognitive_capture:null,
-            learning_profile:buildAdaptiveLearningProfile(
-              retainAdaptiveTraderSamples(saved.samples,{now:Date.now()}).samples.filter(row=>
-                row&&row.training_eligible===true&&(row.historical_baseline===true||row.closed_candle_baseline===true))),
+            learning_profile:buildAdaptiveLearningProfile([]),
             paper_portfolio:saved.paper_portfolio&&saved.paper_portfolio.mode==='PAPER_ONLY'&&saved.paper_portfolio.real_order_execution===false&&
               Array.isArray(saved.paper_portfolio.open_positions)&&Array.isArray(saved.paper_portfolio.closed_trades)
               ?{...createServerPaperPortfolio(),...saved.paper_portfolio,enabled:true,paper_trading:true,real_order_execution:false,
                 open_positions:saved.paper_portfolio.open_positions.slice(-3),closed_trades:saved.paper_portfolio.closed_trades.slice(-2000)}
               :createServerPaperPortfolio()
           };
+          this.state.learning_profile=buildAdaptiveLearningProfile(this.state.samples.filter(row=>
+            row&&row.training_eligible===true&&(row.historical_baseline===true||row.closed_candle_baseline===true)));
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
           this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
             temporalSamples:this.trainingSamples()
