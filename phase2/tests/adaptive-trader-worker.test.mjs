@@ -4,9 +4,71 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
-import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
+import {AdaptiveTraderWorker,retainAdaptiveTraderSamples} from '../core/adaptive-trader-worker.mjs';
 import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
+
+
+
+test('Smart Trader sample cap preserves unresolved labels and balances resolved history across symbols',()=>{
+  const now=Date.now(),rows=[];
+  for(let symbolIndex=0;symbolIndex<80;symbolIndex++){
+    const symbol='COIN'+String(symbolIndex).padStart(3,'0')+'USDT';
+    for(let sampleIndex=0;sampleIndex<118;sampleIndex++){
+      rows.push({
+        id:'HIST:'+symbol+':'+sampleIndex,symbol,
+        at:now-(118-sampleIndex)*4*60*60*1000,
+        historical_baseline:true,training_eligible:true,
+        target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+        outcome:sampleIndex%3===0?'UP':sampleIndex%3===1?'DOWN':'FLAT'
+      });
+    }
+  }
+  const pending=[];
+  for(let index=0;index<30;index++){
+    const row={
+      id:'PENDING:'+index,symbol:'PENDING'+String(index).padStart(3,'0')+'USDT',
+      at:now-60*60*1000,closed_candle_baseline:true,training_eligible:true,
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+      outcome:null
+    };
+    pending.push(row);rows.push(row);
+  }
+  for(let index=0;index<100;index++){
+    rows.push({id:'AUDIT:'+index,symbol:'AUDIT'+index+'USDT',at:now-index,
+      observation_type:'MARKET_WIDE_TICKER',training_eligible:false});
+  }
+  const retained=retainAdaptiveTraderSamples(rows,{limit:6000,now});
+  assert.equal(retained.samples.length,6000);
+  assert.equal(retained.stats.pending_input_samples,30);
+  assert.equal(retained.stats.pending_retained_samples,30);
+  assert.equal(retained.stats.pending_overflow,0);
+  assert.equal(retained.stats.resolved_training_input_samples,80*118);
+  assert.equal(retained.stats.resolved_training_retained_samples,5970);
+  assert.equal(retained.stats.retained_training_symbols,110);
+  assert.equal(retained.stats.retained_audit_samples,0,
+    'market-wide audit-only rows cannot evict first-passage learning labels');
+  for(const row of pending) assert.ok(retained.samples.includes(row),
+    'every still-resolvable four-hour baseline must survive memory compaction');
+  const counts=new Map();
+  for(const row of retained.samples.filter(row=>row.historical_baseline===true)){
+    counts.set(row.symbol,(counts.get(row.symbol)||0)+1);
+  }
+  assert.equal(counts.size,80,'scan/selection order must not erase entire symbols');
+  assert.equal(Math.min(...counts.values()),74);
+  assert.equal(Math.max(...counts.values()),75);
+  assert.ok(retained.samples.every((row,index)=>index===0||
+    Number(retained.samples[index-1].at)<=Number(row.at)),
+    'retained learning samples must remain in chronological order for walk-forward splits');
+
+  const overflow=retainAdaptiveTraderSamples([
+    ...rows,
+    {id:'EXPIRED_PENDING',symbol:'EXPIREDUSDT',at:now-49*60*60*1000,
+      closed_candle_baseline:true,training_eligible:true,outcome:null}
+  ],{limit:6000,now});
+  assert.ok(!overflow.samples.some(row=>row.id==='EXPIRED_PENDING'),
+    'a sample outside the 48-hour label-recovery window must not pin memory forever');
+});
 
 
 
