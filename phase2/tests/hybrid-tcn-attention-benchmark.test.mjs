@@ -8,6 +8,8 @@ import {
   HYBRID_TCN_CONFIGURATION,
   HYBRID_TCN_RECEPTIVE_FIELD,
   buildHybridSequence,
+  calculateKamaEfficiencyRatio,
+  evaluateHybridMarketGates,
   buildPurgedWalkForwardFolds,
   calculateVolumeProfile,
   predictHybridTcnAttention,
@@ -30,6 +32,7 @@ function makeSequence(direction = 1, seed = 0) {
     Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, feature) => {
       if (feature === 19) return 0; // no historical depth snapshot
       if (feature === 20 || feature === 21 || feature === 22) return 1; // controlled fixture: flow, profile and BTC reference available
+      if (feature === 28) return 0.35; // directional KAMA efficiency ratio
       const trend = direction * (feature === 0 ? 0.7 : feature === 10 ? 0.4 : 0.12);
       const wave = Math.sin((time + 1) * (feature + 1) * 0.13 + seed) * 0.08;
       return Math.max(-3, Math.min(3, trend + wave));
@@ -58,6 +61,9 @@ function makeRows(count = 700) {
       max_favorable_excursion_pct: positive ? 2.8 : 0.8,
       max_favorable_excursion_at: at + 2 * FIFTEEN_MINUTES,
       classic_score: positive ? 0.92 : 0.08,
+      kama_efficiency_ratio: 0.35,
+      volatility_zscore: 0.5,
+      btc_trend_return_pct: 0.8,
       sequence: makeSequence(1, index % 13),
       feature_snapshot_sha: 'unit-fixture-v1'
     };
@@ -96,9 +102,10 @@ function makeCandles(count = 40) {
   });
 }
 
-test('hybrid feature contract includes order flow, depth, volume profile and adaptive volatility', () => {
-  assert.equal(HYBRID_FEATURE_NAMES.length, 28);
-  assert.equal(HYBRID_SEQUENCE_CHANNELS, 28);
+test('hybrid feature contract includes order flow, depth, volume profile, adaptive volatility and KAMA ER', () => {
+  assert.equal(HYBRID_FEATURE_NAMES.length, 29);
+  assert.equal(HYBRID_SEQUENCE_CHANNELS, 29);
+  assert.equal(HYBRID_FEATURE_NAMES.at(-1), 'kama_efficiency_ratio');
   for (const name of [
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
@@ -112,7 +119,10 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   const built = buildHybridSequence({ candles, benchmarkCandles: candles, asOf, sequenceSteps: 24 });
   assert.equal(built.ready, true);
   assert.equal(built.sequence.length, 24);
-  assert.equal(built.sequence[0].length, 28);
+  assert.equal(built.sequence[0].length, 29);
+  assert.ok(built.kama_efficiency_ratio >= 0 && built.kama_efficiency_ratio <= 1);
+  assert.ok(Number.isFinite(built.volatility_zscore));
+  assert.ok(Number.isFinite(built.btc_trend_return_pct));
   assert.ok(built.latest_input_at <= asOf);
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
@@ -138,6 +148,46 @@ test('hybrid feature contract includes order flow, depth, volume profile and ada
   const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles: candles, asOf, sequenceSteps: 24 });
   assert.equal(beforeFuture.latest_input_at, asOf, 'future closed candles must not enter the tensor');
   assert.deepEqual(beforeFuture.sequence, built.sequence);
+});
+
+test('KAMA efficiency ratio distinguishes directional movement from a choppy path', () => {
+  const trend = Array.from({ length: 11 }, (_, index) => ({
+    closeTime: Date.UTC(2026, 0, 1) + index * FIFTEEN_MINUTES,
+    closed: true, open: 100 + index, high: 101 + index, low: 99 + index, close: 100 + index,
+    volume: 1000, quoteVolume: 100000, numberOfTrades: 100
+  }));
+  const choppy = trend.map((row, index) => ({
+    ...row, close: 100 + (index % 2 === 0 ? 0 : 0.5), open: 100, high: 101, low: 99
+  }));
+  const trendingRatio = calculateKamaEfficiencyRatio(trend, { period: 10 });
+  const choppyRatio = calculateKamaEfficiencyRatio(choppy, { period: 10 });
+  assert.equal(trendingRatio, 1);
+  assert.ok(choppyRatio < trendingRatio);
+  assert.equal(calculateKamaEfficiencyRatio(trend.slice(0, 8), { period: 10 }), null);
+});
+
+test('KAMA, volatility z-score and exponential BTC countertrend gates reject weak context and attenuate opposing trend', () => {
+  const lowKama = evaluateHybridMarketGates({
+    kama_efficiency_ratio: 0.1, volatility_zscore: 1.1, btc_trend_return_pct: 2
+  });
+  assert.equal(lowKama.eligible, false);
+  assert.equal(lowKama.reason, 'KAMA_EFFICIENCY_BELOW_MINIMUM');
+
+  const lowVolatility = evaluateHybridMarketGates({
+    kama_efficiency_ratio: 0.6, volatility_zscore: -0.01, btc_trend_return_pct: 2
+  });
+  assert.equal(lowVolatility.eligible, false);
+  assert.equal(lowVolatility.reason, 'VOLATILITY_BELOW_ROLLING_MEAN');
+
+  const withBtcHeadwind = evaluateHybridMarketGates({
+    kama_efficiency_ratio: 0.6, volatility_zscore: 0.4, btc_trend_return_pct: -2
+  });
+  const withBtcTailwind = evaluateHybridMarketGates({
+    kama_efficiency_ratio: 0.6, volatility_zscore: 0.4, btc_trend_return_pct: 2
+  });
+  assert.equal(withBtcHeadwind.eligible, true);
+  assert.ok(withBtcHeadwind.btc_countertrend_penalty_factor < 1);
+  assert.equal(withBtcTailwind.btc_countertrend_penalty_factor, 1);
 });
 
 test('volume profile is derived only from the supplied completed candles', () => {
@@ -345,7 +395,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3');
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4');
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
