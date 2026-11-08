@@ -538,11 +538,14 @@ function fitEnsemble(rows, options = {}) {
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'}
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT}
   ];
   const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
     ...options,...memberProfiles[index],baseRate
@@ -1220,6 +1223,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+    latent_channels:TEMPORAL_LATENT_CHANNELS,
+    trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:Object.keys(fitted.specialists_by_regime).length?SEEDS.length:0,
