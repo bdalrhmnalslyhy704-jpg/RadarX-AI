@@ -1247,8 +1247,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     const difference = positiveLogit - negativeLogit;
     rankingLossSum += Math.max(0, -difference) + Math.log1p(Math.exp(-Math.abs(difference)));
     const pairGradient = sigmoid(-difference) / rankingDenominator;
-    rankingLogitGradients[positive.index] -= pairGradient * positive.probability * (1 - positive.probability);
-    rankingLogitGradients[negative.index] += pairGradient * negative.probability * (1 - negative.probability);
+    rankingLogitGradients[positive.index] -= pairGradient;
+    rankingLogitGradients[negative.index] += pairGradient;
   }
   const crossSectionalRankingLoss = rankingPairCount ? rankingLossSum / rankingDenominator : 0;
   const loss = -average - cumulativeGrowthWeight * cumulativeGeometricReturnPct -
