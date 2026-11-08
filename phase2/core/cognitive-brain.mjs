@@ -1155,21 +1155,33 @@ export function buildCognitiveLearningProfile(samples = [], {
   const boostedTreeValidation=boostedTreeFit
     ?evaluateHoldout(upEventValidation,boostedTreeFit)
     :{evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
-  const hybridFit=boostedTreeFit&&neuralFit
-    ?{
-      kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
-      neural_fit:neuralFit,boosted_weight:0.5,
-      base_rate:boostedTreeFit.base_rate,
-      architecture:'50_50_PROBABILITY_BLEND_GBDT_TCN_MLP_V1',
-      training_strategy:'VALIDATION_SELECTED_GBDT_MLP_PROBABILITY_BLEND_V1'
-    }:null;
-  const hybridValidation=hybridFit
-    ?evaluateHoldout(upEventValidation,hybridFit)
-    :{evaluated:false,model_brier_score:null,reason:'HYBRID_REQUIRES_BOTH_MODELS'};
+  // A small pre-declared convex blend grid is selected on the outer
+  // chronological validation block. Only one selected blend can reach the
+  // untouched holdout; no runner-up is substituted after seeing holdout data.
+  const hybridCandidates=boostedTreeFit&&neuralFit
+    ?[0.25,0.5,0.75].map(boostedWeight=>{
+      const fit={
+        kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
+        neural_fit:neuralFit,boosted_weight:boostedWeight,
+        base_rate:boostedTreeFit.base_rate,
+        architecture:`GBDT_${Math.round(boostedWeight*100)}_V5_${Math.round((1-boostedWeight)*100)}_PROBABILITY_BLEND_V2`,
+        training_strategy:'VALIDATION_SELECTED_GBDT_MLP_PROBABILITY_BLEND_V2'
+      };
+      return {
+        name:'HYBRID_GBDT_MLP_W'+Math.round(boostedWeight*100),
+        fit,validation:evaluateHoldout(upEventValidation,fit)
+      };
+    }):[];
+  const bestHybridCandidate=[...hybridCandidates].sort((a,b)=>
+    (a.validation?.model_brier_score??Infinity)-(b.validation?.model_brier_score??Infinity)||
+    a.name.localeCompare(b.name))[0]||null;
+  const hybridFit=bestHybridCandidate?.fit||null;
+  const hybridValidation=bestHybridCandidate?.validation||
+    {evaluated:false,model_brier_score:null,reason:'HYBRID_REQUIRES_BOTH_MODELS'};
   const challengerCandidates=[
     {name:'NEURAL_GLOBAL',fit:neuralFit,validation:neuralValidation},
     {name:'GBDT_RESIDUAL',fit:boostedTreeFit,validation:boostedTreeValidation},
-    {name:'HYBRID_GBDT_MLP',fit:hybridFit,validation:hybridValidation}
+    ...hybridCandidates
   ].filter(candidate=>candidate.fit&&candidate.validation?.evaluated===true);
   const validationReferences=[
     neuralSameWindowLogisticValidation,
@@ -1365,18 +1377,29 @@ export function buildCognitiveLearningProfile(samples = [], {
       holdout_comparison:validationWinner?.name==='GBDT_RESIDUAL'?challengerHoldoutComparison:null
     },
     hybrid_model: {
-      status:!hybridFit?'WAITING_FOR_BOTH_CHALLENGERS':
-        activeChallenger==='HYBRID_GBDT_MLP'?'OUT_OF_SAMPLE_VALIDATED':
-        validationWinner?.name==='HYBRID_GBDT_MLP'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
+      status:!hybridCandidates.length?'WAITING_FOR_BOTH_CHALLENGERS':
+        String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?'OUT_OF_SAMPLE_VALIDATED':
+        String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')?'VALIDATION_SELECTED_HOLDOUT_FAILED':
         'TRAINED_NOT_SELECTED',
       model_kind:'BLENDED_GBDT_MLP_V1',
-      architecture:hybridFit?.architecture||'50_50_PROBABILITY_BLEND_GBDT_MLP_V1',
-      trained:hybridFit!==null,selected:activeChallenger==='HYBRID_GBDT_MLP',
-      probability_ready:activeChallenger==='HYBRID_GBDT_MLP',
-      boosted_weight:hybridFit?.boosted_weight??null,
+      architecture:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.architecture||
+        bestHybridCandidate?.fit?.architecture||'GBDT_V5_PROBABILITY_BLEND_V2',
+      trained:hybridCandidates.length>0,
+      selected:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
+      probability_ready:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
+      selected_candidate:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?activeChallenger:null,
+      boosted_weight:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.boosted_weight||
+        bestHybridCandidate?.fit?.boosted_weight??null,
       validation:hybridValidation,
-      holdout:validationWinner?.name==='HYBRID_GBDT_MLP'?challengerHoldout:null,
-      holdout_comparison:validationWinner?.name==='HYBRID_GBDT_MLP'?challengerHoldoutComparison:null
+      candidate_validation_metrics:hybridCandidates.map(candidate=>({
+        name:candidate.name,boosted_weight:candidate.fit.boosted_weight,
+        model_brier_score:candidate.validation?.model_brier_score??null,
+        base_rate_brier_score:candidate.validation?.base_rate_brier_score??null,
+        beat_base_rate:candidate.validation?.beat_base_rate===true
+      })),
+      holdout:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?challengerHoldout:null,
+      holdout_comparison:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')
+        ?challengerHoldoutComparison:null
     },
     model_selection: {
       selected_model: selectedModel,
