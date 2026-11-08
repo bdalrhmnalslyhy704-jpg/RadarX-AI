@@ -50,7 +50,10 @@ test('matrix CLI dry-run validates the built-in 30-symbol by three-window plan w
   assert.equal(plan.window_count,3);
   assert.equal(plan.planned_symbol_window_replays,90);
   assert.equal(plan.limits.outcome_horizon_hours,48);
-  assert.equal(plan.limits.archive_prefetch_concurrency,4);
+  assert.equal(plan.limits.archive_prefetch_concurrency,8);
+  assert.equal(plan.limits.window_replay_concurrency,3);
+  assert.equal(plan.limits.archive_prefetch_scope,'ALL_SYMBOLS_ALL_WINDOWS_BEFORE_REPLAY');
+  assert.equal(plan.limits.replay_windows_in_parallel,true);
   assert.equal(plan.policy.real_order_execution,false);
 });
 
@@ -66,7 +69,25 @@ test('matrix CLI dry-run accepts the fixed 33-symbol research cohort without net
   assert.equal(plan.window_count,3);
   assert.equal(plan.planned_symbol_window_replays,99);
   assert.equal(plan.limits.outcome_horizon_hours,4);
+  assert.equal(plan.limits.archive_prefetch_concurrency,8);
+  assert.equal(plan.limits.window_replay_concurrency,3);
+  assert.equal(plan.limits.archive_prefetch_scope,'ALL_SYMBOLS_ALL_WINDOWS_BEFORE_REPLAY');
+  assert.equal(plan.limits.replay_windows_in_parallel,true);
   assert.equal(plan.policy.real_order_execution,false);
+});
+
+test('matrix CLI allows bounded parallel archives and rejects more than three concurrent historical windows',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
+  const accepted=spawnSync(process.execPath,[script,'--dry-run','--archive-prefetch-concurrency','6',
+    '--window-replay-concurrency','2','--outcome-horizon-hours','4'],{encoding:'utf8',timeout:10_000});
+  assert.equal(accepted.status,0,accepted.stderr||accepted.stdout);
+  const plan=JSON.parse(accepted.stdout);
+  assert.equal(plan.limits.archive_prefetch_concurrency,6);
+  assert.equal(plan.limits.window_replay_concurrency,2);
+  const rejected=spawnSync(process.execPath,[script,'--dry-run','--window-replay-concurrency','4'],
+    {encoding:'utf8',timeout:10_000});
+  assert.notEqual(rejected.status,0);
+  assert.match(rejected.stderr,/INVALID_WINDOW-REPLAY-CONCURRENCY|INVALID_WINDOW_REPLAY_CONCURRENCY/);
 });
 
 test('matrix reports measured early detections, missed movers, and weak follow-through together',()=>{
