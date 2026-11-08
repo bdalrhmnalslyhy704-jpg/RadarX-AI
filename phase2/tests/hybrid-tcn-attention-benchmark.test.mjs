@@ -431,15 +431,21 @@ test('cross-sectional ranking never compares assets from different decision time
       max_favorable_excursion_pct: 0.2, kama_efficiency_ratio: 0.7, volatility_zscore: 0.6,
       btc_trend_return_pct: 0.2 }
   ];
-  const objective = profitDrawdownObjective([0.4, 0.6], rows, {
+  const baseOptions = {
     enforceMarketGates: true, sharpeWeight: 0, cumulativeGrowthWeight: 0,
     downsideWeight: 0, adverseExcursionWeight: 0, excursionDrawdownWeight: 0,
-    drawdownWeight: 0, focalLossWeight: 0, crossSectionalRankingWeight: 1
+    drawdownWeight: 0, focalLossWeight: 0
+  };
+  const noRanking = profitDrawdownObjective([0.4, 0.6], rows, {
+    ...baseOptions, crossSectionalRankingWeight: 0
+  });
+  const objective = profitDrawdownObjective([0.4, 0.6], rows, {
+    ...baseOptions, crossSectionalRankingWeight: 1
   });
   assert.equal(objective.cross_sectional_ranking_pair_count, 0);
   assert.equal(objective.cross_sectional_ranking_loss, 0);
-  assert.equal(objective.logit_gradients[0], 0);
-  assert.equal(objective.logit_gradients[1], 0);
+  assert.deepEqual(objective.logit_gradients, noRanking.logit_gradients,
+    'ranking weight must not create cross-time gradients when no same-time pairs exist');
 });
 
 test('market-gated focal loss ignores samples that can never become executable positions', () => {
