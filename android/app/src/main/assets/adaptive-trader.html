@@ -737,6 +737,13 @@ function renderLearning(){
   const neuralNetwork=brainProfile.neural_network||brainCapture.neural_network||{};
   const neuralValidation=neuralNetwork.validation||{};
   const neuralHoldout=neuralNetwork.holdout||{};
+  const boostedTreeModel=brainProfile.boosted_tree_model||brainCapture.boosted_tree_model||{};
+  const boostedTreeValidation=boostedTreeModel.validation||{};
+  const boostedTreeHoldout=boostedTreeModel.holdout||{};
+  const boostedTreeComparison=boostedTreeModel.holdout_comparison||{};
+  const hybridModel=brainProfile.hybrid_model||brainCapture.hybrid_model||{};
+  const hybridValidation=hybridModel.validation||{};
+  const hybridHoldout=hybridModel.holdout||{};
   const temporalNetwork=brainProfile.temporal_network||brainCapture.temporal_network||{};
   const temporalValidation=temporalNetwork.validation||{};
   const temporalHoldout=temporalNetwork.holdout||{};
@@ -766,13 +773,19 @@ function renderLearning(){
       ?'النموذج الاحتياطي اجتاز الاختبار الأخير: Brier '+fmt(holdout.model_brier_score,3)+' مقابل خط الأساس '+fmt(holdout.base_rate_brier_score,3)
       :'لا توجد احتمالات شراء زمنية معتمدة؛ لا تُرفع العملة إلى مرشح دخول قبل اجتياز الشبكة الزمنية للتحقق والاختبار المستقل.';
   const selectedModel=temporalReady?'الشبكة الزمنية TCN':
+    modelSelection.selected_model==='GBDT_RESIDUAL'?'أشجار التعزيز التدريجي GBDT':
+    String(modelSelection.selected_model||'').startsWith('HYBRID_GBDT_MLP')?'النموذج الهجين GBDT + V5':
     modelSelection.selected_model==='NEURAL_GLOBAL'?'الشبكة العصبية الاحتياطية V5':
     modelSelection.selected_model==='RECENT_WINDOW'?'الذاكرة الحديثة':
     modelSelection.selected_model==='GLOBAL_HISTORY'?'الذاكرة الطويلة':'لا يوجد نموذج معتمد';
   const adaptationText=temporalReady
     ?'تكيّف: اختيرت الشبكة الزمنية بعد تفوقها على المنافس الخطي في التحقق والاختبار المستقل.'
-    :modelSelection.selected_model==='NEURAL_GLOBAL'
-      ?'تكيّف: اختيرت الشبكة العصبية الاحتياطية بعد تفوقها على المنافس الخطي في التحقق الأوسط.'
+    :modelSelection.selected_model==='GBDT_RESIDUAL'
+      ?'تكيّف: اختير منافس أشجار التعزيز بعد اجتيازه التحقق والاختبار الزمني المستقل أمام النماذج اللوجستية.'
+      :String(modelSelection.selected_model||'').startsWith('HYBRID_GBDT_MLP')
+        ?'تكيّف: اختير النموذج الهجين بعد اجتيازه التحقق والاختبار الزمني المستقل.'
+        :modelSelection.selected_model==='NEURAL_GLOBAL'
+          ?'تكيّف: اختيرت الشبكة العصبية الاحتياطية بعد تفوقها على المنافس الخطي في التحقق والاختبار المستقل.'
       :adaptation.status==='RECENT_WINDOW_SELECTED'
         ?'تكيّف: اختير النموذج الحديث بعد تفوقه في التحقق الأوسط.'
         :adaptation.status==='GLOBAL_HISTORY_RETAINED'
@@ -795,6 +808,31 @@ function renderLearning(){
   const neuralHoldoutText=neuralHoldout.evaluated===true
     ?'Brier الاختبار العصبي المستقل '+fmt(neuralHoldout.model_brier_score,3)+' مقابل خط الأساس '+fmt(neuralHoldout.base_rate_brier_score,3)
     :'الشبكة لم تحصل على اختبار نهائي معتمد بعد؛ لا تُنشر احتمالاتها.';
+  const boostedTreeStatusText=boostedTreeModel.status==='OUT_OF_SAMPLE_VALIDATED'
+    ?'اجتازت الأشجار التعزيزية التحقق الزمني والاختبار النهائي المستقل، واختيرت للمراقبة الورقية.'
+    :boostedTreeModel.status==='VALIDATION_SELECTED_HOLDOUT_FAILED'
+      ?'اجتازت التحقق الأوسط لكنها فشلت في الاختبار النهائي؛ لا تُعتمد.'
+      :boostedTreeModel.trained===true?'تدرّبت الأشجار لكنها لم تتفوق بما يكفي لاختيارها.':'نموذج الأشجار ينتظر عينات ناضجة كافية.';
+  const boostedTreeValidationText=boostedTreeValidation.evaluated===true
+    ?'Brier تحقق GBDT '+fmt(boostedTreeValidation.model_brier_score,3)+' مقابل خط الأساس '+fmt(boostedTreeValidation.base_rate_brier_score,3)
+    :'تحقق GBDT لم يكتمل.';
+  const boostedTreeHoldoutText=boostedTreeHoldout.evaluated===true
+    ?'Brier الاختبار المستقل GBDT '+fmt(boostedTreeHoldout.model_brier_score,3)+
+      ' · هامش المطلوب '+fmt(boostedTreeComparison.required_brier_margin,3)+
+      ' · مقابل اللوجستي العام '+(boostedTreeComparison.beats_global_logistic===true?'تفوق':'لم يتفوق')+
+      ' · مقابل اللوجستي الحديث '+(boostedTreeComparison.beats_recent_logistic===true?'تفوق':'لم يتفوق')
+    :'لا يوجد اختبار مستقل معتمد لـ GBDT بعد.';
+  const hybridStatusText=hybridModel.status==='OUT_OF_SAMPLE_VALIDATED'
+    ?'النموذج الهجين اجتاز التحقق والاختبار المستقل.'
+    :hybridModel.status==='VALIDATION_SELECTED_HOLDOUT_FAILED'
+      ?'النموذج الهجين فشل في الاختبار النهائي؛ ما زال غير معتمد.'
+      :hybridModel.trained===true?'تدرّب النموذج الهجين لكنه لم يُختَر؛ يظل بحثياً.':'النموذج الهجين ينتظر اكتمال تدريب مكوّناته.';
+  const hybridValidationText=hybridValidation.evaluated===true
+    ?'Brier تحقق الهجين '+fmt(hybridValidation.model_brier_score,3)+' مقابل الأساس '+fmt(hybridValidation.base_rate_brier_score,3)
+    :'تحقق الهجين لم يكتمل.';
+  const hybridHoldoutText=hybridHoldout.evaluated===true
+    ?'Brier الاختبار المستقل للهجين '+fmt(hybridHoldout.model_brier_score,3)
+    :'لم يجتز الهجين بعد اختباراً مستقلاً.';
   const temporalStatusText=temporalNetwork.status==='LIVE_GATE_PASSED_OUT_OF_SAMPLE'
     ?'اجتازت الاختبار الزمني المستقل وبوابة 100 نتيجة؛ يظل التنفيذ الحقيقي متوقفًا.'
     :temporalNetwork.status==='OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY'
@@ -831,7 +869,9 @@ function renderLearning(){
   el('cognitiveSummary').innerHTML=
     '<div class="learning-card"><h3>حالة الذاكرة والاستدلال</h3><p>'+esc(records)+' سجلًا محفوظًا · '+esc(resolvedJournal)+' نتيجة مكتملة · '+esc(Math.max(0,Number(brainProfile.training_samples)||0))+' تدريب · '+esc(Math.max(0,Number(brainProfile.validation_samples)||0))+' تحقق · '+esc(Math.max(0,Number(brainProfile.holdout_samples)||0))+' اختبار نهائي.</p><div class="tiny">عينات تداخل مستبعدة: '+esc(Number(brainProfile.purged_overlap_samples)||0)+' · عوامل مغطاة: '+esc(covered)+' · قرارات مبكرة للمراجعة: '+esc(Number(brainCapture.early_setup_reviews)||0)+'</div></div>'+
     '<div class="learning-card"><h3>الشبكة العصبية العميقة V5 — شبكة المؤشرات الاحتياطية</h3><p>'+esc(neuralNetwork.architecture||'18-10-6-1+RESIDUAL')+' · تجميع '+esc(Number(neuralNetwork.ensemble_members)||0)+' / '+esc(Number(neuralNetwork.ensemble_members_required)||3)+' شبكات مستقلة · '+esc(Number(neuralNetwork.training_samples)||0)+' / '+esc(Number(neuralNetwork.samples_required)||240)+' عينة تدريب ناضجة.</p><div class="tiny">'+esc(neuralStatusText)+'</div><div class="tiny">'+esc(neuralValidationText)+'</div><div class="tiny">'+esc(neuralHoldoutText)+'</div></div>'+
-    '<div class="learning-card"><h3>الشبكة الزمنية TCN الجديدة</h3><p>'+esc(temporalNetwork.architecture||'TCN 24×22 · BTC Bull/Bear Mixture of Experts + 5m Microstructure')+' · '+esc(Number(temporalNetwork.ensemble_members)||0)+' / '+esc(Number(temporalNetwork.ensemble_members_required)||3)+' نماذج · تدريب '+esc(Number(temporalNetwork.training_samples)||0)+' / '+esc(Number(temporalNetwork.required_training_samples)||160)+' · تحقق '+esc(Number(temporalNetwork.validation_samples)||0)+' · اختبار مستقل '+esc(Number(temporalNetwork.holdout_samples)||0)+' / 100.</p><div class="tiny">'+esc(temporalRegimeText)+'</div><div class="tiny">معدل نجاح الهدف +3% قبل −2%: تدريب '+esc(fmt(temporalNetwork.training_positive_rate_pct,1))+'% · تحقق '+esc(fmt(temporalValidation.positive_rate_pct,1))+'% · اختبار '+esc(fmt(temporalHoldout.positive_rate_pct,1))+'%</div><div class="tiny">الهدف: +3% قبل −2% خلال 4 ساعات · 24 شمعة 15m × 22 خاصية: تدفق 5m وخبراء مستقلون لصعود/هبوط BTC وسياق 4h/24h</div><div class="tiny">'+esc(temporalStatusText)+'</div><div class="tiny">'+esc(temporalValidationText)+'</div><div class="tiny">'+esc(temporalHoldoutText)+'</div><div class="tiny">'+esc(temporalSelectedText)+'</div></div>'+
+    '<div class="learning-card"><h3>منافس أشجار التعزيز التدريجي GBDT</h3><p>'+esc(boostedTreeModel.architecture||'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS')+' · أشجار '+esc(Number(boostedTreeModel.tree_count)||0)+' · تدريب '+esc(Number(boostedTreeModel.training_samples)||0)+' عينة.</p><div class="tiny">'+esc(boostedTreeStatusText)+'</div><div class="tiny">'+esc(boostedTreeValidationText)+'</div><div class="tiny">'+esc(boostedTreeHoldoutText)+'</div></div>'+
+    '<div class="learning-card"><h3>النموذج الهجين GBDT + V5</h3><p>'+esc(hybridModel.architecture||'50_50_PROBABILITY_BLEND_GBDT_MLP_V1')+' · وزن الأشجار '+esc(fmt(Number(hybridModel.boosted_weight)*100,0))+'%.</p><div class="tiny">'+esc(hybridStatusText)+'</div><div class="tiny">'+esc(hybridValidationText)+'</div><div class="tiny">'+esc(hybridHoldoutText)+'</div></div>'+
+    '<div class="learning-card"><h3>الشبكة الزمنية TCN الجديدة</h3><p>'+esc(temporalNetwork.architecture||'TCN 24×29→8 latent · BTC Bull/Bear experts')+' · '+esc(Number(temporalNetwork.ensemble_members)||0)+' / '+esc(Number(temporalNetwork.ensemble_members_required)||3)+' نماذج · تدريب '+esc(Number(temporalNetwork.training_samples)||0)+' / '+esc(Number(temporalNetwork.required_training_samples)||160)+' · تحقق '+esc(Number(temporalNetwork.validation_samples)||0)+' · اختبار مستقل '+esc(Number(temporalNetwork.holdout_samples)||0)+' / 100.</p><div class="tiny">'+esc(temporalRegimeText)+'</div><div class="tiny">معدل نجاح الهدف +3% قبل −2%: تدريب '+esc(fmt(temporalNetwork.training_positive_rate_pct,1))+'% · تحقق '+esc(fmt(temporalValidation.positive_rate_pct,1))+'% · اختبار '+esc(fmt(temporalHoldout.positive_rate_pct,1))+'%</div><div class="tiny">الهدف: +3% قبل −2% خلال 4 ساعات · 24 شمعة 15m × 29 ميزة تُسقط إلى '+esc(Number(temporalNetwork.latent_channels)||8)+' قنوات كامنة · '+esc(Number(temporalNetwork.trainable_parameter_count)||512)+' معاملاً زمنياً قابلاً للتعلم؛ مع مرساة لوجستية مجمدة</div><div class="tiny">'+esc(temporalStatusText)+'</div><div class="tiny">'+esc(temporalValidationText)+'</div><div class="tiny">'+esc(temporalHoldoutText)+'</div><div class="tiny">'+esc(temporalSelectedText)+'</div></div>'+
     '<div class="learning-card"><h3>اختيار النموذج والتكيّف</h3><p>'+esc(selectedModel)+' · '+esc(adaptationText)+'</p><div class="tiny">'+esc(validationText)+'</div></div>'+
     '<div class="learning-card"><h3>امتحان لم يُستخدم في التدريب</h3><p>'+esc(probabilityText)+'</p><div class="tiny">المنهج: '+esc(brainProfile.method||brain.method||'غير متاح')+' · '+esc(prequentialText)+'</div><div class="tiny">نتائج التوقع الأمامي: '+esc(Number(prequential.resolved_forecasts)||0)+' · Brier حديث: '+esc(prequential.recent_window&&prequential.recent_window.brier_score!==null&&Number.isFinite(Number(prequential.recent_window.brier_score))?fmt(prequential.recent_window.brier_score,3):'غير كافٍ')+'</div><div class="tiny">'+esc(errorReviewText)+'</div></div>';
 
