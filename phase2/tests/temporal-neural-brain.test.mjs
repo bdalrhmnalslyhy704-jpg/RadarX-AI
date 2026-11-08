@@ -284,7 +284,7 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
   assert.equal(expert.local_selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
   assert.equal(expert.member_selection_samples,expert.local_selection_samples);
-  assert.equal(expert.local_calibration_samples,24);
+  assert.equal(expert.local_calibration_samples,36);
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
   assert.equal(expert.calibration_samples,expert.local_calibration_samples);
   assert.ok(expert.support_gaps.includes('REGIME_MEMBER_SELECTION_BLOCK_UNSUPPORTED'));
