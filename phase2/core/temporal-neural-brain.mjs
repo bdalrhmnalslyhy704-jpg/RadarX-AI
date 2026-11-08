@@ -696,13 +696,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      // Mature histories keep 70% for model fitting and 16% for member
-      // selection, reserving 13.5% for regime-local probability calibration.
-      // Preserve the selection block's positive-class support while extending
-      // calibration into the final part of the inner fit window. Outer
-      // validation and final holdout remain untouched; no support minimum
-      // is reduced and no validation/holdout labels enter fitting.
-      :{training:0.70,memberSelection:0.86,calibration:0.995};
+      // Mature histories use 66% for model fitting, 16% for member selection,
+      // and 17.5% for regime-local calibration. The live risk-on regime has a
+      // ~7% positive rate, so its unchanged five-positive calibration gate
+      // needs a larger local block. Outer validation/holdout remain untouched.
+      :{training:0.66,memberSelection:0.82,calibration:0.995};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
@@ -717,9 +715,24 @@ export function buildTemporalNeuralProfile(samples = [], {
       .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
     const times=[...new Set(regimeRows.map(row=>row.at))].sort((a,b)=>a-b);
     if(times.length<4)return [regime,{rows:regimeRows,training:[],memberSelection:[],calibration:[],innerValidation:[],trainingCutoffAt:null,memberSelectionCutoffAt:null,calibrationCutoffAt:null}];
-    const trainIndex=Math.max(1,Math.min(times.length-2,Math.floor(times.length*splitFractions.training)));
-    const selectionIndex=Math.max(trainIndex+1,Math.min(times.length-1,Math.floor(times.length*splitFractions.memberSelection)));
-    const calibrationIndex=Math.max(selectionIndex+1,Math.min(times.length,Math.floor(times.length*splitFractions.calibration)));
+    // Use sample-count quantiles per regime, not fractions of timestamp groups.
+    // Different BTC regimes can have very different symbol density at each time;
+    // timestamp-only splits can leave the sparse regime with too few positive
+    // calibration labels despite an apparently large chronological window.
+    const sampleCountsByTime=new Map();
+    for(const row of regimeRows)sampleCountsByTime.set(row.at,(sampleCountsByTime.get(row.at)||0)+1);
+    const sampleQuantileIndex=(fraction,minIndex,maxIndex)=>{
+      const target=Math.max(1,Math.ceil(regimeRows.length*fraction));
+      let cumulative=0;
+      for(let index=0;index<times.length;index++){
+        cumulative+=sampleCountsByTime.get(times[index])||0;
+        if(cumulative>=target)return Math.max(minIndex,Math.min(maxIndex,index+1));
+      }
+      return maxIndex;
+    };
+    const trainIndex=sampleQuantileIndex(splitFractions.training,1,times.length-2);
+    const selectionIndex=sampleQuantileIndex(splitFractions.memberSelection,trainIndex+1,times.length-1);
+    const calibrationIndex=sampleQuantileIndex(splitFractions.calibration,selectionIndex+1,times.length);
     const trainingCutoffAt=times[trainIndex];
     const memberSelectionCutoffAt=times[selectionIndex];
     const calibrationCutoffAt=times[calibrationIndex]??validationStart;
@@ -759,6 +772,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       resolved_samples:rows.length,training_samples:allRegimeTrainingRows.length,
       regime_model_training_samples:allRegimeTrainingRows.length,
       model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
+       regime_split_method:'REGIME_LOCAL_SAMPLE_COUNT_CHRONOLOGICAL_QUANTILES_V1',
       regime_local_split_boundaries:Object.fromEntries(regimes.map(regime=>[regime,{
         training_cutoff_at:regimeSplits[regime].trainingCutoffAt,
         member_selection_cutoff_at:regimeSplits[regime].memberSelectionCutoffAt,
