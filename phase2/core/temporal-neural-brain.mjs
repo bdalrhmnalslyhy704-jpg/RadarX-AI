@@ -465,6 +465,171 @@ function predictLogistic(sequence, model) {
   for (let index = 0; index < model.weights.length; index++) value += model.weights[index] * vector[index];
   return logistic(value);
 }
+
+// A second challenger for the *same* early first-passage target as the TCN.
+// It uses pooled causal sequence summaries (24-step means + recent 8-step means)
+// and a frozen regime-local logistic anchor. Depth/leaf/round budgets are small
+// for the limited per-regime sample counts; selection happens only on the
+// disjoint regime member-selection block and calibration on the later block.
+function temporalTreeLinearLogit(vector,fit){
+  let value=Number(fit?.bias)||0;
+  for(let index=0;index<vector.length;index++){
+    value+=vector[index]*(Number(fit?.weights?.[index])||0);
+  }
+  return clamp(value,-12,12);
+}
+
+function temporalTreeNodeValue(node,vector){
+  if(!node||typeof node!=='object')return 0;
+  if(node.type==='leaf')return Number(node.value)||0;
+  const feature=Number(node.feature);
+  return vector[feature]<=Number(node.threshold)
+    ?temporalTreeNodeValue(node.left,vector)
+    :temporalTreeNodeValue(node.right,vector);
+}
+
+function bestTemporalTreeSplit(indices,rows,gradients,hessians,{
+  minimumLeaf=12,l2=8,minGain=0.002
+}={}){
+  let totalGradient=0,totalHessian=0;
+  for(const index of indices){
+    totalGradient+=gradients[index];
+    totalHessian+=hessians[index];
+  }
+  let best=null;
+  const features=rows[0]?.vector?.length||0;
+  for(let feature=0;feature<features;feature++){
+    const ordered=indices.map(index=>({index,value:rows[index].vector[feature]}))
+      .sort((a,b)=>a.value-b.value||a.index-b.index);
+    let leftGradient=0,leftHessian=0;
+    for(let offset=0;offset<ordered.length-1;offset++){
+      const current=ordered[offset];
+      leftGradient+=gradients[current.index];
+      leftHessian+=hessians[current.index];
+      const leftCount=offset+1,rightCount=ordered.length-leftCount;
+      if(leftCount<minimumLeaf||rightCount<minimumLeaf)continue;
+      const nextValue=ordered[offset+1].value;
+      if(!(current.value<nextValue))continue;
+      const rightGradient=totalGradient-leftGradient;
+      const rightHessian=totalHessian-leftHessian;
+      const gain=0.5*(
+        leftGradient*leftGradient/(leftHessian+l2)+
+        rightGradient*rightGradient/(rightHessian+l2)-
+        totalGradient*totalGradient/(totalHessian+l2)
+      );
+      if(gain>minGain&&(!best||gain>best.gain)){
+        best={feature,threshold:current.value+(nextValue-current.value)/2,gain};
+      }
+    }
+  }
+  return best;
+}
+
+function buildTemporalTreeNode(indices,depth,rows,gradients,hessians,options){
+  let gradient=0,hessian=0;
+  for(const index of indices){gradient+=gradients[index];hessian+=hessians[index];}
+  const leafValue=clamp(-gradient/(hessian+options.l2),-0.55,0.55);
+  if(depth>=options.maxDepth||indices.length<options.minimumLeaf*2){
+    return {type:'leaf',value:leafValue};
+  }
+  const split=bestTemporalTreeSplit(indices,rows,gradients,hessians,options);
+  if(!split)return {type:'leaf',value:leafValue};
+  const left=[],right=[];
+  for(const index of indices){
+    (rows[index].vector[split.feature]<=split.threshold?left:right).push(index);
+  }
+  if(left.length<options.minimumLeaf||right.length<options.minimumLeaf){
+    return {type:'leaf',value:leafValue};
+  }
+  return {
+    type:'split',feature:split.feature,threshold:split.threshold,gain:split.gain,
+    left:buildTemporalTreeNode(left,depth+1,rows,gradients,hessians,options),
+    right:buildTemporalTreeNode(right,depth+1,rows,gradients,hessians,options)
+  };
+}
+
+function accumulateTemporalTreeImportance(node,gains,counts){
+  if(!node||typeof node!=='object'||node.type!=='split')return;
+  const feature=Number(node.feature);
+  if(Number.isInteger(feature)&&feature>=0&&feature<gains.length){
+    gains[feature]+=Math.max(0,Number(node.gain)||0);
+    counts[feature]++;
+  }
+  accumulateTemporalTreeImportance(node.left,gains,counts);
+  accumulateTemporalTreeImportance(node.right,gains,counts);
+}
+
+function fitTemporalResidualTrees(training,baselineFit,{
+  maxTrees=24,maxDepth=2,learningRate=0.04,l2=10,minimumLeafFraction=0.05
+}={}){
+  const rows=(Array.isArray(training)?training:[]).map(row=>({
+    vector:pooledSequence(row.sequence),target:Number(row.target)
+  })).filter(row=>row.vector.length===TEMPORAL_SEQUENCE_CHANNELS*2&&
+    row.vector.every(Number.isFinite)&&(row.target===0||row.target===1));
+  if(rows.length<160||!baselineFit||!Array.isArray(baselineFit.weights)||
+     baselineFit.weights.length!==TEMPORAL_SEQUENCE_CHANNELS*2||
+     !Number.isFinite(Number(baselineFit.bias)))return null;
+  const options={
+    maxDepth:Math.max(1,Math.min(2,Math.trunc(Number(maxDepth)||2))),
+    minimumLeaf:Math.max(12,Math.min(60,Math.floor(rows.length*minimumLeafFraction))),
+    l2:clamp(Number(l2)||10,3,30),minGain:0.002
+  };
+  const rate=clamp(Number(learningRate)||0.04,0.01,0.08);
+  const logits=rows.map(row=>temporalTreeLinearLogit(row.vector,baselineFit));
+  const trees=[];
+  const featureGains=Array(TEMPORAL_SEQUENCE_CHANNELS*2).fill(0);
+  const featureSplitCounts=Array(TEMPORAL_SEQUENCE_CHANNELS*2).fill(0);
+  const rounds=Math.max(8,Math.min(32,Math.trunc(Number(maxTrees)||24)));
+  for(let round=0;round<rounds;round++){
+    const gradients=new Array(rows.length),hessians=new Array(rows.length);
+    for(let index=0;index<rows.length;index++){
+      const probability=logistic(logits[index]);
+      gradients[index]=probability-rows[index].target;
+      hessians[index]=Math.max(0.025,probability*(1-probability));
+    }
+    const root=buildTemporalTreeNode(rows.map((_,index)=>index),0,rows,gradients,hessians,options);
+    if(root.type==='leaf')break;
+    for(let index=0;index<rows.length;index++){
+      logits[index]=clamp(logits[index]+rate*temporalTreeNodeValue(root,rows[index].vector),-12,12);
+    }
+    trees.push({root});
+    accumulateTemporalTreeImportance(root,featureGains,featureSplitCounts);
+  }
+  if(!trees.length)return null;
+  const totalGain=featureGains.reduce((sum,value)=>sum+value,0);
+  const featureImportance=featureGains.map((gain,index)=>({
+    feature:index<TEMPORAL_SEQUENCE_CHANNELS
+      ?'sequence_mean_'+index
+      :'recent_8_mean_'+(index-TEMPORAL_SEQUENCE_CHANNELS),
+    gain:Number(gain.toFixed(7)),
+    gain_share_pct:totalGain>0?Number((gain/totalGain*100).toFixed(2)):0,
+    split_count:featureSplitCounts[index]
+  })).filter(row=>row.split_count>0).sort((a,b)=>b.gain-a.gain||a.feature.localeCompare(b.feature));
+  return {
+    kind:'TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1',
+    architecture:'TEMPORAL_POOLED_58_NEWTON_GBDT_DEPTH2_24_ROUNDS',
+    baseline_fit:baselineFit,trees,tree_count:trees.length,
+    learning_rate:rate,max_depth:options.maxDepth,
+    minimum_leaf_samples:options.minimumLeaf,l2:options.l2,
+    training_samples:rows.length,feature_importance:featureImportance,
+    feature_importance_total_gain:Number(totalGain.toFixed(7))
+  };
+}
+
+function predictTemporalResidualTrees(sequence,fit,residualScale=1,treeCount=null){
+  if(!fit||fit.kind!=='TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1'||
+     !Array.isArray(fit.trees)||!fit.trees.length)return null;
+  const vector=pooledSequence(sequence);
+  let value=temporalTreeLinearLogit(vector,fit.baseline_fit);
+  const count=Math.max(1,Math.min(fit.trees.length,
+    Math.trunc(Number(treeCount)||fit.trees.length)));
+  for(let index=0;index<count;index++){
+    value+=Number(fit.learning_rate)*clamp(Number(residualScale)||0,0,1)*
+      temporalTreeNodeValue(fit.trees[index].root,vector);
+  }
+  return logistic(clamp(value,-12,12));
+}
+
 function evaluate(rows, predictFn, baseRate) {
   if (!rows.length) return {
     evaluated:false,sample_count:0,positive_count:0,negative_count:0,positive_rate_pct:null,
