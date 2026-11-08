@@ -265,7 +265,7 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
       if(group>=12&&group<=17&&riskOn)up=false;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
-      else if(riskOn&&[22,24,26].includes(group))up=false; // force a genuine local validation support gap
+      else if(riskOn&&[17,19,21,22,23,24,25,26,27].includes(group))up=false; // keep local selection/validation class support intentionally sparse
       else if(group>=17&&group<=27)up=index<2;
       else up=index<2;
       const row=sample(group,index,{up});
