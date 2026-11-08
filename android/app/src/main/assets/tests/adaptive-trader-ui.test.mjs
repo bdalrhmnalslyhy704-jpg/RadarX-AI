@@ -136,7 +136,7 @@ test('cognitive dashboard distinguishes nested validation, untouched holdout, ad
   assert.match(html,/أخطاء عالية الثقة/);
   assert.match(html,/هذا ارتباط تشخيصي وليس إثباتًا للسبب/);
   assert.match(html,/لا تُرفع العملة إلى مرشح دخول قبل اجتياز الشبكة الزمنية للتحقق والاختبار المستقل/);
-  assert.match(html,/TCN 24×22|TCN_24x22_DILATED_RESIDUAL_BTC_CONTEXT_GATED_ENSEMBLE_V5/);
+  assert.match(html,/TCN 24×29→8 latent|TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7/);
   assert.match(html,/temporalNetwork\.probability_ready/);
   assert.match(html,/OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY/);
 });
@@ -154,4 +154,13 @@ test('cognitive dashboard exposes the V5 residual neural network and selected mo
   assert.match(html,/neuralHoldoutText/);
   assert.match(html,/modelSelection\.selected_model==='NEURAL_GLOBAL'/);
   assert.match(html,/18-10-6-1\+RESIDUAL/);
+  assert.match(html,/boostedTreeModel=brainProfile\.boosted_tree_model/);
+  assert.match(html,/hybridModel=brainProfile\.hybrid_model/);
+  assert.match(html,/أشجار التعزيز التدريجي GBDT/);
+  assert.match(html,/النموذج الهجين GBDT \+ V5/);
+  assert.match(html,/boostedTreeHoldoutText/);
+  assert.match(html,/hybridHoldoutText/);
+  assert.match(html,/temporalNetwork\.latent_channels/);
+  assert.match(html,/temporalNetwork\.trainable_parameter_count/);
+
 });
