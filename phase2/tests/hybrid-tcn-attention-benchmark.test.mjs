@@ -359,6 +359,54 @@ test('time-bucketed capped portfolio gradient matches central finite differences
     base.logit_gradients[0] + ' vs ' + numerical);
 });
 
+test('overlapping four-hour positions share the 30-slot cap and per-symbol lock with exact capacity gradients', () => {
+  const rows = [
+    { at: 100, symbol: 'AUSDT', resolved_at: 500, gross_return_pct: 3,
+      max_adverse_excursion_pct: -0.2, max_favorable_excursion_pct: 3,
+      max_adverse_excursion_at: 200 },
+    { at: 100, symbol: 'BUSDT', resolved_at: 500, gross_return_pct: -2,
+      max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.3,
+      max_adverse_excursion_at: 300 },
+    { at: 200, symbol: 'AUSDT', resolved_at: 600, gross_return_pct: 2.5,
+      max_adverse_excursion_pct: -0.4, max_favorable_excursion_pct: 2.7,
+      max_adverse_excursion_at: 350 },
+    { at: 200, symbol: 'CUSDT', resolved_at: 600, gross_return_pct: 3.2,
+      max_adverse_excursion_pct: -0.3, max_favorable_excursion_pct: 3.4,
+      max_adverse_excursion_at: 360 },
+    { at: 300, symbol: 'DUSDT', resolved_at: 700, gross_return_pct: -1.5,
+      max_adverse_excursion_pct: -1.8, max_favorable_excursion_pct: 0.4,
+      max_adverse_excursion_at: 400 }
+  ];
+  const probabilities = [0.99, 0.99, 0.99, 0.99, 0.99];
+  const options = {
+    positionFraction: 0.5, threshold: 0.55, temperature: 0.1,
+    roundTripCostBps: 30, sharpeWeight: 0, cumulativeGrowthWeight: 0,
+    downsideWeight: 0, adverseExcursionWeight: 0, excursionDrawdownWeight: 0,
+    drawdownWeight: 0, focalLossWeight: 0, crossSectionalRankingWeight: 0
+  };
+  const objective = profitDrawdownObjective(probabilities, rows, options);
+  assert.equal(objective.overlap_aware_position_capacity, true);
+  assert.equal(objective.position_capacity_units, 2);
+  assert.equal(objective.symbol_position_capacity_units, 1);
+  assert.ok(objective.max_simultaneous_position_units <= 2 + 1e-8);
+  assert.ok(objective.max_symbol_position_units <= 1 + 1e-8);
+  assert.ok(objective.positions[2] < objective.positions[3],
+    'the repeat A position must be reduced by its already-open symbol exposure');
+  assert.equal(objective.positions[4], 0,
+    'a new entry must be blocked while both global position slots remain occupied');
+
+  const epsilon = 1e-4;
+  const logit = Math.log(probabilities[0] / (1 - probabilities[0]));
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([
+    sigmoid(value), ...probabilities.slice(1)
+  ], rows, options).loss;
+  const numerical = (evaluate(logit + epsilon) - evaluate(logit - epsilon)) / (2 * epsilon);
+  assert.ok(Math.abs(objective.logit_gradients[0] - numerical) < 4e-4,
+    'event-time portfolio and symbol-capacity reverse gradients must match finite differences: ' +
+    objective.logit_gradients[0] + ' vs ' + numerical);
+});
+
 test('asymmetric focal loss gives a stronger gradient to overconfident losing-direction predictions', () => {
   const losingRows = [
     { at: 1, symbol: 'LOSSUSDT', gross_return_pct: -2,
@@ -569,7 +617,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5');
+    'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
   assert.equal(fitted.architecture_config.training_objective, fitted.training_objective);
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
@@ -726,6 +774,8 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
     thresholdGrid: [0.4, 0.5, 0.6]
   });
   assert.ok(report.integrity.dataset_sha256);
+  assert.equal(report.training_objective, 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
+  assert.equal(report.architecture_config.training_objective, report.training_objective);
   assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
   assert.equal(report.walk_forward.fold_count, 5);
   assert.equal(report.same_test_event_count, 450);

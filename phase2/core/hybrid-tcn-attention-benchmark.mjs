@@ -36,7 +36,7 @@ export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V5';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_OVERLAP_AWARE_PORTFOLIO_SHARPE_RANKING_V6';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -59,7 +59,7 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   minimum_kama_efficiency_ratio: 0.20,
   minimum_volatility_zscore: 0,
   btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
-  training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5'
+  training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -1072,8 +1072,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
   // The portfolio risk path is measured per market snapshot, not per symbol row.
-  // Every coin observed at the same decision timestamp is simultaneous. Treating
-  // those rows as serial trades makes drawdown depend on alphabetical symbol order.
+  // Same-time entries are simultaneous; earlier entries stay open until resolved_at.
+  // Both same-time and overlapping positions share the actual capital/slot ceilings.
   const positions = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
   const focalEligible = Array(rows.length).fill(false);
@@ -1107,53 +1107,164 @@ export function profitDrawdownObjective(probabilities, rows, {
   }
 
   const positionCapacity = Math.max(1, Math.floor(1 / size + 1e-9));
-  const portfolioReturns = [];
-  const orderedAdverseReturns = [];
-  const orderedExcursionDrawdowns = [];
-  const groupReturnDerivativeByRow = Array(rows.length).fill(0);
-  const groupAdverseDerivativeByRow = Array(rows.length).fill(0);
-  const groupExcursionDerivativeByRow = Array(rows.length).fill(0);
-  const groupIndexByRow = Array(rows.length).fill(-1);
+  const symbolPositionCapacity = 1;
+  const positions = Array(rows.length).fill(0);
+  const memberByRow = Array(rows.length).fill(null);
+  const decisionGroupsByTime = new Map();
+  for (const pair of pairs) {
+    const gates = enforceMarketGates ? evaluateHybridMarketGates(pair.row, {
+      minimumKamaEfficiencyRatio, minimumVolatilityZScore, btcCountertrendPenaltyPerPct
+    }) : { eligible: true, btc_countertrend_penalty_factor: 1 };
+    const penaltyFactor = gates.eligible ? Number(gates.btc_countertrend_penalty_factor ?? 1) : 0;
+    const rawAllocation = gates.eligible
+      ? sigmoid((pair.probability - threshold) / temp) * penaltyFactor
+      : 0;
+    orderedBtcPenaltyFactors[pair.index] = penaltyFactor;
+    // Classification loss follows the executable market gates. A blocked row
+    // is excluded from focal/ranking gradients and cannot consume position slots.
+    focalEligible[pair.index] = gates.eligible === true;
+    orderedProbabilityDerivative[pair.index] = gates.eligible
+      ? sigmoid((pair.probability - threshold) / temp) *
+        (1 - sigmoid((pair.probability - threshold) / temp)) / temp *
+        penaltyFactor * pair.probability * (1 - pair.probability)
+      : 0;
+    const at = Number(pair.row.at);
+    const resolvedAt = Math.max(at + 1, finite(pair.row.resolved_at) ?? at + 1);
+    const adverseAt = Math.max(at, finite(pair.row.max_adverse_excursion_at) ?? resolvedAt);
+    const net = netReturnPct(pair.row, cost);
+    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
+    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
+    const excursion = Math.max(0, favourable - adverse);
+    const symbol = String(pair.row.symbol || '__ROW_' + pair.index).toUpperCase();
+    const member = {
+      pair, symbol, rawAllocation, preGlobalAllocation: 0, allocation: 0,
+      resolvedAt, adverseAt, net, adverse, excursion
+    };
+    memberByRow[pair.index] = member;
+    let group = decisionGroupsByTime.get(at);
+    if (!group) {
+      group = {at, members: []};
+      decisionGroupsByTime.set(at, group);
+    }
+    group.members.push(member);
+  }
+
+  const decisionGroups = [...decisionGroupsByTime.values()].sort((a, b) => a.at - b.at);
+  const activePositions = new Map();
+  const groupCapacityPolicies = [];
   let maxSimultaneousPositionUnits = 0;
-  for (let groupIndex = 0; groupIndex < decisionGroups.length; groupIndex++) {
-    const group = decisionGroups[groupIndex];
-    const allocationTotal = group.members.reduce((sum, member) => sum + member.allocation, 0);
-    const returnNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.net, 0);
-    const adverseNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.adverse, 0);
-    const excursionNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.excursion, 0);
-    const isCapped = allocationTotal > positionCapacity;
-    const allocationScale = isCapped ? positionCapacity / allocationTotal : 1;
-    portfolioReturns.push(allocationScale * returnNumerator * size);
-    orderedAdverseReturns.push(allocationScale * adverseNumerator * size);
-    orderedExcursionDrawdowns.push(allocationScale * excursionNumerator * size);
-    maxSimultaneousPositionUnits = Math.max(maxSimultaneousPositionUnits, allocationTotal * allocationScale);
+  let maxSymbolPositionUnits = 0;
+  for (const group of decisionGroups) {
+    // Expiries are processed before new entries at the same timestamp, matching
+    // the paper simulator's EXIT-before-DECISION event ordering.
+    for (const [rowIndex, active] of activePositions) {
+      if (active.resolvedAt <= group.at) activePositions.delete(rowIndex);
+    }
+    const globalPriorRows = [...activePositions.keys()];
+    const existingGlobalExposure = [...activePositions.values()]
+      .reduce((sum, active) => sum + active.allocation, 0);
+    const activeBySymbol = new Map();
+    for (const [rowIndex, active] of activePositions) {
+      if (!activeBySymbol.has(active.symbol)) activeBySymbol.set(active.symbol, []);
+      activeBySymbol.get(active.symbol).push(rowIndex);
+    }
+    const membersBySymbol = new Map();
     for (const member of group.members) {
-      const rowIndex = member.pair.index;
-      positions[rowIndex] = member.allocation * allocationScale;
-      groupIndexByRow[rowIndex] = groupIndex;
-      if (!isCapped || allocationTotal <= 0) {
-        groupReturnDerivativeByRow[rowIndex] = member.net * size;
-        groupAdverseDerivativeByRow[rowIndex] = member.adverse * size;
-        groupExcursionDerivativeByRow[rowIndex] = member.excursion * size;
-      } else {
-        const inverseSquare = positionCapacity * size / (allocationTotal * allocationTotal);
-        groupReturnDerivativeByRow[rowIndex] = inverseSquare *
-          (member.net * allocationTotal - returnNumerator);
-        groupAdverseDerivativeByRow[rowIndex] = inverseSquare *
-          (member.adverse * allocationTotal - adverseNumerator);
-        groupExcursionDerivativeByRow[rowIndex] = inverseSquare *
-          (member.excursion * allocationTotal - excursionNumerator);
+      if (!membersBySymbol.has(member.symbol)) membersBySymbol.set(member.symbol, []);
+      membersBySymbol.get(member.symbol).push(member);
+    }
+    const symbolPolicies = [];
+    for (const [symbol, symbolMembers] of membersBySymbol) {
+      const priorRows = activeBySymbol.get(symbol) ?? [];
+      const priorExposure = priorRows.reduce((sum, rowIndex) =>
+        sum + (activePositions.get(rowIndex)?.allocation ?? 0), 0);
+      const rawTotal = symbolMembers.reduce((sum, member) => sum + member.rawAllocation, 0);
+      const available = Math.max(0, symbolPositionCapacity - priorExposure);
+      const capped = rawTotal > available + 1e-12;
+      const scale = capped && rawTotal > 0 ? available / rawTotal : 1;
+      for (const member of symbolMembers) member.preGlobalAllocation = member.rawAllocation * scale;
+      const newSymbolExposure = symbolMembers.reduce((sum, member) =>
+        sum + member.preGlobalAllocation, 0);
+      maxSymbolPositionUnits = Math.max(maxSymbolPositionUnits, priorExposure + newSymbolExposure);
+      symbolPolicies.push({symbol, members: symbolMembers, priorRows, rawTotal, available, scale, capped});
+    }
+
+    // Unlike the previous same-timestamp-only cap, this includes every open
+    // position whose four-hour outcome has not matured, across all prior times.
+    const preGlobalTotal = group.members.reduce((sum, member) => sum + member.preGlobalAllocation, 0);
+    const availableGlobal = Math.max(0, positionCapacity - existingGlobalExposure);
+    const globalCapped = preGlobalTotal > availableGlobal + 1e-12;
+    const globalScale = globalCapped && preGlobalTotal > 0 ? availableGlobal / preGlobalTotal : 1;
+    const newGlobalExposure = group.members.reduce((sum, member) => {
+      member.allocation = member.preGlobalAllocation * globalScale;
+      positions[member.pair.index] = member.allocation;
+      return sum + member.allocation;
+    }, 0);
+    maxSimultaneousPositionUnits = Math.max(
+      maxSimultaneousPositionUnits, existingGlobalExposure + newGlobalExposure
+    );
+    groupCapacityPolicies.push({
+      group,
+      globalPriorRows,
+      globalCapped,
+      globalAvailable: availableGlobal,
+      globalPreTotal: preGlobalTotal,
+      globalScale,
+      symbolPolicies
+    });
+    for (const member of group.members) {
+      if (member.allocation > 1e-12 && member.resolvedAt > group.at) {
+        activePositions.set(member.pair.index, {
+          allocation: member.allocation,
+          resolvedAt: member.resolvedAt,
+          symbol: member.symbol
+        });
       }
     }
   }
-  const n = portfolioReturns.length;
+
+  const collectEventGroups = (timeOf) => {
+    const byTime = new Map();
+    for (const member of memberByRow) {
+      const at = timeOf(member);
+      if (!byTime.has(at)) byTime.set(at, []);
+      byTime.get(at).push(member);
+    }
+    return [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([at, members]) => ({at, members}));
+  };
+  const exitGroups = collectEventGroups(member => member.resolvedAt);
+  const adverseGroups = collectEventGroups(member => member.adverseAt);
+  // Intratrade excursion risk is charged at realization time; realized equity
+  // and capacity use the same matured-position event clock.
+  const excursionGroups = exitGroups;
+  const exitGroupIndexByRow = Array(rows.length).fill(-1);
+  const adverseGroupIndexByRow = Array(rows.length).fill(-1);
+  const excursionGroupIndexByRow = Array(rows.length).fill(-1);
+  for (let groupIndex = 0; groupIndex < exitGroups.length; groupIndex++) {
+    for (const member of exitGroups[groupIndex].members) exitGroupIndexByRow[member.pair.index] = groupIndex;
+  }
+  for (let groupIndex = 0; groupIndex < adverseGroups.length; groupIndex++) {
+    for (const member of adverseGroups[groupIndex].members) adverseGroupIndexByRow[member.pair.index] = groupIndex;
+  }
+  for (let groupIndex = 0; groupIndex < excursionGroups.length; groupIndex++) {
+    for (const member of excursionGroups[groupIndex].members) excursionGroupIndexByRow[member.pair.index] = groupIndex;
+  }
+  const portfolioReturns = exitGroups.map(group =>
+    group.members.reduce((sum, member) => sum + member.allocation * member.net, 0) * size);
+  const orderedAdverseReturns = adverseGroups.map(group =>
+    group.members.reduce((sum, member) => sum + member.allocation * member.adverse, 0) * size);
+  const orderedExcursionDrawdowns = excursionGroups.map(group =>
+    group.members.reduce((sum, member) => sum + member.allocation * member.excursion, 0) * size);
+  const n = Math.max(1, portfolioReturns.length);
+  const nAdverse = Math.max(1, orderedAdverseReturns.length);
+  const nExcursion = Math.max(1, orderedExcursionDrawdowns.length);
   const average = mean(portfolioReturns) ?? 0;
   const equityLogReturns = portfolioReturns.map(value => Math.log1p(clamp(value / 100, -0.99, 10)));
   const averageLogReturn = mean(equityLogReturns) ?? 0;
   const logVariance = mean(equityLogReturns.map(value => (value - averageLogReturn) ** 2)) ?? 0;
   const logStandardDeviation = Math.sqrt(logVariance + 1e-8);
   const cumulativeEquityFactor = Math.exp(equityLogReturns.reduce((sum, value) => sum + value, 0));
-  const geometricFactor = Math.pow(cumulativeEquityFactor, 1 / Math.max(1, n));
+  const geometricFactor = Math.pow(cumulativeEquityFactor, 1 / n);
   const cumulativeGeometricReturnPct = (geometricFactor - 1) * 100;
   const cumulativeEquitySharpe = averageLogReturn / logStandardDeviation;
   const sharpe = cumulativeEquitySharpe;
@@ -1184,8 +1295,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     }
   }
   const downsideMean = downsideSquared / n;
-  const adverseMean = adverseSquared / n;
-  const excursionDrawdownMean = excursionDrawdownSquared / n;
+  const adverseMean = adverseSquared / nAdverse;
+  const excursionDrawdownMean = excursionDrawdownSquared / nExcursion;
   const drawdownMean = underwaterSquared / n;
   const focalWeight = clamp(finite(focalLossWeight) ?? 0.25, 0, 2);
   const gammaPositive = clamp(finite(focalGammaPositive) ?? 1, 0, 5);
@@ -1260,7 +1371,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     const x = portfolioReturns[index];
     let gradient = -1 / n;
     gradient -= cumulativeGrowthWeight * geometricFactor * 100 /
-      (Math.max(1, n) * Math.max(1e-6, 100 + x));
+      (n * Math.max(1e-6, 100 + x));
     const logReturn = equityLogReturns[index];
     const sharpeDerivativeByLogReturn = 1 / (n * logStandardDeviation) -
       averageLogReturn * (logReturn - averageLogReturn) / (n * logStandardDeviation ** 3);
@@ -1269,20 +1380,82 @@ export function profitDrawdownObjective(probabilities, rows, {
     gradient += drawdownGradient[index];
     portfolioReturnGradients[index] = gradient;
   }
+
+  // First derive loss with respect to the actually allocated position units.
+  // Reverse the event-time capacity graph afterwards, so later overlapping
+  // entries also send their slot-cost gradient back to earlier open positions.
+  const allocationGradientAccumulator = Array(rows.length).fill(0);
+  for (const pair of pairs) {
+    const rowIndex = pair.index;
+    const exitIndex = exitGroupIndexByRow[rowIndex];
+    const adverseIndex = adverseGroupIndexByRow[rowIndex];
+    const excursionIndex = excursionGroupIndexByRow[rowIndex];
+    const member = memberByRow[rowIndex];
+    const portfolioGradient = portfolioReturnGradients[exitIndex] * member.net * size;
+    const adverseGradient = 2 * adverseExcursionWeight *
+      orderedAdverseReturns[adverseIndex] * member.adverse * size / nAdverse;
+    const excursionGradient = 2 * excursionDrawdownWeight *
+      orderedExcursionDrawdowns[excursionIndex] * member.excursion * size / nExcursion;
+    allocationGradientAccumulator[rowIndex] = portfolioGradient + adverseGradient + excursionGradient;
+  }
+
+  const rawAllocationGradients = Array(rows.length).fill(0);
+  for (let policyIndex = groupCapacityPolicies.length - 1; policyIndex >= 0; policyIndex--) {
+    const policy = groupCapacityPolicies[policyIndex];
+    const {group} = policy;
+    const gradientAfterGlobal = new Map();
+    let globalCapacityGradient = 0;
+    if (policy.globalCapped && policy.globalPreTotal > 0) {
+      let weightedGradient = 0;
+      for (const member of group.members) {
+        weightedGradient += allocationGradientAccumulator[member.pair.index] * member.preGlobalAllocation;
+      }
+      for (const member of group.members) {
+        const rowIndex = member.pair.index;
+        gradientAfterGlobal.set(rowIndex,
+          policy.globalScale * allocationGradientAccumulator[rowIndex] -
+          policy.globalAvailable * weightedGradient / (policy.globalPreTotal * policy.globalPreTotal));
+      }
+      globalCapacityGradient = -weightedGradient / policy.globalPreTotal;
+      for (const priorRowIndex of policy.globalPriorRows) {
+        allocationGradientAccumulator[priorRowIndex] += globalCapacityGradient;
+      }
+    } else {
+      for (const member of group.members) {
+        gradientAfterGlobal.set(member.pair.index, allocationGradientAccumulator[member.pair.index]);
+      }
+    }
+
+    for (const symbolPolicy of policy.symbolPolicies) {
+      if (symbolPolicy.capped && symbolPolicy.rawTotal > 0) {
+        let weightedGradient = 0;
+        for (const member of symbolPolicy.members) {
+          weightedGradient += (gradientAfterGlobal.get(member.pair.index) ?? 0) * member.rawAllocation;
+        }
+        for (const member of symbolPolicy.members) {
+          const rowIndex = member.pair.index;
+          rawAllocationGradients[rowIndex] =
+            symbolPolicy.scale * (gradientAfterGlobal.get(rowIndex) ?? 0) -
+            symbolPolicy.available * weightedGradient / (symbolPolicy.rawTotal * symbolPolicy.rawTotal);
+        }
+        const symbolCapacityGradient = -weightedGradient / symbolPolicy.rawTotal;
+        for (const priorRowIndex of symbolPolicy.priorRows) {
+          allocationGradientAccumulator[priorRowIndex] += symbolCapacityGradient;
+        }
+      } else {
+        for (const member of symbolPolicy.members) {
+          rawAllocationGradients[member.pair.index] = gradientAfterGlobal.get(member.pair.index) ?? 0;
+        }
+      }
+    }
+  }
+
   const logitGradients = Array(rows.length).fill(0);
   for (const pair of pairs) {
     const rowIndex = pair.index;
-    const groupIndex = groupIndexByRow[rowIndex];
-    if (groupIndex < 0) continue;
-    const portfolioGradient = portfolioReturnGradients[groupIndex] *
-      groupReturnDerivativeByRow[rowIndex];
-    const adverseGradient = 2 * adverseExcursionWeight *
-      orderedAdverseReturns[groupIndex] * groupAdverseDerivativeByRow[rowIndex] / n;
-    const excursionGradient = 2 * excursionDrawdownWeight *
-      orderedExcursionDrawdowns[groupIndex] * groupExcursionDerivativeByRow[rowIndex] / n;
     logitGradients[rowIndex] =
-      (portfolioGradient + adverseGradient + excursionGradient) *
-      orderedProbabilityDerivative[rowIndex] + focalWeight * focalLogitGradients[rowIndex] +
+      rawAllocationGradients[rowIndex] * orderedProbabilityDerivative[rowIndex] +
+      focalWeight * focalLogitGradients[rowIndex] +
       rankingWeight * rankingLogitGradients[rowIndex];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
@@ -1314,9 +1487,14 @@ export function profitDrawdownObjective(probabilities, rows, {
     positions: positions.map(value => round(value, 8)),
     portfolio_returns_pct: portfolioReturns.map(value => round(value, 8)),
     decision_time_count: decisionGroups.length,
+    exit_time_count: exitGroups.length,
     position_capacity_units: positionCapacity,
+    symbol_position_capacity_units: symbolPositionCapacity,
     max_simultaneous_position_units: round(maxSimultaneousPositionUnits, 8),
-    portfolio_path_granularity: 'ONE_AGGREGATED_PORTFOLIO_RETURN_PER_DECISION_TIMESTAMP',
+    max_symbol_position_units: round(maxSymbolPositionUnits, 8),
+    overlap_aware_position_capacity: true,
+    position_holding_constraint: 'OPEN_FROM_DECISION_UNTIL_RESOLVED_AT_ONE_POSITION_PER_SYMBOL',
+    portfolio_path_granularity: 'ONE_AGGREGATED_PORTFOLIO_RETURN_PER_EXIT_TIMESTAMP',
     logit_gradients: logitGradients
   };
 }
@@ -1376,7 +1554,7 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5',
+    training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6',
     objective_trace: trace
   };
 }
@@ -2000,7 +2178,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5',
+    training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,
