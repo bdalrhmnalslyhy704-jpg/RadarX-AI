@@ -510,6 +510,42 @@ test('hand-written TCN and temporal-attention backpropagation matches finite dif
   assert.ok(diagnostic.maximum_relative_error <= 2e-4);
 });
 
+test('drawdown loss is normalized to the explicit risk budget and its gradient remains exact', () => {
+  const rows = Array.from({ length: 8 }, (_, index) => {
+    const at = index * 10;
+    return {
+      at, symbol: 'LOSS' + index + 'USDT', resolved_at: at + 1,
+      gross_return_pct: -2, max_adverse_excursion_pct: -2.1,
+      max_favorable_excursion_pct: 0.2,
+      max_adverse_excursion_at: at + 1, max_favorable_excursion_at: at + 1
+    };
+  });
+  const probabilities = rows.map(() => 0.9);
+  const options = {
+    positionFraction: 0.5, roundTripCostBps: 30,
+    sharpeWeight: 0, cumulativeGrowthWeight: 0, downsideWeight: 0,
+    adverseExcursionWeight: 0, excursionDrawdownWeight: 0,
+    drawdownWeight: 1, focalLossWeight: 0, crossSectionalRankingWeight: 0,
+    drawdownRiskBudgetPct: 8
+  };
+  const objective = profitDrawdownObjective(probabilities, rows, options);
+  assert.equal(objective.drawdown_risk_budget_pct, 8);
+  assert.ok(objective.raw_drawdown_semivariance > 0);
+  assert.ok(Math.abs(objective.drawdown_penalty -
+    objective.raw_drawdown_semivariance / 64) < 1e-8);
+  const epsilon = 1e-4;
+  const logit = Math.log(probabilities[0] / (1 - probabilities[0]));
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([
+    sigmoid(value), ...probabilities.slice(1)
+  ], rows, options).loss;
+  const numerical = (evaluate(logit + epsilon) - evaluate(logit - epsilon)) /
+    (2 * epsilon);
+  assert.ok(Math.abs(objective.logit_gradients[0] - numerical) < 4e-4,
+    'risk-budget-normalized drawdown gradient must match finite differences: ' +
+    objective.logit_gradients[0] + ' vs ' + numerical);
+});
+
 test('cross-sectional neural ranking pushes same-time profitable assets above losing assets', () => {
   const positive = {
     at: 10, symbol: 'AUSDT', gross_return_pct: 3,
@@ -617,7 +653,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
+    'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7');
   assert.equal(fitted.architecture_config.training_objective, fitted.training_objective);
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
@@ -780,7 +816,7 @@ test('fixed-SHA benchmark keeps both models on the same OOS events and fails clo
     thresholdGrid: [0.4, 0.5, 0.6]
   });
   assert.ok(report.integrity.dataset_sha256);
-  assert.equal(report.training_objective, 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
+  assert.equal(report.training_objective, 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7');
   assert.equal(report.architecture_config.training_objective, report.training_objective);
   assert.equal(report.integrity.source_commit_sha, SOURCE_SHA);
   assert.equal(report.walk_forward.fold_count, 5);
@@ -956,7 +992,7 @@ test('fixed-SHA benchmark retains MIXED rows without counting MIXED as a require
   assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','MIXED','SIDEWAYS']);
   assert.deepEqual(report.integrity.missing_market_regimes, []);
   assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
-  assert.equal(report.training_objective, 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
+  assert.equal(report.training_objective, 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7');
   assert.equal(report.architecture_config.training_objective, report.training_objective);
 });
 

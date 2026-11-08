@@ -36,7 +36,7 @@ export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_OVERLAP_AWARE_PORTFOLIO_SHARPE_RANKING_V6';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_OVERLAP_AWARE_RISK_BUDGET_PORTFOLIO_SHARPE_RANKING_V7';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -59,7 +59,7 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   minimum_kama_efficiency_ratio: 0.20,
   minimum_volatility_zscore: 0,
   btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
-  training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6'
+  training_objective: 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -1055,6 +1055,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   adverseExcursionWeight = 0.04,
   excursionDrawdownWeight = 0.04,
   drawdownWeight = 0.08,
+  drawdownRiskBudgetPct = 8,
   focalLossWeight = 0.25,
   focalGammaPositive = 1,
   focalGammaNegative = 2,
@@ -1240,6 +1241,12 @@ export function profitDrawdownObjective(probabilities, rows, {
   const sharpe = cumulativeEquitySharpe;
   let downsideSquared = 0, adverseSquared = 0, excursionDrawdownSquared = 0;
   let underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
+  // Drawdown is dimensionless relative to the permitted portfolio risk
+  // budget, rather than raw percentage-points squared. Without this scaling,
+  // a 30-40% historical trough can numerically dominate focal/ranking losses
+  // and teach the model to abstain instead of learning which assets to rank.
+  const drawdownBudget = clamp(finite(drawdownRiskBudgetPct) ?? 8, 1, 100);
+  const drawdownRiskScale = 1 / (drawdownBudget * drawdownBudget);
   const drawdowns = [], peakIndices = [], drawdownGradient = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const value = portfolioReturns[index];
@@ -1261,13 +1268,14 @@ export function profitDrawdownObjective(probabilities, rows, {
     if (dd <= 0) continue;
     const from = peakIndices[trough] + 1;
     for (let index = from; index <= trough; index++) {
-      drawdownGradient[index] -= 2 * drawdownWeight * dd / n;
+      drawdownGradient[index] -= 2 * drawdownWeight * dd * drawdownRiskScale / n;
     }
   }
   const downsideMean = downsideSquared / n;
   const adverseMean = adverseSquared / nAdverse;
   const excursionDrawdownMean = excursionDrawdownSquared / nExcursion;
-  const drawdownMean = underwaterSquared / n;
+  const rawDrawdownSemivariance = underwaterSquared / n;
+  const drawdownMean = rawDrawdownSemivariance * drawdownRiskScale;
   const focalWeight = clamp(finite(focalLossWeight) ?? 0.25, 0, 2);
   const gammaPositive = clamp(finite(focalGammaPositive) ?? 1, 0, 5);
   const gammaNegative = clamp(finite(focalGammaNegative) ?? 2, 0, 5);
@@ -1441,6 +1449,9 @@ export function profitDrawdownObjective(probabilities, rows, {
     adverse_excursion_penalty: round(adverseMean, 8),
     intratrade_excursion_drawdown_penalty: round(excursionDrawdownMean, 8),
     drawdown_penalty: round(drawdownMean, 8),
+    raw_drawdown_semivariance: round(rawDrawdownSemivariance, 8),
+    drawdown_risk_budget_pct: drawdownBudget,
+    drawdown_risk_scale: round(drawdownRiskScale, 10),
     asymmetric_focal_loss: round(asymmetricFocalLoss, 8),
     cross_sectional_ranking_loss: round(crossSectionalRankingLoss, 8),
     cross_sectional_ranking_weight: rankingWeight,
@@ -1524,6 +1535,12 @@ export function trainHybridTcnAttention(trainingRows, {
     trace.push({ epoch, loss: objective.loss, mean_net_return_pct: objective.mean_net_return_pct,
       sharpe_per_decision: objective.sharpe_per_decision,
       max_additive_drawdown_pct: objective.max_additive_drawdown_pct,
+      drawdown_penalty: objective.drawdown_penalty,
+      raw_drawdown_semivariance: objective.raw_drawdown_semivariance,
+      drawdown_risk_budget_pct: objective.drawdown_risk_budget_pct,
+      downside_semivariance: objective.downside_semivariance,
+      adverse_excursion_penalty: objective.adverse_excursion_penalty,
+      intratrade_excursion_drawdown_penalty: objective.intratrade_excursion_drawdown_penalty,
       focal_sample_count: objective.focal_sample_count,
       focal_eligible_coverage_pct: objective.focal_eligible_coverage_pct,
       asymmetric_focal_loss: objective.asymmetric_focal_loss,
@@ -1551,7 +1568,7 @@ export function trainHybridTcnAttention(trainingRows, {
     selected_training_loss: round(bestLoss, 8),
     early_stopped: earlyStopped,
     early_stopping_patience: patience,
-    training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6',
+    training_objective: 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7',
     objective_trace: trace
   };
 }
@@ -2179,7 +2196,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6',
+    training_objective: 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,
