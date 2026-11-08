@@ -36,7 +36,7 @@ export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_CUMULATIVE_SHARPE_V4';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V5';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -59,7 +59,7 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   minimum_kama_efficiency_ratio: 0.20,
   minimum_volatility_zscore: 0,
   btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
-  training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_BTC_COUNTERTREND_PENALTY_V4'
+  training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -2000,7 +2000,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,
