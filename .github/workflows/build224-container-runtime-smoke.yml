@@ -241,6 +241,9 @@ jobs:
             boosted_tree_holdout_base_rate_brier:boostedTree.holdout?.base_rate_brier_score??null,
             boosted_tree_holdout_comparison:boostedTree.holdout_comparison||{},
             boosted_tree_holdout_ranking_metrics:boostedTree.holdout?.ranking_metrics||{},
+            boosted_tree_feature_importance_total_gain:Number(boostedTree.feature_importance_total_gain)||0,
+            boosted_tree_top_features:Array.isArray(boostedTree.feature_importance)
+              ?boostedTree.feature_importance.slice(0,12):[],
             hybrid_status:String(hybridModel.status||'UNKNOWN'),
             hybrid_selected_candidate:String(hybridModel.selected_candidate||'NONE'),
             hybrid_selected_boosted_weight:hybridModel.boosted_weight??null,
