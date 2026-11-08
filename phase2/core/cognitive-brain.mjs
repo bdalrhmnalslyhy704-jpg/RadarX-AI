@@ -777,10 +777,14 @@ function evaluateHoldout(rows, fit) {
   const base = fit.base_rate;
   const predictions = rows.map(row => predictFromFit(row.features, fit));
   const targets = rows.map(row => row.target);
-  const positiveCount=targets.filter(target=>target===1).length;
-  const negativeCount=targets.length-positiveCount;
+  // Ranking metrics are binary-up-event diagnostics. Exclude legacy FLAT
+  // soft labels from AUC/precision denominators; Brier and log-loss still use
+  // every scored row exactly as before.
   const ranked=predictions.map((probability,index)=>({probability,index,target:targets[index]}))
+    .filter(row=>row.target===0||row.target===1)
     .sort((a,b)=>b.probability-a.probability||a.index-b.index);
+  const positiveCount=ranked.filter(row=>row.target===1).length;
+  const negativeCount=ranked.filter(row=>row.target===0).length;
   const rankingAtFraction=fraction=>{
     const sampleCount=Math.max(1,Math.min(ranked.length,Math.ceil(ranked.length*fraction)));
     const selected=ranked.slice(0,sampleCount);
