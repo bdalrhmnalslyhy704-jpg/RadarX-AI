@@ -51,6 +51,12 @@ const FEATURE_NAMES = Object.freeze([
   'volume_buyer_structure_confluence'
 ]);
 
+function isCognitiveBinaryModelVariant(value) {
+  const variant=String(value||'').trim();
+  return variant==='NEURAL_GLOBAL'||variant==='GBDT_RESIDUAL'||
+    /^HYBRID_GBDT_MLP_W(?:25|50|75)$/.test(variant);
+}
+
 const FACTORS = Object.freeze([
   { key: 'volume_expansion', label_ar: 'تسارع حجم التداول', test: f => finite(f.volume_ratio) !== null && Number(f.volume_ratio) >= 1.5 },
   { key: 'trade_expansion', label_ar: 'تسارع عدد الصفقات', test: f => finite(f.trade_ratio) !== null && Number(f.trade_ratio) >= 1.25 },
@@ -1493,8 +1499,7 @@ export function buildCognitivePrequentialProfile(journal = [], {
         ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
           ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
         : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
-          ? ['NEURAL_GLOBAL','GBDT_RESIDUAL','HYBRID_GBDT_MLP'].includes(
-              String(row.selected_model||row.model_variant||'')) &&
+          ? isCognitiveBinaryModelVariant(row.selected_model||row.model_variant) &&
             ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
           : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
             ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
@@ -1506,8 +1511,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ...row,
       model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
-      target: ['TEMPORAL_TCN','NEURAL_GLOBAL','GBDT_RESIDUAL','HYBRID_GBDT_MLP'].includes(
-        String(row.selected_model||row.model_variant||'')) ||
+      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN' ||
+        isCognitiveBinaryModelVariant(row.selected_model||row.model_variant) ||
         row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
         ? (row.outcome==='UP'?1:0)
         : row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
