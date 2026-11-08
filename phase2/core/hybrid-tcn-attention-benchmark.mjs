@@ -1058,7 +1058,8 @@ export function profitDrawdownObjective(probabilities, rows, {
   focalGammaPositive = 1,
   focalGammaNegative = 2,
   focalPositiveWeight = 1,
-  focalNegativeWeight = 1.6
+  focalNegativeWeight = 1.6,
+  crossSectionalRankingWeight = 0.15
 } = {}) {
   if (!Array.isArray(probabilities) || probabilities.length !== rows.length || !rows.length) {
     throw new Error('PROFIT_OBJECTIVE_REQUIRES_MATCHED_NON_EMPTY_ROWS');
@@ -1175,10 +1176,42 @@ export function profitDrawdownObjective(probabilities, rows, {
     focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / focalDenominator;
   }
   const asymmetricFocalLoss = focalSampleCount ? focalLossSum / focalDenominator : 0;
+  // Same-timestamp pairwise ranking: the scanner's task is to rank stronger
+  // Spot opportunities above weaker ones in the same market snapshot.
+  // Only gate-eligible rows participate; no cross-time pair is constructed.
+  const rankingWeight = clamp(finite(crossSectionalRankingWeight) ?? 0.15, 0, 2);
+  const byDecisionTime = new Map();
+  for (const pair of pairs) {
+    if (!focalEligible[pair.index]) continue;
+    const key = String(pair.row.at);
+    if (!byDecisionTime.has(key)) byDecisionTime.set(key, { positive: [], negative: [] });
+    const group = byDecisionTime.get(key);
+    (netReturnPct(pair.row, cost) > 0 ? group.positive : group.negative).push(pair);
+  }
+  const rankingPairs = [];
+  for (const group of byDecisionTime.values()) {
+    for (const positive of group.positive) {
+      for (const negative of group.negative) rankingPairs.push([positive, negative]);
+    }
+  }
+  const rankingPairCount = rankingPairs.length;
+  const rankingLogitGradients = Array(n).fill(0);
+  let rankingLossSum = 0;
+  const rankingDenominator = Math.max(1, rankingPairCount);
+  for (const [positive, negative] of rankingPairs) {
+    const positiveLogit = Math.log(positive.probability / (1 - positive.probability));
+    const negativeLogit = Math.log(negative.probability / (1 - negative.probability));
+    const difference = positiveLogit - negativeLogit;
+    rankingLossSum += Math.max(0, -difference) + Math.log1p(Math.exp(-Math.abs(difference)));
+    const pairGradient = sigmoid(-difference) / rankingDenominator;
+    rankingLogitGradients[positive.index] -= pairGradient;
+    rankingLogitGradients[negative.index] += pairGradient;
+  }
+  const crossSectionalRankingLoss = rankingPairCount ? rankingLossSum / rankingDenominator : 0;
   const loss = -average - cumulativeGrowthWeight * cumulativeGeometricReturnPct -
     sharpeWeight * cumulativeEquitySharpe + downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
     excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean +
-    focalWeight * asymmetricFocalLoss;
+    focalWeight * asymmetricFocalLoss + rankingWeight * crossSectionalRankingLoss;
   const logitGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
@@ -1204,7 +1237,8 @@ export function profitDrawdownObjective(probabilities, rows, {
       orderedExcursionDrawdowns[index] * excursionRange * size / n;
     logitGradients[pair.index] =
       (gradient * net + adverseGradient + excursionGradient) *
-      orderedProbabilityDerivative[index] + focalWeight * focalLogitGradients[pair.index];
+      orderedProbabilityDerivative[index] + focalWeight * focalLogitGradients[pair.index] +
+      rankingWeight * rankingLogitGradients[pair.index];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -1220,6 +1254,9 @@ export function profitDrawdownObjective(probabilities, rows, {
     intratrade_excursion_drawdown_penalty: round(excursionDrawdownMean, 8),
     drawdown_penalty: round(drawdownMean, 8),
     asymmetric_focal_loss: round(asymmetricFocalLoss, 8),
+    cross_sectional_ranking_loss: round(crossSectionalRankingLoss, 8),
+    cross_sectional_ranking_weight: rankingWeight,
+    cross_sectional_ranking_pair_count: rankingPairCount,
     focal_loss_weight: focalWeight,
     focal_negative_class_weight: negativeWeight,
     focal_sample_count: focalSampleCount,
@@ -1274,7 +1311,9 @@ export function trainHybridTcnAttention(trainingRows, {
     trace.push({ epoch, loss: objective.loss, mean_net_return_pct: objective.mean_net_return_pct,
       sharpe_per_decision: objective.sharpe_per_decision,
       max_additive_drawdown_pct: objective.max_additive_drawdown_pct,
-      focal_sample_count: objective.focal_sample_count });
+      focal_sample_count: objective.focal_sample_count,
+      cross_sectional_ranking_loss: objective.cross_sectional_ranking_loss,
+      cross_sectional_ranking_pair_count: objective.cross_sectional_ranking_pair_count });
   }
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,

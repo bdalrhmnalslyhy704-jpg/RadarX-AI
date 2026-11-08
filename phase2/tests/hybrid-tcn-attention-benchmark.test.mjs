@@ -396,6 +396,52 @@ test('hand-written TCN and temporal-attention backpropagation matches finite dif
   assert.ok(diagnostic.maximum_relative_error <= 2e-4);
 });
 
+test('cross-sectional neural ranking pushes same-time profitable assets above losing assets', () => {
+  const positive = {
+    at: 10, symbol: 'AUSDT', gross_return_pct: 3,
+    max_adverse_excursion_pct: -0.2, max_favorable_excursion_pct: 3,
+    kama_efficiency_ratio: 0.8, volatility_zscore: 0.8, btc_trend_return_pct: 0.2
+  };
+  const negative = {
+    at: 10, symbol: 'BUSDT', gross_return_pct: -2,
+    max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.2,
+    kama_efficiency_ratio: 0.7, volatility_zscore: 0.6, btc_trend_return_pct: 0.2
+  };
+  const options = {
+    enforceMarketGates: true, roundTripCostBps: 30,
+    sharpeWeight: 0, cumulativeGrowthWeight: 0, downsideWeight: 0,
+    adverseExcursionWeight: 0, excursionDrawdownWeight: 0, drawdownWeight: 0,
+    focalLossWeight: 0, crossSectionalRankingWeight: 1
+  };
+  const objective = profitDrawdownObjective([0.4, 0.6], [positive, negative], options);
+  assert.equal(objective.cross_sectional_ranking_pair_count, 1);
+  assert.ok(objective.cross_sectional_ranking_loss > 0);
+  assert.ok(objective.logit_gradients[0] < 0,
+    'gradient must raise the profitable row logit');
+  assert.ok(objective.logit_gradients[1] > 0,
+    'gradient must lower the losing row logit');
+});
+
+test('cross-sectional ranking never compares assets from different decision times', () => {
+  const rows = [
+    { at: 10, symbol: 'AUSDT', gross_return_pct: 3, max_adverse_excursion_pct: -0.2,
+      max_favorable_excursion_pct: 3, kama_efficiency_ratio: 0.8, volatility_zscore: 0.8,
+      btc_trend_return_pct: 0.2 },
+    { at: 20, symbol: 'BUSDT', gross_return_pct: -2, max_adverse_excursion_pct: -2.1,
+      max_favorable_excursion_pct: 0.2, kama_efficiency_ratio: 0.7, volatility_zscore: 0.6,
+      btc_trend_return_pct: 0.2 }
+  ];
+  const objective = profitDrawdownObjective([0.4, 0.6], rows, {
+    enforceMarketGates: true, sharpeWeight: 0, cumulativeGrowthWeight: 0,
+    downsideWeight: 0, adverseExcursionWeight: 0, excursionDrawdownWeight: 0,
+    drawdownWeight: 0, focalLossWeight: 0, crossSectionalRankingWeight: 1
+  });
+  assert.equal(objective.cross_sectional_ranking_pair_count, 0);
+  assert.equal(objective.cross_sectional_ranking_loss, 0);
+  assert.equal(objective.logit_gradients[0], 0);
+  assert.equal(objective.logit_gradients[1], 0);
+});
+
 test('market-gated focal loss ignores samples that can never become executable positions', () => {
   const eligible = {
     at: 1, symbol: 'AUSDT', gross_return_pct: 0.3,
