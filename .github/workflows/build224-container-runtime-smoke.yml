@@ -177,6 +177,8 @@ jobs:
           const neuralNetwork=brainProfile.neural_network||{};
           const temporalNetwork=brainProfile.temporal_network||{};
           const summary=x.last_summary||{};
+          const boostedTree=brainProfile.boosted_tree_model||{};
+          const hybridModel=brainProfile.hybrid_model||{};
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V7'||
              temporalNetwork.architecture!=='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'||
              temporalNetwork.training_strategy!=='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'||
@@ -224,6 +226,28 @@ jobs:
           const cognitiveEvidence={
             method:String(brainProfile.method||brain.method||'UNKNOWN'),
             model_selected:String(brainProfile.model_selection?.selected_model||'NONE'),
+            model_selection_reason:String(brainProfile.model_selection?.reason||'UNKNOWN'),
+            challenger_holdout_passed:brainProfile.model_selection?.challenger_holdout_passed===true,
+            challenger_candidate_metrics:brainProfile.model_selection?.challenger_candidate_metrics||[],
+            boosted_tree_status:String(boostedTree.status||'UNKNOWN'),
+            boosted_tree_trained:boostedTree.trained===true,
+            boosted_tree_selected:boostedTree.selected===true,
+            boosted_tree_probability_ready:boostedTree.probability_ready===true,
+            boosted_tree_tree_count:Number(boostedTree.tree_count)||0,
+            boosted_tree_training_samples:Number(boostedTree.training_samples)||0,
+            boosted_tree_validation_brier:boostedTree.validation?.model_brier_score??null,
+            boosted_tree_validation_base_rate_brier:boostedTree.validation?.base_rate_brier_score??null,
+            boosted_tree_holdout_brier:boostedTree.holdout?.model_brier_score??null,
+            boosted_tree_holdout_base_rate_brier:boostedTree.holdout?.base_rate_brier_score??null,
+            boosted_tree_holdout_comparison:boostedTree.holdout_comparison||{},
+            hybrid_status:String(hybridModel.status||'UNKNOWN'),
+            hybrid_trained:hybridModel.trained===true,
+            hybrid_selected:hybridModel.selected===true,
+            hybrid_probability_ready:hybridModel.probability_ready===true,
+            hybrid_validation_brier:hybridModel.validation?.model_brier_score??null,
+            hybrid_validation_base_rate_brier:hybridModel.validation?.base_rate_brier_score??null,
+            hybrid_holdout_brier:hybridModel.holdout?.model_brier_score??null,
+            hybrid_holdout_comparison:hybridModel.holdout_comparison||{},
             v5_status:String(neuralNetwork.status||'UNKNOWN'),
             v5_trained:neuralNetwork.trained===true,
             v5_training_samples:Number(neuralNetwork.training_samples)||0,
