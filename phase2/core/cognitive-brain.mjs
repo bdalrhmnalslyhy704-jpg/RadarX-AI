@@ -338,7 +338,8 @@ function fitResidualBoostedTrees(training, baselineFit, {
     const tree={root};
     let changed=false;
     for(let index=0;index<rows.length;index++){
-      const correction=rate*residualTreeValue(root,rows[index].vector);
+      const correction=rate*clamp(Number(residualScale)||0,0,1)*
+        residualTreeValue(root,rows[index].vector);
       logits[index]=clamp(logits[index]+correction,-12,12);
       if(Math.abs(correction)>1e-9)changed=true;
     }
@@ -1191,7 +1192,9 @@ export function buildCognitiveLearningProfile(samples = [], {
   // Fit the tabular challenger on the complete outer training block. Its
   // tree residuals are anchored to the same-window logistic model; validation
   // may select a challenger, but the final holdout is never used for selection.
-  const boostedTreeFit=neuralGlobalLogisticFit&&upEventTraining.length>=neuralMinimum
+  const boostedTrainingReady=neuralGlobalLogisticFit!==null&&
+    upEventTraining.length>=neuralMinimum;
+  const boostedTreeFit=boostedTrainingReady
     ?fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit):null;
   const boostedTreeValidation=boostedTreeFit
     ?evaluateHoldout(upEventValidation,boostedTreeFit)
@@ -1399,16 +1402,20 @@ export function buildCognitiveLearningProfile(samples = [], {
       selection_margin: comparisonMargin
     },
     boosted_tree_model: {
-      status:!boostedTreeFit?'WAITING_FOR_MATURED_TRAINING_SAMPLES':
+      status:!boostedTrainingReady?'WAITING_FOR_MATURED_TRAINING_SAMPLES':
+        !boostedTreeFit?'NO_TRAINING_RESIDUAL_GAIN':
         activeChallenger==='GBDT_RESIDUAL'?'OUT_OF_SAMPLE_VALIDATED':
         validationWinner?.name==='GBDT_RESIDUAL'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
         'TRAINED_NOT_SELECTED',
       model_kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
       architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS',
+      training_support_ready:boostedTrainingReady,
+      fit_failure_reason:boostedTrainingReady&&!boostedTreeFit
+        ?'NO_GAINFUL_TREE_SPLIT_OVER_FROZEN_LOGISTIC_RESIDUALS':null,
       trained:boostedTreeFit!==null,selected:activeChallenger==='GBDT_RESIDUAL',
       probability_ready:activeChallenger==='GBDT_RESIDUAL',
       tree_count:boostedTreeFit?.tree_count||0,
-      training_samples:boostedTreeFit?.training_samples||0,
+      training_samples:boostedTreeFit?.training_samples||(boostedTrainingReady?upEventTraining.length:0),
       minimum_leaf_samples:boostedTreeFit?.minimum_leaf_samples||0,
       learning_rate:boostedTreeFit?.learning_rate??null,
       residual_scale:boostedTreeFit?.residual_scale??null,
@@ -1436,6 +1443,11 @@ export function buildCognitiveLearningProfile(samples = [], {
         name:candidate.name,boosted_weight:candidate.fit.boosted_weight,
         model_brier_score:candidate.validation?.model_brier_score??null,
         base_rate_brier_score:candidate.validation?.base_rate_brier_score??null,
+        auc_roc:candidate.validation?.ranking_metrics?.auc_roc??null,
+        top_10pct_precision_pct:candidate.validation?.ranking_metrics?.top_10_pct?.precision_pct??null,
+        top_10pct_recall_pct:candidate.validation?.ranking_metrics?.top_10_pct?.recall_pct??null,
+        top_20pct_precision_pct:candidate.validation?.ranking_metrics?.top_20_pct?.precision_pct??null,
+        top_20pct_recall_pct:candidate.validation?.ranking_metrics?.top_20_pct?.recall_pct??null,
         beat_base_rate:candidate.validation?.beat_base_rate===true
       })),
       holdout:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?challengerHoldout:null,
