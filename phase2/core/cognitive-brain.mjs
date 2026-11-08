@@ -895,6 +895,17 @@ export function buildCognitiveLearningProfile(samples = [], {
       neuralFit.members[selectedIndex]=refitMember;
       neuralSameWindowLogisticFit=refitBaseline;
       neuralFinalTraining=refitRows;
+      // All validation metrics must use the prevalence of the exact final refit
+      // set. The previous code retained the earlier ensemble fit's base_rate,
+      // even after adding the disjoint member-selection rows to the refit.
+      // That made the Brier reference predictor inconsistent with the weights
+      // that actually generated the validation and holdout probabilities.
+      const refitPositiveSamples=refitRows.filter(row=>Number(row.target)===1).length;
+      const refitNegativeSamples=refitRows.length-refitPositiveSamples;
+      neuralFit.base_rate=refitBaseline.base_rate;
+      neuralFit.refit_base_rate=refitBaseline.base_rate;
+      neuralFit.refit_positive_samples=refitPositiveSamples;
+      neuralFit.refit_negative_samples=refitNegativeSamples;
       neuralFit.training_samples=refitRows.length;
       neuralFit.refit_training_samples=refitRows.length;
       neuralFit.refit_max_outcome_resolved_at=Math.max(...refitRows.map(row=>row.resolved_at));
@@ -926,6 +937,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralValidationComparison={
     neural_brier_score:neuralValidation.model_brier_score??null,
     base_rate_brier_score:neuralValidation.base_rate_brier_score??null,
+    base_rate_used:neuralFit?.base_rate??null,
     same_window_logistic_brier_score:neuralSameWindowLogisticValidation.model_brier_score??null,
     global_logistic_brier_score:neuralGlobalLogisticValidation.model_brier_score??null,
     recent_logistic_brier_score:neuralRecentLogisticValidation?.model_brier_score??null,
@@ -965,6 +977,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     beatsSameWindowLogistic&&beatsGlobalLogistic&&beatsRecentLogistic;
   const neuralHoldoutComparison={
     sample_count:upEventHoldout.length,required_live_holdout_samples:100,required_brier_margin:comparisonMargin,
+    base_rate_used:neuralFit?.base_rate??null,
     neural_brier_score:neuralHoldout.model_brier_score,
     same_window_logistic_brier_score:neuralSameWindowLogisticHoldout.model_brier_score??null,
     global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
@@ -1046,6 +1059,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
       refit_training_samples:neuralFit?.refit_training_samples??0,
+      refit_positive_samples:neuralFit?.refit_positive_samples??0,
+      refit_negative_samples:neuralFit?.refit_negative_samples??0,
+      refit_base_rate:neuralFit?.refit_base_rate??null,
+      scoring_base_rate:neuralFit?.base_rate??null,
       maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
       training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
