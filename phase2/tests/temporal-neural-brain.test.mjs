@@ -58,6 +58,73 @@ test('temporal network fails closed without first-passage tensor samples',()=>{
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
 });
 
+test('temporal boosted trees compete on the same first-passage target with regime-local purged blocks',()=>{
+  const rows=[];
+  const groups=70,perGroup=20;
+  for(let group=0;group<groups;group++){
+    for(let index=0;index<perGroup;index++){
+      const volumeState=index%2===0;
+      const compressionState=Math.floor(index/2)%2===0;
+      const up=volumeState&&compressionState;
+      const at=BASE_TIME+group*EIGHT_HOURS;
+      const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>{
+        const step=Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0);
+        step[0]=volumeState?1.2:-1.2;
+        step[1]=compressionState?1.1:-1.1;
+        step[19]=-0.5; // BTC risk-off: a single independent regime specialist.
+        return step;
+      });
+      rows.push({
+        id:'TEMPORAL-AND-'+group+'-'+index,
+        symbol:'ANDPAIR'+String(index).padStart(2,'0')+'USDT',
+        at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+        training_eligible:true,historical_baseline:true,closed_candle_baseline:false,
+        target_definition:TEMPORAL_TARGET_DEFINITION,
+        outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+        outcome:up?'UP':'DOWN',return_pct:up?3.2:-2.3,
+        first_passage:{hit:up?'TAKE_PROFIT_REACHED_FIRST':'STOP_LEVEL_REACHED_FIRST',
+          outcome:up?'UP':'DOWN',path_resolution:'15M'},
+        temporal_sequence:sequence
+      });
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{
+    epochs:2,minimumHoldoutSamples:150,liveHoldoutSamples:150
+  });
+  const tree=profile.temporal_boosted_tree;
+  assert.ok(tree,'the first-passage challenger diagnostics must always be present');
+  assert.equal(tree.model_kind,'TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1');
+  assert.equal(tree.target_definition,TEMPORAL_TARGET_DEFINITION);
+  assert.equal(tree.architecture,'TEMPORAL_POOLED_58_NEWTON_GBDT_DEPTH2_24_ROUNDS');
+  assert.equal(tree.trained,true);
+  assert.ok(tree.regime_specialists.BTC_RISK_OFF.tree_count>0);
+  const expert=tree.regime_specialists.BTC_RISK_OFF;
+  assert.equal(expert.supported,true);
+  assert.equal(expert.selection_passed,true);
+  assert.equal(expert.validation_passed,true,JSON.stringify({
+    status:expert.status,selection:expert.selection_brier,
+    selection_logistic:expert.selection_logistic_brier,
+    validation:expert.validation,validation_logistic:expert.validation_logistic
+  }));
+  assert.equal(expert.holdout_passed,true,JSON.stringify({
+    status:expert.status,holdout:expert.holdout,holdout_logistic:expert.holdout_logistic
+  }));
+  assert.ok(expert.max_training_outcome_resolved_at<expert.training_cutoff_at);
+  assert.ok(expert.training_cutoff_at<expert.member_selection_cutoff_at);
+  assert.ok(expert.member_selection_cutoff_at<expert.calibration_cutoff_at);
+  assert.ok(expert.calibration_cutoff_at<=expert.validation_start_at);
+  assert.ok(expert.validation_start_at<profile.holdout_start_at);
+  assert.ok(expert.holdout.sample_count>=150);
+  assert.ok(expert.validation.model_brier_score+0.003<
+    expert.validation_logistic.model_brier_score);
+  assert.ok(expert.holdout.model_brier_score+0.003<
+    expert.holdout_logistic.model_brier_score);
+  assert.ok(expert.feature_importance.length>0);
+  assert.ok(Math.abs(expert.feature_importance.reduce((sum,row)=>
+    sum+row.gain_share_pct,0)-100)<0.1);
+  assert.ok(tree.holdout_comparison.passed);
+});
+
 test('temporal network trains only on valid tensors and keeps chronological validation and holdout separate',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
