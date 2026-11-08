@@ -91,6 +91,25 @@ test('matrix CLI dry-run accepts the fixed 33-symbol research cohort without net
   assert.equal(plan.policy.real_order_execution,false);
 });
 
+test('matrix dry-run expands listing-aware per-window universes into the exact replay count',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
+  const symbolsPath=resolve(dirname(fileURLToPath(import.meta.url)),'../benchmarks/hybrid-tcn-attention-symbols.json');
+  const windowsPath=resolve(dirname(fileURLToPath(import.meta.url)),'../benchmarks/hybrid-tcn-attention-windows.json');
+  const symbols=JSON.parse(readFileSync(symbolsPath,'utf8'));
+  const run=spawnSync(process.execPath,[script,'--dry-run','--symbols',symbols.join(','),
+    '--windows',windowsPath,'--outcome-horizon-hours','4'],{encoding:'utf8',timeout:10_000});
+  assert.equal(run.status,0,run.stderr||run.stdout);
+  const plan=JSON.parse(run.stdout);
+  assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
+  assert.equal(plan.window_count,9);
+  assert.equal(plan.symbol_count,37);
+  assert.equal(plan.planned_symbol_window_replays,171);
+  assert.equal(plan.windows.slice(0,3).every(w=>w.symbols.length===33),true);
+  assert.equal(plan.windows.slice(3).every(w=>w.symbols.length===12),true);
+  assert.ok(['PARTIUSDT','BEAMXUSDT','SOLVUSDT','SOPHUSDT']
+    .every(symbol=>plan.symbols.includes(symbol)));
+});
+
 test('matrix CLI allows bounded parallel archives and rejects more than three concurrent historical windows',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
   const accepted=spawnSync(process.execPath,[script,'--dry-run','--archive-prefetch-concurrency','6',

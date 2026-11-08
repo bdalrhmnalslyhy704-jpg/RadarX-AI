@@ -55,7 +55,7 @@ async function main(){
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
       '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 8] [--window-replay-concurrency 3] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
       '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x29 KAMA/volatility/BTC-gated causal sequence export) [--dry-run]',
-      'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
+      'The global Spot USDT symbol list may be overridden per historical window, allowing listing-aware token cohorts without requesting pre-listing candles.',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
       'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency; windows may override the global symbol list for post-listing cohorts.',
       'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
