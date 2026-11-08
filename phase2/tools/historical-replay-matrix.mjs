@@ -54,7 +54,7 @@ async function main(){
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
       '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 4] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
-      '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x28 causal sequence export) [--dry-run]',
+      '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x29 KAMA/volatility/BTC-gated causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
       'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency and skips slow REST pagination when an archive is unavailable.',
@@ -108,7 +108,7 @@ async function main(){
     if(hybridBenchmarkOutput){
       try{
         const captured=JSON.parse(await readFile(hybridWindowPath,'utf8'));
-        if(!Array.isArray(captured.rows)||captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1')throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
+        if(!Array.isArray(captured.rows)||captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC')throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
         if(hybridSourceSha===null)hybridSourceSha=captured.source_commit_sha;
         if(captured.source_commit_sha!==hybridSourceSha)throw new Error('HYBRID_CAPTURE_SOURCE_SHA_MISMATCH');
         hybridRows.push(...captured.rows.map(row=>({
@@ -132,14 +132,14 @@ async function main(){
   let hybridDatasetSummary=null;
   if(hybridBenchmarkOutput){
     const hybridDataset={
-      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1',
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC',
       source_commit_sha:hybridSourceSha,
       market:'BINANCE_SPOT_USDT',
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
       feature_interval:'1M_CLOSED_CANDLES',
       capture_sampling:'EVERY_10M_DECISION',
       sequence_steps:24,
-      sequence_channels:28,
+      sequence_channels:29,
       outcome_horizon_ms:4*HOUR_MS,
       symbols,
       windows:windows.map(window=>({
