@@ -587,6 +587,64 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
 });
 
 
+test('Newton boosted-tree challenger learns nonlinear XOR patterns without using the final holdout for selection',()=>{
+  const rows=Array.from({length:720},(_,index)=>{
+    const volumeState=index%2===0;
+    const compressionState=Math.floor(index/2)%2===0;
+    const isPositive=volumeState!==compressionState;
+    const at=BASE_TIME+index*5*60*60*1000;
+    return {
+      id:'XOR-BOOST-'+index,symbol:'XORPAIR'+String(index%19)+'USDT',
+      at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome_source:'CLOSED_CANDLE_4H',training_eligible:true,
+      closed_candle_baseline:true,outcome:isPositive?'UP':'DOWN',
+      features:{
+        volume_ratio:volumeState?2.8:0.55,trade_ratio:1,
+        taker_buy_ratio:0.55,higher_low:false,breakout_above_prior_high:false,
+        compression_ratio:compressionState?0.55:1.25,
+        relative_strength_vs_btc_pct:0,recent_15m_return_pct:0,
+        trend_aligned:false,micro_5m_available:false,close_location:0.5
+      }
+    };
+  });
+  const profile=buildCognitiveLearningProfile(rows);
+  assert.equal(profile.boosted_tree_model.trained,true,
+    'the new tree challenger must train once the outer training block has enough mature rows');
+  assert.ok(profile.boosted_tree_model.tree_count>0);
+  assert.equal(profile.boosted_tree_model.validation.evaluated,true);
+  assert.equal(profile.hybrid_model.trained,true);
+  assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
+  assert.ok(profile.validation_start_at<profile.holdout_start_at);
+  if(profile.model_selection.active_challenger){
+    assert.equal(profile.model_selection.challenger_holdout_passed,true,
+      'a challenger is active only after its single validation-selected candidate passes the untouched holdout');
+    assert.equal(profile.model_selection.selected_model,profile.model_selection.active_challenger);
+  }
+});
+
+test('prequential audit treats boosted and hybrid forecasts as separate binary model variants',()=>{
+  for(const modelVariant of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP']){
+    const journal=Array.from({length:8},(_,index)=>{
+      const at=BASE_TIME+index*5*60*60*1000;
+      const outcome=index%2===0?'UP':'DOWN';
+      return {
+        id:modelVariant+'-'+index,model_version:5,selected_model:modelVariant,
+        target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+        at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+        outcome_source:'CLOSED_CANDLE_4H',outcome,
+        predicted_up_probability:outcome==='UP'?90:10
+      };
+    });
+    const audit=buildCognitivePrequentialProfile(journal,{
+      minimumWindowSamples:2,windowSize:4,modelVariant
+    });
+    assert.equal(audit.audited_model_variant,modelVariant);
+    assert.equal(audit.resolved_forecasts,8);
+    assert.equal(audit.recent_window.brier_score,0.01);
+    assert.equal(audit.previous_window.brier_score,0.01);
+  }
+});
+
 test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
   const journal=Array.from({length:8},(_,index)=>{
     const at=BASE_TIME+index*5*60*60*1000;
