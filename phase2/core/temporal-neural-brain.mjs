@@ -1263,16 +1263,19 @@ export function buildTemporalNeuralProfile(samples = [], {
       ?evaluate(regimeValidation,predictCalibratedTemporalTree,regimePrior)
       :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
         base_rate_brier_score:null,beat_base_rate:false,reason:'TEMPORAL_TREE_NOT_SELECTED'};
-    const temporalTreeHoldout=temporalTreeFit&&temporalTreeWinner&&temporalTreeSelectionPassed
-      ?evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior)
-      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
-        base_rate_brier_score:null,beat_base_rate:false,reason:'TEMPORAL_TREE_SELECTION_GATE_NOT_PASSED'};
     const temporalTreeValidationPassed=temporalTreeSelectionPassed&&
       temporalTreeCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
       temporalTreeValidation.evaluated===true&&validationLogistic.evaluated===true&&
       temporalTreeValidation.beat_base_rate===true&&
       temporalTreeValidation.model_brier_score+comparisonMargin<
         validationLogistic.model_brier_score;
+    // Do not even score the untouched holdout for a tree that failed the
+    // earlier validation gate. This keeps the final block out of model review.
+    const temporalTreeHoldout=temporalTreeValidationPassed
+      ?evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior)
+      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'TEMPORAL_TREE_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
     const temporalTreeHoldoutPassed=temporalTreeValidationPassed&&
       temporalTreeHoldout.evaluated===true&&holdoutLogistic.evaluated===true&&
       temporalTreeHoldout.beat_base_rate===true&&
@@ -1390,8 +1393,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     status:!temporalTreeSupportedRegimes.length?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
       !temporalTreeValidationRegimes.length?'TEMPORAL_GBDT_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
       !temporalTreeSelectedRegimes.length?'TEMPORAL_GBDT_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
-      temporalTreeLiveReady?'TEMPORAL_GBDT_LIVE_SAMPLE_GATE_PASSED':
-      'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
+      'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
     model_kind:'TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1',
     architecture:'TEMPORAL_POOLED_58_NEWTON_GBDT_DEPTH2_24_ROUNDS',
     target_definition:TEMPORAL_TARGET_DEFINITION,
@@ -1400,9 +1402,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     feature_source:'24_STEP_MEANS_PLUS_RECENT_8_STEP_MEANS',
     trained:temporalTreeSupportedRegimes.some(regime=>
       Number(temporalBoostedTreeResults[regime]?.tree_count)>0),
-    selected:temporalTreeSelectedRegimes.length>0,
-    probability_ready:temporalTreeSelectedRegimes.length>0,
-    live_eligibility_ready:temporalTreeLiveReady,
+    selected_for_research:temporalTreeSelectedRegimes.length>0,
+    research_out_of_sample_validated:temporalTreeSelectedRegimes.length>0,
+    research_live_sample_count_gate_met:temporalTreeLiveReady,
+    probability_ready:false,
+    live_eligibility_ready:false,
     supported_regimes:temporalTreeSupportedRegimes,
     validation_selected_regimes:temporalTreeValidationRegimes,
     selected_regimes:temporalTreeSelectedRegimes,
