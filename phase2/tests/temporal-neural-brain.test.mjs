@@ -154,6 +154,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   }
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.trained,true);
+  assert.equal(profile.regime_split_method,'REGIME_LOCAL_SAMPLE_COUNT_CHRONOLOGICAL_QUANTILES_V1');
   assert.equal(profile.validation.evaluated,true);
   assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
@@ -240,8 +241,8 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   assert.ok(profile.regime_model_training_samples>=600,
     'the bounded holdout must leave a larger purged chronological block for temporal fitting');
   assert.deepEqual(profile.shared_model_split_fractions,
-    {training:0.66,memberSelection:0.82,calibration:0.995},
-    'mature histories must reserve a larger regime-local calibration block without moving outer validation or holdout');
+    {training:0.60,memberSelection:0.82,calibration:0.995},
+    'mature histories must preserve separate member-selection and calibration evidence without moving outer validation or holdout');
   assert.ok(profile.validation_samples>=300,
     'mature histories must reserve at least 300 observations for inner TCN validation');
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);

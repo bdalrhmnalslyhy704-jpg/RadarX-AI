@@ -696,11 +696,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      // Mature histories use 66% for model fitting, 16% for member selection,
-      // and 17.5% for regime-local calibration. The live risk-on regime has a
-      // ~7% positive rate, so its unchanged five-positive calibration gate
-      // needs a larger local block. Outer validation/holdout remain untouched.
-      :{training:0.66,memberSelection:0.82,calibration:0.995};
+      // Mature histories use 60% for model fitting, 22% for member selection,
+      // and 17.5% for regime-local calibration. The live risk-on regime's
+      // member-selection block had only two positives after overlap purging.
+      // Expand selection without reducing calibration or using outer evidence.
+      :{training:0.60,memberSelection:0.82,calibration:0.995};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
@@ -1233,11 +1233,16 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_specialist_count:2,
     independent_regime_models:Object.keys(fitted.specialists_by_regime).length,
     regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
+    regime_split_method:'REGIME_LOCAL_SAMPLE_COUNT_CHRONOLOGICAL_QUANTILES_V1',
     model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
     regime_local_split_boundaries:Object.fromEntries(regimes.map(regime=>[regime,{
       training_cutoff_at:regimeSplits[regime].trainingCutoffAt,
       member_selection_cutoff_at:regimeSplits[regime].memberSelectionCutoffAt,
-      calibration_cutoff_at:regimeSplits[regime].calibrationCutoffAt
+      calibration_cutoff_at:regimeSplits[regime].calibrationCutoffAt,
+      training_samples:regimeSplits[regime].training.length,
+      member_selection_samples:regimeSplits[regime].memberSelection.length,
+      calibration_samples:regimeSplits[regime].calibration.length,
+      inner_validation_samples:regimeSplits[regime].innerValidation.length
     }])),
     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
