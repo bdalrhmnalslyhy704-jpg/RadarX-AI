@@ -1103,13 +1103,13 @@ async function main() {
   if(hybridBenchmarkOutput){
     await mkdir(dirname(hybridBenchmarkOutput), {recursive:true});
     const hybridDataset={
-      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V1',
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC',
       source_commit_sha:String(process.env.GITHUB_SHA||''),
       market:'BINANCE_SPOT_USDT',
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
       feature_interval:'1M_CLOSED_CANDLES',
       sequence_steps:24,
-      sequence_channels:28,
+      sequence_channels:29,
       outcome_horizon_ms:4*HOUR_MS,
       capture_sampling:'EVERY_10M_DECISION',
       capture_symbols:symbols,
