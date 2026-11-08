@@ -159,7 +159,7 @@ test('hybrid feature contract includes order flow, multi-hour relative strength,
     'a missing intermediate BTC candle must invalidate the four-hour context, not bridge the gap');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
-  const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles: candles, asOf, sequenceSteps: 24 });
+  const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles, asOf, sequenceSteps: 24 });
   assert.equal(beforeFuture.latest_input_at, asOf, 'future closed candles must not enter the tensor');
   assert.deepEqual(beforeFuture.sequence, built.sequence);
 });
@@ -455,6 +455,27 @@ test('profit objective explicitly penalizes measured peak-to-trough excursion', 
   assert.ok(low.logit_gradients.every(Number.isFinite));
 });
 
+
+test('adverse excursion objective uses its own event clock when several exits share one trough timestamp', () => {
+  const rows = [
+    {at:10,symbol:'AUSDT',resolved_at:110,gross_return_pct:2,
+      max_adverse_excursion_pct:-0.4,max_adverse_excursion_at:50,max_favorable_excursion_pct:2.2},
+    {at:10,symbol:'BUSDT',resolved_at:210,gross_return_pct:-1.5,
+      max_adverse_excursion_pct:-1.8,max_adverse_excursion_at:50,max_favorable_excursion_pct:0.3},
+    {at:10,symbol:'CUSDT',resolved_at:310,gross_return_pct:3,
+      max_adverse_excursion_pct:-0.2,max_adverse_excursion_at:50,max_favorable_excursion_pct:3.1}
+  ];
+  const objective = profitDrawdownObjective([0.62,0.57,0.68],rows);
+  assert.equal(objective.exit_time_count,3);
+  assert.equal(objective.adverse_time_count,1,
+    'all three trades record their adverse excursion at the same market timestamp');
+  assert.equal(objective.excursion_time_count,3);
+  assert.ok(Number.isFinite(objective.adverse_excursion_penalty),
+    'separate adverse event aggregation must never read past its own group array');
+  assert.ok(Number.isFinite(objective.loss));
+  assert.ok(objective.logit_gradients.every(Number.isFinite));
+});
+
 test('profit/drawdown objective is finite and produces probability gradients', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3 },
@@ -675,6 +696,10 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.epochs, 1);
   assert.equal(fitted.epochs_requested, 1);
   assert.equal(fitted.selected_epoch, 1);
+  assert.ok(Number.isFinite(fitted.selected_training_loss),
+    'best training checkpoint must have a finite measured objective');
+  assert.ok(fitted.objective_trace.every(item => Number.isFinite(item.loss)),
+    'every training trace loss must be finite, never silently serialized as null');
   assert.equal(fitted.selected_training_loss,
     Math.min(...fitted.objective_trace.map(item => item.loss)));
   assert.equal(fitted.early_stopped, false);

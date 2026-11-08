@@ -1301,8 +1301,6 @@ export function profitDrawdownObjective(probabilities, rows, {
   for (let index = 0; index < n; index++) {
     const value = portfolioReturns[index];
     if (value < 0) downsideSquared += value * value;
-    adverseSquared += orderedAdverseReturns[index] ** 2;
-    excursionDrawdownSquared += orderedExcursionDrawdowns[index] ** 2;
     cumulative += value;
     if (cumulative > peak) {
       peak = cumulative;
@@ -1312,6 +1310,13 @@ export function profitDrawdownObjective(probabilities, rows, {
     drawdowns.push(drawdown);
     peakIndices.push(peakIndex);
     underwaterSquared += drawdown * drawdown;
+  }
+  // Adverse excursions and realized exits have different event clocks.
+  // Never index them with the exit-group count: several exits may share one
+  // adverse timestamp, which previously produced undefined ** 2 => NaN.
+  for (const adverseReturn of orderedAdverseReturns) adverseSquared += adverseReturn ** 2;
+  for (const excursionDrawdown of orderedExcursionDrawdowns) {
+    excursionDrawdownSquared += excursionDrawdown ** 2;
   }
   for (let trough = 0; trough < n; trough++) {
     const dd = drawdowns[trough];
@@ -1519,6 +1524,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     portfolio_returns_pct: portfolioReturns.map(value => round(value, 8)),
     decision_time_count: decisionGroups.length,
     exit_time_count: exitGroups.length,
+    adverse_time_count: adverseGroups.length,
+    excursion_time_count: excursionGroups.length,
     position_capacity_units: positionCapacity,
     symbol_position_capacity_units: symbolPositionCapacity,
     max_simultaneous_position_units: round(maxSimultaneousPositionUnits, 8),
@@ -1561,6 +1568,12 @@ export function trainHybridTcnAttention(trainingRows, {
     const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
+    if (!Number.isFinite(objective.loss) ||
+        !Array.isArray(objective.logit_gradients) ||
+        objective.logit_gradients.length !== normalizedRows.length ||
+        !objective.logit_gradients.every(Number.isFinite)) {
+      throw new Error('HYBRID_TCN_NON_FINITE_OBJECTIVE_OR_GRADIENT_EPOCH_' + epoch);
+    }
     // Keep the exact parameter state whose objective was measured. Financial
     // training loss can rise after an initially useful phase; never return a
     // later degraded checkpoint merely because the epoch budget was exhausted.
@@ -1601,6 +1614,9 @@ export function trainHybridTcnAttention(trainingRows, {
       earlyStopped = true;
       break;
     }
+  }
+  if (bestEpoch < 1 || !Number.isFinite(bestLoss)) {
+    throw new Error('HYBRID_TCN_NO_FINITE_BEST_CHECKPOINT');
   }
   Object.assign(model, bestModel);
   return {
