@@ -612,6 +612,10 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
+  const ranking=profile.boosted_tree_model.validation.ranking_metrics;
+  assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
+  assert.ok(ranking.top_10_pct.sample_count>=1);
+  assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
   assert.equal(profile.hybrid_model.trained,true);
   assert.equal(profile.hybrid_model.candidate_validation_metrics.length,3,
     'hybrid selection evaluates a pre-declared three-weight grid on validation');
