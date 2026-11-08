@@ -97,6 +97,98 @@ function mapCurrentPrices(rows){
   ]).filter(([symbol,price])=>symbol&&price!==null&&price>0));
 }
 
+/**
+ * Retain a bounded but symbol-balanced learning journal.
+ *
+ * A single 80-symbol market sweep can contribute up to 118 historical labels
+ * per symbol (9,440 rows) while the durable journal is capped at 6,000. A plain
+ * slice(-MAX_SAMPLES) therefore made scan priority/order determine which coins
+ * survived. Preserve every still-resolvable live baseline first, then retain
+ * resolved examples round-robin by symbol, and use leftover capacity for
+ * market-wide audit rows. Output is re-sorted chronologically for walk-forward
+ * training. Rows older than the worker's 48h label-recovery window are not
+ * pinned forever when their outcome is still missing.
+ */
+export function retainAdaptiveTraderSamples(samples,{limit=MAX_SAMPLES,now=Date.now()}={}){
+  const cap=Math.max(1,Math.trunc(Number(limit)||MAX_SAMPLES));
+  const rows=Array.isArray(samples)?samples.filter(row=>row&&typeof row==='object'):[];
+  const unique=new Map();
+  for(let index=0;index<rows.length;index++){
+    const row=rows[index];
+    const id=String(row.id||'').trim()||[
+      cleanSymbol(row.symbol),String(finite(row.at)??'NA'),String(index)
+    ].join(':');
+    unique.set(id,row);
+  }
+  const distinct=[...unique.values()];
+  const isBaseline=row=>row.training_eligible===true&&
+    (row.historical_baseline===true||row.closed_candle_baseline===true);
+  const pending=distinct.filter(row=>{
+    if(!isBaseline(row)||row.outcome)return false;
+    const at=finite(row.at),age=at===null?null:Number(now)-at;
+    return age!==null&&age>=0&&age<=48*60*60*1000;
+  });
+  const resolved=distinct.filter(row=>isBaseline(row)&&
+    ['UP','DOWN','FLAT'].includes(row.outcome));
+  const pendingSet=new Set(pending);
+  const resolvedSet=new Set(resolved);
+  const others=distinct.filter(row=>!pendingSet.has(row)&&!resolvedSet.has(row));
+  const fairNewestFirst=(items,slots)=>{
+    if(slots<=0||!items.length)return [];
+    const grouped=new Map();
+    for(const row of items){
+      const symbol=cleanSymbol(row.symbol)||String(row.id||'UNKNOWN');
+      if(!grouped.has(symbol))grouped.set(symbol,[]);
+      grouped.get(symbol).push(row);
+    }
+    const symbols=[...grouped.keys()].sort();
+    for(const group of grouped.values()){
+      group.sort((a,b)=>(finite(b.at)??0)-(finite(a.at)??0)||
+        String(a.id||'').localeCompare(String(b.id||'')));
+    }
+    const selected=[];
+    for(let depth=0;selected.length<slots;depth++){
+      let added=false;
+      for(const symbol of symbols){
+        const row=grouped.get(symbol)[depth];
+        if(!row)continue;
+        selected.push(row);added=true;
+        if(selected.length>=slots)break;
+      }
+      if(!added)break;
+    }
+    return selected;
+  };
+  const retainedPending=fairNewestFirst(pending,Math.min(cap,pending.length));
+  const remaining=cap-retainedPending.length;
+  const retainedResolved=fairNewestFirst(resolved,remaining);
+  const afterTraining=retainedPending.length+retainedResolved.length;
+  const retainedOthers=others
+    .sort((a,b)=>(finite(b.at)??0)-(finite(a.at)??0))
+    .slice(0,Math.max(0,cap-afterTraining));
+  const retained=[...retainedPending,...retainedResolved,...retainedOthers]
+    .sort((a,b)=>(finite(a.at)??0)-(finite(b.at)??0)||
+      cleanSymbol(a.symbol).localeCompare(cleanSymbol(b.symbol))||
+      String(a.id||'').localeCompare(String(b.id||'')));
+  return {
+    samples:retained,
+    stats:{
+      input_samples:rows.length,
+      unique_input_samples:distinct.length,
+      retained_samples:retained.length,
+      trimmed_samples:Math.max(0,distinct.length-retained.length),
+      pending_input_samples:pending.length,
+      pending_retained_samples:retainedPending.length,
+      resolved_training_input_samples:resolved.length,
+      resolved_training_retained_samples:retainedResolved.length,
+      retained_training_symbols:new Set([...retainedPending,...retainedResolved]
+        .map(row=>cleanSymbol(row.symbol)).filter(Boolean)).size,
+      retained_audit_samples:retainedOthers.length,
+      pending_overflow:Math.max(0,pending.length-retainedPending.length)
+    }
+  };
+}
+
 export class AdaptiveTraderWorker{
   constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT,
     executionController=null,scanTimeoutMs=75_000,executionTimeoutMs=15_000,persistTimeoutMs=12_000}={}){
@@ -133,7 +225,7 @@ export class AdaptiveTraderWorker{
               ?Math.trunc(Number(saved.scan_cursor))
               :Math.max(0,Math.trunc(Number(saved.last_summary?.universe?.scan_offset)||0)+
                 Math.trunc(Number(saved.last_summary?.universe?.scan_advance_count)||0)),
-            samples:saved.samples.slice(-MAX_SAMPLES).map(row=>{
+            samples:retainAdaptiveTraderSamples(saved.samples.map(row=>{
               const sample={...row,observation_type:row.observation_type||'DEEP_CANDIDATE'};
               const historical=sample.observation_type==='HISTORICAL_CLOSED_CANDLE'&&sample.historical_baseline===true;
               const closedBaseline=sample.closed_candle_baseline===true;
@@ -148,23 +240,27 @@ export class AdaptiveTraderWorker{
                 sample.outcome_source=null;
               }
               return sample;
-            }),
-            v5_samples:Array.isArray(saved.v5_samples)?saved.v5_samples.slice(-MAX_SAMPLES).filter(row=>
-              row&&row.training_eligible===true&&
-              (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-              row.target_definition==='LEGACY_4H_CLOSE_RETURN'):[],
+            }),{now:Date.now()}).samples,
+            v5_samples:retainAdaptiveTraderSamples(
+              (Array.isArray(saved.v5_samples)?saved.v5_samples:[]).filter(row=>
+                row&&row.training_eligible===true&&
+                (row.historical_baseline===true||row.closed_candle_baseline===true)&&
+                row.target_definition==='LEGACY_4H_CLOSE_RETURN'),
+              {now:Date.now()}
+            ).samples,
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
             cognitive_journal:Array.isArray(saved.cognitive_journal)?saved.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL):[],
             cognitive_capture:saved.cognitive_capture&&typeof saved.cognitive_capture==='object'?saved.cognitive_capture:null,
-            learning_profile:buildAdaptiveLearningProfile(saved.samples.filter(row=>
-              row&&row.training_eligible===true&&(row.historical_baseline===true||row.closed_candle_baseline===true))),
+            learning_profile:buildAdaptiveLearningProfile([]),
             paper_portfolio:saved.paper_portfolio&&saved.paper_portfolio.mode==='PAPER_ONLY'&&saved.paper_portfolio.real_order_execution===false&&
               Array.isArray(saved.paper_portfolio.open_positions)&&Array.isArray(saved.paper_portfolio.closed_trades)
               ?{...createServerPaperPortfolio(),...saved.paper_portfolio,enabled:true,paper_trading:true,real_order_execution:false,
                 open_positions:saved.paper_portfolio.open_positions.slice(-3),closed_trades:saved.paper_portfolio.closed_trades.slice(-2000)}
               :createServerPaperPortfolio()
           };
+          this.state.learning_profile=buildAdaptiveLearningProfile(this.state.samples.filter(row=>
+            row&&row.training_eligible===true&&(row.historical_baseline===true||row.closed_candle_baseline===true)));
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
           this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
             temporalSamples:this.trainingSamples()
@@ -816,8 +912,10 @@ recordServerPaperPortfolio(snapshot,now){
       this.state.samples.push(item);
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
-    this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
-    this.state.v5_samples=this.state.v5_samples.slice(-MAX_SAMPLES);
+    const sampleRetention=retainAdaptiveTraderSamples(this.state.samples,{now});
+    const v5SampleRetention=retainAdaptiveTraderSamples(this.state.v5_samples,{now});
+    this.state.samples=sampleRetention.samples;
+    this.state.v5_samples=v5SampleRetention.samples;
     // Keep the sequence tensor for each retained training row. With a 6,000-row
     // cap this is bounded and preserves enough chronological groups for the
     // independent temporal holdout instead of silently discarding most history.
@@ -841,6 +939,8 @@ recordServerPaperPortfolio(snapshot,now){
         row?.selection_lane==='MARKET_ACTIVITY_ACCELERATION').length,
       active_spot_prices:(snapshot.latest_prices||[]).length,
       tracked_samples:this.state.samples.length,
+      sample_retention:sampleRetention.stats,
+      v5_sample_retention:v5SampleRetention.stats,
       historical_resolved_samples:this.state.samples.filter(row=>row.observation_type==='HISTORICAL_CLOSED_CANDLE'&&row.outcome).length,
       resolved_samples:this.trainingSamples().filter(row=>row.outcome).length,
       unresolved_training_samples:this.trainingSamples().filter(row=>!row.outcome).length,
