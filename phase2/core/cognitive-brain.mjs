@@ -216,6 +216,154 @@ function fitLogisticModel(training, { l2 = 0.08, iterations = 900, learningRate 
   return { intercept, weights, base_rate: baseRate, feature_names: [...FEATURE_NAMES], l2 };
 }
 
+
+// A bounded Newton-gradient boosted-tree challenger. Trees learn only residual
+// interactions on top of a same-window logistic anchor; the anchor is never
+// modified. The fixed depth/leaf/round budgets are intentionally conservative
+// for the small, autocorrelated market sample sizes in Build 224.
+function linearLogit(vector, fit) {
+  let value=Number(fit?.intercept)||0;
+  for(let index=0;index<vector.length;index++) value+=
+    vector[index]*(Number(fit?.weights?.[index])||0);
+  return clamp(value,-12,12);
+}
+
+function residualTreeValue(node, vector) {
+  if(!node||typeof node!=='object')return 0;
+  if(node.type==='leaf')return Number(node.value)||0;
+  const feature=Number(node.feature);
+  return vector[feature]<=Number(node.threshold)
+    ?residualTreeValue(node.left,vector)
+    :residualTreeValue(node.right,vector);
+}
+
+function bestResidualTreeSplit(indices, rows, gradients, hessians, {
+  minimumLeaf=12,l2=8,minGain=0.002
+}={}) {
+  let totalGradient=0,totalHessian=0;
+  for(const index of indices){
+    totalGradient+=gradients[index];
+    totalHessian+=hessians[index];
+  }
+  let best=null;
+  const features=rows[0]?.vector?.length||0;
+  for(let feature=0;feature<features;feature++){
+    const ordered=indices.map(index=>({index,value:rows[index].vector[feature]}))
+      .sort((a,b)=>a.value-b.value||a.index-b.index);
+    let leftGradient=0,leftHessian=0;
+    for(let offset=0;offset<ordered.length-1;offset++){
+      const current=ordered[offset];
+      leftGradient+=gradients[current.index];
+      leftHessian+=hessians[current.index];
+      const leftCount=offset+1,rightCount=ordered.length-leftCount;
+      if(leftCount<minimumLeaf||rightCount<minimumLeaf)continue;
+      const nextValue=ordered[offset+1].value;
+      if(!(current.value<nextValue))continue;
+      const rightGradient=totalGradient-leftGradient;
+      const rightHessian=totalHessian-leftHessian;
+      const gain=0.5*(
+        leftGradient*leftGradient/(leftHessian+l2)+
+        rightGradient*rightGradient/(rightHessian+l2)-
+        totalGradient*totalGradient/(totalHessian+l2)
+      );
+      if(gain>minGain&&(!best||gain>best.gain)){
+        best={
+          feature,threshold:current.value+(nextValue-current.value)/2,
+          gain
+        };
+      }
+    }
+  }
+  return best;
+}
+
+function buildResidualTreeNode(indices, depth, rows, gradients, hessians, options) {
+  let gradient=0,hessian=0;
+  for(const index of indices){gradient+=gradients[index];hessian+=hessians[index];}
+  const leafValue=clamp(-gradient/(hessian+options.l2),-0.65,0.65);
+  if(depth>=options.maxDepth||indices.length<options.minimumLeaf*2){
+    return {type:'leaf',value:leafValue};
+  }
+  const split=bestResidualTreeSplit(indices,rows,gradients,hessians,options);
+  if(!split)return {type:'leaf',value:leafValue};
+  const left=[],right=[];
+  for(const index of indices){
+    (rows[index].vector[split.feature]<=split.threshold?left:right).push(index);
+  }
+  if(left.length<options.minimumLeaf||right.length<options.minimumLeaf){
+    return {type:'leaf',value:leafValue};
+  }
+  return {
+    type:'split',feature:split.feature,threshold:split.threshold,
+    left:buildResidualTreeNode(left,depth+1,rows,gradients,hessians,options),
+    right:buildResidualTreeNode(right,depth+1,rows,gradients,hessians,options)
+  };
+}
+
+function fitResidualBoostedTrees(training, baselineFit, {
+  maxTrees=36,maxDepth=3,learningRate=0.035,l2=12,
+  minimumLeafFraction=0.035,residualScale=0.65
+}={}) {
+  const rows=(Array.isArray(training)?training:[]).filter(row=>
+    Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length&&
+    row.vector.every(Number.isFinite)&&Number.isFinite(Number(row.target)));
+  if(rows.length<200||!baselineFit||!Array.isArray(baselineFit.weights)||
+     baselineFit.weights.length!==FEATURE_NAMES.length)return null;
+  const options={
+    maxDepth:Math.max(1,Math.min(3,Math.trunc(maxDepth)||3)),
+    minimumLeaf:Math.max(12,Math.min(80,Math.floor(rows.length*minimumLeafFraction))),
+    l2:clamp(Number(l2)||12,2,30),minGain:0.002
+  };
+  const rate=clamp(Number(learningRate)||0.035,0.01,0.08);
+  const logits=rows.map(row=>linearLogit(row.vector,baselineFit));
+  const trees=[];
+  const rounds=Math.max(8,Math.min(48,Math.trunc(maxTrees)||36));
+  for(let round=0;round<rounds;round++){
+    const gradients=new Array(rows.length),hessians=new Array(rows.length);
+    for(let index=0;index<rows.length;index++){
+      const probability=logistic(logits[index]);
+      gradients[index]=probability-Number(rows[index].target);
+      hessians[index]=Math.max(0.025,probability*(1-probability));
+    }
+    const root=buildResidualTreeNode(
+      rows.map((_,index)=>index),0,rows,gradients,hessians,options
+    );
+    if(root.type==='leaf')break;
+    const tree={root};
+    let changed=false;
+    for(let index=0;index<rows.length;index++){
+      const correction=rate*residualTreeValue(root,rows[index].vector);
+      logits[index]=clamp(logits[index]+correction,-12,12);
+      if(Math.abs(correction)>1e-9)changed=true;
+    }
+    if(!changed)break;
+    trees.push(tree);
+  }
+  if(!trees.length)return null;
+  return {
+    kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
+    architecture:'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS',
+    baseline_fit:baselineFit,trees,tree_count:trees.length,
+    learning_rate:rate,residual_scale:clamp(Number(residualScale)||0,0,1),
+    max_depth:options.maxDepth,minimum_leaf_samples:options.minimumLeaf,
+    l2:options.l2,base_rate:baselineFit.base_rate,
+    training_samples:rows.length,
+    training_strategy:'SAME_WINDOW_LOGISTIC_ANCHORED_NEWTON_GRADIENT_BOOSTING_V1'
+  };
+}
+
+function predictResidualBoostedTrees(features, fit) {
+  if(!fit||fit.kind!=='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'||
+     !Array.isArray(fit.trees)||!fit.trees.length)return null;
+  const vector=normalizedFeatures(features);
+  let value=linearLogit(vector,fit.baseline_fit);
+  let residual=0;
+  for(const tree of fit.trees)residual+=
+    Number(fit.learning_rate)*residualTreeValue(tree.root,vector);
+  value=clamp(value+clamp(Number(fit.residual_scale)||0,0,1)*residual,-12,12);
+  return clamp(logistic(value),0.02,0.98);
+}
+
 function fitNeuralNetworkModel(training, {
   hiddenUnits = NEURAL_POLICY.hiddenUnits,
   secondHiddenUnits = NEURAL_POLICY.secondHiddenUnits,
@@ -428,6 +576,16 @@ function fitNeuralEnsemble(training, options = {}) {
 }
 
 function predictFromFit(features, fit, residualScale=1) {
+  if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
+    return predictResidualBoostedTrees(features,fit);
+  }
+  if(fit?.kind==='BLENDED_GBDT_MLP_V1'){
+    const boosted=predictFromFit(features,fit.boosted_fit);
+    const neural=predictFromFit(features,fit.neural_fit);
+    if(!Number.isFinite(boosted)||!Number.isFinite(neural))return null;
+    const weight=clamp(Number(fit.boosted_weight)||0,0,1);
+    return clamp(weight*boosted+(1-weight)*neural,0.02,0.98);
+  }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
     const selected=Number(fit.selected_member_index);
@@ -989,17 +1147,96 @@ export function buildCognitiveLearningProfile(samples = [], {
     beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
     passed:neuralHoldoutReady
   };
-  let neuralSelected=false;
-  if(neuralWins){
-    selectedModel='NEURAL_GLOBAL';
-    selectedFit=neuralFit;
-    selectedTraining=neuralFinalTraining;
-    selectedValidation=neuralValidation;
-    selectionReason='NEURAL_MLP_BEAT_LOGISTIC_CHALLENGER_ON_MIDDLE_CHRONOLOGICAL_VALIDATION';
-    neuralSelected=true;
+  // Fit the tabular challenger on the complete outer training block. Its
+  // tree residuals are anchored to the same-window logistic model; validation
+  // may select a challenger, but the final holdout is never used for selection.
+  const boostedTreeFit=neuralGlobalLogisticFit&&upEventTraining.length>=neuralMinimum
+    ?fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit):null;
+  const boostedTreeValidation=boostedTreeFit
+    ?evaluateHoldout(upEventValidation,boostedTreeFit)
+    :{evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
+  const hybridFit=boostedTreeFit&&neuralFit
+    ?{
+      kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
+      neural_fit:neuralFit,boosted_weight:0.5,
+      base_rate:boostedTreeFit.base_rate,
+      architecture:'50_50_PROBABILITY_BLEND_GBDT_TCN_MLP_V1',
+      training_strategy:'VALIDATION_SELECTED_GBDT_MLP_PROBABILITY_BLEND_V1'
+    }:null;
+  const hybridValidation=hybridFit
+    ?evaluateHoldout(upEventValidation,hybridFit)
+    :{evaluated:false,model_brier_score:null,reason:'HYBRID_REQUIRES_BOTH_MODELS'};
+  const challengerCandidates=[
+    {name:'NEURAL_GLOBAL',fit:neuralFit,validation:neuralValidation},
+    {name:'GBDT_RESIDUAL',fit:boostedTreeFit,validation:boostedTreeValidation},
+    {name:'HYBRID_GBDT_MLP',fit:hybridFit,validation:hybridValidation}
+  ].filter(candidate=>candidate.fit&&candidate.validation?.evaluated===true);
+  const validationReferences=[
+    neuralSameWindowLogisticValidation,
+    neuralGlobalLogisticValidation,
+    ...(neuralRecentLogisticFit?[neuralRecentLogisticValidation]:[])
+  ].filter(metric=>metric?.evaluated===true&&Number.isFinite(metric.model_brier_score));
+  const qualifiesOnValidation=candidate=>{
+    const metric=candidate.validation;
+    if(metric?.evaluated!==true||metric.beat_base_rate!==true)return false;
+    return validationReferences.length>=2&&validationReferences.every(reference=>
+      metric.model_brier_score+comparisonMargin<reference.model_brier_score);
+  };
+  const validationQualified=challengerCandidates.filter(qualifiesOnValidation)
+    .sort((a,b)=>a.validation.model_brier_score-b.validation.model_brier_score||
+      a.name.localeCompare(b.name));
+  // Select exactly one challenger from validation. Do not fall through to a
+  // runner-up after seeing the final holdout; that would turn the holdout into
+  // another tuning set.
+  const validationWinner=validationQualified[0]||null;
+  let neuralSelected=validationWinner?.name==='NEURAL_GLOBAL';
+  let challengerHoldout={evaluated:false,model_brier_score:null,reason:'NO_VALIDATED_CHALLENGER'};
+  let challengerHoldoutComparison={passed:false,beats_base_rate:false,
+    beats_same_window_logistic:false,beats_global_logistic:false,beats_recent_logistic:false};
+  let activeChallenger=null;
+  if(validationWinner){
+    challengerHoldout=validationWinner.name==='NEURAL_GLOBAL'
+      ?neuralHoldout:evaluateHoldout(upEventHoldout,validationWinner.fit);
+    const holdoutReferences=[
+      neuralSameWindowLogisticHoldout,neuralGlobalLogisticHoldout,
+      ...(neuralRecentLogisticFit?[neuralRecentLogisticHoldout]:[])
+    ].filter(metric=>metric?.evaluated===true&&Number.isFinite(metric.model_brier_score));
+    const beatsReferences=challengerHoldout.evaluated===true&&
+      holdoutReferences.length>=2&&holdoutReferences.every(reference=>
+        challengerHoldout.model_brier_score+comparisonMargin<reference.model_brier_score);
+    challengerHoldoutComparison={
+      sample_count:upEventHoldout.length,
+      required_brier_margin:comparisonMargin,
+      model_brier_score:challengerHoldout.model_brier_score??null,
+      base_rate_brier_score:challengerHoldout.base_rate_brier_score??null,
+      beats_base_rate:challengerHoldout.beat_base_rate===true,
+      beats_same_window_logistic:challengerHoldout.evaluated===true&&
+        neuralSameWindowLogisticHoldout.evaluated===true&&
+        challengerHoldout.model_brier_score+comparisonMargin<
+          neuralSameWindowLogisticHoldout.model_brier_score,
+      beats_global_logistic:challengerHoldout.evaluated===true&&
+        neuralGlobalLogisticHoldout.evaluated===true&&
+        challengerHoldout.model_brier_score+comparisonMargin<
+          neuralGlobalLogisticHoldout.model_brier_score,
+      beats_recent_logistic:!neuralRecentLogisticFit||
+        (challengerHoldout.evaluated===true&&neuralRecentLogisticHoldout?.evaluated===true&&
+          challengerHoldout.model_brier_score+comparisonMargin<
+            neuralRecentLogisticHoldout.model_brier_score),
+      passed:challengerHoldout.beat_base_rate===true&&beatsReferences
+    };
+    if(challengerHoldoutComparison.passed){
+      activeChallenger=validationWinner.name;
+      selectedModel=validationWinner.name;
+      selectedFit=validationWinner.fit;
+      selectedTraining=validationWinner.name==='NEURAL_GLOBAL'?neuralFinalTraining:training;
+      selectedValidation=validationWinner.validation;
+      selectionReason=validationWinner.name+'_BEAT_ALL_LOGISTIC_CHALLENGERS_ON_VALIDATION_AND_HOLDOUT';
+    }else{
+      selectionReason='VALIDATION_CHALLENGER_FAILED_UNTOUCHED_HOLDOUT;_LOGISTIC_FALLBACK_RETAINED';
+    }
   }
-  const holdoutMetrics = selectedModel==='NEURAL_GLOBAL'
-    ?neuralHoldout:evaluateHoldout(holdout, selectedFit);
+  const holdoutMetrics = activeChallenger
+    ?challengerHoldout:evaluateHoldout(holdout, selectedFit);
   const evidence = factorEvidence(selectedTraining, { minimumBucket });
   const rankingReady = training.length >= minTrainingSamples &&
     validation.length >= minimumValidationSamples &&
@@ -1108,8 +1345,49 @@ export function buildCognitiveLearningProfile(samples = [], {
       holdout_comparison:neuralHoldoutComparison,
       selection_margin: comparisonMargin
     },
+    boosted_tree_model: {
+      status:!boostedTreeFit?'WAITING_FOR_MATURED_TRAINING_SAMPLES':
+        activeChallenger==='GBDT_RESIDUAL'?'OUT_OF_SAMPLE_VALIDATED':
+        validationWinner?.name==='GBDT_RESIDUAL'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
+        'TRAINED_NOT_SELECTED',
+      model_kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
+      architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS',
+      trained:boostedTreeFit!==null,selected:activeChallenger==='GBDT_RESIDUAL',
+      probability_ready:activeChallenger==='GBDT_RESIDUAL',
+      tree_count:boostedTreeFit?.tree_count||0,
+      training_samples:boostedTreeFit?.training_samples||0,
+      minimum_leaf_samples:boostedTreeFit?.minimum_leaf_samples||0,
+      learning_rate:boostedTreeFit?.learning_rate??null,
+      residual_scale:boostedTreeFit?.residual_scale??null,
+      validation:boostedTreeValidation,
+      hybrid_validation:hybridValidation,
+      holdout:validationWinner?.name==='GBDT_RESIDUAL'?challengerHoldout:null,
+      holdout_comparison:validationWinner?.name==='GBDT_RESIDUAL'?challengerHoldoutComparison:null
+    },
+    hybrid_model: {
+      status:!hybridFit?'WAITING_FOR_BOTH_CHALLENGERS':
+        activeChallenger==='HYBRID_GBDT_MLP'?'OUT_OF_SAMPLE_VALIDATED':
+        validationWinner?.name==='HYBRID_GBDT_MLP'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
+        'TRAINED_NOT_SELECTED',
+      model_kind:'BLENDED_GBDT_MLP_V1',
+      architecture:hybridFit?.architecture||'50_50_PROBABILITY_BLEND_GBDT_MLP_V1',
+      trained:hybridFit!==null,selected:activeChallenger==='HYBRID_GBDT_MLP',
+      probability_ready:activeChallenger==='HYBRID_GBDT_MLP',
+      boosted_weight:hybridFit?.boosted_weight??null,
+      validation:hybridValidation,
+      holdout:validationWinner?.name==='HYBRID_GBDT_MLP'?challengerHoldout:null,
+      holdout_comparison:validationWinner?.name==='HYBRID_GBDT_MLP'?challengerHoldoutComparison:null
+    },
     model_selection: {
       selected_model: selectedModel,
+      validation_challenger:validationWinner?.name||null,
+      active_challenger:activeChallenger,
+      challenger_holdout_passed:challengerHoldoutComparison.passed===true,
+      challenger_candidate_metrics:challengerCandidates.map(candidate=>({
+        name:candidate.name,
+        validation_brier_score:candidate.validation.model_brier_score??null,
+        validation_base_rate_brier_score:candidate.validation.base_rate_brier_score??null
+      })),
       reason: selectionReason,
       recent_window_samples: recentTraining.length,
       global_validation_brier_score: globalValidation.model_brier_score,
