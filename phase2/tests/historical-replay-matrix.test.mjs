@@ -23,15 +23,17 @@ test('hybrid fixed-SHA research matrix captures 33 unique historical Spot USDT s
   assert.ok(symbols.every(symbol=>/^[A-Z0-9]{5,20}$/.test(symbol)&&symbol.endsWith('USDT')));
   assert.ok(['ATOMUSDT','UNIUSDT','ETCUSDT'].every(symbol=>symbols.includes(symbol)));
 });
-test('expanded hybrid benchmark includes later listing-aware windows for missed riser assets',()=>{
+test('expanded hybrid benchmark includes post-listing missed-riser and later bull-regime windows',()=>{
   const path=resolve(dirname(fileURLToPath(import.meta.url)),'../benchmarks/hybrid-tcn-attention-windows.json');
   const windows=JSON.parse(readFileSync(path,'utf8'));
-  assert.equal(windows.length,9);
+  assert.equal(windows.length,11);
   assert.deepEqual(windows.slice(0,3).map(w=>Date.parse(w.end)-Date.parse(w.start)),[48,24,48].map(h=>h*3_600_000));
   assert.ok(windows.slice(3).every(w=>Date.parse(w.start)>=Date.parse('2025-05-28T13:00:00.000Z')));
   assert.ok(windows.every((w,i)=>i===0||Date.parse(w.start)>=Date.parse(windows[i-1].end)));
   const missed=['PARTIUSDT','BEAMXUSDT','SOLVUSDT','SOPHUSDT'];
   for(const window of windows.slice(3)) assert.ok(missed.every(symbol=>window.symbols.includes(symbol)));
+  assert.ok(windows.some(w=>w.id==='missed-risers-post-soph-jul-2025-btc-rally'));
+  assert.ok(windows.some(w=>w.id==='missed-risers-post-soph-aug-2026-btc-rally'));
 });
 test('matrix windows are normalized, unique, chronological and limited to seven days',()=>{const w=normalizeMatrixWindows([{id:'bull',start:'2025-01-01T00:00:00Z',end:'2025-01-02T00:00:00Z'}],{now:Date.parse('2025-01-03T00:00:00Z')});assert.equal(w[0].id,'bull');assert.equal(w[0].endMs-w[0].startMs,86_400_000);assert.throws(()=>normalizeMatrixWindows([{id:'x',start:'2025-01-01',end:'2025-01-10'}],{now:Date.parse('2025-01-11')}),/OVER_SEVEN_DAYS/);assert.throws(()=>normalizeMatrixWindows([{id:'x',start:'2025-01-01',end:'2025-01-02'},{id:'x',start:'2025-01-02',end:'2025-01-03'}],{now:Date.parse('2025-01-04')}),/DUPLICATE/);});
 test('per-window Spot universes are preserved and normalized for listing-aware historical replay',()=>{
@@ -102,9 +104,9 @@ test('matrix dry-run expands listing-aware per-window universes into the exact r
   assert.equal(run.status,0,run.stderr||run.stdout);
   const plan=JSON.parse(run.stdout);
   assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
-  assert.equal(plan.window_count,9);
+  assert.equal(plan.window_count,11);
   assert.equal(plan.symbol_count,37);
-  assert.equal(plan.planned_symbol_window_replays,171);
+  assert.equal(plan.planned_symbol_window_replays,195);
   assert.equal(plan.windows.slice(0,3).every(w=>w.symbols.length===33),true);
   assert.equal(plan.windows.slice(3).every(w=>w.symbols.length===12),true);
   assert.ok(['PARTIUSDT','BEAMXUSDT','SOLVUSDT','SOPHUSDT']

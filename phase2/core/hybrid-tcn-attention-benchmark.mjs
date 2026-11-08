@@ -68,6 +68,7 @@ const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
 const DEFAULT_TRADE_THRESHOLD_GRID = Object.freeze([0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]);
 const DEFAULT_TARGET_DEFINITION = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1';
 const REQUIRED_MARKET_REGIMES = Object.freeze(['BULL_TREND', 'BEAR_TREND', 'SIDEWAYS']);
+const ALLOWED_MARKET_REGIMES = Object.freeze([...REQUIRED_MARKET_REGIMES, 'MIXED']);
 
 const finite = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
@@ -675,7 +676,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
-        !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
+        !ALLOWED_MARKET_REGIMES.includes(marketRegime) ||
         !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
         at === null || latestInputAt === null || latestInputAt > at ||
         resolvedAt === null || resolvedAt <= at || gross === null ||
@@ -1312,7 +1313,10 @@ export function trainHybridTcnAttention(trainingRows, {
       sharpe_per_decision: objective.sharpe_per_decision,
       max_additive_drawdown_pct: objective.max_additive_drawdown_pct,
       focal_sample_count: objective.focal_sample_count,
+      focal_eligible_coverage_pct: objective.focal_eligible_coverage_pct,
+      asymmetric_focal_loss: objective.asymmetric_focal_loss,
       cross_sectional_ranking_loss: objective.cross_sectional_ranking_loss,
+      cross_sectional_ranking_weight: objective.cross_sectional_ranking_weight,
       cross_sectional_ranking_pair_count: objective.cross_sectional_ranking_pair_count });
   }
   return {
@@ -1735,6 +1739,8 @@ export function runFixedShaBenchmark(inputRows, {
   minimumTestRows = 30,
   embargoMs = 4 * 60 * 60 * 1000,
   epochs = 8,
+  learningRate = 0.003,
+  crossSectionalRankingWeight = 0.15,
   roundTripCostBps = DEFAULT_COST_BPS,
   positionFraction = DEFAULT_POSITION_FRACTION,
   maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
@@ -1824,7 +1830,10 @@ export function runFixedShaBenchmark(inputRows, {
     enforceMarketGates: true
   };
   for (const fold of walkForward.folds) {
-    const fitted = trainHybridTcnAttention(fold.train, { epochs });
+    const fitted = trainHybridTcnAttention(fold.train, {
+      epochs, learningRate,
+      objectiveOptions: { crossSectionalRankingWeight }
+    });
     const validationNeural = new Map(fold.validation.map(row =>
       [row.id, predictHybridTcnAttention(row.sequence, fitted).probability]));
     const validationClassic = new Map(fold.validation.map(row => [row.id, row.classic_score]));
@@ -1854,6 +1863,8 @@ export function runFixedShaBenchmark(inputRows, {
       classic_validation: summarizeTrades(classicChoice.report),
       neural_training: {
         epochs: fitted.epochs,
+        learning_rate: learningRate,
+        cross_sectional_ranking_weight: crossSectionalRankingWeight,
         training_samples: fitted.training_samples,
         trained_logit_scale: fitted.trained_logit_scale,
         objective_trace: fitted.objective_trace

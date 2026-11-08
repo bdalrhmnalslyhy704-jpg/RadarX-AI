@@ -797,6 +797,23 @@ test('fixed-SHA benchmark rejects missing MAE timing and mixed outcome sources',
     /ONE_CLOSED_SPOT_OUTCOME_SOURCE/);
 });
 
+test('fixed-SHA benchmark retains MIXED rows without counting MIXED as a required regime', () => {
+  const rows = makeRows(700).map((row, index) => ({
+    ...row,
+    market_regime: index % 4 === 0 ? 'MIXED' : row.market_regime
+  }));
+  const report = runFixedShaBenchmark(rows, {
+    sourceCommitSha: SOURCE_SHA, folds: 5, minimumTrainTimes: 160,
+    minimumTrainRows: 80, minimumValidationRows: 50, minimumTestRows: 50,
+    embargoMs: FOUR_HOURS, epochs: 1, thresholdGrid: [0.4, 0.5, 0.6]
+  });
+  assert.equal(report.integrity.rows, rows.length);
+  assert.equal(report.integrity.rejected_or_duplicate_rows_removed, 0);
+  assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','MIXED','SIDEWAYS']);
+  assert.deepEqual(report.integrity.missing_market_regimes, []);
+  assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
+});
+
 test('fixed-SHA benchmark refuses a dataset missing any observed BTC regime', () => {
   const rows = makeRows(18).map(row => ({
     ...row, market_regime: 'BULL_TREND', historical_window_id: 'only-bull-window'

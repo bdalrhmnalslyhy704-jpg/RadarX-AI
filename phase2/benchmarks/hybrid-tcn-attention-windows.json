@@ -38,6 +38,26 @@
     ]
   },
   {
+    "id": "missed-risers-post-soph-jul-2025-btc-rally",
+    "label": "Post-listing BTC bull move — 9-11 July 2025",
+    "start": "2025-07-09T00:00:00.000Z",
+    "end": "2025-07-11T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
     "id": "missed-risers-post-soph-aug-2025",
     "label": "Post-listing missed-riser cohort — August 2025",
     "start": "2025-08-15T00:00:00.000Z",
@@ -102,6 +122,26 @@
     "label": "Post-listing missed-riser cohort — June 2026",
     "start": "2026-06-15T00:00:00.000Z",
     "end": "2026-06-17T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-aug-2026-btc-rally",
+    "label": "Post-listing BTC bull move — 19-21 August 2026",
+    "start": "2026-08-19T00:00:00.000Z",
+    "end": "2026-08-21T00:00:00.000Z",
     "symbols": [
       "BTCUSDT",
       "ETHUSDT",

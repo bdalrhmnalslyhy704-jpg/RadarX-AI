@@ -34,6 +34,9 @@ if (!inputPath) {
       minimumValidationRows: numericArgument('--minimum-validation-rows', options.minimumValidationRows ?? 30, 10),
       minimumTestRows: numericArgument('--minimum-test-rows', options.minimumTestRows ?? 30, 10),
       epochs: numericArgument('--epochs', options.epochs ?? 8, 1),
+      learningRate: numericArgument('--learning-rate', options.learningRate ?? 0.003, 0.0001),
+      crossSectionalRankingWeight: numericArgument('--ranking-weight',
+        options.crossSectionalRankingWeight ?? 0.15, 0),
       roundTripCostBps: numericArgument('--round-trip-cost-bps', options.roundTripCostBps ?? 30, 0),
       embargoMs: numericArgument('--embargo-hours', options.embargoHours ?? 4, 0) * 60 * 60 * 1000
     });

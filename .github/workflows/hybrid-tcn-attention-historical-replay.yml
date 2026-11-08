@@ -89,7 +89,9 @@ jobs:
             --input "$DATASET_PATH" \
             --source-commit-sha "$GITHUB_SHA" \
             --folds 5 \
-            --epochs 8 \
+            --epochs 32 \
+            --learning-rate 0.003 \
+            --ranking-weight 1.0 \
             --round-trip-cost-bps 30 \
             --output "$BENCHMARK_PATH"
       - name: Upload complete replay dataset and benchmark evidence

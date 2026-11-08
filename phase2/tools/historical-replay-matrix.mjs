@@ -190,7 +190,8 @@ async function main(){
       observed_market_regimes:[...new Set(results.map(result=>String(result.market_regime?.regime??'UNKNOWN').toUpperCase()))],
       benchmark_options:{folds:5,minimumTrainTimes:70,minimumTrainRows:100,
         minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
-        positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,epochs:8,
+        positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,
+        epochs:32,learningRate:0.003,crossSectionalRankingWeight:1.0,
         targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
       capture_summary:{
         rows:hybridRows.length,
