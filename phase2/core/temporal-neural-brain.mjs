@@ -757,8 +757,14 @@ export function buildTemporalNeuralProfile(samples = [], {
       regime_specialist_count:2,
       regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
       model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
-      resolved_samples:rows.length,training_samples:sharedTrainingRows.length,
-      regime_model_training_samples:sharedTrainingRows.length,
+      resolved_samples:rows.length,training_samples:allRegimeTrainingRows.length,
+      regime_model_training_samples:allRegimeTrainingRows.length,
+      model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
+      regime_local_split_boundaries:Object.fromEntries(regimes.map(regime=>[regime,{
+        training_cutoff_at:regimeSplits[regime].trainingCutoffAt,
+        member_selection_cutoff_at:regimeSplits[regime].memberSelectionCutoffAt,
+        calibration_cutoff_at:regimeSplits[regime].calibrationCutoffAt
+      }])),
       selection_samples:0,validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
       required_selection_samples:Math.max(10,Math.ceil(minimumValidationSamples*0.4)),
@@ -768,10 +774,10 @@ export function buildTemporalNeuralProfile(samples = [], {
       member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
       calibration_cutoff_at:sharedSelectionCutoffAt,
       validation_start_at:sharedSelectionCutoffAt,holdout_start_at:holdoutStart,
-      max_training_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+      max_training_outcome_resolved_at:regimeTrainingMaxResolvedAt,
       shared_model_training_cutoff_at:sharedTrainingCutoffAt,
       shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
-      regime_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+      regime_model_training_max_outcome_resolved_at:regimeTrainingMaxResolvedAt,
       probability_ready:false,live_eligibility_ready:false,
       trained:false,selected:false,supported_regimes:[],selected_regimes:[],
       regime_specialists:emptyCoverage,
@@ -1167,18 +1173,20 @@ export function buildTemporalNeuralProfile(samples = [], {
       }:null
     }];
   }));
-  // Top-level sample counts describe the shared model's actual fit and the
-  // complete chronological evidence blocks. Per-regime scored subsets remain
-  // explicit under regime_specialists and holdout_comparison.
-  const reportTrainingSamples=sharedTrainingRows.length;
+  // Top-level training counts describe both separate regime-local fit sets.
+  // The global outer validation and final holdout remain outside all fitting.
+  const reportTrainingSamples=allRegimeTrainingRows.length;
   const reportSelectionSamples=Object.values(selectionByRegime).reduce((sum,value)=>sum+Number(value||0),0);
   const reportValidationSamples=Object.values(validationByRegime).reduce((sum,value)=>sum+Number(value||0),0);
   const reportHoldoutSamples=holdout.length;
-  const reportTrainingPositive=targets.filter(value=>value===1).length;
-  const reportTrainingNegative=targets.filter(value=>value===0).length;
+  const reportTrainingPositive=allRegimeTrainingRows.filter(row=>row.target===1).length;
+  const reportTrainingNegative=allRegimeTrainingRows.filter(row=>row.target===0).length;
   const reportTrainingPrior=(reportTrainingPositive+2)/(reportTrainingSamples+4);
-  const reportMaxTrainingResolvedAt=sharedTrainingMaxResolvedAt;
-  const reportValidationStartAt=sharedSelectionCutoffAt;
+  const reportMaxTrainingResolvedAt=regimeTrainingMaxResolvedAt;
+  const localValidationStarts=regimes.map(regime=>regimeSplits[regime].calibrationCutoffAt)
+    .filter(value=>Number.isFinite(Number(value)));
+  const reportValidationStartAt=localValidationStarts.length
+    ?Math.min(validationStart,...localValidationStarts):validationStart;
   const validationReason=!supportedRegimes.length?'NO_SUPPORTED_BTC_REGIME':
     !validationSelectedRegimes.length?'NO_REGIME_BEAT_ITS_VALIDATION_LOGISTIC':
     'AT_LEAST_ONE_REGIME_BEAT_ITS_VALIDATION_LOGISTIC';
@@ -1212,12 +1220,18 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_specialist_count:2,
     independent_regime_models:Object.keys(fitted.specialists_by_regime).length,
     regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
+    model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
+    regime_local_split_boundaries:Object.fromEntries(regimes.map(regime=>[regime,{
+      training_cutoff_at:regimeSplits[regime].trainingCutoffAt,
+      member_selection_cutoff_at:regimeSplits[regime].memberSelectionCutoffAt,
+      calibration_cutoff_at:regimeSplits[regime].calibrationCutoffAt
+    }])),
     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
     residual_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_LOGISTIC_FROZEN',
     calibration_strategy:'REGIME_LOCAL_SELECTION_BLOCK_SHRUNK_BRIER_PLATT_V2',
     calibration_fit_scope:'REGIME_LOCAL_CALIBRATION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
-    regime_model_training_samples:sharedTrainingRows.length,
+    regime_model_training_samples:allRegimeTrainingRows.length,
     pooled_model_selection_diagnostic_samples:pooledMemberSelectionDiagnostics.samples,
     member_selection_samples_total:reportSelectionSamples,
     selection_samples:reportSelectionSamples,
@@ -1227,7 +1241,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
     shared_model_split_fractions:{...splitFractions},
     shared_model_selection_layout:`TRAIN_${Math.round(sharedTrainCutIndex/fitTimes.length*100)}_PERCENT_MEMBER_SELECTION_${Math.round((sharedMemberSelectionCutIndex-sharedTrainCutIndex)/fitTimes.length*100)}_PERCENT_CALIBRATION_${Math.round((sharedSelectionCutIndex-sharedMemberSelectionCutIndex)/fitTimes.length*100)}_PERCENT`,
-    regime_model_training_max_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+    regime_model_training_max_outcome_resolved_at:regimeTrainingMaxResolvedAt,
     required_training_samples:minTrainingSamples,
     required_selection_samples:minSelectionSamples,
     required_validation_samples:minimumValidationSamples,
