@@ -176,6 +176,7 @@ jobs:
           const brainProfile=brain.profile||{};
           const neuralNetwork=brainProfile.neural_network||{};
           const temporalNetwork=brainProfile.temporal_network||{};
+          const temporalBoostedTree=temporalNetwork.temporal_boosted_tree||{};
           const summary=x.last_summary||{};
           const boostedTree=brainProfile.boosted_tree_model||{};
           const hybridModel=brainProfile.hybrid_model||{};
@@ -277,6 +278,42 @@ jobs:
             legacy_neural_network_contract:legacyNeuralNetworkContract,
             temporal_network_contract:temporalNetworkContract,
             temporal_network_status:String(temporalNetwork.status||'UNKNOWN'),
+            temporal_boosted_tree_status:String(temporalBoostedTree.status||'UNKNOWN'),
+            temporal_boosted_tree_model_kind:String(temporalBoostedTree.model_kind||'UNKNOWN'),
+            temporal_boosted_tree_target_definition:String(temporalBoostedTree.target_definition||'UNKNOWN'),
+            temporal_boosted_tree_trained:temporalBoostedTree.trained===true,
+            temporal_boosted_tree_research_validated:temporalBoostedTree.research_out_of_sample_validated===true,
+            temporal_boosted_tree_training_samples:Number(temporalBoostedTree.training_samples)||0,
+            temporal_boosted_tree_validation_brier:temporalBoostedTree.validation?.model_brier_score??null,
+            temporal_boosted_tree_validation_logistic_brier:temporalBoostedTree.validation_logistic?.model_brier_score??null,
+            temporal_boosted_tree_holdout_brier:temporalBoostedTree.holdout?.model_brier_score??null,
+            temporal_boosted_tree_holdout_logistic_brier:temporalBoostedTree.holdout_logistic?.model_brier_score??null,
+            temporal_boosted_tree_holdout_comparison:temporalBoostedTree.holdout_comparison||{},
+            temporal_boosted_tree_regime_specialists:Object.fromEntries(Object.entries(
+              temporalBoostedTree.regime_specialists||{}).map(([regime,specialist])=>[
+                regime,{
+                  status:String(specialist?.status||'UNKNOWN'),
+                  supported:specialist?.supported===true,
+                  training_samples:Number(specialist?.training_samples)||0,
+                  selection_samples:Number(specialist?.selection_samples)||0,
+                  calibration_samples:Number(specialist?.calibration_samples)||0,
+                  validation_samples:Number(specialist?.validation_samples)||0,
+                  holdout_samples:Number(specialist?.holdout_samples)||0,
+                  selection_passed:specialist?.selection_passed===true,
+                  validation_passed:specialist?.validation_passed===true,
+                  holdout_passed:specialist?.holdout_passed===true,
+                  selected_tree_count:specialist?.selected_tree_count??null,
+                  selected_residual_scale:specialist?.selected_residual_scale??null,
+                  selection_brier:specialist?.selection_brier??null,
+                  selection_logistic_brier:specialist?.selection_logistic_brier??null,
+                  validation_brier:specialist?.validation?.model_brier_score??null,
+                  validation_logistic_brier:specialist?.validation_logistic?.model_brier_score??null,
+                  holdout_brier:specialist?.holdout?.model_brier_score??null,
+                  holdout_logistic_brier:specialist?.holdout_logistic?.model_brier_score??null
+                }
+              ])),
+            temporal_boosted_tree_top_features:Array.isArray(temporalBoostedTree.feature_importance)
+              ?temporalBoostedTree.feature_importance.slice(0,15):[],
             temporal_network_training_strategy:String(temporalNetwork.training_strategy||'UNKNOWN'),
             temporal_network_training_objective:String(temporalNetwork.training_objective||'UNKNOWN'),
             temporal_network_residual_scale_selection:String(temporalNetwork.residual_scale_selection||'UNKNOWN'),
