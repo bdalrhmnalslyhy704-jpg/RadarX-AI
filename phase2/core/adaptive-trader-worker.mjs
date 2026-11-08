@@ -565,6 +565,7 @@ export class AdaptiveTraderWorker{
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
       holdout:profile.holdout||null,neural_network:profile.neural_network||null,
+      boosted_tree_model:profile.boosted_tree_model||null,hybrid_model:profile.hybrid_model||null,
       temporal_network:publicTemporalProfile(profile.temporal_network),method:profile.method
     };
   }
