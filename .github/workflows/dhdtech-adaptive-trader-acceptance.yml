@@ -179,7 +179,9 @@ jobs:
                 );
                 const universe=summary&&summary.universe||{};
                 const workerContract=value.scanner_contract==='SERVER_DRIVEN_SCAN_V2';
-                const systemHealthy=deploymentResponse.ok&&deployment.build_version==='Build 224'&&
+                const deployedBuildIdentity=deployment.build_identity||{};
+                const exactBuildCommit=String(deployedBuildIdentity.commit||'')===context.sha;
+                const systemHealthy=deploymentResponse.ok&&exactBuildCommit&&deployment.build_version==='Build 224'&&
                   deployment.expected_radars===12&&deployment.registered_radars===12&&
                   deployment.pre_move_scanner_ready===true&&
                   deployment.analyst_system&&deployment.analyst_system.expected_analysts===20&&
@@ -194,6 +196,7 @@ jobs:
                   successful_scans:value.successful_scans,last_error:value.last_error,
                   radars:deployment.registered_radars,analysts:deployment.analyst_system&&deployment.analyst_system.expected_analysts,
                   system_healthy:systemHealthy,worker_contract:value.scanner_contract||null,
+                   deployed_build_identity:deployedBuildIdentity,expected_build_commit:context.sha,exact_build_commit:exactBuildCommit,
                   last_scan_at:value.last_scan_at,history_rows:historyRows,
                   candidates:Array.isArray(candidates)?candidates.length:null,
                   latest_prices:Array.isArray(prices)?prices.length:null,

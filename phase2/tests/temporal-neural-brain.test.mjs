@@ -420,6 +420,8 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   }
   assert.ok(workflow.includes('phase2/core/cognitive-brain.mjs'));
   assert.ok(workflow.includes('phase2/core/temporal-neural-brain.mjs'));
+  assert.ok(workflow.includes('String(deployedBuildIdentity.commit||\'\')===context.sha'));
+  assert.ok(workflow.includes('deploymentResponse.ok&&exactBuildCommit&&'));
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
