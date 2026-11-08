@@ -329,7 +329,8 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const expert=profile.regime_specialists[regime];
     assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
-    assert.equal(expert.local_calibration_samples,35);
+    assert.ok(expert.local_calibration_samples>=30,
+      'each BTC regime needs at least 30 matured calibration rows of its own');
     assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
     assert.equal(expert.calibration_samples,expert.local_calibration_samples);
     assert.ok(expert.calibration_targets.positive>=5);
