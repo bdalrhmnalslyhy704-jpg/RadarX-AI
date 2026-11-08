@@ -643,6 +643,37 @@ test('zero-trade abstention cannot count as risk-adjusted neural superiority', (
   }), true);
 });
 
+test('threshold selection abstains when positive validation PnL has negative risk-adjusted utility', () => {
+  const rows = makeRows().map(row => ({
+    ...row,
+    gross_return_pct: 0.4,
+    max_adverse_excursion_pct: -25,
+    max_favorable_excursion_pct: 0.4
+  }));
+  const report = runFixedShaBenchmark(rows, {
+    sourceCommitSha: SOURCE_SHA,
+    folds: 5,
+    minimumTrainTimes: 160,
+    minimumTrainRows: 80,
+    minimumValidationRows: 50,
+    minimumTestRows: 50,
+    embargoMs: FOUR_HOURS,
+    epochs: 1,
+    thresholdGrid: [0.4, 0.5],
+    minimumValidationTrades: 10
+  });
+  const trials = report.walk_forward.folds.flatMap(fold =>
+    fold.neural_threshold_selection.candidate_trials);
+  assert.ok(trials.some(row => row.trade_count >= 10 &&
+    row.net_pnl_pct > 0 && row.utility <= 0 &&
+    row.risk_adjusted_edge_over_abstention === false),
+  'fixture must expose profitable-but-risk-dominated validation choices');
+  assert.ok(report.walk_forward.folds.every(fold =>
+    fold.neural_threshold_selection.status === 'ABSTAINED_NO_PROFITABLE_VALIDATION_THRESHOLD'),
+  'the model must abstain rather than choose a negative-utility strategy');
+  assert.equal(report.acceptance_gates.neural_validation_thresholds_profitable_with_minimum_samples, 'FAIL');
+});
+
 test('threshold selection explores validation score quantiles and explicitly abstains without a profitable sample', () => {
   const rows = makeRows().map(row => ({
     ...row,

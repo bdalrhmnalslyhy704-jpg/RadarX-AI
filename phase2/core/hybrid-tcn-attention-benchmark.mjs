@@ -1609,7 +1609,10 @@ function chooseThreshold(validationRows, scoreById, options) {
     const report = simulatePaperTrades(decisions, options);
     const utility = report.net_pnl_pct - 0.5 * report.max_drawdown_pct +
       0.1 * report.sharpe_per_trade;
-    const eligible = report.trade_count >= minimumValidationTrades && report.net_pnl_pct > 0;
+    // A profitable sample is not enough: never select a validation strategy whose
+    // risk-adjusted utility is worse than the zero-exposure (no-trade) baseline.
+    const eligible = report.trade_count >= minimumValidationTrades &&
+      report.net_pnl_pct > 0 && utility > 0;
     const candidate = { threshold, report, utility, eligible };
     candidateTrials.push({
       threshold,
@@ -1619,6 +1622,7 @@ function chooseThreshold(validationRows, scoreById, options) {
       max_drawdown_pct: report.max_drawdown_pct,
       sharpe_per_trade: report.sharpe_per_trade,
       utility: round(utility, 8),
+      risk_adjusted_edge_over_abstention: utility > 0,
       eligible
     });
     if (eligible && (!best || candidate.utility > best.utility ||
