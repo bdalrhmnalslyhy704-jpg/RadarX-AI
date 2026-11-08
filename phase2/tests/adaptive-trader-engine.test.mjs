@@ -1059,7 +1059,19 @@ test('historical sample phases give the cognitive learner enough distinct time b
   assert.equal(temporal.live_eligibility_ready,false);
   assert.deepEqual(temporal.selected_regimes,[]);
   assert.equal(temporal.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
-  assert.ok(temporal.max_training_outcome_resolved_at<temporal.validation_start_at);
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const specialist=temporal.regime_specialists?.[regime];
+    if(Number(specialist?.training_samples)>0){
+      assert.ok(specialist.max_training_outcome_resolved_at<specialist.training_cutoff_at,
+        regime+' training labels must resolve before its own training cutoff');
+      assert.ok(specialist.training_cutoff_at<specialist.member_selection_cutoff_at,
+        regime+' member selection must follow its training block');
+      assert.ok(specialist.member_selection_cutoff_at<specialist.calibration_cutoff_at,
+        regime+' calibration must follow its member-selection block');
+      assert.ok(specialist.calibration_cutoff_at<=specialist.validation_start_at,
+        regime+' validation must follow its own calibration block');
+    }
+  }
   assert.ok(temporal.validation_start_at<temporal.holdout_start_at);
   // The constant-trend fixture has no predictive variation. Chronological size
   // alone must never unlock temporal probabilities.
