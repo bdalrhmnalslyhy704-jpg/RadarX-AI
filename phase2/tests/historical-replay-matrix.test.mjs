@@ -129,6 +129,21 @@ test('matrix CLI allows a four-million verified Spot archive cap and rejects uns
   assert.match(rejected.stderr,/INVALID_MAX-TRADES|INVALID_MAX_TRADES/);
 });
 
+test('historical replay child accepts the raised four-million archive cap in dry-run and rejects larger values',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay.mjs');
+  const start='2025-01-01T00:00:00.000Z',end='2025-01-03T00:00:00.000Z';
+  const accepted=spawnSync(process.execPath,[script,'--dry-run','--start',start,'--end',end,
+    '--outcome-horizon-hours','4','--max-trades','4000000'],{encoding:'utf8',timeout:10_000});
+  assert.equal(accepted.status,0,accepted.stderr||accepted.stdout);
+  const plan=JSON.parse(accepted.stdout);
+  assert.equal(plan.status,'DRY_RUN_NO_NETWORK');
+  assert.equal(plan.limits.max_trades_per_symbol,4_000_000);
+  const rejected=spawnSync(process.execPath,[script,'--dry-run','--start',start,'--end',end,
+    '--outcome-horizon-hours','4','--max-trades','4000001'],{encoding:'utf8',timeout:10_000});
+  assert.notEqual(rejected.status,0);
+  assert.match(rejected.stderr,/INVALID_MAX-TRADES|INVALID_MAX_TRADES/);
+});
+
 test('matrix CLI allows bounded parallel archives and rejects more than three concurrent historical windows',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
   const accepted=spawnSync(process.execPath,[script,'--dry-run','--archive-prefetch-concurrency','6',

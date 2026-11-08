@@ -540,6 +540,8 @@ async function main() {
   }
   const requestedDetectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
   const detectorProfile=requestedDetectorProfile==='EARLY_EXPANSION_RADAR'?'RADAR8_PREMOVE_SHADOW':requestedDetectorProfile;
+  const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
+  const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 4000000, 'max-trades');
   const detectorSpec=profileSnapshot(requestedDetectorProfile);
   if(args.includes('--dry-run')){
     const startRaw=timeArg(flag(args,'--start'),'start');
@@ -550,6 +552,7 @@ async function main() {
       symbols:String(flag(args,'--symbols','GTCUSDT,WUSDT')).split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),
       window:{start:startRaw,end:endRaw,lookback_hours:integerArg(flag(args,'--lookback-hours','24'),24,1,168,'lookback-hours'),
         outcome_horizon_hours:integerArg(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours')},
+      limits:{max_trade_pages_per_symbol:maxPages,max_trades_per_symbol:maxTrades},
       policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,credentials_used:false}
     },null,2)+'\n');
     return;
@@ -567,8 +570,6 @@ async function main() {
   const requestedOutcomeEnd = end + outcomeHorizonHours * HOUR_MS;
   const observationEnd = Math.min(latestClosedMinuteEnd, requestedOutcomeEnd);
   if (observationEnd < end) throw new Error('OUTCOME_OBSERVATION_WINDOW_INVALID');
-  const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
-  const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 1000000, 'max-trades');
   const output = resolve(flag(args, '--output', './.radarx-data/historical-replay-' + new Date(now).toISOString().replace(/[:.]/g, '-') + '.json'));
   const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
   const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
