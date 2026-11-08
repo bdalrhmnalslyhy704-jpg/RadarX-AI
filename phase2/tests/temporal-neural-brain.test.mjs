@@ -302,15 +302,18 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
 
 test('TCN fits, selects and calibrates each specialist only on its own BTC regime',()=>{
   const rows=[];
-  for(let group=0;group<66;group++){
+  // 100 chronological groups leave 33 purged training groups per specialist,
+  // 15 member-selection groups, 11 local-calibration groups, 24 validation
+  // groups and a 15-group untouched holdout after the outer split is applied.
+  for(let group=0;group<100;group++){
     const riskOn=group%2===0;
     for(let index=0;index<7;index++){
       let up;
-      if(group>=54)up=index===0;          // untouched holdout: six negatives and one positive per group
-      else if(group>=45)up=index<2;       // outer validation: two positives and five negatives per group
-      else if(group>=36)up=index<2;       // local calibration: 35 matured rows per regime
-      else if(group>=24)up=index%2===0;  // member-selection block remains balanced
-      else up=index<2;                    // training has sufficient negative-class support
+      if(group>=85)up=index===0;          // untouched holdout: one positive per group
+      else if(group>=61)up=index<2;       // outer validation: two positives per group
+      else if(group>=48)up=index<2;       // local calibration: >=35 matured rows per regime
+      else if(group>=33)up=index%2===0;  // local member-selection block
+      else up=index<2;                    // independent training for both regimes
       const row=sample(group,index,{up});
       row.temporal_sequence=row.temporal_sequence.map(step=>{
         const copy=step.slice();
