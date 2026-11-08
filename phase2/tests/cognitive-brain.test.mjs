@@ -633,7 +633,7 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
 });
 
 test('prequential audit treats boosted and hybrid forecasts as separate binary model variants',()=>{
-  for(const modelVariant of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP']){
+  for(const modelVariant of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP_W75']){
     const journal=Array.from({length:8},(_,index)=>{
       const at=BASE_TIME+index*5*60*60*1000;
       const outcome=index%2===0?'UP':'DOWN';
