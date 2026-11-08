@@ -28,14 +28,15 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'three_bar_momentum_reversal',
   'fast_slow_mean_spread',
   'higher_low_reclaim',
-  'prior_high_reclaim'
+  'prior_high_reclaim',
+  'kama_efficiency_ratio'
 ]);
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x28_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_WITH_TRAIN_ONLY_NORMALIZATION_LEAKY_RELU_DYNAMIC_LOGIT_ASYMMETRIC_FOCAL_V3';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_CUMULATIVE_SHARPE_V4';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -52,7 +53,13 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   temporal_attention: 'LEARNED_QUERY_SOFTMAX',
   activation: 'LEAKY_RELU_ALPHA_0_05',
   input_normalization: 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4',
-  output_logit_scale: 'TRAINED_EXP_BOUNDED_0_25_TO_4'
+  output_logit_scale: 'TRAINED_EXP_BOUNDED_0_25_TO_4',
+  directional_filter: 'KAMA_EFFICIENCY_RATIO_10_CLOSED_CANDLES',
+  volatility_gate: 'CURRENT_6_RETURN_VOLATILITY_ZSCORE_AGAINST_PRIOR_24',
+  minimum_kama_efficiency_ratio: 0.20,
+  minimum_volatility_zscore: 0,
+  btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
+  training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_BTC_COUNTERTREND_PENALTY_V4'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -270,6 +277,68 @@ function realizedVolatility(returns) {
   return Math.sqrt(Math.max(0, variance ?? 0));
 }
 
+export function calculateKamaEfficiencyRatio(candles, { period = 10 } = {}) {
+  const window = Math.max(2, Math.min(50, Math.trunc(Number(period) || 10)));
+  const rows = (Array.isArray(candles) ? candles : []).filter(row => validClosedCandle(row)).slice(-(window + 1));
+  if (rows.length < window + 1) return null;
+  const closes = rows.map(row => candleNumber(row, 'close'));
+  if (closes.some(value => !(value > 0))) return null;
+  let pathLength = 0;
+  for (let index = 1; index < closes.length; index++) pathLength += Math.abs(closes[index] - closes[index - 1]);
+  if (pathLength <= EPS) return 0;
+  return round(clamp(Math.abs(closes.at(-1) - closes[0]) / pathLength, 0, 1), 8);
+}
+
+function rollingVolatilityZScore(candles, endIndex, currentVolatility, {
+  returnsWindow = 6, historyWindow = 24, minimumHistory = 6
+} = {}) {
+  const history = [];
+  const firstEnd = Math.max(returnsWindow, endIndex - historyWindow);
+  for (let end = firstEnd; end < endIndex; end++) {
+    const sample = candles.slice(end - returnsWindow, end + 1);
+    if (sample.length !== returnsWindow + 1) continue;
+    const returns = sample.slice(1).map((row, index) =>
+      logReturn(candleNumber(row, 'close'), candleNumber(sample[index], 'close')));
+    if (returns.every(value => finite(value) !== null)) history.push(realizedVolatility(returns));
+  }
+  if (history.length < minimumHistory || finite(currentVolatility) === null) return null;
+  const baselineMean = mean(history) ?? 0;
+  const baselineStd = realizedVolatility(history);
+  if (baselineStd <= 1e-10) return currentVolatility >= baselineMean ? 0 : -4;
+  return round(clamp((currentVolatility - baselineMean) / baselineStd, -4, 4), 6);
+}
+
+export function evaluateHybridMarketGates(row, {
+  minimumKamaEfficiencyRatio = 0.20,
+  minimumVolatilityZScore = 0,
+  btcCountertrendPenaltyPerPct = 0.12
+} = {}) {
+  const kama = finite(row?.kama_efficiency_ratio) ?? finite(row?.sequence?.at(-1)?.[HYBRID_SEQUENCE_CHANNELS - 1]);
+  const volatilityZ = finite(row?.volatility_zscore);
+  const btcTrend = finite(row?.btc_trend_return_pct);
+  const kamaAvailable = kama !== null && kama >= 0 && kama <= 1;
+  const volatilityAvailable = volatilityZ !== null;
+  const btcAvailable = btcTrend !== null;
+  const kamaPass = kamaAvailable && kama >= minimumKamaEfficiencyRatio;
+  const volatilityPass = volatilityAvailable && volatilityZ >= minimumVolatilityZScore;
+  const btcPenaltyFactor = btcAvailable
+    ? Math.exp(-Math.max(0, Number(btcCountertrendPenaltyPerPct) || 0) * Math.max(0, -btcTrend))
+    : 0;
+  const eligible = kamaPass && volatilityPass && btcAvailable;
+  return {
+    eligible,
+    reason: !kamaAvailable ? 'KAMA_EFFICIENCY_UNAVAILABLE' : !kamaPass ? 'KAMA_EFFICIENCY_BELOW_MINIMUM' :
+      !volatilityAvailable ? 'VOLATILITY_ZSCORE_UNAVAILABLE' : !volatilityPass ? 'VOLATILITY_BELOW_ROLLING_MEAN' :
+        !btcAvailable ? 'BTC_TREND_UNAVAILABLE' : null,
+    kama_efficiency_ratio: kama,
+    kama_pass: kamaPass,
+    volatility_zscore: volatilityZ,
+    volatility_pass: volatilityPass,
+    btc_trend_return_pct: btcTrend,
+    btc_countertrend_penalty_factor: round(btcPenaltyFactor, 8)
+  };
+}
+
 /**
  * Build a strictly causal 24 x 23 feature tensor from completed Binance Spot
  * candles. Optional book and aggregate-trade fields are consumed only when
@@ -292,6 +361,9 @@ export function buildHybridSequence({
     .sort((a, b) => candleTime(a) - candleTime(b));
   const selected = clean.slice(-steps);
   const sequence = [];
+  let latestKamaEfficiencyRatio = null;
+  let latestVolatilityZScore = null;
+  let latestBtcTrendReturnPct = null;
   for (let index = clean.length - steps; index < clean.length; index++) {
     const current = clean[index];
     const close = candleNumber(current, 'close');
@@ -321,6 +393,8 @@ export function buildHybridSequence({
     const shortVol = realizedVolatility(returnSeries.slice(-6));
     const baseVol = realizedVolatility(returnSeries.slice(-20));
     const adaptiveVol = baseVol > 1e-10 ? shortVol / baseVol : 0;
+    const kamaEfficiencyRatio = calculateKamaEfficiencyRatio(prior, { period: 10 });
+    const volatilityZScore = rollingVolatilityZScore(clean, index, shortVol);
     const benchmarkIndex = benchmark.findLastIndex(row => candleTime(row) === closeTime);
     const priorSymbolOpenTime = index > 0 ? finite(clean[index - 1].openTime) : null;
     const candleIntervalMs = Math.max(1, priorSymbolOpenTime !== null
@@ -332,6 +406,16 @@ export function buildHybridSequence({
       ? logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
         candleNumber(benchmark[benchmarkIndex - 1], 'close'))
       : 0;
+    let btcTrendReturnPct = null;
+    if (benchmarkIndex >= 12 && priorBenchmarkMatches) {
+      const trendStartIndex = benchmarkIndex - 12;
+      const hasContiguousBtcTrend = Array.from({ length: 12 }, (_, offset) => offset + 1)
+        .every(offset => candleTime(benchmark[benchmarkIndex - offset]) === closeTime - offset * candleIntervalMs);
+      if (hasContiguousBtcTrend) {
+        btcTrendReturnPct = round(logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
+          candleNumber(benchmark[trendStartIndex], 'close')) * 100, 6);
+      }
+    }
     const oneBarReturn = logReturn(close, candleNumber(prior.at(-2), 'close'));
     const previousOneBarReturn = logReturn(
       candleNumber(prior.at(-2), 'close'), candleNumber(prior.at(-3), 'close'));
@@ -380,13 +464,18 @@ export function buildHybridSequence({
       (recentThreeBarReturn - precedingThreeBarReturn) * 100,
       fastMeanClose !== null && slowMeanClose > 0 ? ((fastMeanClose / slowMeanClose) - 1) * 100 : 0,
       ((low - previousRangeLow) / close) * 100,
-      ((close - previousRangeHigh) / close) * 100
+      ((close - previousRangeHigh) / close) * 100,
+      kamaEfficiencyRatio ?? 0
     ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
+    latestKamaEfficiencyRatio = kamaEfficiencyRatio;
+    latestVolatilityZScore = volatilityZScore;
+    latestBtcTrendReturnPct = btcTrendReturnPct;
     sequence.push(features);
   }
   const latestInputAt = candleTime(selected.at(-1));
   return {
     ready: sequence.length === steps && latestInputAt <= cutoff &&
+      latestKamaEfficiencyRatio !== null && latestVolatilityZScore !== null && latestBtcTrendReturnPct !== null &&
       sequence.every(row => row.length === HYBRID_SEQUENCE_CHANNELS && row.every(Number.isFinite)),
     reason: null,
     sequence_steps: steps,
@@ -394,6 +483,9 @@ export function buildHybridSequence({
     latest_input_at: latestInputAt,
     as_of: cutoff,
     feature_names: [...HYBRID_FEATURE_NAMES],
+    kama_efficiency_ratio: latestKamaEfficiencyRatio,
+    volatility_zscore: latestVolatilityZScore,
+    btc_trend_return_pct: latestBtcTrendReturnPct,
     sequence
   };
 }
@@ -543,6 +635,9 @@ export function prepareHybridBenchmarkEvent({
       max_favorable_excursion_pct: outcome.max_favorable_excursion_pct,
       max_favorable_excursion_at: outcome.max_favorable_excursion_at,
       classic_score: score,
+      kama_efficiency_ratio: features.kama_efficiency_ratio,
+      volatility_zscore: features.volatility_zscore,
+      btc_trend_return_pct: features.btc_trend_return_pct,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
       sequence: features.sequence,
       feature_snapshot_sha: typeof featureSnapshotSha === 'string' ? featureSnapshotSha : null,
@@ -573,6 +668,9 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
+    const kamaEfficiencyRatio = finite(raw.kama_efficiency_ratio) ?? finite(sequence?.at(-1)?.[HYBRID_SEQUENCE_CHANNELS - 1]);
+    const volatilityZScore = finite(raw.volatility_zscore);
+    const btcTrendReturnPct = finite(raw.btc_trend_return_pct);
     if (!id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
@@ -585,7 +683,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         adverseAt === null || adverseAt < at || adverseAt > resolvedAt ||
         favourable === null || favourable < 0 || favourable > 1000 ||
         favourableAt === null || favourableAt < at || favourableAt > resolvedAt || classic === null ||
-        classic < 0 || classic > 1 ||
+        classic < 0 || classic > 1 || kamaEfficiencyRatio === null || kamaEfficiencyRatio < 0 || kamaEfficiencyRatio > 1 ||
+        volatilityZScore === null || btcTrendReturnPct === null ||
         !Array.isArray(sequence) || sequence.length !== HYBRID_SEQUENCE_STEPS ||
         !sequence.every(step => Array.isArray(step) && step.length === HYBRID_SEQUENCE_CHANNELS &&
           step.every(value => finite(value) !== null && Math.abs(Number(value)) <= 4))) continue;
@@ -603,6 +702,9 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       max_favorable_excursion_pct:favourable,
       max_favorable_excursion_at:favourableAt,
       classic_score: classic,
+      kama_efficiency_ratio: kamaEfficiencyRatio,
+      volatility_zscore: volatilityZScore,
+      btc_trend_return_pct: btcTrendReturnPct,
       outcome_definition:rowTargetDefinition,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
