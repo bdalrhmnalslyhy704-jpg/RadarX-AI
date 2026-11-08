@@ -221,8 +221,10 @@ test('TCN trains and validates an independent expert for each supported BTC regi
 });
 
 test('mature history reserves a broad untouched holdout and a wider regime-supported validation block',()=>{
+  // 90×20 preserves the 60% regime-local training floor after reserving
+  // the unchanged 25% untouched holdout and 300-row validation blocks.
   const rows=[];
-  for(let group=0;group<80;group++){
+  for(let group=0;group<90;group++){
     for(let index=0;index<20;index++){
       const row=sample(group,index);
       const btcRiskOn=group%2===0;
