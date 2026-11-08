@@ -1435,7 +1435,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
         ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
           ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
         : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
-          ? String(row.selected_model||row.model_variant||'')==='NEURAL_GLOBAL' &&
+          ? ['NEURAL_GLOBAL','GBDT_RESIDUAL','HYBRID_GBDT_MLP'].includes(
+              String(row.selected_model||row.model_variant||'')) &&
             ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
           : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
             ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
@@ -1447,7 +1448,8 @@ export function buildCognitivePrequentialProfile(journal = [], {
       ...row,
       model_variant: String(row.selected_model || row.model_variant || 'V5_UNSPECIFIED').trim() || 'V5_UNSPECIFIED',
       prediction: clamp(Number(row.predicted_up_probability) / 100, 0.001, 0.999),
-      target: String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN' ||
+      target: ['TEMPORAL_TCN','NEURAL_GLOBAL','GBDT_RESIDUAL','HYBRID_GBDT_MLP'].includes(
+        String(row.selected_model||row.model_variant||'')) ||
         row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
         ? (row.outcome==='UP'?1:0)
         : row.outcome === 'UP' ? 1 : row.outcome === 'DOWN' ? 0 : 0.5
