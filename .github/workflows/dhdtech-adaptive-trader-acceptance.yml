@@ -145,7 +145,7 @@ jobs:
                 const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
                 const temporalNetworkContract=Boolean(
-                  temporalNetwork.architecture==='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6'&&
+                  temporalNetwork.architecture==='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'&&
                   temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'&&
                   temporalNetwork.model_split_scope==='INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD'&&
                   temporalNetwork.model_scope==='INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS'&&
@@ -303,7 +303,7 @@ jobs:
                 const scanFresh=Number.isFinite(scannedAt)&&scannedAt<=Date.now()+5000&&
                   Date.now()-scannedAt<=8*60*1000&&
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
-                const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V6'&&
+                const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V7'&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
                   cognitiveProfile.identifier_features_used===false&&neuralNetworkContract&&temporalNetworkContract;
                 const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
