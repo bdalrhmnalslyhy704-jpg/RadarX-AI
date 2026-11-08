@@ -31,7 +31,7 @@ const SOURCE_SHA = '52d0ba535e4c983fa5113bbde8061277555f87a6';
 function makeSequence(direction = 1, seed = 0) {
   return Array.from({ length: HYBRID_SEQUENCE_STEPS }, (_, time) =>
     Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, feature) => {
-      if (feature === 19) return 0; // no historical depth snapshot
+      if (feature === 19) return 1; // fixture has contiguous symbol/BTC 1h and 4h context
       if (feature === 20 || feature === 21 || feature === 22) return 1; // controlled fixture: flow, profile and BTC reference available
       if (feature === 28) return 0.35; // directional KAMA efficiency ratio
       const trend = direction * (feature === 0 ? 0.7 : feature === 10 ? 0.4 : 0.12);
@@ -103,12 +103,13 @@ function makeCandles(count = 40) {
   });
 }
 
-test('hybrid feature contract includes order flow, depth, volume profile, adaptive volatility and KAMA ER', () => {
+test('hybrid feature contract includes order flow, multi-hour relative strength, volume profile and KAMA ER', () => {
   assert.equal(HYBRID_FEATURE_NAMES.length, 29);
   assert.equal(HYBRID_SEQUENCE_CHANNELS, 29);
   assert.equal(HYBRID_FEATURE_NAMES.at(-1), 'kama_efficiency_ratio');
   for (const name of [
-    'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
+    'taker_buy_imbalance', 'agg_trade_imbalance', 'relative_btc_return_1h',
+    'relative_btc_return_4h', 'multi_hour_context_available',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
     'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available',
     'short_return_acceleration', 'three_bar_momentum_reversal', 'fast_slow_mean_spread',
@@ -117,7 +118,10 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
 
   const candles = makeCandles();
   const asOf = candles.at(-1).closeTime;
-  const built = buildHybridSequence({ candles, benchmarkCandles: candles, asOf, sequenceSteps: 24 });
+  const benchmarkCandles = candles.map((row,index)=>({
+    ...row, close:row.close/(1+index*0.001)
+  }));
+  const built = buildHybridSequence({ candles, benchmarkCandles, asOf, sequenceSteps: 24 });
   assert.equal(built.ready, true);
   assert.equal(built.sequence.length, 24);
   assert.equal(built.sequence[0].length, 29);
@@ -128,8 +132,9 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
   assert.ok(built.sequence.at(-1)[11] > 0, 'aggregate trade buy imbalance should be represented');
-  assert.ok(built.sequence.at(-1)[12] > 0, 'bid depth imbalance should be represented');
-  assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
+  assert.ok(built.sequence.at(-1)[12] > 0, 'one-hour relative strength versus BTC should be represented');
+  assert.ok(built.sequence.at(-1)[13] > 0, 'four-hour relative strength versus BTC should be represented');
+  assert.equal(built.sequence.at(-1)[19], 1, 'both multi-hour relative-strength horizons should be available');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
   assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
   const sparse = buildHybridSequence({
@@ -138,12 +143,20 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   });
   assert.equal(sparse.sequence.at(-1)[21], 0, 'partial volume profile must be unavailable to the model');
   assert.equal(built.sequence.at(-1)[22], 1, 'relative BTC reference mask should be set');
-  const misalignedBenchmark = candles.slice(0, -1);
+  const misalignedBenchmark = benchmarkCandles.slice(0, -1);
   const missingBtc = buildHybridSequence({
     candles, benchmarkCandles: misalignedBenchmark, asOf, sequenceSteps: 24
   });
   assert.equal(missingBtc.sequence.at(-1)[22], 0,
     'relative BTC feature must be unavailable without an exact matching close and contiguous prior candle');
+  assert.equal(missingBtc.sequence.at(-1)[19], 0,
+    'multi-hour relative strength must be masked when the latest matching BTC close is absent');
+  assert.equal(missingBtc.ready, false,
+    'benchmark tensor must fail closed when required multi-hour context is unavailable');
+  const gappedBenchmark = benchmarkCandles.filter((_,index)=>index!==28);
+  const gapped = buildHybridSequence({candles,benchmarkCandles:gappedBenchmark,asOf,sequenceSteps:24});
+  assert.equal(gapped.sequence.at(-1)[19],0,
+    'a missing intermediate BTC candle must invalidate the four-hour context, not bridge the gap');
 
   const future = { ...candles.at(-1), closeTime: asOf + FIFTEEN_MINUTES };
   const beforeFuture = buildHybridSequence({ candles: [...candles, future], benchmarkCandles: candles, asOf, sequenceSteps: 24 });

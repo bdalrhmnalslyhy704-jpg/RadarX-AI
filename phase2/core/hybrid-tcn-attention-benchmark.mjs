@@ -13,14 +13,14 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'trade_count_log_ratio',
   'taker_buy_imbalance',
   'agg_trade_imbalance',
-  'depth_imbalance',
-  'spread_bps_scaled',
+  'relative_btc_return_1h',
+  'relative_btc_return_4h',
   'volume_profile_poc_distance',
   'volume_profile_value_area_position',
   'realized_volatility_short',
   'adaptive_volatility_ratio',
   'relative_btc_return',
-  'order_book_available',
+  'multi_hour_context_available',
   'agg_trade_available',
   'volume_profile_trade_level_available',
   'relative_btc_available',
@@ -36,7 +36,7 @@ export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_OVERLAP_AWARE_RISK_BUDGET_PORTFOLIO_SHARPE_RANKING_V7';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_RELATIVE_1H_4H_OVERLAP_AWARE_RISK_BUDGET_PORTFOLIO_SHARPE_RANKING_V8';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -59,6 +59,8 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   minimum_kama_efficiency_ratio: 0.20,
   minimum_volatility_zscore: 0,
   btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
+  relative_strength_context: 'EXACT_CLOSED_1H_AND_4H_SYMBOL_MINUS_BTC_LOG_RETURNS',
+  missing_multi_hour_context_action: 'REJECT_SIGNAL',
   training_objective: 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7'
 });
 const EPS = 1e-8;
@@ -341,9 +343,10 @@ export function evaluateHybridMarketGates(row, {
 }
 
 /**
- * Build a strictly causal 24 x 23 feature tensor from completed Binance Spot
- * candles. Optional book and aggregate-trade fields are consumed only when
- * they are attached to their matching closed candle; absent feeds are masked.
+ * Build a strictly causal 24 x 29 feature tensor from completed Binance Spot
+ * candles. The caller may provide a longer closed-candle history; the model
+ * still consumes the final 24 steps while 1h/4h relative-strength features use
+ * the longer causal context. Missing or discontinuous horizons are masked.
  */
 export function buildHybridSequence({
   candles = [], benchmarkCandles = [], asOf = Date.now(), sequenceSteps = HYBRID_SEQUENCE_STEPS
@@ -361,10 +364,47 @@ export function buildHybridSequence({
     .filter(row => validClosedCandle(row, cutoff))
     .sort((a, b) => candleTime(a) - candleTime(b));
   const selected = clean.slice(-steps);
+  const benchmarkIndexByCloseTime = new Map(benchmark.map((row, index) => [candleTime(row), index]));
+  const contiguousRunLengths = rows => {
+    const lengths = Array(rows.length).fill(1);
+    for (let index = 1; index < rows.length; index++) {
+      const previous = rows[index - 1], current = rows[index];
+      const closeDelta = candleTime(current) - candleTime(previous);
+      const openDelta = finite(current.openTime) - finite(previous.openTime);
+      const previousDuration = finite(previous.closeTime) - finite(previous.openTime);
+      const currentDuration = finite(current.closeTime) - finite(current.openTime);
+      if (closeDelta > 0 && openDelta === closeDelta && currentDuration === previousDuration) {
+        lengths[index] = lengths[index - 1] + 1;
+      }
+    }
+    return lengths;
+  };
+  const symbolRunLengths = contiguousRunLengths(clean);
+  const benchmarkRunLengths = contiguousRunLengths(benchmark);
+  const relativeReturnAtHorizon = (symbolIndex, benchmarkIndex, horizonMs) => {
+    if (symbolIndex < 1 || benchmarkIndex < 1) return null;
+    const symbolNow = clean[symbolIndex], symbolPrevious = clean[symbolIndex - 1];
+    const benchmarkNow = benchmark[benchmarkIndex], benchmarkPrevious = benchmark[benchmarkIndex - 1];
+    const intervalMs = candleTime(symbolNow) - candleTime(symbolPrevious);
+    const benchmarkIntervalMs = candleTime(benchmarkNow) - candleTime(benchmarkPrevious);
+    if (!(intervalMs > 0) || intervalMs !== benchmarkIntervalMs || horizonMs % intervalMs !== 0) return null;
+    const bars = horizonMs / intervalMs;
+    if (!Number.isInteger(bars) || symbolRunLengths[symbolIndex] < bars + 1 ||
+        benchmarkRunLengths[benchmarkIndex] < bars + 1) return null;
+    const symbolStart = clean[symbolIndex - bars];
+    const benchmarkStart = benchmark[benchmarkIndex - bars];
+    const expectedStartTime = candleTime(symbolNow) - horizonMs;
+    if (candleTime(symbolStart) !== expectedStartTime ||
+        candleTime(benchmarkStart) !== expectedStartTime) return null;
+    return round((logReturn(candleNumber(symbolNow, 'close'), candleNumber(symbolStart, 'close')) -
+      logReturn(candleNumber(benchmarkNow, 'close'), candleNumber(benchmarkStart, 'close'))) * 100, 6);
+  };
   const sequence = [];
   let latestKamaEfficiencyRatio = null;
   let latestVolatilityZScore = null;
   let latestBtcTrendReturnPct = null;
+  let latestMultiHourContextAvailable = false;
+  let multiHourContextAvailableSteps = 0;
   for (let index = clean.length - steps; index < clean.length; index++) {
     const current = clean[index];
     const close = candleNumber(current, 'close');
@@ -383,7 +423,6 @@ export function buildHybridSequence({
     const takerBuyQuote = finite(current.takerBuyQuoteVolume ?? current.taker_buy_quote_volume);
     const totalQuote = quoteVolume(current);
     const takerShare = takerBuyQuote !== null && totalQuote > 0 ? takerBuyQuote / totalQuote : null;
-    const depth = depthTotals(current.orderBook ?? current.order_book ?? current.depth, close);
     const aggImbalance = aggregateTradeImbalance(current);
     const volumeProfile = calculateVolumeProfile(prior);
     const closeLocation = clamp((close - low) / range, 0, 1);
@@ -396,7 +435,7 @@ export function buildHybridSequence({
     const adaptiveVol = baseVol > 1e-10 ? shortVol / baseVol : 0;
     const kamaEfficiencyRatio = calculateKamaEfficiencyRatio(prior, { period: 10 });
     const volatilityZScore = rollingVolatilityZScore(clean, index, shortVol);
-    const benchmarkIndex = benchmark.findLastIndex(row => candleTime(row) === closeTime);
+    const benchmarkIndex = benchmarkIndexByCloseTime.get(closeTime) ?? -1;
     const priorSymbolOpenTime = index > 0 ? finite(clean[index - 1].openTime) : null;
     const candleIntervalMs = Math.max(1, priorSymbolOpenTime !== null
       ? (finite(current.openTime) ?? closeTime) - priorSymbolOpenTime
@@ -407,6 +446,12 @@ export function buildHybridSequence({
       ? logReturn(candleNumber(benchmark[benchmarkIndex], 'close'),
         candleNumber(benchmark[benchmarkIndex - 1], 'close'))
       : 0;
+    const relativeBtc1h = benchmarkIndex >= 0
+      ? relativeReturnAtHorizon(index, benchmarkIndex, 60 * 60 * 1000) : null;
+    const relativeBtc4h = benchmarkIndex >= 0
+      ? relativeReturnAtHorizon(index, benchmarkIndex, 4 * 60 * 60 * 1000) : null;
+    const multiHourContextAvailable = relativeBtc1h !== null && relativeBtc4h !== null;
+    if (multiHourContextAvailable) multiHourContextAvailableSteps++;
     let btcTrendReturnPct = null;
     if (benchmarkIndex >= 12 && priorBenchmarkMatches) {
       const trendStartIndex = benchmarkIndex - 12;
@@ -450,14 +495,14 @@ export function buildHybridSequence({
       Math.log(Math.max(0.05, tradesRatio)),
       takerShare === null ? 0 : (takerShare - 0.5) * 2,
       aggImbalance ?? 0,
-      depth?.imbalance ?? 0,
-      depth ? clamp(depth.spreadBps / 25, 0, 4) : 0,
+      relativeBtc1h ?? 0,
+      relativeBtc4h ?? 0,
       pocDistance,
       valueAreaPosition,
       shortVol * 100,
       adaptiveVol,
       relativeBtc * 100,
-      depth ? 1 : 0,
+      multiHourContextAvailable ? 1 : 0,
       aggImbalance === null ? 0 : 1,
       volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
       priorBenchmarkMatches ? 1 : 0,
@@ -471,14 +516,17 @@ export function buildHybridSequence({
     latestKamaEfficiencyRatio = kamaEfficiencyRatio;
     latestVolatilityZScore = volatilityZScore;
     latestBtcTrendReturnPct = btcTrendReturnPct;
+    latestMultiHourContextAvailable = multiHourContextAvailable;
     sequence.push(features);
   }
   const latestInputAt = candleTime(selected.at(-1));
   return {
     ready: sequence.length === steps && latestInputAt <= cutoff &&
       latestKamaEfficiencyRatio !== null && latestVolatilityZScore !== null && latestBtcTrendReturnPct !== null &&
+      latestMultiHourContextAvailable === true &&
       sequence.every(row => row.length === HYBRID_SEQUENCE_CHANNELS && row.every(Number.isFinite)),
-    reason: null,
+    reason: latestMultiHourContextAvailable ? null : 'MULTI_HOUR_RELATIVE_BTC_CONTEXT_UNAVAILABLE',
+    reason_detail: latestMultiHourContextAvailable ? null : 'REQUIRES_CONTIGUOUS_CLOSED_SYMBOL_AND_BTC_CANDLES_FOR_1H_AND_4H',
     sequence_steps: steps,
     sequence_channels: HYBRID_SEQUENCE_CHANNELS,
     latest_input_at: latestInputAt,
@@ -487,6 +535,8 @@ export function buildHybridSequence({
     kama_efficiency_ratio: latestKamaEfficiencyRatio,
     volatility_zscore: latestVolatilityZScore,
     btc_trend_return_pct: latestBtcTrendReturnPct,
+    multi_hour_context_available: latestMultiHourContextAvailable,
+    multi_hour_context_coverage_pct: round(multiHourContextAvailableSteps / steps * 100, 4),
     sequence
   };
 }
@@ -2040,8 +2090,10 @@ export function runFixedShaBenchmark(inputRows, {
       ? round(rows.filter(row =>
         row.sequence.filter(step => step[22] === 1).length / row.sequence.length >= 0.8
       ).length / rows.length * 100, 4) : 0,
-    depth_availability_pct: rows.length
-      ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
+    multi_hour_context_coverage_pct: rows.length
+      ? round(rows.filter(row =>
+        row.sequence.filter(step => step[19] === 1).length / row.sequence.length >= 0.8
+      ).length / rows.length * 100, 4) : 0
   };
   if (!marketRegimeCoverageComplete) return {
     status:'INSUFFICIENT_MARKET_REGIME_COVERAGE',
@@ -2139,6 +2191,7 @@ export function runFixedShaBenchmark(inputRows, {
   const maeCoverage = integrity.adverse_excursion_coverage_pct >= 99.9;
   const mfeCoverage = integrity.favourable_excursion_coverage_pct >= 99.9;
   const relativeBtcCoverage = integrity.relative_btc_coverage_pct >= 80;
+  const multiHourContextCoverage = integrity.multi_hour_context_coverage_pct >= 80;
   const uniqueRows = integrity.rejected_or_duplicate_rows_removed === 0;
   const validationThresholdsReady = foldReports.every(fold =>
     fold.neural_threshold_selection?.status === 'SELECTED_PROFITABLE_VALIDATION_THRESHOLD');
@@ -2176,6 +2229,7 @@ export function runFixedShaBenchmark(inputRows, {
     adverse_excursion_coverage_at_least_99_9_pct: maeCoverage ? 'PASS' : 'FAIL',
     favourable_excursion_coverage_at_least_99_9_pct: mfeCoverage ? 'PASS' : 'FAIL',
     relative_btc_reference_coverage_at_least_80_pct: relativeBtcCoverage ? 'PASS' : 'FAIL',
+    multi_hour_relative_strength_coverage_at_least_80_pct: multiHourContextCoverage ? 'PASS' : 'FAIL',
     all_input_rows_valid_and_unique: uniqueRows ? 'PASS' : 'FAIL',
     all_three_observed_btc_regimes: marketRegimeCoverageComplete ? 'PASS' : 'FAIL',
     each_required_btc_regime_has_30_oos_events: allRequiredRegimesHaveOosCoverage ? 'PASS' : 'FAIL',

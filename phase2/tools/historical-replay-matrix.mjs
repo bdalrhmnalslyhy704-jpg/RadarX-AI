@@ -136,7 +136,7 @@ async function main(){
       try{
         const captured=JSON.parse(await readFile(hybridWindowPath,'utf8'));
         if(!Array.isArray(captured.rows)||
-          captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC')
+          captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V3_MULTI_HOUR_BTC_CONTEXT')
           throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
         capturedSha=captured.source_commit_sha;
         capturedRows=captured.rows.map(row=>({...row,historical_window_id:window.id,
@@ -172,7 +172,7 @@ async function main(){
   let hybridDatasetSummary=null;
   if(hybridBenchmarkOutput){
     const hybridDataset={
-      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC',
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V3_MULTI_HOUR_BTC_CONTEXT',
       source_commit_sha:hybridSourceSha,
       market:'BINANCE_SPOT_USDT',
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
@@ -180,6 +180,7 @@ async function main(){
       capture_sampling:'EVERY_10M_DECISION',
       sequence_steps:24,
       sequence_channels:29,
+      sequence_context:'24_STEPS_PLUS_CONTIGUOUS_1H_AND_4H_SYMBOL_MINUS_BTC_RELATIVE_STRENGTH',
       outcome_horizon_ms:4*HOUR_MS,
       symbols:allSymbols,
       windows:windows.map(window=>({
@@ -202,7 +203,8 @@ async function main(){
           Array.isArray(row.sequence)&&row.sequence.filter(step=>step[20]===1).length/row.sequence.length>=0.8).length,
         trade_level_volume_profile_rows:hybridRows.filter(row=>row.trade_level_volume_profile_available).length,
         relative_btc_rows:hybridRows.filter(row=>
-          Array.isArray(row.sequence)&&row.sequence.filter(step=>step[22]===1).length/row.sequence.length>=0.8).length
+          Array.isArray(row.sequence)&&row.sequence.filter(step=>step[22]===1).length/row.sequence.length>=0.8).length,
+        multi_hour_context_rows:hybridRows.filter(row=>row.multi_hour_context_available===true).length
       },
       rows:hybridRows
     };

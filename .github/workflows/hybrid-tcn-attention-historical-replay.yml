@@ -127,6 +127,7 @@ jobs:
           if (report.acceptance_gates?.adverse_excursion_coverage_at_least_99_9_pct !== 'PASS') errors.push('MAE_COVERAGE_LOW');
           if (report.acceptance_gates?.favourable_excursion_coverage_at_least_99_9_pct !== 'PASS') errors.push('MFE_COVERAGE_LOW');
           if (report.acceptance_gates?.relative_btc_reference_coverage_at_least_80_pct !== 'PASS') errors.push('RELATIVE_BTC_COVERAGE_LOW');
+          if (report.acceptance_gates?.multi_hour_relative_strength_coverage_at_least_80_pct !== 'PASS') errors.push('MULTI_HOUR_RELATIVE_STRENGTH_COVERAGE_LOW');
           if (report.acceptance_gates?.all_three_observed_btc_regimes !== 'PASS') errors.push('BULL_BEAR_SIDEWAYS_REGIME_COVERAGE_INCOMPLETE');
           if (report.acceptance_gates?.each_required_btc_regime_has_30_oos_events !== 'PASS') errors.push('ONE_OR_MORE_BTC_REGIMES_MISSING_30_OOS_EVENTS');
           if (report.acceptance_gates?.all_input_rows_valid_and_unique !== 'PASS') errors.push('INVALID_OR_DUPLICATE_ROWS_REJECTED');

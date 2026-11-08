@@ -487,9 +487,14 @@ export function runHistoricalReplay({
     const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
     if(captureHybridSample&&horizonObserved){
-      const featureCandles=available1m.slice(-48).map(row=>({
+      // Keep 24h of closed symbol history for causal 1h/4h relative strength.
+      // Attach executed trades only to the latest 48 minutes: all 24 model steps
+      // and their 24-bar volume-profile priors remain fully trade-backed without
+      // carrying the entire day's tick history into feature construction.
+      const featureCandles=tickerHistory.map((row,historyIndex)=>({
         ...row,
-        aggTrades:tradesByMinute.get(row.openTime)||[]
+        aggTrades:historyIndex>=tickerHistory.length-48
+          ?(tradesByMinute.get(row.openTime)||[]):[]
       }));
       const tensor=buildHybridSequence({
         candles:featureCandles,benchmarkCandles:hybridBenchmarkCandles,
@@ -525,7 +530,8 @@ export function runHistoricalReplay({
           outcome_exit_reason:bracket.exit_reason,
           trade_flow_available:tensor.sequence.filter(step=>step[20]===1).length/tensor.sequence.length>=0.8,
           trade_level_volume_profile_available:tensor.sequence.at(-1)?.[21]===1,
-          relative_btc_available:tensor.sequence.filter(step=>step[22]===1).length/tensor.sequence.length>=0.8
+          relative_btc_available:tensor.sequence.filter(step=>step[22]===1).length/tensor.sequence.length>=0.8,
+          multi_hour_context_available:tensor.multi_hour_context_available===true
         });
       }
     }
