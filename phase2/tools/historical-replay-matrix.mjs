@@ -57,13 +57,15 @@ async function main(){
       '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x29 KAMA/volatility/BTC-gated causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
-      'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency and skips slow REST pagination when an archive is unavailable.',
+      'Hybrid benchmark mode prefetches official checksum-verified Spot aggTrade archives with bounded concurrency; windows may override the global symbol list for post-listing cohorts.',
       'Each symbol must have complete closed-candle coverage. Missing aggregate trades use an explicit candle-only fallback; exact trade-crossing timestamps remain unavailable. No synthetic data or orders.'
     ].join('\n')+'\n');return;
   }
   const symbols=normalizeMatrixSymbols(flag(args,'--symbols',HISTORICAL_MATRIX_DEFAULT_SYMBOLS.join(',')));
   const windowsInput=await loadWindows(flag(args,'--windows'));
   const windows=normalizeMatrixWindows(windowsInput,{now:Date.now()});
+  const allSymbols=normalizeMatrixSymbols([...symbols,...windows.flatMap(window=>window.symbols??symbols)]);
+  const plannedReplays=windows.reduce((total,window)=>total+(window.symbols??symbols).length,0);
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
   const archivePrefetchConcurrency=integer(flag(args,'--archive-prefetch-concurrency','8'),8,1,8,'archive-prefetch-concurrency');
@@ -74,7 +76,7 @@ async function main(){
   if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const timeoutMs=integer(flag(args,'--timeout-ms','1800000'),1800000,60000,7200000,'timeout-ms');
   const outputDir=resolve(flag(args,'--output','./reports/radarx-historical-matrix-'+new Date().toISOString().replace(/[:.]/g,'-')));
-  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,archive_prefetch_concurrency:archivePrefetchConcurrency,window_replay_concurrency:windowReplayConcurrency,archive_prefetch_scope:'ALL_SYMBOLS_ALL_WINDOWS_BEFORE_REPLAY',replay_windows_in_parallel:true,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:allSymbols.length,window_count:windows.length,planned_symbol_window_replays:plannedReplays,symbols:allSymbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end,symbols:w.symbols??symbols})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,archive_prefetch_concurrency:archivePrefetchConcurrency,window_replay_concurrency:windowReplayConcurrency,archive_prefetch_scope:'ALL_SYMBOLS_ALL_WINDOWS_BEFORE_REPLAY',replay_windows_in_parallel:true,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
   if(args.includes('--dry-run')){process.stdout.write(JSON.stringify({...plan,status:'DRY_RUN_NO_NETWORK'},null,2)+'\n');return;}
   await mkdir(outputDir,{recursive:true});
   const client=new RestClient({...CONFIG.rest,baseUrls:CONFIG.rest.baseUrls??CONFIG.rest.urls});
@@ -86,7 +88,7 @@ async function main(){
   const regimeByWindow=new Map(regimeRows.map(item=>[item.windowId,item.marketRegime]));
   let archivePrefetchSummary=null;
   if(hybridBenchmarkOutput){
-    const archiveTasks=windows.flatMap(window=>symbols.map(symbol=>({
+    const archiveTasks=windows.flatMap(window=>(window.symbols??symbols).map(symbol=>({
       windowId:window.id,symbol,startTime:window.startMs-25*MINUTE_MS,endTime:window.endMs-1
     })));
     const archiveRows=await mapWithConcurrency(archiveTasks,archivePrefetchConcurrency,async task=>{
@@ -116,12 +118,13 @@ async function main(){
   // Replay the three independently checksummed windows concurrently. Each child
   // writes to unique paths; the shared OS temp archive cache is already warm.
   const replayRows=await mapWithConcurrency(windows,windowReplayConcurrency,async(window,i)=>{
+    const windowSymbols=window.symbols??symbols;
     const marketRegime=regimeByWindow.get(window.id)??{regime:'UNKNOWN',sample_count:0,reason:'BTC_REGIME_RESULT_MISSING'};
     process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+
       ' ('+(i+1)+'/'+windows.length+', parallel='+windowReplayConcurrency+')\\n');
     const rawPath=resolve(outputDir,window.id+'.json');
     const hybridWindowPath=resolve(outputDir,window.id+'.hybrid-benchmark.json');
-    const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),
+    const childArgs=[replayScript,'--symbols',windowSymbols.join(','),'--start',String(window.startMs),
       '--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),
       '--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),
       '--output',rawPath];
@@ -143,12 +146,12 @@ async function main(){
       }
     }
     const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{
-      requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,
-      coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'
+      requested_symbols:windowSymbols.length,returned_symbol_results:0,coverage_complete_symbols:0,
+      coverage_incomplete_symbols:windowSymbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'
     };
     return {
       result:{id:window.id,label:window.label,window:{start:window.start,end:window.end},
-        market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,
+        symbols:windowSymbols,market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,
           error:child.error??parseError},report_path:rawPath,summary},
       hybridRows:capturedRows,sourceSha:capturedSha
     };
@@ -178,9 +181,9 @@ async function main(){
       sequence_steps:24,
       sequence_channels:29,
       outcome_horizon_ms:4*HOUR_MS,
-      symbols,
+      symbols:allSymbols,
       windows:windows.map(window=>({
-        id:window.id,start:window.start,end:window.end,
+        id:window.id,start:window.start,end:window.end,symbols:window.symbols??symbols,
         market_regime:String(results.find(result=>result.id===window.id)?.market_regime?.regime??'UNKNOWN').toUpperCase()
       })),
       required_market_regimes:HISTORICAL_MATRIX_REQUIRED_REGIMES,

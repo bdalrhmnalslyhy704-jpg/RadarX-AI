@@ -23,14 +23,29 @@ test('hybrid fixed-SHA research matrix captures 33 unique historical Spot USDT s
   assert.ok(symbols.every(symbol=>/^[A-Z0-9]{5,20}$/.test(symbol)&&symbol.endsWith('USDT')));
   assert.ok(['ATOMUSDT','UNIUSDT','ETCUSDT'].every(symbol=>symbols.includes(symbol)));
 });
-test('expanded hybrid windows provide longer chronological bull, sideways and bear samples',()=>{
+test('expanded hybrid benchmark includes later listing-aware windows for missed riser assets',()=>{
   const path=resolve(dirname(fileURLToPath(import.meta.url)),'../benchmarks/hybrid-tcn-attention-windows.json');
   const windows=JSON.parse(readFileSync(path,'utf8'));
-  assert.equal(windows.length,3);
-  assert.deepEqual(windows.map(w=>Date.parse(w.end)-Date.parse(w.start)),[48,24,48].map(h=>h*3_600_000));
+  assert.equal(windows.length,9);
+  assert.deepEqual(windows.slice(0,3).map(w=>Date.parse(w.end)-Date.parse(w.start)),[48,24,48].map(h=>h*3_600_000));
+  assert.ok(windows.slice(3).every(w=>Date.parse(w.start)>=Date.parse('2025-05-28T13:00:00.000Z')));
   assert.ok(windows.every((w,i)=>i===0||Date.parse(w.start)>=Date.parse(windows[i-1].end)));
+  const missed=['PARTIUSDT','BEAMXUSDT','SOLVUSDT','SOPHUSDT'];
+  for(const window of windows.slice(3)) assert.ok(missed.every(symbol=>window.symbols.includes(symbol)));
 });
 test('matrix windows are normalized, unique, chronological and limited to seven days',()=>{const w=normalizeMatrixWindows([{id:'bull',start:'2025-01-01T00:00:00Z',end:'2025-01-02T00:00:00Z'}],{now:Date.parse('2025-01-03T00:00:00Z')});assert.equal(w[0].id,'bull');assert.equal(w[0].endMs-w[0].startMs,86_400_000);assert.throws(()=>normalizeMatrixWindows([{id:'x',start:'2025-01-01',end:'2025-01-10'}],{now:Date.parse('2025-01-11')}),/OVER_SEVEN_DAYS/);assert.throws(()=>normalizeMatrixWindows([{id:'x',start:'2025-01-01',end:'2025-01-02'},{id:'x',start:'2025-01-02',end:'2025-01-03'}],{now:Date.parse('2025-01-04')}),/DUPLICATE/);});
+test('per-window Spot universes are preserved and normalized for listing-aware historical replay',()=>{
+  const normalized=normalizeMatrixWindows([{
+    id:'post-listing',start:'2025-06-01T00:00:00Z',end:'2025-06-03T00:00:00Z',
+    symbols:['partiusdt','beamxusdt','solvusdt','sophusdt']
+  }],{now:Date.parse('2025-06-04T00:00:00Z')});
+  assert.deepEqual(normalized[0].symbols,['PARTIUSDT','BEAMXUSDT','SOLVUSDT','SOPHUSDT']);
+  const fallback=normalizeMatrixWindows([{
+    id:'baseline',start:'2025-01-01T00:00:00Z',end:'2025-01-02T00:00:00Z'
+  }],{now:Date.parse('2025-01-03T00:00:00Z')});
+  assert.equal(fallback[0].symbols,null);
+});
+
 test('market regime classification uses observed BTC direction and range',()=>{const bull=classifyBtcMarketRegime(candles({open:100,close:104,low:99,high:105}));assert.equal(bull.regime,'BULL_TREND');const bear=classifyBtcMarketRegime(candles({open:100,close:96,low:95,high:101}));assert.equal(bear.regime,'BEAR_TREND');const sideways=classifyBtcMarketRegime(candles({open:100,close:100.5,low:99,high:101}));assert.equal(sideways.regime,'SIDEWAYS');const mixed=classifyBtcMarketRegime(candles({open:100,close:101,low:96,high:106}));assert.equal(mixed.regime,'MIXED');assert.equal(classifyBtcMarketRegime([]).regime,'UNKNOWN');});
 test('required historical regime coverage includes a bearish-market window',()=>{
   const observed=['BULL_TREND','SIDEWAYS'];
