@@ -300,10 +300,21 @@ function buildResidualTreeNode(indices, depth, rows, gradients, hessians, option
     return {type:'leaf',value:leafValue};
   }
   return {
-    type:'split',feature:split.feature,threshold:split.threshold,
+    type:'split',feature:split.feature,threshold:split.threshold,gain:split.gain,
     left:buildResidualTreeNode(left,depth+1,rows,gradients,hessians,options),
     right:buildResidualTreeNode(right,depth+1,rows,gradients,hessians,options)
   };
+}
+
+function accumulateResidualTreeImportance(node,gains,counts) {
+  if(!node||typeof node!=='object'||node.type!=='split')return;
+  const feature=Number(node.feature);
+  if(Number.isInteger(feature)&&feature>=0&&feature<gains.length){
+    gains[feature]+=Math.max(0,Number(node.gain)||0);
+    counts[feature]++;
+  }
+  accumulateResidualTreeImportance(node.left,gains,counts);
+  accumulateResidualTreeImportance(node.right,gains,counts);
 }
 
 function fitResidualBoostedTrees(training, baselineFit, {
@@ -323,6 +334,8 @@ function fitResidualBoostedTrees(training, baselineFit, {
   const rate=clamp(Number(learningRate)||0.035,0.01,0.08);
   const logits=rows.map(row=>linearLogit(row.vector,baselineFit));
   const trees=[];
+  const featureGains=Array(FEATURE_NAMES.length).fill(0);
+  const featureSplitCounts=Array(FEATURE_NAMES.length).fill(0);
   const rounds=Math.max(8,Math.min(48,Math.trunc(maxTrees)||36));
   for(let round=0;round<rounds;round++){
     const gradients=new Array(rows.length),hessians=new Array(rows.length);
@@ -345,8 +358,17 @@ function fitResidualBoostedTrees(training, baselineFit, {
     }
     if(!changed)break;
     trees.push(tree);
+    accumulateResidualTreeImportance(root,featureGains,featureSplitCounts);
   }
   if(!trees.length)return null;
+  const totalFeatureGain=featureGains.reduce((sum,value)=>sum+value,0);
+  const featureImportance=FEATURE_NAMES.map((feature,index)=>({
+    feature,gain:Number(featureGains[index].toFixed(7)),
+    gain_share_pct:totalFeatureGain>0
+      ?Number((featureGains[index]/totalFeatureGain*100).toFixed(2)):0,
+    split_count:featureSplitCounts[index]
+  })).filter(row=>row.split_count>0)
+    .sort((a,b)=>b.gain-a.gain||a.feature.localeCompare(b.feature));
   return {
     kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
     architecture:'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS',
@@ -355,6 +377,8 @@ function fitResidualBoostedTrees(training, baselineFit, {
     max_depth:options.maxDepth,minimum_leaf_samples:options.minimumLeaf,
     l2:options.l2,base_rate:baselineFit.base_rate,
     training_samples:rows.length,
+    feature_importance:featureImportance,
+    feature_importance_total_gain:Number(totalFeatureGain.toFixed(7)),
     training_strategy:'SAME_WINDOW_LOGISTIC_ANCHORED_NEWTON_GRADIENT_BOOSTING_V1'
   };
 }
@@ -1423,6 +1447,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       minimum_leaf_samples:boostedTreeFit?.minimum_leaf_samples||0,
       learning_rate:boostedTreeFit?.learning_rate??null,
       residual_scale:boostedTreeFit?.residual_scale??null,
+      feature_importance:boostedTreeFit?.feature_importance||[],
+      feature_importance_total_gain:boostedTreeFit?.feature_importance_total_gain??0,
       validation:boostedTreeValidation,
       hybrid_validation:hybridValidation,
       holdout:validationWinner?.name==='GBDT_RESIDUAL'?challengerHoldout:null,
