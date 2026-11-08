@@ -448,6 +448,62 @@ test('paper simulator charges round-trip costs, enforces a single open position,
   assert.equal(report.trades[1].mfe_marked_at, base + FOUR_HOURS + 10 * 60 * 1000);
 });
 
+test('cumulative-equity Sharpe gradient remains exact when KAMA, volatility and BTC gates are active', () => {
+  const rows = [
+    { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
+      max_adverse_excursion_pct: -0.8, max_favorable_excursion_pct: 3.2,
+      kama_efficiency_ratio: 0.6, volatility_zscore: 0.8, btc_trend_return_pct: -1.5 },
+    { at: 2, symbol: 'BUSDT', gross_return_pct: -2,
+      max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.7,
+      kama_efficiency_ratio: 0.55, volatility_zscore: 0.2, btc_trend_return_pct: 0.5 },
+    { at: 3, symbol: 'CUSDT', gross_return_pct: 2.2,
+      max_adverse_excursion_pct: -0.5, max_favorable_excursion_pct: 3.4,
+      kama_efficiency_ratio: 0.8, volatility_zscore: 1.1, btc_trend_return_pct: -0.7 }
+  ];
+  const probabilities = [0.57, 0.63, 0.48];
+  const options = { temperature: 0.2, threshold: 0.55, roundTripCostBps: 30, enforceMarketGates: true };
+  const base = profitDrawdownObjective(probabilities, rows, options);
+  assert.ok(Number.isFinite(base.cumulative_equity_sharpe));
+  assert.ok(Number.isFinite(base.cumulative_geometric_return_pct));
+  assert.equal(base.btc_countertrend_penalty_enabled, true);
+  assert.ok(base.mean_btc_penalty_factor < 1);
+  const epsilon = 1e-3;
+  const logit = Math.log(probabilities[0] / (1 - probabilities[0]));
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([
+    sigmoid(value), probabilities[1], probabilities[2]
+  ], rows, options).loss;
+  const numerical = (evaluate(logit + epsilon) - evaluate(logit - epsilon)) / (2 * epsilon);
+  assert.ok(Math.abs(base.logit_gradients[0] - numerical) < 3e-4,
+    'cumulative equity Sharpe plus BTC-adjusted gate gradient must match central finite difference');
+});
+
+test('paper simulator hard-rejects low KAMA or below-mean volatility and applies an exponential BTC headwind', () => {
+  const base = Date.UTC(2026, 0, 1);
+  const common = {
+    at: base, resolved_at: base + FOUR_HOURS,
+    max_adverse_excursion_at: base + FIFTEEN_MINUTES,
+    max_adverse_excursion_pct: -0.5,
+    max_favorable_excursion_at: base + 2 * FIFTEEN_MINUTES,
+    max_favorable_excursion_pct: 1.2,
+    score: 0.95, threshold: 0.6, gross_return_pct: 3
+  };
+  const report = simulatePaperTrades([
+    { ...common, id: 'ok', symbol: 'AUSDT', kama_efficiency_ratio: 0.6,
+      volatility_zscore: 0.3, btc_trend_return_pct: -2 },
+    { ...common, id: 'low-kama', symbol: 'BUSDT', kama_efficiency_ratio: 0.1,
+      volatility_zscore: 0.8, btc_trend_return_pct: 1 },
+    { ...common, id: 'low-vol', symbol: 'CUSDT', kama_efficiency_ratio: 0.7,
+      volatility_zscore: -0.2, btc_trend_return_pct: 1 }
+  ], { enforceMarketGates: true, positionFraction: 0.5, maxConcurrentPositions: 3 });
+  assert.equal(report.trade_count, 1);
+  assert.equal(report.market_gate_diagnostics.blocked_kama_efficiency, 1);
+  assert.equal(report.market_gate_diagnostics.blocked_low_volatility, 1);
+  assert.equal(report.market_gate_diagnostics.btc_countertrend_penalized, 1);
+  assert.ok(report.trades[0].score < 0.95);
+  assert.ok(report.trades[0].market_gate.btc_countertrend_penalty_factor < 1);
+});
+
 test('paper portfolio enforces a per-symbol lock and a hard concurrent-capital ceiling', () => {
   const base = Date.UTC(2026, 0, 1);
   const report = simulatePaperTrades([
