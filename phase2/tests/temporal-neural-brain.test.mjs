@@ -7,6 +7,8 @@ import {
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS,
+  TEMPORAL_LATENT_CHANNELS,
+  TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   buildTemporalNeuralProfile,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
@@ -106,6 +108,13 @@ test('temporal network trains only on valid tensors and keeps chronological vali
     'ensemble members must use distinct deterministic training schedules');
   assert.equal(profile.sequence_steps,24);
   assert.equal(profile.sequence_channels,29);
+  assert.equal(profile.latent_channels,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(profile.trainable_parameter_count,TEMPORAL_TRAINABLE_PARAMETER_COUNT);
+  assert.equal(TEMPORAL_LATENT_CHANNELS,8);
+  assert.equal(TEMPORAL_TRAINABLE_PARAMETER_COUNT,512,
+    'the learned 29-to-8 projection must reduce the TCN residual to 512 parameters');
+  assert.ok(profile.member_training_profiles.every(row=>
+    row.latentChannels===8&&row.trainableParameters===512));
   assert.ok(profile.training_samples>=160);
   assert.ok(profile.validation_samples>=50);
   assert.ok(profile.holdout_samples>=40,
