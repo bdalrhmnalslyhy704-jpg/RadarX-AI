@@ -505,7 +505,7 @@ test('prequential audit isolates boosted-tree and hybrid predictions by model va
     minimumWindowSamples:4,windowSize:6,modelVariant:'GBDT_RESIDUAL'
   });
   const hybridAudit=buildCognitivePrequentialProfile(journal,{
-    minimumWindowSamples:4,windowSize:6,modelVariant:'HYBRID_GBDT_MLP'
+    minimumWindowSamples:4,windowSize:6,modelVariant:'HYBRID_GBDT_MLP_W75'
   });
   assert.equal(treeAudit.resolved_forecasts,12);
   assert.equal(treeAudit.excluded_other_model_variant_forecasts,12);
