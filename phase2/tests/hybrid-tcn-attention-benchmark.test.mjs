@@ -950,7 +950,7 @@ test('fixed-SHA benchmark retains MIXED rows without counting MIXED as a require
   assert.deepEqual(report.integrity.market_regimes, ['BEAR_TREND','BULL_TREND','MIXED','SIDEWAYS']);
   assert.deepEqual(report.integrity.missing_market_regimes, []);
   assert.equal(report.acceptance_gates.all_three_observed_btc_regimes, 'PASS');
-  assert.equal(report.training_objective, 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5');
+  assert.equal(report.training_objective, 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6');
   assert.equal(report.architecture_config.training_objective, report.training_objective);
 });
 
