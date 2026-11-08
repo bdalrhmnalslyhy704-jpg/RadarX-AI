@@ -159,6 +159,10 @@ test('cognitive dashboard exposes the V5 residual neural network and selected mo
   assert.match(html,/أشجار التعزيز التدريجي GBDT/);
   assert.match(html,/النموذج الهجين GBDT \+ V5/);
   assert.match(html,/boostedTreeHoldoutText/);
+  assert.match(html,/boostedTreeRanking=boostedTreeHoldout\.ranking_metrics/);
+  assert.match(html,/top_10_pct\?\.precision_pct/);
+  assert.match(html,/top_10_pct\?\.recall_pct/);
+  assert.match(html,/ranking_metrics/);
   assert.match(html,/hybridHoldoutText/);
   assert.match(html,/temporalNetwork\.latent_channels/);
   assert.match(html,/temporalNetwork\.trainable_parameter_count/);
