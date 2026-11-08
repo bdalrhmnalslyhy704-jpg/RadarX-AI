@@ -548,7 +548,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4');
+    'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5');
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);

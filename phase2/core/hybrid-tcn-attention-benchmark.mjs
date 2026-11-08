@@ -1238,7 +1238,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     }
   }
   const rankingPairCount = rankingPairs.length;
-  const rankingLogitGradients = Array(n).fill(0);
+  const rankingLogitGradients = Array(rows.length).fill(0);
   let rankingLossSum = 0;
   const rankingDenominator = Math.max(1, rankingPairCount);
   for (const [positive, negative] of rankingPairs) {
