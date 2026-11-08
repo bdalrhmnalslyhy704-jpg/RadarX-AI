@@ -293,6 +293,72 @@ test('profit-loss logit gradients match a central finite-difference check', () =
     base.logit_gradients[0] + ' vs ' + numerical);
 });
 
+test('same-timestamp opportunities are aggregated as one portfolio snapshot independent of symbol order', () => {
+  const rows = [
+    { at: 100, symbol: 'AUSDT', gross_return_pct: 4, max_adverse_excursion_pct: -0.5, max_favorable_excursion_pct: 4 },
+    { at: 100, symbol: 'BUSDT', gross_return_pct: -3, max_adverse_excursion_pct: -3.2, max_favorable_excursion_pct: 0.4 },
+    { at: 100, symbol: 'CUSDT', gross_return_pct: 2, max_adverse_excursion_pct: -0.8, max_favorable_excursion_pct: 2.4 },
+    { at: 200, symbol: 'DUSDT', gross_return_pct: -2, max_adverse_excursion_pct: -2.2, max_favorable_excursion_pct: 0.5 }
+  ];
+  const probabilities = [0.91, 0.84, 0.77, 0.88];
+  const options = { positionFraction: 0.5, threshold: 0.55, temperature: 0.15 };
+  const forward = profitDrawdownObjective(probabilities, rows, options);
+  const reverse = profitDrawdownObjective([...probabilities].reverse(), [...rows].reverse(), options);
+  assert.equal(forward.decision_time_count, 2);
+  assert.equal(forward.portfolio_returns_pct.length, 2,
+    'drawdown path must contain one point per decision timestamp, not one point per coin');
+  assert.deepEqual(forward.portfolio_returns_pct, reverse.portfolio_returns_pct);
+  assert.equal(forward.loss, reverse.loss);
+  assert.equal(forward.max_additive_drawdown_pct, reverse.max_additive_drawdown_pct);
+});
+
+test('same-timestamp allocation is capped to one total-equity deployment across all simultaneous symbols', () => {
+  const rows = ['AUSDT', 'BUSDT', 'CUSDT', 'DUSDT'].map((symbol, index) => ({
+    at: 100, symbol, gross_return_pct: index % 2 ? -1 : 2,
+    max_adverse_excursion_pct: -1, max_favorable_excursion_pct: 2
+  }));
+  const objective = profitDrawdownObjective([0.99, 0.98, 0.97, 0.96], rows, {
+    positionFraction: 0.5, threshold: 0.55, temperature: 0.1,
+    focalLossWeight: 0, crossSectionalRankingWeight: 0
+  });
+  assert.equal(objective.position_capacity_units, 2);
+  assert.ok(objective.max_simultaneous_position_units <= 2 + 1e-8);
+  assert.ok(objective.max_simultaneous_position_units > 1.99);
+  assert.ok(objective.positions.reduce((sum, value) => sum + value, 0) <= 2 + 1e-8);
+  assert.equal(objective.decision_time_count, 1);
+  assert.equal(objective.max_additive_drawdown_pct, 0,
+    'simultaneous gains and losses must not form an artificial intra-snapshot drawdown');
+});
+
+test('time-bucketed capped portfolio gradient matches central finite differences', () => {
+  const rows = [
+    { at: 100, symbol: 'AUSDT', gross_return_pct: 4, max_adverse_excursion_pct: -0.5, max_favorable_excursion_pct: 4 },
+    { at: 100, symbol: 'BUSDT', gross_return_pct: -3, max_adverse_excursion_pct: -3.2, max_favorable_excursion_pct: 0.4 },
+    { at: 100, symbol: 'CUSDT', gross_return_pct: 2, max_adverse_excursion_pct: -0.8, max_favorable_excursion_pct: 2.4 },
+    { at: 200, symbol: 'DUSDT', gross_return_pct: -2, max_adverse_excursion_pct: -2.2, max_favorable_excursion_pct: 0.5 },
+    { at: 200, symbol: 'EUSDT', gross_return_pct: 3.5, max_adverse_excursion_pct: -0.7, max_favorable_excursion_pct: 3.7 },
+    { at: 200, symbol: 'FUSDT', gross_return_pct: 1.2, max_adverse_excursion_pct: -0.4, max_favorable_excursion_pct: 1.4 }
+  ];
+  const probabilities = [0.91, 0.84, 0.77, 0.88, 0.81, 0.74];
+  const options = {
+    positionFraction: 0.5, threshold: 0.55, temperature: 0.15,
+    focalLossWeight: 0, crossSectionalRankingWeight: 0,
+    roundTripCostBps: 30
+  };
+  const base = profitDrawdownObjective(probabilities, rows, options);
+  assert.ok(base.max_simultaneous_position_units <= 2 + 1e-8);
+  const z = Math.log(probabilities[0] / (1 - probabilities[0]));
+  const epsilon = 1e-3;
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const evaluate = value => profitDrawdownObjective([
+    sigmoid(value), ...probabilities.slice(1)
+  ], rows, options).loss;
+  const numerical = (evaluate(z + epsilon) - evaluate(z - epsilon)) / (2 * epsilon);
+  assert.ok(Math.abs(base.logit_gradients[0] - numerical) < 3e-4,
+    'capped same-time portfolio gradient must match central finite differences: ' +
+    base.logit_gradients[0] + ' vs ' + numerical);
+});
+
 test('asymmetric focal loss gives a stronger gradient to overconfident losing-direction predictions', () => {
   const losingRows = [
     { at: 1, symbol: 'LOSSUSDT', gross_return_pct: -2,

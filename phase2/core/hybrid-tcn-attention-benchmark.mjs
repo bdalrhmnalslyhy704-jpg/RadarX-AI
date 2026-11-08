@@ -1071,39 +1071,81 @@ export function profitDrawdownObjective(probabilities, rows, {
   const pairs = rows.map((row, index) => ({
     row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
+  // The portfolio risk path is measured per market snapshot, not per symbol row.
+  // Every coin observed at the same decision timestamp is simultaneous. Treating
+  // those rows as serial trades makes drawdown depend on alphabetical symbol order.
   const positions = Array(rows.length).fill(0);
-  const orderedReturns = Array(rows.length).fill(0);
-  const orderedAdverseReturns = Array(rows.length).fill(0);
-  const orderedExcursionDrawdowns = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
   const focalEligible = Array(rows.length).fill(false);
   const orderedBtcPenaltyFactors = Array(rows.length).fill(1);
-  for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
-    const pair = pairs[orderedIndex];
+  const decisionGroups = [];
+  for (const pair of pairs) {
     const gates = enforceMarketGates ? evaluateHybridMarketGates(pair.row, {
       minimumKamaEfficiencyRatio, minimumVolatilityZScore, btcCountertrendPenaltyPerPct
     }) : { eligible: true, btc_countertrend_penalty_factor: 1 };
     const penaltyFactor = gates.eligible ? Number(gates.btc_countertrend_penalty_factor ?? 1) : 0;
     const rawAllocation = sigmoid((pair.probability - threshold) / temp);
     const allocation = gates.eligible ? rawAllocation * penaltyFactor : 0;
-    orderedBtcPenaltyFactors[orderedIndex] = penaltyFactor;
+    orderedBtcPenaltyFactors[pair.index] = penaltyFactor;
     // Classification loss must match the executable policy: a row rejected by
     // KAMA/volatility/BTC gates can never become a position, so it must not
     // consume model capacity by generating a conflicting focal-loss gradient.
     focalEligible[pair.index] = gates.eligible === true;
-    const net = netReturnPct(pair.row, cost);
-    positions[pair.index] = allocation;
-    orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
-    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
-    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
-    orderedAdverseReturns[orderedIndex] = allocation * adverse * size;
-    orderedExcursionDrawdowns[orderedIndex] =
-      allocation * Math.max(0, favourable - adverse) * size;
-    orderedProbabilityDerivative[orderedIndex] = gates.eligible
+    orderedProbabilityDerivative[pair.index] = gates.eligible
       ? rawAllocation * (1 - rawAllocation) / temp * penaltyFactor * pair.probability * (1 - pair.probability)
       : 0;
+    const net = netReturnPct(pair.row, cost);
+    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
+    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
+    const excursion = Math.max(0, favourable - adverse);
+    let group = decisionGroups.at(-1);
+    if (!group || group.at !== pair.row.at) {
+      group = {at: pair.row.at, members: []};
+      decisionGroups.push(group);
+    }
+    group.members.push({pair, allocation, net, adverse, excursion});
   }
-  const portfolioReturns = orderedReturns;
+
+  const positionCapacity = Math.max(1, Math.floor(1 / size + 1e-9));
+  const portfolioReturns = [];
+  const orderedAdverseReturns = [];
+  const orderedExcursionDrawdowns = [];
+  const groupReturnDerivativeByRow = Array(rows.length).fill(0);
+  const groupAdverseDerivativeByRow = Array(rows.length).fill(0);
+  const groupExcursionDerivativeByRow = Array(rows.length).fill(0);
+  const groupIndexByRow = Array(rows.length).fill(-1);
+  let maxSimultaneousPositionUnits = 0;
+  for (let groupIndex = 0; groupIndex < decisionGroups.length; groupIndex++) {
+    const group = decisionGroups[groupIndex];
+    const allocationTotal = group.members.reduce((sum, member) => sum + member.allocation, 0);
+    const returnNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.net, 0);
+    const adverseNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.adverse, 0);
+    const excursionNumerator = group.members.reduce((sum, member) => sum + member.allocation * member.excursion, 0);
+    const isCapped = allocationTotal > positionCapacity;
+    const allocationScale = isCapped ? positionCapacity / allocationTotal : 1;
+    portfolioReturns.push(allocationScale * returnNumerator * size);
+    orderedAdverseReturns.push(allocationScale * adverseNumerator * size);
+    orderedExcursionDrawdowns.push(allocationScale * excursionNumerator * size);
+    maxSimultaneousPositionUnits = Math.max(maxSimultaneousPositionUnits, allocationTotal * allocationScale);
+    for (const member of group.members) {
+      const rowIndex = member.pair.index;
+      positions[rowIndex] = member.allocation * allocationScale;
+      groupIndexByRow[rowIndex] = groupIndex;
+      if (!isCapped || allocationTotal <= 0) {
+        groupReturnDerivativeByRow[rowIndex] = member.net * size;
+        groupAdverseDerivativeByRow[rowIndex] = member.adverse * size;
+        groupExcursionDerivativeByRow[rowIndex] = member.excursion * size;
+      } else {
+        const inverseSquare = positionCapacity * size / (allocationTotal * allocationTotal);
+        groupReturnDerivativeByRow[rowIndex] = inverseSquare *
+          (member.net * allocationTotal - returnNumerator);
+        groupAdverseDerivativeByRow[rowIndex] = inverseSquare *
+          (member.adverse * allocationTotal - adverseNumerator);
+        groupExcursionDerivativeByRow[rowIndex] = inverseSquare *
+          (member.excursion * allocationTotal - excursionNumerator);
+      }
+    }
+  }
   const n = portfolioReturns.length;
   const average = mean(portfolioReturns) ?? 0;
   const equityLogReturns = portfolioReturns.map(value => Math.log1p(clamp(value / 100, -0.99, 10)));
@@ -1151,7 +1193,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   const positiveWeight = clamp(finite(focalPositiveWeight) ?? 1, 0.1, 5);
   const negativeWeight = clamp(finite(focalNegativeWeight) ?? 1.6, 0.1, 8);
   let focalLossSum = 0;
-  const focalLogitGradients = Array(n).fill(0);
+  const focalLogitGradients = Array(rows.length).fill(0);
   const focalSampleCount = focalEligible.filter(Boolean).length;
   const focalDenominator = Math.max(1, focalSampleCount);
   for (const pair of pairs) {
@@ -1213,7 +1255,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     sharpeWeight * cumulativeEquitySharpe + downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
     excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean +
     focalWeight * asymmetricFocalLoss + rankingWeight * crossSectionalRankingLoss;
-  const logitGradients = Array(n).fill(0);
+  const portfolioReturnGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
     let gradient = -1 / n;
@@ -1225,21 +1267,23 @@ export function profitDrawdownObjective(probabilities, rows, {
     gradient -= sharpeWeight * sharpeDerivativeByLogReturn / Math.max(1e-6, 100 + x);
     if (x < 0) gradient += 2 * downsideWeight * x / n;
     gradient += drawdownGradient[index];
-    const pair = pairs[index];
-    const net = netReturnPct(pair.row, cost) * size;
-    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ??
-      Math.min(0, netReturnPct(pair.row, cost))) * size;
+    portfolioReturnGradients[index] = gradient;
+  }
+  const logitGradients = Array(rows.length).fill(0);
+  for (const pair of pairs) {
+    const rowIndex = pair.index;
+    const groupIndex = groupIndexByRow[rowIndex];
+    if (groupIndex < 0) continue;
+    const portfolioGradient = portfolioReturnGradients[groupIndex] *
+      groupReturnDerivativeByRow[rowIndex];
     const adverseGradient = 2 * adverseExcursionWeight *
-      orderedAdverseReturns[index] * adverse / n;
-    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
-    const excursionRange = Math.max(0, favourable - Math.min(0,
-      finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, netReturnPct(pair.row, cost))));
+      orderedAdverseReturns[groupIndex] * groupAdverseDerivativeByRow[rowIndex] / n;
     const excursionGradient = 2 * excursionDrawdownWeight *
-      orderedExcursionDrawdowns[index] * excursionRange * size / n;
-    logitGradients[pair.index] =
-      (gradient * net + adverseGradient + excursionGradient) *
-      orderedProbabilityDerivative[index] + focalWeight * focalLogitGradients[pair.index] +
-      rankingWeight * rankingLogitGradients[pair.index];
+      orderedExcursionDrawdowns[groupIndex] * groupExcursionDerivativeByRow[rowIndex] / n;
+    logitGradients[rowIndex] =
+      (portfolioGradient + adverseGradient + excursionGradient) *
+      orderedProbabilityDerivative[rowIndex] + focalWeight * focalLogitGradients[rowIndex] +
+      rankingWeight * rankingLogitGradients[rowIndex];
   }
   const maxDrawdown = Math.max(0, ...drawdowns);
   return {
@@ -1261,7 +1305,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     focal_loss_weight: focalWeight,
     focal_negative_class_weight: negativeWeight,
     focal_sample_count: focalSampleCount,
-    focal_eligible_coverage_pct: round(focalSampleCount / n * 100, 4),
+    focal_eligible_coverage_pct: round(focalSampleCount / Math.max(1, rows.length) * 100, 4),
     focal_gamma_positive: gammaPositive,
     focal_gamma_negative: gammaNegative,
     max_additive_drawdown_pct: round(maxDrawdown, 6),
@@ -1269,6 +1313,10 @@ export function profitDrawdownObjective(probabilities, rows, {
     round_trip_cost_bps: cost,
     positions: positions.map(value => round(value, 8)),
     portfolio_returns_pct: portfolioReturns.map(value => round(value, 8)),
+    decision_time_count: decisionGroups.length,
+    position_capacity_units: positionCapacity,
+    max_simultaneous_position_units: round(maxSimultaneousPositionUnits, 8),
+    portfolio_path_granularity: 'ONE_AGGREGATED_PORTFOLIO_RETURN_PER_DECISION_TIMESTAMP',
     logit_gradients: logitGradients
   };
 }
@@ -1328,7 +1376,7 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    training_objective: 'TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V5',
     objective_trace: trace
   };
 }
