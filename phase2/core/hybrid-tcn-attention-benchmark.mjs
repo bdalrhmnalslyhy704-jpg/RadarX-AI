@@ -1301,15 +1301,40 @@ export function simulatePaperTrades(decisions, {
   roundTripCostBps = DEFAULT_COST_BPS,
   positionFraction = DEFAULT_POSITION_FRACTION,
   maxConcurrentPositions = DEFAULT_MAX_CONCURRENT_POSITIONS,
-  initialEquity = 100
+  initialEquity = 100,
+  enforceMarketGates = false,
+  minimumKamaEfficiencyRatio = 0.20,
+  minimumVolatilityZScore = 0,
+  btcCountertrendPenaltyPerPct = 0.12
 } = {}) {
   const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.001, 1);
   const maxOpen = Math.max(1, Math.min(30, Math.trunc(Number(maxConcurrentPositions) || DEFAULT_MAX_CONCURRENT_POSITIONS)));
   const costPct = Math.max(0, Number(roundTripCostBps) || 0) / 100;
   const seedEquity = Math.max(1, Number(initialEquity) || 100);
-  const selected = (Array.isArray(decisions) ? decisions : [])
-    .filter(row => finite(row.score) !== null && finite(row.threshold ?? threshold) !== null &&
-      row.score >= (row.threshold ?? threshold) &&
+  const inputDecisions = Array.isArray(decisions) ? decisions : [];
+  const marketGateDiagnostics = {
+    input_count: inputDecisions.length, eligible_count: 0,
+    blocked_kama_efficiency: 0, blocked_low_volatility: 0,
+    blocked_missing_btc_context: 0, btc_countertrend_penalized: 0
+  };
+  const contextDecisions = inputDecisions.map(row => {
+    const gates = enforceMarketGates ? evaluateHybridMarketGates(row, {
+      minimumKamaEfficiencyRatio, minimumVolatilityZScore, btcCountertrendPenaltyPerPct
+    }) : { eligible: true, btc_countertrend_penalty_factor: 1, reason: null };
+    if (enforceMarketGates) {
+      if (gates.reason === 'KAMA_EFFICIENCY_UNAVAILABLE' || gates.reason === 'KAMA_EFFICIENCY_BELOW_MINIMUM') marketGateDiagnostics.blocked_kama_efficiency++;
+      else if (gates.reason === 'VOLATILITY_ZSCORE_UNAVAILABLE' || gates.reason === 'VOLATILITY_BELOW_ROLLING_MEAN') marketGateDiagnostics.blocked_low_volatility++;
+      else if (gates.reason) marketGateDiagnostics.blocked_missing_btc_context++;
+      if (gates.eligible && Number(gates.btc_countertrend_penalty_factor) < 0.999999) marketGateDiagnostics.btc_countertrend_penalized++;
+    }
+    return { ...row, _market_gate: gates,
+      _adjusted_score: (finite(row.score) ?? -1) * Number(gates.eligible ? gates.btc_countertrend_penalty_factor ?? 1 : 0) };
+  });
+  marketGateDiagnostics.eligible_count = contextDecisions.filter(row => row._market_gate?.eligible).length;
+  const selected = contextDecisions
+    .filter(row => (!enforceMarketGates || row._market_gate?.eligible === true) &&
+      finite(row._adjusted_score) !== null && finite(row.threshold ?? threshold) !== null &&
+      row._adjusted_score >= (row.threshold ?? threshold) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.max_adverse_excursion_at) !== null &&
       finite(row.max_favorable_excursion_at) !== null &&
@@ -1321,6 +1346,7 @@ export function simulatePaperTrades(decisions, {
       finite(row.gross_return_pct) !== null &&
       finite(row.max_adverse_excursion_pct) !== null &&
       finite(row.max_favorable_excursion_pct) !== null)
+    .map(row => ({ ...row, score: row._adjusted_score }))
     .sort((a, b) => a.at - b.at || b.score - a.score || a.symbol.localeCompare(b.symbol));
 
   let cash = seedEquity;
@@ -1413,6 +1439,8 @@ export function simulatePaperTrades(decisions, {
       trade: {
         id: decision.id, symbol, at, resolved_at: Number(decision.resolved_at),
         score: round(Number(decision.score), 6),
+        raw_model_score: round(Number(decision.score) / Math.max(1e-8, Number(decision._market_gate?.btc_countertrend_penalty_factor ?? 1)), 6),
+        market_gate: decision._market_gate,
         gross_return_pct: round(gross, 6), net_return_pct: round(net, 6),
         max_adverse_excursion_pct: round(adverse, 6),
         max_adverse_excursion_at: adverseAt,
@@ -1454,6 +1482,7 @@ export function simulatePaperTrades(decisions, {
     round_trip_cost_bps: Number(roundTripCostBps),
     position_fraction: size,
     max_concurrent_positions: maxOpen,
+    market_gate_diagnostics: marketGateDiagnostics,
     trades
   };
 }
@@ -1677,7 +1706,8 @@ export function runFixedShaBenchmark(inputRows, {
   const outOfSampleNeural = [], outOfSampleClassic = [], foldReports = [];
   const executionOptions = {
     threshold: 0.55, roundTripCostBps, positionFraction, maxConcurrentPositions,
-    thresholdGrid: [...thresholdGrid], minimumValidationTrades
+    thresholdGrid: [...thresholdGrid], minimumValidationTrades,
+    enforceMarketGates: true
   };
   for (const fold of walkForward.folds) {
     const fitted = trainHybridTcnAttention(fold.train, { epochs });
@@ -1791,7 +1821,17 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    market_gate_policy: {
+      kama_efficiency_ratio_period: 10,
+      minimum_kama_efficiency_ratio: 0.20,
+      volatility_zscore_history_bars: 24,
+      volatility_zscore_current_return_window: 6,
+      minimum_volatility_zscore: 0,
+      btc_trend_window_bars: 12,
+      btc_countertrend_penalty_per_pct: 0.12,
+      missing_context_action: 'REJECT_SIGNAL'
+    },
     threshold_selection_policy: {
       method: 'STATIC_GRID_PLUS_VALIDATION_SCORE_QUANTILES',
       minimum_validation_trades: Math.max(5, Math.min(100, Math.trunc(Number(minimumValidationTrades) || 10))),
