@@ -144,6 +144,7 @@ jobs:
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
+                const temporalBoostedTree=temporalNetwork.temporal_boosted_tree||{};
                 const boostedTree=cognitiveProfile.boosted_tree_model||cognitiveCapture.boosted_tree_model||{};
                 const hybridModel=cognitiveProfile.hybrid_model||cognitiveCapture.hybrid_model||{};
                 const temporalNetworkContract=Boolean(
@@ -321,7 +322,22 @@ jobs:
                       holdout_brier:temporalNetwork.holdout?.model_brier_score??null,
                       holdout_base_rate_brier:temporalNetwork.holdout?.base_rate_brier_score??null,
                       holdout_pooled_logistic_brier:temporalNetwork.holdout?.pooled_logistic_brier_score??null,
-                      holdout_comparison:temporalNetwork.holdout_comparison||{}
+                      holdout_comparison:temporalNetwork.holdout_comparison||{},
+                      temporal_boosted_tree:{
+                        status:String(temporalBoostedTree.status||'UNKNOWN'),
+                        model_kind:String(temporalBoostedTree.model_kind||'UNKNOWN'),
+                        target_definition:String(temporalBoostedTree.target_definition||'UNKNOWN'),
+                        trained:temporalBoostedTree.trained===true,
+                        research_out_of_sample_validated:temporalBoostedTree.research_out_of_sample_validated===true,
+                        probability_ready:temporalBoostedTree.probability_ready===true,
+                        training_samples:Number(temporalBoostedTree.training_samples)||0,
+                        validation_brier:temporalBoostedTree.validation?.model_brier_score??null,
+                        validation_logistic_brier:temporalBoostedTree.validation_logistic?.model_brier_score??null,
+                        holdout_brier:temporalBoostedTree.holdout?.model_brier_score??null,
+                        holdout_logistic_brier:temporalBoostedTree.holdout_logistic?.model_brier_score??null,
+                        holdout_comparison:temporalBoostedTree.holdout_comparison||{},
+                        regime_specialists:temporalBoostedTree.regime_specialists||{}
+                      }
                     }:null
                   }:null
                 };
