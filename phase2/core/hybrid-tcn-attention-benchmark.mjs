@@ -1044,7 +1044,12 @@ export function profitDrawdownObjective(probabilities, rows, {
   positionFraction = DEFAULT_POSITION_FRACTION,
   threshold = 0.55,
   temperature = 0.10,
-  sharpeWeight = 0.15,
+  sharpeWeight = 0.30,
+  cumulativeGrowthWeight = 0.02,
+  enforceMarketGates = false,
+  minimumKamaEfficiencyRatio = 0.20,
+  minimumVolatilityZScore = 0,
+  btcCountertrendPenaltyPerPct = 0.12,
   downsideWeight = 0.08,
   adverseExcursionWeight = 0.04,
   excursionDrawdownWeight = 0.04,
@@ -1069,9 +1074,16 @@ export function profitDrawdownObjective(probabilities, rows, {
   const orderedAdverseReturns = Array(rows.length).fill(0);
   const orderedExcursionDrawdowns = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
+  const orderedBtcPenaltyFactors = Array(rows.length).fill(1);
   for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
     const pair = pairs[orderedIndex];
-    const allocation = sigmoid((pair.probability - threshold) / temp);
+    const gates = enforceMarketGates ? evaluateHybridMarketGates(pair.row, {
+      minimumKamaEfficiencyRatio, minimumVolatilityZScore, btcCountertrendPenaltyPerPct
+    }) : { eligible: true, btc_countertrend_penalty_factor: 1 };
+    const penaltyFactor = gates.eligible ? Number(gates.btc_countertrend_penalty_factor ?? 1) : 0;
+    const rawAllocation = sigmoid((pair.probability - threshold) / temp);
+    const allocation = gates.eligible ? rawAllocation * penaltyFactor : 0;
+    orderedBtcPenaltyFactors[orderedIndex] = penaltyFactor;
     const net = netReturnPct(pair.row, cost);
     positions[pair.index] = allocation;
     orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
@@ -1080,15 +1092,22 @@ export function profitDrawdownObjective(probabilities, rows, {
     orderedAdverseReturns[orderedIndex] = allocation * adverse * size;
     orderedExcursionDrawdowns[orderedIndex] =
       allocation * Math.max(0, favourable - adverse) * size;
-    orderedProbabilityDerivative[orderedIndex] =
-      allocation * (1 - allocation) / temp * pair.probability * (1 - pair.probability);
+    orderedProbabilityDerivative[orderedIndex] = gates.eligible
+      ? rawAllocation * (1 - rawAllocation) / temp * penaltyFactor * pair.probability * (1 - pair.probability)
+      : 0;
   }
   const portfolioReturns = orderedReturns;
   const n = portfolioReturns.length;
   const average = mean(portfolioReturns) ?? 0;
-  const variance = mean(portfolioReturns.map(value => (value - average) ** 2)) ?? 0;
-  const standardDeviation = Math.sqrt(variance + 1e-6);
-  const sharpe = average / standardDeviation;
+  const equityLogReturns = portfolioReturns.map(value => Math.log1p(clamp(value / 100, -0.99, 10)));
+  const averageLogReturn = mean(equityLogReturns) ?? 0;
+  const logVariance = mean(equityLogReturns.map(value => (value - averageLogReturn) ** 2)) ?? 0;
+  const logStandardDeviation = Math.sqrt(logVariance + 1e-8);
+  const cumulativeEquityFactor = Math.exp(equityLogReturns.reduce((sum, value) => sum + value, 0));
+  const geometricFactor = Math.pow(cumulativeEquityFactor, 1 / Math.max(1, n));
+  const cumulativeGeometricReturnPct = (geometricFactor - 1) * 100;
+  const cumulativeEquitySharpe = averageLogReturn / logStandardDeviation;
+  const sharpe = cumulativeEquitySharpe;
   let downsideSquared = 0, adverseSquared = 0, excursionDrawdownSquared = 0;
   let underwaterSquared = 0, cumulative = 0, peak = 0, peakIndex = -1;
   const drawdowns = [], peakIndices = [], drawdownGradient = Array(n).fill(0);
@@ -1148,18 +1167,20 @@ export function profitDrawdownObjective(probabilities, rows, {
     focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / n;
   }
   const asymmetricFocalLoss = focalLossSum / n;
-  const loss = -average - sharpeWeight * sharpe +
-    downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
+  const loss = -average - cumulativeGrowthWeight * cumulativeGeometricReturnPct -
+    sharpeWeight * cumulativeEquitySharpe + downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
     excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean +
     focalWeight * asymmetricFocalLoss;
   const logitGradients = Array(n).fill(0);
   for (let index = 0; index < n; index++) {
     const x = portfolioReturns[index];
     let gradient = -1 / n;
-    gradient -= sharpeWeight * (
-      1 / (n * standardDeviation) -
-      average * (x - average) / (n * standardDeviation ** 3)
-    );
+    gradient -= cumulativeGrowthWeight * geometricFactor * 100 /
+      (Math.max(1, n) * Math.max(1e-6, 100 + x));
+    const logReturn = equityLogReturns[index];
+    const sharpeDerivativeByLogReturn = 1 / (n * logStandardDeviation) -
+      averageLogReturn * (logReturn - averageLogReturn) / (n * logStandardDeviation ** 3);
+    gradient -= sharpeWeight * sharpeDerivativeByLogReturn / Math.max(1e-6, 100 + x);
     if (x < 0) gradient += 2 * downsideWeight * x / n;
     gradient += drawdownGradient[index];
     const pair = pairs[index];
@@ -1182,6 +1203,10 @@ export function profitDrawdownObjective(probabilities, rows, {
     loss: round(loss, 8),
     mean_net_return_pct: round(average, 6),
     sharpe_per_decision: round(sharpe, 6),
+    cumulative_equity_sharpe: round(cumulativeEquitySharpe, 6),
+    cumulative_geometric_return_pct: round(cumulativeGeometricReturnPct, 6),
+    btc_countertrend_penalty_enabled: Boolean(enforceMarketGates),
+    mean_btc_penalty_factor: round(mean(orderedBtcPenaltyFactors) ?? 1, 8),
     downside_semivariance: round(downsideMean, 8),
     adverse_excursion_penalty: round(adverseMean, 8),
     intratrade_excursion_drawdown_penalty: round(excursionDrawdownMean, 8),
@@ -1223,7 +1248,9 @@ export function trainHybridTcnAttention(trainingRows, {
   const trace = [];
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
     const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
-    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, objectiveOptions);
+    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
+      enforceMarketGates: true, ...objectiveOptions
+    });
     let gradients = zerosLike(parameters());
     for (let index = 0; index < normalizedRows.length; index++) {
       const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
@@ -1247,7 +1274,7 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'ASYMMETRIC_FOCAL_NET_PROFIT_SHARPE_MAE_MFE_DRAWDOWN_V3',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
     objective_trace: trace
   };
 }
