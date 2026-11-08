@@ -770,6 +770,40 @@ function evaluateHoldout(rows, fit) {
   const base = fit.base_rate;
   const predictions = rows.map(row => predictFromFit(row.features, fit));
   const targets = rows.map(row => row.target);
+  const positiveCount=targets.filter(target=>target===1).length;
+  const negativeCount=targets.length-positiveCount;
+  const ranked=predictions.map((probability,index)=>({probability,index,target:targets[index]}))
+    .sort((a,b)=>b.probability-a.probability||a.index-b.index);
+  const rankingAtFraction=fraction=>{
+    const sampleCount=Math.max(1,Math.min(ranked.length,Math.ceil(ranked.length*fraction)));
+    const selected=ranked.slice(0,sampleCount);
+    const selectedPositive=selected.filter(row=>row.target===1).length;
+    const precision=selectedPositive/sampleCount;
+    const recall=positiveCount?selectedPositive/positiveCount:null;
+    const prevalence=positiveCount/Math.max(1,targets.length);
+    return {
+      sample_count:sampleCount,positive_samples:selectedPositive,
+      precision_pct:Number((precision*100).toFixed(1)),
+      recall_pct:recall===null?null:Number((recall*100).toFixed(1)),
+      lift_vs_prevalence:prevalence>0?Number((precision/prevalence).toFixed(3)):null
+    };
+  };
+  let aucWins=0,aucPairs=0;
+  if(positiveCount>0&&negativeCount>0){
+    const positiveScores=ranked.filter(row=>row.target===1).map(row=>row.probability);
+    const negativeScores=ranked.filter(row=>row.target===0).map(row=>row.probability);
+    for(const positiveScore of positiveScores)for(const negativeScore of negativeScores){
+      aucPairs++;
+      if(positiveScore>negativeScore)aucWins++;
+      else if(positiveScore===negativeScore)aucWins+=0.5;
+    }
+  }
+  const rankingMetrics={
+    positive_samples:positiveCount,negative_samples:negativeCount,
+    auc_roc:aucPairs?Number((aucWins/aucPairs).toFixed(5)):null,
+    top_10_pct:rankingAtFraction(0.10),
+    top_20_pct:rankingAtFraction(0.20)
+  };
   const modelBrier = mean(predictions.map((p, index) => (p - targets[index]) ** 2));
   const baselineBrier = mean(targets.map(target => (base - target) ** 2));
   const logLoss = mean(predictions.map((p, index) => {
@@ -805,6 +839,7 @@ function evaluateHoldout(rows, fit) {
     accuracy_directional_pct: directionalCount
       ? Number((directionalCorrect / directionalCount * 100).toFixed(1)) : null,
     expected_calibration_error: Number(calibrationError.toFixed(5)),
+    ranking_metrics:rankingMetrics,
     beat_base_rate: modelBrier + 0.002 < baselineBrier,
     improvement_vs_base_rate: Number((baselineBrier - modelBrier).toFixed(5))
   };
