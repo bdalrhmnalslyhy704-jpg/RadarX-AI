@@ -243,8 +243,8 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   assert.ok(profile.regime_model_training_samples>=600,
     'the bounded holdout must leave a larger purged chronological block for temporal fitting');
   assert.deepEqual(profile.shared_model_split_fractions,
-    {training:0.60,memberSelection:0.82,calibration:0.995},
-    'mature histories must preserve separate member-selection and calibration evidence without moving outer validation or holdout');
+    {training:0.60,memberSelection:0.76,calibration:0.995},
+    'mature histories must retain distinct member selection and broaden regime-local calibration without moving outer validation or holdout');
   assert.ok(profile.validation_samples>=300,
     'mature histories must reserve at least 300 observations for inner TCN validation');
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);

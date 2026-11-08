@@ -696,11 +696,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      // Mature histories use 60% for model fitting, 22% for member selection,
-      // and 17.5% for regime-local calibration. The live risk-on regime's
-      // member-selection block had only two positives after overlap purging.
-      // Expand selection without reducing calibration or using outer evidence.
-      :{training:0.60,memberSelection:0.82,calibration:0.995};
+      // Mature histories use 60% for fitting, 16% for member selection,
+      // and 23.5% for regime-local calibration before purging. This widens the
+      // sparse risk-on calibration block while preserving its own member-
+      // selection set. Outer validation and final holdout remain untouched.
+      :{training:0.60,memberSelection:0.76,calibration:0.995};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
