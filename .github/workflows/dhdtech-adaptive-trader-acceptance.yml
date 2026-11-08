@@ -144,6 +144,8 @@ jobs:
                 const cognitiveCapture=cognitive&&cognitive.capture||{};
                 const neuralNetwork=cognitiveProfile.neural_network||cognitiveCapture.neural_network||{};
                 const temporalNetwork=cognitiveProfile.temporal_network||cognitiveCapture.temporal_network||{};
+                const boostedTree=cognitiveProfile.boosted_tree_model||cognitiveCapture.boosted_tree_model||{};
+                const hybridModel=cognitiveProfile.hybrid_model||cognitiveCapture.hybrid_model||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'&&
                   temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'&&
@@ -274,6 +276,29 @@ jobs:
                       probability_ready:neuralNetwork.probability_ready===true,
                       validation_evaluated:neuralNetwork.validation?.evaluated===true,
                       holdout_evaluated:neuralNetwork.holdout?.evaluated===true
+                    }:null,
+                    boosted_tree_model:boostedTree?{
+                      status:String(boostedTree.status||'unknown'),
+                      trained:boostedTree.trained===true,
+                      selected:boostedTree.selected===true,
+                      probability_ready:boostedTree.probability_ready===true,
+                      tree_count:Number(boostedTree.tree_count)||0,
+                      training_samples:Number(boostedTree.training_samples)||0,
+                      validation_brier:boostedTree.validation?.model_brier_score??null,
+                      validation_base_rate_brier:boostedTree.validation?.base_rate_brier_score??null,
+                      holdout_brier:boostedTree.holdout?.model_brier_score??null,
+                      holdout_comparison:boostedTree.holdout_comparison||{},
+                      feature_importance:Array.isArray(boostedTree.feature_importance)
+                        ?boostedTree.feature_importance.slice(0,12):[]
+                    }:null,
+                    hybrid_model:hybridModel?{
+                      status:String(hybridModel.status||'unknown'),
+                      trained:hybridModel.trained===true,
+                      selected:hybridModel.selected===true,
+                      probability_ready:hybridModel.probability_ready===true,
+                      selected_candidate:String(hybridModel.selected_candidate||'none'),
+                      candidate_validation_metrics:hybridModel.candidate_validation_metrics||[],
+                      holdout_comparison:hybridModel.holdout_comparison||{}
                     }:null,
                     temporal_network:temporalNetwork?{
                       architecture:String(temporalNetwork.architecture||'unknown'),
