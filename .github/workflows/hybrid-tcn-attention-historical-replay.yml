@@ -75,7 +75,8 @@ jobs:
             --output "$REPORT_DIR/matrix" \
             --max-trade-pages 500 \
             --max-trades 1000000 \
-            --archive-prefetch-concurrency 4 \
+            --archive-prefetch-concurrency 8 \
+            --window-replay-concurrency 3 \
             --outcome-horizon-hours 4 \
             --timeout-ms 3600000 \
             --hybrid-benchmark-output "$DATASET_PATH"
