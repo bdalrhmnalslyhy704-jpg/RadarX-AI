@@ -1104,7 +1104,7 @@ async function main() {
   if(hybridBenchmarkOutput){
     await mkdir(dirname(hybridBenchmarkOutput), {recursive:true});
     const hybridDataset={
-      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC',
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V3_MULTI_HOUR_BTC_CONTEXT',
       source_commit_sha:String(process.env.GITHUB_SHA||''),
       market:'BINANCE_SPOT_USDT',
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
