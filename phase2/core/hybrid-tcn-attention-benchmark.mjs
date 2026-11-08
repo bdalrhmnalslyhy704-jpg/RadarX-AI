@@ -1471,7 +1471,8 @@ export function profitDrawdownObjective(probabilities, rows, {
 
 export function trainHybridTcnAttention(trainingRows, {
   epochs = 8, learningRate = 0.003, l2 = 0.001,
-  seed = 17, objectiveOptions = {}
+  seed = 17, objectiveOptions = {},
+  earlyStoppingPatience = 8, minimumLossImprovement = 1e-6
 } = {}) {
   const rows = normalizeBenchmarkRows(trainingRows);
   if (rows.length < 20) throw new Error('HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS');
@@ -1490,11 +1491,26 @@ export function trainHybridTcnAttention(trainingRows, {
   let optimizer = { m: zerosLike(parameters()), v: zerosLike(parameters()) };
   const totalEpochs = Math.max(1, Math.min(50, Math.trunc(Number(epochs) || 8)));
   const trace = [];
+  const patience = Math.max(1, Math.min(20, Math.trunc(Number(earlyStoppingPatience) || 8)));
+  const minimumImprovement = Math.max(0, finite(minimumLossImprovement) ?? 1e-6);
+  let bestLoss = Infinity, bestEpoch = 0, bestModel = structuredClone(model);
+  let staleEpochs = 0, earlyStopped = false;
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
     const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
     const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
+    // Keep the exact parameter state whose objective was measured. Financial
+    // training loss can rise after an initially useful phase; never return a
+    // later degraded checkpoint merely because the epoch budget was exhausted.
+    if (objective.loss < bestLoss - minimumImprovement) {
+      bestLoss = objective.loss;
+      bestEpoch = epoch;
+      bestModel = structuredClone(model);
+      staleEpochs = 0;
+    } else {
+      staleEpochs++;
+    }
     let gradients = zerosLike(parameters());
     for (let index = 0; index < normalizedRows.length; index++) {
       const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
@@ -1514,7 +1530,12 @@ export function trainHybridTcnAttention(trainingRows, {
       cross_sectional_ranking_loss: objective.cross_sectional_ranking_loss,
       cross_sectional_ranking_weight: objective.cross_sectional_ranking_weight,
       cross_sectional_ranking_pair_count: objective.cross_sectional_ranking_pair_count });
+    if (staleEpochs >= patience && epoch < totalEpochs) {
+      earlyStopped = true;
+      break;
+    }
   }
+  Object.assign(model, bestModel);
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
     architecture_config: HYBRID_TCN_CONFIGURATION,
@@ -1523,7 +1544,13 @@ export function trainHybridTcnAttention(trainingRows, {
     activation: 'LEAKY_RELU_ALPHA_0_05',
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
-    training_samples: rows.length, epochs: totalEpochs,
+    training_samples: rows.length,
+    epochs: trace.length,
+    epochs_requested: totalEpochs,
+    selected_epoch: bestEpoch,
+    selected_training_loss: round(bestLoss, 8),
+    early_stopped: earlyStopped,
+    early_stopping_patience: patience,
     training_objective: 'OVERLAP_AWARE_TIME_BUCKETED_PORTFOLIO_CUMULATIVE_EQUITY_SHARPE_CROSS_SECTIONAL_RANKING_V6',
     objective_trace: trace
   };
@@ -2059,6 +2086,10 @@ export function runFixedShaBenchmark(inputRows, {
       classic_validation: summarizeTrades(classicChoice.report),
       neural_training: {
         epochs: fitted.epochs,
+        epochs_requested: fitted.epochs_requested,
+        selected_epoch: fitted.selected_epoch,
+        selected_training_loss: fitted.selected_training_loss,
+        early_stopped: fitted.early_stopped,
         learning_rate: learningRate,
         cross_sectional_ranking_weight: crossSectionalRankingWeight,
         training_samples: fitted.training_samples,

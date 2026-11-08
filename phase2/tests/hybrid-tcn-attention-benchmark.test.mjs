@@ -623,6 +623,12 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
   assert.ok(fitted.trained_logit_scale >= 0.25 && fitted.trained_logit_scale <= 4);
+  assert.equal(fitted.epochs, 1);
+  assert.equal(fitted.epochs_requested, 1);
+  assert.equal(fitted.selected_epoch, 1);
+  assert.equal(fitted.selected_training_loss,
+    Math.min(...fitted.objective_trace.map(item => item.loss)));
+  assert.equal(fitted.early_stopped, false);
   const predicted = predictHybridTcnAttention(rows.at(-1).sequence, fitted);
   assert.ok(predicted);
   assert.ok(predicted.probability >= 0 && predicted.probability <= 1);
