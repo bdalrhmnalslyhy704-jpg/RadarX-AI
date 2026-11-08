@@ -233,6 +233,26 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.hidden_neurons, 10);
     assert.equal(profile.neural_network.second_hidden_neurons, 6);
 
+    // The new tree and hybrid challengers are independently scored against
+    // the same chronological UP-event target. A model may be selected only
+    // after the untouched holdout independently confirms its validation win.
+    assert.equal(profile.boosted_tree_model.model_kind,'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1');
+    assert.equal(profile.hybrid_model.model_kind,'BLENDED_GBDT_MLP_V1');
+    assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
+      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+      .includes(profile.boosted_tree_model.status));
+    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','TRAINED_NOT_SELECTED',
+      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+      .includes(profile.hybrid_model.status));
+    if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
+      assert.equal(profile.boosted_tree_model.selected,true);
+      assert.equal(profile.boosted_tree_model.holdout_comparison.passed,true);
+    }
+    if(profile.model_selection.selected_model==='HYBRID_GBDT_MLP'){
+      assert.equal(profile.hybrid_model.selected,true);
+      assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
+    }
+
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
     const highProbability = assessCognitiveCandidate(highEvidence, profile, BASE_TIME + 20_000);
@@ -463,6 +483,36 @@ test('unobserved order book stays explicitly unknown and never receives a fabric
   assert.equal(result.market_motive_assessment.order_book_confirmation,'NOT_CHECKED');
   assert.equal(result.market_motive_assessment.order_book_spread_bps,null);
   assert.equal(result.market_motive_assessment.spoofing_assessment,'NOT_CHECKED');
+});
+
+test('prequential audit isolates boosted-tree and hybrid predictions by model variant',()=>{
+  const journal=[];
+  for(const model of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP']){
+    for(let index=0;index<12;index++){
+      const at=BASE_TIME+(model==='GBDT_RESIDUAL'?0:100)*FOUR_HOURS+
+        index*5*60*60*1000;
+      const outcome=index%2===0?'UP':'DOWN';
+      journal.push({
+        id:model+'-'+index,model_version:5,selected_model:model,
+        target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+        at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,
+        outcome_source:'CLOSED_CANDLE_4H',outcome,
+        predicted_up_probability:outcome==='UP'?90:10
+      });
+    }
+  }
+  const treeAudit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:4,windowSize:6,modelVariant:'GBDT_RESIDUAL'
+  });
+  const hybridAudit=buildCognitivePrequentialProfile(journal,{
+    minimumWindowSamples:4,windowSize:6,modelVariant:'HYBRID_GBDT_MLP'
+  });
+  assert.equal(treeAudit.resolved_forecasts,12);
+  assert.equal(treeAudit.excluded_other_model_variant_forecasts,12);
+  assert.equal(hybridAudit.resolved_forecasts,12);
+  assert.equal(hybridAudit.excluded_other_model_variant_forecasts,12);
+  assert.equal(treeAudit.recent_window.brier_score,0.01);
+  assert.equal(hybridAudit.recent_window.brier_score,0.01);
 });
 
 test('prequential audit never mixes neural and logistic model variants after model selection changes', () => {
