@@ -11,7 +11,9 @@ export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS=29;
-export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_DILATED_RESIDUAL_BTC_CONTEXT_GATED_MASKED_MICRO_ENSEMBLE_V6';
+export const TEMPORAL_LATENT_CHANNELS=8;
+export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=512;
+export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -165,139 +167,143 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
 }
 
 function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
-  const channels = TEMPORAL_SEQUENCE_CHANNELS;
-  const layers = DILATIONS.length;
-  const offset = Number(seed) * 0.6180339887498949;
-  const depthWeights = Array.from({ length: layers }, (_, layer) =>
-    Array.from({ length: KERNEL_TAPS }, (_, tap) =>
-      Array.from({ length: channels }, (_, channel) =>
-        0.035 * Math.sin((layer + 1) * 4.17 + (tap + 1) * 6.31 + (channel + 1) * 2.13 + offset))));
-  const pointWeights = Array.from({ length: layers }, (_, layer) =>
-    Array.from({ length: channels }, (_, input) =>
-      Array.from({ length: channels }, (_, output) =>
-        0.025 * Math.cos((layer + 1) * 3.71 + (input + 1) * 2.91 + (output + 1) * 5.23 + offset))));
-  const biases = Array.from({ length: layers }, (_, layer) =>
-    Array.from({ length: channels }, (_, channel) =>
-      0.002 * Math.sin((layer + 1) * 5.3 + (channel + 1) * 1.7 + offset)));
-  // The shared TCN starts from a pooled-sequence logistic fit trained only
-  // on the chronological training block. The convolutional stack learns an
-  // additive temporal residual; it cannot erase the linear anchor.
-  // A zero output head blocks gradients from reaching every temporal layer
-  // during the first epoch. Start with a tiny deterministic seed-shaped head:
-  // it preserves the frozen logistic anchor while allowing full backpropagation
-  // from the first training pass without adding runtime randomness.
-  const outputWeights = Array.from({ length: channels }, (_, channel) =>
-    0.01 * Math.sin((channel + 1) * 4.73 + offset));
+  const inputChannels=TEMPORAL_SEQUENCE_CHANNELS;
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const layers=DILATIONS.length;
+  const offset=Number(seed)*0.6180339887498949;
+  const projectionWeights=Array.from({length:inputChannels},(_,input)=>
+    Array.from({length:channels},(_,output)=>
+      0.045*Math.sin((input+1)*3.71+(output+1)*5.23+offset)));
+  const projectionBiases=Array.from({length:channels},(_,channel)=>
+    0.002*Math.cos((channel+1)*2.17+offset));
+  const depthWeights=Array.from({length:layers},(_,layer)=>
+    Array.from({length:KERNEL_TAPS},(_,tap)=>
+      Array.from({length:channels},(_,channel)=>
+        0.035*Math.sin((layer+1)*4.17+(tap+1)*6.31+(channel+1)*2.13+offset))));
+  const pointWeights=Array.from({length:layers},(_,layer)=>
+    Array.from({length:channels},(_,input)=>
+      Array.from({length:channels},(_,output)=>
+        0.025*Math.cos((layer+1)*3.71+(input+1)*2.91+(output+1)*5.23+offset))));
+  const biases=Array.from({length:layers},(_,layer)=>
+    Array.from({length:channels},(_,channel)=>
+      0.002*Math.sin((layer+1)*5.3+(channel+1)*1.7+offset)));
+  const outputWeights=Array.from({length:channels},(_,channel)=>
+    0.01*Math.sin((channel+1)*4.73+offset));
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
-  const baselineWeights=Array.isArray(baselineFit?.weights)&&baselineFit.weights.length===channels*2
-    ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4)):Array(channels*2).fill(0);
+  const baselineWeights=Array.isArray(baselineFit?.weights)&&
+    baselineFit.weights.length===inputChannels*2
+      ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
+      :Array(inputChannels*2).fill(0);
   const baselineBias=Number.isFinite(Number(baselineFit?.bias))
     ?Number(baselineFit.bias):Math.log(prior/(1-prior));
   return {
-    depthWeights,pointWeights,biases,outputWeights,
-    skipWeights:baselineWeights,outputBias:baselineBias,
-    baseline_by_regime:null,
-    residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR'
+    projectionWeights,projectionBiases,depthWeights,pointWeights,biases,outputWeights,
+    skipWeights:baselineWeights,outputBias:baselineBias,baseline_by_regime:null,
+    residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR',
+    latent_channels:channels,trainable_parameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT
   };
 }
 
 function forward(sequence, model, residualScale=1) {
-  const activations = [sequence];
-  const depthCaches = [];
-  for (let layer = 0; layer < DILATIONS.length; layer++) {
-    const input = activations[layer];
-    const dilation = DILATIONS[layer];
-    const depth = input.map((row, time) => row.map((_, channel) => {
-      let value = input[time][channel];
-      for (let tap = 1; tap <= KERNEL_TAPS; tap++) {
-        const previous = time - tap * dilation;
-        if (previous >= 0) value += model.depthWeights[layer][tap - 1][channel] * input[previous][channel];
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const projected=sequence.map(row=>Array.from({length:channels},(_,outputChannel)=>{
+    let value=model.projectionBiases[outputChannel];
+    for(let inputChannel=0;inputChannel<TEMPORAL_SEQUENCE_CHANNELS;inputChannel++){
+      value+=row[inputChannel]*model.projectionWeights[inputChannel][outputChannel];
+    }
+    return Math.tanh(value);
+  }));
+  const activations=[projected],depthCaches=[];
+  for(let layer=0;layer<DILATIONS.length;layer++){
+    const input=activations[layer],dilation=DILATIONS[layer];
+    const depth=input.map((row,time)=>row.map((_,channel)=>{
+      let value=input[time][channel];
+      for(let tap=1;tap<=KERNEL_TAPS;tap++){
+        const previous=time-tap*dilation;
+        if(previous>=0)value+=model.depthWeights[layer][tap-1][channel]*input[previous][channel];
       }
       return value;
     }));
-    const output = depth.map((row, time) => row.map((_, outputChannel) => {
-      let value = input[time][outputChannel] + model.biases[layer][outputChannel];
-      for (let inputChannel = 0; inputChannel < TEMPORAL_SEQUENCE_CHANNELS; inputChannel++) {
-        value += depth[time][inputChannel] * model.pointWeights[layer][inputChannel][outputChannel];
+    const output=depth.map((row,time)=>row.map((_,outputChannel)=>{
+      let value=input[time][outputChannel]+model.biases[layer][outputChannel];
+      for(let inputChannel=0;inputChannel<channels;inputChannel++){
+        value+=depth[time][inputChannel]*model.pointWeights[layer][inputChannel][outputChannel];
       }
       return Math.tanh(value);
     }));
-    depthCaches.push(depth);
-    activations.push(output);
+    depthCaches.push(depth);activations.push(output);
   }
-  const final = activations.at(-1);
-  // The causal receptive field spans the 24-step window. Pool the latest
-  // 12 states, so older multi-hour setup/market-regime context contributes.
-  const poolStart=Math.max(0,final.length-12);
-  const pooled = Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0);
-  const poolCount = final.length - poolStart;
-  for (let time = poolStart; time < final.length; time++) {
-    for (let channel = 0; channel < pooled.length; channel++) pooled[channel] += final[time][channel] / poolCount;
+  const final=activations.at(-1),poolStart=Math.max(0,final.length-12);
+  const pooled=Array(channels).fill(0),poolCount=final.length-poolStart;
+  for(let time=poolStart;time<final.length;time++){
+    for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
   }
   const baselineFeatures=pooledSequence(sequence);
-  // Each BTC regime uses its own logistic anchor fitted only on the shared
-  // chronological training block. This matches the regime-specific logistic
-  // challenger used in validation/holdout; the TCN residual learns only what
-  // is additional to that regime's linear signal.
   const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
-  const baselineWeights=Array.isArray(regimeBaseline?.weights)
-    ?regimeBaseline.weights:model.skipWeights;
-  const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))
-    ?Number(regimeBaseline.bias):model.outputBias;
-  let logit = baselineBias;
+  const baselineWeights=Array.isArray(regimeBaseline?.weights)?regimeBaseline.weights:model.skipWeights;
+  const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))?Number(regimeBaseline.bias):model.outputBias;
+  let logit=baselineBias;
   for(let feature=0;feature<baselineFeatures.length;feature++){
     logit+=baselineFeatures[feature]*(Number(baselineWeights?.[feature])||0);
   }
   const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
-  for (let channel = 0; channel < pooled.length; channel++) logit += pooled[channel] * model.outputWeights[channel] * boundedResidualScale;
-  return { probability: logistic(logit), activations, depthCaches, pooled, poolStart, poolCount, baselineFeatures };
+  for(let channel=0;channel<pooled.length;channel++){
+    logit+=pooled[channel]*model.outputWeights[channel]*boundedResidualScale;
+  }
+  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,baselineFeatures};
 }
 
 function gradientsFor(sequence, target, model, cache) {
-  const gradients = zerosLike(model);
-  const activationGradients = Array(DILATIONS.length + 1);
-  const final = cache.activations.at(-1);
-  activationGradients[DILATIONS.length] = final.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const gradients=zerosLike(model),channels=TEMPORAL_LATENT_CHANNELS;
+  const activationGradients=Array(DILATIONS.length+1);
+  const final=cache.activations.at(-1);
+  activationGradients[DILATIONS.length]=final.map(()=>Array(channels).fill(0));
   const error=2*(cache.probability-target)*cache.probability*(1-cache.probability);
-  // outputBias and skipWeights are frozen at the training-only logistic anchor.
-  for (let channel = 0; channel < TEMPORAL_SEQUENCE_CHANNELS; channel++) {
-    gradients.outputWeights[channel] = error * cache.pooled[channel];
-    for (let time = cache.poolStart; time < final.length; time++) {
-      activationGradients[DILATIONS.length][time][channel] +=
-        error * model.outputWeights[channel] / cache.poolCount;
+  for(let channel=0;channel<channels;channel++){
+    gradients.outputWeights[channel]=error*cache.pooled[channel];
+    for(let time=cache.poolStart;time<final.length;time++){
+      activationGradients[DILATIONS.length][time][channel]+=
+        error*model.outputWeights[channel]/cache.poolCount;
     }
   }
-
-  for (let layer = DILATIONS.length - 1; layer >= 0; layer--) {
-    const input = cache.activations[layer];
-    const output = cache.activations[layer + 1];
-    const depth = cache.depthCaches[layer];
-    const dilation = DILATIONS[layer];
-    const inputGradient = input.map(() => Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
-    const outputGradient = activationGradients[layer + 1];
-    for (let time = 0; time < output.length; time++) {
-      for (let outputChannel = 0; outputChannel < TEMPORAL_SEQUENCE_CHANNELS; outputChannel++) {
-        const activation = output[time][outputChannel];
-        const dz = outputGradient[time][outputChannel] * (1 - activation * activation);
-        gradients.biases[layer][outputChannel] += dz;
-        // Residual identity path.
-        inputGradient[time][outputChannel] += dz;
-        for (let inputChannel = 0; inputChannel < TEMPORAL_SEQUENCE_CHANNELS; inputChannel++) {
-          gradients.pointWeights[layer][inputChannel][outputChannel] += depth[time][inputChannel] * dz;
-          const depthGradient = model.pointWeights[layer][inputChannel][outputChannel] * dz;
-          inputGradient[time][inputChannel] += depthGradient;
-          for (let tap = 1; tap <= KERNEL_TAPS; tap++) {
-            const previous = time - tap * dilation;
-            if (previous < 0) continue;
-            gradients.depthWeights[layer][tap - 1][inputChannel] +=
-              input[previous][inputChannel] * depthGradient;
-            inputGradient[previous][inputChannel] +=
-              model.depthWeights[layer][tap - 1][inputChannel] * depthGradient;
+  for(let layer=DILATIONS.length-1;layer>=0;layer--){
+    const input=cache.activations[layer],output=cache.activations[layer+1];
+    const depth=cache.depthCaches[layer],dilation=DILATIONS[layer];
+    const inputGradient=input.map(()=>Array(channels).fill(0));
+    const outputGradient=activationGradients[layer+1];
+    for(let time=0;time<output.length;time++){
+      for(let outputChannel=0;outputChannel<channels;outputChannel++){
+        const activation=output[time][outputChannel];
+        const dz=outputGradient[time][outputChannel]*(1-activation*activation);
+        gradients.biases[layer][outputChannel]+=dz;
+        inputGradient[time][outputChannel]+=dz;
+        for(let inputChannel=0;inputChannel<channels;inputChannel++){
+          gradients.pointWeights[layer][inputChannel][outputChannel]+=depth[time][inputChannel]*dz;
+          const depthGradient=model.pointWeights[layer][inputChannel][outputChannel]*dz;
+          inputGradient[time][inputChannel]+=depthGradient;
+          for(let tap=1;tap<=KERNEL_TAPS;tap++){
+            const previous=time-tap*dilation;
+            if(previous<0)continue;
+            gradients.depthWeights[layer][tap-1][inputChannel]+=
+              input[previous][inputChannel]*depthGradient;
+            inputGradient[previous][inputChannel]+=
+              model.depthWeights[layer][tap-1][inputChannel]*depthGradient;
           }
         }
       }
     }
-    activationGradients[layer] = inputGradient;
+    activationGradients[layer]=inputGradient;
+  }
+  const projected=cache.activations[0];
+  for(let time=0;time<sequence.length;time++){
+    for(let outputChannel=0;outputChannel<channels;outputChannel++){
+      const activation=projected[time][outputChannel];
+      const dz=activationGradients[0][time][outputChannel]*(1-activation*activation);
+      gradients.projectionBiases[outputChannel]+=dz;
+      for(let inputChannel=0;inputChannel<TEMPORAL_SEQUENCE_CHANNELS;inputChannel++){
+        gradients.projectionWeights[inputChannel][outputChannel]+=sequence[time][inputChannel]*dz;
+      }
+    }
   }
   return gradients;
 }
@@ -312,6 +318,7 @@ function fitMember(rows, seed, {
     ?baselineByRegime:null;
   model.training_objective=trainingObjective;
   const trainableParameters=()=>({
+    projectionWeights:model.projectionWeights,projectionBiases:model.projectionBiases,
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
     biases:model.biases,outputWeights:model.outputWeights
   });
@@ -324,7 +331,7 @@ function fitMember(rows, seed, {
       const plus = (target, source) => Array.isArray(target)
         ? target.map((value, index) => plus(value, source[index]))
         : target + source;
-      for (const key of ['depthWeights', 'pointWeights', 'biases', 'outputWeights']) {
+      for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         gradient[key] = plus(gradient[key], itemGradient[key]);
       }
     }
