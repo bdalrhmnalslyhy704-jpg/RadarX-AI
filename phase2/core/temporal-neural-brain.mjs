@@ -17,6 +17,7 @@ const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
 const HORIZON_MS = 4 * 60 * 60 * 1000;
 const SEEDS = Object.freeze([13, 29, 47]);
+const RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
 const MIN_TRAIN = 160;
 const MAX_TRAIN = 1280;
 const MIN_VALIDATION = 24;
@@ -547,7 +548,7 @@ function fitEnsemble(rows, options = {}) {
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-    candidate_residual_scales:[0,0.25,0.5,0.75,1],
+    candidate_residual_scales:[...RESIDUAL_SCALES],
     training_prior_probability:baseRate
   };
 }
@@ -814,7 +815,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2',
     training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
-    candidate_residual_scales:[0,0.25,0.5,0.75,1]
+    candidate_residual_scales:[...RESIDUAL_SCALES]
   };
 
   const regimeResults={};
@@ -948,7 +949,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
     const selectionPrior=localSelectionSupported?regimePrior:baseRate;
     const regimeFit=sharedResidualFit;
-    const candidateResidualScales=[0,0.25,0.5,0.75,1];
+    const candidateResidualScales=RESIDUAL_SCALES;
     const memberRanks=regimeFit.members.flatMap((member,index)=>
       candidateResidualScales.map(residualScale=>({
         index,residual_scale:residualScale,
@@ -1198,7 +1199,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_index:null,
     member_selection_method:'REGIME_PREFERRED_SHARED_FALLBACK_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER',
     residual_scale_selection:'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2',
-    candidate_residual_scales:[0,0.25,0.5,0.75,1],
+    candidate_residual_scales:[...RESIDUAL_SCALES],
     regime_specialist_count:2,
     regime_selection_mode:'REGIME_LOCAL_SHARED_FALLBACK_TCN_OUT_OF_SAMPLE_GATES_V16',
     model_scope:'SHARED_TCN_RESIDUAL_WITH_REGIME_SPECIFIC_LOGISTIC_ANCHORS',
