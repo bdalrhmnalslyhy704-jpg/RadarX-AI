@@ -487,7 +487,7 @@ test('unobserved order book stays explicitly unknown and never receives a fabric
 
 test('prequential audit isolates boosted-tree and hybrid predictions by model variant',()=>{
   const journal=[];
-  for(const model of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP']){
+  for(const model of ['GBDT_RESIDUAL','HYBRID_GBDT_MLP_W75']){
     for(let index=0;index<12;index++){
       const at=BASE_TIME+(model==='GBDT_RESIDUAL'?0:100)*FOUR_HOURS+
         index*5*60*60*1000;
