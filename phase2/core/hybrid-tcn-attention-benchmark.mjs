@@ -1071,41 +1071,11 @@ export function profitDrawdownObjective(probabilities, rows, {
   const pairs = rows.map((row, index) => ({
     row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
-  // The portfolio risk path is measured per market snapshot, not per symbol row.
   // Same-time entries are simultaneous; earlier entries stay open until resolved_at.
-  // Both same-time and overlapping positions share the actual capital/slot ceilings.
-  const positions = Array(rows.length).fill(0);
+  // The objective now follows the paper engine's global and per-symbol occupancy limits.
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
   const focalEligible = Array(rows.length).fill(false);
   const orderedBtcPenaltyFactors = Array(rows.length).fill(1);
-  const decisionGroups = [];
-  for (const pair of pairs) {
-    const gates = enforceMarketGates ? evaluateHybridMarketGates(pair.row, {
-      minimumKamaEfficiencyRatio, minimumVolatilityZScore, btcCountertrendPenaltyPerPct
-    }) : { eligible: true, btc_countertrend_penalty_factor: 1 };
-    const penaltyFactor = gates.eligible ? Number(gates.btc_countertrend_penalty_factor ?? 1) : 0;
-    const rawAllocation = sigmoid((pair.probability - threshold) / temp);
-    const allocation = gates.eligible ? rawAllocation * penaltyFactor : 0;
-    orderedBtcPenaltyFactors[pair.index] = penaltyFactor;
-    // Classification loss must match the executable policy: a row rejected by
-    // KAMA/volatility/BTC gates can never become a position, so it must not
-    // consume model capacity by generating a conflicting focal-loss gradient.
-    focalEligible[pair.index] = gates.eligible === true;
-    orderedProbabilityDerivative[pair.index] = gates.eligible
-      ? rawAllocation * (1 - rawAllocation) / temp * penaltyFactor * pair.probability * (1 - pair.probability)
-      : 0;
-    const net = netReturnPct(pair.row, cost);
-    const adverse = Math.min(0, finite(pair.row.max_adverse_excursion_pct) ?? Math.min(0, net));
-    const favourable = Math.max(0, finite(pair.row.max_favorable_excursion_pct) ?? 0);
-    const excursion = Math.max(0, favourable - adverse);
-    let group = decisionGroups.at(-1);
-    if (!group || group.at !== pair.row.at) {
-      group = {at: pair.row.at, members: []};
-      decisionGroups.push(group);
-    }
-    group.members.push({pair, allocation, net, adverse, excursion});
-  }
-
   const positionCapacity = Math.max(1, Math.floor(1 / size + 1e-9));
   const symbolPositionCapacity = 1;
   const positions = Array(rows.length).fill(0);
