@@ -930,6 +930,8 @@ recordServerPaperPortfolio(snapshot,now){
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.probability_ready===true
             ?String(this.state.cognitive_profile?.model_selection?.selected_model||'LEGACY_BASELINE'):'NONE',
         neural_network:this.state.cognitive_profile?.neural_network||null,
+        boosted_tree_model:this.state.cognitive_profile?.boosted_tree_model||null,
+        hybrid_model:this.state.cognitive_profile?.hybrid_model||null,
         temporal_network:temporalNetwork,
         resolved_samples:Number(this.state.cognitive_profile?.resolved_samples)||0,
         training_samples:Number(this.state.cognitive_profile?.training_samples)||0,
