@@ -1251,7 +1251,6 @@ export function profitDrawdownObjective(probabilities, rows, {
   for (let index = 0; index < n; index++) {
     const value = portfolioReturns[index];
     if (value < 0) downsideSquared += value * value;
-    adverseSquared += orderedAdverseReturns[index] ** 2;
     excursionDrawdownSquared += orderedExcursionDrawdowns[index] ** 2;
     cumulative += value;
     if (cumulative > peak) {
@@ -1270,6 +1269,13 @@ export function profitDrawdownObjective(probabilities, rows, {
     for (let index = from; index <= trough; index++) {
       drawdownGradient[index] -= 2 * drawdownWeight * dd * drawdownRiskScale / n;
     }
+  }
+  // Adverse-excursion timestamps form their own event buckets. Their count
+  // is not necessarily equal to the exit-time portfolio path length; iterating
+  // them using n can read undefined and poison the complete training loss with
+  // NaN (serialized as null). Accumulate this channel on its own clock.
+  for (const adverseReturn of orderedAdverseReturns) {
+    adverseSquared += adverseReturn * adverseReturn;
   }
   const downsideMean = downsideSquared / n;
   const adverseMean = adverseSquared / nAdverse;
@@ -1511,6 +1517,12 @@ export function trainHybridTcnAttention(trainingRows, {
     const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
+    if (!Number.isFinite(objective.loss) ||
+        !Array.isArray(objective.logit_gradients) ||
+        objective.logit_gradients.length !== normalizedRows.length ||
+        !objective.logit_gradients.every(Number.isFinite)) {
+      throw new Error('HYBRID_TCN_NON_FINITE_OBJECTIVE_OR_GRADIENT');
+    }
     // Keep the exact parameter state whose objective was measured. Financial
     // training loss can rise after an initially useful phase; never return a
     // later degraded checkpoint merely because the epoch budget was exhausted.

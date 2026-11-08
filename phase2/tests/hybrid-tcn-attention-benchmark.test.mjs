@@ -269,6 +269,28 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_favorable_excursion_at, at);
 });
 
+test('adverse-excursion event buckets may be fewer than exit buckets without poisoning training loss', () => {
+  const rows = [
+    { at: 100, symbol: 'AUSDT', resolved_at: 500, max_adverse_excursion_at: 250,
+      gross_return_pct: 3, max_adverse_excursion_pct: -0.8, max_favorable_excursion_pct: 3.2 },
+    { at: 150, symbol: 'BUSDT', resolved_at: 600, max_adverse_excursion_at: 250,
+      gross_return_pct: -2, max_adverse_excursion_pct: -2.1, max_favorable_excursion_pct: 0.6 },
+    { at: 200, symbol: 'CUSDT', resolved_at: 700, max_adverse_excursion_at: 250,
+      gross_return_pct: 2.5, max_adverse_excursion_pct: -0.5, max_favorable_excursion_pct: 2.8 }
+  ];
+  const objective = profitDrawdownObjective([0.78, 0.74, 0.81], rows, {
+    positionFraction: 0.5, threshold: 0.55, temperature: 0.15,
+    focalLossWeight: 0, crossSectionalRankingWeight: 0
+  });
+  assert.equal(objective.exit_time_count, 3);
+  assert.equal(objective.adverse_excursion_penalty !== null, true);
+  assert.ok(Number.isFinite(objective.adverse_excursion_penalty));
+  assert.ok(Number.isFinite(objective.loss),
+    'independent adverse-event cardinality must not serialize the objective loss as null');
+  assert.ok(objective.logit_gradients.every(Number.isFinite),
+    'every row gradient must remain finite when adverse timestamps are coalesced');
+});
+
 test('profit-loss logit gradients match a central finite-difference check', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
