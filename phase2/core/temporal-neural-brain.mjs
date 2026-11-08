@@ -696,14 +696,13 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      // Mature histories retain a larger member-selection block. In the last
-      // live acceptance scan, the old 70/80/98 split left only 93 selection
-      // rows and 5 positives for choosing among 15 member/scale combinations.
-      // Train on 70%, select on 70-86%, calibrate on 86-98%, then validate
-      // and hold out on their existing untouched outer chronological blocks.
-      // Keeping training at 70% preserves the mature-history >=600-row fitting
-      // floor while widening selection from 10% to 16% of the fit history.
-      :{training:0.70,memberSelection:0.86,calibration:0.98};
+      // Mature histories keep 70% for model fitting and 14% for member
+      // selection, reserving 15.5% for regime-local probability calibration.
+      // The live bullish regime narrowly missed the unchanged five-positive
+      // calibration-support gate. Reallocating two points from selection to
+      // calibration increases support without lowering any minimum or using
+      // outer validation/holdout labels for fitting or model selection.
+      :{training:0.70,memberSelection:0.84,calibration:0.995};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
