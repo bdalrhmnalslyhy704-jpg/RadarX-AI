@@ -97,7 +97,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_WITH_POOLED_FALLBACK_V2');
   assert.equal(profile.residual_scale_selection,'REGIME_LOCAL_SHARED_FALLBACK_SELECTION_BLOCK_BRIER_GRID_V2');
   assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
-  assert.deepEqual(profile.candidate_residual_scales,[0,0.25,0.5,0.75,1]);
+  assert.deepEqual(profile.candidate_residual_scales,[0,0.1,0.25,0.5,1]);
   assert.equal(profile.member_training_profiles.length,3);
   assert.ok(profile.member_training_profiles.every(row=>
     row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
@@ -248,7 +248,7 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const expert=profile.regime_specialists[regime];
     assert.ok(expert.holdout_samples>=20);
-    assert.ok([0,0.25,0.5,0.75,1].includes(expert.selected_residual_scale));
+    assert.ok([0,0.1,0.25,0.5,1].includes(expert.selected_residual_scale));
     assert.ok(expert.holdout_positive_samples>=5);
     assert.ok(expert.holdout_negative_samples>=20);
     assert.ok(expert.validation_start_at<profile.holdout_start_at);
