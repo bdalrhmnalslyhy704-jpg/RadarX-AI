@@ -1,4 +1,4 @@
-# Hybrid TCN + Attention — Fixed-SHA research benchmark
+# Hybrid TCN + Attention — KAMA / Volatility / BTC-gated Fixed-SHA benchmark
 
 ## Status and safety
 
@@ -18,7 +18,7 @@ The classical baseline and the neural challenger are run against the same normal
 
 ## Causal feature tensor
 
-buildHybridSequence constructs a causal 24-step × 28-channel sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 28 channels include:
+buildHybridSequence constructs a causal 24-step × 29-channel sequence from completed candles only. It rejects incomplete candles and any candle whose close time exceeds asOf. The 28 channels include:
 
 1. One-, three-, and twelve-candle log returns.
 2. Candle body, range, close location, and upper/lower wick fractions.
@@ -30,30 +30,41 @@ buildHybridSequence constructs a causal 24-step × 28-channel sequence from comp
 8. Explicit availability masks for depth, aggregate-trade price levels, and the timestamp-matched relative-BTC reference.
 9. One-candle return acceleration and three-candle momentum reversal versus the preceding three-candle window.
 10. Fast/slow close-mean spread, higher-low reclaim, and close reclaim relative to the preceding three-candle high.
+11. Kaufman Efficiency Ratio (KAMA ER) over the preceding ten closed-candle price changes. It measures net directional progress relative to total path length and is included as the 29th channel.
 
 The order-book and aggregate-trade fields are optional. A missing feed is encoded as unavailable, not fabricated as neutral live evidence. When historical AggTrades exist, the volume profile bins actual trade quote volume by executed price. When only OHLCV candles exist, it falls back to a candle-typical-price proxy and exposes that distinction through its explicit profile-source and availability masks; it must not be described as tick-accurate profile data. The current builder consumes depth/aggregate-trade fields attached to their matching completed candle and uses only BTC candles closed by the same decision timestamp for relative strength. The replay adapter fetches this BTC reference history separately. Historical order-book snapshots remain unavailable and are represented with an explicit mask; no depth is fabricated.
 
 ## Neural architecture and objective
 
-The challenger first fits per-channel z-score normalization on the training fold only (standard deviation floor 0.05; normalized values clipped to [-4, 4]) and applies the same frozen transform to that fold's validation and test rows. The normalized 28 features are projected to 12 hidden channels, then passed through four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps and 12 hidden channels. This gives a theoretical 31-step receptive field, spanning the full 24-step input. The hidden activation is LeakyReLU (alpha 0.05), avoiding tanh saturation while retaining a negative-side gradient. A learned temporal attention query produces a softmax weight over the 24 available historical states. The output layer learns a bounded dynamic logit scale from training data only; its effective scale is constrained to [0.25, 4.0]. No step after the decision timestamp is accessible to the model.
+The challenger first fits per-channel z-score normalization on the training fold only (standard deviation floor 0.05; normalized values clipped to [-4, 4]) and applies the same frozen transform to that fold's validation and test rows. The normalized 29 features are projected to 12 hidden channels, then passed through four causal residual temporal convolution blocks with dilations 1, 2, 4, and 8, each using three causal kernel taps and 12 hidden channels. This gives a theoretical 31-step receptive field, spanning the full 24-step input. The hidden activation is LeakyReLU (alpha 0.05), avoiding tanh saturation while retaining a negative-side gradient. A learned temporal attention query produces a softmax weight over the 24 available historical states. The output layer learns a bounded dynamic logit scale from training data only; its effective scale is constrained to [0.25, 4.0]. No step after the decision timestamp is accessible to the model.
 
-Training minimizes a custom differentiable portfolio objective, not MSE or Brier:
+Training minimizes a custom differentiable cumulative-equity objective, not MSE or Brier:
 
-loss = -mean(net portfolio return) - 0.15 * Sharpe + 0.08 * downside semivariance + 0.04 * adverse-excursion penalty + 0.04 * intratrade peak-to-trough excursion penalty + 0.08 * entry-ordered drawdown proxy + 0.25 * asymmetric focal loss.
+loss = -mean(net portfolio return) - 0.02 * cumulative geometric equity return - 0.30 * Sharpe(log equity returns) + 0.08 * downside semivariance + 0.04 * adverse-excursion penalty + 0.04 * intratrade peak-to-trough excursion penalty + 0.08 * entry-ordered drawdown proxy + 0.25 * asymmetric focal loss.
 
 The focal target is whether each completed paper outcome is profitable after the fixed round-trip cost. Positive outcomes use gamma=1 and weight=1.0; losing outcomes use gamma=2 and weight=1.6, so confident false-positive entries are penalized more heavily. The focal term is combined with the portfolio objective; it does not replace execution costs, drawdown simulation, or out-of-sample acceptance.
 
 The gradient flows through the smooth position-allocation function, asymmetric focal term, dynamic output scale, attention and TCN layers. The focal-loss and portfolio gradients are checked independently against central finite differences. This objective is an optimization target, not a guarantee of future profit. Thresholds are selected only on the validation block inside each walk-forward fold.
 
+## Pre-TCN market-quality gates
+
+The final 29th tensor channel is the ten-bar KAMA Efficiency Ratio. The benchmark also carries three causal decision-time context values separately from the learned tensor:
+
+- **KAMA trend-efficiency gate:** require KAMA ER ≥0.20. A low value means the ten-bar price path has made little net progress relative to its total travelled distance; the candidate is rejected before paper execution.
+- **Z-score volatility gate:** compare current six-return realized volatility with the mean and standard deviation of the preceding 24 rolling six-return volatility observations. Require z-score ≥0 (current volatility at or above its own recent mean). The comparison uses only observations closed by the decision timestamp.
+- **BTC countertrend penalty:** compute the timestamp-aligned 12-bar BTCUSDT return. For a long Spot signal during a negative BTC trend, multiply the model score/exposure by `exp(-0.12 × abs(BTC trend return in percentage points)`. Positive or flat BTC trend receives factor 1. Missing KAMA, volatility, or aligned BTC context rejects the candidate; it is not silently imputed.
+
+The same gates and BTC penalty are applied in training exposure, validation threshold selection, the classic comparator, and out-of-sample simulation. Each replay report includes counts for KAMA rejection, low-volatility rejection, missing market context, and BTC countertrend penalties. The gates reduce exposure; they are not a promise of a 55% win rate.
+
 ## Execution and outcome rules
 
 The benchmark assumes long-only Binance Spot entries, up to thirty concurrent positions across distinct symbols, and a 1/30 initial-equity allocation per position. A second signal for a symbol is rejected until its prior position resolves; capacity and available cash are both enforced. Default round-trip costs are 30 bps (10 bps fee plus 5 bps slippage per side). All strategies use identical costs. A +3% take-profit and -2% stop-loss are resolved from completed future candles; if one candle touches both levels and OHLC ordering is unknown, the stop is assumed to occur first. This conservative tie rule prevents optimistic look-ahead.
 
-The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The historical replay capture adapter samples one decision every ten minutes from completed 1m candles and resolves the fixed +3% / -2% barrier over the full four-hour forward horizon. It refuses unresolved horizons and keeps order-book depth explicitly unavailable when no historical depth archive exists. The matrix adapter stamps each replay row with its historical window ID and the BTC market regime classified from observed closed BTC candles. Rows with unknown regimes are rejected. All three observed regimes — BULL_TREND, BEAR_TREND, and SIDEWAYS — must be present before model fitting or acceptance. The dataset must provide one unique row per symbol/decision timestamp with a 24 × 28 sequence tensor (matching the frozen feature-name order) and:
+The event adapter prepareHybridBenchmarkEvent builds a normalized row from the decision-time closed-candle window and the forward 4-hour closed-candle path. It refuses an incomplete forward horizon when neither barrier has been reached. The historical replay capture adapter samples one decision every ten minutes from completed 1m candles and resolves the fixed +3% / -2% barrier over the full four-hour forward horizon. It refuses unresolved horizons and keeps order-book depth explicitly unavailable when no historical depth archive exists. The matrix adapter stamps each replay row with its historical window ID and the BTC market regime classified from observed closed BTC candles. Rows with unknown regimes are rejected. All three observed regimes — BULL_TREND, BEAR_TREND, and SIDEWAYS — must be present before model fitting or acceptance. The versioned V2_KAMA_VOL_BTC dataset must provide one unique row per symbol/decision timestamp with a 24 × 29 sequence tensor (matching the frozen feature-name order) and:
 
 - id, symbol, market=BINANCE_SPOT_USDT, a single fixed closed-Spot outcome_source (1m replay or 15m), the exact outcome_definition FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1, at, latest_input_at, and resolved_at in epoch milliseconds.
 - max_adverse_excursion_pct / max_adverse_excursion_at and max_favorable_excursion_pct / max_favorable_excursion_at from the completed future candle path, so both portfolio peaks and troughs are marked at their observed event times rather than at entry.
-- sequence: exactly 24 rows by 28 finite normalized features, each value within [-4, 4].
+- sequence: exactly 24 rows by 29 finite normalized features, each value within [-4, 4], with the KAMA ER channel last. The row also carries finite KAMA ER, volatility z-score, and 12-bar BTC trend return values for the market gates.
 - gross_return_pct: realized long-only forward gross return, derived from the same closed-candle outcome policy for every model.
 - classic_score: frozen classic-baseline score normalized to [0, 1].
 
@@ -80,7 +91,7 @@ The hybrid may be marked accepted only if all these independent gates pass on th
 - All three observed BTC regimes (bull, bear, sideways) are represented by replay rows, with each row traceable to its historical window.
 - AggTrade flow is present on at least 80% of scored rows, executed-price volume-profile coverage is at least 70%, and relative-BTC reference coverage is at least 80%.
 
-Any missing gate yields NEURAL_SUPERIORITY_NOT_PROVEN. Insufficient folds yield INSUFFICIENT_WALK_FORWARD_COVERAGE.
+Any missing acceptance gate yields NEURAL_SUPERIORITY_NOT_PROVEN. The market-quality gates are also mandatory for every candidate paper entry and fail closed when their decision-time context is unavailable. Insufficient folds yield INSUFFICIENT_WALK_FORWARD_COVERAGE.
 
 ## Reproduction
 
