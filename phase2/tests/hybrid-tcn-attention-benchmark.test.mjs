@@ -486,6 +486,18 @@ test('cross-sectional neural ranking pushes same-time profitable assets above lo
     'gradient must raise the profitable row logit');
   assert.ok(objective.logit_gradients[1] > 0,
     'gradient must lower the losing row logit');
+
+  const sigmoid = value => 1 / (1 + Math.exp(-value));
+  const positiveLogit = Math.log(0.4 / 0.6);
+  const epsilon = 1e-4;
+  const evaluate = value => profitDrawdownObjective(
+    [sigmoid(value), 0.6], [positive, negative], options
+  ).loss;
+  const numerical = (evaluate(positiveLogit + epsilon) - evaluate(positiveLogit - epsilon)) /
+    (2 * epsilon);
+  assert.ok(Math.abs(objective.logit_gradients[0] - numerical) < 2e-4,
+    'cross-sectional ranking gradient must include the probability-to-model-logit chain rule: ' +
+    objective.logit_gradients[0] + ' vs ' + numerical);
 });
 
 test('cross-sectional ranking never compares assets from different decision times', () => {
