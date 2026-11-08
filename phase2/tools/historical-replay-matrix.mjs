@@ -53,7 +53,7 @@ async function main(){
     process.stdout.write([
       'RadarX multi-window historical replay matrix (public Binance Spot, read-only)',
       'Usage: node phase2/tools/historical-replay-matrix.mjs [--symbols BTCUSDT,ETHUSDT,...] [--windows windows.json]',
-      '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 4] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
+      '       [--max-trade-pages 60] [--max-trades 60000] [--archive-prefetch-concurrency 8] [--window-replay-concurrency 3] [--outcome-horizon-hours 24] [--output reports/radarx-matrix]',
       '       [--hybrid-benchmark-output dataset.json] (4h horizon; 24x29 KAMA/volatility/BTC-gated causal sequence export) [--dry-run]',
       'Default coverage: 30 Spot USDT symbols × 3 one-day candidate windows (maximum 90 symbol-window replays).',
       'Each window is classified from observed closed BTCUSDT candles: BULL_TREND, BEAR_TREND, SIDEWAYS, MIXED, or UNKNOWN.',
@@ -66,61 +66,98 @@ async function main(){
   const windows=normalizeMatrixWindows(windowsInput,{now:Date.now()});
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
   const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
-  const archivePrefetchConcurrency=integer(flag(args,'--archive-prefetch-concurrency','4'),4,1,8,'archive-prefetch-concurrency');
+  const archivePrefetchConcurrency=integer(flag(args,'--archive-prefetch-concurrency','8'),8,1,8,'archive-prefetch-concurrency');
+  const windowReplayConcurrency=integer(flag(args,'--window-replay-concurrency','3'),3,1,3,'window-replay-concurrency');
   const outcomeHorizonHours=integer(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours');
   const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
   const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
   if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const timeoutMs=integer(flag(args,'--timeout-ms','1800000'),1800000,60000,7200000,'timeout-ms');
   const outputDir=resolve(flag(args,'--output','./reports/radarx-historical-matrix-'+new Date().toISOString().replace(/[:.]/g,'-')));
-  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,archive_prefetch_concurrency:archivePrefetchConcurrency,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
+  const plan={engine:'RADARX_HISTORICAL_REPLAY_MATRIX_V1',created_at:new Date().toISOString(),symbol_count:symbols.length,window_count:windows.length,planned_symbol_window_replays:symbols.length*windows.length,symbols,windows:windows.map(w=>({id:w.id,label:w.label,start:w.start,end:w.end})),limits:{max_trade_pages_per_symbol:maxTradePages,max_trades_per_symbol:maxTrades,archive_prefetch_concurrency:archivePrefetchConcurrency,window_replay_concurrency:windowReplayConcurrency,archive_prefetch_scope:'ALL_SYMBOLS_ALL_WINDOWS_BEFORE_REPLAY',replay_windows_in_parallel:true,outcome_horizon_hours:outcomeHorizonHours,timeout_ms_per_window:timeoutMs},policy:{market:'BINANCE_SPOT',paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'}};
   if(args.includes('--dry-run')){process.stdout.write(JSON.stringify({...plan,status:'DRY_RUN_NO_NETWORK'},null,2)+'\n');return;}
   await mkdir(outputDir,{recursive:true});
   const client=new RestClient({...CONFIG.rest,baseUrls:CONFIG.rest.baseUrls??CONFIG.rest.urls});
-  const results=[];
-  const hybridRows=[];
-  let hybridSourceSha=null;
-  for(let i=0;i<windows.length;i++){
-    const window=windows[i];
-    process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+' ('+(i+1)+'/'+windows.length+')\n');
-    const marketRegime=await classifyWindow(client,window);
-    if(hybridBenchmarkOutput){
-      const archiveStart=window.startMs-25*MINUTE_MS;
-      const archiveEnd=window.endMs-1;
-      const archiveResults=await mapWithConcurrency(symbols,archivePrefetchConcurrency,async symbol=>{
-        try{
-          const result=await fetchBinanceSpotAggTradesArchive(symbol,archiveStart,archiveEnd,{maxTrades});
-          return {symbol,complete:result.complete===true,rows:Number(result.coverage?.rows)||0,
-            reason:result.complete===true?null:String(result.coverage?.reason||'ARCHIVE_INCOMPLETE')};
-        }catch(error){return {symbol,complete:false,rows:0,reason:String(error?.message??error).slice(0,180)};}
-      });
-      const archiveComplete=archiveResults.filter(item=>item.complete).length;
-      process.stderr.write('[MATRIX_ARCHIVE_PREFETCH] '+window.id+' complete='+archiveComplete+'/'+symbols.length+
-        ' concurrency='+archivePrefetchConcurrency+' incomplete='+JSON.stringify(archiveResults.filter(item=>!item.complete))+'\\n');
-    }
+  // Classify all regimes and prefetch every symbol/window archive up front.
+  // This prevents a later window from waiting for the previous window's downloads.
+  const regimeRows=await mapWithConcurrency(windows,Math.min(3,windows.length),async window=>({
+    windowId:window.id,marketRegime:await classifyWindow(client,window)
+  }));
+  const regimeByWindow=new Map(regimeRows.map(item=>[item.windowId,item.marketRegime]));
+  let archivePrefetchSummary=null;
+  if(hybridBenchmarkOutput){
+    const archiveTasks=windows.flatMap(window=>symbols.map(symbol=>({
+      windowId:window.id,symbol,startTime:window.startMs-25*MINUTE_MS,endTime:window.endMs-1
+    })));
+    const archiveRows=await mapWithConcurrency(archiveTasks,archivePrefetchConcurrency,async task=>{
+      try{
+        const result=await fetchBinanceSpotAggTradesArchive(task.symbol,task.startTime,task.endTime,{maxTrades});
+        return {windowId:task.windowId,symbol:task.symbol,complete:result.complete===true,
+          rows:Number(result.coverage?.rows)||0,cacheHit:result.coverage?.cache_hit===true,
+          reason:result.complete===true?null:String(result.coverage?.reason||'ARCHIVE_INCOMPLETE')};
+      }catch(error){
+        return {windowId:task.windowId,symbol:task.symbol,complete:false,rows:0,cacheHit:false,
+          reason:String(error?.message??error).slice(0,180)};
+      }
+    });
+    const byWindow=windows.map(window=>{
+      const rows=archiveRows.filter(item=>item.windowId===window.id);
+      return {window_id:window.id,complete:rows.filter(item=>item.complete).length,
+        requested:rows.length,cache_hits:rows.filter(item=>item.cacheHit).length,
+        incomplete:rows.filter(item=>!item.complete).map(({windowId,...item})=>item)};
+    });
+    archivePrefetchSummary={
+      requested:archiveRows.length,complete:archiveRows.filter(item=>item.complete).length,
+      cache_hits:archiveRows.filter(item=>item.cacheHit).length,
+      concurrency:archivePrefetchConcurrency,windows:byWindow
+    };
+    process.stderr.write('[MATRIX_ARCHIVE_PREFETCH_ALL_WINDOWS] '+JSON.stringify(archivePrefetchSummary)+'\\n');
+  }
+  // Replay the three independently checksummed windows concurrently. Each child
+  // writes to unique paths; the shared OS temp archive cache is already warm.
+  const replayRows=await mapWithConcurrency(windows,windowReplayConcurrency,async(window,i)=>{
+    const marketRegime=regimeByWindow.get(window.id)??{regime:'UNKNOWN',sample_count:0,reason:'BTC_REGIME_RESULT_MISSING'};
+    process.stderr.write('[MATRIX] '+window.id+' '+window.start+' .. '+window.end+
+      ' ('+(i+1)+'/'+windows.length+', parallel='+windowReplayConcurrency+')\\n');
     const rawPath=resolve(outputDir,window.id+'.json');
     const hybridWindowPath=resolve(outputDir,window.id+'.hybrid-benchmark.json');
-    const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),'--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),'--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),'--output',rawPath];
+    const childArgs=[replayScript,'--symbols',symbols.join(','),'--start',String(window.startMs),
+      '--end',String(window.endMs-1),'--max-trade-pages',String(maxTradePages),
+      '--max-trades',String(maxTrades),'--outcome-horizon-hours',String(outcomeHorizonHours),
+      '--output',rawPath];
     if(hybridBenchmarkOutput)childArgs.push('--hybrid-benchmark-output',hybridWindowPath,'--no-aggtrade-rest-fallback');
     const child=await runChild(childArgs,{timeoutMs,windowId:window.id});
-    let rawReport=null,parseError=null;
+    let rawReport=null,parseError=null,capturedRows=[],capturedSha=null;
     try{rawReport=JSON.parse(await readFile(rawPath,'utf8'));}catch(error){parseError=String(error?.message??error);}
     if(hybridBenchmarkOutput){
       try{
         const captured=JSON.parse(await readFile(hybridWindowPath,'utf8'));
-        if(!Array.isArray(captured.rows)||captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC')throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
-        if(hybridSourceSha===null)hybridSourceSha=captured.source_commit_sha;
-        if(captured.source_commit_sha!==hybridSourceSha)throw new Error('HYBRID_CAPTURE_SOURCE_SHA_MISMATCH');
-        hybridRows.push(...captured.rows.map(row=>({
-          ...row,
-          historical_window_id:window.id,
-          market_regime:String(marketRegime?.regime??'UNKNOWN').toUpperCase()
-        })));
-      }catch(error){parseError=(parseError?parseError+'; ':'')+'HYBRID_CAPTURE_FAILED:'+String(error?.message??error);}
+        if(!Array.isArray(captured.rows)||
+          captured.dataset_contract!=='RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC')
+          throw new Error('HYBRID_CAPTURE_CONTRACT_INVALID');
+        capturedSha=captured.source_commit_sha;
+        capturedRows=captured.rows.map(row=>({...row,historical_window_id:window.id,
+          market_regime:String(marketRegime?.regime??'UNKNOWN').toUpperCase()}));
+      }catch(error){
+        parseError=(parseError?parseError+'; ':'')+'HYBRID_CAPTURE_FAILED:'+String(error?.message??error);
+      }
     }
-    const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'};
-    results.push({id:window.id,label:window.label,window:{start:window.start,end:window.end},market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,error:child.error??parseError},report_path:rawPath,summary});
-  }
+    const summary=rawReport?summarizeHistoricalWindowReport(rawReport):{
+      requested_symbols:symbols.length,returned_symbol_results:0,coverage_complete_symbols:0,
+      coverage_incomplete_symbols:symbols.length,coverage_status:'INCOMPLETE_OR_EMPTY'
+    };
+    return {
+      result:{id:window.id,label:window.label,window:{start:window.start,end:window.end},
+        market_regime:marketRegime,process:{exit_code:child.exitCode,timed_out:child.timedOut,
+          error:child.error??parseError},report_path:rawPath,summary},
+      hybridRows:capturedRows,sourceSha:capturedSha
+    };
+  });
+  const results=replayRows.map(item=>item.result);
+  const hybridRows=replayRows.flatMap(item=>item.hybridRows);
+  const sourceShas=[...new Set(replayRows.map(item=>item.sourceSha).filter(Boolean))];
+  if(sourceShas.length>1)throw new Error('HYBRID_CAPTURE_SOURCE_SHA_MISMATCH_ACROSS_WINDOWS');
+  const hybridSourceSha=sourceShas[0]??null;
   const complete=results.filter(x=>['COMPLETE','COMPLETE_WITH_CANDLE_FALLBACK'].includes(x.summary.coverage_status)&&x.market_regime.regime!=='UNKNOWN');
   const hasCandleFallback=complete.some(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK');
   const regimesObserved=[...new Set(results.map(x=>x.market_regime.regime))];
