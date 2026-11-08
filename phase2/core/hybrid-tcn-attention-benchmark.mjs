@@ -1074,6 +1074,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   const orderedAdverseReturns = Array(rows.length).fill(0);
   const orderedExcursionDrawdowns = Array(rows.length).fill(0);
   const orderedProbabilityDerivative = Array(rows.length).fill(0);
+  const focalEligible = Array(rows.length).fill(false);
   const orderedBtcPenaltyFactors = Array(rows.length).fill(1);
   for (let orderedIndex = 0; orderedIndex < pairs.length; orderedIndex++) {
     const pair = pairs[orderedIndex];
@@ -1084,6 +1085,10 @@ export function profitDrawdownObjective(probabilities, rows, {
     const rawAllocation = sigmoid((pair.probability - threshold) / temp);
     const allocation = gates.eligible ? rawAllocation * penaltyFactor : 0;
     orderedBtcPenaltyFactors[orderedIndex] = penaltyFactor;
+    // Classification loss must match the executable policy: a row rejected by
+    // KAMA/volatility/BTC gates can never become a position, so it must not
+    // consume model capacity by generating a conflicting focal-loss gradient.
+    focalEligible[pair.index] = gates.eligible === true;
     const net = netReturnPct(pair.row, cost);
     positions[pair.index] = allocation;
     orderedReturns[orderedIndex] = allocation * net * size; // percentage points on total equity
@@ -1145,7 +1150,10 @@ export function profitDrawdownObjective(probabilities, rows, {
   const negativeWeight = clamp(finite(focalNegativeWeight) ?? 1.6, 0.1, 8);
   let focalLossSum = 0;
   const focalLogitGradients = Array(n).fill(0);
+  const focalSampleCount = focalEligible.filter(Boolean).length;
+  const focalDenominator = Math.max(1, focalSampleCount);
   for (const pair of pairs) {
+    if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
     const positive = netReturnPct(pair.row, cost) > 0;
     const gamma = positive ? gammaPositive : gammaNegative;
@@ -1164,9 +1172,9 @@ export function profitDrawdownObjective(probabilities, rows, {
         classWeight * (probability ** gamma) / (1 - probability);
     }
     focalLossSum += focalLoss;
-    focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / n;
+    focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / focalDenominator;
   }
-  const asymmetricFocalLoss = focalLossSum / n;
+  const asymmetricFocalLoss = focalSampleCount ? focalLossSum / focalDenominator : 0;
   const loss = -average - cumulativeGrowthWeight * cumulativeGeometricReturnPct -
     sharpeWeight * cumulativeEquitySharpe + downsideWeight * downsideMean + adverseExcursionWeight * adverseMean +
     excursionDrawdownWeight * excursionDrawdownMean + drawdownWeight * drawdownMean +
@@ -1214,6 +1222,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     asymmetric_focal_loss: round(asymmetricFocalLoss, 8),
     focal_loss_weight: focalWeight,
     focal_negative_class_weight: negativeWeight,
+    focal_sample_count: focalSampleCount,
+    focal_eligible_coverage_pct: round(focalSampleCount / n * 100, 4),
     focal_gamma_positive: gammaPositive,
     focal_gamma_negative: gammaNegative,
     max_additive_drawdown_pct: round(maxDrawdown, 6),
@@ -1263,7 +1273,8 @@ export function trainHybridTcnAttention(trainingRows, {
     optimizer = update.optimizer;
     trace.push({ epoch, loss: objective.loss, mean_net_return_pct: objective.mean_net_return_pct,
       sharpe_per_decision: objective.sharpe_per_decision,
-      max_additive_drawdown_pct: objective.max_additive_drawdown_pct });
+      max_additive_drawdown_pct: objective.max_additive_drawdown_pct,
+      focal_sample_count: objective.focal_sample_count });
   }
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
@@ -1293,6 +1304,66 @@ export function predictHybridTcnAttention(sequence, fitted) {
     architecture: HYBRID_TCN_ARCHITECTURE,
     architecture_config: HYBRID_TCN_CONFIGURATION,
     receptive_field_steps: TCN_RECEPTIVE_FIELD
+  };
+}
+
+/**
+ * Numerically verify the hand-written TCN/attention backpropagation against
+ * central finite differences over representative parameters in every block.
+ * This is an opt-in diagnostic used by the benchmark tests, not training data.
+ */
+export function diagnoseHybridGradientIntegrity({
+  seed = 17, epsilon = 1e-5, tolerance = 2e-4
+} = {}) {
+  const sequence = Array.from({ length: HYBRID_SEQUENCE_STEPS }, (_, time) =>
+    Array.from({ length: HYBRID_SEQUENCE_CHANNELS }, (_, channel) =>
+      Math.sin((time + 1) * (channel + 2) * 0.137) * 0.7 +
+      Math.cos((time + 3) * (channel + 1) * 0.071) * 0.2));
+  const model = initializeHybridModel(seed);
+  const cache = forwardHybrid(sequence, model);
+  const analyticalGradients = gradientsForHybrid(sequence, model, cache, 1);
+  const probes = [
+    ['outputBias', ['outputBias']],
+    ['outputWeights[3]', ['outputWeights', 3]],
+    ['attentionQuery[2]', ['attentionQuery', 2]],
+    ['pointWeights[1][2][4]', ['pointWeights', 1, 2, 4]],
+    ['depthWeights[2][1][3]', ['depthWeights', 2, 1, 3]],
+    ['inputWeights[7][5]', ['inputWeights', 7, 5]],
+    ['inputBias[2]', ['inputBias', 2]],
+    ['biases[1][4]', ['biases', 1, 4]],
+    ['logitScaleRaw', ['logitScaleRaw']]
+  ];
+  const getAt = (object, path) => path.reduce((value, key) => value[key], object);
+  const setAt = (object, path, value) => {
+    let cursor = object;
+    for (const key of path.slice(0, -1)) cursor = cursor[key];
+    cursor[path.at(-1)] = value;
+  };
+  const results = probes.map(([name, path]) => {
+    const analytical = Number(getAt(analyticalGradients, path));
+    const center = Number(getAt(model, path));
+    const plus = structuredClone(model), minus = structuredClone(model);
+    setAt(plus, path, center + epsilon);
+    setAt(minus, path, center - epsilon);
+    const upper = forwardHybrid(sequence, plus).logit;
+    const lower = forwardHybrid(sequence, minus).logit;
+    const numerical = (upper - lower) / (2 * epsilon);
+    const absoluteError = Math.abs(analytical - numerical);
+    const relativeError = absoluteError / Math.max(1, Math.abs(analytical), Math.abs(numerical));
+    return {
+      parameter: name,
+      analytical: round(analytical, 10),
+      numerical: round(numerical, 10),
+      absolute_error: round(absoluteError, 10),
+      relative_error: round(relativeError, 10)
+    };
+  });
+  const maximumRelativeError = Math.max(...results.map(row => row.relative_error));
+  return {
+    status: maximumRelativeError <= tolerance ? 'PASS' : 'FAIL',
+    tolerance,
+    maximum_relative_error: maximumRelativeError,
+    probes: results
   };
 }
 
@@ -1738,6 +1809,12 @@ export function runFixedShaBenchmark(inputRows, {
       classic_threshold: classicChoice.threshold,
       neural_validation: summarizeTrades(neuralChoice.report),
       classic_validation: summarizeTrades(classicChoice.report),
+      neural_training: {
+        epochs: fitted.epochs,
+        training_samples: fitted.training_samples,
+        trained_logit_scale: fitted.trained_logit_scale,
+        objective_trace: fitted.objective_trace
+      },
       neural_threshold_selection: {
         status: neuralChoice.status,
         minimum_validation_trades: neuralChoice.minimum_validation_trades,
