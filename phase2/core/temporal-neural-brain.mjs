@@ -1243,6 +1243,18 @@ export function buildTemporalNeuralProfile(samples = [], {
     );
     const predictCalibratedLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),logisticProbabilityCalibrator);
+    const neuralResidualContributes=selectedResidualScale>0;
+    const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
+    const validationLogistic=evaluate(regimeValidation,
+      predictCalibratedLogistic,regimeBaseline.base_rate);
+    const validationPassed=neuralResidualContributes&&
+      selectionCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
+      validationModel.evaluated&&validationLogistic.evaluated&&
+      validationModel.beat_base_rate===true&&
+      validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
+    const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
+    const holdoutLogistic=evaluate(regimeHoldout,
+      predictCalibratedLogistic,regimeBaseline.base_rate);
     const predictCalibratedTemporalTree=sequence=>calibratedProbability(
       temporalTreeFit&&temporalTreeWinner
         ?predictTemporalResidualTrees(sequence,temporalTreeFit,
@@ -1307,18 +1319,6 @@ export function buildTemporalNeuralProfile(samples = [], {
       feature_importance:temporalTreeFit?.feature_importance||[],
       feature_importance_total_gain:temporalTreeFit?.feature_importance_total_gain??0
     };
-    const neuralResidualContributes=selectedResidualScale>0;
-    const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
-    const validationLogistic=evaluate(regimeValidation,
-      predictCalibratedLogistic,regimeBaseline.base_rate);
-    const validationPassed=neuralResidualContributes&&
-      selectionCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
-      validationModel.evaluated&&validationLogistic.evaluated&&
-      validationModel.beat_base_rate===true&&
-      validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
-    const holdoutLogistic=evaluate(regimeHoldout,
-      predictCalibratedLogistic,regimeBaseline.base_rate);
     const holdoutPassed=validationPassed&&neuralResidualContributes&&
       holdoutModel.evaluated&&holdoutLogistic.evaluated&&
       holdoutModel.beat_base_rate===true&&
