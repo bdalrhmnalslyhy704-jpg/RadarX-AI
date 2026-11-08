@@ -12,6 +12,7 @@ import {
   evaluateHybridMarketGates,
   buildPurgedWalkForwardFolds,
   calculateVolumeProfile,
+  diagnoseHybridGradientIntegrity,
   predictHybridTcnAttention,
   prepareHybridBenchmarkEvent,
   profitDrawdownObjective,
@@ -386,6 +387,40 @@ test('walk-forward row thresholds are not compared to the number of distinct tim
     train: fold.train_count, validation: fold.validation_count, test: fold.test_count
   }))));
   assert.ok(wf.folds.every(fold => fold.validation_count >= 30 && fold.test_count >= 30));
+});
+
+test('hand-written TCN and temporal-attention backpropagation matches finite differences', () => {
+  const diagnostic = diagnoseHybridGradientIntegrity();
+  assert.equal(diagnostic.status, 'PASS', JSON.stringify(diagnostic));
+  assert.ok(diagnostic.probes.length >= 9);
+  assert.ok(diagnostic.maximum_relative_error <= 2e-4);
+});
+
+test('market-gated focal loss ignores samples that can never become executable positions', () => {
+  const eligible = {
+    at: 1, symbol: 'AUSDT', gross_return_pct: 0.3,
+    max_adverse_excursion_pct: 0, max_favorable_excursion_pct: 0,
+    kama_efficiency_ratio: 0.7, volatility_zscore: 0.5, btc_trend_return_pct: 0.2
+  };
+  const blocked = {
+    at: 2, symbol: 'BUSDT', gross_return_pct: 0.3,
+    max_adverse_excursion_pct: 0, max_favorable_excursion_pct: 0,
+    kama_efficiency_ratio: 0.05, volatility_zscore: 0.5, btc_trend_return_pct: 0.2
+  };
+  const options = {
+    enforceMarketGates: true, roundTripCostBps: 30,
+    sharpeWeight: 0, cumulativeGrowthWeight: 0, downsideWeight: 0,
+    adverseExcursionWeight: 0, excursionDrawdownWeight: 0, drawdownWeight: 0,
+    focalLossWeight: 1
+  };
+  const solo = profitDrawdownObjective([0.8], [eligible], options);
+  const mixed = profitDrawdownObjective([0.8, 0.99], [eligible, blocked], options);
+  assert.equal(solo.focal_sample_count, 1);
+  assert.equal(mixed.focal_sample_count, 1);
+  assert.equal(mixed.focal_eligible_coverage_pct, 50);
+  assert.equal(mixed.asymmetric_focal_loss, solo.asymmetric_focal_loss);
+  assert.ok(Math.abs(mixed.logit_gradients[0] - solo.logit_gradients[0]) < 1e-10);
+  assert.equal(mixed.logit_gradients[1], 0);
 });
 
 test('hybrid TCN actually uses temporal attention and returns a normalized attention distribution', () => {
