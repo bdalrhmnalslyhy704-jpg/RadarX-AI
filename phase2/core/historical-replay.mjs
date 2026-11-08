@@ -487,7 +487,7 @@ export function runHistoricalReplay({
     const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
     if(captureHybridSample&&horizonObserved){
-      const featureCandles=available1m.slice(-24).map(row=>({
+      const featureCandles=available1m.slice(-48).map(row=>({
         ...row,
         aggTrades:tradesByMinute.get(row.openTime)||[]
       }));
