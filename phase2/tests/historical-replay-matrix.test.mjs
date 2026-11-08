@@ -113,6 +113,22 @@ test('matrix dry-run expands listing-aware per-window universes into the exact r
     .every(symbol=>plan.symbols.includes(symbol)));
 });
 
+test('matrix CLI allows a four-million verified Spot archive cap and rejects unsafe larger caps',()=>{
+  const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
+  const accepted=spawnSync(process.execPath,[script,'--dry-run','--max-trades','4000000',
+    '--archive-prefetch-concurrency','3','--window-replay-concurrency','2','--outcome-horizon-hours','4'],
+    {encoding:'utf8',timeout:10_000});
+  assert.equal(accepted.status,0,accepted.stderr||accepted.stdout);
+  const plan=JSON.parse(accepted.stdout);
+  assert.equal(plan.limits.max_trades_per_symbol,4_000_000);
+  assert.equal(plan.limits.archive_prefetch_concurrency,3);
+  assert.equal(plan.limits.window_replay_concurrency,2);
+  const rejected=spawnSync(process.execPath,[script,'--dry-run','--max-trades','4000001'],
+    {encoding:'utf8',timeout:10_000});
+  assert.notEqual(rejected.status,0);
+  assert.match(rejected.stderr,/INVALID_MAX-TRADES|INVALID_MAX_TRADES/);
+});
+
 test('matrix CLI allows bounded parallel archives and rejects more than three concurrent historical windows',()=>{
   const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-replay-matrix.mjs');
   const accepted=spawnSync(process.execPath,[script,'--dry-run','--archive-prefetch-concurrency','6',

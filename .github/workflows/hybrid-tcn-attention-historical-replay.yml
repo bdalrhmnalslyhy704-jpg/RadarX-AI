@@ -74,9 +74,9 @@ jobs:
             --windows phase2/benchmarks/hybrid-tcn-attention-windows.json \
             --output "$REPORT_DIR/matrix" \
             --max-trade-pages 500 \
-            --max-trades 1000000 \
-            --archive-prefetch-concurrency 8 \
-            --window-replay-concurrency 3 \
+            --max-trades 4000000 \
+            --archive-prefetch-concurrency 3 \
+            --window-replay-concurrency 2 \
             --outcome-horizon-hours 4 \
             --timeout-ms 3600000 \
             --hybrid-benchmark-output "$DATASET_PATH"

@@ -67,7 +67,7 @@ async function main(){
   const allSymbols=normalizeMatrixSymbols([...symbols,...windows.flatMap(window=>window.symbols??symbols)]);
   const plannedReplays=windows.reduce((total,window)=>total+(window.symbols??symbols).length,0);
   const maxTradePages=integer(flag(args,'--max-trade-pages','60'),60,1,1000,'max-trade-pages');
-  const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,1000000,'max-trades');
+  const maxTrades=integer(flag(args,'--max-trades','60000'),60000,1000,4000000,'max-trades');
   const archivePrefetchConcurrency=integer(flag(args,'--archive-prefetch-concurrency','8'),8,1,8,'archive-prefetch-concurrency');
   const windowReplayConcurrency=integer(flag(args,'--window-replay-concurrency','3'),3,1,3,'window-replay-concurrency');
   const outcomeHorizonHours=integer(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours');
@@ -212,6 +212,7 @@ async function main(){
     hybridDatasetSummary={path:hybridBenchmarkOutput,rows:hybridRows.length,source_commit_sha:hybridSourceSha};
   }
   const matrix={...plan,generated_at:new Date().toISOString(),output_dir:outputDir,windows:results,
+    archive_prefetch_summary:archivePrefetchSummary,
     hybrid_benchmark_dataset:hybridDatasetSummary,matrix_summary:{
     window_count:results.length,completed_windows:complete.length,coverage_incomplete_windows:results.length-complete.length,
     trade_fallback_windows:complete.filter(x=>x.summary.coverage_status==='COMPLETE_WITH_CANDLE_FALLBACK').length,
