@@ -696,13 +696,13 @@ export function buildTemporalNeuralProfile(samples = [], {
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
       ?{training:0.55,memberSelection:0.80,calibration:0.98}
-      // Mature histories keep 70% for model fitting and 14% for member
-      // selection, reserving 15.5% for regime-local probability calibration.
-      // The live bullish regime narrowly missed the unchanged five-positive
-      // calibration-support gate. Reallocating two points from selection to
-      // calibration increases support without lowering any minimum or using
-      // outer validation/holdout labels for fitting or model selection.
-      :{training:0.70,memberSelection:0.84,calibration:0.995};
+      // Mature histories keep 70% for model fitting and 16% for member
+      // selection, reserving 13.5% for regime-local probability calibration.
+      // Preserve the selection block's positive-class support while extending
+      // calibration into the final part of the inner fit window. Outer
+      // validation and final holdout remain untouched; no support minimum
+      // is reduced and no validation/holdout labels enter fitting.
+      :{training:0.70,memberSelection:0.86,calibration:0.995};
   const sharedTrainCutIndex=Math.max(1,Math.min(fitTimes.length-2,
     Math.floor(fitTimes.length*splitFractions.training)));
   const sharedMemberSelectionCutIndex=Math.max(sharedTrainCutIndex+1,
