@@ -741,6 +741,7 @@ function renderLearning(){
   const boostedTreeValidation=boostedTreeModel.validation||{};
   const boostedTreeHoldout=boostedTreeModel.holdout||{};
   const boostedTreeComparison=boostedTreeModel.holdout_comparison||{};
+  const boostedTreeRanking=boostedTreeHoldout.ranking_metrics||{};
   const hybridModel=brainProfile.hybrid_model||brainCapture.hybrid_model||{};
   const hybridValidation=hybridModel.validation||{};
   const hybridHoldout=hybridModel.holdout||{};
@@ -820,7 +821,10 @@ function renderLearning(){
     ?'Brier الاختبار المستقل GBDT '+fmt(boostedTreeHoldout.model_brier_score,3)+
       ' · هامش المطلوب '+fmt(boostedTreeComparison.required_brier_margin,3)+
       ' · مقابل اللوجستي العام '+(boostedTreeComparison.beats_global_logistic===true?'تفوق':'لم يتفوق')+
-      ' · مقابل اللوجستي الحديث '+(boostedTreeComparison.beats_recent_logistic===true?'تفوق':'لم يتفوق')
+      ' · مقابل اللوجستي الحديث '+(boostedTreeComparison.beats_recent_logistic===true?'تفوق':'لم يتفوق')+
+      ' · دقة أعلى 10% '+fmt(boostedTreeRanking.top_10_pct?.precision_pct,1)+'%'+
+      ' · التقاط الإيجابيات '+fmt(boostedTreeRanking.top_10_pct?.recall_pct,1)+'%'+
+      ' · AUC '+fmt(boostedTreeRanking.auc_roc,3)
     :'لا يوجد اختبار مستقل معتمد لـ GBDT بعد.';
   const hybridStatusText=hybridModel.status==='OUT_OF_SAMPLE_VALIDATED'
     ?'النموذج الهجين اجتاز التحقق والاختبار المستقل.'
