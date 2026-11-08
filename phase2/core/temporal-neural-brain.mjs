@@ -839,7 +839,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
       regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
-      model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
+      temporal_boosted_tree:temporalBoostedTreeProfile,
+     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
@@ -1025,6 +1026,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   };
 
   const regimeResults={};
+  const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
   const minRegimePositive=Math.max(5,Math.ceil(minimumValidationSamples*0.2));
@@ -1114,6 +1116,14 @@ export function buildTemporalNeuralProfile(samples = [], {
     if(holdTargets.negative<minRegimeNegative)supportGaps.push('HOLDOUT_NEGATIVE_CLASS');
     const supported=supportGaps.length===0;
     if(!supported){
+      temporalBoostedTreeResults[regime]={
+        supported:false,status:'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE',
+        support_gaps:[...supportGaps],training_samples:regimeTraining.length,
+        selection_samples:memberSelectionRows.length,calibration_samples:calibrationRows.length,
+        validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
+        validation:{evaluated:false,sample_count:regimeValidation.length},
+        holdout:{evaluated:false,sample_count:regimeHoldout.length}
+      };
       regimeResults[regime]={supported:false,support_gaps:supportGaps,
         training_start_at:regimeTraining[0]?.at??null,
         training_cutoff_at:regimeSplit.trainingCutoffAt,
@@ -1146,6 +1156,42 @@ export function buildTemporalNeuralProfile(samples = [], {
       epochs,learningRate,l2,baseRate:regimePrior,
       baselineFit:regimeBaseline,baselineByRegime:{[regime]:regimeBaseline}
     });
+    // Same first-passage target, same regime-local training/selection/calibration
+    // blocks, and the exact same frozen logistic anchor used by the TCN.
+    const temporalTreeFit=fitTemporalResidualTrees(regimeTraining,regimeBaseline,{
+      maxTrees:24,maxDepth:2,learningRate:0.04,l2:10,minimumLeafFraction:0.05
+    });
+    const temporalTreeCandidates=temporalTreeFit
+      ?[6,12,18,24].filter(count=>count<=temporalTreeFit.trees.length)
+        .flatMap(treeCount=>[0.25,0.5,0.75,1].map(residualScale=>({
+          tree_count:treeCount,residual_scale:residualScale,
+          metrics:evaluate(memberSelectionRows,
+            sequence=>predictTemporalResidualTrees(sequence,temporalTreeFit,residualScale,treeCount),
+            regimePrior)
+        })))
+      :[];
+    const temporalTreeBaselineSelection=evaluate(memberSelectionRows,
+      sequence=>predictLogistic(sequence,regimeBaseline),regimePrior);
+    const temporalTreeWinner=temporalTreeCandidates.filter(row=>row.metrics.evaluated===true)
+      .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+        a.tree_count-b.tree_count||a.residual_scale-b.residual_scale)[0]||null;
+    const temporalTreeSelectionPassed=Boolean(temporalTreeWinner&&
+      temporalTreeWinner.metrics.beat_base_rate===true&&
+      temporalTreeBaselineSelection.evaluated===true&&
+      temporalTreeWinner.metrics.model_brier_score+comparisonMargin<
+        temporalTreeBaselineSelection.model_brier_score);
+    const temporalTreeCalibrator=temporalTreeFit&&temporalTreeSelectionPassed
+      ?fitSelectionProbabilityCalibrator(calibrationRows,
+        sequence=>predictTemporalResidualTrees(sequence,temporalTreeFit,
+          temporalTreeWinner.residual_scale,temporalTreeWinner.tree_count),
+        {minimumSamples:30,minimumPositive:5,minimumNegative:20,
+         iterations:300,learningRate:0.03,regularization:0.45,
+         fitOn:calibrationSource+'_TEMPORAL_GBDT'})
+      :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
+        fit_on:calibrationSource+'_TEMPORAL_GBDT',sample_count:0,
+        positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
+        reason:!temporalTreeFit?'TEMPORAL_TREE_NOT_TRAINED':
+          'TEMPORAL_TREE_DID_NOT_BEAT_SELECTION_LOGISTIC'};
     const selectionPrior=regimePrior;
     const candidateResidualScales=RESIDUAL_SCALES;
     const memberRanks=regimeFit.members.flatMap((member,index)=>
@@ -1197,6 +1243,70 @@ export function buildTemporalNeuralProfile(samples = [], {
     );
     const predictCalibratedLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),logisticProbabilityCalibrator);
+    const predictCalibratedTemporalTree=sequence=>calibratedProbability(
+      temporalTreeFit&&temporalTreeWinner
+        ?predictTemporalResidualTrees(sequence,temporalTreeFit,
+          temporalTreeWinner.residual_scale,temporalTreeWinner.tree_count)
+        :null,temporalTreeCalibrator);
+    const temporalTreeValidation=temporalTreeFit&&temporalTreeWinner
+      ?evaluate(regimeValidation,predictCalibratedTemporalTree,regimePrior)
+      :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,reason:'TEMPORAL_TREE_NOT_SELECTED'};
+    const temporalTreeHoldout=temporalTreeFit&&temporalTreeWinner&&temporalTreeSelectionPassed
+      ?evaluate(regimeHoldout,predictCalibratedTemporalTree,regimePrior)
+      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,reason:'TEMPORAL_TREE_SELECTION_GATE_NOT_PASSED'};
+    const temporalTreeValidationPassed=temporalTreeSelectionPassed&&
+      temporalTreeCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
+      temporalTreeValidation.evaluated===true&&validationLogistic.evaluated===true&&
+      temporalTreeValidation.beat_base_rate===true&&
+      temporalTreeValidation.model_brier_score+comparisonMargin<
+        validationLogistic.model_brier_score;
+    const temporalTreeHoldoutPassed=temporalTreeValidationPassed&&
+      temporalTreeHoldout.evaluated===true&&holdoutLogistic.evaluated===true&&
+      temporalTreeHoldout.beat_base_rate===true&&
+      temporalTreeHoldout.model_brier_score+comparisonMargin<
+        holdoutLogistic.model_brier_score;
+    temporalBoostedTreeResults[regime]={
+      supported:true,
+      status:!temporalTreeFit?'NO_TEMPORAL_TREE_TRAINING_GAIN':
+        !temporalTreeSelectionPassed?'TEMPORAL_TREE_DID_NOT_BEAT_SELECTION_LOGISTIC':
+        !temporalTreeCalibrator.fitted?'TEMPORAL_TREE_CALIBRATION_NOT_READY':
+        temporalTreeHoldoutPassed?'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED':
+        temporalTreeValidationPassed?'TEMPORAL_GBDT_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+        'TEMPORAL_GBDT_DID_NOT_BEAT_VALIDATION_LOGISTIC',
+      training_samples:regimeTraining.length,
+      selection_samples:memberSelectionRows.length,
+      calibration_samples:calibrationRows.length,
+      validation_samples:regimeValidation.length,
+      holdout_samples:regimeHoldout.length,
+      training_positive_samples:trainTargets.positive,
+      selection_positive_samples:memberSelectionTargets.positive,
+      calibration_positive_samples:calibrationTargets.positive,
+      validation_positive_samples:validTargets.positive,
+      holdout_positive_samples:holdTargets.positive,
+      training_cutoff_at:regimeSplit.trainingCutoffAt,
+      member_selection_cutoff_at:regimeSplit.memberSelectionCutoffAt,
+      calibration_cutoff_at:regimeSplit.calibrationCutoffAt,
+      validation_start_at:regimeValidation[0]?.at??null,
+      max_training_outcome_resolved_at:regimeTraining.length
+        ?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
+      tree_count:temporalTreeFit?.tree_count||0,
+      selected_tree_count:temporalTreeWinner?.tree_count??null,
+      selected_residual_scale:temporalTreeWinner?.residual_scale??null,
+      selection_brier:temporalTreeWinner?.metrics?.model_brier_score??null,
+      selection_logistic_brier:temporalTreeBaselineSelection.model_brier_score??null,
+      selection_passed:temporalTreeSelectionPassed,
+      calibration:temporalTreeCalibrator,
+      validation:temporalTreeValidation,
+      validation_logistic:validationLogistic,
+      validation_passed:temporalTreeValidationPassed,
+      holdout:temporalTreeHoldout,
+      holdout_logistic:holdoutLogistic,
+      holdout_passed:temporalTreeHoldoutPassed,
+      feature_importance:temporalTreeFit?.feature_importance||[],
+      feature_importance_total_gain:temporalTreeFit?.feature_importance_total_gain??0
+    };
     const neuralResidualContributes=selectedResidualScale>0;
     const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
     const validationLogistic=evaluate(regimeValidation,
@@ -1240,6 +1350,100 @@ export function buildTemporalNeuralProfile(samples = [], {
       probability_calibration:selectionCalibrator,
       logistic_probability_calibration:logisticProbabilityCalibrator};
   }
+  const temporalTreeSupportedRegimes=regimes.filter(regime=>
+    temporalBoostedTreeResults[regime]?.supported===true);
+  const temporalTreeValidationRegimes=regimes.filter(regime=>
+    temporalBoostedTreeResults[regime]?.validation_passed===true);
+  const temporalTreeSelectedRegimes=regimes.filter(regime=>
+    temporalBoostedTreeResults[regime]?.holdout_passed===true);
+  const temporalTreeValidation=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
+    temporalBoostedTreeResults[regime]?.validation));
+  const temporalTreeHoldout=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
+    temporalBoostedTreeResults[regime]?.holdout));
+  const temporalTreeValidationLogistic=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
+    temporalBoostedTreeResults[regime]?.validation_logistic));
+  const temporalTreeHoldoutLogistic=aggregateEvaluations(temporalTreeSupportedRegimes.map(regime=>
+    temporalBoostedTreeResults[regime]?.holdout_logistic));
+  const temporalTreeHoldoutCount=temporalTreeSelectedRegimes.reduce((sum,regime)=>
+    sum+Number(temporalBoostedTreeResults[regime]?.holdout?.sample_count||0),0);
+  const temporalTreeAllSupportedValidated=temporalTreeSupportedRegimes.length>0&&
+    temporalTreeSupportedRegimes.every(regime=>temporalTreeSelectedRegimes.includes(regime));
+  const temporalTreeLiveReady=temporalTreeSelectedRegimes.length>0&&
+    temporalTreeAllSupportedValidated&&temporalTreeHoldoutCount>=liveHoldoutSamples;
+  const temporalTreeFeatureImportanceMap=new Map();
+  for(const regime of temporalTreeSupportedRegimes){
+    for(const item of temporalBoostedTreeResults[regime]?.feature_importance||[]){
+      const previous=temporalTreeFeatureImportanceMap.get(item.feature)||{gain:0,split_count:0};
+      previous.gain+=Number(item.gain)||0;
+      previous.split_count+=Number(item.split_count)||0;
+      temporalTreeFeatureImportanceMap.set(item.feature,previous);
+    }
+  }
+  const temporalTreeTotalGain=[...temporalTreeFeatureImportanceMap.values()]
+    .reduce((sum,item)=>sum+item.gain,0);
+  const temporalTreeFeatureImportance=[...temporalTreeFeatureImportanceMap.entries()]
+    .map(([feature,item])=>({feature,gain:Number(item.gain.toFixed(7)),
+      gain_share_pct:temporalTreeTotalGain>0
+        ?Number((item.gain/temporalTreeTotalGain*100).toFixed(2)):0,
+      split_count:item.split_count}))
+    .sort((a,b)=>b.gain-a.gain||a.feature.localeCompare(b.feature));
+  const temporalBoostedTreeProfile={
+    status:!temporalTreeSupportedRegimes.length?'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE':
+      !temporalTreeValidationRegimes.length?'TEMPORAL_GBDT_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !temporalTreeSelectedRegimes.length?'TEMPORAL_GBDT_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      temporalTreeLiveReady?'TEMPORAL_GBDT_LIVE_SAMPLE_GATE_PASSED':
+      'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY',
+    model_kind:'TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1',
+    architecture:'TEMPORAL_POOLED_58_NEWTON_GBDT_DEPTH2_24_ROUNDS',
+    target_definition:TEMPORAL_TARGET_DEFINITION,
+    model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
+    model_scope:'REGIME_LOCAL_TEMPORAL_TREE_WITH_FROZEN_LOGISTIC_ANCHOR',
+    feature_source:'24_STEP_MEANS_PLUS_RECENT_8_STEP_MEANS',
+    trained:temporalTreeSupportedRegimes.some(regime=>
+      Number(temporalBoostedTreeResults[regime]?.tree_count)>0),
+    selected:temporalTreeSelectedRegimes.length>0,
+    probability_ready:temporalTreeSelectedRegimes.length>0,
+    live_eligibility_ready:temporalTreeLiveReady,
+    supported_regimes:temporalTreeSupportedRegimes,
+    validation_selected_regimes:temporalTreeValidationRegimes,
+    selected_regimes:temporalTreeSelectedRegimes,
+    training_samples:temporalTreeSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(temporalBoostedTreeResults[regime]?.training_samples||0),0),
+    selection_samples:temporalTreeSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(temporalBoostedTreeResults[regime]?.selection_samples||0),0),
+    calibration_samples:temporalTreeSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(temporalBoostedTreeResults[regime]?.calibration_samples||0),0),
+    validation_samples:temporalTreeValidation.sample_count||0,
+    holdout_samples:temporalTreeHoldout.sample_count||0,
+    validation:temporalTreeValidation,
+    validation_logistic:temporalTreeValidationLogistic,
+    holdout:temporalTreeHoldout,
+    holdout_logistic:temporalTreeHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      sample_count:temporalTreeHoldout.sample_count||0,
+      model_brier_score:temporalTreeHoldout.model_brier_score??null,
+      logistic_brier_score:temporalTreeHoldoutLogistic.model_brier_score??null,
+      beats_base_rate:temporalTreeHoldout.beat_base_rate===true,
+      beats_logistic:temporalTreeHoldout.evaluated===true&&
+        temporalTreeHoldoutLogistic.evaluated===true&&
+        temporalTreeHoldout.model_brier_score+comparisonMargin<
+          temporalTreeHoldoutLogistic.model_brier_score,
+      passed:temporalTreeSelectedRegimes.length>0&&
+        temporalTreeHoldout.evaluated===true&&temporalTreeHoldout.beat_base_rate===true&&
+        temporalTreeHoldoutLogistic.evaluated===true&&
+        temporalTreeHoldout.model_brier_score+comparisonMargin<
+          temporalTreeHoldoutLogistic.model_brier_score,
+      selected_regimes:temporalTreeSelectedRegimes,
+      supported_regimes:temporalTreeSupportedRegimes,
+      all_supported_regimes_validated:temporalTreeAllSupportedValidated,
+      live_holdout_samples:temporalTreeHoldoutCount,
+      required_live_holdout_samples:liveHoldoutSamples
+    },
+    regime_specialists:temporalBoostedTreeResults,
+    feature_importance:temporalTreeFeatureImportance,
+    feature_importance_total_gain:Number(temporalTreeTotalGain.toFixed(7))
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
