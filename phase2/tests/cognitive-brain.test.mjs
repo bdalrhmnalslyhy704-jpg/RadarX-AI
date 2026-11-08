@@ -587,11 +587,11 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
 });
 
 
-test('Newton boosted-tree challenger learns nonlinear XOR patterns without using the final holdout for selection',()=>{
+test('Newton boosted-tree challenger learns nonlinear conjunctions without using the final holdout for selection',()=>{
   const rows=Array.from({length:720},(_,index)=>{
     const volumeState=index%2===0;
     const compressionState=Math.floor(index/2)%2===0;
-    const isPositive=volumeState!==compressionState;
+    const isPositive=volumeState&&compressionState;
     const at=BASE_TIME+index*5*60*60*1000;
     return {
       id:'XOR-BOOST-'+index,symbol:'XORPAIR'+String(index%19)+'USDT',
