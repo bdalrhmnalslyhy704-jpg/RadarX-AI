@@ -662,6 +662,12 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
+  const importance=profile.boosted_tree_model.feature_importance;
+  assert.ok(importance.length>0,'every fitted tree must expose at least one gain-attributed feature');
+  assert.ok(importance.every(row=>profile.feature_names.includes(row.feature)&&
+    row.gain>0&&row.split_count>0));
+  assert.ok(Math.abs(importance.reduce((sum,row)=>sum+row.gain_share_pct,0)-100)<0.1);
+  assert.ok(profile.boosted_tree_model.feature_importance_total_gain>0);
   const ranking=profile.boosted_tree_model.validation.ranking_metrics;
   assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
   assert.ok(ranking.top_10_pct.sample_count>=1);
