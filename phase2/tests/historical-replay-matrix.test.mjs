@@ -43,7 +43,8 @@ test('per-window Spot universes are preserved and normalized for listing-aware h
   const fallback=normalizeMatrixWindows([{
     id:'baseline',start:'2025-01-01T00:00:00Z',end:'2025-01-02T00:00:00Z'
   }],{now:Date.parse('2025-01-03T00:00:00Z')});
-  assert.equal(fallback[0].symbols,null);
+  assert.equal(Object.hasOwn(fallback[0],'symbols'),false,
+    'windows without an override inherit the global symbol cohort');
 });
 
 test('market regime classification uses observed BTC direction and range',()=>{const bull=classifyBtcMarketRegime(candles({open:100,close:104,low:99,high:105}));assert.equal(bull.regime,'BULL_TREND');const bear=classifyBtcMarketRegime(candles({open:100,close:96,low:95,high:101}));assert.equal(bear.regime,'BEAR_TREND');const sideways=classifyBtcMarketRegime(candles({open:100,close:100.5,low:99,high:101}));assert.equal(sideways.regime,'SIDEWAYS');const mixed=classifyBtcMarketRegime(candles({open:100,close:101,low:96,high:106}));assert.equal(mixed.regime,'MIXED');assert.equal(classifyBtcMarketRegime([]).regime,'UNKNOWN');});
