@@ -15,6 +15,7 @@ export const COGNITIVE_MODEL_BUILD_CONTRACT = 'RADARX_COGNITIVE_AGENT_V5_TCN_V6'
  */
 
 const MIN_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
+const NEURAL_RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
 const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
@@ -417,7 +418,7 @@ function fitNeuralEnsemble(training, options = {}) {
     training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
-    candidate_residual_scales:[0,0.25,0.5,0.75,1],
+    candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
     base_rate:mean(members.map(member=>member.base_rate)),
     feature_names:[...FEATURE_NAMES],
     training_samples:members[0].training_samples,
@@ -747,7 +748,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
         target_definition:'UP_CLOSE_RETURN_BINARY_V1',
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
-        candidate_residual_scales:[0,0.25,0.5,0.75,1],
+        candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
         selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
         max_selection_outcome_resolved_at:null,selected_residual_scale:null,
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
@@ -866,7 +867,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   let neuralFinalTraining=neuralTraining;
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
-  const neuralResidualScales=[0,0.25,0.5,0.75,1];
+  const neuralResidualScales=NEURAL_RESIDUAL_SCALES;
   const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
     neuralResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
