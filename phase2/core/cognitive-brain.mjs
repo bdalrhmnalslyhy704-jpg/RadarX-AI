@@ -1423,7 +1423,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       selected:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
       probability_ready:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
       selected_candidate:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?activeChallenger:null,
-      boosted_weight:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.boosted_weight||
+      boosted_weight:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.boosted_weight??
         bestHybridCandidate?.fit?.boosted_weight??null,
       validation:hybridValidation,
       candidate_validation_metrics:hybridCandidates.map(candidate=>({
