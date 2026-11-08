@@ -839,8 +839,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       ensemble_members:0,ensemble_members_required:SEEDS.length,
       regime_specialist_count:2,
       regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
-      temporal_boosted_tree:temporalBoostedTreeProfile,
-     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
+      model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
       resolved_samples:rows.length,training_samples:training.length,
       validation_samples:validation.length,holdout_samples:holdout.length,
       required_training_samples:minTrainingSamples,
@@ -1592,6 +1591,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+    temporal_boosted_tree:temporalBoostedTreeProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
