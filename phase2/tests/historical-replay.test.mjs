@@ -105,6 +105,66 @@ test('historical replay preserves metrics from radar-specific analysis objects, 
     'profile metrics must not be misrepresented as historical order-book liquidity quality');
 });
 
+test('historical replay normalizes Falcon Eye Bollinger, ATR, momentum and relative-strength metrics',()=>{
+  const rows=candles(300);
+  const source=rows[205];
+  const replay=runHistoricalReplay({
+    symbol:'IOSTUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:source.openTime,
+    endTime:source.closeTime,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    allowCandleOnlyFallback:true,
+    evaluate(){
+      return {
+        accepted:false,
+        candidate_detected:true,
+        candidate_mode:'FALCON_EYE_RADAR_CANDIDATE_SHADOW',
+        candidate_eligible:true,
+        alert:{
+          symbol:'IOSTUSDT',
+          radar:'FALCON_EYE_RADAR',
+          eligible:true,
+          data_quality:90,
+          closed_candles_only:true,
+          analysis:{
+            eligible:true,
+            score:78.9,
+            metrics:{
+              return_1m:0.18,
+              return_3m:0.43,
+              volume_ratio:3.4,
+              trade_ratio:2.1,
+              taker_buy_ratio:0.67,
+              bollinger_width:0.013,
+              bollinger_ratio:1.4,
+              atr_ratio:1.25,
+              efficiency_ratio:0.68,
+              vwap_distance_pct:0.35,
+              relative_strength_15m_spread_pct:0.72,
+              relative_strength_5m_spread_pct:0.44
+            }
+          }
+        },
+        reason_codes:['HISTORICAL_CANDIDATE_DETECTED']
+      };
+    }
+  });
+  const row=replay.steps[0];
+  assert.equal(row.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(row.signal_metrics.return_1m_pct,0.18);
+  assert.equal(row.signal_metrics.return_3m_pct,0.43);
+  assert.equal(row.signal_metrics.bb_expansion_ratio,1.4);
+  assert.equal(row.signal_metrics.atr_ratio,1.25);
+  assert.equal(row.signal_metrics.efficiency_ratio,0.68);
+  assert.equal(row.signal_metrics.vwap_distance_pct,0.35);
+  assert.equal(row.market_evidence.relative_strength_vs_market_pct,0.72);
+  assert.equal(row.profile_metrics.bollinger_ratio,1.4);
+  assert.equal(row.market_evidence.liquidity_quality,null);
+});
+
 test('CLI replay window count excludes the next candle that has not closed',()=>{
   const start=Date.UTC(2024,10,6,0,0,0,0);
   const nextOpen=Date.UTC(2024,10,6,6,0,0,0);
