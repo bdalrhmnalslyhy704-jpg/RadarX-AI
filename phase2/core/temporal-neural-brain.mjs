@@ -921,7 +921,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const splitFractions=fitTimes.length<16
     ?{training:0.50,memberSelection:0.76,calibration:0.98}
     :rows.length<1200
-      ?{training:0.55,memberSelection:0.80,calibration:0.98}
+      ?{training:0.55,memberSelection:0.72,calibration:0.995}
       // Mature histories use 60% for fitting, 16% for member selection,
       // and 23.5% for regime-local calibration before purging. This widens the
       // sparse risk-on calibration block while preserving its own member-

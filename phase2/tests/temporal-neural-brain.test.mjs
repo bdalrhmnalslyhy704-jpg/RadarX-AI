@@ -179,7 +179,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.regime_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'SHARED_POOLED_TRAINING_ONLY_LOGISTIC_FROZEN');
-  assert.equal(profile.residual_scale_selection,'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4');
+  assert.equal(profile.residual_scale_selection,'SHARED_POOLED_SELECTION_BLOCK_BRIER_GRID_V1');
   assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.1,0.25,0.5,1]);
   assert.equal(profile.member_training_profiles.length,3);

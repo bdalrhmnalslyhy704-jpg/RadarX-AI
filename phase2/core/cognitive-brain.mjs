@@ -41,7 +41,19 @@ const COGNITIVE_GBDT_VALIDATION_GRID=Object.freeze([
   Object.freeze({name:'DEPTH2_24R_LR020_L2_20_S035',maxTrees:24,maxDepth:2,
     learningRate:0.02,l2:20,minimumLeafFraction:0.06,residualScale:0.35}),
   Object.freeze({name:'DEPTH3_32R_LR018_L2_24_S030',maxTrees:32,maxDepth:3,
-    learningRate:0.018,l2:24,minimumLeafFraction:0.07,residualScale:0.30})
+    learningRate:0.018,l2:24,minimumLeafFraction:0.07,residualScale:0.30}),
+  Object.freeze({name:'DEPTH2_36R_LR025_L2_10_S045',maxTrees:36,maxDepth:2,
+    learningRate:0.025,l2:10,minimumLeafFraction:0.045,residualScale:0.45}),
+  Object.freeze({name:'DEPTH3_48R_LR025_L2_16_S050',maxTrees:48,maxDepth:3,
+    learningRate:0.025,l2:16,minimumLeafFraction:0.05,residualScale:0.50}),
+  Object.freeze({name:'DEPTH2_48R_LR035_L2_08_S065',maxTrees:48,maxDepth:2,
+    learningRate:0.035,l2:8,minimumLeafFraction:0.06,residualScale:0.65}),
+  Object.freeze({name:'DEPTH3_36R_LR045_L2_18_S050',maxTrees:36,maxDepth:3,
+    learningRate:0.045,l2:18,minimumLeafFraction:0.025,residualScale:0.50}),
+  Object.freeze({name:'DEPTH2_32R_LR050_L2_14_S080',maxTrees:32,maxDepth:2,
+    learningRate:0.05,l2:14,minimumLeafFraction:0.04,residualScale:0.80}),
+  Object.freeze({name:'DEPTH3_48R_LR030_L2_24_S085',maxTrees:48,maxDepth:3,
+    learningRate:0.03,l2:24,minimumLeafFraction:0.06,residualScale:0.85})
 ]);
 export const COGNITIVE_FEATURE_SCHEMA='CROSS_ASSET_EARLY_FLOW_FEATURES_V2';
 export const COGNITIVE_FEATURE_NAMES = Object.freeze([
