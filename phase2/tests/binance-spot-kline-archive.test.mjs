@@ -43,3 +43,38 @@ test('lists full UTC monthly archive windows without adding the exclusive end mo
   );
   assert.deepEqual(months,['2026-05','2026-06','2026-07']);
 });
+
+
+test('archive coverage allows pre-listing 404s but rejects gaps after first verified month',()=>{
+  const summarize=files=>import('../core/binance-spot-kline-archive.mjs')
+    .then(module=>module.summarizeBinanceSpotArchiveMonthCoverage(files));
+  return Promise.all([
+    summarize([
+      {month:'2025-11',status:'MISSING'},
+      {month:'2025-12',status:'MISSING'},
+      {month:'2026-01',status:'VERIFIED'},
+      {month:'2026-02',status:'VERIFIED'}
+    ]).then(result=>{
+      assert.equal(result.first_available_month,'2026-01');
+      assert.equal(result.pre_listing_missing_months,2);
+      assert.equal(result.complete_from_first_available,true);
+      assert.equal(result.coverage_ratio_after_first_available,1);
+    }),
+    summarize([
+      {month:'2025-11',status:'MISSING'},
+      {month:'2025-12',status:'VERIFIED'},
+      {month:'2026-01',status:'MISSING'},
+      {month:'2026-02',status:'VERIFIED'}
+    ]).then(result=>{
+      assert.equal(result.missing_months_after_first_available,1);
+      assert.equal(result.complete_from_first_available,false);
+    }),
+    summarize([
+      {month:'2025-11',status:'FAILED'},
+      {month:'2025-12',status:'VERIFIED'}
+    ]).then(result=>{
+      assert.equal(result.failed_archive_months,1);
+      assert.equal(result.complete_from_first_available,false);
+    })
+  ]);
+});
