@@ -469,6 +469,7 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
   let pages = 0;
   let complete = false;
   let lastTimestamp = null;
+  let emptyPageBeforeEnd = false;
   while (pages < maxPages && all.size < maxTrades) {
     const remaining = maxTrades - all.size;
     const query = fromId == null
@@ -482,7 +483,7 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
     );
     const page = normalizedTrades(result.trades ?? result.data ?? []);
     pages++;
-    if (!page.length) { complete = true; break; }
+    if (!page.length) { emptyPageBeforeEnd = true; break; }
     for (const trade of page) all.set(trade.a, trade);
     const last = page[page.length - 1];
     lastTimestamp = last.T;
@@ -501,9 +502,22 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
     complete, pages, rows: trades.length, requested_start_time: start,
     requested_end_time: end, last_trade_time: lastTimestamp,
     limit_reached: pages >= maxPages || trades.length >= maxTrades,
+    empty_page_before_end: emptyPageBeforeEnd,
+    reason: emptyPageBeforeEnd ? 'AGGTRADE_EMPTY_PAGE_BEFORE_END' : null,
     pagination: 'aggTrade id cursor; unique aggregate trade IDs'
   };
   return {trades, complete, coverage};
+}
+
+export function withArchiveAttemptCoverage(tradeFetch, archiveAttempt) {
+  return {
+    ...tradeFetch,
+    coverage: {
+      ...(tradeFetch?.coverage || {}),
+      archive_attempt: archiveAttempt?.coverage || null,
+      archive_attempt_complete: archiveAttempt?.complete === true
+    }
+  };
 }
 
 async function main() {
@@ -666,12 +680,9 @@ async function main() {
         const restTradeFetch = await fetchAggregateTrades(
           client, symbol, start - 65_000, end, {maxPages, maxTrades}
         );
-        tradeFetch = restTradeFetch.complete === true
-          ? restTradeFetch
-          : {...restTradeFetch, coverage: {
-              ...(restTradeFetch.coverage || {}),
-              archive_attempt: archiveAttempt?.coverage || null
-            }};
+        // Preserve the archive's verified failure/cap diagnostics even when a
+        // REST fallback reports complete. A fallback must never erase provenance.
+        tradeFetch = withArchiveAttemptCoverage(restTradeFetch, archiveAttempt);
       } catch (error) {
         // Neither verified archive nor complete REST coverage is evidence of full
         // trade history. Preserve both errors and continue in explicitly partial candle-only mode.

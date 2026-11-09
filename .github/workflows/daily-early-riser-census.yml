@@ -1,0 +1,121 @@
+name: Build 224 Daily Early-Riser Binance Spot Historical Census
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-census-20261109
+    paths:
+      - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Inclusive UTC start date (YYYY-MM-DD)
+        required: false
+        default: '2025-11-01'
+        type: string
+      end_exclusive:
+        description: Exclusive UTC end date (YYYY-MM-DD)
+        required: false
+        default: '2026-11-01'
+        type: string
+      max_symbols:
+        description: 0 means all currently trading directional Spot USDT symbols
+        required: false
+        default: '0'
+        type: string
+      min_quote_volume:
+        description: Minimum preceding 24h quote volume in USDT
+        required: false
+        default: '750000'
+        type: string
+      max_samples_per_symbol:
+        description: Maximum non-overlapping daily anchors per symbol
+        required: false
+        default: '500'
+        type: string
+      concurrency:
+        description: Parallel symbol archive workers (1-8)
+        required: false
+        default: '4'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-early-riser-census-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-market-daily-early-riser-census:
+    name: Verified Binance Spot 24h early-riser census
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      RADARX_DAILY_EARLY_RISER_REPORT: artifacts/daily-early-riser-census.json
+      RADARX_DAILY_EARLY_RISER_SAMPLES: artifacts/daily-early-riser-samples.jsonl
+    steps:
+      - name: Checkout isolated Build 224 research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check daily early-riser census modules
+        run: |
+          node --check phase2/core/daily-early-riser-census.mjs
+          node --check phase2/tools/daily-early-riser-historical-census.mjs
+      - name: Run daily early-riser target and feature-cutoff tests
+        run: node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+      - name: Replay checksum-verified monthly Spot archives and build daily event census
+        id: census
+        run: |
+          node phase2/tools/daily-early-riser-historical-census.mjs \
+            --start '${{ github.event.inputs.start || '2025-11-01' }}' \
+            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
+            --min-quote-volume '${{ github.event.inputs.min_quote_volume || '750000' }}' \
+            --max-samples-per-symbol '${{ github.event.inputs.max_samples_per_symbol || '500' }}' \
+            --concurrency '${{ github.event.inputs.concurrency || '4' }}'
+      - name: Upload daily census report, labels, archive manifests and request provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish daily census summary
+        if: always()
+        run: |
+          cat > /tmp/daily-census-summary.mjs <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-census.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              'Daily early-riser census did not produce a report. Inspect workflow logs.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const summary={
+            status:report.status,
+            window:report.window,
+            universe:report.universe,
+            methodology:report.methodology,
+            data_quality:report.data_quality,
+            targets:report.targets,
+            sample_file:report.sample_file,
+            production_touched:report.production_touched===true,
+            deployed:report.deployed===true,
+            merged:report.merged===true,
+            real_order_execution:report.real_order_execution===true,
+            predictive_superiority_verified:report.predictive_superiority_verified===true,
+            profitability_verified:report.profitability_verified===true
+          };
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify(summary,null,2)+'\\n');
+          NODE
+          node /tmp/daily-census-summary.mjs

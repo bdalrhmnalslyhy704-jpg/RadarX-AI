@@ -10,7 +10,8 @@ import {
   hasCognitiveBrierSuperiority,
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_FEATURE_NAMES,
-  buildCognitiveFeatureVector
+  buildCognitiveFeatureVector,
+  evaluateCognitiveDirectionalRanking
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
@@ -300,8 +301,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
-    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','TRAINED_NOT_SELECTED',
-      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC',
+      'TRAINED_NOT_SELECTED','VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
       assert.equal(profile.boosted_tree_model.selected,true);
@@ -311,6 +312,25 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       assert.equal(profile.hybrid_model.selected,true);
       assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
     }
+    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP_W')){
+      assert.equal(profile.hybrid_model.holdout?.evaluated,true,
+        'the validation winner must expose untouched holdout metrics even when it fails');
+      assert.equal(profile.model_selection.challenger_holdout?.evaluated,true);
+      assert.ok(profile.hybrid_model.holdout_comparison);
+      assert.equal(profile.hybrid_model.holdout_comparison.passed,
+        profile.model_selection.challenger_holdout_comparison.passed);
+    }
+    assert.ok(profile.neural_network.inner_selection_diagnostics);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.candidate_member_scale_count,
+      profile.neural_network.member_selection_brier_scores.length);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.passed,
+      Number.isInteger(profile.neural_network.selected_member_index)&&
+        profile.neural_network.selected_member_index>=0);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.failure_reason,
+      Number.isInteger(profile.neural_network.selected_member_index)&&
+        profile.neural_network.selected_member_index>=0
+        ?'NEURAL_MEMBER_SELECTION_PASSED'
+        :profile.neural_network.validation.reason);
 
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
@@ -720,6 +740,9 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.equal(profile.boosted_tree_model.trained,true,
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
+  assert.equal(profile.boosted_tree_model.probability_calibration?.fit_on,
+    'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
+    'the GBDT component must expose its own later, disjoint probability calibration');
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
   assert.equal(profile.boosted_tree_model.search_grid_size,9);
   assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,9,
@@ -750,12 +773,24 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
   assert.equal(profile.hybrid_model.trained,true);
-  assert.equal(profile.hybrid_model.candidate_validation_metrics.length,3,
-    'hybrid selection evaluates a pre-declared three-weight grid on validation');
-  assert.deepEqual(profile.hybrid_model.candidate_validation_metrics.map(row=>row.boosted_weight),
+  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,3,
+    'all three pre-declared blend weights must be evaluated on the disjoint inner selection block');
+  assert.deepEqual(profile.hybrid_model.candidate_selection_metrics.map(row=>row.boosted_weight),
     [0.25,0.5,0.75]);
-  assert.ok(profile.hybrid_model.candidate_validation_metrics.every(row=>
-    Number.isFinite(row.model_brier_score)&&Number.isFinite(row.base_rate_brier_score)));
+  assert.ok(profile.hybrid_model.selection_samples>=20);
+  assert.ok(profile.hybrid_model.selection_start_at<profile.validation_start_at,
+    'blend-weight selection must finish before outer validation begins');
+  assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
+    row.selection_sample_count===profile.hybrid_model.selection_samples&&
+    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)));
+  assert.ok(profile.hybrid_model.candidate_validation_metrics.length<=1,
+    'only the inner-selected blend weight may reach outer validation');
+  if(profile.hybrid_model.candidate_validation_metrics.length===1){
+    const frozen=profile.hybrid_model.candidate_validation_metrics[0];
+    assert.equal(frozen.name,profile.hybrid_model.selection_winner_candidate);
+    assert.equal(frozen.boosted_weight,profile.hybrid_model.boosted_weight);
+    assert.equal(frozen.validation_sample_count,profile.validation_samples);
+  }
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   if(profile.model_selection.active_challenger){
@@ -807,4 +842,50 @@ test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
   assert.equal(audit.resolved_forecasts,8);
   assert.equal(audit.recent_window.brier_score,0.01);
   assert.equal(audit.previous_window.brier_score,0.01);
+});
+
+
+test('cognitive model ranking excludes FLAT from directional AUC and top-k denominators',()=>{
+  const rows=[
+    {outcome:'FLAT',target:0},
+    {outcome:'FLAT',target:0},
+    {outcome:'UP',target:1},
+    {outcome:'UP',target:1},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0}
+  ];
+  // The FLAT scores are deliberately highest. They must not take top-k slots.
+  const scores=[0.999,0.998,0.99,0.98,0.97,0.96,0.95,0.94,0.93,0.92,0.91,0.90];
+  const metrics=evaluateCognitiveDirectionalRanking(rows,scores);
+  assert.equal(metrics.all_outcome_sample_count,12);
+  assert.equal(metrics.directional_sample_count,10);
+  assert.equal(metrics.excluded_flat_samples,2);
+  assert.equal(metrics.positive_samples,2);
+  assert.equal(metrics.negative_samples,8);
+  assert.equal(metrics.top_10_pct.sample_count,1,
+    'top 10% must be 10% of the 10 directional cases, not 10% of 12 including FLAT');
+  assert.equal(metrics.top_10_pct.positive_samples,1);
+  assert.equal(metrics.top_10_pct.precision_pct,100);
+  assert.equal(metrics.top_20_pct.sample_count,2);
+  assert.equal(metrics.top_20_pct.positive_samples,2);
+  assert.equal(metrics.top_20_pct.recall_pct,100);
+});
+
+test('cognitive directional ranking keeps missing scores at the bottom without dropping directional rows',()=>{
+  const rows=[
+    {outcome:'UP',target:1},{outcome:'DOWN',target:0},
+    {outcome:'UP',target:1},{outcome:'DOWN',target:0},
+    {outcome:'FLAT',target:0}
+  ];
+  const metrics=evaluateCognitiveDirectionalRanking(rows,[null,0.8,0.7,null,0.99]);
+  assert.equal(metrics.directional_sample_count,4);
+  assert.equal(metrics.missing_score_samples,2);
+  assert.equal(metrics.top_10_pct.sample_count,1);
+  assert.equal(metrics.top_10_pct.positive_samples,0);
 });
