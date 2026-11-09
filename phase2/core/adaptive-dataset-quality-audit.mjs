@@ -37,22 +37,54 @@ export function retainBalancedAdaptiveSamples(samples = [], {
       auditRows.push(row);
     }
   }
-  for (const rows of groups.values()) rows.sort((a, b) =>
-    (finite(b.at) ?? 0) - (finite(a.at) ?? 0) ||
-    String(b.id || '').localeCompare(String(a.id || '')));
   const symbols = [...groups.keys()].sort();
-  const selectedTraining = [];
-  for (let depth = 0; selectedTraining.length < trainingLimit; depth++) {
+  for (const rows of groups.values()) rows.sort((a, b) =>
+    (finite(a.at) ?? 0) - (finite(b.at) ?? 0) ||
+    String(a.id || '').localeCompare(String(b.id || '')));
+
+  // Allocate one slot per symbol in round-robin order before giving any symbol
+  // a second slot. This also redistributes slots when a symbol has fewer rows.
+  const quotas = new Map(symbols.map(symbol => [symbol, 0]));
+  let remainingTrainingSlots = trainingLimit;
+  while (remainingTrainingSlots > 0) {
     let added = false;
     for (const symbol of symbols) {
-      const row = groups.get(symbol)?.[depth];
-      if (!row) continue;
-      selectedTraining.push(row);
+      const quota = quotas.get(symbol) || 0;
+      if (quota >= groups.get(symbol).length) continue;
+      quotas.set(symbol, quota + 1);
+      remainingTrainingSlots--;
       added = true;
-      if (selectedTraining.length >= trainingLimit) break;
+      if (remainingTrainingSlots <= 0) break;
     }
     if (!added) break;
   }
+
+  const selectedTraining = [];
+  for (const symbol of symbols) {
+    const rows = groups.get(symbol);
+    const quota = quotas.get(symbol) || 0;
+    if (!quota) continue;
+    if (rows.length <= quota) {
+      selectedTraining.push(...rows);
+      continue;
+    }
+    if (quota === 1) {
+      // With one slot, keep the latest outcome so the symbol remains current.
+      selectedTraining.push(rows[rows.length - 1]);
+      continue;
+    }
+    // Choose deterministic chronological quantiles, including both ends of
+    // the window. This preserves early/middle/recent regimes instead of keeping
+    // only the newest append-order samples after a rolling memory cap.
+    const used = new Set();
+    for (let slot = 0; slot < quota; slot++) {
+      const index = Math.round(slot * (rows.length - 1) / (quota - 1));
+      if (used.has(index)) continue;
+      used.add(index);
+      selectedTraining.push(rows[index]);
+    }
+  }
+
   auditRows.sort((a, b) =>
     (finite(b.at) ?? 0) - (finite(a.at) ?? 0) ||
     String(b.id || '').localeCompare(String(a.id || '')));
