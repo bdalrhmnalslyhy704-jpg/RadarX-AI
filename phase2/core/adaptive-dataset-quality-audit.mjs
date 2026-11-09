@@ -130,10 +130,23 @@ const finite = value => {
 
 const emptyCounts = () => ({samples: 0, positive: 0, negative: 0, flat: 0, symbols: new Set(), days: new Set()});
 
+function temporalSequenceRejectReason(sequence) {
+  if (!Array.isArray(sequence)) return 'TEMPORAL_SEQUENCE_MISSING';
+  if (sequence.length !== SEQUENCE_STEPS) return 'TEMPORAL_SEQUENCE_STEP_COUNT_INVALID';
+  for (const step of sequence) {
+    if (!Array.isArray(step) || step.length !== SEQUENCE_CHANNELS)
+      return 'TEMPORAL_SEQUENCE_CHANNEL_COUNT_INVALID';
+    for (const value of step) {
+      const number=finite(value);
+      if (number===null) return 'TEMPORAL_SEQUENCE_NON_FINITE_VALUE';
+      if (Math.abs(number)>4) return 'TEMPORAL_SEQUENCE_VALUE_OUT_OF_RANGE';
+    }
+  }
+  return null;
+}
+
 function validSequence(sequence) {
-  return Array.isArray(sequence) && sequence.length === SEQUENCE_STEPS &&
-    sequence.every(step => Array.isArray(step) && step.length === SEQUENCE_CHANNELS &&
-      step.every(value => finite(value) !== null && Math.abs(Number(value)) <= 4));
+  return temporalSequenceRejectReason(sequence)===null;
 }
 
 function phaseSupport(temporalProfile = {}) {
@@ -243,6 +256,7 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
   const valid = [];
   let unresolved = 0;
   let sequenceMissing = 0;
+  const sequenceQualityCounts={missing:0,step_count_invalid:0,channel_count_invalid:0,non_finite_value:0,value_out_of_range:0};
   let duplicateRows = 0;
   const outcomeCounts = {UP: 0, DOWN: 0, FLAT: 0};
   const byRegime = {
@@ -295,9 +309,15 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
     if (row.outcome_source !== expectedSource) {
       reject('OUTCOME_SOURCE_MISMATCH'); continue;
     }
-    if (!validSequence(row.temporal_sequence)) {
-      reject('TEMPORAL_SEQUENCE_MISSING_OR_INVALID');
+    const sequenceRejectReason=temporalSequenceRejectReason(row.temporal_sequence);
+    if(sequenceRejectReason){
+      reject(sequenceRejectReason);
       sequenceMissing++;
+      if(sequenceRejectReason==='TEMPORAL_SEQUENCE_MISSING')sequenceQualityCounts.missing++;
+      else if(sequenceRejectReason==='TEMPORAL_SEQUENCE_STEP_COUNT_INVALID')sequenceQualityCounts.step_count_invalid++;
+      else if(sequenceRejectReason==='TEMPORAL_SEQUENCE_CHANNEL_COUNT_INVALID')sequenceQualityCounts.channel_count_invalid++;
+      else if(sequenceRejectReason==='TEMPORAL_SEQUENCE_NON_FINITE_VALUE')sequenceQualityCounts.non_finite_value++;
+      else if(sequenceRejectReason==='TEMPORAL_SEQUENCE_VALUE_OUT_OF_RANGE')sequenceQualityCounts.value_out_of_range++;
       continue;
     }
 
@@ -404,6 +424,7 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
       rejected_rows: Object.values(rejectionCounts).reduce((sum, count) => sum + count, 0),
       duplicate_rows: duplicateRows,
       sequence_missing_or_invalid_rows: sequenceMissing,
+      sequence_quality: {...sequenceQualityCounts},
       distinct_symbols: symbols.length,
       distinct_utc_days: days.length,
       distinct_utc_months: months.length,
