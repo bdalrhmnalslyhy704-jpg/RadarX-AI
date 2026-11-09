@@ -130,6 +130,20 @@ test('sample memory retains training evidence fairly across symbols instead of a
   assert.equal(new Set(retained.map(row=>row.id)).size,retained.length);
 });
 
+test('balanced retention preserves early, middle and recent history for each symbol',()=>{
+  const rows=[];
+  for(const symbol of ['AAAAAUSDT','BBBBBUSDT']){
+    for(let index=0;index<100;index++)
+      rows.push(makeSample({symbol,index,at:BASE+index*24*60*60*1000,outcome:index%10===0?'UP':'DOWN'}));
+  }
+  const retained=retainBalancedAdaptiveSamples(rows,{maxSamples:4,maxTrainingSamples:4});
+  assert.equal(retained.length,4);
+  for(const symbol of ['AAAAAUSDT','BBBBBUSDT']){
+    const selected=retained.filter(row=>row.symbol===symbol).map(row=>row.at).sort((a,b)=>a-b);
+    assert.deepEqual(selected,[BASE,BASE+99*24*60*60*1000]);
+  }
+});
+
 test('aggregate sample count cannot hide weak positive support in a model phase',()=>{
   const rows=broadDataset();
   const profile=passingTemporalProfile();
