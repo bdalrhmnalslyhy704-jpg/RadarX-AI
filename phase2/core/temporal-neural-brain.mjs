@@ -1253,6 +1253,9 @@ export function buildTemporalNeuralProfile(samples = [], {
           sequence=>forward(sequence,member,residualScale).probability,selectionPrior)
       }))
     ).filter(row=>row.metrics.evaluated===true);
+    const diagnosticMemberCandidate=[...memberCandidates].sort((a,b)=>
+      a.metrics.model_brier_score-b.metrics.model_brier_score||
+      a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
     const memberRanks=memberCandidates.filter(row=>
       memberSelectionLogistic.evaluated===true&&row.metrics.beat_base_rate===true&&
       row.metrics.model_brier_score+comparisonMargin<memberSelectionLogistic.model_brier_score)
@@ -1260,6 +1263,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         a.index-b.index||a.residual_scale-b.residual_scale);
     const selectedMemberIndex=memberRanks.length?memberRanks[0].index:-1;
     const selectedResidualScale=memberRanks.length?memberRanks[0].residual_scale:0;
+    const diagnosticMemberIndex=diagnosticMemberCandidate?.index??-1;
+    const diagnosticResidualScale=diagnosticMemberCandidate?.residual_scale??0;
     fitted.selected_member_by_regime[regime]=selectedMemberIndex;
     fitted.residual_scales_by_regime[regime]=selectedResidualScale;
     const memberSelectionScores=memberCandidates.map(row=>({
@@ -1274,21 +1279,25 @@ export function buildTemporalNeuralProfile(samples = [], {
     }));
     // Calibration has a later chronological block and is regime-local. It
     // never reuses selection labels or borrows outcomes from another regime.
-    const selectionCalibrator=selectedMemberIndex>=0
+    // Calibrate the best selection-block candidate for honest diagnostic scoring.
+    // If it fails the logistic gate, these scores remain diagnostic-only.
+    const selectionCalibrator=diagnosticMemberCandidate
       ?fitSelectionProbabilityCalibrator(
         calibrationRows,
-        sequence=>forward(sequence,regimeFit.members[selectedMemberIndex],selectedResidualScale).probability,
+        sequence=>forward(sequence,regimeFit.members[diagnosticMemberIndex],diagnosticResidualScale).probability,
         {minimumSamples:30,minimumPositive:5,minimumNegative:20,
          iterations:300,learningRate:0.03,regularization:0.45,
-         fitOn:calibrationSource}
+         fitOn:calibrationSource+'_DIAGNOSTIC_ONLY'}
       )
-      :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',fit_on:calibrationSource,
+      :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',fit_on:calibrationSource+'_DIAGNOSTIC_ONLY',
         sample_count:0,positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
-        reason:'NO_TCN_MEMBER_BEAT_SAME_WINDOW_LOGISTIC_ON_SELECTION'};
+        reason:'NO_TCN_DIAGNOSTIC_CANDIDATE'};
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
     fitted.specialists_by_regime[regime]={
       ...regimeFit,selected_member_index:selectedMemberIndex,
       selected_residual_scale:selectedResidualScale,
+      diagnostic_member_index:diagnosticMemberIndex,
+      diagnostic_residual_scale:diagnosticResidualScale,
       probability_calibrator:selectionCalibrator
     };
 
@@ -1307,7 +1316,12 @@ export function buildTemporalNeuralProfile(samples = [], {
     const predictCalibratedLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),logisticProbabilityCalibrator);
     const neuralResidualContributes=selectedResidualScale>0;
-    const validationModel=evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior);
+    const diagnosticPrediction=sequence=>diagnosticMemberIndex>=0
+      ?calibratedProbability(forward(sequence,regimeFit.members[diagnosticMemberIndex],diagnosticResidualScale).probability,selectionCalibrator)
+      :null;
+    const validationModel=selectedMemberIndex>=0
+      ?evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior)
+      :evaluate(regimeValidation,diagnosticPrediction,regimePrior);
     const validationLogistic=evaluate(regimeValidation,
       predictCalibratedLogistic,regimeBaseline.base_rate);
     const validationPassed=neuralResidualContributes&&
@@ -1315,7 +1329,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       validationModel.evaluated&&validationLogistic.evaluated&&
       validationModel.beat_base_rate===true&&
       validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    const holdoutModel=evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior);
+    const holdoutModel=selectedMemberIndex>=0
+      ?evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior)
+      :evaluate(regimeHoldout,diagnosticPrediction,regimePrior);
     const holdoutLogistic=evaluate(regimeHoldout,
       predictCalibratedLogistic,regimeBaseline.base_rate);
     const predictCalibratedTemporalTree=sequence=>calibratedProbability(
@@ -1385,7 +1401,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       feature_importance:temporalTreeFit?.feature_importance||[],
       feature_importance_total_gain:temporalTreeFit?.feature_importance_total_gain??0
     };
-    const holdoutPassed=validationPassed&&neuralResidualContributes&&
+    const holdoutPassed=selectedMemberIndex>=0&&validationPassed&&neuralResidualContributes&&
       holdoutModel.evaluated&&holdoutLogistic.evaluated&&
       holdoutModel.beat_base_rate===true&&
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
@@ -1405,6 +1421,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibration_selection_samples:calibrationRows.length,calibration_source:calibrationSource,
       calibration_targets:selectedCalibrationTargets,
       selected_member_index:selectedMemberIndex,selected_residual_scale:selectedResidualScale,
+      diagnostic_member_index:diagnosticMemberIndex,diagnostic_residual_scale:diagnosticResidualScale,
+      diagnostic_only:selectedMemberIndex<0,
       neural_residual_contributes:neuralResidualContributes,
       selection_calibration_samples:selectionCalibrator.sample_count,
       logistic_calibration_samples:logisticProbabilityCalibrator.sample_count,
@@ -1596,6 +1614,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       member_selection_scores:Array.isArray(result.member_selection_scores)?result.member_selection_scores:[],
       selected_member_index:Number.isInteger(result.selected_member_index)?result.selected_member_index:null,
       selected_residual_scale:Number(result.selected_residual_scale),
+      diagnostic_member_index:Number.isInteger(result.diagnostic_member_index)?result.diagnostic_member_index:null,
+      diagnostic_residual_scale:Number(result.diagnostic_residual_scale)||0,
+      diagnostic_only:result.diagnostic_only===true,
       neural_residual_contributes:result.neural_residual_contributes===true,
       selection_calibration_samples:Number(result.selection_calibration_samples)||0,
       logistic_calibration_samples:Number(result.logistic_calibration_samples)||0,
@@ -1622,9 +1643,11 @@ export function buildTemporalNeuralProfile(samples = [], {
       live_eligibility_ready:result.holdout_passed===true&&
         Number(result.holdout_model?.sample_count)>=liveHoldoutSamples,
       validation_brier:result.validation_model?.model_brier_score??null,
+      validation_diagnostic_only:result.validation_passed!==true&&result.validation_model?.evaluated===true,
       validation_base_rate_brier:result.validation_model?.base_rate_brier_score??null,
       validation_pooled_logistic_brier:result.validation_logistic?.model_brier_score??null,
       holdout_brier:result.holdout_model?.model_brier_score??null,
+      holdout_diagnostic_only:result.holdout_passed!==true&&result.holdout_model?.evaluated===true,
       holdout_base_rate_brier:result.holdout_model?.base_rate_brier_score??null,
       holdout_pooled_logistic_brier:result.holdout_logistic?.model_brier_score??null,
       probability_calibration:result.probability_calibration||null,

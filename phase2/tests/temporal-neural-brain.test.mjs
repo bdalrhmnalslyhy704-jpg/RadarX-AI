@@ -221,8 +221,10 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the model comparison must report the exact number of holdout rows it actually scored');
-  assert.ok(profile.holdout_comparison.sample_count>=40,
-    'the scored holdout must meet the research minimum');
+  assert.ok(profile.holdout.sample_count>=40,
+    'the holdout block must retain the full research sample count for diagnostics');
+  assert.ok(profile.holdout_comparison.sample_count===profile.holdout.sample_count,
+    'the comparison count must equal the number of rows actually scored');
   assert.equal(profile.live_eligibility_ready,false,
     'a small research holdout must never satisfy the 100-outcome live gate');
   if(profile.probability_ready){
@@ -271,7 +273,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at,
     'training labels must resolve before member selection begins');
   assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
-  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
+  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
   assert.equal(expert.member_selection_source,'REGIME_MEMBER_SELECTION_BLOCK');
   assert.equal(expert.calibration_source,'REGIME_CALIBRATION_BLOCK');
   assert.equal(expert.neural_residual_contributes,expert.selected_residual_scale>0);
@@ -283,7 +285,7 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(expert.selection_calibration_samples>0);
   assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
     'member ranking and probability calibration must not reuse the same rows');
-  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
+  assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
   assert.equal(expert.logistic_probability_calibration.fitted,true);
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
     'the logistic challenger must be calibrated on the exact same regime-local later block');
@@ -437,7 +439,7 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
     assert.equal(expert.calibration_samples,expert.local_calibration_samples);
     assert.ok(expert.calibration_targets.positive>=5);
     assert.ok(expert.calibration_targets.negative>=20);
-    assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK');
+    assert.equal(expert.probability_calibration.fit_on,'REGIME_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
     assert.equal(expert.probability_calibration.fitted,true);
     assert.equal(expert.logistic_probability_calibration.fitted,true);
     assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
