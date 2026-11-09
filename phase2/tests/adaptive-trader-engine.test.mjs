@@ -36,8 +36,8 @@ test('third-page history wave alternates each Spot symbol while keeping each sca
       'each symbol must receive the third page on the opposite worker scan');
     assert.notEqual(next[index].wave,current[index].wave);
   }
-  assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now).max_pages,2,
-    'the per-symbol wave is separate from the always-full BTC benchmark fetch');
+  assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now).max_pages,3,
+    'BTC always keeps all three verified historical pages');
   assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now).wave_interval_ms,180000);
 });
 
