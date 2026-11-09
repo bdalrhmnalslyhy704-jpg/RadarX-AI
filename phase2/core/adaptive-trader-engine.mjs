@@ -83,7 +83,7 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
     'تجاوز هذه العملة في الوقت الحالي، واستمر في فحص بقية الأزواج.');
 }
 
-export const HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL=64;
+export const HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL=110;
 
 const POLICY = Object.freeze({
   minQuoteVolume24h: 750000,
@@ -636,31 +636,50 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     if(!(volume24h>=minQuoteVolume24h))continue;
     const dailyReturn=pct(baseline.close,candles[index-dayBars].candle.close);
     if(dailyReturn===null)continue;
-    possible.push({index,volume24h,dailyReturn,baseline,future});
+    const absolute15mBar=Math.floor((baseline.closeTime+1)/(15*60*1000));
+    possible.push({index,absolute15mBar,volume24h,dailyReturn,baseline,future});
   }
   const desired=Math.max(1,Math.min(118,Math.trunc(Number(maxSamples)||48)));
-  // Give each symbol a deterministic phase on the 4h sampling grid. This keeps
-  // that symbol's own outcomes non-overlapping, while preventing every market
-  // pair from contributing labels at the exact same eight timestamps. The hash
-  // only stratifies historical sampling; it is never a model feature.
+  // Anchor each symbol to a stable phase on the absolute 4h time grid. Using
+  // the Binance candle timestamp (not its page-relative row index) means a
+  // rolling 2,000-candle window cannot shift the phase and create overlapping
+  // labels across repeated scans. The hash only staggers symbols across time.
   let phaseHash=2166136261;
   for(const char of cleanSymbol){
     phaseHash^=char.charCodeAt(0);
     phaseHash=Math.imul(phaseHash,16777619)>>>0;
   }
   const samplingPhase=phaseHash%horizonBars;
-  const phaseRows=possible.filter(item=>item.index%horizonBars===samplingPhase);
+  const phaseRows=possible.filter(item=>item.absolute15mBar%horizonBars===samplingPhase);
   const selectedCount=Math.min(desired,phaseRows.length);
   const selected=[];
-  if(selectedCount===1){
-    selected.push(phaseRows.at(-1));
-  }else if(selectedCount>1){
-    // Stratify across the complete matured history instead of taking only its newest tail.
-    // The 24-row default preserves cross-sectional coverage within the worker's bounded 6k tensor cache.
-    for(let slot=0;slot<selectedCount;slot++){
+  if(selectedCount>0&&selectedCount<=64){
+    // Preserve the original 64-row schedule for stable IDs when the quota grows.
+    if(selectedCount===1)selected.push(phaseRows.at(-1));
+    else for(let slot=0;slot<selectedCount;slot++){
       const index=Math.round(slot*(phaseRows.length-1)/(selectedCount-1));
       selected.push(phaseRows[index]);
     }
+  }else if(selectedCount>64){
+    const legacyCount=Math.min(64,phaseRows.length);
+    const legacyIndexes=new Set();
+    for(let slot=0;slot<legacyCount;slot++){
+      const index=legacyCount===1?phaseRows.length-1:
+        Math.round(slot*(phaseRows.length-1)/(legacyCount-1));
+      legacyIndexes.add(index);
+    }
+    const remainingIndexes=phaseRows.map((_,index)=>index)
+      .filter(index=>!legacyIndexes.has(index));
+    const extraCount=Math.max(0,selectedCount-legacyIndexes.size);
+    const extraIndexes=[];
+    if(extraCount===1){extraIndexes.push(remainingIndexes[Math.floor((remainingIndexes.length-1)/2)]);}
+    else if(extraCount>1){
+      for(let slot=0;slot<extraCount;slot++){
+        extraIndexes.push(remainingIndexes[Math.round(slot*(remainingIndexes.length-1)/(extraCount-1))]);
+      }
+    }
+    for(const index of [...legacyIndexes,...extraIndexes].filter(Number.isInteger).sort((a,b)=>a-b))
+      selected.push(phaseRows[index]);
   }
   const out=[];
   for(const item of selected){

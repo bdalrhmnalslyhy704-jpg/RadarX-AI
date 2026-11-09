@@ -1015,7 +1015,7 @@ test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bu
   assert.equal(shock.real_order_execution,false);
 });
 
-test('deep historical capture keeps full causal tensors across 116 non-overlapping closed-candle outcomes',()=>{
+test('deep historical capture keeps at least 116 causal tensors across the full non-overlapping history grid',()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
@@ -1023,7 +1023,8 @@ test('deep historical capture keeps full causal tensors across 116 non-overlappi
   const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
     symbol:'DEEP110USDT',klines,fastKlines,btcKlines,now,maxSamples:118
   });
-  assert.equal(samples.length,116,'only baselines with complete 120-bar causal context are eligible');
+  assert.ok(samples.length>=116&&samples.length<=118,
+    'only baselines on the absolute 4h phase with complete 120-bar context are eligible');
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
   const temporalSamples=samples.filter(row=>Array.isArray(row.temporal_sequence));
   assert.equal(temporalSamples.length,samples.length,
@@ -1037,17 +1038,23 @@ test('deep historical capture keeps full causal tensors across 116 non-overlappi
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.horizon_ms===4*60*60*1000));
 });
 
-test('per-symbol historical capture keeps 64 independent first-passage outcomes across the full available regime window',()=>{
-  assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,64);
+test('per-symbol historical capture keeps 110 independent first-passage outcomes while preserving the legacy 64',()=>{
+  assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,110);
   const now=Date.now();
   const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
   const btcKlines=longClosedCandleFixture(now,2000,15*60*1000,90_000,0.00002);
+  const legacyRows=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DENSEHISTORYUSDT',klines,fastKlines,btcKlines,now,maxSamples:64
+  });
   const rows=buildAdaptiveTraderHistoricalOutcomeSamples({
     symbol:'DENSEHISTORYUSDT',klines,fastKlines,btcKlines,now,
     maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
   });
-  assert.equal(rows.length,64,'the increased quota must be filled when source history supports it');
+  assert.equal(rows.length,110,'the expanded quota must be filled when source history supports it');
+  const expandedIds=new Set(rows.map(row=>row.id));
+  assert.ok(legacyRows.every(row=>expandedIds.has(row.id)),
+    'the expanded quota must preserve every baseline ID from the prior 64-row schedule');
   assert.ok(rows.every(row=>row.temporal_sequence?.length===24&&
     row.temporal_sequence.every(step=>step.length===29)));
   assert.ok(rows.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
@@ -1060,6 +1067,22 @@ test('per-symbol historical capture keeps 64 independent first-passage outcomes 
     'the added samples must remain stratified across the historical regime window');
   assert.ok(rows.every((row,index)=>index===0||row.at>rows[index-1].at),
     'increased sampling must remain strictly chronological');
+  const phases=new Set(rows.map(row=>Math.floor((row.at+1)/(15*60*1000))%16));
+  assert.equal(phases.size,1,'historical samples must stay on the same absolute 4h phase across page rotations');
+  const shiftedNow=now+15*60*1000;
+  const shiftedKlines=longClosedCandleFixture(shiftedNow,2000,15*60*1000,10,0.0001);
+  const shiftedFast=longClosedCandleFixture(shiftedNow,6000,5*60*1000,10,0.00003);
+  const shiftedBtc=longClosedCandleFixture(shiftedNow,2000,15*60*1000,90_000,0.00002);
+  const shiftedRows=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DENSEHISTORYUSDT',klines:shiftedKlines,fastKlines:shiftedFast,
+    btcKlines:shiftedBtc,now:shiftedNow,maxSamples:110
+  });
+  const combined=[...new Map([...rows,...shiftedRows].map(row=>[row.id,row])).values()]
+    .sort((a,b)=>a.at-b.at);
+  for(let index=1;index<combined.length;index++){
+    assert.ok(combined[index].at-combined[index-1].at>=4*60*60*1000,
+      'rolling Binance pages must never create overlapping 4h labels for one symbol');
+  }
 });
 
 test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
