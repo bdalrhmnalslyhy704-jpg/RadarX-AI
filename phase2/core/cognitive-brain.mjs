@@ -30,6 +30,7 @@ const NEURAL_POLICY = Object.freeze({
   selectionMargin: 0.003,
   ensembleSeeds: Object.freeze([11, 29, 47])
 });
+export const COGNITIVE_CHALLENGER_BRIER_MARGIN = NEURAL_POLICY.selectionMargin;
 const FEATURE_NAMES = Object.freeze([
   'volume_expansion',
   'trade_expansion',
@@ -79,6 +80,15 @@ const finite = value => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 };
+
+export function hasCognitiveBrierSuperiority(candidateScore, baselineScore,
+  margin = COGNITIVE_CHALLENGER_BRIER_MARGIN) {
+  const candidate = finite(candidateScore);
+  const baseline = finite(baselineScore);
+  const required = finite(margin);
+  return candidate !== null && baseline !== null && required !== null && required >= 0 &&
+    baseline - candidate - required > 1e-12;
+}
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)));
@@ -791,11 +801,13 @@ function factorEvidence(training, { minimumBucket = 8 } = {}) {
   return { factors: output, covered_factor_buckets: covered };
 }
 
-function evaluateHoldout(rows, fit) {
+function evaluateHoldout(rows, fit, comparisonMargin = 0.002) {
+  const requiredMargin = finite(comparisonMargin);
   if (rows.length < 20) return {
     sample_count: rows.length, evaluated: false, model_brier_score: null,
     base_rate_brier_score: null, log_loss: null, accuracy_directional_pct: null,
     expected_calibration_error: null, beat_base_rate: false,
+    required_brier_margin: requiredMargin,
     reason: 'HOLDOUT_REQUIRES_20_OUTCOMES'
   };
   const base = fit.base_rate;
@@ -875,7 +887,8 @@ function evaluateHoldout(rows, fit) {
       ? Number((directionalCorrect / directionalCount * 100).toFixed(1)) : null,
     expected_calibration_error: Number(calibrationError.toFixed(5)),
     ranking_metrics:rankingMetrics,
-    beat_base_rate: modelBrier + 0.002 < baselineBrier,
+    beat_base_rate: hasCognitiveBrierSuperiority(modelBrier,baselineBrier,comparisonMargin),
+    required_brier_margin: requiredMargin,
     improvement_vs_base_rate: Number((baselineBrier - modelBrier).toFixed(5))
   };
 }
@@ -1093,13 +1106,17 @@ export function buildCognitiveLearningProfile(samples = [], {
       baselineFit:neuralSameWindowLogisticFit
     }):null;
   let neuralFinalTraining=neuralTraining;
+  // Enforce at least the declared V5 challenger margin; caller options may
+  // demand a stricter improvement but cannot weaken the 0.003 policy floor.
+  const comparisonMargin=Math.max(COGNITIVE_CHALLENGER_BRIER_MARGIN,
+    finite(neuralSelectionMargin)??0);
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=NEURAL_RESIDUAL_SCALES;
   const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
     neuralResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
-      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale})
+      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale},comparisonMargin)
     }))
   ):[];
   const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true)
@@ -1152,17 +1169,16 @@ export function buildCognitiveLearningProfile(samples = [], {
   // This validation score is now measured on rows later than model fitting,
   // member selection and calibration, so it is an honest outer comparison.
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
-    ?evaluateHoldout(upEventValidation,neuralFit):{
+    ?evaluateHoldout(upEventValidation,neuralFit,comparisonMargin):{
       evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_SELECTION_SAMPLES',
       sample_count:upEventValidation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
     };
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
-    ?evaluateHoldout(upEventValidation,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventValidation,neuralSameWindowLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
   const neuralGlobalLogisticValidation=neuralGlobalLogisticFit
-    ?evaluateHoldout(upEventValidation,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventValidation,neuralGlobalLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
   const neuralRecentLogisticValidation=neuralRecentLogisticFit
-    ?evaluateHoldout(upEventValidation,neuralRecentLogisticFit):null;
-  const comparisonMargin=Math.max(0.002,Number(neuralSelectionMargin)||0);
+    ?evaluateHoldout(upEventValidation,neuralRecentLogisticFit,comparisonMargin):null;
   const neuralValidationComparison={
     neural_brier_score:neuralValidation.model_brier_score??null,
     base_rate_brier_score:neuralValidation.base_rate_brier_score??null,
@@ -1184,16 +1200,16 @@ export function buildCognitiveLearningProfile(samples = [], {
     neuralValidationComparison.beats_same_window_logistic===true&&
     neuralValidationComparison.beats_global_logistic===true&&
     neuralValidationComparison.beats_recent_logistic===true;
-  const neuralHoldout=neuralFit?evaluateHoldout(upEventHoldout,neuralFit):{
+  const neuralHoldout=neuralFit?evaluateHoldout(upEventHoldout,neuralFit,comparisonMargin):{
     sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
     log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
   };
   const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
   const neuralGlobalLogisticHoldout=neuralGlobalLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit):{evaluated:false,model_brier_score:null};
+    ?evaluateHoldout(upEventHoldout,neuralGlobalLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
   const neuralRecentLogisticHoldout=neuralRecentLogisticFit
-    ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit):null;
+    ?evaluateHoldout(upEventHoldout,neuralRecentLogisticFit,comparisonMargin):null;
   const beatsSameWindowLogistic=neuralHoldout.evaluated===true&&
     neuralSameWindowLogisticHoldout.evaluated===true&&
     neuralHoldout.model_brier_score+comparisonMargin<neuralSameWindowLogisticHoldout.model_brier_score;
@@ -1225,7 +1241,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const boostedTreeFit=boostedTrainingReady
     ?fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit):null;
   const boostedTreeValidation=boostedTreeFit
-    ?evaluateHoldout(upEventValidation,boostedTreeFit)
+    ?evaluateHoldout(upEventValidation,boostedTreeFit,comparisonMargin)
     :{evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
   // A small pre-declared convex blend grid is selected on the outer
   // chronological validation block. Only one selected blend can reach the
@@ -1241,7 +1257,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       };
       return {
         name:'HYBRID_GBDT_MLP_W'+Math.round(boostedWeight*100),
-        fit,validation:evaluateHoldout(upEventValidation,fit)
+        fit,validation:evaluateHoldout(upEventValidation,fit,comparisonMargin)
       };
     }):[];
   const bestHybridCandidate=[...hybridCandidates].sort((a,b)=>
@@ -1280,7 +1296,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   let activeChallenger=null;
   if(validationWinner){
     challengerHoldout=validationWinner.name==='NEURAL_GLOBAL'
-      ?neuralHoldout:evaluateHoldout(upEventHoldout,validationWinner.fit);
+      ?neuralHoldout:evaluateHoldout(upEventHoldout,validationWinner.fit,comparisonMargin);
     const holdoutReferences=[
       neuralSameWindowLogisticHoldout,neuralGlobalLogisticHoldout,
       ...(neuralRecentLogisticFit?[neuralRecentLogisticHoldout]:[])
