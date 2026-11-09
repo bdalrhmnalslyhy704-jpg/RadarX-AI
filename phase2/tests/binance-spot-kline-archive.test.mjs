@@ -22,7 +22,7 @@ test('parses only valid closed Spot 15m archive rows and audits duplicates',()=>
     row(open,open+899999999),
     row(open+900000000,open+1799999999,'101'),
     row(open,open+899999999),
-    row(open+1800000000,open+2699999000),
+    row(open+1800000000,open+2699989999),
     'bad,row'
   ].join('\n');
   const parsed=parseBinanceSpotKlineArchiveCsv(csv,{intervalMs:15*60*1000});
