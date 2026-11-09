@@ -1168,6 +1168,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     });
     return {candidate,historicalSamples,closedCandleOutcomes,history:{
       asset_15m_pages:Number(result?.historical_pages_fetched)||1,
+      asset_15m_pages_attempted:Number(result?.historical_pages_attempted)||0,
       asset_15m_candles:Array.isArray(result?.data)?result.data.length:0,
       asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
@@ -1276,6 +1277,11 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       historical_training_samples_per_symbol:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
       historical_sampling_strategy:'DETERMINISTIC_TIME_STRATIFIED_PER_SYMBOL_V1',
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
+      asset_15m_three_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=3).length,
+      asset_15m_pages_fetched_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages)||0),0),
+      asset_15m_pages_attempted_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages_attempted)||0),0),
+      asset_15m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0)),
+      asset_15m_median_history_candles:(()=>{const values=analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0).sort((a,b)=>a-b);if(!values.length)return 0;const middle=Math.floor(values.length/2);return values.length%2?values[middle]:Math.round((values[middle-1]+values[middle])/2);})(),
       asset_5m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=2).length,
       asset_5m_deep_history_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=4).length,
       asset_5m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_5m_candles)||0)),
