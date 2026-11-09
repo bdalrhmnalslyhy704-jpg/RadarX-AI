@@ -94,8 +94,8 @@ test('dataset audit admits only broad, mature, balanced, matching 15m first-pass
 
 test('dataset fingerprints are stable under input reordering and change when model inputs change',()=>{
   const rows=[
-    makeSample({symbol:'HASHUSDT',index:1,at:BASE,outcome:'UP'}),
-    makeSample({symbol:'HASHUSDT',index:2,at:BASE+FOUR_HOURS,outcome:'DOWN'})
+    makeSample({symbol:'HASHXUSDT',index:1,at:BASE,outcome:'UP'}),
+    makeSample({symbol:'HASHXUSDT',index:2,at:BASE+FOUR_HOURS,outcome:'DOWN'})
   ];
   const options={temporalProfile:null,now:BASE+20*FOUR_HOURS};
   const first=buildAdaptiveDatasetQualityAudit(rows,options);
@@ -147,7 +147,7 @@ test('aggregate sample count cannot hide weak positive support in a model phase'
 
 test('unresolved, future, mixed-resolution, duplicate and sequence-less rows are excluded fail-closed',()=>{
   const valid=makeSample({symbol:'VALIDUSDT',index:1,at:BASE,outcome:'UP'});
-  const future={...makeSample({symbol:'FUTUREUSDT',index:2,at:BASE+1000,outcome:'UP'}),resolved_at:BASE+1000+FOUR_HOURS+1};
+  const future={...makeSample({symbol:'FUTUREUSDT',index:2,at:BASE+1000,outcome:'UP'}),resolved_at:BASE+12*FOUR_HOURS};
   const mixed={...makeSample({symbol:'MIXEDUSDT',index:3,at:BASE+2000,outcome:'UP'}),first_passage:{outcome:'UP',path_resolution:'5M'}};
   const noSequence={...makeSample({symbol:'NOSEQUSDT',index:4,at:BASE+3000,outcome:'DOWN'}),temporal_sequence:[]};
   const noPrice={...makeSample({symbol:'NOPRICEUSDT',index:6,at:BASE+5000,outcome:'DOWN'}),price:0};
