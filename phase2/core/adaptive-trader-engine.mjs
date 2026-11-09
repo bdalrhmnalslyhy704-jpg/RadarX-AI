@@ -253,6 +253,76 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 }
 
 
+function diagnoseTemporalSequenceMissingReason(candles,btcCandles){
+  const steps=24;
+  if(!Array.isArray(candles))return 'ASSET_15M_CANDLES_MISSING';
+  const start=candles.length-steps;
+  if(start<96)return 'ASSET_15M_DAY_CONTEXT_MISSING';
+  if(!Array.isArray(btcCandles))return 'BTC_15M_CANDLES_MISSING';
+  const history=candles.slice(start-24);
+  if(history.length!==48)return 'ASSET_15M_SEQUENCE_WINDOW_TOO_SHORT';
+  if(history.some((row,index)=>index>0&&row.openTime-history[index-1].openTime!==15*60*1000))
+    return 'ASSET_15M_SEQUENCE_WINDOW_GAP';
+  const btcByClose=new Map(btcCandles.map(row=>[Number(row.closeTime),row]));
+  const btcIndexByClose=new Map(btcCandles.map((row,index)=>[Number(row.closeTime),index]));
+  for(let index=start;index<candles.length;index++){
+    const current=candles[index],previous=candles[index-1];
+    const volumeBase=mean(candles.slice(index-24,index).map(row=>row.quoteVolume));
+    const tradesBase=mean(candles.slice(index-24,index).map(row=>row.trades));
+    const rangeBase=mean(candles.slice(index-24,index).map(row=>(row.high-row.low)/row.close));
+    const rangeNow=(current.high-current.low)/current.close;
+    const buyShare=current.quoteVolume>0?current.takerBuyQuoteVolume/current.quoteVolume:null;
+    const btcCurrent=btcByClose.get(Number(current.closeTime));
+    const btcPrevious=btcByClose.get(Number(previous.closeTime));
+    const btcIndex=btcIndexByClose.get(Number(current.closeTime));
+    if(!btcCurrent||!btcPrevious||!(btcPrevious.close>0))return 'BTC_15M_TIMESTAMP_ALIGNMENT_MISSING';
+    const btcBaseline=Number.isInteger(btcIndex)&&btcIndex>=24?btcCandles.slice(btcIndex-24,btcIndex):[];
+    if(btcBaseline.length!==24)return 'BTC_15M_SHORT_CONTEXT_MISSING';
+    if(!btcBaseline.every((row,index)=>index===0||row.openTime-btcBaseline[index-1].openTime===15*60*1000))
+      return 'BTC_15M_SHORT_CONTEXT_GAP';
+    const btcDayBaseline=Number.isInteger(btcIndex)&&btcIndex>=96?btcCandles.slice(btcIndex-96,btcIndex):[];
+    if(btcDayBaseline.length!==96)return 'BTC_15M_DAY_CONTEXT_MISSING';
+    if(!btcDayBaseline.every((row,index)=>index===0||row.openTime-btcDayBaseline[index-1].openTime===15*60*1000))
+      return 'BTC_15M_DAY_CONTEXT_GAP';
+    const btcRangeBase=mean(btcBaseline.map(row=>(row.high-row.low)/row.close));
+    const btcRangeNow=(btcCurrent.high-btcCurrent.low)/btcCurrent.close;
+    const btcVolumeBase=mean(btcBaseline.map(row=>row.quoteVolume));
+    const btcTradesBase=mean(btcBaseline.map(row=>row.trades));
+    const btcVolumeRatio=btcCurrent.quoteVolume>0&&btcVolumeBase>0?btcCurrent.quoteVolume/btcVolumeBase:null;
+    const btcTradeRatio=btcCurrent.trades>0&&btcTradesBase>0?btcCurrent.trades/btcTradesBase:null;
+    const btcFourHourPrior=btcCandles[btcIndex-16]||null;
+    const btcDayPrior=btcDayBaseline[0]||null;
+    const btcReturn4h=btcFourHourPrior?.close>0?(btcCurrent.close/btcFourHourPrior.close-1)*100:null;
+    const btcReturn24h=btcDayPrior?.close>0?(btcCurrent.close/btcDayPrior.close-1)*100:null;
+    const btcDayVolatility=Math.sqrt(mean(btcDayBaseline.map(row=>((row.high-row.low)/row.close)**2)));
+    const btcDayHigh=Math.max(...btcDayBaseline.map(row=>row.high));
+    const btcDrawdownFromDayHigh=btcDayHigh>0?(btcCurrent.close/btcDayHigh-1)*100:null;
+    const assetDayBaseline=candles.slice(index-96,index);
+    if(assetDayBaseline.length!==96)return 'ASSET_15M_DAY_CONTEXT_MISSING';
+    if(!assetDayBaseline.every((row,offset)=>offset===0||row.openTime-assetDayBaseline[offset-1].openTime===15*60*1000))
+      return 'ASSET_15M_DAY_CONTEXT_GAP';
+    const assetFourHourPrior=candles[index-16]||null;
+    const assetDayPrior=assetDayBaseline[0]||null;
+    const assetReturn4h=assetFourHourPrior?.close>0?(current.close/assetFourHourPrior.close-1)*100:null;
+    const assetReturn24h=assetDayPrior?.close>0?(current.close/assetDayPrior.close-1)*100:null;
+    const assetRelativeReturn24h=assetReturn24h!==null&&btcReturn24h!==null?assetReturn24h-btcReturn24h:null;
+    const assetDayVolatility=Math.sqrt(mean(assetDayBaseline.map(row=>((row.high-row.low)/row.close)**2)));
+    const assetDayVolumeBase=mean(assetDayBaseline.map(row=>row.quoteVolume));
+    const assetDayTradesBase=mean(assetDayBaseline.map(row=>row.trades));
+    if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||!(buyShare>=0&&buyShare<=1))
+      return 'ASSET_15M_FLOW_FEATURES_INVALID';
+    if(!(btcRangeBase>0)||!(btcRangeNow>0)||!(btcVolumeRatio>0)||!(btcTradeRatio>0)||
+       !Number.isFinite(btcReturn4h)||!Number.isFinite(btcReturn24h)||
+       !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh))
+      return 'BTC_15M_CONTEXT_FEATURES_INVALID';
+    if(!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
+       !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
+       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0))
+      return 'ASSET_15M_DAY_FEATURES_INVALID';
+  }
+  return 'TEMPORAL_SEQUENCE_UNCLASSIFIED_FAILURE';
+}
+
 function buildTemporalSequence(candles, btcCandles, fastCandles) {
   const steps=24;
   const start=candles.length-steps;
@@ -571,6 +641,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
+  const temporalSequenceMissingReason=temporalSequence?null:diagnoseTemporalSequenceMissingReason(candles,btcCandles);
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -639,6 +710,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    temporal_sequence_missing_reason:temporalSequenceMissingReason,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -816,6 +888,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
+      temporal_sequence_missing_reason:candidate.temporal_sequence_missing_reason||null,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
