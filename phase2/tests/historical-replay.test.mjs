@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withArchiveAttemptCoverage, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
@@ -736,6 +736,33 @@ test('historical trade fetch uses the production generic REST client and carries
   assert.equal(calls[0].query.endTime,50_000);
   assert.equal(calls[1].query.fromId,1010);
   assert.equal(result.trades.at(-1).T,50_000);
+});
+
+test('an empty aggregate-trade page before the requested end is incomplete, never proof of full coverage', async () => {
+  const client = {async request(path, query) {
+    assert.equal(path, '/api/v3/aggTrades');
+    assert.equal(query.symbol, 'GTCUSDT');
+    return {data:[],source:'TEST_EMPTY_PAGE'};
+  }};
+  const result = await fetchAggregateTrades(client, 'GTCUSDT', 10_000, 50_000,
+    {maxPages:3,maxTrades:2_000});
+  assert.equal(result.trades.length, 0);
+  assert.equal(result.complete, false);
+  assert.equal(result.coverage.empty_page_before_end, true);
+  assert.equal(result.coverage.reason, 'AGGTRADE_EMPTY_PAGE_BEFORE_END');
+  assert.equal(result.coverage.limit_reached, false);
+});
+
+test('REST fallback preserves the official archive failure/cap provenance even when REST completes', () => {
+  const rest = {trades:[{a:1,T:50_000,p:'1',q:'1',m:false}],complete:true,
+    coverage:{complete:true,pages:1,rows:1}};
+  const archive = {trades:[],complete:false,
+    coverage:{complete:false,reason:'ARCHIVE_TRADE_CAP_REACHED',trade_cap:100_000}};
+  const result = withArchiveAttemptCoverage(rest,archive);
+  assert.equal(result.complete,true);
+  assert.equal(result.coverage.archive_attempt_complete,false);
+  assert.equal(result.coverage.archive_attempt.reason,'ARCHIVE_TRADE_CAP_REACHED');
+  assert.equal(result.coverage.rows,1);
 });
 
 test('opt-in candle-only fallback replays verified candles without inventing aggTrades', () => {
