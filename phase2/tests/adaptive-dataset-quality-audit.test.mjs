@@ -160,7 +160,8 @@ test('unresolved, future, mixed-resolution, duplicate and sequence-less rows are
   assert.equal(audit.counts.valid_resolved_rows,1);
   assert.equal(audit.counts.duplicate_rows,1);
   assert.equal(audit.counts.sequence_missing_or_invalid_rows,1);
-  assert.equal(audit.counts.unresolved_rows,1);
+  assert.equal(audit.counts.unresolved_rows,2,
+    'both an immature future label and an unlabelled outcome remain unresolved');
   assert.equal(audit.rejection_reasons.OUTCOME_UNAVAILABLE,1);
   assert.equal(audit.rejection_reasons.OUTCOME_NOT_MATURED,1);
   assert.equal(audit.rejection_reasons.FIRST_PASSAGE_LABEL_INVALID,1);
