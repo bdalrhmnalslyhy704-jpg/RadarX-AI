@@ -81,6 +81,12 @@ const finite = value => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+export function effectiveCognitiveChallengerMargin(requestedMargin) {
+  const requested = finite(requestedMargin);
+  return requested === null ? COGNITIVE_CHALLENGER_BRIER_MARGIN :
+    Math.max(COGNITIVE_CHALLENGER_BRIER_MARGIN, requested);
+}
+
 export function hasCognitiveBrierSuperiority(candidateScore, baselineScore,
   margin = COGNITIVE_CHALLENGER_BRIER_MARGIN) {
   const candidate = finite(candidateScore);
@@ -1108,8 +1114,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   let neuralFinalTraining=neuralTraining;
   // Enforce at least the declared V5 challenger margin; caller options may
   // demand a stricter improvement but cannot weaken the 0.003 policy floor.
-  const comparisonMargin=Math.max(COGNITIVE_CHALLENGER_BRIER_MARGIN,
-    finite(neuralSelectionMargin)??0);
+  const comparisonMargin=effectiveCognitiveChallengerMargin(neuralSelectionMargin);
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=NEURAL_RESIDUAL_SCALES;
