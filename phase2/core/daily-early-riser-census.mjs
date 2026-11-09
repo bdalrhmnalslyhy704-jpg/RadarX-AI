@@ -26,8 +26,10 @@ function normalizeCandle(raw,intervalMs=DAILY_EARLY_RISER_INTERVAL_MS){
     };
     if(Object.values(values).some(value=>value===null)||
       values.openTime<=0||values.closeTime!==values.openTime+intervalMs-1||
-      values.low<=0||values.high<values.low||values.close<=0||values.quoteVolume<0||
-      values.trades<0||values.takerBuyQuoteVolume<0)return null;
+      values.open<=0||values.low<=0||values.high<values.low||values.close<=0||
+      values.high<Math.max(values.open,values.close)||values.low>Math.min(values.open,values.close)||
+      values.quoteVolume<0||values.trades<0||values.takerBuyQuoteVolume<0||
+      values.takerBuyQuoteVolume>values.quoteVolume*1.000001)return null;
     return values;
   }
   if(!raw||typeof raw!=='object')return null;
@@ -38,8 +40,10 @@ function normalizeCandle(raw,intervalMs=DAILY_EARLY_RISER_INTERVAL_MS){
   };
   if(Object.values(values).some(value=>value===null)||
     values.openTime<=0||values.closeTime!==values.openTime+intervalMs-1||
-    values.low<=0||values.high<values.low||values.close<=0||values.quoteVolume<0||
-    values.trades<0||values.takerBuyQuoteVolume<0)return null;
+    values.open<=0||values.low<=0||values.high<values.low||values.close<=0||
+    values.high<Math.max(values.open,values.close)||values.low>Math.min(values.open,values.close)||
+    values.quoteVolume<0||values.trades<0||values.takerBuyQuoteVolume<0||
+    values.takerBuyQuoteVolume>values.quoteVolume*1.000001)return null;
   return values;
 }
 
@@ -225,11 +229,13 @@ export function buildDailyEarlyRiserHistoricalSamples({
     }
     const baselineOpen=baseline.openTime;
     const evaluationNow=baseline.closeTime+1;
-    const btcDailyPrior=btcByClose.get(candles[index-95].closeTime);
+    // Compare closes exactly 96 x 15m bars apart for a true 24h return.
+    const prior24h=candles[index-96];
+    const btcDailyPrior=btcByClose.get(prior24h.closeTime);
     const btcDailyCurrent=btcByClose.get(baseline.closeTime);
     const btcDailyReturn=btcDailyPrior&&btcDailyCurrent
       ?pct(btcDailyCurrent.close,btcDailyPrior.close):null;
-    const assetDailyReturn=pct(baseline.close,candles[index-95].close);
+    const assetDailyReturn=pct(baseline.close,prior24h.close);
     if(assetDailyReturn===null){rejectedFeatureRows++;continue;}
     while(fastCursor+1<orderedFast.length&&rawCloseTime(orderedFast[fastCursor+1])<=baseline.closeTime)fastCursor++;
     while(btcCursor+1<orderedBtc.length&&rawCloseTime(orderedBtc[btcCursor+1])<=baseline.closeTime)btcCursor++;
