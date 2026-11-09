@@ -4,11 +4,25 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow, compactHistoricalReplayReport} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('hybrid matrix persistence removes bulky per-step diagnostics but preserves replay summaries',()=>{
+  const compact=compactHistoricalReplayReport({generated_at:'2026-11-08T00:00:00Z',results:[{
+    symbol:'GTCUSDT',summary:{replay_steps:360,accepted:3},data_quality:{candle_fetch_complete:true},
+    evaluation:{moderate_move:{classification:'MISSED'}},steps:[{large:'detail-1'},{large:'detail-2'}]
+  }]});
+  assert.equal(compact.results[0].symbol,'GTCUSDT');
+  assert.equal(compact.results[0].summary.replay_steps,360);
+  assert.equal(compact.results[0].evaluation.moderate_move.classification,'MISSED');
+  assert.equal(compact.results[0].replay_step_detail_count,2);
+  assert.equal(compact.results[0].replay_step_details_omitted,true);
+  assert.equal(Object.hasOwn(compact.results[0],'steps'),false);
+  assert.match(compact.step_detail_policy,/OMITTED_FROM_MATRIX_WINDOW_JSON/);
+});
 
 test('high-activity historical watch shadow recognizes verified buyer flow while keeping liquidity and push explicitly unverified',()=>{
   const alert={
