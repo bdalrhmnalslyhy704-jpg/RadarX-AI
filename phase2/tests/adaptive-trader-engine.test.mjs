@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
   ADAPTIVE_TRADER_POLICY,
+  HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
   buildAdaptiveTraderCoveragePlan,
   scoreAdaptiveTraderCandidate,
   buildAdaptiveTraderHistoricalOutcomeSamples,
@@ -1034,6 +1035,29 @@ test('deep historical capture keeps full causal tensors across 116 non-overlappi
       'historical outcomes for one symbol must never overlap their four-hour labels');
   }
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.horizon_ms===4*60*60*1000));
+});
+
+test('per-symbol historical capture keeps 32 independent first-passage outcomes across the full available regime window',()=>{
+  assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,32);
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,2000,15*60*1000,90_000,0.00002);
+  const rows=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DENSEHISTORYUSDT',klines,fastKlines,btcKlines,now,
+    maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
+  });
+  assert.equal(rows.length,32,'the increased quota must be filled when source history supports it');
+  assert.ok(rows.every(row=>row.temporal_sequence?.length===24&&
+    row.temporal_sequence.every(step=>step.length===29)));
+  assert.ok(rows.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(rows.every(row=>row.first_passage?.path_resolution==='15M'));
+  for(let index=1;index<rows.length;index++){
+    assert.ok(rows[index].at-rows[index-1].at>=4*60*60*1000,
+      'increasing sample density must not create overlapping 4h outcome labels');
+  }
+  assert.ok(rows.at(-1).at-rows[0].at>=10*24*60*60*1000,
+    'the added samples must remain stratified across the historical regime window');
 });
 
 test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
