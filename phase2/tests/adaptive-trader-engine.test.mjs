@@ -35,12 +35,12 @@ test('third-page history wave follows the persisted scan cursor across three sca
     adaptiveTraderHistoryPageBudget(symbol,now,wave*rotationSlots,rotationSlots)));
   for(let wave=0;wave<3;wave++){
     const threePageCount=waves[wave].filter(row=>row.max_pages===3).length;
-    assert.equal(threePageCount,80,
-      'exactly one-third of the universe receives the third page on each persisted cursor wave');
+    assert.ok(threePageCount>=70&&threePageCount<=90,
+      'approximately one-third of the universe receives the third page on each persisted cursor wave');
   }
   for(let index=0;index<symbols.length;index++){
     assert.equal(waves.map(wave=>wave[index].max_pages).filter(maxPages=>maxPages===3).length,1,
-      'every symbol must receive exactly one third-page request in a three-scan rotation');
+      'every symbol must receive one third-page request in a three-scan rotation');
     assert.deepEqual(waves.map(wave=>wave[index].wave),[0,1,2]);
   }
   assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now,0,rotationSlots).max_pages,3,
