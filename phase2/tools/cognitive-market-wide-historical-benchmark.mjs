@@ -408,6 +408,9 @@ async function main(){
       sample_phase:'SYMBOL_STABLE_ABSOLUTE_4H_GRID',
       historical_volume_eligibility_usdt:MIN_QUOTE_VOLUME_24H,
       samples_per_symbol:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
+      model_training_window_cap_samples:6000,
+      temporal_training_window_cap_samples:6000,
+      outer_validation_and_holdout_excluded_from_fit:true,
       archive_checksum:'OFFICIAL_SHA256_REQUIRED',
       model_selection:'NESTED_CHRONOLOGICAL_SELECTION_CALIBRATION_VALIDATION_AND_UNTOUCHED_HOLDOUT',
       holdout_policy:'ONE_VALIDATION_WINNER_ONLY_NO_RUNNER_UP_AFTER_HOLDOUT',
@@ -607,9 +610,10 @@ async function main(){
       minimumValidationSamples:20,
       minimumHoldoutSamples:20,
       minNeuralTrainingSamples:240,
-      maxNeuralTrainingSamples:1280,
+      maxNeuralTrainingSamples:6000,
       maxResolvedSamples:0,
       temporalOptions:{
+        maxTrainingSamples:6000,
         minimumHoldoutSamples:150,
         liveHoldoutSamples:150
       }
