@@ -1269,6 +1269,10 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.metrics.model_brier_score+comparisonMargin<neuralSelectionLogistic.model_brier_score)
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
+  const neuralBestMemberCandidate=neuralMemberSelection
+    .filter(row=>row.metrics?.evaluated===true&&Number.isFinite(row.metrics.model_brier_score))
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+      a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
   if(neuralFit){
     neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
     neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
@@ -1329,9 +1333,19 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralRecentLogisticCalibration=calibrateReferenceFit(neuralRecentLogisticFit);
   // This validation score is now measured on rows later than model fitting,
   // member selection and calibration, so it is an honest outer comparison.
+  const neuralSelectionFailureReason=!neuralFit
+    ?!neuralSameWindowLogisticFit?'NEURAL_SELECTION_LOGISTIC_BASELINE_UNAVAILABLE'
+      :neuralTraining.length<neuralMinimum?'NEURAL_TRAINING_SAMPLE_MINIMUM_NOT_MET'
+      :neuralSelection.length<neuralSelectionMinimum?'NEURAL_SELECTION_SAMPLE_MINIMUM_NOT_MET'
+      :'NEURAL_ENSEMBLE_FIT_FAILED'
+    :neuralFit.selected_member_index<0
+      ?neuralSelectionLogistic.evaluated===true
+        ?'NO_NEURAL_MEMBER_BEAT_INNER_SELECTION_LOGISTIC_BY_REQUIRED_MARGIN'
+        :'NEURAL_SELECTION_LOGISTIC_BASELINE_UNAVAILABLE'
+      :'NEURAL_MEMBER_SELECTION_PASSED';
   const neuralValidation=neuralFit&&neuralFit.selected_member_index>=0
     ?evaluateHoldout(upEventValidation,neuralFit,comparisonMargin):{
-      evaluated:false,reason:'NEURAL_MODEL_REQUIRES_MATURED_SELECTION_SAMPLES',
+      evaluated:false,reason:neuralSelectionFailureReason,
       sample_count:upEventValidation.length,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
     };
   const neuralSameWindowLogisticValidation=neuralSameWindowLogisticFit
@@ -1364,7 +1378,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralHoldout=neuralFit&&neuralFit.selected_member_index>=0
     ?evaluateHoldout(upEventHoldout,neuralFit,comparisonMargin):{
     sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
-    log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
+    log_loss:null,beat_base_rate:false,reason:neuralSelectionFailureReason
   };
   const neuralSameWindowLogisticHoldout=neuralSameWindowLogisticFit
     ?evaluateHoldout(upEventHoldout,neuralSameWindowLogisticFit,comparisonMargin):{evaluated:false,model_brier_score:null};
@@ -1691,6 +1705,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     holdout: holdoutMetrics,
     neural_network: {
       status: !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
+        neuralFit.selected_member_index<0 ? 'TRAINED_NOT_SELECTED_ON_INNER_SELECTION' :
         neuralLiveReady ? 'LIVE_GATE_PASSED_OUT_OF_SAMPLE' :
         neuralSelected ? 'VALIDATION_SELECTED_BUT_HOLDOUT_COMPARISON_FAILED' :
         neuralValidation.beat_base_rate===true ? 'VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER' : 'VALIDATION_DID_NOT_BEAT_BASE_RATE',
@@ -1738,6 +1753,28 @@ export function buildCognitiveLearningProfile(samples = [], {
       internal_selection_logistic_brier:neuralSelectionLogistic.model_brier_score??null,
       internal_selection_required_margin:comparisonMargin,
       internal_selection_qualified_members:neuralMemberOrder.length,
+      inner_selection_diagnostics:{
+        training_sample_count:neuralTraining.length,
+        selection_sample_count:neuralSelection.length,
+        selection_positive_samples:neuralSelection.filter(row=>Number(row.target)===1).length,
+        selection_negative_samples:neuralSelection.filter(row=>Number(row.target)===0).length,
+        logistic_baseline_evaluated:neuralSelectionLogistic.evaluated===true,
+        logistic_baseline_brier_score:neuralSelectionLogistic.model_brier_score??null,
+        required_brier_margin:comparisonMargin,
+        candidate_member_scale_count:neuralMemberSelection.length,
+        qualifying_member_scale_count:neuralMemberOrder.length,
+        best_candidate:neuralBestMemberCandidate?{
+          member_index:neuralBestMemberCandidate.index,
+          residual_scale:neuralBestMemberCandidate.residual_scale,
+          brier_score:neuralBestMemberCandidate.metrics.model_brier_score,
+          base_rate_brier_score:neuralBestMemberCandidate.metrics.base_rate_brier_score,
+          beats_same_window_logistic:neuralSelectionLogistic.evaluated===true&&
+            neuralBestMemberCandidate.metrics.model_brier_score+comparisonMargin<
+              neuralSelectionLogistic.model_brier_score
+        }:null,
+        passed:Number.isInteger(neuralFit?.selected_member_index)&&neuralFit.selected_member_index>=0,
+        failure_reason:neuralSelectionFailureReason
+      },
       member_selection_brier_scores:neuralMemberSelection.map(row=>({
         index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
         base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate,
@@ -1848,8 +1885,11 @@ export function buildCognitiveLearningProfile(samples = [], {
         top_20pct_recall_pct:candidate.validation?.ranking_metrics?.top_20_pct?.recall_pct??null,
         beat_base_rate:candidate.validation?.beat_base_rate===true
       })),
-      holdout:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?challengerHoldout:null,
-      holdout_comparison:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')
+      // Publish the validation winner's holdout evidence even when it failed.
+      // Evidence visibility must not depend on acceptance state.
+      holdout:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')
+        ?challengerHoldout:null,
+      holdout_comparison:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')
         ?challengerHoldoutComparison:null
     },
     model_selection: {
@@ -1857,10 +1897,19 @@ export function buildCognitiveLearningProfile(samples = [], {
       validation_challenger:validationWinner?.name||null,
       active_challenger:activeChallenger,
       challenger_holdout_passed:challengerHoldoutComparison.passed===true,
+      challenger_holdout:validationWinner?challengerHoldout:null,
+      challenger_holdout_comparison:validationWinner?challengerHoldoutComparison:null,
       challenger_candidate_metrics:challengerCandidates.map(candidate=>({
         name:candidate.name,
         validation_brier_score:candidate.validation.model_brier_score??null,
-        validation_base_rate_brier_score:candidate.validation.base_rate_brier_score??null
+        validation_base_rate_brier_score:candidate.validation.base_rate_brier_score??null,
+        validation_beats_base_rate:candidate.validation.beat_base_rate===true,
+        holdout_brier_score:candidate.name===validationWinner?.name
+          ?challengerHoldout.model_brier_score??null:null,
+        holdout_beats_base_rate:candidate.name===validationWinner?.name
+          ?challengerHoldout.beat_base_rate===true:null,
+        holdout_comparison_passed:candidate.name===validationWinner?.name
+          ?challengerHoldoutComparison.passed===true:null
       })),
       reason: selectionReason,
       recent_window_samples: recentTraining.length,
