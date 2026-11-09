@@ -133,7 +133,12 @@ export class AdaptiveTraderWorker{
               const closedBaseline=sample.closed_candle_baseline===true;
               sample.training_eligible=historical||closedBaseline;
               if(historical){
-                sample.outcome_source=sample.outcome_source||'HISTORICAL_CLOSED_CANDLE';
+                const verifiedFirstPassage=sample.target_definition===TEMPORAL_TARGET_DEFINITION&&
+                  sample.first_passage?.path_resolution==='15M'&&
+                  sample.first_passage?.outcome===sample.outcome;
+                sample.outcome_source=verifiedFirstPassage
+                  ?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+                  :(sample.outcome_source||'HISTORICAL_CLOSED_CANDLE');
               }else if(!closedBaseline||!['CLOSED_CANDLE_4H','CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'].includes(sample.outcome_source)){
                 // Earlier Build 224 versions labeled live samples from current ticker prices.
                 // Retract those labels instead of carrying unverified outcomes into learning.
@@ -628,8 +633,9 @@ recordServerPaperPortfolio(snapshot,now){
         const hasVerifiedFirstPassage=row.target_definition===TEMPORAL_TARGET_DEFINITION&&
           row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome;
         const inserted={...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
-          training_eligible:true,outcome_source:row.outcome_source||
-            (hasVerifiedFirstPassage?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1':'HISTORICAL_CLOSED_CANDLE')};
+          training_eligible:true,outcome_source:hasVerifiedFirstPassage
+            ?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+            :(row.outcome_source||'HISTORICAL_CLOSED_CANDLE')};
         this.state.samples.push(inserted);
         historicalSampleById.set(id,inserted);
         knownIds.add(id);newHistoricalSamples++;

@@ -590,7 +590,7 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     symbol:'HISTUSDT',price:1,at:baselineAt,base_score:72,tier:'EARLY_SETUP',
     observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
     target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
-    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    outcome_source:'HISTORICAL_CLOSED_CANDLE',
     first_passage:{hit:'TAKE_PROFIT_REACHED_FIRST',outcome:'UP',path_resolution:'15M'},
     temporal_sequence:Array.from({length:24},()=>Array(29).fill(0)),
     quote_volume_24h:4_500_000,change_24h_pct:1.8,
@@ -622,6 +622,8 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     assert.equal(status.learning_capture.shared_neural_resolved_samples,1);
     assert.equal(status.learning_profile.historical_samples,1);
     assert.equal(status.cognitive_brain.profile.resolved_samples,1);
+    assert.equal(status.cognitive_brain.profile.temporal_network.resolved_samples,1);
+    assert.equal(status.cognitive_brain.profile.comparison_contract.sample_identity_matches,true);
     assert.equal(status.learning_profile.outcome_counts.up,1);
     assert.ok(status.memory.resolved_samples>=1);
     assert.equal(status.learning_capture.historical_input_samples,1);
