@@ -8,8 +8,8 @@ const SEQUENCE_CHANNELS = 29;
 /**
  * Retain training rows fairly across symbols. The previous append-order slice
  * could let the most recently scanned priority lane evict entire earlier
- * symbols. Round-robin newest-first retention preserves symbol diversity while
- * keeping the total persisted sample count bounded.
+ * symbols. Balanced chronological quantiles preserve symbol diversity and
+ * early/middle/recent market regimes while keeping memory bounded.
  */
 export function retainBalancedAdaptiveSamples(samples = [], {
   maxSamples = 6000,
