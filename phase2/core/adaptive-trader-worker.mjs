@@ -143,10 +143,6 @@ export class AdaptiveTraderWorker{
               }
               return sample;
             }),
-            v5_samples:Array.isArray(saved.v5_samples)?saved.v5_samples.slice(-MAX_SAMPLES).filter(row=>
-              row&&row.training_eligible===true&&
-              (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-              row.target_definition==='LEGACY_4H_CLOSE_RETURN'):[],
             price_history:saved.price_history.slice(-MAX_HISTORY),
             missed_movers:Array.isArray(saved.missed_movers)?saved.missed_movers.slice(-MAX_MISSED):[],
             cognitive_journal:Array.isArray(saved.cognitive_journal)?saved.cognitive_journal.slice(-MAX_COGNITIVE_JOURNAL):[],
@@ -651,10 +647,15 @@ recordServerPaperPortfolio(snapshot,now){
             existing.temporal_sequence=row.temporal_sequence;
             historicalSequenceBackfills++;
           }
-          for(const key of ['target_definition','outcome_source','outcome','resolved_at','horizon_ms',
+          for(const key of ['target_definition','outcome','resolved_at','horizon_ms',
             'first_passage','mark_price','return_pct','close_return_pct','close_return_source',
             'features','base_score','tier','price','quote_volume_24h','change_24h_pct','selection_lane']){
             if(row[key]!==undefined)existing[key]=row[key];
+          }
+          if(row.outcome_source!==undefined)existing.outcome_source=row.outcome_source;
+          else if(row.target_definition===TEMPORAL_TARGET_DEFINITION&&
+             row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome){
+            existing.outcome_source='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1';
           }
           existing.observation_type='HISTORICAL_CLOSED_CANDLE';
           existing.historical_baseline=true;

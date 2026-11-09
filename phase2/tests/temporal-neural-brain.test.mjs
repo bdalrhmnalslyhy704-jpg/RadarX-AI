@@ -512,7 +512,8 @@ test('V5, GBDT, hybrid and TCN consume identical first-passage rows and outer ho
   assert.equal(contract.holdout_samples,contract.temporal_holdout_samples);
   assert.equal(profile.neural_network.target_definition,TEMPORAL_TARGET_DEFINITION);
   assert.equal(temporal.target_definition,TEMPORAL_TARGET_DEFINITION);
-  assert.equal(profile.neural_network.holdout.sample_count,temporal.holdout.sample_count);
+  assert.equal(profile.neural_network.holdout.sample_count,contract.holdout_samples);
+  assert.equal(contract.holdout_samples,temporal.outer_holdout_samples);
 });
 
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{
@@ -546,7 +547,7 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   const successBranch=workflow.indexOf('if(valid)',validStart);
   assert.ok(validStart>=0&&successBranch>validStart,'acceptance success gate must remain explicit');
   const validExpression=workflow.slice(validStart,successBranch);
-  for(const gate of ['cognitiveSplitReady','neuralNetworkContract','v5NeuralLiveReady','neuralLiveReady','probabilityClaimSafe']){
+  for(const gate of ['cognitiveSplitReady','sharedDatasetReady','neuralNetworkContract','v5NeuralLiveReady','neuralLiveReady','probabilityClaimSafe']){
     assert.ok(validExpression.includes(gate),'DHDTech success must require '+gate);
   }
   for(const gate of [
@@ -576,6 +577,9 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(workflow.includes('String(deployedBuildIdentity.commit||\'\')===context.sha'));
   assert.ok(workflow.includes('deploymentResponse.ok&&exactBuildCommit&&'));
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+  assert.ok(workflow.includes('sharedComparison.sample_fingerprint===temporalNetwork.outer_sample_fingerprint'));
+  assert.ok(workflow.includes('sharedComparison.shared_outer_split_applied===true'));
+  assert.ok(containerWorkflow.includes('CONTAINER_SHARED_NEURAL_SAMPLE_IDENTITY_MISMATCH'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
   assert.ok(containerWorkflow.includes("training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'"));
