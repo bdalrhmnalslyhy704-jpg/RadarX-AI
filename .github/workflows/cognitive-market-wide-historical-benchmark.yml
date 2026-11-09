@@ -1,0 +1,129 @@
+name: Build 224 Cognitive Market-Wide Historical Binance Benchmark
+
+on:
+  push:
+    branches:
+      - verify/cognitive-hybrid-nested-calibration-20261109
+      - research/fail-closed-replay-and-cognitive-audit-20261109
+      - research/cognitive-expanded-history-ablation-20261109
+      - research/cognitive-ranking-cohort-parity-20261109
+    paths:
+      - 'phase2/core/binance-spot-kline-archive.mjs'
+      - 'phase2/core/cognitive-benchmark-metrics.mjs'
+      - 'phase2/core/adaptive-trader-engine.mjs'
+      - 'phase2/core/market-wide-light-scan.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/cognitive-market-wide-historical-benchmark.mjs'
+      - 'phase2/tests/binance-spot-kline-archive.test.mjs'
+      - 'phase2/tests/cognitive-benchmark-metrics.test.mjs'
+      - '.github/workflows/cognitive-market-wide-historical-benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      start:
+        description: Inclusive UTC start date (YYYY-MM-DD)
+        required: false
+        default: '2025-11-01'
+        type: string
+      end_exclusive:
+        description: Exclusive UTC end date (YYYY-MM-DD; use first day after last full month)
+        required: false
+        default: '2026-11-01'
+        type: string
+      max_symbols:
+        description: 0 means all currently trading directional Spot USDT symbols
+        required: false
+        default: '0'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cognitive-market-wide-historical-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  archive-replay-and-model-evaluation:
+    name: Verified Binance Spot archive replay and nested model evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      RADARX_COGNITIVE_BENCHMARK_REPORT: artifacts/cognitive-market-wide-historical-benchmark.json
+      RADARX_COGNITIVE_BENCHMARK_SAMPLES: artifacts/cognitive-market-wide-historical-samples.jsonl
+    steps:
+      - name: Checkout isolated Build 224 research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify archive extraction utility
+        run: unzip -v | head -n 2
+      - name: Syntax-check research pipeline
+        run: |
+          node --check phase2/core/binance-spot-kline-archive.mjs
+          node --check phase2/core/cognitive-benchmark-metrics.mjs
+          node --check phase2/core/adaptive-trader-engine.mjs
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/cognitive-market-wide-historical-benchmark.mjs
+      - name: Test archive parser, coverage and ranking baselines
+        run: |
+          node --test --test-timeout=60000 phase2/tests/binance-spot-kline-archive.test.mjs
+          node --test --test-timeout=60000 phase2/tests/cognitive-benchmark-metrics.test.mjs
+      - name: Replay verified monthly Spot archives and evaluate all cognitive models
+        id: benchmark
+        run: |
+          node phase2/tools/cognitive-market-wide-historical-benchmark.mjs \
+            --start '${{ github.event.inputs.start || '2025-11-01' }}' \
+            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
+            --concurrency 6 \
+            --min-symbols 80 \
+            --min-samples 6000 \
+            --min-sequences 3000 \
+            --min-temporal-coverage 0.80
+      - name: Upload raw provenance, dataset and model metrics even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-cognitive-historical-benchmark-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish benchmark summary
+        if: always()
+        run: |
+          cat > /tmp/benchmark-summary.mjs <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/cognitive-market-wide-historical-benchmark.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Benchmark did not produce a report. Inspect workflow logs.'+String.fromCharCode(10));
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const q=report.data_quality||{},m=report.models||{},p=m.profile||{};
+          const summary={
+            status:report.status,
+            window:report.window,
+            universe:report.universe,
+            data_quality:q,
+            selected_model:m.selected_model_name||p.model_selection?.selected_model||null,
+            baseline_split_integrity:m.baseline_split_integrity,
+            existing_engine_baselines:m.existing_engine_baselines,
+            model_vs_existing_engine:m.model_vs_existing_engine,
+            neural:{status:p.neural_network?.status,validation:p.neural_network?.validation,holdout:p.neural_network?.holdout},
+            boosted_tree:{status:p.boosted_tree_model?.status,validation:p.boosted_tree_model?.validation,holdout:p.boosted_tree_model?.holdout},
+            hybrid:{status:p.hybrid_model?.status,selection:p.hybrid_model?.candidate_selection_metrics,validation:p.hybrid_model?.validation,holdout:p.hybrid_model?.holdout},
+            temporal:{status:p.temporal_network?.status,validation:p.temporal_network?.validation,holdout:p.temporal_network?.holdout,holdout_comparison:p.temporal_network?.holdout_comparison},
+            predictive_superiority_verified:m.predictive_superiority_verified===true,
+            profitability_verified:m.profitability_verified===true
+          };
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify(summary,null,2)+String.fromCharCode(10));
+          NODE
+          node /tmp/benchmark-summary.mjs
