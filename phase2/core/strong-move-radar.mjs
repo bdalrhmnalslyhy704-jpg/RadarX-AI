@@ -403,7 +403,7 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
   const threeSecond=a.metrics?.three_second_liquidity||{};
   const threeSecondRatio=strictFinite(a.metrics?.three_second_taker_buy_ratio);
   const threeSecondFailures=!threeSecond.available
-    ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    ?['AGGTRADE_COVERAGE_NOT_VERIFIED']
     :threeSecondRatio===null
       ?['THREE_SECOND_TRADE_BUCKET_EMPTY']
       :threeSecondRatio<=0.70
