@@ -5,6 +5,7 @@ on:
     branches:
       - verify/cognitive-hybrid-nested-calibration-20261109
       - research/fail-closed-replay-and-cognitive-audit-20261109
+      - research/cognitive-expanded-history-ablation-20261109
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'
