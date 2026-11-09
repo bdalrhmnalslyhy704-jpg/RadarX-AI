@@ -178,6 +178,26 @@ test('historical learning examples use only baseline candles and label returns f
   assert.deepEqual(relabelled.features,target.features);
 });
 
+test('historical training samples are time-stratified across the full available history',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,1800,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,960,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,1800,15*60*1000,90_000,0.00002);
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'STRATIFIEDUSDT',klines,fastKlines,btcKlines,now,maxSamples:8
+  });
+  assert.equal(samples.length,8);
+  const baselineIndexes=samples.map(sample=>klines.data.findIndex(row=>row[6]===sample.at));
+  assert.ok(baselineIndexes.every(index=>index>=0));
+  assert.deepEqual(baselineIndexes,[...baselineIndexes].sort((a,b)=>a-b));
+  const gaps=baselineIndexes.slice(1).map((index,slot)=>index-baselineIndexes[slot]);
+  assert.ok(gaps.every(gap=>gap>=16),
+    'each sample must preserve the non-overlapping 4h label horizon');
+  assert.ok(samples.at(-1).at-samples[0].at>=10*24*60*60*1000,
+    'the bounded sample budget must represent older and newer market regimes, not just the newest tail');
+  assert.ok(samples.every(sample=>sample.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
+});
+
 test('15m-only historical samples remain available to V5 but are marked ineligible for TCN labels',()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);

@@ -83,6 +83,8 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
     'تجاوز هذه العملة في الوقت الحالي، واستمر في فحص بقية الأزواج.');
 }
 
+const HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL=24;
+
 const POLICY = Object.freeze({
   minQuoteVolume24h: 750000,
   minClosedCandles: 12,
@@ -636,7 +638,6 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     possible.push({index,volume24h,dailyReturn,baseline,future});
   }
   const desired=Math.max(1,Math.min(118,Math.trunc(Number(maxSamples)||48)));
-  const selected=[];
   // Give each symbol a deterministic phase on the 4h sampling grid. This keeps
   // that symbol's own outcomes non-overlapping, while preventing every market
   // pair from contributing labels at the exact same eight timestamps. The hash
@@ -647,12 +648,19 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     phaseHash=Math.imul(phaseHash,16777619)>>>0;
   }
   const samplingPhase=phaseHash%horizonBars;
-  for(let cursor=possible.length-1;cursor>=0&&selected.length<desired;cursor--){
-    const item=possible[cursor];
-    if(item.index%horizonBars!==samplingPhase)continue;
-    selected.push(item);
+  const phaseRows=possible.filter(item=>item.index%horizonBars===samplingPhase);
+  const selectedCount=Math.min(desired,phaseRows.length);
+  const selected=[];
+  if(selectedCount===1){
+    selected.push(phaseRows.at(-1));
+  }else if(selectedCount>1){
+    // Stratify across the complete matured history instead of taking only its newest tail.
+    // The 24-row default preserves cross-sectional coverage within the worker's bounded 6k tensor cache.
+    for(let slot=0;slot<selectedCount;slot++){
+      const index=Math.round(slot*(phaseRows.length-1)/(selectedCount-1));
+      selected.push(phaseRows[index]);
+    }
   }
-  selected.reverse();
   const out=[];
   for(const item of selected){
     const {index,volume24h,dailyReturn,baseline,future}=item;
@@ -1100,7 +1108,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       :fastLatest;
     const candidate=scoreAdaptiveTraderCandidate({symbol:ticker.symbol,ticker,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h});
     const historicalSamples=buildAdaptiveTraderHistoricalOutcomeSamples({
-      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,maxSamples:118
+      symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,btcKlines,now,minQuoteVolume24h,
+      maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
     });
     const closedCandleOutcomes=buildAdaptiveTraderClosedCandleOutcomeLabels({
       symbol:ticker.symbol,klines:result,fastKlines:fastResult.value,
@@ -1213,6 +1222,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       micro_5m_symbols_available: analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length,
       micro_5m_symbols_unavailable: Math.max(0,candidates.length-analyzed.filter(row=>row?.candidate?.features?.micro_5m_available===true).length),
       historical_training_samples_available: historicalTrainingSamples.length,
+      historical_training_samples_per_symbol:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
+      historical_sampling_strategy:'DETERMINISTIC_TIME_STRATIFIED_PER_SYMBOL_V1',
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
       asset_5m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=2).length,
       asset_5m_deep_history_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=4).length,
