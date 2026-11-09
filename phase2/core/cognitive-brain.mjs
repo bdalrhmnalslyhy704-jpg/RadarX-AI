@@ -1154,30 +1154,37 @@ export function buildCognitiveLearningProfile(samples = [], {
     ?fitLogisticModel(upEventTraining,{l2,iterations,learningRate}):null;
   const neuralRecentLogisticFit=upEventRecentTraining.length>=minTrainingSamples
     ?fitLogisticModel(upEventRecentTraining,{l2,iterations,learningRate}):null;
-  const neuralCandidateRows=training.length>=neuralMinimum
-    ?asUpEventRows(training.slice(-neuralLimit)):[];
+  // When V5 and TCN share a verified first-passage dataset, both must use
+  // the exact same capped fit pool and the TCN's timestamp cutoffs.
+  const neuralFitPoolSamples=sharedOuterSplitApplied
+    ?Math.max(0,Math.trunc(Number(temporalNetwork.shared_model_fit_pool_samples)||0))
+    :neuralLimit;
+  const neuralCandidateRows=neuralFitPoolSamples>0
+    ?asUpEventRows(training.slice(-neuralFitPoolSamples)):[];
   const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
-  // V5 now reserves four chronological stages inside its training window:
-  // 70% model fitting, 10% member/residual selection, and 20% probability
-  // calibration (itself split into fit/check blocks), followed by outer
-  // validation and the untouched final holdout. Every cutoff purges outcomes
-  // that had not matured before that block ended.
-  const neuralTrainingCutIndex=neuralCandidateTimes.length>=4
+  const localNeuralTrainingCutIndex=neuralCandidateTimes.length>=4
     ?Math.max(1,Math.min(neuralCandidateTimes.length-2,Math.floor(neuralCandidateTimes.length*0.70))):-1;
-  const neuralSelectionCutIndex=neuralTrainingCutIndex>=0
-    ?Math.max(neuralTrainingCutIndex+1,Math.min(neuralCandidateTimes.length-1,
+  const localNeuralSelectionCutIndex=localNeuralTrainingCutIndex>=0
+    ?Math.max(localNeuralTrainingCutIndex+1,Math.min(neuralCandidateTimes.length-1,
       Math.floor(neuralCandidateTimes.length*0.80))):-1;
-  const neuralSelectionStartAt=neuralTrainingCutIndex>=0
-    ?neuralCandidateTimes[neuralTrainingCutIndex]:null;
-  const neuralCalibrationStartAt=neuralSelectionCutIndex>=0
-    ?neuralCandidateTimes[neuralSelectionCutIndex]:null;
-  const neuralTraining=neuralSelectionStartAt===null?[]:neuralCandidateRows.filter(row=>
-    row.at<neuralSelectionStartAt&&row.resolved_at<neuralSelectionStartAt);
-  const neuralSelection=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
-    row.at>=neuralSelectionStartAt&&row.at<neuralCalibrationStartAt&&
-    row.resolved_at<neuralCalibrationStartAt);
-  const neuralCalibration=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
-    row.at>=neuralCalibrationStartAt&&row.resolved_at<validationStartAt);
+  const neuralTrainingCutoffAt=sharedOuterSplitApplied
+    ?finite(temporalNetwork.shared_model_training_cutoff_at)
+    :(localNeuralTrainingCutIndex>=0?neuralCandidateTimes[localNeuralTrainingCutIndex]:null);
+  const neuralSelectionCutoffAt=sharedOuterSplitApplied
+    ?finite(temporalNetwork.shared_model_member_selection_cutoff_at)
+    :(localNeuralSelectionCutIndex>=0?neuralCandidateTimes[localNeuralSelectionCutIndex]:null);
+  const neuralCalibrationCutoffAt=sharedOuterSplitApplied
+    ?finite(temporalNetwork.shared_model_selection_cutoff_at):validationStartAt;
+  const neuralSelectionStartAt=neuralTrainingCutoffAt;
+  const neuralCalibrationStartAt=neuralSelectionCutoffAt;
+  const neuralTraining=neuralTrainingCutoffAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at<neuralTrainingCutoffAt&&row.resolved_at<neuralTrainingCutoffAt);
+  const neuralSelection=neuralTrainingCutoffAt===null||neuralSelectionCutoffAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at>=neuralTrainingCutoffAt&&row.at<neuralSelectionCutoffAt&&
+    row.resolved_at<neuralSelectionCutoffAt);
+  const neuralCalibration=neuralSelectionCutoffAt===null||neuralCalibrationCutoffAt===null?[]:neuralCandidateRows.filter(row=>
+    row.at>=neuralSelectionCutoffAt&&row.at<neuralCalibrationCutoffAt&&
+    row.resolved_at<neuralCalibrationCutoffAt);
   const neuralCalibrationTimes=[...new Set(neuralCalibration.map(row=>row.at))].sort((a,b)=>a-b);
   const neuralCalibrationFitCutIndex=neuralCalibrationTimes.length>=3
     ?Math.max(1,Math.min(neuralCalibrationTimes.length-1,Math.floor(neuralCalibrationTimes.length*0.70))):-1;
@@ -1186,13 +1193,31 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralCalibrationFit=neuralCalibrationCheckStartAt===null?[]:neuralCalibration.filter(row=>
     row.at<neuralCalibrationCheckStartAt&&row.resolved_at<neuralCalibrationCheckStartAt);
   const neuralCalibrationCheck=neuralCalibrationCheckStartAt===null?[]:neuralCalibration.filter(row=>
-    row.at>=neuralCalibrationCheckStartAt&&row.resolved_at<validationStartAt);
+    row.at>=neuralCalibrationCheckStartAt&&row.resolved_at<neuralCalibrationCutoffAt);
+  const temporalStageFingerprints=temporalNetwork.shared_model_stage_fingerprints||{};
+  const neuralStageFingerprints={
+    training:sampleIdentityFingerprint(neuralTraining),
+    member_selection:sampleIdentityFingerprint(neuralSelection),
+    calibration:sampleIdentityFingerprint(neuralCalibration),
+    validation:sampleIdentityFingerprint(upEventValidation),
+    holdout:sampleIdentityFingerprint(upEventHoldout)
+  };
+  const neuralPhaseIdentityMatches=Boolean(sharedOuterSplitApplied&&
+    ['training','member_selection','calibration','validation','holdout'].every(phase=>
+      typeof temporalStageFingerprints[phase]==='string'&&
+      temporalStageFingerprints[phase]===neuralStageFingerprints[phase]));
+  const neuralPhaseAlignmentReady=Boolean(neuralPhaseIdentityMatches&&
+    neuralTrainingCutoffAt!==null&&neuralSelectionCutoffAt!==null&&
+    neuralCalibrationCutoffAt!==null&&neuralTrainingCutoffAt<neuralSelectionCutoffAt&&
+    neuralSelectionCutoffAt<neuralCalibrationCutoffAt&&
+    neuralCalibrationCutoffAt<=validationStartAt&&validationStartAt<holdoutStartAt);
   const neuralSelectionMinimum=Math.max(20,minimumValidationSamples);
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
   let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
-  const neuralFit=neuralTraining.length>=neuralMinimum&&
+  const neuralPhaseUsable=!sharedOuterSplitApplied||neuralPhaseAlignmentReady;
+  const neuralFit=neuralPhaseUsable&&neuralTraining.length>=neuralMinimum&&
     neuralSelection.length>=neuralSelectionMinimum&&neuralSameWindowLogisticFit
     ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
@@ -1200,7 +1225,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit
     }):null;
-  let neuralFinalTraining=neuralTraining;
+  // V5 keeps the original training-only weights after member selection.
   // Enforce at least the declared V5 challenger margin; caller options may
   // demand a stricter improvement but cannot weaken the 0.003 policy floor.
   const comparisonMargin=effectiveCognitiveChallengerMargin(neuralSelectionMargin);
@@ -1224,43 +1249,9 @@ export function buildCognitiveLearningProfile(samples = [], {
   if(neuralFit){
     neuralFit.selected_member_index=neuralMemberOrder.length?neuralMemberOrder[0].index:-1;
     neuralFit.selected_residual_scale=neuralMemberOrder.length?neuralMemberOrder[0].residual_scale:0;
-    // Refit only the selected member on the union of model-fit + selection rows.
-    // All labels must mature before the separate calibration window begins.
-    const selectedIndex=neuralFit.selected_member_index;
-    const refitRows=[...neuralTraining,...neuralSelection]
-      .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
-    const refitBaseline=selectedIndex>=0?fitLogisticModel(refitRows,{l2,iterations,learningRate}):null;
-    const selectedProfile=selectedIndex>=0?neuralFit.member_training_profiles[selectedIndex]||{}:{};
-    const refitMember=selectedIndex>=0&&refitBaseline
-      ?fitNeuralNetworkModel(refitRows,{
-        hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline
-      }):null;
-    if(refitMember&&refitBaseline){
-      neuralFit.members[selectedIndex]=refitMember;
-      neuralSameWindowLogisticFit=refitBaseline;
-      neuralFinalTraining=refitRows;
-      // All validation metrics must use the prevalence of the exact final refit
-      // set. The previous code retained the earlier ensemble fit's base_rate,
-      // even after adding the disjoint member-selection rows to the refit.
-      // That made the Brier reference predictor inconsistent with the weights
-      // that actually generated the validation and holdout probabilities.
-      const refitPositiveSamples=refitRows.filter(row=>Number(row.target)===1).length;
-      const refitNegativeSamples=refitRows.length-refitPositiveSamples;
-      neuralFit.base_rate=refitBaseline.base_rate;
-      neuralFit.refit_base_rate=refitBaseline.base_rate;
-      neuralFit.refit_positive_samples=refitPositiveSamples;
-      neuralFit.refit_negative_samples=refitNegativeSamples;
-      neuralFit.training_samples=refitRows.length;
-      neuralFit.refit_training_samples=refitRows.length;
-      neuralFit.refit_max_outcome_resolved_at=Math.max(...refitRows.map(row=>row.resolved_at));
-    }else{
-      neuralFit.selected_member_index=-1;
-      neuralFit.selected_residual_scale=0;
-      neuralFit.refit_training_samples=0;
-      neuralFit.refit_max_outcome_resolved_at=null;
-    }
-    // Fit calibration only after refitting; the calibration rows remain later.
+    // Selection chooses a member and residual scale; it never enters gradient fitting.
+    neuralFit.refit_training_samples=0;
+    neuralFit.refit_max_outcome_resolved_at=null;
     neuralFit.probability_calibrator=neuralFit.selected_member_index>=0
       ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,neuralFit)
       :null;
@@ -1521,7 +1512,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       activeChallenger=validationWinner.name;
       selectedModel=validationWinner.name;
       selectedFit=validationWinner.fit;
-      selectedTraining=validationWinner.name==='NEURAL_GLOBAL'?neuralFinalTraining:training;
+      selectedTraining=validationWinner.name==='NEURAL_GLOBAL'?neuralTraining:training;
       selectedValidation=validationWinner.validation;
       selectionReason=validationWinner.name+'_BEAT_ALL_LOGISTIC_CHALLENGERS_ON_VALIDATION_AND_HOLDOUT';
     }else{
@@ -1572,7 +1563,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       temporal_validation_samples:Number(temporalNetwork.outer_validation_samples)||0,
       temporal_holdout_samples:Number(temporalNetwork.outer_holdout_samples)||0,
       validation_sample_count_matches:Number(temporalNetwork.outer_validation_samples)===validation.length,
-      holdout_sample_count_matches:Number(temporalNetwork.outer_holdout_samples)===holdout.length
+      holdout_sample_count_matches:Number(temporalNetwork.outer_holdout_samples)===holdout.length,
+      shared_phase_identity_matches:neuralPhaseIdentityMatches,
+      shared_phase_alignment_ready:neuralPhaseAlignmentReady,
+      temporal_stage_fingerprints:temporalStageFingerprints,
+      cognitive_stage_fingerprints:neuralStageFingerprints
     },
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
@@ -1605,14 +1600,22 @@ export function buildCognitiveLearningProfile(samples = [], {
       feature_schema:COGNITIVE_FEATURE_SCHEMA,
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
-      samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,
+      samples_required:neuralMinimum,training_samples:neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
-      refit_training_samples:neuralFit?.refit_training_samples??0,
-      refit_positive_samples:neuralFit?.refit_positive_samples??0,
-      refit_negative_samples:neuralFit?.refit_negative_samples??0,
-      refit_base_rate:neuralFit?.refit_base_rate??null,
+      refit_training_samples:0,
       scoring_base_rate:neuralFit?.base_rate??null,
-      maximum_training_sample_budget:neuralLimit,
+      maximum_training_sample_budget:neuralFitPoolSamples,
+      shared_phase_alignment_ready:neuralPhaseAlignmentReady,
+      shared_phase_identity_matches:neuralPhaseIdentityMatches,
+      shared_phase_sample_counts:{
+        training:neuralTraining.length,member_selection:neuralSelection.length,
+        calibration:neuralCalibration.length,validation:upEventValidation.length,
+        holdout:upEventHoldout.length
+      },
+      shared_phase_sample_fingerprints:neuralStageFingerprints,
+      training_cutoff_at:neuralTrainingCutoffAt,
+      member_selection_cutoff_at:neuralSelectionCutoffAt,
+      calibration_cutoff_at:neuralCalibrationCutoffAt,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
       training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
@@ -1632,7 +1635,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         reason:'NEURAL_MODEL_NOT_FITTED'
       },
       max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
-      max_refit_training_outcome_resolved_at:neuralFit?.refit_max_outcome_resolved_at??null,
+      max_refit_training_outcome_resolved_at:null,
       max_selection_outcome_resolved_at:neuralSelection.length?Math.max(...neuralSelection.map(row=>row.resolved_at)):null,
       max_calibration_fit_outcome_resolved_at:neuralCalibrationFit.length?Math.max(...neuralCalibrationFit.map(row=>row.resolved_at)):null,
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
