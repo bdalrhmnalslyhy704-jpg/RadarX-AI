@@ -75,6 +75,9 @@ test('worker exposes the exact V5 plus TCN source contract without claiming mode
   try{
     const status=worker.snapshot();
     assert.equal(status.cognitive_model_contract,COGNITIVE_MODEL_BUILD_CONTRACT);
+    assert.equal(status.dataset_quality_audit.data_support_ready,false);
+    assert.equal(status.dataset_quality_audit.status,'ADDITIONAL_VERIFIED_DATA_REQUIRED');
+    assert.equal(status.dataset_quality_audit.policy.real_order_execution,false);
     assert.equal(status.cognitive_brain.profile.temporal_network.architecture,
       'TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7');
     assert.equal(status.cognitive_brain.profile.temporal_network.probability_ready,false,
