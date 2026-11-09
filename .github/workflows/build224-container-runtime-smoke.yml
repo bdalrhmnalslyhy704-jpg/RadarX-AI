@@ -171,6 +171,30 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           const x=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/adaptive-status.json','utf8'));
+          const datasetAudit=x.dataset_quality_audit||x.learning_capture?.dataset_quality_audit||null;
+          if(!datasetAudit||datasetAudit.schema_version!=='RADARX_ADAPTIVE_DATASET_QUALITY_AUDIT_V1'||
+             !/^[a-f0-9]{64}$/.test(String(datasetAudit.fingerprints?.sample_identity_sha256||''))||
+             !/^[a-f0-9]{64}$/.test(String(datasetAudit.fingerprints?.model_input_sha256||''))){
+            throw new Error('ADAPTIVE_TRADER_DATASET_QUALITY_AUDIT_MISSING_OR_INVALID '+JSON.stringify({
+              datasetAudit:datasetAudit?{schema_version:datasetAudit.schema_version,status:datasetAudit.status}:null
+            }));
+          }
+          console.log('ADAPTIVE_TRADER_DATASET_QUALITY_AUDIT '+JSON.stringify({
+            status:datasetAudit.status,data_support_ready:datasetAudit.data_support_ready===true,
+            target_definition:datasetAudit.target_definition,
+            counts:datasetAudit.counts||{},class_balance:datasetAudit.class_balance||{},
+            time_coverage:datasetAudit.time_coverage?{
+              earliest_sample_utc:datasetAudit.time_coverage.earliest_sample_utc,
+              latest_sample_utc:datasetAudit.time_coverage.latest_sample_utc,
+              span_days:datasetAudit.time_coverage.span_days,
+              distinct_utc_days:datasetAudit.counts?.distinct_utc_days,
+              distinct_utc_months:datasetAudit.counts?.distinct_utc_months
+            }:null,
+            regimes:datasetAudit.regimes||{},regime_phase_support:datasetAudit.regime_phase_support||{},
+            blocking_reasons:datasetAudit.blocking_reasons||[],
+            rejection_reasons:datasetAudit.rejection_reasons||{},
+            fingerprints:datasetAudit.fingerprints
+          }));
           const capture=x.learning_capture||null;
           const brain=x.cognitive_brain||{};
           const brainProfile=brain.profile||{};
@@ -424,6 +448,13 @@ jobs:
               btc_benchmark_available:summary?.meta?.btc_benchmark_available===true,
               btc_benchmark_error:String(summary?.meta?.btc_benchmark_error||''),
               asset_15m_extended_symbols:Number(summary?.universe?.asset_15m_extended_symbols)||0,
+              asset_15m_three_page_symbols:Number(summary?.universe?.asset_15m_three_page_symbols)||0,
+              asset_15m_two_page_symbols:Number(summary?.universe?.asset_15m_two_page_symbols)||0,
+              asset_15m_pages_fetched_total:Number(summary?.universe?.asset_15m_pages_fetched_total)||0,
+              asset_15m_pages_attempted_total:Number(summary?.universe?.asset_15m_pages_attempted_total)||0,
+              asset_15m_page_wave:Number(summary?.universe?.asset_15m_page_wave)||0,
+              asset_15m_max_history_candles:Number(summary?.universe?.asset_15m_max_history_candles)||0,
+              asset_15m_median_history_candles:Number(summary?.universe?.asset_15m_median_history_candles)||0,
               asset_5m_extended_symbols:Number(summary?.universe?.asset_5m_extended_symbols)||0,
               asset_5m_deep_history_symbols:Number(summary?.universe?.asset_5m_deep_history_symbols)||0,
               asset_5m_max_history_candles:Number(summary?.universe?.asset_5m_max_history_candles)||0,
