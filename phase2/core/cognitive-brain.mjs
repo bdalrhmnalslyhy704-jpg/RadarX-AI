@@ -1848,8 +1848,11 @@ export function buildCognitiveLearningProfile(samples = [], {
         top_20pct_recall_pct:candidate.validation?.ranking_metrics?.top_20_pct?.recall_pct??null,
         beat_base_rate:candidate.validation?.beat_base_rate===true
       })),
-      holdout:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?challengerHoldout:null,
-      holdout_comparison:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')
+      // Retain the one validation winner's untouched-holdout evidence even
+      // when it fails. This is reporting only: no runner-up is evaluated and
+      // the holdout cannot change the validation-selected candidate.
+      holdout:validationWinner?.name===bestHybridCandidate?.name?challengerHoldout:null,
+      holdout_comparison:validationWinner?.name===bestHybridCandidate?.name
         ?challengerHoldoutComparison:null
     },
     model_selection: {
@@ -1857,6 +1860,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       validation_challenger:validationWinner?.name||null,
       active_challenger:activeChallenger,
       challenger_holdout_passed:challengerHoldoutComparison.passed===true,
+      validation_challenger_holdout:validationWinner?challengerHoldout:null,
+      validation_challenger_holdout_comparison:validationWinner?challengerHoldoutComparison:null,
       challenger_candidate_metrics:challengerCandidates.map(candidate=>({
         name:candidate.name,
         validation_brier_score:candidate.validation.model_brier_score??null,
