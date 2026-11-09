@@ -238,7 +238,7 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
     const at = finite(row.at);
     const resolvedAt = finite(row.resolved_at);
     if (!id) { reject('MISSING_SAMPLE_ID'); continue; }
-    if (!/^[A-Z0-9]{5,30}USDT$/.test(symbol)) { reject('INVALID_SPOT_SYMBOL'); continue; }
+    if (!/^[A-Z0-9]{1,30}USDT$/.test(symbol)) { reject('INVALID_SPOT_SYMBOL'); continue; }
     if (at === null || at <= 0 || !Number.isSafeInteger(Math.trunc(at)) || !Number.isFinite(new Date(at).getTime())) {
       reject('INVALID_SAMPLE_TIME'); continue;
     }
