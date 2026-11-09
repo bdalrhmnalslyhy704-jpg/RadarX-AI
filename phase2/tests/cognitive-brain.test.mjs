@@ -6,6 +6,7 @@ import {
   assessCognitiveCandidate,
   applyCognitiveRankAdjustment,
   COGNITIVE_CHALLENGER_BRIER_MARGIN,
+  effectiveCognitiveChallengerMargin,
   hasCognitiveBrierSuperiority
 } from '../core/cognitive-brain.mjs';
 
@@ -22,8 +23,12 @@ test('V5 neural and hybrid challengers require a strict 0.003 Brier improvement'
     'only an improvement above 0.003 passes');
   assert.equal(hasCognitiveBrierSuperiority(null,0.5),false,
     'missing metrics fail closed');
-  assert.equal(hasCognitiveBrierSuperiority(0.4,0.4031,0.002),false,
-    'callers cannot lower the exported V5 policy margin');
+  assert.equal(effectiveCognitiveChallengerMargin(0.002),0.003,
+    'a caller cannot weaken the V5 policy floor');
+  assert.equal(effectiveCognitiveChallengerMargin(0.004),0.004,
+    'a caller may request a stricter margin');
+  assert.equal(effectiveCognitiveChallengerMargin(null),0.003,
+    'missing configuration retains the declared policy margin');
 });
 
 function sample(index, outcome, features = {}) {
