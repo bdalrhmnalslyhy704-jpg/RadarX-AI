@@ -270,8 +270,11 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
-  assert.ok(profile.member_training_profiles_by_regime.BTC_RISK_ON.slice(0,2).every(row=>
-    row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'));
+  const regimeMembers=profile.member_training_profiles_by_regime.BTC_RISK_ON;
+  assert.equal(regimeMembers[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(regimeMembers[1].trainingObjective,'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE');
+  assert.equal(regimeMembers[2].trainingObjective,'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE');
+  assert.equal(regimeMembers[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
   assert.equal(expert.baseline_anchor_source,'SHARED_POOLED_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.shared_training_samples);
   assert.ok(expert.shared_training_samples>=160);
