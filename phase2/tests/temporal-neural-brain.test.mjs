@@ -668,4 +668,83 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
     'the model must reject any first-passage sample built at a different candle resolution');
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
+});\n
+test('V5 and TCN use identical training, member-selection, calibration, validation and holdout rows',()=>{
+  const rows=[];
+  for(let group=0;group<40;group++){
+    const riskOn=group%2===0;
+    for(let index=0;index<40;index++){
+      const up=index%4===0;
+      const row=sample(group,index,{up});
+      row.features={
+        volume_ratio:up?2.2:0.8,
+        trade_ratio:up?1.7:0.85,
+        taker_buy_ratio:up?0.62:0.44,
+        close_location:up?0.78:0.35,
+        higher_low:up,
+        breakout_above_prior_high:false,
+        compression_ratio:up?0.68:1.12,
+        relative_strength_vs_btc_pct:up?0.9:-0.45,
+        recent_15m_return_pct:up?0.7:-0.2,
+        return_3h_pct:up?1.1:-0.4,
+        trend_aligned:up,
+        micro_5m_available:true,
+        micro_5m_taker_buy_ratio:up?0.61:0.43,
+        micro_5m_return_pct:up?0.2:-0.15
+      };
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildCognitiveLearningProfile(rows,{
+    temporalSamples:rows,
+    allowedOutcomeSources:[
+      'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',
+      'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+    ],
+    minNeuralTrainingSamples:240,
+    maxNeuralTrainingSamples:1280,
+    iterations:40,
+    neuralIterations:30,
+    temporalOptions:{epochs:1,minimumHoldoutSamples:40,liveHoldoutSamples:150}
+  });
+  const temporal=profile.temporal_network;
+  const neural=profile.neural_network;
+  const phases=['training','member_selection','calibration','validation','holdout'];
+  assert.equal(temporal.trained,true,JSON.stringify({
+    status:temporal.status,training:temporal.training_samples,
+    validation:temporal.validation_samples,holdout:temporal.holdout_samples
+  }));
+  assert.equal(neural.trained,true,JSON.stringify({
+    training:neural.training_samples,selection:neural.selection_samples,
+    calibration:neural.calibration_samples,reason:neural.status
+  }));
+  assert.equal(profile.comparison_contract.shared_outer_split_applied,true);
+  assert.equal(profile.comparison_contract.sample_identity_matches,true);
+  assert.equal(profile.comparison_contract.shared_phase_identity_matches,true);
+  assert.equal(profile.comparison_contract.shared_phase_alignment_ready,true);
+  assert.equal(neural.shared_phase_alignment_ready,true);
+  assert.deepEqual(neural.shared_phase_sample_fingerprints,temporal.shared_model_stage_fingerprints);
+  assert.equal(neural.training_samples,temporal.shared_model_training_samples);
+  assert.equal(neural.selection_samples,temporal.shared_model_selection_samples);
+  assert.equal(neural.calibration_samples,temporal.shared_model_calibration_samples);
+  assert.equal(neural.shared_phase_sample_counts.validation,temporal.outer_validation_samples);
+  assert.equal(neural.shared_phase_sample_counts.holdout,temporal.outer_holdout_samples);
+  for(const phase of phases){
+    assert.equal(
+      neural.shared_phase_sample_fingerprints[phase],
+      temporal.shared_model_stage_fingerprints[phase],
+      phase+' fingerprint must be identical across V5 and TCN'
+    );
+  }
+  assert.equal(neural.refit_training_samples,0,
+    'selection rows must never be added to V5 gradient-training rows');
+  assert.ok(neural.max_training_outcome_resolved_at<neural.training_cutoff_at);
+  assert.ok(neural.training_cutoff_at<neural.member_selection_cutoff_at);
+  assert.ok(neural.member_selection_cutoff_at<neural.calibration_cutoff_at);
+  assert.ok(neural.calibration_cutoff_at<=profile.validation_start_at);
 });
