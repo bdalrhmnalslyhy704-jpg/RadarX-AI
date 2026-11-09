@@ -45,6 +45,8 @@ jobs:
           node --check phase2/runtime.mjs
           node --check phase2/http/api.mjs
           node --check phase2/market/universe-scanner.mjs
+          node --check phase2/core/daily-early-riser-census.mjs
+          node --check phase2/tools/daily-early-riser-historical-census.mjs
         timeout-minutes: 5
       - name: Build Docker image
         run: docker build -t radarx-phase4-test .
