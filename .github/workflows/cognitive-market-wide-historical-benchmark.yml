@@ -76,9 +76,9 @@ jobs:
         id: benchmark
         run: |
           node phase2/tools/cognitive-market-wide-historical-benchmark.mjs \
-            --start '${{ inputs.start || '2025-11-01' }}' \
-            --end-exclusive '${{ inputs.end_exclusive || '2026-11-01' }}' \
-            --max-symbols '${{ inputs.max_symbols || '0' }}' \
+            --start '${{ github.event.inputs.start || '2025-11-01' }}' \
+            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
             --concurrency 6 \
             --min-symbols 80 \
             --min-samples 6000 \
