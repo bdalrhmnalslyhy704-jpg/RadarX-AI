@@ -3,6 +3,7 @@ import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execu
 import {COGNITIVE_MODEL_BUILD_CONTRACT,buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
 import {buildRadarOutcomeLearningSnapshot,applyRadarOutcomeLearningAdjustment} from './radar-outcome-learning.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
+import {buildAdaptiveDatasetQualityAudit} from './adaptive-dataset-quality-audit.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -73,6 +74,7 @@ function emptyState(){
     last_started_at:null,last_scan_at:null,last_duration_ms:null,last_error:null,
     last_summary:null,learning_profile:buildAdaptiveLearningProfile([]),
     cognitive_profile:buildCognitiveLearningProfile([]),cognitive_journal:[],cognitive_capture:null,
+    dataset_quality_audit:buildAdaptiveDatasetQualityAudit([],{temporalProfile:null}),
     v5_samples:[],
     cognitive_prequential:buildCognitivePrequentialProfile([]),
     radar_outcome_learning:null,
@@ -343,6 +345,11 @@ export class AdaptiveTraderWorker{
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
       this.state.cognitive_profile=this.buildCognitiveProfile();
+      this.state.dataset_quality_audit=buildAdaptiveDatasetQualityAudit(this.trainingSamples(),{
+        temporalProfile:this.state.cognitive_profile?.temporal_network,now
+      });
+      if(this.state.last_learning_capture&&typeof this.state.last_learning_capture==='object')
+        this.state.last_learning_capture.dataset_quality_audit=this.state.dataset_quality_audit;
       this.activeScanStage='RADAR_OUTCOME_MEMORY';
       if(typeof this.store.getRadarSignalOutcomes==='function'){
         try{
@@ -564,6 +571,7 @@ export class AdaptiveTraderWorker{
       },
       ranking_ready:profile.ranking_ready===true,
       probability_ready:profile.probability_ready===true,
+      dataset_quality_audit:this.state.dataset_quality_audit||null,
       training_samples:Number(profile.training_samples)||0,
       holdout_samples:Number(profile.holdout_samples)||0,
       holdout:profile.holdout||null,neural_network:profile.neural_network||null,
@@ -903,6 +911,7 @@ recordServerPaperPortfolio(snapshot,now){
         selected_probability_model:this.state.cognitive_profile?.temporal_network?.probability_ready===true
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.probability_ready===true
             ?String(this.state.cognitive_profile?.model_selection?.selected_model||'LEGACY_BASELINE'):'NONE',
+        dataset_quality_audit:this.state.dataset_quality_audit||null,
         neural_network:this.state.cognitive_profile?.neural_network||null,
         boosted_tree_model:this.state.cognitive_profile?.boosted_tree_model||null,
         hybrid_model:this.state.cognitive_profile?.hybrid_model||null,
@@ -1009,6 +1018,7 @@ recordServerPaperPortfolio(snapshot,now){
       last_summary:this.state.last_summary,
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.trainingSamples()),
       learning_capture:this.state.last_learning_capture||null,
+      dataset_quality_audit:this.state.dataset_quality_audit||null,
       cognitive_brain:{
         method:this.state.cognitive_profile?.method||'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
         status:this.state.cognitive_profile?.temporal_network?.probability_ready===true?'TEMPORAL_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
