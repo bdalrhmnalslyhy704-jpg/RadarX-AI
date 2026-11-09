@@ -1312,7 +1312,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
       asset_15m_three_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=3).length,
       asset_15m_two_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)===2).length,
-      asset_15m_page_wave:Math.abs(Math.floor((finite(now)??Date.now())/HISTORICAL_15M_PAGE_WAVE_MS))%2,
+      asset_15m_page_wave:Math.abs(Math.floor((finite(now)??Date.now())/HISTORICAL_15M_PAGE_WAVE_MS))%3,
       asset_15m_pages_fetched_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages)||0),0),
       asset_15m_pages_attempted_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages_attempted)||0),0),
       asset_15m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0)),
