@@ -493,9 +493,44 @@ export function runHistoricalReplay({
       if(typeof value==='string')return value.length<=96;
       return finite(value)!==null;
     }));
+    const compactProfileEvidence=(value,depth=0)=>{
+      if(value===null||value===undefined)return null;
+      if(typeof value==='boolean')return value;
+      if(typeof value==='string')return value.length<=128?value:value.slice(0,128);
+      if(typeof value==='number')return Number.isFinite(value)?value:null;
+      if(Array.isArray(value))return depth>=3?undefined:value.slice(0,32).map(item=>compactProfileEvidence(item,depth+1));
+      if(typeof value==='object'){
+        if(depth>=3)return undefined;
+        const out={};
+        for(const [key,item] of Object.entries(value).slice(0,80)){
+          const next=compactProfileEvidence(item,depth+1);
+          if(next!==undefined)out[key]=next;
+        }
+        return out;
+      }
+      return undefined;
+    };
+    const profileMetricGroupKeys=[
+      'large_prints','candle_flow','orderbook','orderbook_persistence','price_context',
+      'support_score','stability_score','relative','algorithms','confirmation_count',
+      'confirmation_total','trigger','candle_freshness','activity_shock','derivatives',
+      'liquidations','pre_expansion_fingerprint','historical_watch_proxy','bottom_context',
+      'missing_historical_context','component_scores','market_regime_label','role_evidence',
+      'anti_chase_penalty','watch_only','entry_eligible'
+    ];
+    const profileMetricGroups=Object.fromEntries(profileMetricGroupKeys
+      .filter(key=>profileAnalysis?.[key]!==undefined)
+      .map(key=>[key,compactProfileEvidence(profileAnalysis[key])]));
+    const profileEvidenceLimitations=[...new Set([
+      ...(Array.isArray(raw?.shadow_evaluation?.unavailable_historical_evidence)
+        ?raw.shadow_evaluation.unavailable_historical_evidence:[]),
+      ...(Array.isArray(raw?.notification_gate?.failures)?raw.notification_gate.failures:[]),
+      ...(Array.isArray(raw?.notificationGate?.failures)?raw.notificationGate.failures:[])
+    ].map(value=>String(value??'').trim()).filter(Boolean))].slice(0,24);
     const metricSource=hasMetricFields(strong?.metrics)?'alert.strong_move.metrics':
       (hasMetricFields(alert?.metrics)?'alert.metrics':
-        (hasMetricFields(profileAnalysis?.metrics)?'alert.profile_analysis.metrics':'UNAVAILABLE'));
+        (hasMetricFields(profileAnalysis?.metrics)?'alert.profile_analysis.metrics':
+          (Object.keys(profileMetricGroups).length?'alert.profile_analysis.groups':'UNAVAILABLE')));
     const rejectionGroup = accepted ? "ACCEPTED" :
       (!tradeCoverageComplete && !candleOnlyFallback) ? "HISTORICAL_TRADE_COVERAGE_INCOMPLETE" :
       alert?.eligible === false ? "STRONG_MOVE_CORE_GATE" :
@@ -556,39 +591,47 @@ export function runHistoricalReplay({
         failures: Array.isArray(notification?.failures) ? notification.failures.slice(0, 20) : reasons
       },
       signal_metrics: {
-        return_1m_pct: metricValue(metrics?.return_1m,metrics?.return_1m_pct,metrics?.r1,metrics?.return1mPct),
+        return_1m_pct: metricValue(metrics?.return_1m,metrics?.return_1m_pct,metrics?.r1,metrics?.return1mPct,metrics?.one_minute_return_pct),
         return_3m_pct: metricValue(metrics?.return_3m,metrics?.return_3m_pct,metrics?.r3,metrics?.return3mPct),
-        return_5m_pct: metricValue(metrics?.return_5m,metrics?.return_5m_pct,metrics?.r5,metrics?.return5mPct),
+        return_5m_pct: metricValue(metrics?.return_5m,metrics?.return_5m_pct,metrics?.r5,metrics?.return5mPct,metrics?.five_minute_return_pct,metrics?.return_15m),
         return_10m_pct: metricValue(metrics?.return_10m,metrics?.return_10m_pct,metrics?.r10),
         return_15m_pct: metricValue(metrics?.return_15m,metrics?.return_15m_pct,metrics?.r15),
         return_20m_pct: metricValue(metrics?.return_20m,metrics?.return_20m_pct,metrics?.r20),
         acceleration: metricValue(metrics?.acceleration,metrics?.activity_acceleration),
-        volume_ratio: metricValue(metrics?.volume_ratio,metrics?.volumeRatio,metrics?.volume_acceleration,metrics?.volumeAcceleration),
-        trade_ratio: metricValue(metrics?.trade_ratio,metrics?.tradeRatio,metrics?.trade_count_acceleration,metrics?.trade_acceleration),
-        taker_buy_ratio_1m_3m: metricValue(metrics?.taker_buy_ratio,metrics?.taker_buy_ratio_1m_3m,metrics?.takerRatio,metrics?.taker_ratio,metrics?.buy_ratio),
+        volume_ratio: metricValue(metrics?.volume_ratio,metrics?.volumeRatio,metrics?.volume_acceleration,metrics?.volumeAcceleration,profileAnalysis?.candle_flow?.volumeRatio,profileAnalysis?.algorithms?.PARTICIPATION_REGIME?.volume_ratio),
+        trade_ratio: metricValue(metrics?.trade_ratio,metrics?.tradeRatio,metrics?.trade_count_acceleration,metrics?.trade_acceleration,profileAnalysis?.algorithms?.PARTICIPATION_REGIME?.trade_ratio),
+        taker_buy_ratio_1m_3m: metricValue(metrics?.taker_buy_ratio,metrics?.taker_buy_ratio_1m_3m,metrics?.takerRatio,metrics?.taker_ratio,metrics?.buy_ratio,profileAnalysis?.candle_flow?.takerBuyRatio),
         taker_buy_ratio_3s: metricValue(metrics?.three_second_taker_buy_ratio,metrics?.taker_buy_ratio_3s),
         taker_buy_delta: metricValue(metrics?.taker_buy_delta,metrics?.taker_delta),
         taker_buy_pressure_confirmed: typeof metrics?.taker_buy_pressure_confirmed === "boolean" ? metrics.taker_buy_pressure_confirmed : null,
-        independent_confirmations: metricValue(metrics?.independent_confirmations,metrics?.confirmation_count,metrics?.confirmation_total),
-        flash_score: metricValue(metrics?.flash_score),
-        flash_confirmations: metricValue(metrics?.flash_confirmations),
+        independent_confirmations: metricValue(metrics?.independent_confirmations,metrics?.confirmation_count,metrics?.confirmation_total,profileAnalysis?.confirmation_count),
+        flash_score: metricValue(metrics?.flash_score,profileAnalysis?.large_prints?.score),
+        flash_confirmations: metricValue(metrics?.flash_confirmations,profileAnalysis?.large_prints?.largeCount),
         liquidity_acceleration_3m: metricValue(metrics?.liquidity_acceleration?.three_minute_acceleration,metrics?.liquidity_acceleration_3m),
         liquidity_acceleration_score: metricValue(metrics?.liquidity_acceleration?.score,metrics?.liquidity_acceleration_score),
-        range_ratio: metricValue(metrics?.range_ratio,metrics?.latest_range_ratio),
+        range_ratio: metricValue(metrics?.range_ratio,metrics?.latest_range_ratio,metrics?.range_acceptance_pct),
         bb_width: metricValue(metrics?.bb_width,metrics?.bollinger_width),
         bb_expansion_ratio: metricValue(metrics?.bb_expansion_ratio,metrics?.bollinger_ratio,metrics?.bollinger?.ratio),
         atr_ratio: metricValue(metrics?.atr_ratio,metrics?.atr?.ratio),
-        efficiency_ratio: metricValue(metrics?.efficiency_ratio,metrics?.efficiencyRatio),
+        efficiency_ratio: metricValue(metrics?.efficiency_ratio,metrics?.efficiencyRatio,metrics?.efficiency),
         vwap_distance_pct: metricValue(metrics?.vwap_distance_pct,metrics?.vwap_deviation_pct,metrics?.vwap?.deviationPct),
-        five_min_trend: metricValue(metrics?.five_min_trend,metrics?.five_min_trend_score),
+        five_min_trend: metricValue(metrics?.five_min_trend,metrics?.five_min_trend_score,metrics?.five_minute_return_pct),
         breakout_distance_up_pct: metricValue(metrics?.breakout_distance_up_pct,metrics?.resistance_gap_pct,metrics?.breakout_distance_pct),
         micro_breakout: typeof metrics?.micro_breakout === "boolean" ? metrics.micro_breakout : null,
         breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up :
           (typeof metrics?.break_up === "boolean" ? metrics.break_up : null),
+        one_minute_z:metricValue(metrics?.one_minute_z),
+        five_minute_z:metricValue(metrics?.five_minute_z),
+        relative_acceleration_bps:metricValue(metrics?.relative_acceleration_bps),
+        market_velocity_bps:metricValue(metrics?.market_velocity_bps),
+        range_acceptance_pct:metricValue(metrics?.range_acceptance_pct),
+        persistence_score:metricValue(metrics?.persistence_score),
         component_scores: Object.fromEntries(['velocity','volume','trades','taker','range','flash','breakout','ema','vwap','bollinger','efficiency','atr']
           .map(key=>[key,finite(componentScores?.[key])]))
       },
       profile_metrics:profileMetricSnapshot,
+      profile_metric_groups:profileMetricGroups,
+      profile_evidence_limitations:profileEvidenceLimitations,
       profile_metrics_source:metricSource,
       market_evidence: {
         data_quality:finite(alert?.data_quality ?? strong?.data_quality),
