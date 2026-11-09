@@ -328,7 +328,15 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
         profile.hybrid_model.holdout_comparison);
       assert.deepEqual(profile.model_selection.validation_challenger_holdout,
         profile.hybrid_model.holdout);
+    }else if(profile.model_selection.validation_challenger==='NEURAL_GLOBAL'){
+      assert.equal(profile.neural_network.holdout.evaluated,true);
+      assert.ok(profile.model_selection.validation_challenger_holdout_comparison);
+      assert.equal(profile.model_selection.validation_challenger_holdout_comparison.passed,
+        profile.model_selection.challenger_holdout_passed);
+      assert.deepEqual(profile.model_selection.validation_challenger_holdout,
+        profile.neural_network.holdout);
     }else{
+      assert.equal(profile.model_selection.validation_challenger,null);
       assert.equal(profile.model_selection.validation_challenger_holdout,null);
       assert.equal(profile.model_selection.validation_challenger_holdout_comparison,null);
     }
