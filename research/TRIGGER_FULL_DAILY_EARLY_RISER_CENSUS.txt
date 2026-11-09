@@ -1,0 +1,1 @@
+Explicitly trigger the full 2025-11-01 through 2026-11-01 Binance Spot daily early-riser census. Research-only; no merge, production deployment or exchange orders.
