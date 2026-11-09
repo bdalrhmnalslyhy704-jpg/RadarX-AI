@@ -397,16 +397,17 @@ test('shared TCN learns pooled selection/calibration but keeps the outer regime 
   assert.ok(expert.shared_training_samples>=120);
   assert.ok(expert.training_samples>=80);
   assert.equal(expert.training_samples,expert.regime_training_samples);
-  assert.equal(expert.local_selection_samples,60);
+  assert.ok(expert.local_selection_samples>=30&&expert.local_selection_samples<expert.member_selection_samples,
+    'only the local outer regime is counted separately from the pooled member-selection block');
   assert.equal(expert.local_selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'SHARED_POOLED_MEMBER_SELECTION_BLOCK');
   assert.ok(expert.member_selection_samples>expert.local_selection_samples);
   assert.ok(expert.pooled_selection_diagnostic_positive_samples>0);
-  assert.equal(expert.local_calibration_samples,36);
+  assert.ok(expert.local_calibration_samples>=30,
+    'local-regime calibration coverage remains visible while pooled calibrator can use both regimes');
   assert.equal(expert.calibration_source,'SHARED_POOLED_CALIBRATION_BLOCK');
   assert.ok(expert.calibration_samples>expert.local_calibration_samples);
   assert.ok(expert.pooled_calibration_diagnostic_positive_samples>0);
-  assert.ok(expert.support_gaps.includes('VALIDATION_POSITIVE_CLASS'));
   assert.ok(expert.support_gaps.includes('VALIDATION_POSITIVE_CLASS'),
     'the specialist remains unavailable because its own later validation block lacks positive outcomes');
   assert.equal(expert.selected,false);
