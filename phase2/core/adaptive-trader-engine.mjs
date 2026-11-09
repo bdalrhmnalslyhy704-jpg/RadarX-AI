@@ -125,6 +125,33 @@ const finite = value => {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
+
+const HISTORICAL_15M_PAGE_WAVE_MS=3*60*1000;
+
+/**
+ * Alternate the optional third historical 15m page across symbols by scan
+ * wave. Every symbol flips between two and three requested pages each worker
+ * cycle, while BTC keeps its full three-page benchmark on every scan.
+ */
+export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now()){
+  const clean=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{5,30}USDT$/.test(clean))
+    throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
+  const at=finite(now)??Date.now();
+  const wave=Math.abs(Math.floor(at/HISTORICAL_15M_PAGE_WAVE_MS))%2;
+  let hash=2166136261;
+  for(const character of clean){
+    hash^=character.charCodeAt(0);
+    hash=Math.imul(hash,16777619)>>>0;
+  }
+  const symbolWave=hash&1;
+  return {
+    wave,
+    symbol_wave:symbolWave,
+    max_pages:symbolWave===wave?3:2,
+    wave_interval_ms:HISTORICAL_15M_PAGE_WAVE_MS
+  };
+}
 function mergeOlderKlinePage(current,older){
   const currentRows=Array.isArray(current?.data)?current.data:[];
   const olderRows=Array.isArray(older?.data)?older.data:[];
@@ -1144,8 +1171,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const first15m=await rest.request('/api/v3/klines', {
       symbol:ticker.symbol,interval:'15m',limit:1000
     });
+    const historyPageBudget=adaptiveTraderHistoryPageBudget(ticker.symbol,now);
     const result=await fetchAdaptiveTraderHistoricalKlines({
-      rest,symbol:ticker.symbol,interval:'15m',firstPage:first15m,maxPages:3
+      rest,symbol:ticker.symbol,interval:'15m',firstPage:first15m,maxPages:historyPageBudget.max_pages
     });
     const fastLatest=await fastLatestPromise;
     const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
@@ -1169,6 +1197,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     return {candidate,historicalSamples,closedCandleOutcomes,history:{
       asset_15m_pages:Number(result?.historical_pages_fetched)||1,
       asset_15m_pages_attempted:Number(result?.historical_pages_attempted)||0,
+      asset_15m_page_budget:historyPageBudget.max_pages,
+      asset_15m_page_wave:historyPageBudget.wave,
       asset_15m_candles:Array.isArray(result?.data)?result.data.length:0,
       asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
@@ -1278,6 +1308,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       historical_sampling_strategy:'DETERMINISTIC_TIME_STRATIFIED_PER_SYMBOL_V1',
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
       asset_15m_three_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=3).length,
+      asset_15m_two_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)===2).length,
+      asset_15m_page_wave:Math.abs(Math.floor((finite(now)??Date.now())/HISTORICAL_15M_PAGE_WAVE_MS))%2,
       asset_15m_pages_fetched_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages)||0),0),
       asset_15m_pages_attempted_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages_attempted)||0),0),
       asset_15m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0)),
