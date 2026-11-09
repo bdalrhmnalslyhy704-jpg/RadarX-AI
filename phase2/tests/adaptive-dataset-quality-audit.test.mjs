@@ -27,23 +27,36 @@ function makeSample({symbol='TESTUSDT',index=0,at=BASE,outcome='DOWN',regime='BT
 
 function passingTemporalProfile(){
   const phases={
-    training:{positive:50,negative:300},
-    member_selection:{positive:25,negative:60},
-    calibration:{positive:25,negative:60},
-    validation:{positive:25,negative:60},
-    holdout:{positive:40,negative:100}
+    training:{samples:350,positive:50,negative:300},
+    member_selection:{samples:85,positive:25,negative:60},
+    calibration:{samples:85,positive:25,negative:60},
+    validation:{samples:85,positive:25,negative:60},
+    holdout:{samples:140,positive:40,negative:100}
   };
   return {
     regime_specialists:Object.fromEntries(['BTC_RISK_ON','BTC_RISK_OFF'].map(regime=>[
       regime,{
+        training_samples:phases.training.samples,
         training_positive_samples:phases.training.positive,
         training_negative_samples:phases.training.negative,
-        selection_positive_samples:phases.member_selection.positive,
-        selection_negative_samples:phases.member_selection.negative,
-        calibration_positive_samples:phases.calibration.positive,
-        calibration_negative_samples:phases.calibration.negative,
+        pooled_selection_diagnostic_samples:phases.member_selection.samples,
+        pooled_selection_diagnostic_positive_samples:phases.member_selection.positive,
+        pooled_selection_diagnostic_negative_samples:phases.member_selection.negative,
+        selection_samples:phases.member_selection.samples,
+        local_selection_samples:phases.member_selection.samples,
+        pooled_calibration_diagnostic_samples:phases.calibration.samples,
+        pooled_calibration_diagnostic_positive_samples:phases.calibration.positive,
+        pooled_calibration_diagnostic_negative_samples:phases.calibration.negative,
+        calibration_samples:phases.calibration.samples,
+        calibration_targets:{
+          samples:phases.calibration.samples,
+          positive:phases.calibration.positive,
+          negative:phases.calibration.negative
+        },
+        validation_samples:phases.validation.samples,
         validation_positive_samples:phases.validation.positive,
         validation_negative_samples:phases.validation.negative,
+        holdout_samples:phases.holdout.samples,
         holdout_positive_samples:phases.holdout.positive,
         holdout_negative_samples:phases.holdout.negative
       }
@@ -88,6 +101,9 @@ test('dataset audit admits only broad, mature, balanced, matching 15m first-pass
   assert.equal(audit.regimes.BTC_RISK_ON.samples,1200);
   assert.equal(audit.regimes.BTC_RISK_OFF.samples,1200);
   assert.equal(audit.regime_phase_support.BTC_RISK_ON.passed,true);
+  assert.equal(audit.regime_phase_support.BTC_RISK_ON.phases.calibration.scope,'SHARED_POOLED');
+  assert.equal(audit.regime_phase_support.BTC_RISK_ON.phases.calibration.positive,25);
+  assert.equal(audit.regime_phase_support.BTC_RISK_ON.phases.member_selection.positive,25);
   assert.equal(audit.policy.real_order_execution,false);
   assert.equal(ADAPTIVE_DATASET_SUPPORT_POLICY.min_distinct_symbols,40);
 });
@@ -163,7 +179,7 @@ test('aggregate sample count cannot hide weak positive support in a model phase'
   const rows=broadDataset();
   const profile=passingTemporalProfile();
   profile.regime_specialists.BTC_RISK_ON.holdout_positive_samples=3;
-  profile.regime_specialists.BTC_RISK_ON.selection_positive_samples=2;
+  profile.regime_specialists.BTC_RISK_ON.pooled_selection_diagnostic_positive_samples=2;
   const audit=buildAdaptiveDatasetQualityAudit(rows,{
     temporalProfile:profile,now:BASE+31*24*60*60*1000
   });
@@ -171,7 +187,8 @@ test('aggregate sample count cannot hide weak positive support in a model phase'
   assert.equal(audit.data_support_ready,false);
   assert.ok(audit.blocking_reasons.includes('REGIME_PHASE_CLASS_SUPPORT_BELOW_MINIMUM'));
   assert.ok(audit.regime_phase_support.BTC_RISK_ON.gaps.includes('holdout:POSITIVE_SUPPORT'));
-  assert.ok(audit.regime_phase_support.BTC_RISK_ON.gaps.includes('member_selection:POSITIVE_SUPPORT'));
+  assert.ok(audit.regime_phase_support.BTC_RISK_ON.gaps.includes('member_selection:POSITIVE_SUPPORT'));  assert.equal(audit.regime_phase_support.BTC_RISK_ON.phases.calibration.positive,25,
+    'calibration support must come from the shared pooled target diagnostics');
 });
 
 test('unresolved, future, mixed-resolution, duplicate and sequence-less rows are excluded fail-closed',()=>{
