@@ -105,3 +105,152 @@ export function evaluateExistingEngineBaselines(rows){
     )
   };
 }
+
+
+/**
+ * Audit two distinct data contracts:
+ * 1) closed-candle feature samples, usable by the MLP/GBDT cognitive models;
+ * 2) complete 24x29 temporal tensors, additionally required by the TCN.
+ *
+ * A missing/incomplete tensor is reported as a temporal exclusion, not as a
+ * corrupt price label. Rows with invalid identities, labels, horizons or
+ * feature payloads remain hard failures. The temporal cohort is returned as
+ * an explicit intersection so all model-family comparisons can still use the
+ * exact same outer sample identities.
+ */
+export function auditCognitiveTrainingSampleCohorts(rows, {
+  targetDefinition,
+  outcomeSource = 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+  horizonMs = 4 * 60 * 60 * 1000,
+  sequenceSteps = 24,
+  sequenceChannels = 29,
+  maxAbsoluteSequenceValue = 4
+} = {}) {
+  const featureSamples = [];
+  const temporalSamples = [];
+  const seenIds = new Set();
+  const seenBaselines = new Set();
+  const bySymbol = new Map();
+  const reasonCounts = {};
+  const invalidExamples = [];
+  const sequenceExclusions = {
+    missing: 0,
+    invalid_shape: 0,
+    non_finite: 0,
+    out_of_range: 0
+  };
+  let duplicateIds = 0;
+  let duplicateBaselines = 0;
+  const increment = (map, key) => { map[key] = (map[key] || 0) + 1; };
+  const safeFinite = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const isPlainFeatures = value => value && typeof value === 'object' &&
+    !Array.isArray(value);
+  const isValidFeatureLabel = row => {
+    const reasons = [];
+    const id = String(row?.id || '');
+    const symbol = String(row?.symbol || '').trim().toUpperCase();
+    const at = safeFinite(row?.at);
+    const resolvedAt = safeFinite(row?.resolved_at);
+    if (row?.training_eligible !== true) reasons.push('TRAINING_NOT_ELIGIBLE');
+    if (row?.historical_baseline !== true) reasons.push('NOT_HISTORICAL_BASELINE');
+    if (row?.target_definition !== targetDefinition) reasons.push('TARGET_DEFINITION_MISMATCH');
+    if (row?.outcome_source !== outcomeSource) reasons.push('OUTCOME_SOURCE_MISMATCH');
+    if (!['UP', 'DOWN', 'FLAT'].includes(row?.outcome)) reasons.push('OUTCOME_INVALID');
+    if (row?.first_passage?.path_resolution !== '15M') reasons.push('FIRST_PASSAGE_RESOLUTION_INVALID');
+    if (row?.first_passage?.outcome !== row?.outcome) reasons.push('FIRST_PASSAGE_OUTCOME_MISMATCH');
+    if (!id) reasons.push('SAMPLE_ID_MISSING');
+    if (!/^[A-Z0-9]{5,30}$/.test(symbol)) reasons.push('SYMBOL_INVALID');
+    if (at === null || at <= 0) reasons.push('BASELINE_TIME_INVALID');
+    if (resolvedAt === null || at === null || resolvedAt - at !== horizonMs)
+      reasons.push('RESOLUTION_HORIZON_MISMATCH');
+    if (safeFinite(row?.horizon_ms) !== horizonMs) reasons.push('HORIZON_FIELD_MISMATCH');
+    if (!isPlainFeatures(row?.features)) reasons.push('FEATURE_PAYLOAD_INVALID');
+    return {valid: reasons.length === 0, reasons, id, symbol, at};
+  };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const checked = isValidFeatureLabel(row);
+    if (!checked.valid) {
+      for (const reason of checked.reasons) increment(reasonCounts, reason);
+      if (invalidExamples.length < 12) invalidExamples.push({
+        id: String(row?.id || '').slice(0, 120),
+        symbol: String(row?.symbol || '').slice(0, 30),
+        reasons: checked.reasons
+      });
+      continue;
+    }
+    if (seenIds.has(checked.id)) {
+      duplicateIds++;
+      continue;
+    }
+    seenIds.add(checked.id);
+    const baselineKey = checked.symbol + ':' + String(Math.trunc(checked.at));
+    if (seenBaselines.has(baselineKey)) {
+      duplicateBaselines++;
+      continue;
+    }
+    seenBaselines.add(baselineKey);
+    featureSamples.push(row);
+    if (!bySymbol.has(checked.symbol)) bySymbol.set(checked.symbol, []);
+    bySymbol.get(checked.symbol).push(checked.at);
+
+    const sequence = row?.temporal_sequence;
+    let sequenceFailure = null;
+    if (!Array.isArray(sequence)) sequenceFailure = 'missing';
+    else if (sequence.length !== sequenceSteps ||
+      sequence.some(step => !Array.isArray(step) || step.length !== sequenceChannels))
+      sequenceFailure = 'invalid_shape';
+    else if (sequence.some(step => step.some(value => safeFinite(value) === null)))
+      sequenceFailure = 'non_finite';
+    else if (sequence.some(step => step.some(value =>
+      Math.abs(Number(value)) > maxAbsoluteSequenceValue)))
+      sequenceFailure = 'out_of_range';
+    if (sequenceFailure) {
+      sequenceExclusions[sequenceFailure]++;
+      continue;
+    }
+    temporalSamples.push(row);
+  }
+  let spacingViolations = 0;
+  for (const times of bySymbol.values()) {
+    times.sort((a, b) => a - b);
+    for (let index = 1; index < times.length; index++) {
+      if (times[index] - times[index - 1] < horizonMs) spacingViolations++;
+    }
+  }
+  const temporalCoverage = featureSamples.length
+    ? temporalSamples.length / featureSamples.length : 0;
+  return {
+    feature_samples: featureSamples,
+    temporal_samples: temporalSamples,
+    observed_rows: Array.isArray(rows) ? rows.length : 0,
+    feature_eligible_samples: featureSamples.length,
+    temporal_eligible_samples: temporalSamples.length,
+    invalid_samples: Object.values(reasonCounts).reduce((sum, count) => sum + count, 0),
+    invalid_feature_reason_counts: Object.fromEntries(
+      Object.entries(reasonCounts).sort((a, b) => a[0].localeCompare(b[0]))
+    ),
+    invalid_feature_examples: invalidExamples,
+    duplicate_ids: duplicateIds,
+    duplicate_baselines: duplicateBaselines,
+    sequence_exclusions: sequenceExclusions,
+    temporal_sequence_coverage_ratio: Number(temporalCoverage.toFixed(6)),
+    temporal_sequence_coverage_pct: Number((temporalCoverage * 100).toFixed(3)),
+    per_symbol_4h_spacing_violations: spacingViolations,
+    symbols_with_feature_samples: bySymbol.size,
+    symbols_with_samples: new Set(temporalSamples.map(row =>
+      String(row.symbol || '').toUpperCase())).size,
+    outcome_counts: outcomeRows(temporalSamples).reduce((counts, row) => {
+      counts[row.outcome] = (counts[row.outcome] || 0) + 1;
+      return counts;
+    }, {}),
+    sample_month_counts: temporalSamples.reduce((counts, row) => {
+      const key = new Date(Number(row.at)).toISOString().slice(0, 7);
+      counts[key] = (counts[key] || 0) + 1;
+      return counts;
+    }, {})
+  };
+}
