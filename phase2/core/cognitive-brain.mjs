@@ -1163,16 +1163,15 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralCandidateRows=training.length>=neuralMinimum
     ?asUpEventRows(training.slice(-neuralLimit)):[];
   const neuralCandidateTimes=[...new Set(neuralCandidateRows.map(row=>row.at))].sort((a,b)=>a-b);
-  // V5 now reserves four chronological stages inside its training window:
-  // 70% model fitting, 10% member/residual selection, and 20% probability
-  // calibration (itself split into fit/check blocks), followed by outer
-  // validation and the untouched final holdout. Every cutoff purges outcomes
+  // V5 reserves chronological model-fit, member-selection and calibration
+  // blocks before outer validation. The allocation preserves the 240-row
+  // model-fit floor while keeping a meaningful blend-selection tail. Every cutoff purges outcomes
   // that had not matured before that block ended.
   const neuralTrainingCutIndex=neuralCandidateTimes.length>=4
-    ?Math.max(1,Math.min(neuralCandidateTimes.length-2,Math.floor(neuralCandidateTimes.length*0.70))):-1;
+    ?Math.max(1,Math.min(neuralCandidateTimes.length-2,Math.floor(neuralCandidateTimes.length*0.64))):-1;
   const neuralSelectionCutIndex=neuralTrainingCutIndex>=0
     ?Math.max(neuralTrainingCutIndex+1,Math.min(neuralCandidateTimes.length-1,
-      Math.floor(neuralCandidateTimes.length*0.80))):-1;
+      Math.floor(neuralCandidateTimes.length*0.74))):-1;
   const neuralSelectionStartAt=neuralTrainingCutIndex>=0
     ?neuralCandidateTimes[neuralTrainingCutIndex]:null;
   const neuralCalibrationStartAt=neuralSelectionCutIndex>=0
@@ -1189,10 +1188,10 @@ export function buildCognitiveLearningProfile(samples = [], {
   // selection in three disjoint chronological slices before outer validation.
   // The last slice chooses only a blend weight; it never updates either model.
   const neuralCalibrationFitCutIndex=neuralCalibrationTimes.length>=4
-    ?Math.max(1,Math.min(neuralCalibrationTimes.length-2,Math.floor(neuralCalibrationTimes.length*0.50))):-1;
+    ?Math.max(1,Math.min(neuralCalibrationTimes.length-2,Math.floor(neuralCalibrationTimes.length*0.55))):-1;
   const neuralHybridSelectionCutIndex=neuralCalibrationTimes.length>=4
     ?Math.max(neuralCalibrationFitCutIndex+1,Math.min(neuralCalibrationTimes.length-1,
-      Math.floor(neuralCalibrationTimes.length*0.75))):-1;
+      Math.floor(neuralCalibrationTimes.length*0.78))):-1;
   const neuralCalibrationCheckStartAt=neuralCalibrationFitCutIndex>=0
     ?neuralCalibrationTimes[neuralCalibrationFitCutIndex]:null;
   const neuralHybridSelectionStartAt=neuralHybridSelectionCutIndex>=0
