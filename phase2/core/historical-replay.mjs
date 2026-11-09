@@ -646,7 +646,7 @@ export function runHistoricalReplay({
         relative_strength_vs_market_pct:metricValue(alert?.pre_move_context?.relative_strength_vs_market_pct,
           alert?.pre_expansion_fingerprint?.relative_strength_vs_market_pct,
           metrics?.relative_strength_vs_market_pct,metrics?.relative_strength_15m_spread_pct,
-          metrics?.relative_strength_5m_spread_pct),
+          metrics?.relative_strength_5m_spread_pct,metrics?.relative_30m_pct,metrics?.relative_2h_pct),
         relative_strength_vs_btc_pct:metricValue(alert?.pre_move_context?.relative_strength_vs_btc_pct,
           alert?.pre_expansion_fingerprint?.relative_strength_vs_btc_pct,
           metrics?.relative_strength_vs_btc_pct,metrics?.relative_vs_btc_pct),
