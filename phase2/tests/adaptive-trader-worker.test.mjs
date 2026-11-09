@@ -395,14 +395,11 @@ test('background sidecar restores its own memory, resolves outcomes and records 
     const saved=await store.getAdaptiveTraderState();
     assert.equal(saved.successful_scans,9);
     const firstPassageSaved=saved.samples.find(row=>row.id==='TESTUSDT:old');
-    const closeDirectionSaved=saved.v5_samples.find(row=>row.id==='TESTUSDT:old');
     assert.equal(firstPassageSaved.outcome,'UP');
     assert.equal(firstPassageSaved.return_pct,3);
     assert.equal(firstPassageSaved.close_return_pct,-0.8);
-    assert.equal(closeDirectionSaved.outcome,'DOWN');
-    assert.equal(closeDirectionSaved.return_pct,-0.8);
-    assert.equal(closeDirectionSaved.target_definition,'LEGACY_4H_CLOSE_RETURN');
-    assert.equal(closeDirectionSaved.outcome_source,'CLOSED_CANDLE_4H');
+    assert.equal(firstPassageSaved.target_definition,'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
+    assert.equal(saved.v5_samples.length,0,'challengers must not retain a separate close-return cache');
     assert.ok(saved.price_history.length>=2);
     assert.equal(saved.last_summary.counts.early_setup,0);
     assert.equal((await store.getSubscriptions()).length,0);
@@ -593,6 +590,9 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     symbol:'HISTUSDT',price:1,at:baselineAt,base_score:72,tier:'EARLY_SETUP',
     observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,training_eligible:true,
     target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    first_passage:{hit:'TAKE_PROFIT_REACHED_FIRST',outcome:'UP',path_resolution:'15M'},
+    temporal_sequence:Array.from({length:24},()=>Array(29).fill(0)),
     quote_volume_24h:4_500_000,change_24h_pct:1.8,
     features:{volume_ratio:1.8,trade_ratio:1.5,taker_buy_ratio:0.59,close_location:0.72,
       higher_low:true,breakout_above_prior_high:true,compression_ratio:0.7,
@@ -619,7 +619,7 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     const status=worker.snapshot();
     assert.equal(status.memory.historical_samples,1);
     assert.equal(status.learning_capture.new_historical_samples,1);
-    assert.equal(status.learning_capture.new_historical_v5_close_samples,1);
+    assert.equal(status.learning_capture.shared_neural_resolved_samples,1);
     assert.equal(status.learning_profile.historical_samples,1);
     assert.equal(status.cognitive_brain.profile.resolved_samples,1);
     assert.equal(status.learning_profile.outcome_counts.up,1);
@@ -635,8 +635,10 @@ test('worker ingests real closed-candle historical outcomes before collecting li
     assert.equal(status.real_order_execution,false);
     const saved=await store.getAdaptiveTraderState();
     assert.ok(saved.samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'));
-    assert.ok(saved.v5_samples.some(row=>row.id===historicalSample.id&&row.outcome==='UP'&&
-      row.return_pct===0.7&&row.target_definition==='LEGACY_4H_CLOSE_RETURN'));
+    assert.equal(saved.v5_samples.length,0);
+    assert.ok(saved.samples.some(row=>row.id===historicalSample.id&&
+      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
+      row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
   }finally{
     await worker.stop();
     await rm(dir,{recursive:true,force:true});

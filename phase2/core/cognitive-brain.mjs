@@ -944,11 +944,20 @@ export function buildCognitiveLearningProfile(samples = [], {
     holdoutRows+=(rowsByTime.get(uniqueTimes[index])||[]).length;
   }
   holdoutCount=Math.max(2,holdoutCount);
-  // Keep the validation block at its existing chronological fraction; reduce only
-  // excess holdout timestamps after preserving the 100-observation untouched live gate.
   const validationCount = Math.max(minimumValidationSamples, Math.floor(uniqueTimes.length * validationFraction));
-  const trainingEndIndex = uniqueTimes.length - holdoutCount - validationCount;
-  const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0;
+  const calculatedTrainingEndIndex = uniqueTimes.length - holdoutCount - validationCount;
+  const calculatedValidationStartAt=uniqueTimes[calculatedTrainingEndIndex]??null;
+  const calculatedHoldoutStartAt=uniqueTimes[uniqueTimes.length-holdoutCount]??null;
+  const sharedValidationStartAt=finite(temporalNetwork.outer_validation_start_at);
+  const sharedHoldoutStartAt=finite(temporalNetwork.outer_holdout_start_at);
+  const sharedOuterSplitApplied=sharedValidationStartAt!==null&&sharedHoldoutStartAt!==null&&
+    sharedValidationStartAt<sharedHoldoutStartAt&&
+    uniqueTimes.includes(sharedValidationStartAt)&&uniqueTimes.includes(sharedHoldoutStartAt);
+  const validationStartAt=sharedOuterSplitApplied?sharedValidationStartAt:calculatedValidationStartAt;
+  const holdoutStartAt=sharedOuterSplitApplied?sharedHoldoutStartAt:calculatedHoldoutStartAt;
+  const trainingEndIndex=validationStartAt===null?-1:uniqueTimes.indexOf(validationStartAt);
+  const canSplit = uniqueTimes.length >= 3 && trainingEndIndex > 0 &&
+    holdoutStartAt!==null&&validationStartAt<holdoutStartAt;
 
   if (!canSplit) {
     const fit = fitLogisticModel(resolved, { l2, iterations, learningRate });
@@ -993,7 +1002,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
         training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
         training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
-        target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+        target_definition:TEMPORAL_TARGET_DEFINITION,
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
         selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
@@ -1008,8 +1017,6 @@ export function buildCognitiveLearningProfile(samples = [], {
     };
   }
 
-  const validationStartAt = uniqueTimes[trainingEndIndex];
-  const holdoutStartAt = uniqueTimes[uniqueTimes.length - holdoutCount];
   const trainingPool = resolved.filter(row => row.at < validationStartAt);
   const training = trainingPool.filter(row => row.resolved_at < validationStartAt);
   const purgedTraining = trainingPool.length - training.length;
@@ -1369,6 +1376,19 @@ export function buildCognitiveLearningProfile(samples = [], {
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
     outcome_horizon_ms: horizonMs,
+    comparison_contract:{
+      target_definition:TEMPORAL_TARGET_DEFINITION,
+      target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+      shared_outer_split_applied:sharedOuterSplitApplied,
+      validation_start_at:validationStartAt,
+      holdout_start_at:holdoutStartAt,
+      validation_samples:validation.length,
+      holdout_samples:holdout.length,
+      temporal_validation_samples:Number(temporalNetwork.outer_validation_samples)||0,
+      temporal_holdout_samples:Number(temporalNetwork.outer_holdout_samples)||0,
+      validation_sample_count_matches:Number(temporalNetwork.outer_validation_samples)===validation.length,
+      holdout_sample_count_matches:Number(temporalNetwork.outer_holdout_samples)===holdout.length
+    },
     ranking_ready: rankingReady,
     probability_ready: probabilityReady,
     ready: rankingReady,
@@ -1410,7 +1430,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
       training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
-      target_definition:'UP_CLOSE_RETURN_BINARY_V1',
+      target_definition:TEMPORAL_TARGET_DEFINITION,
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
       selection_samples:neuralSelection.length,

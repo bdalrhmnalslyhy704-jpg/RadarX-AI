@@ -2,6 +2,7 @@ import {ADAPTIVE_TRADER_POLICY,buildAdaptiveLearningProfile,findMissedMoverEvent
 import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execution.mjs';
 import {COGNITIVE_MODEL_BUILD_CONTRACT,buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
 import {buildRadarOutcomeLearningSnapshot,applyRadarOutcomeLearningAdjustment} from './radar-outcome-learning.mjs';
+import {TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -15,9 +16,7 @@ const MAX_SAMPLES=6000;
 const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 const MAX_COGNITIVE_JOURNAL=3000;
-// V5 learns four-hour close direction; moves inside this deadband are FLAT.
-// TCN retains its separate +3% before -2% first-passage target.
-const V5_CLOSE_DIRECTION_DEADBAND_PCT=0.5;
+// All cognitive challengers share the TCN's verified 15m first-passage event label.
 
 // Historical state created before the TCN upgrade may already contain the same
 // baseline ID without its 24x29 tensor. Validate strictly and backfill only from
@@ -29,14 +28,6 @@ function hasValidTemporalSequence(sequence){
     )
   );
 }
-function v5CloseOutcome(value){
-  const move=finite(value);
-  if(move===null)return null;
-  if(move>=V5_CLOSE_DIRECTION_DEADBAND_PCT)return 'UP';
-  if(move<=-V5_CLOSE_DIRECTION_DEADBAND_PCT)return 'DOWN';
-  return 'FLAT';
-}
-
 function publicTemporalProfile(profile){
   if(!profile||typeof profile!=='object')return null;
   const {_fit,_baseline_fit,_regime_fits,...visible}=profile;
@@ -73,7 +64,7 @@ function createServerPaperPortfolio(){
 function emptyState(){
   const paperPortfolio=createServerPaperPortfolio();
   return {
-    version:2,training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+    version:2,training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE',
     reset_reason:null,enabled:false,scan_count:0,successful_scans:0,scan_cursor:0,
     scan_coverage:{
       eligible_symbols:[],attempted_symbols:[],valid_symbols:[],failed_symbols:[],
@@ -123,12 +114,15 @@ export class AdaptiveTraderWorker{
       let discardedLegacyState=false;
       try{
         const saved=await this.store.getAdaptiveTraderState();
-        discardedLegacyState=Boolean(saved&&!(saved.version===2&&
-          saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'));
-        if(saved&&saved.version===2&&saved.training_dataset_version==='FRESH_BINANCE_CLOSED_CANDLES_V2'&&
+        const compatibleDataset=['FRESH_BINANCE_CLOSED_CANDLES_V2','FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE']
+          .includes(String(saved?.training_dataset_version||''));
+        discardedLegacyState=Boolean(saved&&!(saved.version===2&&compatibleDataset));
+        if(saved&&saved.version===2&&compatibleDataset&&
            Array.isArray(saved.samples)&&Array.isArray(saved.price_history)){
           this.state={
             ...emptyState(),...saved,
+            training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE',
+            v5_samples:[],
             scan_cursor:Number.isFinite(Number(saved.scan_cursor))&&Number(saved.scan_cursor)>=0
               ?Math.trunc(Number(saved.scan_cursor))
               :Math.max(0,Math.trunc(Number(saved.last_summary?.universe?.scan_offset)||0)+
@@ -166,9 +160,7 @@ export class AdaptiveTraderWorker{
               :createServerPaperPortfolio()
           };
           this.state.paper_validation_profile=buildAdaptiveTraderPaperValidationProfile(this.state.paper_portfolio);
-          this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
-            temporalSamples:this.trainingSamples()
-          });
+          this.state.cognitive_profile=this.buildCognitiveProfile();
           this.state.cognitive_prequential=buildCognitivePrequentialProfile(this.state.cognitive_journal,{
         modelVariant:this.state.cognitive_profile?.temporal_network?.probability_ready===true
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
@@ -177,10 +169,9 @@ export class AdaptiveTraderWorker{
       }catch(error){
         this.logger.warn?.('[ADAPTIVE_TRADER_STATE_LOAD_FAILED] '+String(error?.message??error).slice(0,180));
       }
-      // Build 224 neural history before V2 mixed first-passage labels and the
-      // old close-direction split are not reused. A schema/dataset mismatch
-      // intentionally leaves the initialized empty state in place; the first
-      // fresh Binance closed-candle scan rebuilds both datasets from source.
+      // V2 closed-candle history is migrated in place; the legacy close-direction
+      // cache is discarded. All neural challengers now share the verified 15m
+      // first-passage target, sequence rows, and outer chronological boundaries.
       if(discardedLegacyState){
         this.state.reset_reason='LEGACY_NEURAL_TRAINING_DATA_PURGED';
         this.logger.info?.('[ADAPTIVE_TRADER_LEGACY_NEURAL_MEMORY_PURGED] fresh closed-candle dataset required');
@@ -218,15 +209,31 @@ export class AdaptiveTraderWorker{
     // TCN-only first-passage dataset: +3% before -2% within four hours.
     return this.state.samples.filter(row=>row&&row.training_eligible===true&&
       (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-      row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2');
+      row.target_definition===TEMPORAL_TARGET_DEFINITION);
   }
 
   cognitiveTrainingSamples(){
-    // V5-only four-hour close-direction dataset; first-passage labels are excluded.
-    return (Array.isArray(this.state.v5_samples)?this.state.v5_samples:[]).filter(row=>
-      row&&row.training_eligible===true&&
-      (row.historical_baseline===true||row.closed_candle_baseline===true)&&
-      row.target_definition==='LEGACY_4H_CLOSE_RETURN');
+    // Require exactly the sequence-bearing, fully matured first-passage rows accepted by TCN.
+    return this.trainingSamples().filter(row=>
+      hasValidTemporalSequence(row.temporal_sequence)&&
+      ['UP','DOWN','FLAT'].includes(row.outcome)&&
+      row.first_passage?.path_resolution==='15M'&&
+      row.first_passage?.outcome===row.outcome&&
+      row.outcome_source===(row.historical_baseline===true
+        ?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+        :'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1'));
+  }
+
+  buildCognitiveProfile(){
+    const sharedSamples=this.cognitiveTrainingSamples();
+    return buildCognitiveLearningProfile(sharedSamples,{
+      temporalSamples:sharedSamples,
+      allowedOutcomeSources:[
+        'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',
+        'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+      ],
+      maxNeuralTrainingSamples:1280
+    });
   }
 
   updateScanCoverage(snapshot,now=Date.now()){
@@ -333,9 +340,7 @@ export class AdaptiveTraderWorker{
       this.state.last_error=null;
       this.state.last_duration_ms=Math.max(0,Date.now()-started);
       this.state.learning_profile=buildAdaptiveLearningProfile(this.trainingSamples());
-      this.state.cognitive_profile=buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
-        temporalSamples:this.trainingSamples()
-      });
+      this.state.cognitive_profile=this.buildCognitiveProfile();
       this.activeScanStage='RADAR_OUTCOME_MEMORY';
       if(typeof this.store.getRadarSignalOutcomes==='function'){
         try{
@@ -485,12 +490,7 @@ export class AdaptiveTraderWorker{
       ranked_score:finite(candidate?.score),cognitive_rank_score:finite(candidate?.cognitive_rank_score),
       selected_model:profile.temporal_network?.probability_ready===true?'TEMPORAL_TCN':
         String(profile.model_selection?.selected_model||'UNVALIDATED'),
-      target_definition:profile.temporal_network?.probability_ready===true
-        ?'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'
-        :(
-          ['NEURAL_GLOBAL','GBDT_RESIDUAL'].includes(String(profile.model_selection?.selected_model||''))||
-          /^HYBRID_GBDT_MLP_W(?:25|50|75)$/.test(String(profile.model_selection?.selected_model||''))
-        )?'UP_CLOSE_RETURN_BINARY_V1':'LEGACY_4H_CLOSE_RETURN',
+      target_definition:TEMPORAL_TARGET_DEFINITION,
       trained_through_at:trainedThrough,
       training_samples:Number(profile.fit_samples)||0,
       validation_passed:profile.validation?.beat_base_rate===true,
@@ -529,7 +529,7 @@ export class AdaptiveTraderWorker{
       row.return_pct=finite(sample.return_pct);
       row.resolved_at=finite(sample.resolved_at);
       row.outcome_source=String(sample.outcome_source||'CLOSED_CANDLE_OUTCOME');
-      row.target_definition=String(sample.target_definition||'LEGACY_4H_CLOSE_RETURN');
+      row.target_definition=String(sample.target_definition||TEMPORAL_TARGET_DEFINITION);
     }
   }
 
@@ -545,9 +545,7 @@ export class AdaptiveTraderWorker{
       if(decision==='EARLY_SETUP_REVIEW')reviewable++;
       if(Array.isArray(brain.contradictions)&&brain.contradictions.length)contradictory++;
     }
-    const profile=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
-      temporalSamples:this.trainingSamples()
-    });
+    const profile=this.state.cognitive_profile||this.buildCognitiveProfile();
     const journal=this.state.cognitive_journal||[];
     return {
       at:Number(now),assessed_candidates:rows.length,valid_data_candidates:valid,
@@ -614,9 +612,8 @@ recordServerPaperPortfolio(snapshot,now){
       missing_id:0,duplicate_id:0,invalid_outcome:0,missing_features:0,
       invalid_timestamp:0,invalid_price:0,invalid_return:0,resolved_in_future:0,horizon_too_short:0
     };
-    let newHistoricalSamples=0,newHistoricalV5Samples=0;
-    this.state.v5_samples=Array.isArray(this.state.v5_samples)?this.state.v5_samples:[];
-    const knownV5Ids=new Set(this.state.v5_samples.map(row=>String(row?.id||'')));
+    let newHistoricalSamples=0;
+    this.state.v5_samples=[];
     const historicalSampleById=new Map(this.state.samples.map(row=>[String(row?.id||''),row]));
     let historicalSequenceBackfills=0;
     for(const row of historicalRows){
@@ -661,24 +658,9 @@ recordServerPaperPortfolio(snapshot,now){
           existing.training_eligible=true;
         }
       }
-      const closeReturnPct=finite(row.close_return_pct);
-      const v5Outcome=v5CloseOutcome(closeReturnPct);
-      if(closeReturnPct!==null&&v5Outcome!==null&&!knownV5Ids.has(id)){
-        const {temporal_sequence,...v5Base}=row;
-        this.state.v5_samples.push({...v5Base,id,observation_type:'HISTORICAL_CLOSED_CANDLE',
-          historical_baseline:true,closed_candle_baseline:false,training_eligible:true,
-          target_definition:'LEGACY_4H_CLOSE_RETURN',outcome:v5Outcome,
-          return_pct:closeReturnPct,close_return_pct:closeReturnPct,
-          close_return_deadband_pct:V5_CLOSE_DIRECTION_DEADBAND_PCT,
-          close_return_source:'FOUR_HOUR_TERMINAL_CLOSE',
-          resolved_at:resolvedAt,horizon_ms:SAMPLE_HORIZON_MS,
-          outcome_source:'HISTORICAL_CLOSED_CANDLE'});
-        knownV5Ids.add(id);newHistoricalV5Samples++;
-      }
     }
-    let newClosedCandleOutcomes=0,newV5ClosedOutcomes=0;
+    let newClosedCandleOutcomes=0;
     const sampleById=new Map(this.state.samples.map(row=>[String(row?.id||''),row]));
-    const v5SampleById=new Map(this.state.v5_samples.map(row=>[String(row?.id||''),row]));
     for(const label of (Array.isArray(snapshot.closed_candle_outcomes)?snapshot.closed_candle_outcomes:[])){
       const sample=sampleById.get(String(label?.sample_id||''));
       const at=finite(label?.at),baselinePrice=finite(label?.baseline_price);
@@ -702,18 +684,6 @@ recordServerPaperPortfolio(snapshot,now){
       sample.first_passage=label.first_passage?{...label.first_passage,outcome:label.outcome}:null;
       sample.outcome_source='CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
       newClosedCandleOutcomes++;
-      const v5Sample=v5SampleById.get(String(label?.sample_id||''));
-      const closeOutcome=v5CloseOutcome(closeReturnPct);
-      if(v5Sample&&!v5Sample.outcome&&closeReturnPct!==null&&closeOutcome!==null){
-        v5Sample.outcome=closeOutcome;v5Sample.mark_price=markPrice;
-        v5Sample.return_pct=closeReturnPct;v5Sample.close_return_pct=closeReturnPct;
-        v5Sample.resolved_at=resolvedAt;v5Sample.horizon_ms=SAMPLE_HORIZON_MS;
-        v5Sample.target_definition='LEGACY_4H_CLOSE_RETURN';
-        v5Sample.close_return_deadband_pct=V5_CLOSE_DIRECTION_DEADBAND_PCT;
-        v5Sample.close_return_source='FOUR_HOUR_TERMINAL_CLOSE';
-        v5Sample.outcome_source='CLOSED_CANDLE_4H';
-        newV5ClosedOutcomes++;
-      }
     }
 
     // Build a per-symbol index once, so thousands of market-wide observations
@@ -795,13 +765,6 @@ recordServerPaperPortfolio(snapshot,now){
         };
         if(knownIds.has(item.id)||this.state.samples.some(sample=>String(sample?.id||'')===item.id))continue;
         this.state.samples.push(item);
-        const {temporal_sequence,...v5Base}=item;
-        if(!knownV5Ids.has(item.id)){
-          this.state.v5_samples.push({...v5Base,target_definition:'LEGACY_4H_CLOSE_RETURN',
-            close_return_deadband_pct:V5_CLOSE_DIRECTION_DEADBAND_PCT,
-            outcome:null,mark_price:null,return_pct:null,outcome_source:null});
-          knownV5Ids.add(item.id);
-        }
         newestTraining.set(symbol,item);
         knownIds.add(item.id);newDeepSamples++;
         continue;
@@ -820,7 +783,7 @@ recordServerPaperPortfolio(snapshot,now){
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
     this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
-    this.state.v5_samples=this.state.v5_samples.slice(-MAX_SAMPLES);
+    this.state.v5_samples=[];
     // Keep the sequence tensor for each retained training row. With a 6,000-row
     // cap this is bounded and preserves enough chronological groups for the
     // independent temporal holdout instead of silently discarding most history.
@@ -835,7 +798,6 @@ recordServerPaperPortfolio(snapshot,now){
       temporal_sequence_non_15m_labels:this.trainingSamples().filter(row=>hasValidTemporalSequence(row.temporal_sequence)&&
         row.outcome&&row.first_passage?.path_resolution!=='15M').length,
       temporal_sequence_missing_samples:this.trainingSamples().filter(row=>!hasValidTemporalSequence(row.temporal_sequence)).length,
-      new_historical_v5_close_samples:newHistoricalV5Samples,
       historical_rejected:historicalRejected,
       snapshot_historical_samples_available:Math.max(0,Math.trunc(Number(snapshot.universe?.historical_training_samples_available)||0)),
       snapshot_closed_candle_outcomes_input:closedCandleOutcomeRows.length,
@@ -848,9 +810,8 @@ recordServerPaperPortfolio(snapshot,now){
       resolved_samples:this.trainingSamples().filter(row=>row.outcome).length,
       unresolved_training_samples:this.trainingSamples().filter(row=>!row.outcome).length,
       new_closed_candle_outcomes:newClosedCandleOutcomes,
-      new_v5_closed_outcomes:newV5ClosedOutcomes,
-      v5_close_resolved_samples:this.cognitiveTrainingSamples().filter(row=>row.outcome).length,
-      v5_close_unresolved_samples:this.cognitiveTrainingSamples().filter(row=>!row.outcome).length
+      shared_neural_samples:this.cognitiveTrainingSamples().length,
+      shared_neural_resolved_samples:this.cognitiveTrainingSamples().filter(row=>row.outcome).length
     };
   }
 
@@ -1011,9 +972,7 @@ recordServerPaperPortfolio(snapshot,now){
   }
 
   snapshot(){
-    const internalCognitive=this.state.cognitive_profile||buildCognitiveLearningProfile(this.cognitiveTrainingSamples(),{
-      temporalSamples:this.trainingSamples()
-    });
+    const internalCognitive=this.state.cognitive_profile||this.buildCognitiveProfile();
     const publicCognitive=publicCognitiveProfile(internalCognitive);
     const status=!this.enabled?'STOPPED':this.inFlight?'SCANNING':this.state.last_error?'DEGRADED':
       this.state.last_summary?'RUNNING':'STARTING';
