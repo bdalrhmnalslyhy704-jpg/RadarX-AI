@@ -186,7 +186,8 @@ function rankingMetric(rows,targetKey,fraction,includeFlat=false){
     score:finite(row.base_score)??Number.NEGATIVE_INFINITY}))
     .sort((a,b)=>b.score-a.score||a.index-b.index);
   const up=ranked.filter(row=>row.outcome==='UP').length;
-  const directional=ranked.filter(row=>row.outcome==='DOWN').length;
+  const down=ranked.filter(row=>row.outcome==='DOWN').length;
+  const nonUp=ranked.length-up;
   const selectedCount=Math.max(1,Math.ceil(ranked.length*fraction));
   const selected=ranked.slice(0,Math.min(ranked.length,selectedCount));
   const selectedUp=selected.filter(row=>row.outcome==='UP').length;
@@ -202,11 +203,11 @@ function rankingMetric(rows,targetKey,fraction,includeFlat=false){
     for(let j=i;j<end;j++)if(ascending[j].outcome==='UP')positives++;
     rankSum+=positives*avg;i=end;
   }
-  const pairs=up*directional;
+  const pairs=up*nonUp;
   const auc=pairs?(rankSum-up*(up+1)/2)/pairs:null;
   return {
     eligible_samples:ranked.length,excluded_flat_or_ambiguous:rows.length-ranked.length,
-    positive_up:up,negative_down:directional,
+    positive_up:up,negative_down:down,negative_non_up_including_flat:nonUp,
     selected_count:selected.length,selected_up:selectedUp,
     precision_pct:precision===null?null:Number((precision*100).toFixed(3)),
     recall_pct:recall===null?null:Number((recall*100).toFixed(3)),
@@ -224,10 +225,9 @@ function summarizeTarget(rows,targetPct){
   const lead=successful.map(row=>finite(row.targets[key].time_to_first_touch_minutes)).filter(v=>v!==null);
   const tierCounts={EARLY_SETUP:0,WATCH:0,LATE_MOVE:0,NO_SETUP:0,OTHER:0};
   for(const row of successful){
-    const tier=String(row.tier||'OTHER');
-    tierCounts[tier]??=(0);
-    if(Object.prototype.hasOwnProperty.call(tierCounts,tier))tierCounts[tier]++;
-    else tierCounts.OTHER++;
+    const rawTier=String(row.tier||'OTHER');
+    const tier=Object.prototype.hasOwnProperty.call(tierCounts,rawTier)?rawTier:'OTHER';
+    tierCounts[tier]++;
   }
   return {
     target_pct:targetPct,adverse_pct:DEFAULT_ADVERSE_PCT,horizon_hours:24,
