@@ -23,7 +23,7 @@ import {
   buildCognitiveLearningProfile
 } from '../core/cognitive-brain.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
-import {evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateExistingEngineBaselines,auditCognitiveTrainingSampleCohorts} from '../core/cognitive-benchmark-metrics.mjs';
 
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
@@ -204,19 +204,6 @@ async function mapLimit(items,limit,worker){
   await Promise.all(workers);
   return results;
 }
-function isValidTrainingSample(row){
-  const sequence=row?.temporal_sequence;
-  return row?.training_eligible===true&&row?.historical_baseline===true&&
-    row?.target_definition===TEMPORAL_TARGET_DEFINITION&&
-    row?.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'&&
-    ['UP','DOWN','FLAT'].includes(row?.outcome)&&
-    row?.first_passage?.path_resolution==='15M'&&
-    row?.first_passage?.outcome===row?.outcome&&
-    Number(row?.resolved_at)-Number(row?.at)===FOUR_HOURS_MS&&
-    Number(row?.horizon_ms)===FOUR_HOURS_MS&&
-    Array.isArray(sequence)&&sequence.length===24&&
-    sequence.every(step=>Array.isArray(step)&&step.length===29&&step.every(Number.isFinite));
-}
 function countBy(items,keyOf){
   const out={};
   for(const item of items){
@@ -358,37 +345,6 @@ function summarizeProfile(profile){
     }
   };
 }
-function sampleAudit(rows){
-  const ids=new Set(),bySymbol=new Map(),validRows=[];
-  let duplicates=0,invalid=0,validSequences=0;
-  for(const row of rows){
-    const id=String(row?.id||'');
-    if(!id||ids.has(id)){duplicates++;continue;}
-    ids.add(id);
-    if(!isValidTrainingSample(row)){invalid++;continue;}
-    validRows.push(row);
-    if(Array.isArray(row.temporal_sequence))validSequences++;
-    const symbol=String(row.symbol);
-    if(!bySymbol.has(symbol))bySymbol.set(symbol,[]);
-    bySymbol.get(symbol).push(Number(row.at));
-  }
-  let spacingViolations=0;
-  for(const times of bySymbol.values()){
-    times.sort((a,b)=>a-b);
-    for(let index=1;index<times.length;index++)
-      if(times[index]-times[index-1]<FOUR_HOURS_MS)spacingViolations++;
-  }
-  return {
-    observed_rows:rows.length,unique_ids:ids.size,duplicate_ids:duplicates,
-    invalid_samples:invalid,valid_samples:validRows.length,
-    valid_temporal_sequences:validSequences,
-    per_symbol_4h_spacing_violations:spacingViolations,
-    outcome_counts:countBy(validRows,row=>row.outcome),
-    sample_month_counts:countBy(validRows,
-      row=>new Date(Number(row.at)).toISOString().slice(0,7)),
-    symbols_with_samples:bySymbol.size
-  };
-}
 function csvEscape(value){
   const raw=String(value??'');
   return '"'+raw.replace(/"/g,'""')+'"';
@@ -418,6 +374,8 @@ async function main(){
   const minSymbols=Math.max(1,Math.trunc(Number(args['min-symbols'])||80));
   const minSamples=Math.max(1,Math.trunc(Number(args['min-samples'])||6000));
   const minSequences=Math.max(1,Math.trunc(Number(args['min-sequences'])||3000));
+  const minTemporalSequenceCoverage=Math.max(0,Math.min(1,
+    finite(args['min-temporal-coverage'])??0.80));
   const output=resolve(args.output||OUTPUT_PATH);
   const sampleOutput=resolve(args['samples-output']||SAMPLE_PATH);
   const outputDir=resolve(output,'..');
@@ -594,17 +552,16 @@ async function main(){
     });
 
     const sampleRows=symbolResults.flatMap(row=>Array.isArray(row.output)?row.output:[]);
-    const audit=sampleAudit(sampleRows);
-    const uniqueSamples=new Map();
-    for(const row of sampleRows){
-      const key=String(row?.id||'');
-      if(key&&!uniqueSamples.has(key)&&isValidTrainingSample(row))uniqueSamples.set(key,row);
-    }
-    const samples=[...uniqueSamples.values()]
+    const cohortAudit=auditCognitiveTrainingSampleCohorts(sampleRows,{
+      targetDefinition:TEMPORAL_TARGET_DEFINITION,
+      outcomeSource:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+      horizonMs:FOUR_HOURS_MS,sequenceSteps:24,sequenceChannels:29,
+      maxAbsoluteSequenceValue:4
+    });
+    const {feature_samples:featureSamples,temporal_samples:temporalSamples,...audit}=cohortAudit;
+    const samples=temporalSamples
       .sort((a,b)=>Number(a.at)-Number(b.at)||String(a.symbol).localeCompare(String(b.symbol)));
-    const sequenceCount=samples.filter(row=>Array.isArray(row.temporal_sequence)&&
-      row.temporal_sequence.length===24&&row.temporal_sequence.every(step=>
-        Array.isArray(step)&&step.length===29&&step.every(Number.isFinite))).length;
+    const sequenceCount=samples.length;
     const archiveExpected=symbols.length*months.length*2;
     const archiveVerified=archiveManifest.filter(file=>file.status==='VERIFIED').length;
     const archiveMissing=archiveManifest.filter(file=>file.status==='MISSING').length;
@@ -625,8 +582,10 @@ async function main(){
     const archiveGapSymbols=symbolResults.filter(row=>row.status==='INCOMPLETE_ARCHIVE_COVERAGE').length;
     const symbolsWithSamples=audit.symbols_with_samples;
     const qualityReady=symbolsWithSamples>=minSymbols&&samples.length>=minSamples&&
-      sequenceCount>=minSequences&&audit.duplicate_ids===0&&
-      audit.per_symbol_4h_spacing_violations===0&&audit.invalid_samples===0&&
+      sequenceCount>=minSequences&&audit.invalid_samples===0&&
+      audit.duplicate_ids===0&&audit.duplicate_baselines===0&&
+      audit.per_symbol_4h_spacing_violations===0&&
+      audit.temporal_sequence_coverage_ratio>=minTemporalSequenceCoverage&&
       archiveFailed===0&&archiveGapSymbols<=Math.max(2,Math.ceil(symbols.length*0.01))&&
       archiveCoverageAfterListing>=0.995&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
@@ -749,6 +708,16 @@ async function main(){
       minimum_symbols:minSymbols,minimum_samples:minSamples,
       minimum_temporal_sequences:minSequences,
       symbols_with_samples:symbolsWithSamples,
+      symbols_with_feature_samples:audit.symbols_with_feature_samples,
+      feature_eligible_samples:featureSamples.length,
+      temporal_sequence_excluded_samples:featureSamples.length-samples.length,
+      sequence_exclusions:audit.sequence_exclusions,
+      temporal_sequence_coverage_ratio:audit.temporal_sequence_coverage_ratio,
+      temporal_sequence_coverage_pct:audit.temporal_sequence_coverage_pct,
+      temporal_sequence_coverage_required:minTemporalSequenceCoverage,
+      invalid_feature_reason_counts:audit.invalid_feature_reason_counts,
+      invalid_feature_examples:audit.invalid_feature_examples,
+      duplicate_baselines:audit.duplicate_baselines,
       processed_symbols:symbolResults.filter(row=>row.status==='PROCESSED'||row.symbol==='BTCUSDT').length,
       symbols_without_sufficient_archive:symbolResults.filter(row=>row.status==='INSUFFICIENT_ARCHIVE_HISTORY').length,
       symbols_failed:symbolFailures.length,
@@ -781,8 +750,12 @@ async function main(){
       sample_file:sampleOutput,
       sample_file_sha256:sha256(samplesJsonl),
       symbols_with_samples:symbolsWithSamples,
+      feature_eligible_rows:featureSamples.length,
       sample_rows:samples.length,
       sequence_rows:sequenceCount,
+      temporal_sequence_excluded_rows:featureSamples.length-samples.length,
+      sequence_exclusions:audit.sequence_exclusions,
+      temporal_sequence_coverage_ratio:audit.temporal_sequence_coverage_ratio,
       samples_per_symbol_max:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
       outcome_counts:audit.outcome_counts,
       samples_by_month:audit.sample_month_counts
@@ -819,6 +792,9 @@ async function main(){
     console.log(JSON.stringify({
       status:baseReport.status,window:baseReport.window,universe:baseReport.universe,
       data_quality:baseReport.data_quality,
+      sample_audit:{feature_eligible_samples:featureSamples.length,
+        temporal_samples:samples.length,temporal_coverage_ratio:audit.temporal_sequence_coverage_ratio,
+        sequence_exclusions:audit.sequence_exclusions,invalid_samples:audit.invalid_samples},
       models:{
         cognitive_probability_ready:cognitivePass,
         selected_model:modelSummary.model_selection?.selected_model||null,
