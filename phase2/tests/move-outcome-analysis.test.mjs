@@ -62,6 +62,35 @@ test('labels a missed move and retains the last rejection reasons before the mov
   assert.equal(x.strong_move.classification,'MISSED_PLUS_15_PERCENT_MOVE');
 });
 
+test('missed-move diagnostics separate signal failures from unavailable historical execution evidence',()=>{
+  const source=replay({steps:[
+    step(119*MIN,{failures:[
+      'HISTORICAL_LIQUIDITY_UNVERIFIED',
+      'LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+      'THREE_SECOND_TRADE_BUCKET_EMPTY',
+      'BUY_FLOW_NOT_CONFIRMED'
+    ]})
+  ]});
+  const x=buildMoveOutcomeAnalysis(source);
+  const layers=x.missed_move_failure_layers;
+  assert.deepEqual(layers.replay_environment_blockers,[
+    'HISTORICAL_LIQUIDITY_UNVERIFIED','LIVE_PUSH_DELIVERY_NOT_SIMULATED'
+  ]);
+  assert.deepEqual(layers.evidence_availability_failures,['THREE_SECOND_TRADE_BUCKET_EMPTY']);
+  assert.ok(layers.signal_gate_failures.includes('BUY_FLOW_NOT_CONFIRMED'));
+  assert.deepEqual(x.moderate_move.missed_move.failure_layers,layers);
+
+  const summary=summarizeMoveOutcomeAnalyses([x]);
+  assert.deepEqual(summary.most_common_replay_environment_blockers,[
+    {code:'HISTORICAL_LIQUIDITY_UNVERIFIED',count:1},
+    {code:'LIVE_PUSH_DELIVERY_NOT_SIMULATED',count:1}
+  ]);
+  assert.deepEqual(summary.most_common_evidence_availability_failures,[
+    {code:'THREE_SECOND_TRADE_BUCKET_EMPTY',count:1}
+  ]);
+  assert.ok(summary.most_common_signal_miss_reasons.some(x=>x.code==='BUY_FLOW_NOT_CONFIRMED'));
+});
+
 test('accepted alert after the move is marked late, not early',()=>{
   const source=replay({steps:[
     step(119*MIN,{failures:['STRICT_SCORE_BELOW_THRESHOLD']}),
