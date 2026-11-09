@@ -176,7 +176,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
   assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
-  assert.equal(profile.member_selection_method,'REGIME_LOCAL_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
+  assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.regime_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'SHARED_POOLED_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3');
   assert.equal(profile.residual_scale_selection,'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4');
@@ -202,6 +202,14 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.member_training_profiles.every(row=>
     row.latentChannels===8&&row.trainableParameters===512));
   assert.ok(profile.training_samples>=160);
+  assert.equal(profile.training_samples,profile.shared_model_training_samples);
+  assert.ok(profile.shared_model_selection_samples>=10);
+  assert.ok(profile.shared_model_calibration_samples>=30);
+  assert.ok(profile.shared_model_training_cutoff_at<profile.shared_model_member_selection_cutoff_at);
+  assert.ok(profile.shared_model_member_selection_cutoff_at<profile.shared_model_selection_cutoff_at);
+  assert.ok(profile.shared_model_selection_cutoff_at<=profile.outer_validation_start_at);
+  assert.ok(profile.outer_validation_start_at<profile.outer_holdout_start_at);
+  assert.ok(profile.max_training_outcome_resolved_at<profile.shared_model_training_cutoff_at);
   assert.ok(profile.validation_samples>=50);
   assert.ok(profile.holdout_samples>=40,
     'small research fixtures use the 40-sample research minimum; live readiness still requires 100');
@@ -274,7 +282,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at,
     'training labels must resolve before member selection begins');
   assert.equal(expert.probability_calibration.method,'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2');
-  assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
+  assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
   assert.equal(expert.member_selection_source,'SHARED_POOLED_MEMBER_SELECTION_BLOCK');
   assert.equal(expert.calibration_source,'SHARED_POOLED_CALIBRATION_BLOCK');
   assert.equal(expert.neural_residual_contributes,expert.selected_residual_scale>0);
@@ -286,7 +294,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.ok(expert.selection_calibration_samples>0);
   assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
     'member ranking and probability calibration must not reuse the same rows');
-  assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
+  assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
   assert.equal(expert.logistic_probability_calibration.fitted,true);
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
     'the logistic challenger must be calibrated on the exact same regime-local later block');
@@ -443,7 +451,7 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
   assert.ok(expert.pooled_calibration_diagnostic_positive_samples>0);
     assert.ok(expert.calibration_targets.positive>=5);
     assert.ok(expert.calibration_targets.negative>=20);
-    assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_DIAGNOSTIC_ONLY');
+    assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
     assert.equal(expert.probability_calibration.fitted,true);
     assert.equal(expert.logistic_probability_calibration.fitted,true);
     assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
