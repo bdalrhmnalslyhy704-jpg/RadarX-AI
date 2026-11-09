@@ -106,18 +106,18 @@ export const ADAPTIVE_DATASET_SUPPORT_POLICY = Object.freeze({
   min_negative_samples: 900,
   regimes: Object.freeze({
     BTC_RISK_ON: Object.freeze({
-      training_positive: 40, training_negative: 100,
-      member_selection_positive: 20, member_selection_negative: 20,
-      calibration_positive: 20, calibration_negative: 20,
-      validation_positive: 20, validation_negative: 20,
-      holdout_positive: 20, holdout_negative: 20
+      training: Object.freeze({samples:80,positive:8,negative:20}),
+      member_selection: Object.freeze({samples:10,positive:3,negative:8}),
+      calibration: Object.freeze({samples:30,positive:5,negative:20}),
+      validation: Object.freeze({samples:12,positive:5,negative:20}),
+      holdout: Object.freeze({samples:20,positive:5,negative:20})
     }),
     BTC_RISK_OFF: Object.freeze({
-      training_positive: 40, training_negative: 100,
-      member_selection_positive: 20, member_selection_negative: 20,
-      calibration_positive: 20, calibration_negative: 20,
-      validation_positive: 20, validation_negative: 20,
-      holdout_positive: 20, holdout_negative: 20
+      training: Object.freeze({samples:80,positive:8,negative:20}),
+      member_selection: Object.freeze({samples:10,positive:3,negative:8}),
+      calibration: Object.freeze({samples:30,positive:5,negative:20}),
+      validation: Object.freeze({samples:12,positive:5,negative:20}),
+      holdout: Object.freeze({samples:20,positive:5,negative:20})
     })
   })
 });
@@ -140,6 +140,13 @@ function phaseSupport(temporalProfile = {}) {
   const specialists = temporalProfile?.regime_specialists;
   const output = {};
   const missing = [];
+  const read = (...values) => {
+    for (const value of values) {
+      const number = finite(value);
+      if (number !== null) return number;
+    }
+    return 0;
+  };
   for (const regime of ['BTC_RISK_ON', 'BTC_RISK_OFF']) {
     const source = specialists?.[regime];
     if (!source || typeof source !== 'object') {
@@ -148,35 +155,61 @@ function phaseSupport(temporalProfile = {}) {
       continue;
     }
     const policy = ADAPTIVE_DATASET_SUPPORT_POLICY.regimes[regime];
+    // Match the TCN's real data scopes: the fit uses regime-local training,
+    // shared pooled member-selection and calibration blocks, then regime-local
+    // outer validation and untouched holdout blocks.
     const phases = {
       training: {
-        positive: finite(source.training_positive_samples) ?? 0,
-        negative: finite(source.training_negative_samples) ?? 0,
-        min_positive: policy.training_positive, min_negative: policy.training_negative
+        scope: 'REGIME_LOCAL',
+        samples: read(source.training_samples, source.regime_training_samples),
+        positive: read(source.training_positive_samples),
+        negative: read(source.training_negative_samples),
+        min_samples: policy.training.samples,
+        min_positive: policy.training.positive,
+        min_negative: policy.training.negative
       },
       member_selection: {
-        positive: finite(source.selection_positive_samples) ?? 0,
-        negative: finite(source.selection_negative_samples) ?? 0,
-        min_positive: policy.member_selection_positive, min_negative: policy.member_selection_negative
+        scope: 'SHARED_POOLED',
+        samples: read(source.pooled_selection_diagnostic_samples, source.member_selection_samples),
+        positive: read(source.pooled_selection_diagnostic_positive_samples, source.selection_positive_samples),
+        negative: read(source.pooled_selection_diagnostic_negative_samples, source.selection_negative_samples),
+        min_samples: policy.member_selection.samples,
+        min_positive: policy.member_selection.positive,
+        min_negative: policy.member_selection.negative
       },
       calibration: {
-        positive: finite(source.calibration_positive_samples) ?? 0,
-        negative: finite(source.calibration_negative_samples) ?? 0,
-        min_positive: policy.calibration_positive, min_negative: policy.calibration_negative
+        scope: 'SHARED_POOLED',
+        samples: read(source.pooled_calibration_diagnostic_samples, source.calibration_samples),
+        positive: read(source.pooled_calibration_diagnostic_positive_samples,
+          source.calibration_targets?.positive, source.calibration_positive_samples),
+        negative: read(source.pooled_calibration_diagnostic_negative_samples,
+          source.calibration_targets?.negative, source.calibration_negative_samples),
+        min_samples: policy.calibration.samples,
+        min_positive: policy.calibration.positive,
+        min_negative: policy.calibration.negative
       },
       validation: {
-        positive: finite(source.validation_positive_samples) ?? 0,
-        negative: finite(source.validation_negative_samples) ?? 0,
-        min_positive: policy.validation_positive, min_negative: policy.validation_negative
+        scope: 'REGIME_LOCAL_OUTER',
+        samples: read(source.validation_samples),
+        positive: read(source.validation_positive_samples),
+        negative: read(source.validation_negative_samples),
+        min_samples: policy.validation.samples,
+        min_positive: policy.validation.positive,
+        min_negative: policy.validation.negative
       },
       holdout: {
-        positive: finite(source.holdout_positive_samples) ?? 0,
-        negative: finite(source.holdout_negative_samples) ?? 0,
-        min_positive: policy.holdout_positive, min_negative: policy.holdout_negative
+        scope: 'REGIME_LOCAL_UNTOUCHED',
+        samples: read(source.holdout_samples),
+        positive: read(source.holdout_positive_samples),
+        negative: read(source.holdout_negative_samples),
+        min_samples: policy.holdout.samples,
+        min_positive: policy.holdout.positive,
+        min_negative: policy.holdout.negative
       }
     };
     const gaps = [];
     for (const [phase, counts] of Object.entries(phases)) {
+      if (counts.samples < counts.min_samples) gaps.push(phase + ':SAMPLE_SUPPORT');
       if (counts.positive < counts.min_positive) gaps.push(phase + ':POSITIVE_SUPPORT');
       if (counts.negative < counts.min_negative) gaps.push(phase + ':NEGATIVE_SUPPORT');
     }
