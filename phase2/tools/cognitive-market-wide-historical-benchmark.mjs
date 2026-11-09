@@ -34,6 +34,7 @@ const MAX_ARCHIVE_BYTES=64*1024*1024;
 const MAX_UNZIPPED_BYTES=64*1024*1024;
 const DEFAULT_START='2025-11-01T00:00:00.000Z';
 const DEFAULT_END_EXCLUSIVE='2026-11-01T00:00:00.000Z';
+const REQUEST_AUDIT=[];
 const OUTPUT_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REPORT||
   'artifacts/cognitive-market-wide-historical-benchmark.json');
 const SAMPLE_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_SAMPLES||
@@ -76,11 +77,15 @@ function sleepBackoff(attempt){
 async function fetchResponse(url,{timeoutMs=90000,retries=4,headers={}}={}){
   let lastError=null;
   for(let attempt=0;attempt<retries;attempt++){
+    const audit={url,attempt:attempt+1,started_at:new Date().toISOString(),status:null};
+    REQUEST_AUDIT.push(audit);
     try{
       const response=await fetch(url,{
         headers:{accept:'application/json, application/octet-stream, text/plain',...headers},
         signal:AbortSignal.timeout(timeoutMs)
       });
+      audit.status=response.status;
+      audit.finished_at=new Date().toISOString();
       if(response.status===404)return response;
       if(response.status===418||response.status===429||response.status>=500){
         lastError=new Error('HTTP_'+response.status);
@@ -94,6 +99,8 @@ async function fetchResponse(url,{timeoutMs=90000,retries=4,headers={}}={}){
       }
       return response;
     }catch(error){
+      audit.error=String(error?.message||error).slice(0,180);
+      audit.finished_at=new Date().toISOString();
       lastError=error;
       if(attempt+1<retries)await sleepBackoff(attempt);
     }
@@ -340,14 +347,15 @@ function summarizeProfile(profile){
     }
   };
 }
-function sampleAudit(samples){
-  const ids=new Set(),duplicates=[],bySymbol=new Map();
-  let invalid=0,validSequences=0;
-  for(const row of samples){
+function sampleAudit(rows){
+  const ids=new Set(),bySymbol=new Map(),validRows=[];
+  let duplicates=0,invalid=0,validSequences=0;
+  for(const row of rows){
     const id=String(row?.id||'');
-    if(!id||ids.has(id)){duplicates.push(id);continue;}
+    if(!id||ids.has(id)){duplicates++;continue;}
     ids.add(id);
     if(!isValidTrainingSample(row)){invalid++;continue;}
+    validRows.push(row);
     if(Array.isArray(row.temporal_sequence))validSequences++;
     const symbol=String(row.symbol);
     if(!bySymbol.has(symbol))bySymbol.set(symbol,[]);
@@ -360,12 +368,12 @@ function sampleAudit(samples){
       if(times[index]-times[index-1]<FOUR_HOURS_MS)spacingViolations++;
   }
   return {
-    unique_ids:ids.size,duplicate_ids:duplicates.length,
-    invalid_samples:invalid,valid_samples:samples.length-invalid,
+    observed_rows:rows.length,unique_ids:ids.size,duplicate_ids:duplicates,
+    invalid_samples:invalid,valid_samples:validRows.length,
     valid_temporal_sequences:validSequences,
     per_symbol_4h_spacing_violations:spacingViolations,
-    outcome_counts:countBy(samples.filter(isValidTrainingSample),row=>row.outcome),
-    sample_month_counts:countBy(samples.filter(isValidTrainingSample),
+    outcome_counts:countBy(validRows,row=>row.outcome),
+    sample_month_counts:countBy(validRows,
       row=>new Date(Number(row.at)).toISOString().slice(0,7)),
     symbols_with_samples:bySymbol.size
   };
@@ -447,7 +455,7 @@ async function main(){
     models:{status:'NOT_RUN'},
     archive_manifest:archiveManifest,
     symbol_failures:symbolFailures,
-    request_audit:requestAudit
+    request_audit:REQUEST_AUDIT
   };
   try{
     const exchangeInfo=await getJson(API_ROOT+'/api/v3/exchangeInfo');
@@ -536,14 +544,14 @@ async function main(){
     });
 
     const sampleRows=symbolResults.flatMap(row=>Array.isArray(row.output)?row.output:[]);
+    const audit=sampleAudit(sampleRows);
     const uniqueSamples=new Map();
     for(const row of sampleRows){
       const key=String(row?.id||'');
-      if(key&&!uniqueSamples.has(key))uniqueSamples.set(key,row);
+      if(key&&!uniqueSamples.has(key)&&isValidTrainingSample(row))uniqueSamples.set(key,row);
     }
-    const samples=[...uniqueSamples.values()].filter(isValidTrainingSample)
+    const samples=[...uniqueSamples.values()]
       .sort((a,b)=>Number(a.at)-Number(b.at)||String(a.symbol).localeCompare(String(b.symbol)));
-    const audit=sampleAudit(samples);
     const sequenceCount=samples.filter(row=>Array.isArray(row.temporal_sequence)&&
       row.temporal_sequence.length===24&&row.temporal_sequence.every(step=>
         Array.isArray(step)&&step.length===29&&step.every(Number.isFinite))).length;
@@ -621,7 +629,7 @@ async function main(){
     };
     baseReport.archive_manifest=archiveManifest;
     baseReport.symbol_failures=symbolFailures;
-    baseReport.request_audit=requestAudit;
+    baseReport.request_audit=REQUEST_AUDIT;
     baseReport.elapsed_ms=Date.now()-started;
     baseReport.completed_at=new Date().toISOString();
     await writeFile(output,JSON.stringify(baseReport,null,2),'utf8');
