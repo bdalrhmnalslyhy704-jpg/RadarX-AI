@@ -376,8 +376,24 @@ async function main(){
           fastKlines:{data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
           btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
         });
-        result={symbol,status:'PROCESSED',rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
-          samples:census.samples.length,audit:census.audit,output:census.samples};
+        const featureCutoffViolations=census.samples.filter(row=>
+          row.feature_information_cutoff_at!==row.at).length;
+        const horizonViolations=census.samples.filter(row=>
+          Object.values(row.targets||{}).some(label=>
+            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+        result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
+          rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
+          coverage_15m:{first_available_month:btc15.first_available_month,
+            expected_months_after_first_available:btc15.expected_months_after_first_available,
+            verified_months_after_first_available:btc15.verified_months_after_first_available,
+            complete_from_first_available:btc15.complete_from_first_available},
+          coverage_5m:{first_available_month:btc5.first_available_month,
+            expected_months_after_first_available:btc5.expected_months_after_first_available,
+            verified_months_after_first_available:btc5.verified_months_after_first_available,
+            complete_from_first_available:btc5.complete_from_first_available},
+          samples:census.samples.length,audit:census.audit,
+          feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
+          output:census.samples};
       }else{
         try{
           const [asset15,asset5]=await Promise.all([
@@ -391,19 +407,39 @@ async function main(){
               first_available_month_5m:asset5.first_available_month,
               missing_after_listing_15m:asset15.missing_months_after_first_available,
               missing_after_listing_5m:asset5.missing_months_after_first_available,
-              samples:0,audit:null,output:[]};
+              coverage_15m:{expected_months_after_first_available:asset15.expected_months_after_first_available,
+                verified_months_after_first_available:asset15.verified_months_after_first_available,
+                complete_from_first_available:asset15.complete_from_first_available},
+              coverage_5m:{expected_months_after_first_available:asset5.expected_months_after_first_available,
+                verified_months_after_first_available:asset5.verified_months_after_first_available,
+                complete_from_first_available:asset5.complete_from_first_available},
+              samples:0,audit:null,feature_cutoff_violations:0,horizon_violations:0,output:[]};
           }else{
             const census=buildDailyEarlyRiserHistoricalSamples({
               symbol,klines:{data:asset15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               fastKlines:{data:asset5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
             });
-            result={symbol,status:census.audit.status==='READY'?'PROCESSED':'SAMPLE_AUDIT_FAILED',
+            const featureCutoffViolations=census.samples.filter(row=>
+              row.feature_information_cutoff_at!==row.at).length;
+            const horizonViolations=census.samples.filter(row=>
+              Object.values(row.targets||{}).some(label=>
+                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+            result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
+                ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
               verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
               first_available_month_15m:asset15.first_available_month,
               first_available_month_5m:asset5.first_available_month,
-              samples:census.samples.length,audit:census.audit,output:census.samples};
+              coverage_15m:{expected_months_after_first_available:asset15.expected_months_after_first_available,
+                verified_months_after_first_available:asset15.verified_months_after_first_available,
+                complete_from_first_available:asset15.complete_from_first_available},
+              coverage_5m:{expected_months_after_first_available:asset5.expected_months_after_first_available,
+                verified_months_after_first_available:asset5.verified_months_after_first_available,
+                complete_from_first_available:asset5.complete_from_first_available},
+              samples:census.samples.length,audit:census.audit,
+              feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
+              output:census.samples};
           }
         }catch(error){
           const reason=String(error?.message||error).slice(0,240);
@@ -411,6 +447,7 @@ async function main(){
           result={symbol,status:'FAILED',samples:0,audit:null,output:[],error:reason};
         }
       }
+      const metricRows=(result.output||[]).map(compactSample);
       await persist(result.output||[]);
       totalSamples+=Number(result.samples)||0;
       completed++;
@@ -431,23 +468,31 @@ async function main(){
       }));
       await writeQueue;
       await writeJsonAtomic(output,report);
-      return compactResult;
+      return {...compactResult,metricRows};
     });
     await writeQueue;
-    const allMetricRows=results.flatMap(row=>row?.output||[]);
+    const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
       [String(target)+'_PCT',summarizeTarget(allMetricRows,target)]));
     const archiveFilesExpected=symbols.length*months.length*2;
     const verified=manifest.filter(row=>row.status==='VERIFIED').length;
     const missing=manifest.filter(row=>row.status==='MISSING').length;
     const failed=manifest.filter(row=>row.status==='FAILED').length;
-    const afterFirstExpected=manifest.reduce((sum,row)=>sum+
-      (Number(row.expected_months_after_first_available)||0),0);
-    const afterFirstVerified=manifest.reduce((sum,row)=>sum+
-      (Number(row.verified_months_after_first_available)||0),0);
+    const coverageRows=report.symbol_results
+      .flatMap(row=>[row.coverage_15m,row.coverage_5m]).filter(Boolean);
+    const afterFirstExpected=coverageRows.reduce((sum,row)=>
+      sum+(Number(row.expected_months_after_first_available)||0),0);
+    const afterFirstVerified=coverageRows.reduce((sum,row)=>
+      sum+(Number(row.verified_months_after_first_available)||0),0);
+    const featureCutoffViolations=report.symbol_results.reduce((sum,row)=>
+      sum+(row.feature_cutoff_violations||0),0);
+    const horizonViolations=report.symbol_results.reduce((sum,row)=>
+      sum+(row.horizon_violations||0),0);
+    const allAuditsReady=report.symbol_results.every(row=>
+      row.status==='PROCESSED'&&row.audit?.status==='READY'&&row.audit?.overlap_violations===0);
     report.data_quality={
-      status:failed===0&&symbolFailures.length===0&&
-        report.symbol_results.every(row=>['PROCESSED','INCOMPLETE_ARCHIVE_COVERAGE'].includes(row.status))
+      status:failed===0&&symbolFailures.length===0&&allAuditsReady&&
+        featureCutoffViolations===0&&horizonViolations===0
         ?'AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT':'INCOMPLETE',
       expected_archive_files:archiveFilesExpected,
       observed_archive_files:manifest.length,
@@ -461,10 +506,11 @@ async function main(){
       symbols_incomplete_archive:report.symbol_results.filter(row=>row.status==='INCOMPLETE_ARCHIVE_COVERAGE').length,
       symbols_failed:symbolFailures.length,
       total_daily_samples:totalSamples,
-      all_sample_audits_ready:report.symbol_results.every(row=>row.status!=='SAMPLE_AUDIT_FAILED'),
-      no_overlapping_daily_labels:report.symbol_results.every(row=>row.audit?.overlap_violations===0),
-      feature_cutoff_violations:report.symbol_results.filter(row=>
-        (row.audit?.feature_cutoff_violations||0)>0).length
+      all_sample_audits_ready:allAuditsReady,
+      no_overlapping_daily_labels:report.symbol_results.every(row=>
+        row.audit===null||row.audit?.overlap_violations===0),
+      feature_cutoff_violations:featureCutoffViolations,
+      horizon_violations:horizonViolations
     };
     const reportBytes=Buffer.from(JSON.stringify(report,null,2)+'\n');
     report.sample_file={
