@@ -20,10 +20,9 @@ const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
   minTrainingSamples: 240,
-  // Use up to 1,500 newest purged training rows. This widens the model-fit,
-  // member-selection and calibration blocks without consuming outer validation
-  // or the untouched holdout; the 18-10-6 ensemble remains compact.
-  maxTrainingSamples: 1500,
+  // Research cap for expanded chronological-history ablations. The caller
+  // may request fewer rows; outer validation/holdout remain strictly excluded.
+  maxTrainingSamples: 6000,
   iterations: 100,
   learningRate: 0.012,
   l2: 0.04,
@@ -1149,7 +1148,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
   }
 
-  const neuralLimit=Math.max(240,Math.min(1500,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
+  const neuralLimit=Math.max(240,Math.min(6000,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
   const upEventTraining=asUpEventRows(training);
   const upEventRecentTraining=asUpEventRows(recentTraining);
