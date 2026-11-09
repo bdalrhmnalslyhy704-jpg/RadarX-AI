@@ -1059,9 +1059,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     row.at>=sharedMemberSelectionCutoffAt&&row.at<sharedSelectionCutoffAt&&
     row.resolved_at<sharedSelectionCutoffAt)
     .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
-  // Each BTC regime gets an independent three-member TCN trained from its
-  // own purged rows. Shared cutoffs prevent look-ahead; weights and selection/
-  // calibration outcomes are never shared across regimes.
+  // One shared TCN is fitted on the global purged training block. The later
+  // selection and calibration blocks are shared too; validation and untouched
+  // holdout metrics remain independently gated for each BTC regime.
   const fitted={
     specialists_by_regime:{},
     selected_member_by_regime:{},
@@ -1236,14 +1236,14 @@ export function buildTemporalNeuralProfile(samples = [], {
         holdout:{evaluated:false,sample_count:regimeHoldout.length}
       };
       regimeResults[regime]={supported:false,support_gaps:supportGaps,
-        training_start_at:regimeTraining[0]?.at??null,
-        training_cutoff_at:regimeSplit.trainingCutoffAt,
+        training_start_at:sharedTrainingRows[0]?.at??null,
+        training_cutoff_at:sharedTrainingCutoffAt,
         selection_start_at:memberSelectionRows[0]?.at??null,
-        member_selection_cutoff_at:regimeSplit.memberSelectionCutoffAt,
-        calibration_cutoff_at:regimeSplit.calibrationCutoffAt,
+        member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
+        calibration_cutoff_at:sharedSelectionCutoffAt,
         validation_start_at:regimeValidation[0]?.at??null,
-        max_training_outcome_resolved_at:regimeTraining.length?Math.max(...regimeTraining.map(row=>row.resolved_at)):null,
-        training_samples:regimeTraining.length,selection_samples:memberSelectionRows.length,
+        max_training_outcome_resolved_at:sharedTrainingMaxResolvedAt,
+        training_samples:sharedTrainingRows.length,selection_samples:memberSelectionRows.length,
         local_selection_samples:regimeMemberSelection.length,local_selection_targets:localSelectionTargets,
         calibration_samples:calibrationRows.length,local_calibration_samples:regimeCalibration.length,
         member_selection_samples:memberSelectionRows.length,member_selection_source:memberSelectionSource,
@@ -1251,6 +1251,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         calibration_targets:selectedCalibrationTargets,
         selection_calibration_samples:0,
         validation_samples:regimeValidation.length,holdout_samples:regimeHoldout.length,
+        regime_training_samples:sharedRegimeTraining.length,
         training_targets:targetsOf(sharedRegimeTraining),selection_targets:selectTargets,
         member_selection_targets:memberSelectionTargets,
         validation_targets:validTargets,holdout_targets:holdTargets,
@@ -1625,6 +1626,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       pooled_selection_diagnostic_samples:pooledMemberSelectionDiagnostics.samples,
       pooled_selection_diagnostic_positive_samples:pooledMemberSelectionDiagnostics.positive,
       pooled_selection_diagnostic_negative_samples:pooledMemberSelectionDiagnostics.negative,
+      pooled_calibration_diagnostic_samples:pooledCalibrationDiagnostics.samples,
+      pooled_calibration_diagnostic_positive_samples:pooledCalibrationDiagnostics.positive,
+      pooled_calibration_diagnostic_negative_samples:pooledCalibrationDiagnostics.negative,
       pooled_training_diagnostic_samples:sharedTrainingTargets.samples,
       pooled_training_diagnostic_positive_samples:sharedTrainingTargets.positive,
       local_calibration_samples:Number(result.local_calibration_samples)||0,

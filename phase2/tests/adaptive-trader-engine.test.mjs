@@ -1108,13 +1108,13 @@ test('historical sample phases give the cognitive learner enough distinct time b
     const specialist=temporal.regime_specialists?.[regime];
     if(Number(specialist?.training_samples)>0){
       assert.ok(specialist.max_training_outcome_resolved_at<specialist.training_cutoff_at,
-        regime+' training labels must resolve before its own training cutoff');
+        regime+' pooled training labels must resolve before the shared training cutoff');
       assert.ok(specialist.training_cutoff_at<specialist.member_selection_cutoff_at,
-        regime+' member selection must follow its training block');
+        regime+' shared member selection must follow the shared training block');
       assert.ok(specialist.member_selection_cutoff_at<specialist.calibration_cutoff_at,
-        regime+' calibration must follow its member-selection block');
+        regime+' shared calibration must follow shared member selection');
       assert.ok(specialist.calibration_cutoff_at<=specialist.validation_start_at,
-        regime+' validation must follow its own calibration block');
+        regime+' outer validation must follow shared calibration');
     }
   }
   assert.ok(temporal.validation_start_at<temporal.holdout_start_at);
