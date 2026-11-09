@@ -135,7 +135,7 @@ const HISTORICAL_15M_PAGE_WAVE_MS=3*60*1000;
  */
 export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now()){
   const clean=String(symbol||'').trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,30}USDT$/.test(clean))
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(clean))
     throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
   const at=finite(now)??Date.now();
   const wave=Math.abs(Math.floor(at/HISTORICAL_15M_PAGE_WAVE_MS))%2;
