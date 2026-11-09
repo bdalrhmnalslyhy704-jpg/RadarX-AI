@@ -141,6 +141,7 @@ export function auditCognitiveTrainingSampleCohorts(rows, {
   };
   let duplicateIds = 0;
   let duplicateBaselines = 0;
+  let invalidFeatureRows = 0;
   const increment = (map, key) => { map[key] = (map[key] || 0) + 1; };
   const safeFinite = value => {
     if (value === null || value === undefined || value === '') return null;
@@ -174,6 +175,7 @@ export function auditCognitiveTrainingSampleCohorts(rows, {
   for (const row of Array.isArray(rows) ? rows : []) {
     const checked = isValidFeatureLabel(row);
     if (!checked.valid) {
+      invalidFeatureRows++;
       for (const reason of checked.reasons) increment(reasonCounts, reason);
       if (invalidExamples.length < 12) invalidExamples.push({
         id: String(row?.id || '').slice(0, 120),
@@ -229,7 +231,7 @@ export function auditCognitiveTrainingSampleCohorts(rows, {
     observed_rows: Array.isArray(rows) ? rows.length : 0,
     feature_eligible_samples: featureSamples.length,
     temporal_eligible_samples: temporalSamples.length,
-    invalid_samples: Object.values(reasonCounts).reduce((sum, count) => sum + count, 0),
+    invalid_samples: invalidFeatureRows,
     invalid_feature_reason_counts: Object.fromEntries(
       Object.entries(reasonCounts).sort((a, b) => a[0].localeCompare(b[0]))
     ),
