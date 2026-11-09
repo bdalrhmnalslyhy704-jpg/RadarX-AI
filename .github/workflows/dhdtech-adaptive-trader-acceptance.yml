@@ -376,8 +376,11 @@ jobs:
                   temporalNeuralContributionSafe&&temporalNetwork.selected===true&&
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
+                  Number(temporalNetwork.validation?.required_brier_margin)>=0.003&&
                   temporalNetwork.holdout?.evaluated===true&&temporalNetwork.holdout?.beat_base_rate===true&&
+                  Number(temporalNetwork.holdout?.required_brier_margin)>=0.003&&
                   Number(temporalNetwork.holdout?.sample_count)>=150&&
+                  Number(temporalComparison.required_brier_margin)>=0.003&&
                   temporalComparison.passed===true&&temporalComparison.beats_base_rate===true&&
                   temporalComparison.beats_pooled_logistic===true;
                 // A trained V5 is not an accepted V5: require its own chronological
@@ -389,8 +392,11 @@ jobs:
                   Number(neuralNetwork.training_samples)>=240&&
                   neuralNetwork.validation?.evaluated===true&&
                   neuralNetwork.validation?.beat_base_rate===true&&
+                  Number(neuralNetwork.validation?.required_brier_margin)>=0.003&&
                   neuralNetwork.holdout?.evaluated===true&&
                   neuralNetwork.holdout?.beat_base_rate===true&&
+                  Number(neuralNetwork.holdout?.required_brier_margin)>=0.003&&
+                  Number(neuralNetwork.holdout_comparison?.required_brier_margin)>=0.003&&
                   Number(neuralNetwork.holdout_comparison?.sample_count)>=100&&
                   neuralNetwork.holdout_comparison?.passed===true&&
                   neuralNetwork.holdout_comparison?.beats_base_rate===true&&
