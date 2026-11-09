@@ -28,3 +28,5 @@ jobs:
         run: node --test --test-timeout=120000 phase2/tests/cognitive-brain.test.mjs
       - name: Test temporal TCN and first-passage tree challengers
         run: node --test --test-timeout=120000 phase2/tests/temporal-neural-brain.test.mjs
+      - name: Run complete phase-two regression suite
+        run: node phase2/tests/run-tests.mjs phase2
