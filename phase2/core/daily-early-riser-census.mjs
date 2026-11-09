@@ -52,6 +52,18 @@ function normalizedRows(rows,intervalMs){
     .filter(Boolean).sort((a,b)=>a.openTime-b.openTime);
 }
 
+function toBinanceKlineRow(raw,intervalMs){
+  if(Array.isArray(raw))return normalizeCandle(raw,intervalMs)?raw:null;
+  const row=normalizeCandle(raw,intervalMs);
+  if(!row)return null;
+  const baseVolume=row.quoteVolume/row.close;
+  const takerBuyBaseVolume=row.takerBuyQuoteVolume/row.close;
+  return [
+    row.openTime,row.open,row.high,row.low,row.close,baseVolume,row.closeTime,
+    row.quoteVolume,row.trades,takerBuyBaseVolume,row.takerBuyQuoteVolume,0
+  ];
+}
+
 function validateClosedPath(baseline,path,horizonBars){
   if(!baseline||!(baseline.close>0)||!Number.isFinite(baseline.closeTime))
     return {valid:false,reason:'BASELINE_CANDLE_INVALID'};
@@ -194,12 +206,15 @@ export function buildDailyEarlyRiserHistoricalSamples({
   const fast=normalizedRows(rawFast,5*60*1000).filter(row=>row.closeTime<end);
   const btc=normalizedRows(rawBtc,DAILY_EARLY_RISER_INTERVAL_MS).filter(row=>row.closeTime<end);
   const rawCloseTime=row=>finite(Array.isArray(row)?row[6]:row?.closeTime);
-  const ordered15m=raw15m.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
-    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
-  const orderedFast=rawFast.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
-    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
-  const orderedBtc=rawBtc.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
-    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
+  const ordered15m=raw15m.map(row=>toBinanceKlineRow(row,DAILY_EARLY_RISER_INTERVAL_MS))
+    .filter(row=>row&&rawCloseTime(row)<end)
+    .sort((x,y)=>Number(x[0])-Number(y[0]));
+  const orderedFast=rawFast.map(row=>toBinanceKlineRow(row,5*60*1000))
+    .filter(row=>row&&rawCloseTime(row)<end)
+    .sort((x,y)=>Number(x[0])-Number(y[0]));
+  const orderedBtc=rawBtc.map(row=>toBinanceKlineRow(row,DAILY_EARLY_RISER_INTERVAL_MS))
+    .filter(row=>row&&rawCloseTime(row)<end)
+    .sort((x,y)=>Number(x[0])-Number(y[0]));
   const minVolume=Math.max(0,finite(minQuoteVolume24h)??750000);
   const targets=[...new Set((Array.isArray(targetsPct)?targetsPct:[])
     .map(finite).filter(value=>value!==null&&value>0))].sort((a,b)=>a-b);
