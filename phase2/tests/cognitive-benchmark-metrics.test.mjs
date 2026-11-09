@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines,auditCognitiveTrainingSampleCohorts} from '../core/cognitive-benchmark-metrics.mjs';
 
 test('ranking metrics preserve misses and score coverage while excluding FLAT only from AUC pairs',()=>{
   const rows=[
@@ -62,4 +62,66 @@ test('top-k ranking denominators match the cognitive model directional universe,
   assert.equal(metric.top_10_pct.selected_count,1,
     '10% of 10 directional outcomes is one, not 10% of 11 including FLAT');
   assert.equal(metric.top_20_pct.selected_count,2);
+});
+
+
+test('feature-label rows without TCN tensors are reported as temporal exclusions, not corrupt labels', () => {
+  const base = {
+    id:'sample-1', symbol:'AAAUSDT', at:1_000_000, resolved_at:1_000_000+4*60*60*1000,
+    horizon_ms:4*60*60*1000, training_eligible:true, historical_baseline:true,
+    target_definition:'TARGET_V1', outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    outcome:'UP', first_passage:{path_resolution:'15M',outcome:'UP'}, features:{volume_ratio:1.2}
+  };
+  const audit=auditCognitiveTrainingSampleCohorts([base],{targetDefinition:'TARGET_V1'});
+  assert.equal(audit.invalid_samples,0);
+  assert.equal(audit.feature_eligible_samples,1);
+  assert.equal(audit.temporal_eligible_samples,0);
+  assert.equal(audit.sequence_exclusions.missing,1);
+  assert.equal(audit.temporal_sequence_coverage_ratio,0);
+});
+
+test('a complete bounded 24x29 tensor enters both feature and temporal cohorts', () => {
+  const base = {
+    id:'sample-2', symbol:'BBBUSDT', at:2_000_000, resolved_at:2_000_000+4*60*60*1000,
+    horizon_ms:4*60*60*1000, training_eligible:true, historical_baseline:true,
+    target_definition:'TARGET_V1', outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    outcome:'DOWN', first_passage:{path_resolution:'15M',outcome:'DOWN'}, features:{buyer_pressure:0.6},
+    temporal_sequence:Array.from({length:24},()=>Array(29).fill(0.25))
+  };
+  const audit=auditCognitiveTrainingSampleCohorts([base],{targetDefinition:'TARGET_V1'});
+  assert.equal(audit.invalid_samples,0);
+  assert.equal(audit.feature_eligible_samples,1);
+  assert.equal(audit.temporal_eligible_samples,1);
+  assert.equal(audit.temporal_sequence_coverage_pct,100);
+});
+
+test('temporal sequence range violations are excluded separately from label corruption', () => {
+  const base = {
+    id:'sample-3', symbol:'CCCUSDT', at:3_000_000, resolved_at:3_000_000+4*60*60*1000,
+    horizon_ms:4*60*60*1000, training_eligible:true, historical_baseline:true,
+    target_definition:'TARGET_V1', outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    outcome:'FLAT', first_passage:{path_resolution:'15M',outcome:'FLAT'}, features:{buyer_pressure:0.5},
+    temporal_sequence:Array.from({length:24},()=>Array(29).fill(0))
+  };
+  base.temporal_sequence[4][7]=4.01;
+  const audit=auditCognitiveTrainingSampleCohorts([base],{targetDefinition:'TARGET_V1'});
+  assert.equal(audit.invalid_samples,0);
+  assert.equal(audit.sequence_exclusions.out_of_range,1);
+  assert.equal(audit.temporal_eligible_samples,0);
+});
+
+test('broken labels and duplicate identities remain hard audit failures', () => {
+  const base = {
+    id:'sample-4', symbol:'DDDUSDT', at:4_000_000, resolved_at:4_000_000+4*60*60*1000,
+    horizon_ms:4*60*60*1000, training_eligible:true, historical_baseline:true,
+    target_definition:'TARGET_V1', outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    outcome:'UP', first_passage:{path_resolution:'15M',outcome:'UP'}, features:{volume_ratio:1},
+    temporal_sequence:Array.from({length:24},()=>Array(29).fill(0))
+  };
+  const broken={...base,id:'sample-broken',horizon_ms:60_000};
+  const audit=auditCognitiveTrainingSampleCohorts([base,{...base},broken],{targetDefinition:'TARGET_V1'});
+  assert.equal(audit.duplicate_ids,1);
+  assert.equal(audit.invalid_samples,1);
+  assert.equal(audit.invalid_feature_reason_counts.HORIZON_FIELD_MISMATCH,1);
+  assert.equal(audit.temporal_eligible_samples,1);
 });
