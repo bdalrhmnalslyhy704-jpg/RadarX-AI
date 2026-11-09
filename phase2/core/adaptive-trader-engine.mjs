@@ -137,8 +137,64 @@ function mergeOlderKlinePage(current,older){
     if(open!==null)unique.set(open,row);
   }
   const data=[...unique.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
-  return {...current,data,historical_pages_fetched:2,historical_window_candles:data.length,
+  return {...current,data,
+    historical_pages_fetched:(Math.max(1,Math.trunc(Number(current?.historical_pages_fetched)||1))+1),
+    historical_window_candles:data.length,historical_backfill_error:null};
+}
+
+/**
+ * Extend a closed-candle Kline series using bounded older pages. A repeated,
+ * empty, overlapping-only, or failed page never fabricates additional history.
+ * The default three pages cover approximately 31 days of 15m candles.
+ */
+export async function fetchAdaptiveTraderHistoricalKlines({
+  rest,symbol,interval='15m',firstPage,maxPages=3
+}={}){
+  if(!rest||typeof rest.request!=='function')throw new Error('ADAPTIVE_HISTORICAL_REST_UNAVAILABLE');
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  const cleanInterval=String(interval||'').trim().toLowerCase();
+  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].includes(cleanInterval))
+    throw new Error('ADAPTIVE_HISTORICAL_KLINE_QUERY_INVALID');
+  const pageLimit=Math.max(1,Math.min(3,Math.trunc(Number(maxPages)||3)));
+  const initialRows=Array.isArray(firstPage?.data)?firstPage.data:[];
+  let result={...(firstPage&&typeof firstPage==='object'?firstPage:{}),
+    data:initialRows.slice(),historical_pages_fetched:initialRows.length?1:0,
+    historical_pages_attempted:0,historical_window_candles:initialRows.length,
     historical_backfill_error:null};
+  if(!initialRows.length||pageLimit===1)return result;
+  const intervalMs=({
+    '1m':60_000,'3m':180_000,'5m':300_000,'15m':900_000,'30m':1_800_000,
+    '1h':3_600_000,'2h':7_200_000,'4h':14_400_000,'6h':21_600_000,
+    '8h':28_800_000,'12h':43_200_000,'1d':86_400_000
+  })[cleanInterval];
+  for(let page=1;page<pageLimit;page++){
+    const currentRows=Array.isArray(result.data)?result.data:[];
+    const earliestOpen=finite(currentRows[0]?.[0]);
+    if(earliestOpen===null)break;
+    try{
+      const older=await rest.request('/api/v3/klines',{
+        symbol:cleanSymbol,interval:cleanInterval,limit:1000,endTime:earliestOpen-1
+      });
+      result.historical_pages_attempted=page;
+      const olderRows=Array.isArray(older?.data)?older.data:[];
+      const validOlder=olderRows.filter(row=>{
+        const open=finite(row?.[0]);
+        return open!==null&&open<earliestOpen&&finite(row?.[6])!==null&&
+          Number(row[6])<earliestOpen&&Number(row[6])-open===intervalMs-1;
+      });
+      if(!validOlder.length)break;
+      const merged=mergeOlderKlinePage(result,{...older,data:validOlder});
+      if(merged.data.length<=currentRows.length)break;
+      result={...merged,historical_pages_attempted:page};
+      if(validOlder.length<1000)break;
+    }catch(error){
+      result={...result,
+        historical_backfill_error:String(error?.message??error).slice(0,160)};
+      break;
+    }
+  }
+  result.historical_window_candles=Array.isArray(result.data)?result.data.length:0;
+  return result;
 }
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
@@ -874,22 +930,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
-  let btcKlines = btcResult.value;
-  if(Array.isArray(btcKlines?.data)&&btcKlines.data.length){
-    const earliestOpen=finite(btcKlines.data[0]?.[0]);
-    if(earliestOpen!==null){
-      try{
-        const older=await rest.request('/api/v3/klines',{
-          symbol:'BTCUSDT',interval:'15m',limit:1000,endTime:earliestOpen-1
-        });
-        btcKlines=mergeOlderKlinePage(btcKlines,older);
-      }catch(error){
-        btcKlines={...btcKlines,historical_pages_fetched:1,
-          historical_window_candles:btcKlines.data.length,
-          historical_backfill_error:String(error?.message??error).slice(0,120)};
-      }
-    }
-  }
+  let btcKlines=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'BTCUSDT',interval:'15m',firstPage:btcResult.value,maxPages:3
+  }).catch(error=>({data:[],historical_pages_fetched:0,historical_pages_attempted:0,
+    historical_window_candles:0,historical_backfill_error:String(error?.message??error).slice(0,160)}));
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
   const activeSpot = new Set(symbolInfo.filter(item =>
     item && item.status === 'TRADING' && item.quoteAsset === 'USDT' &&
@@ -1100,22 +1144,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const first15m=await rest.request('/api/v3/klines', {
       symbol:ticker.symbol,interval:'15m',limit:1000
     });
-    let result=first15m;
-    if(Array.isArray(first15m?.data)&&first15m.data.length){
-      const earliestOpen=finite(first15m.data[0]?.[0]);
-      if(earliestOpen!==null){
-        try{
-          const older=await rest.request('/api/v3/klines',{
-            symbol:ticker.symbol,interval:'15m',limit:1000,endTime:earliestOpen-1
-          });
-          result=mergeOlderKlinePage(first15m,older);
-        }catch(error){
-          result={...first15m,historical_pages_fetched:1,
-            historical_window_candles:first15m.data.length,
-            historical_backfill_error:String(error?.message??error).slice(0,120)};
-        }
-      }
-    }
+    const result=await fetchAdaptiveTraderHistoricalKlines({
+      rest,symbol:ticker.symbol,interval:'15m',firstPage:first15m,maxPages:3
+    });
     const fastLatest=await fastLatestPromise;
     const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
       ?{value:{
