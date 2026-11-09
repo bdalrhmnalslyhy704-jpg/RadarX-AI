@@ -4,11 +4,27 @@ import {
   buildCognitiveLearningProfile,
   buildCognitivePrequentialProfile,
   assessCognitiveCandidate,
-  applyCognitiveRankAdjustment
+  applyCognitiveRankAdjustment,
+  COGNITIVE_CHALLENGER_BRIER_MARGIN,
+  hasCognitiveBrierSuperiority
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
+
+test('V5 neural and hybrid challengers require a strict 0.003 Brier improvement',()=>{
+  assert.equal(COGNITIVE_CHALLENGER_BRIER_MARGIN,0.003);
+  assert.equal(hasCognitiveBrierSuperiority(0.4,0.4029),false,
+    'a 0.0029 improvement must not pass');
+  assert.equal(hasCognitiveBrierSuperiority(0.4,0.403),false,
+    'an improvement equal to 0.003 must not pass a strict gate');
+  assert.equal(hasCognitiveBrierSuperiority(0.4,0.4031),true,
+    'only an improvement above 0.003 passes');
+  assert.equal(hasCognitiveBrierSuperiority(null,0.5),false,
+    'missing metrics fail closed');
+  assert.equal(hasCognitiveBrierSuperiority(0.4,0.4031,0.002),false,
+    'callers cannot lower the exported V5 policy margin');
+});
 
 function sample(index, outcome, features = {}) {
   const at = BASE_TIME + index * 15 * 60 * 1000;
