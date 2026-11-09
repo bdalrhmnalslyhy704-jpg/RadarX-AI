@@ -163,6 +163,8 @@ test('historical replay normalizes Falcon Eye Bollinger, ATR, momentum and relat
   assert.equal(row.market_evidence.relative_strength_vs_market_pct,0.72);
   assert.equal(row.profile_metrics.bollinger_ratio,1.4);
   assert.equal(row.market_evidence.liquidity_quality,null);
+  assert.equal(row.profile_orderbook_historical_available,null,
+    'no order-book group and no explicit archive claim means unknown, not available');
 });
 
 test('historical replay preserves grouped Whale, Kahir and Rotation-Lag analysis evidence',()=>{
