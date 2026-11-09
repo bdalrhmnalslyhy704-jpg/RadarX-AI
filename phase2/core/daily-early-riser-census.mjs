@@ -285,7 +285,7 @@ export function buildDailyEarlyRiserHistoricalSamples({
         data_valid:featureCandidate.data_valid===true,data_stale:featureCandidate.data_stale===true,
         score:finite(featureCandidate.score),reason_codes:reasons,
         candle_age_ms:finite(featureCandidate.candle_age_ms),
-        input_counts:{15m:base15m.length,5m:baseFast.length,btc_15m:baseBtc.length}
+        input_counts:{'15m':base15m.length,'5m':baseFast.length,btc_15m:baseBtc.length}
       });
       continue;
     }
