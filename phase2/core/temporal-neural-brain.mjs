@@ -1260,7 +1260,23 @@ export function buildTemporalNeuralProfile(samples = [], {
         validation_model:{evaluated:false,sample_count:regimeValidation.length},
         validation_logistic:{evaluated:false,sample_count:regimeValidation.length},
         holdout_model:{evaluated:false,sample_count:regimeHoldout.length},
-        holdout_logistic:{evaluated:false,sample_count:regimeHoldout.length}};
+        holdout_logistic:{evaluated:false,sample_count:regimeHoldout.length},
+        member_selection_samples:memberSelectionRows.length,
+        shared_member_selection_samples:memberSelectionRows.length,
+        member_selection_source:memberSelectionSource,
+        calibration_samples:calibrationRows.length,
+        shared_calibration_samples:calibrationRows.length,
+        calibration_source:calibrationSource,
+        calibration_targets:calibrationTargets,
+        selected_member_index:sharedTcnSelectedIndex,
+        selected_residual_scale:sharedTcnSelectedScale,
+        diagnostic_member_index:sharedTcnDiagnosticIndex,
+        diagnostic_residual_scale:sharedTcnDiagnosticScale,
+        neural_residual_contributes:sharedTcnSelectedScale>0,
+        selection_calibration_samples:sharedTcnCalibrator.sample_count,
+        logistic_calibration_samples:sharedLogisticCalibrator.sample_count,
+        probability_calibration:sharedTcnCalibrator,
+        logistic_probability_calibration:sharedLogisticCalibrator};
       continue;
     }
 
@@ -1735,14 +1751,14 @@ export function buildTemporalNeuralProfile(samples = [], {
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
-    ensemble_members:Object.keys(fitted.specialists_by_regime).length?SEEDS.length:0,
+    ensemble_members:sharedTcnFit?SEEDS.length:0,
     ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
-    member_training_profiles:Object.values(fitted.specialists_by_regime)[0]?.member_training_profiles||[],
-    member_training_profiles_by_regime:Object.fromEntries(Object.entries(fitted.specialists_by_regime)
-      .map(([regime,specialist])=>[regime,specialist.member_training_profiles])),
+    member_training_profiles:sharedTcnFit?.member_training_profiles||[],
+    member_training_profiles_by_regime:Object.fromEntries(regimes.map(regime=>
+      [regime,sharedTcnFit?.member_training_profiles||[]])),
     member_validation_scores:Object.fromEntries(regimes.map(regime=>[
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),

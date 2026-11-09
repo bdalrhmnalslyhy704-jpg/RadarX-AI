@@ -369,7 +369,7 @@ test('mature history reserves a broad untouched holdout and a wider regime-suppo
   }
 });
 
-test('sparse BTC regime cannot borrow selection or calibration labels from the opposite regime',()=>{
+test('shared TCN learns pooled selection/calibration but keeps the outer regime gate local',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     let riskOn=true;
@@ -377,6 +377,7 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
     for(let index=0;index<12;index++){
       let up;
       if(group>=12&&group<=17&&riskOn)up=false;
+      else if(group===15||group===16)up=index<3;
       else if(group===18)up=index<4;
       else if(group>=28&&group<=30)up=index<5;
       else if(riskOn&&[8,9,10,11,17,19,21,22,23,24,25,26,27].includes(group))up=false; // remove positive labels from the actual local selection window
@@ -391,9 +392,9 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
       rows.push(row);
     }
   }
-  const profile=buildTemporalNeuralProfile(rows,{epochs:2});
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minTrainingSamples:120});
   const expert=profile.regime_specialists.BTC_RISK_ON;
-  assert.ok(expert.shared_training_samples>=160);
+  assert.ok(expert.shared_training_samples>=120);
   assert.ok(expert.training_samples>=80);
   assert.equal(expert.training_samples,expert.regime_training_samples);
   assert.equal(expert.local_selection_samples,60);
