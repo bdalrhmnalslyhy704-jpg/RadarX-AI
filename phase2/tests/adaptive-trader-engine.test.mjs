@@ -30,6 +30,7 @@ test('history page scheduling accepts short-base Spot symbols',()=>{
 test('third-page history wave reaches every symbol once per three balanced scans',()=>{
   const now=Date.UTC(2026,10,9,12,0,0);
   const symbols=Array.from({length:240},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
+  const initialWave=adaptiveTraderHistoryPageBudget('PAIR000USDT',now).wave;
   const waves=[0,1,2].map(wave=>symbols.map(symbol=>
     adaptiveTraderHistoryPageBudget(symbol,now+wave*3*60*1000)));
   for(let wave=0;wave<3;wave++){
@@ -40,12 +41,13 @@ test('third-page history wave reaches every symbol once per three balanced scans
   for(let index=0;index<symbols.length;index++){
     assert.equal(waves.map(wave=>wave[index].max_pages).filter(maxPages=>maxPages===3).length,1,
       'every symbol must receive exactly one third-page request in a three-wave cycle');
-    assert.deepEqual(waves.map(wave=>wave[index].wave),[0,1,2]);
+    assert.deepEqual(waves.map(wave=>wave[index].wave),
+      [0,1,2].map(offset=>(initialWave+offset)%3));
   }
   assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now).max_pages,3,
     'BTC always keeps all three verified historical pages');
   assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now).wave_interval_ms,180000);
-  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now+9*60*1000).wave,0,
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now+9*60*1000).wave,initialWave,
     'the three-wave schedule must repeat deterministically');
 });
 
