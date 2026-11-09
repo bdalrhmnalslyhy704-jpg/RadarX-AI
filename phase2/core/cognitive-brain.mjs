@@ -1333,28 +1333,72 @@ export function buildCognitiveLearningProfile(samples = [], {
     beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
     passed:neuralHoldoutReady
   };
-  // Fit every pre-declared tabular candidate on the same outer training rows
-  // and same frozen logistic anchor. The single best validation candidate is
-  // the only tree model permitted to see the untouched final holdout.
-  const boostedTrainingReady=neuralGlobalLogisticFit!==null&&
-    upEventTraining.length>=neuralMinimum;
+  // GBDT capacity/regularization is selected only on the disjoint inner
+  // selection block. It is then refit on model-fit + selection rows and scored
+  // once on the common outer validation block. The final holdout remains closed.
+  const boostedTrainingRows=neuralTraining;
+  const boostedSelectionRows=neuralSelection;
+  const boostedTrainingBaselineFit=boostedTrainingRows.length>=neuralMinimum
+    ?fitLogisticModel(boostedTrainingRows,{l2,iterations,learningRate}):null;
+  const boostedTrainingReady=boostedTrainingBaselineFit!==null&&
+    boostedTrainingRows.length>=neuralMinimum;
+  const boostedSelectionLogistic=boostedTrainingReady
+    ?evaluateHoldout(boostedSelectionRows,boostedTrainingBaselineFit,comparisonMargin)
+    :{evaluated:false,sample_count:boostedSelectionRows.length,model_brier_score:null,
+      reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
+  const boostedSelectionTargets={
+    samples:boostedSelectionRows.length,
+    positive:boostedSelectionRows.filter(row=>row.target===1).length,
+    negative:boostedSelectionRows.filter(row=>row.target===0).length
+  };
+  const boostedSelectionSupported=boostedSelectionTargets.samples>=neuralSelectionMinimum&&
+    boostedSelectionTargets.positive>=3&&boostedSelectionTargets.negative>=8;
   const boostedTreeCandidates=boostedTrainingReady
     ?COGNITIVE_GBDT_VALIDATION_GRID.map(configuration=>{
-      const fit=fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit,configuration);
+      const fit=fitResidualBoostedTrees(boostedTrainingRows,boostedTrainingBaselineFit,configuration);
       return {
         configuration,fit,
-        validation:fit?evaluateHoldout(upEventValidation,fit,comparisonMargin):{
+        selection:fit?evaluateHoldout(boostedSelectionRows,fit,comparisonMargin):{
           evaluated:false,model_brier_score:null,reason:'NO_GAINFUL_TREE_SPLIT'
         }
       };
-    }).filter(candidate=>candidate.fit&&candidate.validation?.evaluated===true)
+    }).filter(candidate=>candidate.fit&&candidate.selection?.evaluated===true)
     :[];
-  const bestBoostedTreeCandidate=[...boostedTreeCandidates].sort((a,b)=>
-    a.validation.model_brier_score-b.validation.model_brier_score||
+  const bestBoostedTreeDiagnosticCandidate=[...boostedTreeCandidates].sort((a,b)=>
+    a.selection.model_brier_score-b.selection.model_brier_score||
     a.configuration.name.localeCompare(b.configuration.name))[0]||null;
-  const boostedTreeFit=bestBoostedTreeCandidate?.fit||null;
-  const boostedTreeValidation=bestBoostedTreeCandidate?.validation||
-    {evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
+  const qualifiedBoostedTreeCandidates=boostedSelectionSupported&&boostedSelectionLogistic.evaluated===true
+    ?boostedTreeCandidates.filter(candidate=>
+      candidate.selection?.evaluated===true&&candidate.selection.beat_base_rate===true&&
+      candidate.selection.model_brier_score+comparisonMargin<
+        boostedSelectionLogistic.model_brier_score)
+    :[];
+  const bestBoostedTreeCandidate=[...qualifiedBoostedTreeCandidates].sort((a,b)=>
+    a.selection.model_brier_score-b.selection.model_brier_score||
+    a.configuration.name.localeCompare(b.configuration.name))[0]||null;
+  const boostedTreeRefitRows=bestBoostedTreeCandidate
+    ?[...boostedTrainingRows,...boostedSelectionRows]
+      .filter(row=>row.resolved_at<neuralCalibrationStartAt)
+      .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol))
+    :[];
+  const boostedTreeRefitBaselineFit=boostedTreeRefitRows.length>=neuralMinimum
+    ?fitLogisticModel(boostedTreeRefitRows,{l2,iterations,learningRate}):null;
+  const boostedTreeFit=bestBoostedTreeCandidate&&boostedTreeRefitBaselineFit
+    ?fitResidualBoostedTrees(boostedTreeRefitRows,boostedTreeRefitBaselineFit,
+      bestBoostedTreeCandidate.configuration):null;
+  const boostedSameWindowLogisticValidation=boostedTreeRefitBaselineFit
+    ?evaluateHoldout(upEventValidation,boostedTreeRefitBaselineFit,comparisonMargin)
+    :{evaluated:false,sample_count:upEventValidation.length,model_brier_score:null};
+  const boostedSameWindowLogisticHoldout=boostedTreeRefitBaselineFit
+    ?evaluateHoldout(upEventHoldout,boostedTreeRefitBaselineFit,comparisonMargin)
+    :{evaluated:false,sample_count:upEventHoldout.length,model_brier_score:null};
+  const boostedTreeValidation=boostedTreeFit
+    ?evaluateHoldout(upEventValidation,boostedTreeFit,comparisonMargin)
+    :{evaluated:false,sample_count:upEventValidation.length,model_brier_score:null,
+      reason:bestBoostedTreeCandidate?'BOOSTED_TREE_REFIT_FAILED':
+        !boostedTrainingReady?'BOOSTED_TREE_TRAINING_NOT_READY':
+        !boostedSelectionSupported?'BOOSTED_TREE_SELECTION_SUPPORT_BELOW_MINIMUM':
+        'NO_GBDT_CONFIGURATION_BEAT_INNER_SELECTION_LOGISTIC'};
   const boostedTreeCandidateMetrics=boostedTreeCandidates.map(candidate=>({
     configuration:candidate.configuration.name,
     max_trees:candidate.configuration.maxTrees,
@@ -1365,11 +1409,25 @@ export function buildCognitiveLearningProfile(samples = [], {
     residual_scale:candidate.configuration.residualScale,
     actual_tree_count:candidate.fit.tree_count,
     training_samples:candidate.fit.training_samples,
-    validation_sample_count:candidate.validation.sample_count,
-    validation_brier_score:candidate.validation.model_brier_score,
-    validation_base_rate_brier_score:candidate.validation.base_rate_brier_score,
-    validation_auc_roc:candidate.validation.ranking_metrics?.auc_roc??null,
-    validation_beats_base_rate:candidate.validation.beat_base_rate===true
+    selection_sample_count:candidate.selection.sample_count,
+    selection_brier_score:candidate.selection.model_brier_score,
+    selection_base_rate_brier_score:candidate.selection.base_rate_brier_score,
+    selection_beats_base_rate:candidate.selection.beat_base_rate===true,
+    selection_logistic_brier_score:boostedSelectionLogistic.model_brier_score??null,
+    selection_beats_same_window_logistic:boostedSelectionLogistic.evaluated===true&&
+      candidate.selection.model_brier_score+comparisonMargin<
+        boostedSelectionLogistic.model_brier_score,
+    selected_for_refit:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name,
+    validation_sample_count:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name
+      ?boostedTreeValidation.sample_count:0,
+    validation_brier_score:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name
+      ?boostedTreeValidation.model_brier_score??null:null,
+    validation_base_rate_brier_score:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name
+      ?boostedTreeValidation.base_rate_brier_score??null:null,
+    validation_auc_roc:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name
+      ?boostedTreeValidation.ranking_metrics?.auc_roc??null:null,
+    validation_beats_base_rate:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name&&
+      boostedTreeValidation.beat_base_rate===true
   }));
   // A small pre-declared convex blend grid is selected on the outer
   // chronological validation block. Only one selected blend can reach the
@@ -1399,15 +1457,17 @@ export function buildCognitiveLearningProfile(samples = [], {
     {name:'GBDT_RESIDUAL',fit:boostedTreeFit,validation:boostedTreeValidation},
     ...hybridCandidates
   ].filter(candidate=>candidate.fit&&candidate.validation?.evaluated===true);
-  const validationReferences=[
-    neuralSameWindowLogisticValidation,
+  const validationReferencesFor=candidate=>[
+    candidate.name==='NEURAL_GLOBAL'?neuralSameWindowLogisticValidation:
+      boostedSameWindowLogisticValidation,
     neuralGlobalLogisticValidation,
     ...(neuralRecentLogisticFit?[neuralRecentLogisticValidation]:[])
   ].filter(metric=>metric?.evaluated===true&&Number.isFinite(metric.model_brier_score));
   const qualifiesOnValidation=candidate=>{
     const metric=candidate.validation;
+    const references=validationReferencesFor(candidate);
     if(metric?.evaluated!==true||metric.beat_base_rate!==true)return false;
-    return validationReferences.length>=2&&validationReferences.every(reference=>
+    return references.length>=2&&references.every(reference=>
       metric.model_brier_score+comparisonMargin<reference.model_brier_score);
   };
   const validationQualified=challengerCandidates.filter(qualifiesOnValidation)
@@ -1425,8 +1485,10 @@ export function buildCognitiveLearningProfile(samples = [], {
   if(validationWinner){
     challengerHoldout=validationWinner.name==='NEURAL_GLOBAL'
       ?neuralHoldout:evaluateHoldout(upEventHoldout,validationWinner.fit,comparisonMargin);
+    const challengerSameWindowLogisticHoldout=validationWinner.name==='NEURAL_GLOBAL'
+      ?neuralSameWindowLogisticHoldout:boostedSameWindowLogisticHoldout;
     const holdoutReferences=[
-      neuralSameWindowLogisticHoldout,neuralGlobalLogisticHoldout,
+      challengerSameWindowLogisticHoldout,neuralGlobalLogisticHoldout,
       ...(neuralRecentLogisticFit?[neuralRecentLogisticHoldout]:[])
     ].filter(metric=>metric?.evaluated===true&&Number.isFinite(metric.model_brier_score));
     const beatsReferences=challengerHoldout.evaluated===true&&
@@ -1437,11 +1499,14 @@ export function buildCognitiveLearningProfile(samples = [], {
       required_brier_margin:comparisonMargin,
       model_brier_score:challengerHoldout.model_brier_score??null,
       base_rate_brier_score:challengerHoldout.base_rate_brier_score??null,
+      same_window_logistic_brier_score:challengerSameWindowLogisticHoldout.model_brier_score??null,
+      global_logistic_brier_score:neuralGlobalLogisticHoldout.model_brier_score??null,
+      recent_logistic_brier_score:neuralRecentLogisticHoldout?.model_brier_score??null,
       beats_base_rate:challengerHoldout.beat_base_rate===true,
       beats_same_window_logistic:challengerHoldout.evaluated===true&&
-        neuralSameWindowLogisticHoldout.evaluated===true&&
+        challengerSameWindowLogisticHoldout.evaluated===true&&
         challengerHoldout.model_brier_score+comparisonMargin<
-          neuralSameWindowLogisticHoldout.model_brier_score,
+          challengerSameWindowLogisticHoldout.model_brier_score,
       beats_global_logistic:challengerHoldout.evaluated===true&&
         neuralGlobalLogisticHoldout.evaluated===true&&
         challengerHoldout.model_brier_score+comparisonMargin<
@@ -1606,16 +1671,26 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
       architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_VALIDATION_SELECTED_REGULARIZED_GRID_V2',
       search_grid_size:COGNITIVE_GBDT_VALIDATION_GRID.length,
+      selection_sample_count:boostedSelectionRows.length,
+      selection_logistic:boostedSelectionLogistic,
       selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,
+      candidate_selection_metrics:boostedTreeCandidateMetrics,
       candidate_validation_metrics:boostedTreeCandidateMetrics,
+      same_window_logistic_validation:boostedSameWindowLogisticValidation,
+      same_window_logistic_holdout:boostedSameWindowLogisticHoldout,
       training_support_ready:boostedTrainingReady,
+      selection_support_ready:boostedSelectionSupported,
       fit_failure_reason:boostedTrainingReady&&!boostedTreeFit
-        ?'NO_GAINFUL_TREE_SPLIT_OVER_FROZEN_LOGISTIC_RESIDUALS':null,
-      trained:boostedTreeFit!==null,selected:activeChallenger==='GBDT_RESIDUAL',
+        ?(!boostedSelectionSupported?'SELECTION_CLASS_SUPPORT_BELOW_MINIMUM':
+          'NO_GBDT_CONFIGURATION_BEAT_INNER_SELECTION_LOGISTIC_BY_REQUIRED_MARGIN'):null,
+      trained:boostedTreeCandidates.length>0,selected:activeChallenger==='GBDT_RESIDUAL',
       probability_ready:activeChallenger==='GBDT_RESIDUAL',
-      tree_count:boostedTreeFit?.tree_count||0,
-      training_samples:boostedTreeFit?.training_samples||(boostedTrainingReady?upEventTraining.length:0),
-      minimum_leaf_samples:boostedTreeFit?.minimum_leaf_samples||0,
+      tree_count:boostedTreeFit?.tree_count||bestBoostedTreeDiagnosticCandidate?.fit?.tree_count||0,
+      training_samples:boostedTreeFit?.training_samples||
+        (boostedTrainingReady?boostedTrainingRows.length:0),
+      refit_training_samples:boostedTreeFit?.training_samples||0,
+      minimum_leaf_samples:boostedTreeFit?.minimum_leaf_samples||
+        bestBoostedTreeDiagnosticCandidate?.fit?.minimum_leaf_samples||0,
       learning_rate:boostedTreeFit?.learning_rate??null,
       residual_scale:boostedTreeFit?.residual_scale??null,
       feature_importance:boostedTreeFit?.feature_importance||[],
