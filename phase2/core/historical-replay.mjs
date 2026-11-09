@@ -595,10 +595,13 @@ export function runHistoricalReplay({
         liquidity_quality:finite(alert?.liquidity_quality ?? strong?.liquidity_quality),
         spread_bps:finite(alert?.spread_bps ?? alert?.liquidity_metrics?.spread_bps ?? metrics?.spread_bps),
         quote_volume_24h:finite(ticker.quoteVolume24h ?? alert?.quote_volume_24h),
-        relative_strength_vs_market_pct:finite(alert?.pre_move_context?.relative_strength_vs_market_pct ??
-          alert?.pre_expansion_fingerprint?.relative_strength_vs_market_pct ?? metrics?.relative_strength_vs_market_pct),
-        relative_strength_vs_btc_pct:finite(alert?.pre_move_context?.relative_strength_vs_btc_pct ??
-          alert?.pre_expansion_fingerprint?.relative_strength_vs_btc_pct ?? metrics?.relative_strength_vs_btc_pct),
+        relative_strength_vs_market_pct:metricValue(alert?.pre_move_context?.relative_strength_vs_market_pct,
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_market_pct,
+          metrics?.relative_strength_vs_market_pct,metrics?.relative_strength_15m_spread_pct,
+          metrics?.relative_strength_5m_spread_pct),
+        relative_strength_vs_btc_pct:metricValue(alert?.pre_move_context?.relative_strength_vs_btc_pct,
+          alert?.pre_expansion_fingerprint?.relative_strength_vs_btc_pct,
+          metrics?.relative_strength_vs_btc_pct,metrics?.relative_vs_btc_pct),
         volatility_compression_score:finite(alert?.pre_expansion_fingerprint?.compression_score ??
           alert?.pre_expansion_fingerprint?.compression ?? metrics?.compression_score),
         pre_expansion_stage:alert?.pre_expansion_stage ?? alert?.pre_expansion_fingerprint?.stage ?? null,
