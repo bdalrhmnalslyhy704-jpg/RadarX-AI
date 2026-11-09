@@ -118,7 +118,7 @@ test('historical daily census uses closed baseline features, one non-overlapping
     now,minQuoteVolume24h:750_000,maxSamplesPerSymbol:40
   });
   assert.equal(result.audit.status,'READY');
-  assert.ok(result.samples.length>=8);
+  assert.ok(result.samples.length>=8,JSON.stringify(result.audit));
   assert.equal(result.audit.non_overlapping_24h_labels,true);
   assert.equal(result.audit.overlap_violations,0);
   assert.ok(result.samples.every(row=>row.at<row.targets.plus_5_pct.resolved_at));
