@@ -83,7 +83,7 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
     'تجاوز هذه العملة في الوقت الحالي، واستمر في فحص بقية الأزواج.');
 }
 
-export const HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL=32;
+export const HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL=64;
 
 const POLICY = Object.freeze({
   minQuoteVolume24h: 750000,

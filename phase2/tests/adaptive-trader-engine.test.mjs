@@ -1037,8 +1037,8 @@ test('deep historical capture keeps full causal tensors across 116 non-overlappi
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.horizon_ms===4*60*60*1000));
 });
 
-test('per-symbol historical capture keeps 32 independent first-passage outcomes across the full available regime window',()=>{
-  assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,32);
+test('per-symbol historical capture keeps 64 independent first-passage outcomes across the full available regime window',()=>{
+  assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,64);
   const now=Date.now();
   const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
@@ -1047,7 +1047,7 @@ test('per-symbol historical capture keeps 32 independent first-passage outcomes 
     symbol:'DENSEHISTORYUSDT',klines,fastKlines,btcKlines,now,
     maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
   });
-  assert.equal(rows.length,32,'the increased quota must be filled when source history supports it');
+  assert.equal(rows.length,64,'the increased quota must be filled when source history supports it');
   assert.ok(rows.every(row=>row.temporal_sequence?.length===24&&
     row.temporal_sequence.every(step=>step.length===29)));
   assert.ok(rows.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
@@ -1058,6 +1058,8 @@ test('per-symbol historical capture keeps 32 independent first-passage outcomes 
   }
   assert.ok(rows.at(-1).at-rows[0].at>=10*24*60*60*1000,
     'the added samples must remain stratified across the historical regime window');
+  assert.ok(rows.every((row,index)=>index===0||row.at>rows[index-1].at),
+    'increased sampling must remain strictly chronological');
 });
 
 test('historical sample phases give the cognitive learner enough distinct time blocks without overlapping per-symbol outcomes',()=>{
