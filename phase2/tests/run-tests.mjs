@@ -25,6 +25,8 @@ const phase2=[
   'phase2/tests/radar-role-evidence.test.mjs',
   'phase2/tests/historical-replay.test.mjs',
   'phase2/tests/binance-spot-aggtrade-archive.test.mjs',
+  'phase2/tests/binance-spot-kline-archive.test.mjs',
+  'phase2/tests/cognitive-benchmark-metrics.test.mjs',
   'phase2/tests/historical-profile-adapters.test.mjs',
   'phase2/tests/historical-profile-matrix.test.mjs',
   'phase2/tests/al-muqawim-radar.test.mjs',

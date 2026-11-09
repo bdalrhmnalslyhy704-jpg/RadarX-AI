@@ -163,7 +163,7 @@ test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can 
   assert.equal(partial.strong_move.metrics.three_second_liquidity.available,false);
   assert.equal(partial.strong_move.metrics.three_second_taker_buy_ratio,null);
   assert.deepEqual(partial.strong_move.trigger_diagnostics.failed_checks,
-    ['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']);
+    ['AGGTRADE_COVERAGE_NOT_VERIFIED']);
 
   const emptyCompleted=buildStrongMoveAlert({
     one_minute:make1m(),five_minute:make5m(),ticker,
@@ -173,6 +173,22 @@ test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can 
   assert.equal(emptyCompleted.strong_move.metrics.three_second_taker_buy_ratio,null);
   assert.deepEqual(emptyCompleted.strong_move.trigger_diagnostics.failed_checks,
     ['THREE_SECOND_TRADE_BUCKET_EMPTY']);
+});
+
+test('a completed three-second bucket with seller-dominated flow is distinct from missing evidence',()=>{
+  const bucketEnd=Math.floor(NOW/3000)*3000;
+  const sellerDominated=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:[
+      {a:1,T:bucketEnd-2500,p:'1',q:'1',m:false},
+      {a:2,T:bucketEnd-900,p:'1',q:'9',m:true}
+    ],
+    trade_coverage_complete:true
+  },NOW);
+  assert.equal(sellerDominated.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(sellerDominated.strong_move.metrics.three_second_taker_buy_ratio,0.1);
+  assert.deepEqual(sellerDominated.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']);
 });
 
 test('live three-second aggTrade fetch is bounded to the last completed bucket and fails closed at the page cap',async()=>{
