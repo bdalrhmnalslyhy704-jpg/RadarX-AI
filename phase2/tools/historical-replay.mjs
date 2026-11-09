@@ -506,6 +506,16 @@ export async function fetchAggregateTrades(client, symbol, start, end, {maxPages
   return {trades, complete, coverage};
 }
 
+export function compactHistoricalReplayReport(report={}) {
+  const results = Array.isArray(report?.results) ? report.results.map(row => {
+    const {steps, ...summary} = row ?? {};
+    return {...summary, replay_step_details_omitted: true,
+      replay_step_detail_count: Array.isArray(steps) ? steps.length : 0};
+  }) : [];
+  return {...report, results,
+    step_detail_policy: 'OMITTED_FROM_MATRIX_WINDOW_JSON_TO_KEEP_FULL_REPLAY_EVIDENCE_WITHIN_STRING_LIMITS'};
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
@@ -513,7 +523,8 @@ async function main() {
       'RadarX historical replay (public Binance Spot data; read-only)',
       'Usage: node phase2/tools/historical-replay.mjs [--symbols GTCUSDT,WUSDT] [--start ISO|ms] [--end ISO|ms]',
       '       [--detector-profile one of 12 canonical radars; use --list-profiles]',
-      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path] [--dry-run]',
+      '       [--lookback-hours 24] [--outcome-horizon-hours 24] [--max-trade-pages 500] [--max-trades 500000] [--output path]',
+      '       [--hybrid-benchmark-output dataset.json] (4h outcome horizon; optional research export only) [--dry-run]',
       'Default window: last completed minute minus 24 hours. Maximum window: 7 days.',
       'Candle-only profiles are labeled candidate shadows; missing historical order-book/news data is never synthesized.',
       'Trade-history pagination that reaches a cap is flagged incomplete and fails closed. No orders or credentials are used.'
@@ -529,6 +540,8 @@ async function main() {
   }
   const requestedDetectorProfile=String(flag(args,'--detector-profile','STRONG_MOVE_RADAR')).trim().toUpperCase();
   const detectorProfile=requestedDetectorProfile==='EARLY_EXPANSION_RADAR'?'RADAR8_PREMOVE_SHADOW':requestedDetectorProfile;
+  const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
+  const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 4000000, 'max-trades');
   const detectorSpec=profileSnapshot(requestedDetectorProfile);
   if(args.includes('--dry-run')){
     const startRaw=timeArg(flag(args,'--start'),'start');
@@ -539,6 +552,7 @@ async function main() {
       symbols:String(flag(args,'--symbols','GTCUSDT,WUSDT')).split(',').map(x=>x.trim().toUpperCase()).filter(Boolean),
       window:{start:startRaw,end:endRaw,lookback_hours:integerArg(flag(args,'--lookback-hours','24'),24,1,168,'lookback-hours'),
         outcome_horizon_hours:integerArg(flag(args,'--outcome-horizon-hours','24'),24,1,168,'outcome-horizon-hours')},
+      limits:{max_trade_pages_per_symbol:maxPages,max_trades_per_symbol:maxTrades},
       policy:{market:'BINANCE_SPOT_USDT',paper_trading:true,real_order_execution:false,credentials_used:false}
     },null,2)+'\n');
     return;
@@ -556,11 +570,13 @@ async function main() {
   const requestedOutcomeEnd = end + outcomeHorizonHours * HOUR_MS;
   const observationEnd = Math.min(latestClosedMinuteEnd, requestedOutcomeEnd);
   if (observationEnd < end) throw new Error('OUTCOME_OBSERVATION_WINDOW_INVALID');
-  const maxPages = integerArg(flag(args, '--max-trade-pages', '500'), 500, 1, 1000, 'max-trade-pages');
-  const maxTrades = integerArg(flag(args, '--max-trades', '500000'), 500000, 1000, 1000000, 'max-trades');
   const output = resolve(flag(args, '--output', './.radarx-data/historical-replay-' + new Date(now).toISOString().replace(/[:.]/g, '-') + '.json'));
+  const hybridBenchmarkOutputRaw=flag(args,'--hybrid-benchmark-output');
+  const hybridBenchmarkOutput=hybridBenchmarkOutputRaw?resolve(hybridBenchmarkOutputRaw):null;
+  if(hybridBenchmarkOutput&&outcomeHorizonHours!==4)throw new Error('HYBRID_BENCHMARK_REQUIRES_4H_OUTCOME_HORIZON');
   const config = CONFIG;
   const client = new RestClient({...config.rest, baseUrls: config.rest.baseUrls ?? config.rest.urls});
+  const hybridBenchmarkRows=[];
   const report = {
     engine: 'RADARX_HISTORICAL_REPLAY_BATCH_V1',
     generated_at: new Date(now).toISOString(),
@@ -596,6 +612,13 @@ async function main() {
     }
   }
   const marketCohortCandles = Object.fromEntries([...marketCohortFetches.entries()].map(([symbol, fetched]) => [symbol, fetched.candles]));
+  let hybridBenchmarkCandles=[];
+  if(hybridBenchmarkOutput){
+    process.stderr.write('[REPLAY] preloading closed BTCUSDT candles for relative-strength features\\n');
+    const btcFetch=await fetchOneMinute(client,'BTCUSDT',start-24*HOUR_MS-25*MINUTE_MS,observationEnd);
+    hybridBenchmarkCandles=btcFetch.candles;
+    if(!btcFetch.complete)process.stderr.write('[REPLAY] BTC benchmark candle history incomplete; relative_btc_available mask will remain 0 where unsupported\\n');
+  }
 
   for (const symbol of symbols) {
     try {
@@ -644,12 +667,14 @@ async function main() {
       await fetchFrame('BTCUSDT:1h','BTCUSDT','1h',25);
     }
     let tradeFetch;
+    const disableAggTradeRestFallback=args.includes('--no-aggtrade-rest-fallback');
     let archiveAttempt = null;
     try {
       // Prefer full, checksum-verified official historical Spot archives for completed
-      // UTC days. REST remains the fallback for current/incomplete days and unavailable archives.
+      // UTC days. Fixed-SHA hybrid captures disable REST pagination explicitly; missing
+      // archives remain visibly incomplete instead of stalling on hundreds of pages.
       archiveAttempt = await fetchBinanceSpotAggTradesArchive(
-        symbol, start - 65_000, end, {maxTrades}
+        symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxTrades}
       );
       if (archiveAttempt.complete === true) tradeFetch = archiveAttempt;
     } catch (error) {
@@ -661,10 +686,10 @@ async function main() {
         }
       };
     }
-    if (!tradeFetch) {
+    if (!tradeFetch && !disableAggTradeRestFallback) {
       try {
         const restTradeFetch = await fetchAggregateTrades(
-          client, symbol, start - 65_000, end, {maxPages, maxTrades}
+          client, symbol, start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), end, {maxPages, maxTrades}
         );
         tradeFetch = restTradeFetch.complete === true
           ? restTradeFetch
@@ -679,7 +704,7 @@ async function main() {
           trades: [], complete: false,
           coverage: {
             complete: false, pages: 0, rows: 0,
-            requested_start_time: start - 65_000, requested_end_time: end,
+            requested_start_time: start - (hybridBenchmarkOutput?25*MINUTE_MS:65_000), requested_end_time: end,
             last_trade_time: null, limit_reached: false,
             pagination: 'aggTrade ID cursor; unique aggregate trade IDs',
             fallback_reason: String(error?.message ?? error).slice(0, 240),
@@ -687,6 +712,18 @@ async function main() {
           }
         };
       }
+    }
+    if(!tradeFetch){
+      tradeFetch={
+        trades:[],complete:false,
+        coverage:{
+          complete:false,pages:0,rows:0,
+          requested_start_time:start-(hybridBenchmarkOutput?25*MINUTE_MS:65_000),
+          requested_end_time:end,last_trade_time:null,limit_reached:false,
+          reason:'VERIFIED_ARCHIVE_UNAVAILABLE_REST_FALLBACK_DISABLED',
+          archive_attempt:archiveAttempt?.coverage||null
+        }
+      };
     }
     const tickerConfig = config.strongMoveRadar || {};
     const minQuoteVolume24h = Number(tickerConfig.minQuoteVolume24h ?? 1_000_000);
@@ -702,6 +739,9 @@ async function main() {
       endTime: end,
       outcomeEndTime:observationEnd,
       outcomeHorizonMs:outcomeHorizonHours*HOUR_MS,
+      captureHybridBenchmarkRows:hybridBenchmarkOutput!==null,
+      captureHybridBenchmarkEveryMs:10*MINUTE_MS,
+      hybridBenchmarkCandles,
       tradeCoverageComplete: tradeFetch.complete,
       allowCandleOnlyFallback: true,
       timeframeCandles,
@@ -995,6 +1035,10 @@ async function main() {
     if (Number(replay.data_quality.complete_5m_candles) < profileRequirements.base.fiveMinute) {
       profileBaseCoverageFailures.push('HISTORICAL_BASE_SERIES_ROWS_BELOW_MINIMUM:fiveMinute');
     }
+    if(hybridBenchmarkOutput){
+      hybridBenchmarkRows.push(...(Array.isArray(replay.hybrid_benchmark_rows)?replay.hybrid_benchmark_rows:[]));
+      delete replay.hybrid_benchmark_rows;
+    }
     replay.data_quality.profile_coverage_complete = windowCandlesComplete &&
       profileFrameCoverageFailures.length === 0 && profileBaseCoverageFailures.length === 0 &&
       profileTradeCoverageFailures.length === 0 && marketMedianCoverageFailures.length === 0;
@@ -1055,13 +1099,51 @@ async function main() {
       process.stderr.write('[REPLAY_ERROR] ' + symbol + ' ' + message + '\n');
     }
   }
+  // Persist the fixed benchmark rows before the verbose detector report. This keeps
+  // the core research evidence safe even when optional diagnostic detail is oversized.
+  if(hybridBenchmarkOutput){
+    await mkdir(dirname(hybridBenchmarkOutput), {recursive:true});
+    const hybridDataset={
+      dataset_contract:'RADARX_HYBRID_TCN_ATTENTION_4H_SPOT_BENCHMARK_V2_KAMA_VOL_BTC',
+      source_commit_sha:String(process.env.GITHUB_SHA||''),
+      market:'BINANCE_SPOT_USDT',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
+      feature_interval:'1M_CLOSED_CANDLES',
+      sequence_steps:24,
+      sequence_channels:29,
+      outcome_horizon_ms:4*HOUR_MS,
+      capture_sampling:'EVERY_10M_DECISION',
+      capture_symbols:symbols,
+      capture_window:{start,start_iso:new Date(start).toISOString(),end,end_iso:new Date(end).toISOString()},
+      capture_summary:{
+        rows:hybridBenchmarkRows.length,
+        distinct_symbols:new Set(hybridBenchmarkRows.map(row=>row.symbol)).size,
+        distinct_decision_times:new Set(hybridBenchmarkRows.map(row=>row.at)).size,
+        agg_trade_flow_rows:hybridBenchmarkRows.filter(row=>row.trade_flow_available).length,
+        trade_level_volume_profile_rows:hybridBenchmarkRows.filter(row=>row.trade_level_volume_profile_available).length,
+        relative_btc_rows:hybridBenchmarkRows.filter(row=>row.relative_btc_available).length
+      },
+      benchmark_options:{folds:5,minimumTrainTimes:40,minimumTrainRows:100,
+        minimumValidationRows:30,minimumTestRows:30,embargoMs:4*HOUR_MS,
+        positionFraction:1/30,maxConcurrentPositions:30,roundTripCostBps:30,epochs:8,
+        targetDefinition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1'},
+      rows:hybridBenchmarkRows
+    };
+    const hybridTemp=hybridBenchmarkOutput+'.tmp-'+process.pid;
+    await writeFile(hybridTemp,JSON.stringify(hybridDataset)+'\n',{encoding:'utf8',flag:'wx'});
+    await rename(hybridTemp,hybridBenchmarkOutput);
+  }
   const dir = dirname(output);
   await mkdir(dir, {recursive: true});
   const temp = output + '.tmp-' + process.pid;
-  await writeFile(temp, JSON.stringify(report, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
+  const persistedReport = hybridBenchmarkOutput
+    ? compactHistoricalReplayReport(report)
+    : report;
+  await writeFile(temp, JSON.stringify(persistedReport, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
   await rename(temp, output);
   process.stdout.write(JSON.stringify({
-    output, generated_at: report.generated_at,
+    output, hybrid_benchmark_output:hybridBenchmarkOutput,
+    hybrid_benchmark_rows:hybridBenchmarkRows.length, generated_at: report.generated_at,
     symbols: report.results.map(x => ({
       symbol: x.symbol, steps: x.summary.replay_steps, accepted: x.summary.accepted,
       accepted_modes: x.summary.accepted_mode_counts ?? [],
