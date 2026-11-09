@@ -720,6 +720,9 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.equal(profile.boosted_tree_model.trained,true,
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
+  assert.equal(profile.boosted_tree_model.probability_calibration?.fit_on,
+    'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
+    'the GBDT component must expose its own later, disjoint probability calibration');
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
   assert.equal(profile.boosted_tree_model.search_grid_size,9);
   assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,9,
@@ -750,12 +753,24 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
   assert.equal(profile.hybrid_model.trained,true);
-  assert.equal(profile.hybrid_model.candidate_validation_metrics.length,3,
-    'hybrid selection evaluates a pre-declared three-weight grid on validation');
-  assert.deepEqual(profile.hybrid_model.candidate_validation_metrics.map(row=>row.boosted_weight),
+  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,3,
+    'all three pre-declared blend weights must be evaluated on the disjoint inner selection block');
+  assert.deepEqual(profile.hybrid_model.candidate_selection_metrics.map(row=>row.boosted_weight),
     [0.25,0.5,0.75]);
-  assert.ok(profile.hybrid_model.candidate_validation_metrics.every(row=>
-    Number.isFinite(row.model_brier_score)&&Number.isFinite(row.base_rate_brier_score)));
+  assert.ok(profile.hybrid_model.selection_samples>=20);
+  assert.ok(profile.hybrid_model.selection_start_at<profile.validation_start_at,
+    'blend-weight selection must finish before outer validation begins');
+  assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
+    row.selection_sample_count===profile.hybrid_model.selection_samples&&
+    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)));
+  assert.ok(profile.hybrid_model.candidate_validation_metrics.length<=1,
+    'only the inner-selected blend weight may reach outer validation');
+  if(profile.hybrid_model.candidate_validation_metrics.length===1){
+    const frozen=profile.hybrid_model.candidate_validation_metrics[0];
+    assert.equal(frozen.name,profile.hybrid_model.selection_winner_candidate);
+    assert.equal(frozen.boosted_weight,profile.hybrid_model.boosted_weight);
+    assert.equal(frozen.validation_sample_count,profile.validation_samples);
+  }
   assert.ok(profile.max_training_outcome_resolved_at<profile.validation_start_at);
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   if(profile.model_selection.active_challenger){
