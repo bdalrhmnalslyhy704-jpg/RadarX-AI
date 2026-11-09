@@ -180,12 +180,19 @@ export function buildDailyEarlyRiserHistoricalSamples({
     return {samples:[],audit:{status:'INVALID_POLICY',reason:'DAILY_ANCHORS_MUST_NOT_OVERLAP_24H_LABELS'}};
   const end=finite(now);
   if(end===null||end<=0)return {samples:[],audit:{status:'INVALID_POLICY',reason:'NOW_INVALID'}};
-  const candles=normalizedRows(klines?.data??klines,DAILY_EARLY_RISER_INTERVAL_MS)
-    .filter(row=>row.closeTime<end);
-  const fast=normalizedRows(fastKlines?.data??fastKlines,5*60*1000)
-    .filter(row=>row.closeTime<end);
-  const btc=normalizedRows(btcKlines?.data??btcKlines,DAILY_EARLY_RISER_INTERVAL_MS)
-    .filter(row=>row.closeTime<end);
+  const raw15m=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
+  const rawFast=Array.isArray(fastKlines?.data)?fastKlines.data:Array.isArray(fastKlines)?fastKlines:[];
+  const rawBtc=Array.isArray(btcKlines?.data)?btcKlines.data:Array.isArray(btcKlines)?btcKlines:[];
+  const candles=normalizedRows(raw15m,DAILY_EARLY_RISER_INTERVAL_MS).filter(row=>row.closeTime<end);
+  const fast=normalizedRows(rawFast,5*60*1000).filter(row=>row.closeTime<end);
+  const btc=normalizedRows(rawBtc,DAILY_EARLY_RISER_INTERVAL_MS).filter(row=>row.closeTime<end);
+  const rawCloseTime=row=>finite(Array.isArray(row)?row[6]:row?.closeTime);
+  const ordered15m=raw15m.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
+    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
+  const orderedFast=rawFast.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
+    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
+  const orderedBtc=rawBtc.filter(row=>rawCloseTime(row)!==null&&rawCloseTime(row)<end)
+    .slice().sort((x,y)=>Number(Array.isArray(x)?x[0]:x.openTime)-Number(Array.isArray(y)?y[0]:y.openTime));
   const minVolume=Math.max(0,finite(minQuoteVolume24h)??750000);
   const targets=[...new Set((Array.isArray(targetsPct)?targetsPct:[])
     .map(finite).filter(value=>value!==null&&value>0))].sort((a,b)=>a-b);
@@ -195,6 +202,7 @@ export function buildDailyEarlyRiserHistoricalSamples({
   const possible=[];
   let rejectedHistoricalGaps=0,rejectedVolume=0,rejectedFuturePaths=0,rejectedFeatureRows=0;
   const btcByClose=new Map(btc.map(row=>[row.closeTime,row]));
+  let fastCursor=-1,btcCursor=-1;
   for(let index=119;index+DAILY_EARLY_RISER_HORIZON_BARS<candles.length;index++){
     const baseline=candles[index];
     const absoluteBar=Math.floor((baseline.closeTime+1)/DAILY_EARLY_RISER_INTERVAL_MS);
@@ -209,35 +217,31 @@ export function buildDailyEarlyRiserHistoricalSamples({
     if(volume24h<minVolume){rejectedVolume++;continue;}
     const targetSet=classifyDailyEarlyRiserTargetSet({baseline,future15m:future,
       targetsPct:targets,adversePct});
-    if(targetSet.status!=='RESOLVED'){rejectedFuturePaths++;continue;}
-    const baselineIndex=index;
+    if(Object.values(targetSet.targets).some(row=>row.status==='INVALID')){
+      rejectedFuturePaths++;continue;
+    }
     const baselineOpen=baseline.openTime;
     const evaluationNow=baseline.closeTime+1;
-    const btcAtBaseline=btc.filter(row=>row.closeTime<=baseline.closeTime);
-    const fastAtBaseline=fast.filter(row=>row.closeTime<=baseline.closeTime);
     const btcDailyPrior=btcByClose.get(candles[index-95].closeTime);
     const btcDailyCurrent=btcByClose.get(baseline.closeTime);
     const btcDailyReturn=btcDailyPrior&&btcDailyCurrent
       ?pct(btcDailyCurrent.close,btcDailyPrior.close):null;
     const assetDailyReturn=pct(baseline.close,candles[index-95].close);
     if(assetDailyReturn===null){rejectedFeatureRows++;continue;}
+    while(fastCursor+1<orderedFast.length&&rawCloseTime(orderedFast[fastCursor+1])<=baseline.closeTime)fastCursor++;
+    while(btcCursor+1<orderedBtc.length&&rawCloseTime(orderedBtc[btcCursor+1])<=baseline.closeTime)btcCursor++;
+    const base15m=ordered15m.slice(Math.max(0,index-119),index+1);
+    const baseFast=orderedFast.slice(Math.max(0,fastCursor-719),fastCursor+1);
+    const baseBtc=orderedBtc.slice(Math.max(0,btcCursor-999),btcCursor+1);
     const ticker={
       symbol:cleanSymbol,lastPrice:String(baseline.close),quoteVolume:String(volume24h),
       priceChangePercent:String(assetDailyReturn)
     };
     const featureCandidate=scoreAdaptiveTraderCandidate({
       symbol:cleanSymbol,ticker,
-      klines:{data:(klines?.data??klines).filter(row=>finite(Array.isArray(row)?row[6]:row?.closeTime)!==null&&
-        Number(Array.isArray(row)?row[6]:row.closeTime)<=baseline.closeTime).slice(-120),
-        source:klines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
-      fastKlines:{data:(fastKlines?.data??fastKlines??[]).filter(row=>
-        finite(Array.isArray(row)?row[6]:row?.closeTime)!==null&&
-        Number(Array.isArray(row)?row[6]:row.closeTime)<=baseline.closeTime).slice(-720),
-        source:fastKlines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
-      btcKlines:{data:(btcKlines?.data??btcKlines??[]).filter(row=>
-        finite(Array.isArray(row)?row[6]:row?.closeTime)!==null&&
-        Number(Array.isArray(row)?row[6]:row.closeTime)<=baseline.closeTime).slice(-1000),
-        source:btcKlines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
+      klines:{data:base15m,source:klines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
+      fastKlines:{data:baseFast,source:fastKlines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
+      btcKlines:{data:baseBtc,source:btcKlines?.source||'BINANCE_OFFICIAL_ARCHIVE',receivedAt:evaluationNow},
       now:evaluationNow,minQuoteVolume24h:minVolume
     });
     if(featureCandidate.data_valid!==true||featureCandidate.data_stale===true||
