@@ -87,6 +87,8 @@ test('daily first passage labels an earlier adverse barrier as DOWN',()=>{
   });
   assert.equal(result.status,'RESOLVED');
   assert.equal(result.outcome,'DOWN');
+  assert.equal(result.market_move_event.outcome,'FLAT',
+    'an adverse-first path with no later target touch is not a daily gainer event');
   assert.equal(result.first_touch_index,3);
 });
 
