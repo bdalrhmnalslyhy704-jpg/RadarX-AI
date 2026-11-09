@@ -92,6 +92,21 @@ test('dataset audit admits only broad, mature, balanced, matching 15m first-pass
   assert.equal(ADAPTIVE_DATASET_SUPPORT_POLICY.min_distinct_symbols,40);
 });
 
+test('short-base Binance Spot pairs remain valid training samples',()=>{
+  const rows=[
+    makeSample({symbol:'OPUSDT',index:1,at:BASE,outcome:'UP'}),
+    makeSample({symbol:'UNIUSDT',index:2,at:BASE+FOUR_HOURS,outcome:'DOWN'}),
+    makeSample({symbol:'DOGEUSDT',index:3,at:BASE+2*FOUR_HOURS,outcome:'UP'})
+  ];
+  const audit=buildAdaptiveDatasetQualityAudit(rows,{
+    temporalProfile:null,now:BASE+10*FOUR_HOURS
+  });
+  assert.equal(audit.counts.valid_resolved_rows,3);
+  assert.deepEqual(audit.symbol_coverage.weakest_symbols.map(row=>row.symbol).sort(),
+    ['DOGEUSDT','OPUSDT','UNIUSDT']);
+  assert.equal(audit.rejection_reasons.INVALID_SPOT_SYMBOL,undefined);
+});
+
 test('dataset fingerprints are stable under input reordering and change when model inputs change',()=>{
   const rows=[
     makeSample({symbol:'HASHXUSDT',index:1,at:BASE,outcome:'UP'}),
