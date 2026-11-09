@@ -36,7 +36,7 @@ permissions:
 
 concurrency:
   group: cognitive-market-wide-historical-benchmark-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   archive-replay-and-model-evaluation:
