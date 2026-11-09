@@ -195,8 +195,16 @@ test('historical replay preserves grouped Whale, Kahir and Rotation-Lag analysis
   assert.equal(whale.signal_metrics.volume_ratio,2.1);
   assert.equal(whale.signal_metrics.taker_buy_ratio_1m_3m,0.64);
   assert.equal(whale.signal_metrics.independent_confirmations,9);
-  assert.equal(whale.signal_metrics.flash_score,88);
-  assert.equal(whale.signal_metrics.flash_confirmations,6);
+  assert.equal(whale.signal_metrics.flash_score,null,
+    'large-print score must not be mislabeled as the Strong Move flash score');
+  assert.equal(whale.signal_metrics.flash_confirmations,null,
+    'large print count must not be mislabeled as flash confirmations');
+  assert.equal(whale.signal_metrics.large_print_score,88);
+  assert.equal(whale.signal_metrics.large_print_count,6);
+  assert.equal(whale.signal_metrics.large_print_buy_ratio,0.71);
+  assert.equal(whale.signal_metrics.large_print_notional_ratio,0.18);
+  assert.equal(whale.signal_metrics.absorption_score,74);
+  assert.equal(whale.signal_metrics.support_score,65);
   assert.equal(whale.profile_metric_groups.large_prints.largeBuyRatio,0.71);
   assert.equal(whale.profile_metric_groups.candle_flow.absorptionScore,74);
   assert.equal(whale.profile_orderbook_historical_available,false);
