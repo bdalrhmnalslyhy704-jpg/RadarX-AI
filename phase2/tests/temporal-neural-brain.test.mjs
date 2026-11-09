@@ -9,6 +9,8 @@ import {
   TEMPORAL_SEQUENCE_CHANNELS,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
+  TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+  hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
@@ -46,6 +48,18 @@ test('temporal target encodes only an actual +3% first-passage as success',()=>{
   assert.equal(temporalBinaryTarget('UP'),1);
   assert.equal(temporalBinaryTarget('DOWN'),0);
   assert.equal(temporalBinaryTarget('FLAT'),0);
+});
+
+test('TCN baseline gates require a strict 0.003 Brier improvement',()=>{
+  assert.equal(TEMPORAL_BRIER_SUPERIORITY_MARGIN,0.003);
+  assert.equal(hasTemporalBrierSuperiority(0.4,0.4029),false,
+    'a 0.0029 improvement must not pass the policy gate');
+  assert.equal(hasTemporalBrierSuperiority(0.4,0.403),false,
+    'an improvement equal to the required margin must not pass a strict gate');
+  assert.equal(hasTemporalBrierSuperiority(0.4,0.4031),true,
+    'an improvement greater than 0.003 must pass');
+  assert.equal(hasTemporalBrierSuperiority(null,0.5),false,
+    'missing metrics must fail closed');
 });
 
 test('temporal network fails closed without first-passage tensor samples',()=>{
