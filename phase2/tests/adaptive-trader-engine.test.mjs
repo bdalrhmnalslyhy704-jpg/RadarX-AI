@@ -1316,3 +1316,40 @@ test('overlapping-only history responses do not inflate page or candle counts',a
   assert.equal(result.historical_pages_attempted,1);
   assert.equal(result.historical_window_candles,1000);
 });
+
+test('three-page history backfill records verified additional 15m history on a live scan',async()=>{
+  const f=marketFixture();
+  const current=f.klines.data;
+  const interval=15*60*1000;
+  const older=[];
+  for(let index=0;index<1000;index++){
+    const openTime=current[0][0]-(1000-index)*interval;
+    const open=10,close=10.01,quoteVolume=300000;
+    older.push([openTime,open,10.1,9.9,close,quoteVolume/close,
+      openTime+interval-1,quoteVolume,1000,quoteVolume/close*0.58,quoteVolume*0.58,0]);
+  }
+  const calls=[];
+  const rest={
+    async request(path,query={}){
+      calls.push({path,query});
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:[{
+        symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+      }]},source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/ticker/24hr')return {data:[{
+        symbol:'TESTUSDT',lastPrice:'10',quoteVolume:'5000000',priceChangePercent:'2',count:'30000'
+      }],source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return {data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines'&&query.symbol==='TESTUSDT'){
+        if(query.endTime===undefined)return f.klines;
+        if(query.endTime===current[0][0]-1)return {data:older,source:'https://data-api.binance.vision',receivedAt:f.now};
+        return {data:[],source:'https://data-api.binance.vision',receivedAt:f.now};
+      }
+      throw new Error('UNEXPECTED_REQUEST '+path+' '+JSON.stringify(query));
+    }
+  };
+  const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:60_000})({limit:20,now:f.now});
+  assert.equal(snapshot.status,'LIVE_DATA');
+  const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT');
+  assert.equal(pages.length,3,'initial page plus two bounded older-page attempts');
+  assert.equal(snapshot.universe.asset_15m_extended_symbols,1);
+});
