@@ -527,6 +527,14 @@ export function runHistoricalReplay({
       ...(Array.isArray(raw?.notification_gate?.failures)?raw.notification_gate.failures:[]),
       ...(Array.isArray(raw?.notificationGate?.failures)?raw.notificationGate.failures:[])
     ].map(value=>String(value??'').trim()).filter(Boolean))].slice(0,24);
+    const profileOrderbookUnavailable=profileEvidenceLimitations.some(code=>String(code).includes('ORDERBOOK_UNAVAILABLE'));
+    const profileOrderbookGroup=profileMetricGroups.orderbook;
+    const profileOrderbookHasMeasuredDepth=Boolean(profileOrderbookGroup&&
+      finite(profileOrderbookGroup.spreadBps)!==null&&
+      finite(profileOrderbookGroup.totalNear)!==null&&
+      finite(profileOrderbookGroup.totalNear)>0);
+    const profileOrderbookHistoricalAvailable=profileOrderbookUnavailable?false:
+      profileOrderbookHasMeasuredDepth?true:null;
     const metricSource=hasMetricFields(strong?.metrics)?'alert.strong_move.metrics':
       (hasMetricFields(alert?.metrics)?'alert.metrics':
         (hasMetricFields(profileAnalysis?.metrics)?'alert.profile_analysis.metrics':
@@ -649,7 +657,7 @@ export function runHistoricalReplay({
       profile_metrics:profileMetricSnapshot,
       profile_metric_groups:profileMetricGroups,
       profile_evidence_limitations:profileEvidenceLimitations,
-      profile_orderbook_historical_available:!profileEvidenceLimitations.some(code=>String(code).includes('ORDERBOOK_UNAVAILABLE')),
+      profile_orderbook_historical_available:profileOrderbookHistoricalAvailable,
       profile_metrics_source:metricSource,
       market_evidence: {
         data_quality:finite(alert?.data_quality ?? strong?.data_quality),
