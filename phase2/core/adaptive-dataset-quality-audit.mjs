@@ -1,0 +1,312 @@
+const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SEQUENCE_STEPS = 24;
+const SEQUENCE_CHANNELS = 29;
+
+export const ADAPTIVE_DATASET_SUPPORT_POLICY = Object.freeze({
+  min_resolved_samples: 2000,
+  min_distinct_symbols: 40,
+  min_distinct_utc_days: 30,
+  min_positive_samples: 150,
+  min_negative_samples: 900,
+  regimes: Object.freeze({
+    BTC_RISK_ON: Object.freeze({
+      training_positive: 40, training_negative: 100,
+      member_selection_positive: 20, member_selection_negative: 20,
+      calibration_positive: 20, calibration_negative: 20,
+      validation_positive: 20, validation_negative: 20,
+      holdout_positive: 20, holdout_negative: 20
+    }),
+    BTC_RISK_OFF: Object.freeze({
+      training_positive: 40, training_negative: 100,
+      member_selection_positive: 20, member_selection_negative: 20,
+      calibration_positive: 20, calibration_negative: 20,
+      validation_positive: 20, validation_negative: 20,
+      holdout_positive: 20, holdout_negative: 20
+    })
+  })
+});
+
+const finite = value => {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const emptyCounts = () => ({samples: 0, positive: 0, negative: 0, flat: 0, symbols: new Set(), days: new Set()});
+
+function validSequence(sequence) {
+  return Array.isArray(sequence) && sequence.length === SEQUENCE_STEPS &&
+    sequence.every(step => Array.isArray(step) && step.length === SEQUENCE_CHANNELS &&
+      step.every(value => finite(value) !== null && Math.abs(Number(value)) <= 4));
+}
+
+function phaseSupport(temporalProfile = {}) {
+  const specialists = temporalProfile?.regime_specialists;
+  const output = {};
+  const missing = [];
+  for (const regime of ['BTC_RISK_ON', 'BTC_RISK_OFF']) {
+    const source = specialists?.[regime];
+    if (!source || typeof source !== 'object') {
+      output[regime] = {available: false, passed: false, phases: {}};
+      missing.push(regime + ':SPECIALIST_DIAGNOSTICS_MISSING');
+      continue;
+    }
+    const policy = ADAPTIVE_DATASET_SUPPORT_POLICY.regimes[regime];
+    const phases = {
+      training: {
+        positive: finite(source.training_positive_samples) ?? 0,
+        negative: finite(source.training_negative_samples) ?? 0,
+        min_positive: policy.training_positive, min_negative: policy.training_negative
+      },
+      member_selection: {
+        positive: finite(source.selection_positive_samples) ?? 0,
+        negative: finite(source.selection_negative_samples) ?? 0,
+        min_positive: policy.member_selection_positive, min_negative: policy.member_selection_negative
+      },
+      calibration: {
+        positive: finite(source.calibration_positive_samples) ?? 0,
+        negative: finite(source.calibration_negative_samples) ?? 0,
+        min_positive: policy.calibration_positive, min_negative: policy.calibration_negative
+      },
+      validation: {
+        positive: finite(source.validation_positive_samples) ?? 0,
+        negative: finite(source.validation_negative_samples) ?? 0,
+        min_positive: policy.validation_positive, min_negative: policy.validation_negative
+      },
+      holdout: {
+        positive: finite(source.holdout_positive_samples) ?? 0,
+        negative: finite(source.holdout_negative_samples) ?? 0,
+        min_positive: policy.holdout_positive, min_negative: policy.holdout_negative
+      }
+    };
+    const gaps = [];
+    for (const [phase, counts] of Object.entries(phases)) {
+      if (counts.positive < counts.min_positive) gaps.push(phase + ':POSITIVE_SUPPORT');
+      if (counts.negative < counts.min_negative) gaps.push(phase + ':NEGATIVE_SUPPORT');
+    }
+    output[regime] = {
+      available: true,
+      passed: gaps.length === 0,
+      gaps,
+      phases
+    };
+    for (const gap of gaps) missing.push(regime + ':' + gap);
+  }
+  return {regimes: output, passed: missing.length === 0, gaps: missing};
+}
+
+/**
+ * Audits the exact first-passage rows handed to the V5/TCN training pipeline.
+ * This is a data-support gate only; it does not measure model skill or authorize
+ * live probabilities. Unresolved, malformed, duplicate, mixed-horizon, and
+ * non-15m-label rows never enter the coverage or class-balance denominators.
+ */
+export function buildAdaptiveDatasetQualityAudit(samples = [], {
+  temporalProfile = null,
+  now = Date.now()
+} = {}) {
+  const input = Array.isArray(samples) ? samples : [];
+  const nowAt = finite(now) ?? Date.now();
+  const rejectionCounts = {};
+  const reject = code => { rejectionCounts[code] = (rejectionCounts[code] || 0) + 1; };
+  const seenIds = new Set();
+  const seenBaselines = new Set();
+  const valid = [];
+  let unresolved = 0;
+  let sequenceMissing = 0;
+  let duplicateRows = 0;
+  const outcomeCounts = {UP: 0, DOWN: 0, FLAT: 0};
+  const byRegime = {
+    BTC_RISK_ON: emptyCounts(),
+    BTC_RISK_OFF: emptyCounts(),
+    UNKNOWN: emptyCounts()
+  };
+  const bySymbol = new Map();
+  const byUtcDay = new Map();
+  const byUtcMonth = new Map();
+  let microAvailableSteps = 0;
+  let microTotalSteps = 0;
+
+  for (const row of input) {
+    if (!row || row.training_eligible !== true ||
+        (row.closed_candle_baseline !== true && row.historical_baseline !== true)) {
+      reject('NOT_TRAINING_ELIGIBLE');
+      continue;
+    }
+    if (row.target_definition !== 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2') {
+      reject('TARGET_DEFINITION_MISMATCH');
+      continue;
+    }
+    const id = String(row.id || '');
+    const symbol = String(row.symbol || '').trim().toUpperCase();
+    const at = finite(row.at);
+    const resolvedAt = finite(row.resolved_at);
+    if (!id) { reject('MISSING_SAMPLE_ID'); continue; }
+    if (!/^[A-Z0-9]{5,30}USDT$/.test(symbol)) { reject('INVALID_SPOT_SYMBOL'); continue; }
+    if (at === null || at <= 0 || resolvedAt === null) { reject('INVALID_SAMPLE_TIME'); continue; }
+    if (resolvedAt > nowAt + 5000) { reject('OUTCOME_NOT_MATURED'); unresolved++; continue; }
+    if (resolvedAt - at !== FOUR_HOURS_MS || finite(row.horizon_ms) !== FOUR_HOURS_MS) {
+      reject('HORIZON_MISMATCH'); continue;
+    }
+    if (!['UP', 'DOWN', 'FLAT'].includes(row.outcome)) {
+      reject('OUTCOME_UNAVAILABLE'); unresolved++; continue;
+    }
+    if (row.first_passage?.path_resolution !== '15M' ||
+        row.first_passage?.outcome !== row.outcome) {
+      reject('FIRST_PASSAGE_LABEL_INVALID'); continue;
+    }
+    const expectedSource = row.historical_baseline === true
+      ? 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+      : 'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1';
+    if (row.outcome_source !== expectedSource) {
+      reject('OUTCOME_SOURCE_MISMATCH'); continue;
+    }
+    if (!validSequence(row.temporal_sequence)) {
+      reject('TEMPORAL_SEQUENCE_MISSING_OR_INVALID');
+      sequenceMissing++;
+      continue;
+    }
+
+    const baselineKey = symbol + ':' + String(Math.trunc(at));
+    if (seenIds.has(id) || seenBaselines.has(baselineKey)) {
+      reject('DUPLICATE_SAMPLE');
+      duplicateRows++;
+      continue;
+    }
+    seenIds.add(id);
+    seenBaselines.add(baselineKey);
+    valid.push(row);
+    outcomeCounts[row.outcome]++;
+
+    const lastStep = row.temporal_sequence[SEQUENCE_STEPS - 1];
+    const regimeValue = finite(lastStep?.[19]);
+    const regime = regimeValue === null ? 'UNKNOWN' :
+      regimeValue >= 0 ? 'BTC_RISK_ON' : 'BTC_RISK_OFF';
+    const day = new Date(at).toISOString().slice(0, 10);
+    const month = day.slice(0, 7);
+    if (!bySymbol.has(symbol)) bySymbol.set(symbol, emptyCounts());
+    const symbolBucket = bySymbol.get(symbol);
+    const dayBucket = byUtcDay.get(day) || {samples: 0, positive: 0, negative: 0};
+    const monthBucket = byUtcMonth.get(month) || {samples: 0, positive: 0, negative: 0};
+    const regimeBucket = byRegime[regime];
+    const positive = row.outcome === 'UP';
+    for (const bucket of [symbolBucket, regimeBucket]) {
+      bucket.samples++;
+      bucket.symbols.add(symbol);
+      bucket.days.add(day);
+      if (positive) bucket.positive++;
+      else bucket.negative++;
+      if (row.outcome === 'FLAT') bucket.flat++;
+    }
+    dayBucket.samples++;
+    if (positive) dayBucket.positive++; else dayBucket.negative++;
+    monthBucket.samples++;
+    if (positive) monthBucket.positive++; else monthBucket.negative++;
+    byUtcDay.set(day, dayBucket);
+    byUtcMonth.set(month, monthBucket);
+    for (const step of row.temporal_sequence) {
+      microTotalSteps++;
+      if (Number(step[28]) >= 0.5) microAvailableSteps++;
+    }
+  }
+
+  const sorted = valid.slice().sort((a, b) => Number(a.at) - Number(b.at) ||
+    String(a.id).localeCompare(String(b.id)));
+  const symbols = [...bySymbol.keys()].sort();
+  const days = [...byUtcDay.keys()].sort();
+  const months = [...byUtcMonth.keys()].sort();
+  const positive = outcomeCounts.UP;
+  const negative = outcomeCounts.DOWN + outcomeCounts.FLAT;
+  const earliestAt = sorted.length ? Number(sorted[0].at) : null;
+  const latestAt = sorted.length ? Number(sorted[sorted.length - 1].at) : null;
+  const phase = phaseSupport(temporalProfile || {});
+  const gaps = [];
+  const policy = ADAPTIVE_DATASET_SUPPORT_POLICY;
+
+  if (valid.length < policy.min_resolved_samples) gaps.push('TOTAL_RESOLVED_SAMPLES_BELOW_MINIMUM');
+  if (symbols.length < policy.min_distinct_symbols) gaps.push('DISTINCT_SYMBOL_COVERAGE_BELOW_MINIMUM');
+  if (days.length < policy.min_distinct_utc_days) gaps.push('CHRONOLOGICAL_DAY_COVERAGE_BELOW_MINIMUM');
+  if (positive < policy.min_positive_samples) gaps.push('POSITIVE_CLASS_SUPPORT_BELOW_MINIMUM');
+  if (negative < policy.min_negative_samples) gaps.push('NEGATIVE_CLASS_SUPPORT_BELOW_MINIMUM');
+  if (!phase.passed) gaps.push('REGIME_PHASE_CLASS_SUPPORT_BELOW_MINIMUM');
+
+  const symbolRows = [...bySymbol.entries()].map(([symbol, counts]) => ({
+    symbol, samples: counts.samples, positive: counts.positive, negative: counts.negative,
+    positive_rate_pct: counts.samples ? Number((counts.positive / counts.samples * 100).toFixed(2)) : null,
+    utc_days: counts.days.size
+  })).sort((a, b) => a.samples - b.samples || a.symbol.localeCompare(b.symbol));
+  const regimeRows = Object.fromEntries(Object.entries(byRegime).map(([regime, counts]) => [regime, {
+    samples: counts.samples, positive: counts.positive, negative: counts.negative,
+    symbols: counts.symbols.size, utc_days: counts.days.size,
+    positive_rate_pct: counts.samples ? Number((counts.positive / counts.samples * 100).toFixed(2)) : null
+  }]));
+
+  return {
+    schema_version: 'RADARX_ADAPTIVE_DATASET_QUALITY_AUDIT_V1',
+    target_definition: 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+    evaluated_at: new Date(nowAt).toISOString(),
+    data_support_ready: gaps.length === 0,
+    status: gaps.length ? 'ADDITIONAL_VERIFIED_DATA_REQUIRED' : 'MINIMUM_DATA_SUPPORT_PRESENT',
+    blocking_reasons: gaps,
+    counts: {
+      input_training_rows: input.length,
+      valid_resolved_rows: valid.length,
+      unresolved_rows: unresolved,
+      rejected_rows: Object.values(rejectionCounts).reduce((sum, count) => sum + count, 0),
+      duplicate_rows: duplicateRows,
+      sequence_missing_or_invalid_rows: sequenceMissing,
+      distinct_symbols: symbols.length,
+      distinct_utc_days: days.length,
+      distinct_utc_months: months.length,
+      positive: outcomeCounts.UP,
+      negative: negative,
+      down: outcomeCounts.DOWN,
+      flat: outcomeCounts.FLAT,
+      positive_rate_pct: valid.length ? Number((positive / valid.length * 100).toFixed(2)) : null,
+      micro_5m_sequence_coverage_pct: microTotalSteps
+        ? Number((microAvailableSteps / microTotalSteps * 100).toFixed(2)) : null
+    },
+    time_coverage: {
+      earliest_sample_at: earliestAt,
+      latest_sample_at: latestAt,
+      earliest_sample_utc: earliestAt === null ? null : new Date(earliestAt).toISOString(),
+      latest_sample_utc: latestAt === null ? null : new Date(latestAt).toISOString(),
+      span_days: earliestAt === null || latestAt === null
+        ? 0 : Number(((latestAt - earliestAt) / DAY_MS).toFixed(2)),
+      utc_days: days,
+      utc_months: months
+    },
+    class_balance: outcomeCounts,
+    regimes: regimeRows,
+    regime_phase_support: phase.regimes,
+    symbol_coverage: {
+      weakest_symbols: symbolRows.slice(0, 10),
+      strongest_symbols: symbolRows.slice(-10).reverse()
+    },
+    daily_coverage: [...byUtcDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, counts]) => ({
+      date, ...counts
+    })),
+    monthly_coverage: [...byUtcMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, counts]) => ({
+      month, ...counts
+    })),
+    rejection_reasons: Object.fromEntries(Object.entries(rejectionCounts).sort((a, b) => b[1] - a[1])),
+    requirements: {
+      ...policy,
+      regimes: Object.fromEntries(Object.entries(policy.regimes).map(([key, value]) => [key, {...value}]))
+    },
+    interpretation: [
+      'This is a data-support audit, not evidence of predictive superiority or profitability.',
+      'UP means +3% was reached before -2% within four hours on closed 15m candles; DOWN and FLAT are non-positive targets.',
+      'BTC regime is read from the final 24h BTC-context channel (tensor channel 19), matching the TCN regime split.',
+      'A model must still pass separate selection, calibration, outer validation, untouched holdout, and paper gates.'
+    ],
+    policy: {
+      market: 'BINANCE_SPOT',
+      candle_resolution: '15M_CLOSED_ONLY',
+      paper_trading: true,
+      real_order_execution: false,
+      live_probability_permission: false
+    }
+  };
+}
