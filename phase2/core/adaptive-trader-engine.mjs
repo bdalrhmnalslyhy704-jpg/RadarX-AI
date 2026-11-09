@@ -129,16 +129,16 @@ const finite = value => {
 const HISTORICAL_15M_PAGE_WAVE_MS=3*60*1000;
 
 /**
- * Alternate the optional third historical 15m page across symbols by scan
- * wave. Every symbol flips between two and three requested pages each worker
- * cycle, while BTC keeps its full three-page benchmark on every scan.
+ * Assign the optional third historical 15m page to one deterministic
+ * third of symbols per three-minute worker wave. Every symbol receives that
+ * page in one of each three consecutive waves; BTC keeps three pages every scan.
  */
 export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now()){
   const clean=String(symbol||'').trim().toUpperCase();
   if(!/^[A-Z0-9]{1,30}USDT$/.test(clean))
     throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
   const at=finite(now)??Date.now();
-  const wave=Math.abs(Math.floor(at/HISTORICAL_15M_PAGE_WAVE_MS))%2;
+  const wave=Math.abs(Math.floor(at/HISTORICAL_15M_PAGE_WAVE_MS))%3;
   if(clean==='BTCUSDT'){
     return {wave,symbol_wave:wave,max_pages:3,wave_interval_ms:HISTORICAL_15M_PAGE_WAVE_MS};
   }
@@ -147,7 +147,7 @@ export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now()){
     hash^=character.charCodeAt(0);
     hash=Math.imul(hash,16777619)>>>0;
   }
-  const symbolWave=hash&1;
+  const symbolWave=hash%3;
   return {
     wave,
     symbol_wave:symbolWave,
