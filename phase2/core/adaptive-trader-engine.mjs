@@ -126,7 +126,40 @@ const finite = value => {
   return Number.isFinite(n) ? n : null;
 };
 
-const HISTORICAL_15M_PAGE_WAVE_MS=3*60*1000;
+/**
+ * Allocate the optional third historical 15m page to one deterministic third
+ * of the eligible Spot symbols per persisted scan-cursor wave. The cursor
+ * advances after each successful rotation, so the page budget rotates with
+ * actual scans and remains stable across worker restarts.
+ */
+export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now(),scanOffset=null,rotationSlots=19){
+  const clean=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(clean))
+    throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
+  const at=finite(now)??Date.now();
+  const slots=Math.max(1,Math.trunc(Number(rotationSlots)||19));
+  const offset=finite(scanOffset);
+  const wave=offset!==null
+    ?Math.abs(Math.floor(Math.max(0,offset)/slots))%3
+    :Math.abs(Math.floor(at/(3*60*1000)))%3;
+  if(clean==='BTCUSDT'){
+    return {wave,symbol_wave:wave,max_pages:3,rotation_slots_per_cycle:slots,
+      wave_source:offset!==null?'PERSISTED_SCAN_CURSOR':'TIME_FALLBACK'};
+  }
+  let hash=2166136261;
+  for(const character of clean){
+    hash^=character.charCodeAt(0);
+    hash=Math.imul(hash,16777619)>>>0;
+  }
+  const symbolWave=hash%3;
+  return {
+    wave,
+    symbol_wave:symbolWave,
+    max_pages:symbolWave===wave?3:2,
+    rotation_slots_per_cycle:slots,
+    wave_source:offset!==null?'PERSISTED_SCAN_CURSOR':'TIME_FALLBACK'
+  };
+}
 
 /**
  * Assign the optional third historical 15m page to one deterministic
@@ -1174,7 +1207,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const first15m=await rest.request('/api/v3/klines', {
       symbol:ticker.symbol,interval:'15m',limit:1000
     });
-    const historyPageBudget=adaptiveTraderHistoryPageBudget(ticker.symbol,now);
+    const historyPageBudget=adaptiveTraderHistoryPageBudget(
+      ticker.symbol,now,scanOffset,coveragePlan.rotation_slots_per_cycle);
     const result=await fetchAdaptiveTraderHistoricalKlines({
       rest,symbol:ticker.symbol,interval:'15m',firstPage:first15m,maxPages:historyPageBudget.max_pages
     });
@@ -1312,7 +1346,7 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
       asset_15m_three_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=3).length,
       asset_15m_two_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)===2).length,
-      asset_15m_page_wave:Math.abs(Math.floor((finite(now)??Date.now())/HISTORICAL_15M_PAGE_WAVE_MS))%3,
+      asset_15m_page_wave:adaptiveTraderHistoryPageBudget('BTCUSDT',now,scanOffset,coveragePlan.rotation_slots_per_cycle).wave,
       asset_15m_pages_fetched_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages)||0),0),
       asset_15m_pages_attempted_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages_attempted)||0),0),
       asset_15m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0)),
