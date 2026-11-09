@@ -139,6 +139,9 @@ export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now()){
     throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
   const at=finite(now)??Date.now();
   const wave=Math.abs(Math.floor(at/HISTORICAL_15M_PAGE_WAVE_MS))%2;
+  if(clean==='BTCUSDT'){
+    return {wave,symbol_wave:wave,max_pages:3,wave_interval_ms:HISTORICAL_15M_PAGE_WAVE_MS};
+  }
   let hash=2166136261;
   for(const character of clean){
     hash^=character.charCodeAt(0);
