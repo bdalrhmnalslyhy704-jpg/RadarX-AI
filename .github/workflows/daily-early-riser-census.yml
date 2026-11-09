@@ -1,6 +1,11 @@
 name: Build 224 Daily Early-Riser Binance Spot Historical Census
 
 on:
+  push:
+    branches:
+      - research/daily-early-riser-census-20261109
+    paths:
+      - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
   workflow_dispatch:
     inputs:
       start:
