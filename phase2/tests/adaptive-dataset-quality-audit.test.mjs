@@ -123,6 +123,32 @@ test('short-base Binance Spot pairs remain valid training samples',()=>{
   assert.equal(audit.rejection_reasons.INVALID_SPOT_SYMBOL,undefined);
 });
 
+test('dataset audit separates missing, malformed, non-finite and out-of-range TCN tensors',()=>{
+  const makeBad=(symbol,index,mutation)=>{
+    const row=makeSample({symbol,index,at:BASE+index*FOUR_HOURS,outcome:'DOWN'});
+    mutation(row);
+    return row;
+  };
+  const rows=[
+    makeBad('MISSUSDT',1,row=>{row.temporal_sequence=null;}),
+    makeBad('STEPUSDT',2,row=>{row.temporal_sequence=[];}),
+    makeBad('CHANNELUSDT',3,row=>{row.temporal_sequence[0]=row.temporal_sequence[0].slice(0,28);}),
+    makeBad('FINITEUSDT',4,row=>{row.temporal_sequence[0][0]=Number.NaN;}),
+    makeBad('RANGEUSDT',5,row=>{row.temporal_sequence[0][0]=4.01;})
+  ];
+  const audit=buildAdaptiveDatasetQualityAudit(rows,{
+    temporalProfile:null,now:BASE+20*FOUR_HOURS
+  });
+  assert.equal(audit.counts.valid_resolved_rows,0);
+  assert.equal(audit.counts.sequence_missing_or_invalid_rows,5);
+  assert.deepEqual(audit.counts.sequence_quality,{
+    missing:1,step_count_invalid:1,channel_count_invalid:1,
+    non_finite_value:1,value_out_of_range:1
+  });
+  assert.equal(audit.rejection_reasons.TEMPORAL_SEQUENCE_MISSING,1);
+  assert.equal(audit.rejection_reasons.TEMPORAL_SEQUENCE_VALUE_OUT_OF_RANGE,1);
+});
+
 test('dataset fingerprints are stable under input reordering and change when model inputs change',()=>{
   const rows=[
     makeSample({symbol:'HASHXUSDT',index:1,at:BASE,outcome:'UP'}),
