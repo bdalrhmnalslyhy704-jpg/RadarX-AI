@@ -15,7 +15,7 @@ function makeSample({symbol='TESTUSDT',index=0,at=BASE,outcome='DOWN',regime='BT
   sequence.forEach(step=>{step[28]=1;});
   return {
     id:symbol+':'+at+':'+index,
-    symbol,at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+    symbol,price:1,at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
     training_eligible:true,closed_candle_baseline:true,historical_baseline:false,
     target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
     outcome_source:'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',
@@ -150,10 +150,11 @@ test('unresolved, future, mixed-resolution, duplicate and sequence-less rows are
   const future={...makeSample({symbol:'FUTUREUSDT',index:2,at:BASE+1000,outcome:'UP'}),resolved_at:BASE+1000+FOUR_HOURS+1};
   const mixed={...makeSample({symbol:'MIXEDUSDT',index:3,at:BASE+2000,outcome:'UP'}),first_passage:{outcome:'UP',path_resolution:'5M'}};
   const noSequence={...makeSample({symbol:'NOSEQUSDT',index:4,at:BASE+3000,outcome:'DOWN'}),temporal_sequence:[]};
+  const noPrice={...makeSample({symbol:'NOPRICEUSDT',index:6,at:BASE+5000,outcome:'DOWN'}),price:0};
   const duplicate={...valid};
   const unresolved={...makeSample({symbol:'PENDINGUSDT',index:5,at:BASE+4000,outcome:'DOWN'}),
     outcome:null,resolved_at:null,first_passage:null,outcome_source:null};
-  const audit=buildAdaptiveDatasetQualityAudit([valid,duplicate,future,mixed,noSequence,unresolved],{
+  const audit=buildAdaptiveDatasetQualityAudit([valid,duplicate,future,mixed,noSequence,noPrice,unresolved],{
     temporalProfile:null,now:BASE+10*FOUR_HOURS
   });
   assert.equal(audit.counts.valid_resolved_rows,1);
@@ -163,6 +164,7 @@ test('unresolved, future, mixed-resolution, duplicate and sequence-less rows are
   assert.equal(audit.rejection_reasons.OUTCOME_UNAVAILABLE,1);
   assert.equal(audit.rejection_reasons.OUTCOME_NOT_MATURED,1);
   assert.equal(audit.rejection_reasons.FIRST_PASSAGE_LABEL_INVALID,1);
+  assert.equal(audit.rejection_reasons.INVALID_BASELINE_PRICE,1);
   assert.equal(audit.data_support_ready,false);
   assert.ok(audit.blocking_reasons.includes('REGIME_PHASE_CLASS_SUPPORT_BELOW_MINIMUM'));
   assert.equal(audit.policy.live_probability_permission,false);
