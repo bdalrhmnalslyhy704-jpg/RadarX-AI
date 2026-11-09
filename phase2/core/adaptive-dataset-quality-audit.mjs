@@ -1,7 +1,70 @@
+import {createHash} from 'node:crypto';
+
 const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEQUENCE_STEPS = 24;
 const SEQUENCE_CHANNELS = 29;
+
+/**
+ * Retain training rows fairly across symbols. The previous append-order slice
+ * could let the most recently scanned priority lane evict entire earlier
+ * symbols. Round-robin newest-first retention preserves symbol diversity while
+ * keeping the total persisted sample count bounded.
+ */
+export function retainBalancedAdaptiveSamples(samples = [], {
+  maxSamples = 6000,
+  maxTrainingSamples = 5000
+} = {}) {
+  const totalLimit = Math.max(0, Math.trunc(Number(maxSamples) || 0));
+  const trainingLimit = Math.min(totalLimit, Math.max(0, Math.trunc(Number(maxTrainingSamples) || 0)));
+  if (!totalLimit) return [];
+  const uniqueById = new Map();
+  for (const row of Array.isArray(samples) ? samples : []) {
+    if (!row || typeof row !== 'object') continue;
+    const id = String(row.id || '');
+    if (id) uniqueById.set(id, row);
+  }
+  const unique = [...uniqueById.values()];
+  const groups = new Map();
+  const auditRows = [];
+  for (const row of unique) {
+    if (row.training_eligible === true &&
+        (row.closed_candle_baseline === true || row.historical_baseline === true)) {
+      const symbol = String(row.symbol || '').trim().toUpperCase() || 'UNKNOWN';
+      if (!groups.has(symbol)) groups.set(symbol, []);
+      groups.get(symbol).push(row);
+    } else {
+      auditRows.push(row);
+    }
+  }
+  for (const rows of groups.values()) rows.sort((a, b) =>
+    (finite(b.at) ?? 0) - (finite(a.at) ?? 0) ||
+    String(b.id || '').localeCompare(String(a.id || '')));
+  const symbols = [...groups.keys()].sort();
+  const selectedTraining = [];
+  for (let depth = 0; selectedTraining.length < trainingLimit; depth++) {
+    let added = false;
+    for (const symbol of symbols) {
+      const row = groups.get(symbol)?.[depth];
+      if (!row) continue;
+      selectedTraining.push(row);
+      added = true;
+      if (selectedTraining.length >= trainingLimit) break;
+    }
+    if (!added) break;
+  }
+  auditRows.sort((a, b) =>
+    (finite(b.at) ?? 0) - (finite(a.at) ?? 0) ||
+    String(b.id || '').localeCompare(String(a.id || '')));
+  const retained = [
+    ...selectedTraining,
+    ...auditRows.slice(0, Math.max(0, totalLimit - selectedTraining.length))
+  ];
+  return retained.sort((a, b) =>
+    (finite(a.at) ?? 0) - (finite(b.at) ?? 0) ||
+    String(a.symbol || '').localeCompare(String(b.symbol || '')) ||
+    String(a.id || '').localeCompare(String(b.id || '')));
+}
 
 export const ADAPTIVE_DATASET_SUPPORT_POLICY = Object.freeze({
   min_resolved_samples: 2000,
@@ -144,13 +207,14 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
     const resolvedAt = finite(row.resolved_at);
     if (!id) { reject('MISSING_SAMPLE_ID'); continue; }
     if (!/^[A-Z0-9]{5,30}USDT$/.test(symbol)) { reject('INVALID_SPOT_SYMBOL'); continue; }
-    if (at === null || at <= 0 || resolvedAt === null) { reject('INVALID_SAMPLE_TIME'); continue; }
+    if (at === null || at <= 0) { reject('INVALID_SAMPLE_TIME'); continue; }
+    if (!['UP', 'DOWN', 'FLAT'].includes(row.outcome)) {
+      reject('OUTCOME_UNAVAILABLE'); unresolved++; continue;
+    }
+    if (resolvedAt === null) { reject('INVALID_RESOLUTION_TIMESTAMP'); continue; }
     if (resolvedAt > nowAt + 5000) { reject('OUTCOME_NOT_MATURED'); unresolved++; continue; }
     if (resolvedAt - at !== FOUR_HOURS_MS || finite(row.horizon_ms) !== FOUR_HOURS_MS) {
       reject('HORIZON_MISMATCH'); continue;
-    }
-    if (!['UP', 'DOWN', 'FLAT'].includes(row.outcome)) {
-      reject('OUTCOME_UNAVAILABLE'); unresolved++; continue;
     }
     if (row.first_passage?.path_resolution !== '15M' ||
         row.first_passage?.outcome !== row.outcome) {
@@ -213,6 +277,17 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
 
   const sorted = valid.slice().sort((a, b) => Number(a.at) - Number(b.at) ||
     String(a.id).localeCompare(String(b.id)));
+  const identityHasher = createHash('sha256');
+  const modelInputHasher = createHash('sha256');
+  for (const row of sorted) {
+    const identity = [String(row.id),String(row.symbol).toUpperCase(),Number(row.at),
+      Number(row.resolved_at),String(row.outcome),String(row.target_definition)];
+    identityHasher.update(JSON.stringify(identity) + '\\n');
+    modelInputHasher.update(JSON.stringify([
+      identity,finite(row.price),finite(row.return_pct),finite(row.close_return_pct),
+      row.first_passage || null,row.features || null,row.temporal_sequence
+    ]) + '\\n');
+  }
   const symbols = [...bySymbol.keys()].sort();
   const days = [...byUtcDay.keys()].sort();
   const months = [...byUtcMonth.keys()].sort();
@@ -248,6 +323,10 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
     evaluated_at: new Date(nowAt).toISOString(),
     data_support_ready: gaps.length === 0,
     status: gaps.length ? 'ADDITIONAL_VERIFIED_DATA_REQUIRED' : 'MINIMUM_DATA_SUPPORT_PRESENT',
+    fingerprints: {
+      sample_identity_sha256: identityHasher.digest('hex'),
+      model_input_sha256: modelInputHasher.digest('hex')
+    },
     blocking_reasons: gaps,
     counts: {
       input_training_rows: input.length,
