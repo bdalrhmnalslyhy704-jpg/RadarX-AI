@@ -27,28 +27,28 @@ test('history page scheduling accepts short-base Spot symbols',()=>{
     assert.ok([2,3].includes(adaptiveTraderHistoryPageBudget(symbol,Date.UTC(2026,10,9)).max_pages));
 });
 
-test('third-page history wave reaches every symbol once per three balanced scans',()=>{
+test('third-page history wave follows the persisted scan cursor across three scans',()=>{
   const now=Date.UTC(2026,10,9,12,0,0);
   const symbols=Array.from({length:240},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
-  const initialWave=adaptiveTraderHistoryPageBudget('PAIR000USDT',now).wave;
+  const rotationSlots=19;
   const waves=[0,1,2].map(wave=>symbols.map(symbol=>
-    adaptiveTraderHistoryPageBudget(symbol,now+wave*3*60*1000)));
+    adaptiveTraderHistoryPageBudget(symbol,now,wave*rotationSlots,rotationSlots)));
   for(let wave=0;wave<3;wave++){
     const threePageCount=waves[wave].filter(row=>row.max_pages===3).length;
-    assert.ok(threePageCount>=60&&threePageCount<=100,
-      'each scan wave should carry approximately one-third of the third-page requests');
+    assert.equal(threePageCount,80,
+      'exactly one-third of the universe receives the third page on each persisted cursor wave');
   }
   for(let index=0;index<symbols.length;index++){
     assert.equal(waves.map(wave=>wave[index].max_pages).filter(maxPages=>maxPages===3).length,1,
-      'every symbol must receive exactly one third-page request in a three-wave cycle');
-    assert.deepEqual(waves.map(wave=>wave[index].wave),
-      [0,1,2].map(offset=>(initialWave+offset)%3));
+      'every symbol must receive exactly one third-page request in a three-scan rotation');
+    assert.deepEqual(waves.map(wave=>wave[index].wave),[0,1,2]);
   }
-  assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now).max_pages,3,
+  assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now,0,rotationSlots).max_pages,3,
     'BTC always keeps all three verified historical pages');
-  assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now).wave_interval_ms,180000);
-  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now+9*60*1000).wave,initialWave,
-    'the three-wave schedule must repeat deterministically');
+  assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now,0,rotationSlots).wave_source,'PERSISTED_SCAN_CURSOR');
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now,57,rotationSlots).wave,0,
+    'the three-wave scan cursor schedule repeats deterministically');
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now,19,rotationSlots).wave,1);
 });
 
 
@@ -1386,7 +1386,7 @@ test('three-page history backfill records verified additional 15m history on a l
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:60_000})({limit:20,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
   const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT'&&call.query.interval==='15m');
-  const budget=adaptiveTraderHistoryPageBudget('TESTUSDT',f.now);
+  const budget=adaptiveTraderHistoryPageBudget('TESTUSDT',f.now,0,19);
   const expectedCandles=20+(budget.max_pages-1)*1000;
   assert.equal(pages.length,budget.max_pages,
     'the scan must request only the page budget assigned to this symbol wave');
