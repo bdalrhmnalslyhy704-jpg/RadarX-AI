@@ -3,7 +3,7 @@ import {buildAdaptiveTraderPaperValidationProfile} from './adaptive-trader-execu
 import {COGNITIVE_MODEL_BUILD_CONTRACT,buildCognitiveLearningProfile,buildCognitivePrequentialProfile,assessCognitiveCandidate,applyCognitiveRankAdjustment} from './cognitive-brain.mjs';
 import {buildRadarOutcomeLearningSnapshot,applyRadarOutcomeLearningAdjustment} from './radar-outcome-learning.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
-import {buildAdaptiveDatasetQualityAudit} from './adaptive-dataset-quality-audit.mjs';
+import {buildAdaptiveDatasetQualityAudit,retainBalancedAdaptiveSamples} from './adaptive-dataset-quality-audit.mjs';
 
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -801,7 +801,9 @@ recordServerPaperPortfolio(snapshot,now){
       this.state.samples.push(item);
       newestMarketAudit.set(symbol,item);newMarketSamples++;
     }
-    this.state.samples=this.state.samples.slice(-MAX_SAMPLES);
+    this.state.samples=retainBalancedAdaptiveSamples(this.state.samples,{
+      maxSamples:MAX_SAMPLES,maxTrainingSamples:5000
+    });
     this.state.v5_samples=[];
     // Keep the sequence tensor for each retained training row. With a 6,000-row
     // cap this is bounded and preserves enough chronological groups for the
