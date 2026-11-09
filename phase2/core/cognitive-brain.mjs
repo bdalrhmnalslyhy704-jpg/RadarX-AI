@@ -871,6 +871,74 @@ function factorEvidence(training, { minimumBucket = 8 } = {}) {
   return { factors: output, covered_factor_buckets: covered };
 }
 
+/**
+ * Rank only UP versus DOWN outcomes, matching evaluateFrozenRankingSignal()
+ * used for the existing engine. FLAT remains a non-UP label for Brier/log-loss,
+ * but is excluded from directional AUC and precision@K denominators.
+ */
+export function evaluateCognitiveDirectionalRanking(rows, predictions) {
+  const sourceRows=Array.isArray(rows)?rows:[];
+  const sourceScores=Array.isArray(predictions)?predictions:[];
+  const allOutcomeCount=sourceRows.length;
+  const ranked=sourceRows.map((row,index)=>({
+    index,
+    outcome:row?.outcome,
+    score:finite(sourceScores[index])??Number.NEGATIVE_INFINITY
+  })).filter(row=>row.outcome==='UP'||row.outcome==='DOWN')
+    .sort((a,b)=>b.score-a.score||a.index-b.index);
+  const positiveCount=ranked.filter(row=>row.outcome==='UP').length;
+  const negativeCount=ranked.length-positiveCount;
+  const directionalCount=ranked.length;
+  const prevalenceAll=positiveCount/Math.max(1,allOutcomeCount);
+  const prevalenceDirectional=positiveCount/Math.max(1,directionalCount);
+  const rankingAtFraction=fraction=>{
+    const selectedCount=Math.max(1,Math.min(directionalCount,Math.ceil(directionalCount*fraction)));
+    const selected=ranked.slice(0,selectedCount);
+    const selectedPositive=selected.filter(row=>row.outcome==='UP').length;
+    const precision=selectedPositive/selectedCount;
+    const recall=positiveCount?selectedPositive/positiveCount:null;
+    return {
+      sample_count:selectedCount,
+      positive_samples:selectedPositive,
+      selected_count:selectedCount,
+      positive_count:selectedPositive,
+      precision_pct:Number((precision*100).toFixed(3)),
+      recall_pct:recall===null?null:Number((recall*100).toFixed(3)),
+      lift_vs_prevalence:prevalenceAll>0?Number((precision/prevalenceAll).toFixed(5)):null,
+      lift_vs_all_outcome_prevalence:prevalenceAll>0
+        ?Number((precision/prevalenceAll).toFixed(5)):null,
+      lift_vs_directional_prevalence:prevalenceDirectional>0
+        ?Number((precision/prevalenceDirectional).toFixed(5)):null
+    };
+  };
+  const ascending=ranked.slice().sort((a,b)=>a.score-b.score||a.index-b.index);
+  let positiveRankSum=0;
+  for(let start=0;start<ascending.length;){
+    let end=start+1;
+    while(end<ascending.length&&ascending[end].score===ascending[start].score)end++;
+    const averageRank=((start+1)+end)/2;
+    let groupPositive=0;
+    for(let index=start;index<end;index++)
+      if(ascending[index].outcome==='UP')groupPositive++;
+    positiveRankSum+=groupPositive*averageRank;
+    start=end;
+  }
+  const pairs=positiveCount*negativeCount;
+  const auc=pairs>0
+    ?(positiveRankSum-positiveCount*(positiveCount+1)/2)/pairs:null;
+  return {
+    all_outcome_sample_count:allOutcomeCount,
+    directional_sample_count:directionalCount,
+    excluded_flat_samples:sourceRows.filter(row=>row?.outcome==='FLAT').length,
+    positive_samples:positiveCount,
+    negative_samples:negativeCount,
+    missing_score_samples:ranked.filter(row=>!Number.isFinite(row.score)).length,
+    auc_roc:auc===null?null:Number(auc.toFixed(6)),
+    top_10_pct:directionalCount?rankingAtFraction(0.10):null,
+    top_20_pct:directionalCount?rankingAtFraction(0.20):null
+  };
+}
+
 function evaluateHoldout(rows, fit, comparisonMargin = 0.002) {
   const requiredMargin = finite(comparisonMargin);
   if (rows.length < 20) return {
@@ -883,44 +951,9 @@ function evaluateHoldout(rows, fit, comparisonMargin = 0.002) {
   const base = fit.base_rate;
   const predictions = rows.map(row => predictFromFit(row.features, fit));
   const targets = rows.map(row => row.target);
-  // Ranking metrics are binary-up-event diagnostics. Exclude legacy FLAT
-  // soft labels from AUC/precision denominators; Brier and log-loss still use
-  // every scored row exactly as before.
-  const ranked=predictions.map((probability,index)=>({probability,index,target:targets[index]}))
-    .filter(row=>row.target===0||row.target===1)
-    .sort((a,b)=>b.probability-a.probability||a.index-b.index);
-  const positiveCount=ranked.filter(row=>row.target===1).length;
-  const negativeCount=ranked.filter(row=>row.target===0).length;
-  const rankingAtFraction=fraction=>{
-    const sampleCount=Math.max(1,Math.min(ranked.length,Math.ceil(ranked.length*fraction)));
-    const selected=ranked.slice(0,sampleCount);
-    const selectedPositive=selected.filter(row=>row.target===1).length;
-    const precision=selectedPositive/sampleCount;
-    const recall=positiveCount?selectedPositive/positiveCount:null;
-    const prevalence=positiveCount/Math.max(1,targets.length);
-    return {
-      sample_count:sampleCount,positive_samples:selectedPositive,
-      precision_pct:Number((precision*100).toFixed(1)),
-      recall_pct:recall===null?null:Number((recall*100).toFixed(1)),
-      lift_vs_prevalence:prevalence>0?Number((precision/prevalence).toFixed(3)):null
-    };
-  };
-  let aucWins=0,aucPairs=0;
-  if(positiveCount>0&&negativeCount>0){
-    const positiveScores=ranked.filter(row=>row.target===1).map(row=>row.probability);
-    const negativeScores=ranked.filter(row=>row.target===0).map(row=>row.probability);
-    for(const positiveScore of positiveScores)for(const negativeScore of negativeScores){
-      aucPairs++;
-      if(positiveScore>negativeScore)aucWins++;
-      else if(positiveScore===negativeScore)aucWins+=0.5;
-    }
-  }
-  const rankingMetrics={
-    positive_samples:positiveCount,negative_samples:negativeCount,
-    auc_roc:aucPairs?Number((aucWins/aucPairs).toFixed(5)):null,
-    top_10_pct:rankingAtFraction(0.10),
-    top_20_pct:rankingAtFraction(0.20)
-  };
+  // Match the existing-engine comparison cohort exactly: UP/DOWN only.
+  // Brier/log-loss retain the full binary target, including FLAT as non-UP.
+  const rankingMetrics=evaluateCognitiveDirectionalRanking(rows,predictions);
   const modelBrier = mean(predictions.map((p, index) => (p - targets[index]) ** 2));
   const baselineBrier = mean(targets.map(target => (base - target) ** 2));
   const logLoss = mean(predictions.map((p, index) => {
