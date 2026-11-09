@@ -207,7 +207,11 @@ export function buildAdaptiveDatasetQualityAudit(samples = [], {
     const resolvedAt = finite(row.resolved_at);
     if (!id) { reject('MISSING_SAMPLE_ID'); continue; }
     if (!/^[A-Z0-9]{5,30}USDT$/.test(symbol)) { reject('INVALID_SPOT_SYMBOL'); continue; }
-    if (at === null || at <= 0) { reject('INVALID_SAMPLE_TIME'); continue; }
+    if (at === null || at <= 0 || !Number.isSafeInteger(Math.trunc(at)) || !Number.isFinite(new Date(at).getTime())) {
+      reject('INVALID_SAMPLE_TIME'); continue;
+    }
+    const baselinePrice=finite(row.price);
+    if (baselinePrice===null || baselinePrice<=0) { reject('INVALID_BASELINE_PRICE'); continue; }
     if (!['UP', 'DOWN', 'FLAT'].includes(row.outcome)) {
       reject('OUTCOME_UNAVAILABLE'); unresolved++; continue;
     }
