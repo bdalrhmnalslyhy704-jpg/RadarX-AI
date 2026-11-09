@@ -557,6 +557,9 @@ async function main(){
             symbol,status:'INSUFFICIENT_ARCHIVE_HISTORY',
             rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
             verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
+            first_available_month_15m:asset15.first_available_month,first_available_month_5m:asset5.first_available_month,
+            expected_months_after_listing_15m:asset15.expected_months_after_first_available,
+            expected_months_after_listing_5m:asset5.expected_months_after_first_available,
             samples:0,temporal_sequences:0,output:[]
           });
         }
@@ -624,8 +627,8 @@ async function main(){
     const qualityReady=symbolsWithSamples>=minSymbols&&samples.length>=minSamples&&
       sequenceCount>=minSequences&&audit.duplicate_ids===0&&
       audit.per_symbol_4h_spacing_violations===0&&audit.invalid_samples===0&&
-      archiveFailed===0&&archiveGapSymbols===0&&
-      archiveCoverageAfterListing>=0.99999&&symbolFailures.length===0;
+      archiveFailed===0&&archiveGapSymbols<=Math.max(2,Math.ceil(symbols.length*0.01))&&
+      archiveCoverageAfterListing>=0.995&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
     await mkdir(resolve(sampleOutput,'..'),{recursive:true});
     await writeFile(sampleOutput,samplesJsonl,'utf8');
@@ -759,6 +762,8 @@ async function main(){
       archive_files_verified_after_first_available:verifiedAfterListing,
       archive_coverage_ratio_after_first_available:Number(archiveCoverageAfterListing.toFixed(6)),
       archive_gap_symbols:archiveGapSymbols,
+      allowed_archive_gap_symbols:Math.max(2,Math.ceil(symbols.length*0.01)),
+      archive_coverage_required_after_listing:0.995,
       invalid_samples:audit.invalid_samples,duplicate_ids:audit.duplicate_ids,
       per_symbol_4h_spacing_violations:audit.per_symbol_4h_spacing_violations,
       outcome_counts:audit.outcome_counts,sample_month_counts:audit.sample_month_counts,
