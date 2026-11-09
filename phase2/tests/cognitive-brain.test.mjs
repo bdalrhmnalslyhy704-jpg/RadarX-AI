@@ -312,6 +312,25 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       assert.equal(profile.hybrid_model.selected,true);
       assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
     }
+    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP_W')){
+      assert.equal(profile.hybrid_model.holdout?.evaluated,true,
+        'the validation winner must expose untouched holdout metrics even when it fails');
+      assert.equal(profile.model_selection.challenger_holdout?.evaluated,true);
+      assert.ok(profile.hybrid_model.holdout_comparison);
+      assert.equal(profile.hybrid_model.holdout_comparison.passed,
+        profile.model_selection.challenger_holdout_comparison.passed);
+    }
+    assert.ok(profile.neural_network.inner_selection_diagnostics);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.candidate_member_scale_count,
+      profile.neural_network.member_selection_brier_scores.length);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.passed,
+      Number.isInteger(profile.neural_network.selected_member_index)&&
+        profile.neural_network.selected_member_index>=0);
+    assert.equal(profile.neural_network.inner_selection_diagnostics.failure_reason,
+      Number.isInteger(profile.neural_network.selected_member_index)&&
+        profile.neural_network.selected_member_index>=0
+        ?'NEURAL_MEMBER_SELECTION_PASSED'
+        :profile.neural_network.validation.reason);
 
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
