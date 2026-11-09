@@ -502,6 +502,16 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
     assert.ok(validExpression.includes(gate),'DHDTech success must require '+gate);
   }
   for(const gate of [
+    'Number(neuralNetwork.validation?.required_brier_margin)>=0.003',
+    'Number(neuralNetwork.holdout?.required_brier_margin)>=0.003',
+    'Number(neuralNetwork.holdout_comparison?.required_brier_margin)>=0.003',
+    'Number(temporalNetwork.validation?.required_brier_margin)>=0.003',
+    'Number(temporalNetwork.holdout?.required_brier_margin)>=0.003',
+    'Number(temporalComparison.required_brier_margin)>=0.003'
+  ]){
+    assert.ok(workflow.includes(gate),'DHDTech acceptance must enforce the declared 0.003 Brier margin: '+gate);
+  }
+  for(const gate of [
     'neuralNetwork.selected===true',
     'neuralNetwork.probability_ready===true',
     'neuralNetwork.live_eligibility_ready===true',
