@@ -251,6 +251,10 @@ jobs:
             boosted_tree_probability_ready:boostedTree.probability_ready===true,
             boosted_tree_tree_count:Number(boostedTree.tree_count)||0,
             boosted_tree_training_samples:Number(boostedTree.training_samples)||0,
+            boosted_tree_search_grid_size:Number(boostedTree.search_grid_size)||0,
+            boosted_tree_selected_configuration:String(boostedTree.selected_configuration||'NONE'),
+            boosted_tree_candidate_validation_metrics:Array.isArray(boostedTree.candidate_validation_metrics)
+              ?boostedTree.candidate_validation_metrics:[],
             boosted_tree_validation_brier:boostedTree.validation?.model_brier_score??null,
             boosted_tree_validation_base_rate_brier:boostedTree.validation?.base_rate_brier_score??null,
             boosted_tree_holdout_brier:boostedTree.holdout?.model_brier_score??null,

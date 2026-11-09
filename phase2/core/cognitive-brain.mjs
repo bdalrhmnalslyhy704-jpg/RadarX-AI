@@ -31,6 +31,18 @@ const NEURAL_POLICY = Object.freeze({
   ensembleSeeds: Object.freeze([11, 29, 47])
 });
 export const COGNITIVE_CHALLENGER_BRIER_MARGIN = NEURAL_POLICY.selectionMargin;
+
+// Pre-declared GBDT capacity/regularization candidates. The outer chronological
+// validation window selects one candidate; the untouched holdout is opened once
+// for that winner and is never used to choose a different tree configuration.
+const COGNITIVE_GBDT_VALIDATION_GRID=Object.freeze([
+  Object.freeze({name:'DEPTH3_36R_LR035_L2_12_S065',maxTrees:36,maxDepth:3,
+    learningRate:0.035,l2:12,minimumLeafFraction:0.035,residualScale:0.65}),
+  Object.freeze({name:'DEPTH2_24R_LR020_L2_20_S035',maxTrees:24,maxDepth:2,
+    learningRate:0.02,l2:20,minimumLeafFraction:0.06,residualScale:0.35}),
+  Object.freeze({name:'DEPTH3_32R_LR018_L2_24_S030',maxTrees:32,maxDepth:3,
+    learningRate:0.018,l2:24,minimumLeafFraction:0.07,residualScale:0.30})
+]);
 const FEATURE_NAMES = Object.freeze([
   'volume_expansion',
   'trade_expansion',
@@ -1276,16 +1288,44 @@ export function buildCognitiveLearningProfile(samples = [], {
     beats_recent_logistic:neuralRecentLogisticFit?beatsRecentLogistic:null,
     passed:neuralHoldoutReady
   };
-  // Fit the tabular challenger on the complete outer training block. Its
-  // tree residuals are anchored to the same-window logistic model; validation
-  // may select a challenger, but the final holdout is never used for selection.
+  // Fit every pre-declared tabular candidate on the same outer training rows
+  // and same frozen logistic anchor. The single best validation candidate is
+  // the only tree model permitted to see the untouched final holdout.
   const boostedTrainingReady=neuralGlobalLogisticFit!==null&&
     upEventTraining.length>=neuralMinimum;
-  const boostedTreeFit=boostedTrainingReady
-    ?fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit):null;
-  const boostedTreeValidation=boostedTreeFit
-    ?evaluateHoldout(upEventValidation,boostedTreeFit,comparisonMargin)
-    :{evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
+  const boostedTreeCandidates=boostedTrainingReady
+    ?COGNITIVE_GBDT_VALIDATION_GRID.map(configuration=>{
+      const fit=fitResidualBoostedTrees(upEventTraining,neuralGlobalLogisticFit,configuration);
+      return {
+        configuration,fit,
+        validation:fit?evaluateHoldout(upEventValidation,fit,comparisonMargin):{
+          evaluated:false,model_brier_score:null,reason:'NO_GAINFUL_TREE_SPLIT'
+        }
+      };
+    }).filter(candidate=>candidate.fit&&candidate.validation?.evaluated===true)
+    :[];
+  const bestBoostedTreeCandidate=[...boostedTreeCandidates].sort((a,b)=>
+    a.validation.model_brier_score-b.validation.model_brier_score||
+    a.configuration.name.localeCompare(b.configuration.name))[0]||null;
+  const boostedTreeFit=bestBoostedTreeCandidate?.fit||null;
+  const boostedTreeValidation=bestBoostedTreeCandidate?.validation||
+    {evaluated:false,model_brier_score:null,reason:'BOOSTED_TREE_TRAINING_NOT_READY'};
+  const boostedTreeCandidateMetrics=boostedTreeCandidates.map(candidate=>({
+    configuration:candidate.configuration.name,
+    max_trees:candidate.configuration.maxTrees,
+    max_depth:candidate.configuration.maxDepth,
+    learning_rate:candidate.configuration.learningRate,
+    l2:candidate.configuration.l2,
+    minimum_leaf_fraction:candidate.configuration.minimumLeafFraction,
+    residual_scale:candidate.configuration.residualScale,
+    actual_tree_count:candidate.fit.tree_count,
+    training_samples:candidate.fit.training_samples,
+    validation_sample_count:candidate.validation.sample_count,
+    validation_brier_score:candidate.validation.model_brier_score,
+    validation_base_rate_brier_score:candidate.validation.base_rate_brier_score,
+    validation_auc_roc:candidate.validation.ranking_metrics?.auc_roc??null,
+    validation_beats_base_rate:candidate.validation.beat_base_rate===true
+  }));
   // A small pre-declared convex blend grid is selected on the outer
   // chronological validation block. Only one selected blend can reach the
   // untouched holdout; no runner-up is substituted after seeing holdout data.
@@ -1511,7 +1551,10 @@ export function buildCognitiveLearningProfile(samples = [], {
         validationWinner?.name==='GBDT_RESIDUAL'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
         'TRAINED_NOT_SELECTED',
       model_kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
-      architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_DEPTH3_SHRUNK_36_ROUNDS',
+      architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_VALIDATION_SELECTED_REGULARIZED_GRID_V2',
+      search_grid_size:COGNITIVE_GBDT_VALIDATION_GRID.length,
+      selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,
+      candidate_validation_metrics:boostedTreeCandidateMetrics,
       training_support_ready:boostedTrainingReady,
       fit_failure_reason:boostedTrainingReady&&!boostedTreeFit
         ?'NO_GAINFUL_TREE_SPLIT_OVER_FROZEN_LOGISTIC_RESIDUALS':null,

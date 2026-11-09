@@ -683,6 +683,17 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
+  assert.equal(profile.boosted_tree_model.search_grid_size,3);
+  assert.equal(profile.boosted_tree_model.candidate_validation_metrics.length,3,
+    'three pre-declared GBDT schedules must be compared on the same outer validation rows');
+  const treeCandidates=profile.boosted_tree_model.candidate_validation_metrics;
+  assert.ok(treeCandidates.every(row=>row.training_samples===profile.boosted_tree_model.training_samples&&
+    row.validation_sample_count===profile.validation_samples));
+  const validationWinner=[...treeCandidates].sort((a,b)=>
+    a.validation_brier_score-b.validation_brier_score||
+    a.configuration.localeCompare(b.configuration))[0];
+  assert.equal(profile.boosted_tree_model.selected_configuration,validationWinner.configuration,
+    'only the minimum-Brier pre-declared candidate on validation is allowed to proceed');
   const importance=profile.boosted_tree_model.feature_importance;
   assert.ok(importance.length>0,'every fitted tree must expose at least one gain-attributed feature');
   assert.ok(importance.every(row=>profile.feature_names.includes(row.feature)&&
