@@ -171,11 +171,11 @@ export async function fetchAdaptiveTraderHistoricalKlines({
     const currentRows=Array.isArray(result.data)?result.data:[];
     const earliestOpen=finite(currentRows[0]?.[0]);
     if(earliestOpen===null)break;
+    result.historical_pages_attempted=page;
     try{
       const older=await rest.request('/api/v3/klines',{
         symbol:cleanSymbol,interval:cleanInterval,limit:1000,endTime:earliestOpen-1
       });
-      result.historical_pages_attempted=page;
       const olderRows=Array.isArray(older?.data)?older.data:[];
       const validOlder=olderRows.filter(row=>{
         const open=finite(row?.[0]);
