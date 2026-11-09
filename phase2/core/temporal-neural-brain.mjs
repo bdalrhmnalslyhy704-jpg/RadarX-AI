@@ -916,9 +916,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     };
   }
 
-  // Independent regime-specific TCN ensembles are trained only on each
-  // regime's chronological training slice. Selection, calibration, validation
-  // and untouched holdout rows never enter their gradient updates.
+  // The TCN itself is one shared pooled model. Regime-local chronological
+  // partitions below support local training-only anchors and regime diagnostics;
+  // they do not create separate TCN ensembles or per-regime TCN member weights.
+  // The TCN uses shared training, selection and calibration cutoffs, followed
+  // by independent outer validation and untouched holdout gates per regime.
   const fitRows=training.slice(-Math.max(minTrainingSamples,maxTrainingSamples));
   const fitTimes=[...new Set(fitRows.map(row=>row.at))].sort((a,b)=>a-b);
   // Allocate more of a small/medium fitted history to model estimation while
@@ -1060,8 +1062,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     positive:sharedTrainingRows.filter(row=>row.target===1).length,
     negative:sharedTrainingRows.filter(row=>row.target===0).length
   };
-  // Temporal residuals are fitted independently inside the BTC regime loop.
-  // The pooled logistic model above remains an aggregate diagnostic only.
+  // The TCN residual ensemble uses the shared training rows and pooled
+  // training-only logistic anchor. Local regime anchors above are retained for
+  // separate regime-specific temporal boosted-tree diagnostics.
   const sharedCalibrationRows=fitRows.filter(row=>
     row.at>=sharedMemberSelectionCutoffAt&&row.at<sharedSelectionCutoffAt&&
     row.resolved_at<sharedSelectionCutoffAt)
