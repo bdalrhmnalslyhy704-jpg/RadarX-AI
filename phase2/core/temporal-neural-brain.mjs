@@ -334,9 +334,19 @@ function gradientsFor(sequence, target, model, cache) {
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
-  trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
+  trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+  positiveClassWeighting='NONE'
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit);
+  const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
+  const negativeSamples=Math.max(0,rows.length-positiveSamples);
+  const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
+  const positiveSampleWeight=usePositiveClassWeighting&&positiveSamples>0
+    ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
+  const totalSampleWeight=negativeSamples+positiveSamples*positiveSampleWeight;
+  model.training_sample_profile={training_samples:rows.length,positive_samples:positiveSamples,
+    negative_samples:negativeSamples,positive_class_weighting:usePositiveClassWeighting
+      ?'SQRT_INVERSE_PREVALENCE':'NONE',positive_sample_weight:Number(positiveSampleWeight.toFixed(5))};
   model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
     ?baselineByRegime:null;
   model.training_objective=trainingObjective;
@@ -351,14 +361,15 @@ function fitMember(rows, seed, {
     for (const row of rows) {
       const cache = forward(row.sequence, model);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
+      const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       const plus = (target, source) => Array.isArray(target)
         ? target.map((value, index) => plus(value, source[index]))
-        : target + source;
+        : target + source*sampleWeight;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         gradient[key] = plus(gradient[key], itemGradient[key]);
       }
     }
-    const averaged = scaleTree(gradient, 1 / Math.max(1, rows.length));
+    const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
     const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
@@ -740,7 +751,8 @@ function fitEnsemble(rows, options = {}) {
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      trainingObjective:'SQRT_INVERSE_PREVALENCE_WEIGHTED_BRIER_TRAIN_ONLY',
+      positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT}
   ];
   const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
@@ -749,11 +761,11 @@ function fitEnsemble(rows, options = {}) {
   return {
     members,seeds:[...SEEDS],
     architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21',
+    training_strategy:'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_objective:'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22',
     candidate_residual_scales:[...RESIDUAL_SCALES],
     training_prior_probability:baseRate
   };
@@ -1055,10 +1067,10 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_member_by_regime:{},
     residual_scales_by_regime:{},
     probability_calibrators_by_regime:{},
-    training_strategy:'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21',
+    training_strategy:'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
-    training_objective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    training_objective:'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22',
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
     candidate_residual_scales:[...RESIDUAL_SCALES]
   };
@@ -1232,34 +1244,47 @@ export function buildTemporalNeuralProfile(samples = [], {
           'TEMPORAL_TREE_DID_NOT_BEAT_SELECTION_LOGISTIC'};
     const selectionPrior=regimePrior;
     const candidateResidualScales=RESIDUAL_SCALES;
-    const memberRanks=regimeFit.members.flatMap((member,index)=>
+    const memberSelectionLogistic=evaluate(memberSelectionRows,
+      sequence=>predictLogistic(sequence,regimeBaseline),selectionPrior);
+    const memberCandidates=regimeFit.members.flatMap((member,index)=>
       candidateResidualScales.map(residualScale=>({
         index,residual_scale:residualScale,
         metrics:evaluate(memberSelectionRows,
           sequence=>forward(sequence,member,residualScale).probability,selectionPrior)
       }))
-    ).filter(row=>row.metrics.evaluated===true)
+    ).filter(row=>row.metrics.evaluated===true);
+    const memberRanks=memberCandidates.filter(row=>
+      memberSelectionLogistic.evaluated===true&&row.metrics.beat_base_rate===true&&
+      row.metrics.model_brier_score+comparisonMargin<memberSelectionLogistic.model_brier_score)
       .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
         a.index-b.index||a.residual_scale-b.residual_scale);
     const selectedMemberIndex=memberRanks.length?memberRanks[0].index:-1;
-    const selectedResidualScale=memberRanks.length?memberRanks[0].residual_scale:1;
+    const selectedResidualScale=memberRanks.length?memberRanks[0].residual_scale:0;
     fitted.selected_member_by_regime[regime]=selectedMemberIndex;
     fitted.residual_scales_by_regime[regime]=selectedResidualScale;
-    const memberSelectionScores=memberRanks.map(row=>({
+    const memberSelectionScores=memberCandidates.map(row=>({
       index:row.index,residual_scale:row.residual_scale,
       brier_score:row.metrics.model_brier_score,
       base_rate_brier_score:row.metrics.base_rate_brier_score,
-      beat_base_rate:row.metrics.beat_base_rate
+      beat_base_rate:row.metrics.beat_base_rate,
+      same_window_logistic_brier_score:memberSelectionLogistic.model_brier_score??null,
+      beats_same_window_logistic:memberSelectionLogistic.evaluated===true&&
+        row.metrics.model_brier_score+comparisonMargin<memberSelectionLogistic.model_brier_score,
+      selected:row.index===selectedMemberIndex&&row.residual_scale===selectedResidualScale
     }));
     // Calibration has a later chronological block and is regime-local. It
     // never reuses selection labels or borrows outcomes from another regime.
-    const selectionCalibrator=fitSelectionProbabilityCalibrator(
-      calibrationRows,
-      sequence=>forward(sequence,regimeFit.members[selectedMemberIndex],selectedResidualScale).probability,
-      {minimumSamples:30,minimumPositive:5,minimumNegative:20,
-       iterations:300,learningRate:0.03,regularization:0.45,
-       fitOn:calibrationSource}
-    );
+    const selectionCalibrator=selectedMemberIndex>=0
+      ?fitSelectionProbabilityCalibrator(
+        calibrationRows,
+        sequence=>forward(sequence,regimeFit.members[selectedMemberIndex],selectedResidualScale).probability,
+        {minimumSamples:30,minimumPositive:5,minimumNegative:20,
+         iterations:300,learningRate:0.03,regularization:0.45,
+         fitOn:calibrationSource}
+      )
+      :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',fit_on:calibrationSource,
+        sample_count:0,positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
+        reason:'NO_TCN_MEMBER_BEAT_SAME_WINDOW_LOGISTIC_ON_SELECTION'};
     fitted.probability_calibrators_by_regime[regime]=selectionCalibrator;
     fitted.specialists_by_regime[regime]={
       ...regimeFit,selected_member_index:selectedMemberIndex,
@@ -1388,6 +1413,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_model:validationModel,validation_logistic:validationLogistic,
       holdout_model:holdoutModel,holdout_logistic:holdoutLogistic,
       member_selection_scores:memberSelectionScores,
+      member_selection_logistic_brier:memberSelectionLogistic.model_brier_score??null,
+      member_selection_qualified_candidates:memberRanks.length,
       probability_calibration:selectionCalibrator,
       logistic_probability_calibration:logisticProbabilityCalibrator};
   }
@@ -1564,6 +1591,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibration_selection_samples:Number(result.calibration_selection_samples)||0,
       member_selection_samples:Number(result.member_selection_samples)||0,
       member_selection_source:result.member_selection_source||null,
+      member_selection_logistic_brier:result.member_selection_logistic_brier??null,
+      member_selection_qualified_candidates:Number(result.member_selection_qualified_candidates)||0,
+      member_selection_scores:Array.isArray(result.member_selection_scores)?result.member_selection_scores:[],
       selected_member_index:Number.isInteger(result.selected_member_index)?result.selected_member_index:null,
       selected_residual_scale:Number(result.selected_residual_scale),
       neural_residual_contributes:result.neural_residual_contributes===true,

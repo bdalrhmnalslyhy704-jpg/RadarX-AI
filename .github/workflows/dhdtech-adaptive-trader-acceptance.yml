@@ -149,7 +149,7 @@ jobs:
                 const hybridModel=cognitiveProfile.hybrid_model||cognitiveCapture.hybrid_model||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'&&
-                  temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'&&
+                  temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE'&&
                   temporalNetwork.model_split_scope==='INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD'&&
                   temporalNetwork.model_scope==='INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS'&&
                   temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
@@ -388,7 +388,7 @@ jobs:
                       specialist.probability_calibration?.fitted===true&&
                       specialist.logistic_probability_calibration?.fitted===true;
                   });
-                const neuralLiveReady=temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'&&
+                const neuralLiveReady=temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE'&&
                   temporalNetwork.model_split_scope==='INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD'&&
                   temporalNetwork.model_scope==='INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS'&&
                   temporalNeuralContributionSafe&&temporalNetwork.selected===true&&

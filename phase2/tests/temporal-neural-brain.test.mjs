@@ -173,19 +173,23 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }));
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
-  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21');
-  assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE');
+  assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.equal(profile.model_scope,'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS');
   assert.equal(profile.member_selection_method,'REGIME_LOCAL_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.regime_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3');
   assert.equal(profile.residual_scale_selection,'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4');
-  assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.1,0.25,0.5,1]);
   assert.equal(profile.member_training_profiles.length,3);
+  assert.equal(profile.member_training_profiles[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.member_training_profiles[1].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.member_training_profiles[2].trainingObjective,'SQRT_INVERSE_PREVALENCE_WEIGHTED_BRIER_TRAIN_ONLY');
+  assert.equal(profile.member_training_profiles[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
   assert.ok(profile.member_training_profiles.every(row=>
-    row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
-    'member objective metadata must match the Brier-only gradient implemented by V6');
+    Number.isFinite(Number(row.latentChannels))&&Number.isFinite(Number(row.trainableParameters))),
+    'all members retain the fixed causal TCN architecture contract');
   assert.equal(new Set(profile.member_training_profiles.map(row=>JSON.stringify(row))).size,3,
     'ensemble members must use distinct deterministic training schedules');
   assert.equal(profile.sequence_steps,24);
@@ -251,11 +255,12 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.equal(expert.model_scope,'INDEPENDENT_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR');
-  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21');
-  assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE');
+  assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.equal(profile.model_scope,'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
-  assert.ok(profile.member_training_profiles_by_regime.BTC_RISK_ON.every(row=>
+  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.ok(profile.member_training_profiles_by_regime.BTC_RISK_ON.slice(0,2).every(row=>
     row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'));
   assert.equal(expert.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
@@ -285,9 +290,12 @@ test('TCN trains and validates an independent expert for each supported BTC regi
   assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
   assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
   assert.equal(profile.calibration_fit_scope,'REGIME_LOCAL_CALIBRATION_BLOCK_ONLY');
-  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21');
-  assert.equal(profile.training_objective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
+  assert.equal(profile.training_strategy,'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE');
+  assert.equal(profile.training_objective,'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22');
   assert.equal(profile.model_scope,'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS');
+  assert.equal(typeof expert.member_selection_logistic_brier,'number');
+  assert.ok(expert.member_selection_scores.every(row=>
+    typeof row.beats_same_window_logistic==='boolean'));
   assert.ok(expert.selection_start_at<expert.calibration_start_at&&
     expert.calibration_start_at<expert.validation_start_at,
     'member selection, calibration and reported validation must use three disjoint chronological blocks');
@@ -598,7 +606,7 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes('CONTAINER_SHARED_NEURAL_SAMPLE_IDENTITY_MISMATCH'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
-  assert.ok(containerWorkflow.includes("training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'"));
+  assert.ok(containerWorkflow.includes("training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE'"));
   assert.ok(containerWorkflow.includes('neural_residual_contributes===true'));
   assert.ok(workflow.includes('temporalNeuralContributionSafe'));
   assert.ok(workflow.includes('timeout-minutes: 65'));
