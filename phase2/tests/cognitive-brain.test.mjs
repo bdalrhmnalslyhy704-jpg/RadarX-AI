@@ -7,11 +7,42 @@ import {
   applyCognitiveRankAdjustment,
   COGNITIVE_CHALLENGER_BRIER_MARGIN,
   effectiveCognitiveChallengerMargin,
-  hasCognitiveBrierSuperiority
+  hasCognitiveBrierSuperiority,
+  COGNITIVE_FEATURE_SCHEMA,
+  COGNITIVE_FEATURE_NAMES,
+  buildCognitiveFeatureVector
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
+
+test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
+  assert.equal(COGNITIVE_FEATURE_SCHEMA,'CROSS_ASSET_EARLY_FLOW_FEATURES_V2');
+  const index=Object.fromEntries(COGNITIVE_FEATURE_NAMES.map((name,i)=>[name,i]));
+  for(const name of [
+    'relative_momentum_divergence','compression_x_buyer',
+    'micro_buy_flow_acceleration','average_trade_size_expansion','micro_availability_mask'
+  ])assert.ok(Number.isInteger(index[name]),'missing feature '+name);
+  const vector=buildCognitiveFeatureVector({
+    volume_ratio:4,trade_ratio:1,taker_buy_ratio:0.55,
+    compression_ratio:0.6,relative_strength_vs_btc_pct:2,
+    recent_15m_return_pct:0.5,higher_low:true,
+    micro_5m_available:true,micro_5m_taker_buy_ratio:0.7
+  });
+  assert.equal(vector.length,18,'the compact V5 input size remains unchanged');
+  assert.ok(vector[index.relative_momentum_divergence]>0);
+  assert.ok(vector[index.compression_x_buyer]>0);
+  assert.ok(vector[index.micro_buy_flow_acceleration]>0);
+  assert.ok(vector[index.average_trade_size_expansion]>0);
+  assert.equal(vector[index.micro_availability_mask],1);
+  const withoutMicro=buildCognitiveFeatureVector({
+    volume_ratio:4,trade_ratio:1,taker_buy_ratio:0.55,compression_ratio:0.6,
+    relative_strength_vs_btc_pct:2,recent_15m_return_pct:0.5,micro_5m_available:false
+  });
+  assert.equal(withoutMicro[index.micro_buy_flow_acceleration],0);
+  assert.equal(withoutMicro[index.micro_availability_mask],0,
+    'missing 5m evidence must not look like neutral buyer flow');
+});
 
 test('V5 neural and hybrid challengers require a strict 0.003 Brier improvement',()=>{
   assert.equal(COGNITIVE_CHALLENGER_BRIER_MARGIN,0.003);
@@ -250,6 +281,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
     ]);
     assert.equal(profile.neural_network.ensemble_members_required, 3);
+    assert.equal(profile.feature_schema,COGNITIVE_FEATURE_SCHEMA);
+    assert.equal(profile.neural_network.feature_schema,COGNITIVE_FEATURE_SCHEMA);
     assert.equal(profile.neural_network.input_neurons, 18);
     assert.equal(profile.neural_network.hidden_neurons, 10);
     assert.equal(profile.neural_network.second_hidden_neurons, 6);

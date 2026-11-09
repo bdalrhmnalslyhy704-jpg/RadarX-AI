@@ -43,7 +43,8 @@ const COGNITIVE_GBDT_VALIDATION_GRID=Object.freeze([
   Object.freeze({name:'DEPTH3_32R_LR018_L2_24_S030',maxTrees:32,maxDepth:3,
     learningRate:0.018,l2:24,minimumLeafFraction:0.07,residualScale:0.30})
 ]);
-const FEATURE_NAMES = Object.freeze([
+export const COGNITIVE_FEATURE_SCHEMA='CROSS_ASSET_EARLY_FLOW_FEATURES_V2';
+export const COGNITIVE_FEATURE_NAMES = Object.freeze([
   'volume_expansion',
   'trade_expansion',
   'buyer_pressure',
@@ -57,12 +58,13 @@ const FEATURE_NAMES = Object.freeze([
   'upper_wick_rejection',
   'volume_x_buyer',
   'structure_x_buyer',
-  'relative_x_trend',
-  'compression_x_structure',
-  'volume_x_buyer_x_structure',
-  'trade_x_buyer',
-  'volume_buyer_structure_confluence'
+  'relative_momentum_divergence',
+  'compression_x_buyer',
+  'micro_buy_flow_acceleration',
+  'average_trade_size_expansion',
+  'micro_availability_mask'
 ]);
+const FEATURE_NAMES=COGNITIVE_FEATURE_NAMES;
 
 function isCognitiveBinaryModelVariant(value) {
   const variant=String(value||'').trim();
@@ -158,7 +160,14 @@ function normalizedFeatures(features = {}) {
   const close = closeRaw === null ? 0 : clamp((closeRaw - 0.5) * 2, -1, 1);
   const wickRatio = wickRaw !== null && rangeRaw !== null && rangeRaw > 0 ? wickRaw / rangeRaw : null;
   const wickPenalty = wickRatio === null ? 0 : -clamp((wickRatio - 0.35) / 0.35, 0, 2);
-  const coreConfluence = volRaw !== null && volRaw >= 1.5 && buyerRaw !== null && buyerRaw >= 0.52 && structure === 1 ? 1 : 0;
+  const relativeMomentumDivergence=relativeRaw!==null&&momentumRaw!==null
+    ?clamp((relativeRaw-momentumRaw)/1.5,-2,2):0;
+  const compressionBuyer=compression*buyer;
+  const microAvailable=f.micro_5m_available===true&&microRaw!==null;
+  const microBuyFlowAcceleration=microAvailable&&buyerRaw!==null
+    ?clamp((microRaw-buyerRaw)/0.1,-2,2):0;
+  const averageTradeSizeExpansion=volRaw!==null&&tradeRaw!==null&&tradeRaw>0
+    ?clamp(Math.log(clamp(volRaw/tradeRaw,0.05,20))/Math.log(2),-2,2):0;
 
   return [
     volume,
@@ -174,12 +183,16 @@ function normalizedFeatures(features = {}) {
     wickPenalty,
     volume * buyer,
     structure * buyer,
-    relative * trend,
-    compression * structure,
-    volume * buyer * structure,
-    trades * buyer,
-    coreConfluence
+    relativeMomentumDivergence,
+    compressionBuyer,
+    microBuyFlowAcceleration,
+    averageTradeSizeExpansion,
+    microAvailable?1:0
   ];
+}
+
+export function buildCognitiveFeatureVector(features={}){
+  return normalizedFeatures(features);
 }
 
 function validResolvedSamples(samples, {
@@ -994,6 +1007,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     const evidence = factorEvidence(resolved, { minimumBucket });
     return {
       method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
       outcome_horizon_ms: horizonMs,
       comparison_contract:{
         target_definition:TEMPORAL_TARGET_DEFINITION,
@@ -1038,7 +1052,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       neural_network: {
         status: resolved.length >= minNeuralTrainingSamples ? 'WAITING_FOR_CHRONOLOGICAL_SPLIT' : 'WAITING_FOR_MATURED_OUTCOMES',
         architecture: FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
-        input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
+        feature_schema:COGNITIVE_FEATURE_SCHEMA,
+      input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
         second_hidden_neurons:NEURAL_POLICY.secondHiddenUnits,output_neurons: 1,
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
@@ -1446,6 +1461,7 @@ export function buildCognitiveLearningProfile(samples = [], {
 
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
+    feature_schema:COGNITIVE_FEATURE_SCHEMA,
     outcome_horizon_ms: horizonMs,
     comparison_contract:{
       target_definition:TEMPORAL_TARGET_DEFINITION,
@@ -1491,6 +1507,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         neuralSelected ? 'VALIDATION_SELECTED_BUT_HOLDOUT_COMPARISON_FAILED' :
         neuralValidation.beat_base_rate===true ? 'VALIDATED_BUT_NOT_BETTER_THAN_CHALLENGER' : 'VALIDATION_DID_NOT_BEAT_BASE_RATE',
       architecture: neuralFit?.architecture || FEATURE_NAMES.length+'-'+NEURAL_POLICY.hiddenUnits+'-'+NEURAL_POLICY.secondHiddenUnits+'-1+RESIDUAL',
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,

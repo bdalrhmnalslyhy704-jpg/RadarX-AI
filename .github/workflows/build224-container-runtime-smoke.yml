@@ -181,6 +181,9 @@ jobs:
           const summary=x.last_summary||{};
           const boostedTree=brainProfile.boosted_tree_model||{};
           const hybridModel=brainProfile.hybrid_model||{};
+          if(brainProfile.feature_schema!=='CROSS_ASSET_EARLY_FLOW_FEATURES_V2'){
+            throw new Error('CONTAINER_COGNITIVE_FEATURE_SCHEMA_MISMATCH '+String(brainProfile.feature_schema||'MISSING'));
+          }
           if(Number(brainProfile.resolved_samples)>0&&
              (sharedComparison.sample_identity_matches!==true||
               sharedComparison.sample_fingerprint!==temporalNetwork.outer_sample_fingerprint||
@@ -236,6 +239,7 @@ jobs:
              'LIVE_GATE_PASSED_OUT_OF_SAMPLE'].includes(String(temporalNetwork.status));
           const cognitiveEvidence={
             method:String(brainProfile.method||brain.method||'UNKNOWN'),
+            cognitive_feature_schema:String(brainProfile.feature_schema||'UNKNOWN'),
             shared_target_definition:String(sharedComparison.target_definition||'UNKNOWN'),
             shared_sample_identity_matches:sharedComparison.sample_identity_matches===true,
             shared_outer_split_applied:sharedComparison.shared_outer_split_applied===true,

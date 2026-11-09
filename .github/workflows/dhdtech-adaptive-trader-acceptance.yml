@@ -185,6 +185,7 @@ jobs:
                 const cognitiveSplitReady=Boolean(
                   sharedDatasetReady&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
+                  cognitiveProfile.feature_schema==='CROSS_ASSET_EARLY_FLOW_FEATURES_V2'&&
                   Number(cognitiveProfile.resolved_samples)>=100&&
                   Number(cognitiveProfile.training_samples)>=60&&
                   Number(cognitiveProfile.validation_samples)>=20&&
@@ -362,6 +363,7 @@ jobs:
                   (manualScanRequestedAt===null||scannedAt>=manualScanRequestedAt-5000);
                 const cognitiveV5=value.cognitive_model_contract==='RADARX_COGNITIVE_AGENT_V5_TCN_V7'&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
+                  cognitiveProfile.feature_schema==='CROSS_ASSET_EARLY_FLOW_FEATURES_V2'&&
                   cognitiveProfile.identifier_features_used===false&&neuralNetworkContract&&temporalNetworkContract;
                 const probabilityClaimSafe=temporalNetwork.probability_ready!==true||
                   (temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
