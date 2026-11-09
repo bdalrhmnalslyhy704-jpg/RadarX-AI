@@ -179,6 +179,9 @@ export class AdaptiveTraderWorker{
         this.state.reset_reason='LEGACY_NEURAL_TRAINING_DATA_PURGED';
         this.logger.info?.('[ADAPTIVE_TRADER_LEGACY_NEURAL_MEMORY_PURGED] fresh closed-candle dataset required');
       }
+      this.state.dataset_quality_audit=buildAdaptiveDatasetQualityAudit(this.trainingSamples(),{
+        temporalProfile:this.state.cognitive_profile?.temporal_network,now:Date.now()
+      });
       this.enabled=true;this.state.enabled=true;this.state.last_error=null;
       this.interval=setInterval(()=>{void this.runOnce();},this.intervalMs);
       this.interval.unref?.();
