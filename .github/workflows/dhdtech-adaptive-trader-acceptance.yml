@@ -149,9 +149,9 @@ jobs:
                 const hybridModel=cognitiveProfile.hybrid_model||cognitiveCapture.hybrid_model||{};
                 const temporalNetworkContract=Boolean(
                   temporalNetwork.architecture==='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'&&
-                  temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE'&&
-                  temporalNetwork.model_split_scope==='INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD'&&
-                  temporalNetwork.model_scope==='INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS'&&
+                  temporalNetwork.training_strategy==='SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1'&&
+                  temporalNetwork.model_split_scope==='SHARED_POOLED_CHRONOLOGICAL_PURGED_WALK_FORWARD_WITH_REGIME_GATES_V1'&&
+                  temporalNetwork.model_scope==='SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR'&&
                   temporalNetwork.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'&&
                   Number(temporalNetwork.sequence_steps)===24&&
                   Number(temporalNetwork.sequence_channels)===29&&
@@ -376,11 +376,11 @@ jobs:
                     const specialist=temporalNetwork.regime_specialists?.[regime];
                     return specialist?.neural_residual_contributes===true&&
                       Number(specialist.selected_residual_scale)>0&&
-                      specialist.member_selection_source==='REGIME_MEMBER_SELECTION_BLOCK'&&
-                      specialist.calibration_source==='REGIME_CALIBRATION_BLOCK'&&
-                      specialist.baseline_anchor_source==='REGIME_SPECIFIC_TRAINING_ONLY'&&
-                      Number(specialist.local_selection_samples)===Number(specialist.member_selection_samples)&&
-                      Number(specialist.local_calibration_samples)===Number(specialist.calibration_samples)&&
+                      specialist.member_selection_source==='SHARED_POOLED_MEMBER_SELECTION_BLOCK'&&
+                      specialist.calibration_source==='SHARED_POOLED_CALIBRATION_BLOCK'&&
+                      specialist.baseline_anchor_source==='SHARED_POOLED_TRAINING_ONLY'&&
+                      Number(specialist.shared_member_selection_samples)===Number(specialist.member_selection_samples)&&
+                      Number(specialist.shared_calibration_samples)===Number(specialist.calibration_samples)&&
                       Number(specialist.max_training_outcome_resolved_at)<Number(specialist.training_cutoff_at)&&
                       Number(specialist.training_cutoff_at)<Number(specialist.member_selection_cutoff_at)&&
                       Number(specialist.member_selection_cutoff_at)<Number(specialist.calibration_cutoff_at)&&
@@ -388,9 +388,9 @@ jobs:
                       specialist.probability_calibration?.fitted===true&&
                       specialist.logistic_probability_calibration?.fitted===true;
                   });
-                const neuralLiveReady=temporalNetwork.training_strategy==='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE'&&
-                  temporalNetwork.model_split_scope==='INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD'&&
-                  temporalNetwork.model_scope==='INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS'&&
+                const neuralLiveReady=temporalNetwork.training_strategy==='SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1'&&
+                  temporalNetwork.model_split_scope==='SHARED_POOLED_CHRONOLOGICAL_PURGED_WALK_FORWARD_WITH_REGIME_GATES_V1'&&
+                  temporalNetwork.model_scope==='SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR'&&
                   temporalNeuralContributionSafe&&temporalNetwork.selected===true&&
                   temporalNetwork.probability_ready===true&&temporalNetwork.live_eligibility_ready===true&&
                   temporalNetwork.validation?.evaluated===true&&temporalNetwork.validation?.beat_base_rate===true&&
