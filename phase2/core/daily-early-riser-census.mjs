@@ -90,12 +90,11 @@ export function classifyDailyEarlyRiserFirstPassage({
     target_pct:target,adverse_pct:adverse,horizon_bars:horizonBars};
   const upLevel=baseline.close*(1+target/100);
   const downLevel=baseline.close*(1-adverse/100);
-  let maxHigh=baseline.close,minLow=baseline.close;
+  const maxHigh=Math.max(baseline.close,...path.map(row=>row.high));
+  const minLow=Math.min(baseline.close,...path.map(row=>row.low));
   let result=null;
   for(let index=0;index<path.length;index++){
     const candle=path[index];
-    maxHigh=Math.max(maxHigh,candle.high);
-    minLow=Math.min(minLow,candle.low);
     const upHit=candle.high>=upLevel;
     const downHit=candle.low<=downLevel;
     if(upHit&&downHit){
@@ -103,6 +102,7 @@ export function classifyDailyEarlyRiserFirstPassage({
         status:'AMBIGUOUS',outcome:'AMBIGUOUS',
         reason:'TARGET_AND_ADVERSE_BARRIER_TOUCHED_IN_SAME_15M_CANDLE',
         first_touch_index:index,first_touch_at:candle.closeTime,
+        time_to_first_touch_minutes:Number(((candle.closeTime-baseline.closeTime)/60000).toFixed(2)),
         target_level:upLevel,adverse_level:downLevel
       };
       break;
@@ -111,6 +111,7 @@ export function classifyDailyEarlyRiserFirstPassage({
       result={
         status:'RESOLVED',outcome:'UP',reason:'TARGET_REACHED_BEFORE_ADVERSE_BARRIER',
         first_touch_index:index,first_touch_at:candle.closeTime,
+        time_to_first_touch_minutes:Number(((candle.closeTime-baseline.closeTime)/60000).toFixed(2)),
         first_touch_price_level:upLevel
       };
       break;
@@ -119,6 +120,7 @@ export function classifyDailyEarlyRiserFirstPassage({
       result={
         status:'RESOLVED',outcome:'DOWN',reason:'ADVERSE_BARRIER_REACHED_BEFORE_TARGET',
         first_touch_index:index,first_touch_at:candle.closeTime,
+        time_to_first_touch_minutes:Number(((candle.closeTime-baseline.closeTime)/60000).toFixed(2)),
         first_touch_price_level:downLevel
       };
       break;
@@ -126,7 +128,8 @@ export function classifyDailyEarlyRiserFirstPassage({
   }
   if(!result)result={
     status:'RESOLVED',outcome:'FLAT',reason:'NEITHER_BARRIER_REACHED_WITHIN_24H',
-    first_touch_index:null,first_touch_at:validation.end_close_time
+    first_touch_index:null,first_touch_at:validation.end_close_time,
+    time_to_first_touch_minutes:null
   };
   return {
     ...result,
