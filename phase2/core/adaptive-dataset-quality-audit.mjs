@@ -145,10 +145,6 @@ function temporalSequenceRejectReason(sequence) {
   return null;
 }
 
-function validSequence(sequence) {
-  return temporalSequenceRejectReason(sequence)===null;
-}
-
 function phaseSupport(temporalProfile = {}) {
   const specialists = temporalProfile?.regime_specialists;
   const output = {};
