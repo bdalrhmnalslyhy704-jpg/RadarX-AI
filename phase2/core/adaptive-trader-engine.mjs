@@ -682,6 +682,12 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       selected.push(phaseRows[index]);
   }
   const out=[];
+  // Selected anchors are chronological. Advance each reference-series cursor
+  // once instead of filtering the full 12-month BTC/5m history for every sample.
+  // This preserves the exact <=baseline cutoff while changing archive replay
+  // from repeated O(history × samples) scans to a linear pass plus bounded slices.
+  selected.sort((a,b)=>a.index-b.index);
+  let btcCursor=-1,fastCursor=-1;
   for(const item of selected){
     const {index,volume24h,dailyReturn,baseline,future}=item;
     const evaluationNow=baseline.closeTime+1;
@@ -692,8 +698,15 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     // TCN requires 96 prior closed 15m candles for asset-day context plus 24 model steps.
     // Keep this historical replay slice wide enough to build the same 24x29 tensor as live scans.
     const baselineRaw=candles.slice(Math.max(0,index-119),index+1).map(row=>row.raw);
-    const baseBtcRaw=btcCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-1000).map(row=>row.raw);
-    const baseFastRaw=fastCandles.filter(row=>row.candle.closeTime<=baseline.closeTime).slice(-720).map(row=>row.raw);
+    while(btcCursor+1<btcCandles.length&&
+      btcCandles[btcCursor+1].candle.closeTime<=baseline.closeTime)btcCursor++;
+    while(fastCursor+1<fastCandles.length&&
+      fastCandles[fastCursor+1].candle.closeTime<=baseline.closeTime)fastCursor++;
+    const btcEnd=btcCursor+1,fastEnd=fastCursor+1;
+    const baseBtcRaw=btcEnd>0
+      ?btcCandles.slice(Math.max(0,btcEnd-1000),btcEnd).map(row=>row.raw):[];
+    const baseFastRaw=fastEnd>0
+      ?fastCandles.slice(Math.max(0,fastEnd-720),fastEnd).map(row=>row.raw):[];
     const ticker={
       symbol:cleanSymbol,lastPrice:String(baseline.close),
       quoteVolume:String(volume24h),priceChangePercent:String(dailyReturn)
