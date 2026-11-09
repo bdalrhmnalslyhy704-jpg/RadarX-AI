@@ -170,19 +170,32 @@ function countsForTarget(samples,key){
   for(const row of samples)counts[row.targets?.[key]?.outcome||'INVALID']++;
   return counts;
 }
+function countsForMarketMove(samples,key){
+  const counts={UP:0,FLAT:0,INVALID:0};
+  for(const row of samples){
+    const event=row.targets?.[key]?.market_move_event;
+    if(event?.status!=='RESOLVED'){counts.INVALID++;continue;}
+    if(event.outcome==='UP')counts.UP++;
+    else if(event.outcome==='FLAT')counts.FLAT++;
+    else counts.INVALID++;
+  }
+  return counts;
+}
 function median(values){
   const rows=values.filter(Number.isFinite).sort((a,b)=>a-b);
   if(!rows.length)return null;
   const mid=Math.floor(rows.length/2);
   return rows.length%2?(rows[mid]):(rows[mid-1]+rows[mid])/2;
 }
-function rankingMetric(rows,targetKey,fraction,includeFlat=false){
+function rankingMetric(rows,targetKey,fraction,includeFlat=false,labelField='tradeable'){
+  const labelFor=row=>labelField==='market_move_event'
+    ?row.targets?.[targetKey]?.market_move_event:row.targets?.[targetKey];
   const eligible=rows.filter(row=>{
-    const label=row.targets?.[targetKey];
+    const label=labelFor(row);
     return label?.status==='RESOLVED'&&
       (includeFlat?['UP','DOWN','FLAT'].includes(label.outcome):['UP','DOWN'].includes(label.outcome));
   });
-  const ranked=eligible.map((row,index)=>({index,outcome:row.targets[targetKey].outcome,
+  const ranked=eligible.map((row,index)=>({index,outcome:labelFor(row).outcome,
     score:finite(row.base_score)??Number.NEGATIVE_INFINITY}))
     .sort((a,b)=>b.score-a.score||a.index-b.index);
   const up=ranked.filter(row=>row.outcome==='UP').length;
@@ -217,28 +230,71 @@ function rankingMetric(rows,targetKey,fraction,includeFlat=false){
 }
 function summarizeTarget(rows,targetPct){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
-  const outcomes=countsForTarget(rows,key);
-  const successful=rows.filter(row=>row.targets?.[key]?.status==='RESOLVED'&&row.targets[key].outcome==='UP');
-  const rankedAll=rankingMetric(rows,key,0.10,true);
-  const rankingDirectional=rankingMetric(rows,key,0.10,false);
-  const top20=rankingMetric(rows,key,0.20,false);
-  const lead=successful.map(row=>finite(row.targets[key].time_to_first_touch_minutes)).filter(v=>v!==null);
-  const tierCounts={EARLY_SETUP:0,WATCH:0,LATE_MOVE:0,NO_SETUP:0,OTHER:0};
-  for(const row of successful){
-    const rawTier=String(row.tier||'OTHER');
-    const tier=Object.prototype.hasOwnProperty.call(tierCounts,rawTier)?rawTier:'OTHER';
-    tierCounts[tier]++;
-  }
+  // Tradeability: target must be reached before the -2% adverse barrier.
+  const tradeableOutcomes=countsForTarget(rows,key);
+  const tradeableWinners=rows.filter(row=>row.targets?.[key]?.status==='RESOLVED'&&
+    row.targets[key].outcome==='UP');
+  const tradeableTop10=rankingMetric(rows,key,0.10,false,'tradeable');
+  const tradeableTop20=rankingMetric(rows,key,0.20,false,'tradeable');
+  const tradeableLead=tradeableWinners.map(row=>
+    finite(row.targets[key].time_to_first_touch_minutes)).filter(v=>v!==null);
+
+  // Pure market move: +target happened at any point in 24h, even after an
+  // earlier -2% adverse move. This prevents volatile daily gainers disappearing.
+  const marketMoveOutcomes=countsForMarketMove(rows,key);
+  const marketMovers=rows.filter(row=>
+    row.targets?.[key]?.market_move_event?.status==='RESOLVED'&&
+    row.targets[key].market_move_event.outcome==='UP');
+  const marketMoveTop10=rankingMetric(rows,key,0.10,true,'market_move_event');
+  const marketMoveTop20=rankingMetric(rows,key,0.20,true,'market_move_event');
+  const marketMoveLead=marketMovers.map(row=>
+    finite(row.targets[key].market_move_event.time_to_target_minutes)).filter(v=>v!==null);
+  const marketMoversAfterAdverse=marketMovers.filter(row=>
+    row.targets[key].market_move_event.target_touch_after_adverse_barrier===true).length;
+  const ambiguousSameBar=rows.filter(row=>
+    row.targets?.[key]?.market_move_event?.target_and_adverse_touched_same_15m_candle===true).length;
+  const tierCountsFor=cohort=>{
+    const counts={EARLY_SETUP:0,WATCH:0,LATE_MOVE:0,NO_SETUP:0,OTHER:0};
+    for(const row of cohort){
+      const rawTier=String(row.tier||'OTHER');
+      const tier=Object.prototype.hasOwnProperty.call(counts,rawTier)?rawTier:'OTHER';
+      counts[tier]++;
+    }
+    return counts;
+  };
   return {
     target_pct:targetPct,adverse_pct:DEFAULT_ADVERSE_PCT,horizon_hours:24,
-    outcomes,successful_event_count:successful.length,
-    ambiguous_count:outcomes.AMBIGUOUS,incomplete_or_invalid_count:outcomes.INVALID,
-    top_10_pct_event_vs_up_down_flat:rankedAll,
-    top_10_pct_directional_up_vs_down:rankingDirectional,
-    top_20_pct_directional_up_vs_down:top20,
-    median_time_to_target_minutes:median(lead),
-    lead_time_sample_count:lead.length,
-    successful_event_tier_counts:tierCounts
+    market_move_event:{
+      outcomes:marketMoveOutcomes,successful_event_count:marketMovers.length,
+      target_hit_after_adverse_barrier_count:marketMoversAfterAdverse,
+      target_and_adverse_same_15m_candle_count:ambiguousSameBar,
+      top_10_pct_up_vs_non_up:marketMoveTop10,
+      top_20_pct_up_vs_non_up:marketMoveTop20,
+      median_time_to_target_minutes:median(marketMoveLead),
+      lead_time_sample_count:marketMoveLead.length,
+      successful_event_tier_counts:tierCountsFor(marketMovers)
+    },
+    tradeable_first_passage:{
+      outcomes:tradeableOutcomes,successful_event_count:tradeableWinners.length,
+      ambiguous_count:tradeableOutcomes.AMBIGUOUS,
+      incomplete_or_invalid_count:tradeableOutcomes.INVALID,
+      top_10_pct_up_vs_down:tradeableTop10,
+      top_20_pct_up_vs_down:tradeableTop20,
+      median_time_to_target_minutes:median(tradeableLead),
+      lead_time_sample_count:tradeableLead.length,
+      successful_event_tier_counts:tierCountsFor(tradeableWinners)
+    },
+    // Backward-compatible aliases refer strictly to first-passage tradeability.
+    outcomes:tradeableOutcomes,
+    successful_event_count:tradeableWinners.length,
+    ambiguous_count:tradeableOutcomes.AMBIGUOUS,
+    incomplete_or_invalid_count:tradeableOutcomes.INVALID,
+    top_10_pct_event_vs_up_down_flat:rankingMetric(rows,key,0.10,true,'tradeable'),
+    top_10_pct_directional_up_vs_down:tradeableTop10,
+    top_20_pct_directional_up_vs_down:tradeableTop20,
+    median_time_to_target_minutes:median(tradeableLead),
+    lead_time_sample_count:tradeableLead.length,
+    successful_event_tier_counts:tierCountsFor(tradeableWinners)
   };
 }
 function compactSample(row){
