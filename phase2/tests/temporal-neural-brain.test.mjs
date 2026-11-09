@@ -629,8 +629,8 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(workflow.includes('sharedComparison.sample_fingerprint===temporalNetwork.outer_sample_fingerprint'));
   assert.ok(workflow.includes('sharedComparison.shared_outer_split_applied===true'));
   assert.ok(containerWorkflow.includes('CONTAINER_SHARED_NEURAL_PHASE_IDENTITY_MISMATCH'));
-  assert.ok(containerWorkflow.includes('shared_phase_identity_matches===true'));
-  assert.ok(containerWorkflow.includes('sharedPhaseFingerprintsMatch'));
+  assert.ok(containerWorkflow.includes('sharedComparison.shared_phase_identity_matches!==true'));
+  assert.ok(containerWorkflow.includes('!sharedPhaseFingerprintsMatch'));
   assert.ok(workflow.includes('sharedComparison.shared_phase_identity_matches===true'));
   assert.ok(workflow.includes('sharedPhaseFingerprintsMatch'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
