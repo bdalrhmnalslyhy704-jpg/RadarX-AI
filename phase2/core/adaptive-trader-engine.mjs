@@ -20,7 +20,7 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
     entry_eligible:false,paper_trading:true,real_order_execution:false,
     confidence_score:'UNKNOWN'
   });
-  if(!/^[A-Z0-9]{5,30}$/.test(symbol)||candidate?.data_valid!==true||
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(symbol)||candidate?.data_valid!==true||
      candidate?.data_stale===true||candidate?.closed_candles_only!==true||
      !(finite(candidate?.price)>0)||score===null||age===null||age<0||age>POLICY.maxCandleAgeMs) {
     return out('DATA_UNAVAILABLE','لا تدخل — البيانات أو الشموع المغلقة غير مكتملة','NO_TRADE',-1,
@@ -189,7 +189,7 @@ export async function fetchAdaptiveTraderHistoricalKlines({
   if(!rest||typeof rest.request!=='function')throw new Error('ADAPTIVE_HISTORICAL_REST_UNAVAILABLE');
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
   const cleanInterval=String(interval||'').trim().toLowerCase();
-  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].includes(cleanInterval))
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].includes(cleanInterval))
     throw new Error('ADAPTIVE_HISTORICAL_KLINE_QUERY_INVALID');
   const pageLimit=Math.max(1,Math.min(3,Math.trunc(Number(maxPages)||3)));
   const initialRows=Array.isArray(firstPage?.data)?firstPage.data:[];
@@ -549,7 +549,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     real_order_execution: false
   };
 
-  if (!/^[A-Z0-9]{5,30}$/.test(cleanSymbol) || !cleanSymbol.endsWith('USDT') ||
+  if (!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol) || !cleanSymbol.endsWith('USDT') ||
       isLeveragedToken(cleanSymbol) || !(lastPrice > 0) || !(quoteVolume24h >= minQuoteVolume24h) ||
       change24hPct === null) {
     return { ...base, tier: 'DATA_REJECTED', score: null, reason_codes: ['UNIVERSE_OR_TICKER_GATE'] };
@@ -772,7 +772,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   minQuoteVolume24h=POLICY.minQuoteVolume24h,maxSamples=8
 }={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
   const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
   const candles=rows.map(raw=>({raw,candle:normalizeCandle(raw)}))
     .filter(item=>item.candle&&item.candle.closeTime<Number(now))
@@ -903,7 +903,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
 
 export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fastKlines=null,pendingSamples=[],now=Date.now()}={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
   const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
   const candles=rows.map(row=>normalizeCandle(row)).filter(candle=>candle&&candle.closeTime<Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
   if(!candles.length)return [];
