@@ -562,13 +562,13 @@ test('worker purges all legacy neural samples and replaces the persisted state w
   const worker=new AdaptiveTraderWorker({store,snapshotProvider,intervalMs:60_000,scanLimit:40,logger:{info(){},warn(){}}});
   try{
     const started=await worker.start({initialDelayMs:60_000});
-    assert.equal(started.training_dataset_version,'FRESH_BINANCE_CLOSED_CANDLES_V2');
+    assert.equal(started.training_dataset_version,'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE');
     assert.equal(started.training_state_reset_reason,'LEGACY_NEURAL_TRAINING_DATA_PURGED');
     assert.equal(started.memory.resolved_samples,0);
     assert.equal(started.memory.history_rows,0);
     const saved=await store.getAdaptiveTraderState();
     assert.equal(saved.version,2);
-    assert.equal(saved.training_dataset_version,'FRESH_BINANCE_CLOSED_CANDLES_V2');
+    assert.equal(saved.training_dataset_version,'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE');
     assert.equal(saved.scan_count,0);
     assert.deepEqual(saved.samples,[]);
     assert.deepEqual(saved.v5_samples,[]);
