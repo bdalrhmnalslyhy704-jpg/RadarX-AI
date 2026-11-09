@@ -46,6 +46,38 @@ test('daily +5% first passage is resolved only when it precedes the -2% adverse 
   assert.equal(result.horizon_bars,96);
 });
 
+test('a later daily surge remains a market-move event after the adverse barrier was already hit',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfter(baseline,(row,index)=>{
+    if(index===3)return {...row,low:97.8,high:100.5,close:98.1};
+    if(index===38)return {...row,low:99,high:106,close:105.2};
+    return row;
+  });
+  const result=classifyDailyEarlyRiserFirstPassage({
+    baseline,future15m:future,targetPct:5,adversePct:2
+  });
+  assert.equal(result.status,'RESOLVED');
+  assert.equal(result.outcome,'DOWN',
+    'tradeable first-passage outcome remains DOWN because the adverse barrier came first');
+  assert.equal(result.market_move_event.status,'RESOLVED');
+  assert.equal(result.market_move_event.outcome,'UP',
+    'the daily census must still count the later +5% market move');
+  assert.equal(result.market_move_event.target_touch_after_adverse_barrier,true);
+  assert.equal(result.market_move_event.first_touch_index,38);
+});
+
+test('same-bar target and adverse touch is ambiguous for tradeability but still confirms a market move',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfter(baseline,(row,index)=>index===8
+    ?{...row,high:106,low:97,close:100}:row);
+  const result=classifyDailyEarlyRiserFirstPassage({
+    baseline,future15m:future,targetPct:5,adversePct:2
+  });
+  assert.equal(result.status,'AMBIGUOUS');
+  assert.equal(result.market_move_event.outcome,'UP');
+  assert.equal(result.market_move_event.target_and_adverse_touched_same_15m_candle,true);
+});
+
 test('daily first passage labels an earlier adverse barrier as DOWN',()=>{
   const baseline=baselineCandle();
   const future=pathAfter(baseline,(row,index)=>index===3
