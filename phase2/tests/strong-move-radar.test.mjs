@@ -163,7 +163,7 @@ test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can 
   assert.equal(partial.strong_move.metrics.three_second_liquidity.available,false);
   assert.equal(partial.strong_move.metrics.three_second_taker_buy_ratio,null);
   assert.deepEqual(partial.strong_move.trigger_diagnostics.failed_checks,
-    ['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']);
+    ['THREE_SECOND_BUCKET_UNAVAILABLE']);
 
   const emptyCompleted=buildStrongMoveAlert({
     one_minute:make1m(),five_minute:make5m(),ticker,
@@ -173,6 +173,19 @@ test('only a fully covered, completed Binance Spot 3-second aggTrade bucket can 
   assert.equal(emptyCompleted.strong_move.metrics.three_second_taker_buy_ratio,null);
   assert.deepEqual(emptyCompleted.strong_move.trigger_diagnostics.failed_checks,
     ['THREE_SECOND_TRADE_BUCKET_EMPTY']);
+
+  const bucketSellerHeavy=[
+    {a:11,T:bucketEnd-2400,p:'1',q:'2',m:false},
+    {a:12,T:bucketEnd-800,p:'1',q:'8',m:true}
+  ];
+  const weakBuy=buildStrongMoveAlert({
+    one_minute:make1m(),five_minute:make5m(),ticker,
+    agg_trades:bucketSellerHeavy,trade_coverage_complete:true
+  },NOW);
+  assert.equal(weakBuy.strong_move.metrics.three_second_liquidity.available,true);
+  assert.equal(weakBuy.strong_move.metrics.three_second_taker_buy_ratio,0.2);
+  assert.deepEqual(weakBuy.strong_move.trigger_diagnostics.failed_checks,
+    ['THREE_SECOND_TAKER_BUY_RATIO_NOT_ABOVE_70_PERCENT']);
 });
 
 test('live three-second aggTrade fetch is bounded to the last completed bucket and fails closed at the page cap',async()=>{
