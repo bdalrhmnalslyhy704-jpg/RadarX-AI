@@ -6,6 +6,29 @@ const finite = value => {
 const unique = rows => [...new Set((Array.isArray(rows) ? rows : [])
   .map(x => String(x ?? '').trim()).filter(Boolean))];
 
+
+const REPLAY_ENVIRONMENT_BLOCKER_CODES=new Set([
+  'HISTORICAL_LIQUIDITY_UNVERIFIED',
+  'LIVE_PUSH_DELIVERY_NOT_SIMULATED',
+  'HISTORICAL_ORDERBOOK_UNAVAILABLE',
+  'LIVE_PUSH_GATE_NOT_SIMULATED'
+]);
+const EVIDENCE_AVAILABILITY_FAILURE_CODES=new Set([
+  'THREE_SECOND_BUCKET_UNAVAILABLE',
+  'THREE_SECOND_TRADE_BUCKET_EMPTY',
+  'HISTORICAL_AGG_TRADE_COVERAGE_INCOMPLETE',
+  'HISTORICAL_MARKET_MEDIAN_UNAVAILABLE'
+]);
+function classifyFailureLayers(codes=[]){
+  const all=unique(codes).slice(0,30);
+  return {
+    signal_gate_failures:all.filter(code=>!REPLAY_ENVIRONMENT_BLOCKER_CODES.has(code)&&
+      !EVIDENCE_AVAILABILITY_FAILURE_CODES.has(code)),
+    replay_environment_blockers:all.filter(code=>REPLAY_ENVIRONMENT_BLOCKER_CODES.has(code)),
+    evidence_availability_failures:all.filter(code=>EVIDENCE_AVAILABILITY_FAILURE_CODES.has(code))
+  };
+}
+
 function actualMove(replay, targetPct) {
   const s = replay?.summary || {};
   const q = replay?.data_quality || {};
@@ -153,7 +176,8 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     first_late_acceptance: accepted.find(x => Number(x.timestamp) >= moderate.at)
       ? describeHit(accepted.find(x => Number(x.timestamp) >= moderate.at), moderate, 'LATE_DETECTION')
       : null,
-    last_rejection_before_move: lastRejectedBefore(steps, moderate.at)
+    last_rejection_before_move: lastRejectedBefore(steps, moderate.at),
+    failure_layers:classifyFailureLayers(lastRejectedBefore(steps,moderate.at)?.failed_checks||[])
   } : null;
   const missedStrong = strongWasObserved && !strongFirst ? {
     target_pct: strongTargetPct,
@@ -164,7 +188,8 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     first_late_acceptance: accepted.find(x => Number(x.timestamp) >= strong.at)
       ? describeHit(accepted.find(x => Number(x.timestamp) >= strong.at), strong, 'LATE_DETECTION')
       : null,
-    last_rejection_before_move: lastRejectedBefore(steps, strong.at)
+    last_rejection_before_move: lastRejectedBefore(steps, strong.at),
+    failure_layers:classifyFailureLayers(lastRejectedBefore(steps,strong.at)?.failed_checks||[])
   } : null;
 
   const lowFollowThroughCandidates = maturedCandidates.filter(x => {
@@ -206,6 +231,7 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     ...(missedModerate?.last_rejection_before_move?.failed_checks || []),
     ...(missedStrong?.last_rejection_before_move?.failed_checks || [])
   ]).slice(0, 24);
+  const missedMoveFailureLayers=classifyFailureLayers(missedMoveFailures);
   const earlyModerate = describeHit(moderateFirst, moderate, moderateStatus);
   const earlyStrong = describeHit(strongFirst, strong, strongStatus);
   const horizonObserved = completeCandles && steps.length > 0 &&
@@ -305,6 +331,7 @@ export function buildMoveOutcomeAnalysis(replay = {}, {
     },
     low_follow_through_acceptances: lowFollowThrough,
     missed_move_failure_codes: missedMoveFailures,
+    missed_move_failure_layers:missedMoveFailureLayers,
     summary: {
       accepted_count: accepted.length,
       mature_accepted_count: maturedAccepted.length,
@@ -352,6 +379,15 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
       candidateFailureCounts.set(code,(candidateFailureCounts.get(code)||0)+1);
     }
   }
+  const replayBlockerCounts=new Map();
+  const evidenceFailureCounts=new Map();
+  const signalFailureCounts=new Map();
+  const addCounts=(map,codes)=>{for(const code of Array.isArray(codes)?codes:[])map.set(code,(map.get(code)||0)+1);};
+  for(const row of complete){
+    addCounts(replayBlockerCounts,row.missed_move_failure_layers?.replay_environment_blockers);
+    addCounts(evidenceFailureCounts,row.missed_move_failure_layers?.evidence_availability_failures);
+    addCounts(signalFailureCounts,row.missed_move_failure_layers?.signal_gate_failures);
+  }
   const failureCounts = new Map();
   for (const row of complete) {
     for (const code of Array.isArray(row.missed_move_failure_codes) ? row.missed_move_failure_codes : []) {
@@ -398,6 +434,9 @@ export function summarizeMoveOutcomeAnalyses(replays = []) {
     low_follow_through_share_pct: complete.reduce((n,x)=>n+(Number(x.summary?.mature_accepted_count)||0),0)
       ? Number((lowFollowRows.length/complete.reduce((n,x)=>n+(Number(x.summary?.mature_accepted_count)||0),0)*100).toFixed(2)) : null,
     most_common_missed_move_failures: [...failureCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([code,count])=>({code,count})),
+    most_common_replay_environment_blockers:[...replayBlockerCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10).map(([code,count])=>({code,count})),
+    most_common_evidence_availability_failures:[...evidenceFailureCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10).map(([code,count])=>({code,count})),
+    most_common_signal_miss_reasons:[...signalFailureCounts.entries()].sort((a,b)=>b[1]-a[1]).slice(0,15).map(([code,count])=>({code,count})),
     definitions: {
       moderate_move: 'Observed +5% intrawindow high from the first in-window candle baseline.',
       strong_move: 'Observed +15% intrawindow high from the first in-window candle baseline.',
