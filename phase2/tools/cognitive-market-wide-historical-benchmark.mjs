@@ -8,7 +8,8 @@ import {join,resolve} from 'node:path';
 import {
   normalizeBinanceSpotKlineArchiveTimestamp,
   parseBinanceSpotKlineArchiveCsv,
-  listBinanceSpotArchiveMonths
+  listBinanceSpotArchiveMonths,
+  summarizeBinanceSpotArchiveMonthCoverage
 } from '../core/binance-spot-kline-archive.mjs';
 import {
   buildAdaptiveTraderHistoricalOutcomeSamples,
@@ -22,6 +23,7 @@ import {
   buildCognitiveLearningProfile
 } from '../core/cognitive-brain.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
+import {evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
 
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
@@ -165,7 +167,13 @@ async function loadSymbolInterval({symbol,interval,months,tempDir}){
   const totalRejected={malformed:0,invalid_timestamp:0,invalid_price_or_volume:0,
     invalid_close_boundary:0,duplicate_open_time:0};
   for(const month of months){
-    const archive=await fetchVerifiedMonthlyArchive({symbol,interval,month,tempDir});
+    let archive;
+    try{
+      archive=await fetchVerifiedMonthlyArchive({symbol,interval,month,tempDir});
+    }catch(error){
+      archive={status:'FAILED',symbol,interval,month,url:archiveUrl(symbol,interval,month),
+        reason:String(error?.message||error).slice(0,240)};
+    }
     const {rows,...manifest}=archive;
     files.push(manifest);
     if(archive.status!=='VERIFIED')continue;
@@ -174,10 +182,13 @@ async function loadSymbolInterval({symbol,interval,months,tempDir}){
     for(const row of rows)rowsByOpen.set(Number(row[0]),row);
   }
   const rows=[...rowsByOpen.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
+  const coverage=summarizeBinanceSpotArchiveMonthCoverage(files);
   return {
     rows,files,total_rejected:totalRejected,
     verified_months:files.filter(file=>file.status==='VERIFIED').length,
-    missing_months:files.filter(file=>file.status!=='VERIFIED').length
+    missing_months:files.filter(file=>file.status==='MISSING').length,
+    failed_months:files.filter(file=>file.status==='FAILED').length,
+    ...coverage
   };
 }
 async function mapLimit(items,limit,worker){
@@ -486,6 +497,8 @@ async function main(){
     for(const file of [...btc15.files,...btc5.files])archiveManifest.push(file);
     if(btc15.rows.length<300||btc5.rows.length<300)
       throw new Error('BTC_ARCHIVE_HISTORY_INSUFFICIENT');
+    if(!btc15.complete_from_first_available||!btc5.complete_from_first_available)
+      throw new Error('BTC_ARCHIVE_MONTH_GAP_AFTER_FIRST_AVAILABLE');
     console.log('[BTC_ARCHIVE_READY] '+JSON.stringify({rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,verified_months_15m:btc15.verified_months,verified_months_5m:btc5.verified_months}));
     const btcKlines={data:btc15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'};
     const btcFastKlines={data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'};
@@ -508,6 +521,12 @@ async function main(){
           symbol,status:'PROCESSED',rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           verified_months_15m:btc15.verified_months,verified_months_5m:btc5.verified_months,
           missing_months_15m:btc15.missing_months,missing_months_5m:btc5.missing_months,
+          failed_months_15m:btc15.failed_months,failed_months_5m:btc5.failed_months,
+          first_available_month_15m:btc15.first_available_month,first_available_month_5m:btc5.first_available_month,
+          expected_months_after_listing_15m:btc15.expected_months_after_first_available,
+          expected_months_after_listing_5m:btc5.expected_months_after_first_available,
+          complete_from_first_available_15m:btc15.complete_from_first_available,
+          complete_from_first_available_5m:btc5.complete_from_first_available,
           samples:samples.length,temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
           output:samples
         });
@@ -518,6 +537,21 @@ async function main(){
           loadSymbolInterval({symbol,interval:'5m',months,tempDir})
         ]);
         archiveManifest.push(...asset15.files,...asset5.files);
+        if(!asset15.complete_from_first_available||!asset5.complete_from_first_available){
+          return emitSymbol({
+            symbol,status:'INCOMPLETE_ARCHIVE_COVERAGE',
+            rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
+            first_available_month_15m:asset15.first_available_month,
+            first_available_month_5m:asset5.first_available_month,
+            missing_after_listing_15m:asset15.missing_months_after_first_available,
+            missing_after_listing_5m:asset5.missing_months_after_first_available,
+            failed_archive_months_15m:asset15.failed_archive_months,
+            failed_archive_months_5m:asset5.failed_archive_months,
+            expected_months_after_listing_15m:asset15.expected_months_after_first_available,
+            expected_months_after_listing_5m:asset5.expected_months_after_first_available,
+            samples:0,temporal_sequences:0,output:[]
+          });
+        }
         if(asset15.rows.length<240||asset5.rows.length<100){
           return emitSymbol({
             symbol,status:'INSUFFICIENT_ARCHIVE_HISTORY',
@@ -540,6 +574,10 @@ async function main(){
           rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
           verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
           missing_months_15m:asset15.missing_months,missing_months_5m:asset5.missing_months,
+          failed_months_15m:asset15.failed_months,failed_months_5m:asset5.failed_months,
+          first_available_month_15m:asset15.first_available_month,first_available_month_5m:asset5.first_available_month,
+          expected_months_after_listing_15m:asset15.expected_months_after_first_available,
+          expected_months_after_listing_5m:asset5.expected_months_after_first_available,
           rejected_15m:asset15.total_rejected,rejected_5m:asset5.total_rejected,
           samples:samples.length,
           temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
@@ -566,12 +604,28 @@ async function main(){
         Array.isArray(step)&&step.length===29&&step.every(Number.isFinite))).length;
     const archiveExpected=symbols.length*months.length*2;
     const archiveVerified=archiveManifest.filter(file=>file.status==='VERIFIED').length;
-    const archiveMissing=archiveManifest.filter(file=>file.status!=='VERIFIED').length;
+    const archiveMissing=archiveManifest.filter(file=>file.status==='MISSING').length;
+    const archiveFailed=archiveManifest.filter(file=>file.status==='FAILED').length;
     const archiveCoverage=archiveExpected?archiveVerified/archiveExpected:0;
+    const expectedAfterListing=symbolResults.reduce((sum,row)=>
+      sum+Math.max(0,Number(row.expected_months_after_listing_15m)||0)+
+        Math.max(0,Number(row.expected_months_after_listing_5m)||0),0);
+    const verifiedAfterListing=symbolResults.reduce((sum,row)=>
+      sum+Math.max(0,Number(row.expected_months_after_listing_15m)||0)-
+        Math.max(0,Number(row.missing_after_listing_15m)||0)-
+        Math.max(0,Number(row.failed_archive_months_15m)||0)+
+        Math.max(0,Number(row.expected_months_after_listing_5m)||0)-
+        Math.max(0,Number(row.missing_after_listing_5m)||0)-
+        Math.max(0,Number(row.failed_archive_months_5m)||0),0);
+    const archiveCoverageAfterListing=expectedAfterListing
+      ?verifiedAfterListing/expectedAfterListing:0;
+    const archiveGapSymbols=symbolResults.filter(row=>row.status==='INCOMPLETE_ARCHIVE_COVERAGE').length;
     const symbolsWithSamples=audit.symbols_with_samples;
     const qualityReady=symbolsWithSamples>=minSymbols&&samples.length>=minSamples&&
       sequenceCount>=minSequences&&audit.duplicate_ids===0&&
-      audit.per_symbol_4h_spacing_violations===0&&audit.invalid_samples===0;
+      audit.per_symbol_4h_spacing_violations===0&&audit.invalid_samples===0&&
+      archiveFailed===0&&archiveGapSymbols===0&&
+      archiveCoverageAfterListing>=0.99999&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
     await mkdir(resolve(sampleOutput,'..'),{recursive:true});
     await writeFile(sampleOutput,samplesJsonl,'utf8');
@@ -593,9 +647,99 @@ async function main(){
     });
     const modelProfileElapsedMs=Date.now()-profileStartedAt;
     const modelSummary=summarizeProfile(profile);
-    console.log('[COGNITIVE_PROFILE_COMPLETE] '+JSON.stringify({elapsed_ms:modelProfileElapsedMs,selected_model:modelSummary.model_selection?.selected_model||null,cognitive_probability_ready:modelSummary.probability_ready,temporal_live_eligibility_ready:modelSummary.temporal_network.live_eligibility_ready}));
+    const validationStartAt=finite(profile.validation_start_at);
+    const holdoutStartAt=finite(profile.holdout_start_at);
+    const splitContract=profile.comparison_contract||{};
+    const validationRows=validationStartAt!==null&&holdoutStartAt!==null
+      ?samples.filter(row=>Number(row.at)>=validationStartAt&&Number(row.at)<holdoutStartAt&&
+        Number(row.resolved_at)<holdoutStartAt):[];
+    const holdoutRows=holdoutStartAt!==null
+      ?samples.filter(row=>Number(row.at)>=holdoutStartAt):[];
+    const baselineSplitIntegrity={
+      shared_outer_split_applied:splitContract.shared_outer_split_applied===true,
+      sample_identity_matches:splitContract.sample_identity_matches===true,
+      validation_start_at:validationStartAt,
+      holdout_start_at:holdoutStartAt,
+      training_outcomes_end_before_validation:finite(profile.max_training_outcome_resolved_at)!==null&&
+        validationStartAt!==null&&Number(profile.max_training_outcome_resolved_at)<validationStartAt,
+      validation_rows:validationRows.length,
+      expected_validation_rows:Number(profile.validation_samples)||0,
+      holdout_rows:holdoutRows.length,
+      expected_holdout_rows:Number(profile.holdout_samples)||0,
+      validation_count_matches:validationRows.length===Number(profile.validation_samples)&&
+        splitContract.validation_sample_count_matches===true,
+      holdout_count_matches:holdoutRows.length===Number(profile.holdout_samples)&&
+        splitContract.holdout_sample_count_matches===true
+    };
+    baselineSplitIntegrity.ready=baselineSplitIntegrity.shared_outer_split_applied&&
+      baselineSplitIntegrity.sample_identity_matches&&
+      baselineSplitIntegrity.training_outcomes_end_before_validation&&
+      baselineSplitIntegrity.validation_count_matches&&baselineSplitIntegrity.holdout_count_matches&&
+      validationRows.length>0&&holdoutRows.length>0;
+    const existingEngineBaselines=baselineSplitIntegrity.ready?{
+      validation:evaluateExistingEngineBaselines(validationRows),
+      holdout:evaluateExistingEngineBaselines(holdoutRows),
+      holdout_sample_count:holdoutRows.length,
+      applied_to_same_frozen_rows:true,
+      scores_are_probabilities:false
+    }:{
+      status:'BLOCKED_SPLIT_INTEGRITY_FAILED',
+      split_integrity:baselineSplitIntegrity
+    };
+    const baselineCurrent=existingEngineBaselines.holdout?.current_engine_base_score||null;
+    const compareModelToEngine=(modelMetric)=>{
+      const ranking=modelMetric?.ranking_metrics;
+      if(modelMetric?.evaluated!==true||!ranking||!baselineCurrent?.evaluated)
+        return {evaluated:false,reason:'MODEL_OR_ENGINE_HOLDOUT_RANKING_UNAVAILABLE'};
+      const aucDelta=finite(ranking.auc_roc)!==null&&finite(baselineCurrent.auc_roc)!==null
+        ?Number((Number(ranking.auc_roc)-Number(baselineCurrent.auc_roc)).toFixed(6)):null;
+      const top10Delta=finite(ranking.top_10_pct?.precision_pct)!==null&&
+        finite(baselineCurrent.top_10_pct?.precision_pct)!==null
+        ?Number((Number(ranking.top_10_pct.precision_pct)-Number(baselineCurrent.top_10_pct.precision_pct)).toFixed(3)):null;
+      const top20Delta=finite(ranking.top_20_pct?.precision_pct)!==null&&
+        finite(baselineCurrent.top_20_pct?.precision_pct)!==null
+        ?Number((Number(ranking.top_20_pct.precision_pct)-Number(baselineCurrent.top_20_pct.precision_pct)).toFixed(3)):null;
+      return {
+        evaluated:true,model_auc_roc:ranking.auc_roc??null,
+        engine_auc_roc:baselineCurrent.auc_roc??null,auc_delta:aucDelta,
+        model_top_10_precision_pct:ranking.top_10_pct?.precision_pct??null,
+        engine_top_10_precision_pct:baselineCurrent.top_10_pct?.precision_pct??null,
+        top_10_precision_delta_pp:top10Delta,
+        model_top_20_precision_pct:ranking.top_20_pct?.precision_pct??null,
+        engine_top_20_precision_pct:baselineCurrent.top_20_pct?.precision_pct??null,
+        top_20_precision_delta_pp:top20Delta,
+        beats_engine_on_auc:aucDelta!==null&&aucDelta>0,
+        beats_engine_on_top_10:top10Delta!==null&&top10Delta>0,
+        beats_engine_on_both:aucDelta!==null&&top10Delta!==null&&aucDelta>0&&top10Delta>0
+      };
+    };
+    const modelVsExistingEngine=baselineSplitIntegrity.ready?{
+      neural_mlp:compareModelToEngine(modelSummary.neural_network.holdout),
+      boosted_tree:compareModelToEngine(modelSummary.boosted_tree_model.holdout),
+      hybrid:compareModelToEngine(modelSummary.hybrid_model.holdout),
+      temporal_tcn:compareModelToEngine(modelSummary.temporal_network.holdout)
+    }:{status:'BLOCKED_SPLIT_INTEGRITY_FAILED'};
+    const selectedModelName=String(modelSummary.model_selection?.selected_model||'');
+    const selectedModelKey=selectedModelName==='NEURAL_GLOBAL'?'neural_mlp':
+      selectedModelName==='GBDT_RESIDUAL'?'boosted_tree':
+      selectedModelName.startsWith('HYBRID_GBDT_MLP_W')?'hybrid':null;
+    const selectedModelBeatsEngine=selectedModelKey!==null&&
+      modelVsExistingEngine[selectedModelKey]?.beats_engine_on_both===true;
+    const temporalModelBeatsEngine=modelVsExistingEngine.temporal_tcn?.beats_engine_on_both===true&&
+      modelSummary.temporal_network.live_eligibility_ready===true;
     const temporalPass=modelSummary.temporal_network.live_eligibility_ready===true;
     const cognitivePass=modelSummary.probability_ready===true;
+    const predictiveSuperiorityVerified=qualityReady&&baselineSplitIntegrity.ready&&
+      (selectedModelBeatsEngine||temporalModelBeatsEngine)&&
+      (selectedModelBeatsEngine||cognitivePass||temporalPass);
+    console.log('[COGNITIVE_PROFILE_COMPLETE] '+JSON.stringify({
+      elapsed_ms:modelProfileElapsedMs,selected_model:selectedModelName,
+      cognitive_probability_ready:cognitivePass,temporal_live_eligibility_ready:temporalPass,
+      baseline_split_integrity:baselineSplitIntegrity.ready,
+      selected_model_beats_existing_engine:selectedModelBeatsEngine,
+      temporal_tcn_beats_existing_engine:temporalModelBeatsEngine,
+      predictive_superiority_verified:predictiveSuperiorityVerified
+    }));
     baseReport.status=qualityReady?'DATA_QUALITY_READY':'DATA_QUALITY_INSUFFICIENT';
     baseReport.data_quality={
       status:qualityReady?'READY_FOR_MODEL_EVALUATION':'INSUFFICIENT_COVERAGE',
@@ -605,9 +749,16 @@ async function main(){
       processed_symbols:symbolResults.filter(row=>row.status==='PROCESSED'||row.symbol==='BTCUSDT').length,
       symbols_without_sufficient_archive:symbolResults.filter(row=>row.status==='INSUFFICIENT_ARCHIVE_HISTORY').length,
       symbols_failed:symbolFailures.length,
+      symbols_with_incomplete_archive_coverage:archiveGapSymbols,
+      symbols_with_insufficient_archive_history:symbolResults.filter(row=>row.status==='INSUFFICIENT_ARCHIVE_HISTORY').length,
       samples:samples.length,temporal_sequence_samples:sequenceCount,
-      archive_files_expected:archiveExpected,archive_files_verified:archiveVerified,
-      archive_files_missing:archiveMissing,archive_coverage_ratio:Number(archiveCoverage.toFixed(5)),
+      archive_files_expected_all_symbols_all_months:archiveExpected,archive_files_verified:archiveVerified,
+      archive_files_missing_404:archiveMissing,archive_files_failed:archiveFailed,
+      archive_coverage_ratio_all_symbols_all_months:Number(archiveCoverage.toFixed(5)),
+      archive_files_expected_after_first_available:expectedAfterListing,
+      archive_files_verified_after_first_available:verifiedAfterListing,
+      archive_coverage_ratio_after_first_available:Number(archiveCoverageAfterListing.toFixed(6)),
+      archive_gap_symbols:archiveGapSymbols,
       invalid_samples:audit.invalid_samples,duplicate_ids:audit.duplicate_ids,
       per_symbol_4h_spacing_violations:audit.per_symbol_4h_spacing_violations,
       outcome_counts:audit.outcome_counts,sample_month_counts:audit.sample_month_counts,
@@ -632,8 +783,15 @@ async function main(){
       samples_by_month:audit.sample_month_counts
     };
     baseReport.models={
-      status:'PROFILE_COMPUTED',
-      predictive_superiority_verified:cognitivePass||temporalPass,
+      status:predictiveSuperiorityVerified?'PREDICTIVE_SUPERIORITY_VERIFIED':
+        qualityReady&&baselineSplitIntegrity.ready?'NO_VERIFIED_SUPERIORITY_OVER_EXISTING_ENGINE':'EVALUATION_BLOCKED_BY_DATA_OR_SPLIT_QUALITY',
+      predictive_superiority_verified:predictiveSuperiorityVerified,
+      existing_engine_baselines:existingEngineBaselines,
+      model_vs_existing_engine:modelVsExistingEngine,
+      selected_model_name:selectedModelName,
+      selected_model_beats_existing_engine:selectedModelBeatsEngine,
+      temporal_tcn_beats_existing_engine:temporalModelBeatsEngine,
+      baseline_split_integrity:baselineSplitIntegrity,
       cognitive_probability_ready:cognitivePass,
       temporal_live_eligibility_ready:temporalPass,
       profitability_verified:false,
