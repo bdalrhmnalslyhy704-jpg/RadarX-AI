@@ -208,6 +208,8 @@ export function buildDailyEarlyRiserHistoricalSamples({
   const quota=Math.max(1,Math.min(2000,Math.trunc(finite(maxSamplesPerSymbol)??500)));
   const possible=[];
   let rejectedHistoricalGaps=0,rejectedVolume=0,rejectedFuturePaths=0,rejectedFeatureRows=0;
+  const rejectedFeatureReasonCounts={};
+  const rejectedFeatureExamples=[];
   const btcByClose=new Map(btc.map(row=>[row.closeTime,row]));
   let fastCursor=-1,btcCursor=-1;
   for(let index=119;index+DAILY_EARLY_RISER_HORIZON_BARS<candles.length;index++){
@@ -255,7 +257,22 @@ export function buildDailyEarlyRiserHistoricalSamples({
     });
     if(featureCandidate.data_valid!==true||featureCandidate.data_stale===true||
       !featureCandidate.features||!Number.isFinite(Number(featureCandidate.score))){
-      rejectedFeatureRows++;continue;
+      rejectedFeatureRows++;
+      const reasons=Array.isArray(featureCandidate.reason_codes)&&featureCandidate.reason_codes.length
+        ?featureCandidate.reason_codes
+        :[featureCandidate.data_stale===true?'FEATURE_CANDIDATE_STALE':
+          featureCandidate.data_valid!==true?'FEATURE_CANDIDATE_DATA_INVALID':
+          !featureCandidate.features?'FEATURE_VECTOR_MISSING':
+          'FEATURE_SCORE_NON_FINITE'];
+      for(const reason of reasons)rejectedFeatureReasonCounts[reason]=(rejectedFeatureReasonCounts[reason]||0)+1;
+      if(rejectedFeatureExamples.length<8)rejectedFeatureExamples.push({
+        at:baseline.closeTime,baseline_index:index,
+        data_valid:featureCandidate.data_valid===true,data_stale:featureCandidate.data_stale===true,
+        score:finite(featureCandidate.score),reason_codes:reasons,
+        candle_age_ms:finite(featureCandidate.candle_age_ms),
+        input_counts:{15m:base15m.length,5m:baseFast.length,btc_15m:baseBtc.length}
+      });
+      continue;
     }
     possible.push({
       id:'DAILY_EARLY_RISER_24H:'+cleanSymbol+':'+String(baseline.closeTime),
@@ -304,6 +321,9 @@ export function buildDailyEarlyRiserHistoricalSamples({
       rejected_low_quote_volume:rejectedVolume,
       rejected_incomplete_future_paths:rejectedFuturePaths,
       rejected_invalid_feature_rows:rejectedFeatureRows,
+      rejected_feature_reason_counts:Object.fromEntries(
+        Object.entries(rejectedFeatureReasonCounts).sort((a,b)=>a[0].localeCompare(b[0]))),
+      rejected_feature_examples:rejectedFeatureExamples,
       min_quote_volume_24h:minVolume,
       targets_pct:targets,adverse_pct:adversePct,
       horizon_bars:DAILY_EARLY_RISER_HORIZON_BARS,
