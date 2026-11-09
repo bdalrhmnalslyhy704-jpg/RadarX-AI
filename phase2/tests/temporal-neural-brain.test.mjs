@@ -628,7 +628,11 @@ test('DHDTech production acceptance requires both V5 and TCN scientific live gat
   assert.ok(containerWorkflow.includes('FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(workflow.includes('sharedComparison.sample_fingerprint===temporalNetwork.outer_sample_fingerprint'));
   assert.ok(workflow.includes('sharedComparison.shared_outer_split_applied===true'));
-  assert.ok(containerWorkflow.includes('CONTAINER_SHARED_NEURAL_SAMPLE_IDENTITY_MISMATCH'));
+  assert.ok(containerWorkflow.includes('CONTAINER_SHARED_NEURAL_PHASE_IDENTITY_MISMATCH'));
+  assert.ok(containerWorkflow.includes('shared_phase_identity_matches===true'));
+  assert.ok(containerWorkflow.includes('sharedPhaseFingerprintsMatch'));
+  assert.ok(workflow.includes('sharedComparison.shared_phase_identity_matches===true'));
+  assert.ok(workflow.includes('sharedPhaseFingerprintsMatch'));
   assert.ok(containerWorkflow.includes("temporal_label_resolution==='15M_ONLY'"),
     'container smoke must verify the same uniform 15m target contract');
   assert.ok(containerWorkflow.includes("training_strategy==='SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1'"));
