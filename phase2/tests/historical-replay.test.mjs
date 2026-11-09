@@ -244,7 +244,7 @@ test('historical replay preserves grouped Whale, Kahir and Rotation-Lag analysis
   assert.equal(rotation.signal_metrics.return_15m_pct,0.3);
   assert.equal(rotation.signal_metrics.return_3m_pct,null);
   assert.equal(rotation.signal_metrics.taker_buy_ratio_1m_3m,0.66);
-  assert.equal(rotation.signal_metrics.relative_strength_vs_market_pct,0.5);
+  assert.equal(rotation.market_evidence.relative_strength_vs_market_pct,0.5);
   assert.equal(rotation.profile_metric_groups.component_scores.lag,81);
 });
 
