@@ -27,24 +27,28 @@ test('history page scheduling accepts short-base Spot symbols',()=>{
     assert.ok([2,3].includes(adaptiveTraderHistoryPageBudget(symbol,Date.UTC(2026,10,9)).max_pages));
 });
 
-test('third-page history wave alternates each Spot symbol while keeping each scan near half load',()=>{
+test('third-page history wave reaches every symbol once per three balanced scans',()=>{
   const now=Date.UTC(2026,10,9,12,0,0);
-  const symbols=Array.from({length:200},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
-  const current=symbols.map(symbol=>adaptiveTraderHistoryPageBudget(symbol,now));
-  const next=symbols.map(symbol=>adaptiveTraderHistoryPageBudget(symbol,now+3*60*1000));
-  const currentThree=current.filter(row=>row.max_pages===3).length;
-  const nextThree=next.filter(row=>row.max_pages===3).length;
-  assert.ok(currentThree>=70&&currentThree<=130,'first page-wave must distribute additional requests across the universe');
-  assert.ok(nextThree>=70&&nextThree<=130,'next page-wave must remain balanced');
+  const symbols=Array.from({length:240},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
+  const waves=[0,1,2].map(wave=>symbols.map(symbol=>
+    adaptiveTraderHistoryPageBudget(symbol,now+wave*3*60*1000)));
+  for(let wave=0;wave<3;wave++){
+    const threePageCount=waves[wave].filter(row=>row.max_pages===3).length;
+    assert.ok(threePageCount>=60&&threePageCount<=100,
+      'each scan wave should carry approximately one-third of the third-page requests');
+  }
   for(let index=0;index<symbols.length;index++){
-    assert.equal(next[index].max_pages, current[index].max_pages===3?2:3,
-      'each symbol must receive the third page on the opposite worker scan');
-    assert.notEqual(next[index].wave,current[index].wave);
+    assert.equal(waves.map(wave=>wave[index].max_pages).filter(maxPages=>maxPages===3).length,1,
+      'every symbol must receive exactly one third-page request in a three-wave cycle');
+    assert.deepEqual(waves.map(wave=>wave[index].wave),[0,1,2]);
   }
   assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now).max_pages,3,
     'BTC always keeps all three verified historical pages');
   assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now).wave_interval_ms,180000);
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now+9*60*1000).wave,0,
+    'the three-wave schedule must repeat deterministically');
 });
+
 
 test('fair scan plan reserves half of each bounded batch for complete eligible-universe rotation',()=>{
   const plan=buildAdaptiveTraderCoveragePlan(192,40);
