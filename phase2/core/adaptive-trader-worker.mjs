@@ -983,7 +983,7 @@ recordServerPaperPortfolio(snapshot,now){
     return {
       scanner_contract:'SERVER_DRIVEN_SCAN_V2',
       cognitive_model_contract:COGNITIVE_MODEL_BUILD_CONTRACT,
-      training_dataset_version:this.state.training_dataset_version||'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      training_dataset_version:this.state.training_dataset_version||'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE',
       training_state_reset_reason:this.state.reset_reason||null,
       status,enabled:this.enabled,running:this.enabled,in_flight:this.inFlight,
       active_scan_started_at:this.activeScanStartedAt?new Date(this.activeScanStartedAt).toISOString():null,

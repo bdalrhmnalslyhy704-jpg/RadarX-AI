@@ -619,7 +619,7 @@ export class DurableStore {
     };
     const safe={
       version:2,
-      training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V2',
+      training_dataset_version:'FRESH_BINANCE_CLOSED_CANDLES_V3_SHARED_FIRST_PASSAGE',
       reset_reason:value.reset_reason==null?null:String(value.reset_reason).slice(0,100),
       updated_at:Date.now(),
       enabled:value.enabled===true,
