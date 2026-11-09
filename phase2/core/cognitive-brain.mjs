@@ -454,15 +454,23 @@ function fitNeuralNetworkModel(training, {
   l2 = NEURAL_POLICY.l2,
   seed = 1,
   baselineFit = null,
-  trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'
+  trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+  positiveClassWeighting = 'NONE'
 } = {}) {
-  const rows=(Array.isArray(training)?training:[]).map(row=>({
+  const rawRows=(Array.isArray(training)?training:[]).map(row=>({
     vector:Array.isArray(row?.vector)&&row.vector.length===FEATURE_NAMES.length
       ?row.vector:normalizedFeatures(row?.features||{}),
     target:finite(row?.target)===null?targetOf(row):clamp(Number(row.target),0,1)
   })).filter(row=>row.vector.length===FEATURE_NAMES.length&&
     row.vector.every(value=>Number.isFinite(value))&&Number.isFinite(row.target));
-  if(!rows.length)return null;
+  if(!rawRows.length)return null;
+  const positiveSamples=rawRows.filter(row=>row.target>0.5).length;
+  const negativeSamples=rawRows.length-positiveSamples;
+  const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
+  const positiveSampleWeight=usePositiveClassWeighting&&positiveSamples>0
+    ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
+  const rows=rawRows.map(row=>({...row,sample_weight:row.target>0.5?positiveSampleWeight:1}));
+  const totalSampleWeight=rows.reduce((sum,row)=>sum+row.sample_weight,0);
 
   const inputSize=FEATURE_NAMES.length;
   const units1=Math.max(4,Math.min(16,Math.trunc(Number(hiddenUnits)||NEURAL_POLICY.hiddenUnits)));
@@ -552,11 +560,11 @@ function fitNeuralNetworkModel(training, {
       // chronological validation, model selection, and the untouched holdout.
       const brierGradient=2*(probability-row.target)*probability*(1-probability);
       const logLossGradient=probability-row.target;
-      const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+      const error=(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
         ?logLossGradient
         :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
           ?0.5*brierGradient+0.5*logLossGradient
-          :brierGradient;
+          :brierGradient)*row.sample_weight;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -576,7 +584,7 @@ function fitNeuralNetworkModel(training, {
       }
     }
 
-    const n=rows.length;
+    const n=Math.max(1,totalSampleWeight);
     for(let i=0;i<inputSize;i++)for(let j=0;j<units1;j++){
       const result=update(inputWeights[i][j],gradInput[i][j]/n,mInput[i][j],vInput[i][j],epoch);
       inputWeights[i][j]=result.value;mInput[i][j]=result.moment;vInput[i][j]=result.variance;
@@ -607,7 +615,10 @@ function fitNeuralNetworkModel(training, {
     hidden_weights:hiddenWeights,hidden_bias_2:hiddenBias2,
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...FEATURE_NAMES],
-    training_samples:rows.length,iterations:steps,l2:regularization,
+    training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
+    positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
+    iterations:steps,l2:regularization,
     training_objective:trainingObjective,
     residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
@@ -627,7 +638,8 @@ function fitNeuralEnsemble(training, options = {}) {
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'}
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+      positiveClassWeighting:'SQRT_INVERSE_PREVALENCE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -644,8 +656,8 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:[...seeds],
     member_training_profiles:memberProfiles,
-    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V6',
-    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
+    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V7',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
@@ -1183,13 +1195,18 @@ export function buildCognitiveLearningProfile(samples = [], {
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=NEURAL_RESIDUAL_SCALES;
+  const neuralSelectionLogistic=neuralSameWindowLogisticFit
+    ?evaluateHoldout(neuralSelection,neuralSameWindowLogisticFit,comparisonMargin)
+    :{evaluated:false,model_brier_score:null};
   const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
     neuralResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
       metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale},comparisonMargin)
     }))
   ):[];
-  const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true)
+  const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true&&
+    neuralSelectionLogistic.evaluated===true&&
+    row.metrics.model_brier_score+comparisonMargin<neuralSelectionLogistic.model_brier_score)
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
   if(neuralFit){
@@ -1270,7 +1287,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     neuralValidationComparison.beats_same_window_logistic===true&&
     neuralValidationComparison.beats_global_logistic===true&&
     neuralValidationComparison.beats_recent_logistic===true;
-  const neuralHoldout=neuralFit?evaluateHoldout(upEventHoldout,neuralFit,comparisonMargin):{
+  const neuralHoldout=neuralFit&&neuralFit.selected_member_index>=0
+    ?evaluateHoldout(upEventHoldout,neuralFit,comparisonMargin):{
     sample_count:upEventHoldout.length,evaluated:false,model_brier_score:null,base_rate_brier_score:null,
     log_loss:null,beat_base_rate:false,reason:'NEURAL_MODEL_NOT_FITTED'
   };
@@ -1546,9 +1564,15 @@ export function buildCognitiveLearningProfile(samples = [], {
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
       member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
+      member_training_profiles:neuralFit?.member_training_profiles||[],
+      internal_selection_logistic_brier:neuralSelectionLogistic.model_brier_score??null,
+      internal_selection_required_margin:comparisonMargin,
+      internal_selection_qualified_members:neuralMemberOrder.length,
       member_selection_brier_scores:neuralMemberSelection.map(row=>({
         index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
-        base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate
+        base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate,
+        beats_same_window_logistic:neuralSelectionLogistic.evaluated===true&&
+          row.metrics.model_brier_score+comparisonMargin<neuralSelectionLogistic.model_brier_score
       })),
       member_validation_brier_scores:[],
       trained: neuralFit!==null, selected: neuralSelected,

@@ -280,6 +280,11 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
       'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
     ]);
+    assert.equal(profile.neural_network.member_training_profiles[2].positiveClassWeighting,
+      'SQRT_INVERSE_PREVALENCE');
+    assert.ok(profile.neural_network.internal_selection_logistic_brier>=0);
+    assert.ok(profile.neural_network.member_selection_brier_scores.every(row=>
+      typeof row.beats_same_window_logistic==='boolean'));
     assert.equal(profile.neural_network.ensemble_members_required, 3);
     assert.equal(profile.feature_schema,COGNITIVE_FEATURE_SCHEMA);
     assert.equal(profile.neural_network.feature_schema,COGNITIVE_FEATURE_SCHEMA);
