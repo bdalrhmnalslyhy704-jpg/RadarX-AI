@@ -473,7 +473,29 @@ export function runHistoricalReplay({
     const strong = alert?.strong_move ?? {};
     const elite = alert?.elite_gate ?? raw?.eliteGate ?? {};
     const notification = raw?.notificationGate ?? raw?.notification_gate ?? raw?.gate ?? alert?.notification_gate ?? {};
-    const metrics = strong?.metrics ?? {};
+    const profileAnalysis=alert?.analysis??alert?.early_expansion??alert?.almuqawim??
+      alert?.doomsday??alert?.kahir_analysis??alert?.rotation??{};
+    const hasMetricFields=value=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length>0;
+    const metrics=hasMetricFields(strong?.metrics)?strong.metrics:
+      (hasMetricFields(alert?.metrics)?alert.metrics:
+        (hasMetricFields(profileAnalysis?.metrics)?profileAnalysis.metrics:{}));
+    const metricValue=(...values)=>{
+      for(const value of values){
+        const parsed=finite(value);
+        if(parsed!==null)return parsed;
+      }
+      return null;
+    };
+    const componentScores=hasMetricFields(strong?.component_scores)?strong.component_scores:
+      (profileAnalysis?.component_scores??alert?.component_scores??metrics?.component_scores??{});
+    const profileMetricSnapshot=Object.fromEntries(Object.entries(metrics).filter(([,value])=>{
+      if(typeof value==='boolean')return true;
+      if(typeof value==='string')return value.length<=96;
+      return finite(value)!==null;
+    }));
+    const metricSource=hasMetricFields(strong?.metrics)?'alert.strong_move.metrics':
+      (hasMetricFields(alert?.metrics)?'alert.metrics':
+        (hasMetricFields(profileAnalysis?.metrics)?'alert.profile_analysis.metrics':'UNAVAILABLE'));
     const rejectionGroup = accepted ? "ACCEPTED" :
       (!tradeCoverageComplete && !candleOnlyFallback) ? "HISTORICAL_TRADE_COVERAGE_INCOMPLETE" :
       alert?.eligible === false ? "STRONG_MOVE_CORE_GATE" :
@@ -534,37 +556,40 @@ export function runHistoricalReplay({
         failures: Array.isArray(notification?.failures) ? notification.failures.slice(0, 20) : reasons
       },
       signal_metrics: {
-        return_1m_pct: finite(metrics?.return_1m),
-        return_3m_pct: finite(metrics?.return_3m),
-        return_5m_pct: finite(metrics?.return_5m),
-        return_10m_pct: finite(metrics?.return_10m),
-        return_15m_pct: finite(metrics?.return_15m),
-        return_20m_pct: finite(metrics?.return_20m),
-        acceleration: finite(metrics?.acceleration),
-        volume_ratio: finite(metrics?.volume_ratio),
-        trade_ratio: finite(metrics?.trade_ratio),
-        taker_buy_ratio_1m_3m: finite(metrics?.taker_buy_ratio),
-        taker_buy_ratio_3s: finite(metrics?.three_second_taker_buy_ratio),
-        taker_buy_delta: finite(metrics?.taker_buy_delta),
+        return_1m_pct: metricValue(metrics?.return_1m,metrics?.return_1m_pct,metrics?.r1,metrics?.return1mPct),
+        return_3m_pct: metricValue(metrics?.return_3m,metrics?.return_3m_pct,metrics?.r3,metrics?.return3mPct),
+        return_5m_pct: metricValue(metrics?.return_5m,metrics?.return_5m_pct,metrics?.r5,metrics?.return5mPct),
+        return_10m_pct: metricValue(metrics?.return_10m,metrics?.return_10m_pct,metrics?.r10),
+        return_15m_pct: metricValue(metrics?.return_15m,metrics?.return_15m_pct,metrics?.r15),
+        return_20m_pct: metricValue(metrics?.return_20m,metrics?.return_20m_pct,metrics?.r20),
+        acceleration: metricValue(metrics?.acceleration,metrics?.activity_acceleration),
+        volume_ratio: metricValue(metrics?.volume_ratio,metrics?.volumeRatio,metrics?.volume_acceleration,metrics?.volumeAcceleration),
+        trade_ratio: metricValue(metrics?.trade_ratio,metrics?.tradeRatio,metrics?.trade_count_acceleration,metrics?.trade_acceleration),
+        taker_buy_ratio_1m_3m: metricValue(metrics?.taker_buy_ratio,metrics?.taker_buy_ratio_1m_3m,metrics?.takerRatio,metrics?.taker_ratio,metrics?.buy_ratio),
+        taker_buy_ratio_3s: metricValue(metrics?.three_second_taker_buy_ratio,metrics?.taker_buy_ratio_3s),
+        taker_buy_delta: metricValue(metrics?.taker_buy_delta,metrics?.taker_delta),
         taker_buy_pressure_confirmed: typeof metrics?.taker_buy_pressure_confirmed === "boolean" ? metrics.taker_buy_pressure_confirmed : null,
-        independent_confirmations: finite(metrics?.independent_confirmations),
-        flash_score: finite(metrics?.flash_score),
-        flash_confirmations: finite(metrics?.flash_confirmations),
-        liquidity_acceleration_3m: finite(metrics?.liquidity_acceleration?.three_minute_acceleration),
-        liquidity_acceleration_score: finite(metrics?.liquidity_acceleration?.score),
-        range_ratio: finite(metrics?.range_ratio),
-        bb_width: finite(metrics?.bb_width),
-        bb_expansion_ratio: finite(metrics?.bb_expansion_ratio),
-        atr_ratio: finite(metrics?.atr_ratio),
-        efficiency_ratio: finite(metrics?.efficiency_ratio),
-        vwap_distance_pct: finite(metrics?.vwap_distance_pct),
-        five_min_trend: finite(metrics?.five_min_trend),
-        breakout_distance_up_pct: finite(metrics?.breakout_distance_up_pct),
+        independent_confirmations: metricValue(metrics?.independent_confirmations,metrics?.confirmation_count,metrics?.confirmation_total),
+        flash_score: metricValue(metrics?.flash_score),
+        flash_confirmations: metricValue(metrics?.flash_confirmations),
+        liquidity_acceleration_3m: metricValue(metrics?.liquidity_acceleration?.three_minute_acceleration,metrics?.liquidity_acceleration_3m),
+        liquidity_acceleration_score: metricValue(metrics?.liquidity_acceleration?.score,metrics?.liquidity_acceleration_score),
+        range_ratio: metricValue(metrics?.range_ratio,metrics?.latest_range_ratio),
+        bb_width: metricValue(metrics?.bb_width,metrics?.bollinger_width),
+        bb_expansion_ratio: metricValue(metrics?.bb_expansion_ratio,metrics?.bollinger_ratio,metrics?.bollinger?.ratio),
+        atr_ratio: metricValue(metrics?.atr_ratio,metrics?.atr?.ratio),
+        efficiency_ratio: metricValue(metrics?.efficiency_ratio,metrics?.efficiencyRatio),
+        vwap_distance_pct: metricValue(metrics?.vwap_distance_pct,metrics?.vwap_deviation_pct,metrics?.vwap?.deviationPct),
+        five_min_trend: metricValue(metrics?.five_min_trend,metrics?.five_min_trend_score),
+        breakout_distance_up_pct: metricValue(metrics?.breakout_distance_up_pct,metrics?.resistance_gap_pct,metrics?.breakout_distance_pct),
         micro_breakout: typeof metrics?.micro_breakout === "boolean" ? metrics.micro_breakout : null,
-        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up : null,
+        breakout_up: typeof metrics?.breakout_up === "boolean" ? metrics.breakout_up :
+          (typeof metrics?.break_up === "boolean" ? metrics.break_up : null),
         component_scores: Object.fromEntries(['velocity','volume','trades','taker','range','flash','breakout','ema','vwap','bollinger','efficiency','atr']
-          .map(key=>[key,finite((strong?.component_scores||alert?.component_scores)?.[key])]))
+          .map(key=>[key,finite(componentScores?.[key])]))
       },
+      profile_metrics:profileMetricSnapshot,
+      profile_metrics_source:metricSource,
       market_evidence: {
         data_quality:finite(alert?.data_quality ?? strong?.data_quality),
         liquidity_quality:finite(alert?.liquidity_quality ?? strong?.liquidity_quality),
