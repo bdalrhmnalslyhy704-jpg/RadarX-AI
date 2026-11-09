@@ -8,7 +8,7 @@ const SOFT_STRICT_FAILURES=new Set([
   'RISK:ALREADY_EXTENDED_24H',
   'RISK:ADVANCED_CHASE_RISK'
 ]);
-const MISSING_3S_FAILURE='THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT';
+const MISSING_3S_FAILURE='THREE_SECOND_BUCKET_UNAVAILABLE';
 
 /**
  * Conservative second lane for an informative pre-expansion warning.
