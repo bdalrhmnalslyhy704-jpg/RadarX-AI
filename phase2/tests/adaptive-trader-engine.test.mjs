@@ -1349,7 +1349,7 @@ test('three-page history backfill records verified additional 15m history on a l
   };
   const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:60_000})({limit:20,now:f.now});
   assert.equal(snapshot.status,'LIVE_DATA');
-  const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT');
+  const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT'&&call.query.interval==='15m');
   assert.equal(pages.length,3,'initial page plus two bounded older-page attempts');
   assert.equal(snapshot.universe.asset_15m_extended_symbols,1);
 });
