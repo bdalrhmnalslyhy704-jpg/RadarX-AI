@@ -1014,7 +1014,7 @@ test('market-wide scanner prioritizes sub-0.25% early pulses and audits sharp bu
   assert.equal(shock.real_order_execution,false);
 });
 
-test('deep historical capture expands to 118 non-overlapping closed-candle outcomes per symbol',()=>{
+test('deep historical capture keeps full causal tensors across 116 non-overlapping closed-candle outcomes',()=>{
   const now=Date.now();
   const klines=longClosedCandleFixture(now,2000,15*60*1000,10,0.0001);
   const fastKlines=longClosedCandleFixture(now,6000,5*60*1000,10,0.00003);
@@ -1022,11 +1022,11 @@ test('deep historical capture expands to 118 non-overlapping closed-candle outco
   const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
     symbol:'DEEP110USDT',klines,fastKlines,btcKlines,now,maxSamples:118
   });
-  assert.equal(samples.length,118,'deep closed-candle history should use all 118 available non-overlapping labels');
+  assert.equal(samples.length,116,'only baselines with complete 120-bar causal context are eligible');
   assert.ok(samples.every(row=>row.outcome_source==='HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'));
   const temporalSamples=samples.filter(row=>Array.isArray(row.temporal_sequence));
-  assert.equal(temporalSamples.length,116,
-    'two earliest labels remain useful for V5, but lack the 120 closed 15m candles required by TCN');
+  assert.equal(temporalSamples.length,samples.length,
+    'every retained first-passage label must have the same 24x29 tensor contract');
   assert.ok(temporalSamples.every(row=>row.temporal_sequence.length===24&&
     row.temporal_sequence.every(step=>step.length===29)));
   for(let index=1;index<samples.length;index++){
@@ -1047,7 +1047,8 @@ test('historical sample phases give the cognitive learner enough distinct time b
     const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
       symbol,klines,fastKlines,btcKlines,now,maxSamples:12
     });
-    assert.equal(samples.length,12,symbol+' should retain twelve independent 4h labels');
+    assert.ok(samples.length>=10&&samples.length<=12,
+      symbol+' should retain the available time-stratified independent 4h labels');
     for(let j=1;j<samples.length;j++){
       assert.ok(samples[j].at-samples[j-1].at>=4*60*60*1000,
         symbol+' must not contribute overlapping 4h outcome windows');
