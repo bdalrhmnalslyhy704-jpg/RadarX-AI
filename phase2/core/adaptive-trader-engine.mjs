@@ -355,7 +355,10 @@ function firstPassageLabel(baseline, future15m) {
   };
 }
 
-export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKlines = null, btcKlines = null, now = Date.now(), minQuoteVolume24h = POLICY.minQuoteVolume24h } = {}) {
+export function scoreAdaptiveTraderCandidate({
+  symbol,ticker,klines,fastKlines=null,btcKlines=null,now=Date.now(),
+  minQuoteVolume24h=POLICY.minQuoteVolume24h,includeTemporalSequence=true
+}={}) {
   const cleanSymbol = String(symbol || ticker?.symbol || '').trim().toUpperCase();
   const lastPrice = finite(ticker?.lastPrice ?? ticker?.last_price);
   const quoteVolume24h = finite(ticker?.quoteVolume ?? ticker?.quote_volume_24h);
@@ -478,7 +481,8 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
-  const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
+  const temporalSequence=includeTemporalSequence===true
+    ?buildTemporalSequence(candles,btcCandles,fastCandles):null;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -605,7 +609,8 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
  */
 export function buildAdaptiveTraderHistoricalOutcomeSamples({
   symbol,klines,fastKlines=null,btcKlines=null,now=Date.now(),
-  minQuoteVolume24h=POLICY.minQuoteVolume24h,maxSamples=8
+  minQuoteVolume24h=POLICY.minQuoteVolume24h,maxSamples=8,
+  sampleIntervalBars=16,includeTemporalSequence=true
 }={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
   if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
@@ -623,6 +628,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     .sort((a,b)=>a.candle.closeTime-b.candle.closeTime);
   const btcByClose=new Map(btcCandles.map(item=>[item.candle.closeTime,item.candle]));
   const horizonBars=16,dayBars=96;
+  const sampleStrideBars=Math.max(1,Math.min(96,Math.trunc(Number(sampleIntervalBars)||16)));
   const possible=[];
   // A 24-step tensor needs 96 day-context candles before its first step, then 24 model steps.
   for(let index=Math.max(dayBars,119);index+horizonBars<candles.length;index++){
@@ -639,18 +645,18 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     const absolute15mBar=Math.floor((baseline.closeTime+1)/(15*60*1000));
     possible.push({index,absolute15mBar,volume24h,dailyReturn,baseline,future});
   }
-  const desired=Math.max(1,Math.min(118,Math.trunc(Number(maxSamples)||48)));
-  // Anchor each symbol to a stable phase on the absolute 4h time grid. Using
-  // the Binance candle timestamp (not its page-relative row index) means a
-  // rolling 2,000-candle window cannot shift the phase and create overlapping
-  // labels across repeated scans. The hash only staggers symbols across time.
+  const desired=Math.max(1,Math.min(10000,Math.trunc(Number(maxSamples)||48)));
+  // Anchor each symbol to a stable phase on an absolute bar grid.
+  // The default 16 bars preserves the original non-overlapping 4h schedule.
+  // Event-census callers may request a denser 2h cadence; those rows are
+  // surveillance observations, not independent training examples.
   let phaseHash=2166136261;
   for(const char of cleanSymbol){
     phaseHash^=char.charCodeAt(0);
     phaseHash=Math.imul(phaseHash,16777619)>>>0;
   }
-  const samplingPhase=phaseHash%horizonBars;
-  const phaseRows=possible.filter(item=>item.absolute15mBar%horizonBars===samplingPhase);
+  const samplingPhase=phaseHash%sampleStrideBars;
+  const phaseRows=possible.filter(item=>item.absolute15mBar%sampleStrideBars===samplingPhase);
   const selectedCount=Math.min(desired,phaseRows.length);
   const selected=[];
   if(selectedCount>0&&selectedCount<=64){
@@ -716,7 +722,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       klines:{data:baselineRaw,source:klines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
       fastKlines:{data:baseFastRaw,source:fastKlines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
       btcKlines:{data:baseBtcRaw,source:btcKlines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
-      now:evaluationNow,minQuoteVolume24h
+      now:evaluationNow,minQuoteVolume24h,includeTemporalSequence
     });
     if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
     const move=(future.close/baseline.close-1)*100;
