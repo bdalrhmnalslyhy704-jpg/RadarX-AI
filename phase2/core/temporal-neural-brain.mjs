@@ -276,12 +276,19 @@ function forward(sequence, model, residualScale=1) {
   return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,baselineFeatures};
 }
 
-function gradientsFor(sequence, target, model, cache) {
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE') {
   const gradients=zerosLike(model),channels=TEMPORAL_LATENT_CHANNELS;
   const activationGradients=Array(DILATIONS.length+1);
   const final=cache.activations.at(-1);
   activationGradients[DILATIONS.length]=final.map(()=>Array(channels).fill(0));
-  const error=2*(cache.probability-target)*cache.probability*(1-cache.probability);
+  const probabilityError=cache.probability-target;
+  const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
+  const logLossGradient=probabilityError;
+  const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+    ?logLossGradient
+    :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      ?0.5*brierGradient+0.5*logLossGradient
+      :brierGradient;
   for(let channel=0;channel<channels;channel++){
     gradients.outputWeights[channel]=error*cache.pooled[channel];
     for(let time=cache.poolStart;time<final.length;time++){
@@ -360,7 +367,7 @@ function fitMember(rows, seed, {
     const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
       const cache = forward(row.sequence, model);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache);
+      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       const plus = (target, source) => Array.isArray(target)
         ? target.map((value, index) => plus(value, source[index]))
@@ -748,10 +755,10 @@ function fitEnsemble(rows, options = {}) {
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'SQRT_INVERSE_PREVALENCE_WEIGHTED_BRIER_TRAIN_ONLY',
+      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT}
   ];
@@ -765,7 +772,7 @@ function fitEnsemble(rows, options = {}) {
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
-    training_objective:'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22',
+    training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
     training_prior_probability:baseRate
   };
@@ -1070,7 +1077,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_strategy:'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1',
     model_scope:'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR',
     baseline_anchor:'SHARED_POOLED_TRAINING_ONLY_LOGISTIC_FROZEN',
-    training_objective:'BRIER_ENSEMBLE_WITH_ONE_TRAIN_ONLY_CLASS_BALANCED_MEMBER_V22',
+    training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     residual_scale_selection:'SHARED_POOLED_SELECTION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES]
   };
