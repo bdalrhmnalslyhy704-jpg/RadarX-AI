@@ -99,7 +99,10 @@ test('multi-target labels are resolved independently without collapsing +5%, +10
 test('historical daily census uses closed baseline features, one non-overlapping anchor per day, and future-only labels',()=>{
   const count=1800;
   const base=Math.floor(1_700_000_000_000/INTERVAL)*INTERVAL;
-  const fifteen=Array.from({length:count},(_,index)=>candle(base+index*INTERVAL));
+  const fifteen=Array.from({length:count},(_,index)=>{
+    const price=100+index*0.01;
+    return candle(base+index*INTERVAL,{open:price,high:price+0.2,low:price-0.2,close:price});
+  });
   const fast=Array.from({length:count*3},(_,index)=>candle(base+index*FIVE,{
     interval:FIVE,quoteVolume:100_000,trades:600,high:100.1,low:99.9
   }));
@@ -125,6 +128,24 @@ test('historical daily census uses closed baseline features, one non-overlapping
   assert.ok(result.samples.every(row=>row.targets.plus_10_pct.outcome==='FLAT'));
   assert.ok(result.samples.every(row=>row.targets.plus_15_pct.outcome==='FLAT'));
   assert.ok(result.samples.every(row=>row.features&&Number.isFinite(row.base_score)));
+  for(const sample of result.samples){
+    const index=fifteen.findIndex(row=>row.closeTime===sample.at);
+    assert.ok(index>=96,'sample has an exact 24h prior close');
+    const expected=(fifteen[index].close/fifteen[index-96].close-1)*100;
+    assert.ok(Math.abs(sample.daily_change_pct-expected)<1e-5,
+      '24h return must compare prices exactly 96 closed 15m bars apart');
+  }
   assert.ok(result.samples.every(row=>row.temporal_sequence_available===true),
     'complete official 5m history should support the 24x29 temporal tensor');
+});
+
+
+test('malformed future OHLC candles are rejected even when timestamps and numbers are finite',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfter(baseline,(row,index)=>index===2?{...row,high:99.5}:row);
+  const result=classifyDailyEarlyRiserFirstPassage({
+    baseline,future15m:future,targetPct:5,adversePct:2
+  });
+  assert.equal(result.status,'INVALID');
+  assert.equal(result.reason,'INVALID_FUTURE_CANDLE');
 });
