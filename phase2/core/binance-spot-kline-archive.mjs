@@ -86,6 +86,40 @@ export function parseBinanceSpotKlineArchiveCsv(csv, {intervalMs} = {}) {
   };
 }
 
+
+/**
+ * Missing monthly files before the first verified archive are treated as
+ * pre-listing only when they are explicit 404s. Any failed request anywhere,
+ * or a missing archive after the first verified month, invalidates coverage.
+ */
+export function summarizeBinanceSpotArchiveMonthCoverage(files) {
+  const rows=Array.isArray(files)?files.slice().sort((a,b)=>
+    String(a?.month||'').localeCompare(String(b?.month||''))):[];
+  const firstVerifiedIndex=rows.findIndex(row=>row?.status==='VERIFIED');
+  const failedMonths=rows.filter(row=>row?.status==='FAILED').length;
+  const missingBeforeListing=firstVerifiedIndex<0
+    ?rows.filter(row=>row?.status==='MISSING').length
+    :rows.slice(0,firstVerifiedIndex).filter(row=>row?.status==='MISSING').length;
+  const afterFirst=firstVerifiedIndex<0?[]:rows.slice(firstVerifiedIndex);
+  const missingAfterListing=afterFirst.filter(row=>row?.status==='MISSING').length;
+  const failedAfterListing=afterFirst.filter(row=>row?.status==='FAILED').length;
+  const verifiedAfterListing=afterFirst.filter(row=>row?.status==='VERIFIED').length;
+  const expectedAfterListing=afterFirst.length;
+  const complete=firstVerifiedIndex>=0&&failedMonths===0&&missingAfterListing===0&&
+    verifiedAfterListing===expectedAfterListing;
+  return {
+    first_available_month:firstVerifiedIndex<0?null:rows[firstVerifiedIndex].month,
+    pre_listing_missing_months:missingBeforeListing,
+    expected_months_after_first_available:expectedAfterListing,
+    verified_months_after_first_available:verifiedAfterListing,
+    missing_months_after_first_available:missingAfterListing,
+    failed_archive_months:failedMonths,
+    coverage_ratio_after_first_available:expectedAfterListing
+      ?Number((verifiedAfterListing/expectedAfterListing).toFixed(6)):0,
+    complete_from_first_available:complete
+  };
+}
+
 export function listBinanceSpotArchiveMonths(startMs, endExclusiveMs) {
   const start = Number(startMs), end = Number(endExclusiveMs);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= start) {
