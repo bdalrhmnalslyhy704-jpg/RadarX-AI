@@ -20,7 +20,7 @@ export function buildAdaptiveTraderRecommendation(candidate, {now=Date.now()} = 
     entry_eligible:false,paper_trading:true,real_order_execution:false,
     confidence_score:'UNKNOWN'
   });
-  if(!/^[A-Z0-9]{5,30}$/.test(symbol)||candidate?.data_valid!==true||
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(symbol)||candidate?.data_valid!==true||
      candidate?.data_stale===true||candidate?.closed_candles_only!==true||
      !(finite(candidate?.price)>0)||score===null||age===null||age<0||age>POLICY.maxCandleAgeMs) {
     return out('DATA_UNAVAILABLE','لا تدخل — البيانات أو الشموع المغلقة غير مكتملة','NO_TRADE',-1,
@@ -125,6 +125,42 @@ const finite = value => {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 };
+
+/**
+ * Allocate the optional third historical 15m page to one deterministic third
+ * of the eligible Spot symbols per persisted scan-cursor wave. The cursor
+ * advances after each successful rotation, so the page budget rotates with
+ * actual scans and remains stable across worker restarts.
+ */
+export function adaptiveTraderHistoryPageBudget(symbol,now=Date.now(),scanOffset=null,rotationSlots=19){
+  const clean=String(symbol||'').trim().toUpperCase();
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(clean))
+    throw new Error('ADAPTIVE_HISTORY_PAGE_SYMBOL_INVALID');
+  const at=finite(now)??Date.now();
+  const slots=Math.max(1,Math.trunc(Number(rotationSlots)||19));
+  const offset=finite(scanOffset);
+  const wave=offset!==null
+    ?Math.abs(Math.floor(Math.max(0,offset)/slots))%3
+    :Math.abs(Math.floor(at/(3*60*1000)))%3;
+  if(clean==='BTCUSDT'){
+    return {wave,symbol_wave:wave,max_pages:3,rotation_slots_per_cycle:slots,
+      wave_source:offset!==null?'PERSISTED_SCAN_CURSOR':'TIME_FALLBACK'};
+  }
+  let hash=2166136261;
+  for(const character of clean){
+    hash^=character.charCodeAt(0);
+    hash=Math.imul(hash,16777619)>>>0;
+  }
+  const symbolWave=hash%3;
+  return {
+    wave,
+    symbol_wave:symbolWave,
+    max_pages:symbolWave===wave?3:2,
+    rotation_slots_per_cycle:slots,
+    wave_source:offset!==null?'PERSISTED_SCAN_CURSOR':'TIME_FALLBACK'
+  };
+}
+
 function mergeOlderKlinePage(current,older){
   const currentRows=Array.isArray(current?.data)?current.data:[];
   const olderRows=Array.isArray(older?.data)?older.data:[];
@@ -137,8 +173,64 @@ function mergeOlderKlinePage(current,older){
     if(open!==null)unique.set(open,row);
   }
   const data=[...unique.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
-  return {...current,data,historical_pages_fetched:2,historical_window_candles:data.length,
+  return {...current,data,
+    historical_pages_fetched:(Math.max(1,Math.trunc(Number(current?.historical_pages_fetched)||1))+1),
+    historical_window_candles:data.length,historical_backfill_error:null};
+}
+
+/**
+ * Extend a closed-candle Kline series using bounded older pages. A repeated,
+ * empty, overlapping-only, or failed page never fabricates additional history.
+ * The default three pages cover approximately 31 days of 15m candles.
+ */
+export async function fetchAdaptiveTraderHistoricalKlines({
+  rest,symbol,interval='15m',firstPage,maxPages=3
+}={}){
+  if(!rest||typeof rest.request!=='function')throw new Error('ADAPTIVE_HISTORICAL_REST_UNAVAILABLE');
+  const cleanSymbol=String(symbol||'').trim().toUpperCase();
+  const cleanInterval=String(interval||'').trim().toLowerCase();
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d'].includes(cleanInterval))
+    throw new Error('ADAPTIVE_HISTORICAL_KLINE_QUERY_INVALID');
+  const pageLimit=Math.max(1,Math.min(3,Math.trunc(Number(maxPages)||3)));
+  const initialRows=Array.isArray(firstPage?.data)?firstPage.data:[];
+  let result={...(firstPage&&typeof firstPage==='object'?firstPage:{}),
+    data:initialRows.slice(),historical_pages_fetched:initialRows.length?1:0,
+    historical_pages_attempted:0,historical_window_candles:initialRows.length,
     historical_backfill_error:null};
+  if(!initialRows.length||pageLimit===1)return result;
+  const intervalMs=({
+    '1m':60_000,'3m':180_000,'5m':300_000,'15m':900_000,'30m':1_800_000,
+    '1h':3_600_000,'2h':7_200_000,'4h':14_400_000,'6h':21_600_000,
+    '8h':28_800_000,'12h':43_200_000,'1d':86_400_000
+  })[cleanInterval];
+  for(let page=1;page<pageLimit;page++){
+    const currentRows=Array.isArray(result.data)?result.data:[];
+    const earliestOpen=finite(currentRows[0]?.[0]);
+    if(earliestOpen===null)break;
+    result.historical_pages_attempted=page;
+    try{
+      const older=await rest.request('/api/v3/klines',{
+        symbol:cleanSymbol,interval:cleanInterval,limit:1000,endTime:earliestOpen-1
+      });
+      const olderRows=Array.isArray(older?.data)?older.data:[];
+      const validOlder=olderRows.filter(row=>{
+        const open=finite(row?.[0]);
+        return open!==null&&open<earliestOpen&&finite(row?.[6])!==null&&
+          Number(row[6])<earliestOpen&&Number(row[6])-open===intervalMs-1;
+      });
+      if(!validOlder.length)break;
+      const merged=mergeOlderKlinePage(result,{...older,data:validOlder});
+      if(merged.data.length<=currentRows.length)break;
+      result={...merged,historical_pages_attempted:page};
+      if(validOlder.length<1000)break;
+    }catch(error){
+      result={...result,
+        historical_backfill_error:String(error?.message??error).slice(0,160)};
+      break;
+    }
+  }
+  result.historical_window_candles=Array.isArray(result.data)?result.data.length:0;
+  return result;
 }
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
@@ -160,6 +252,76 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
   return values;
 }
 
+
+function diagnoseTemporalSequenceMissingReason(candles,btcCandles){
+  const steps=24;
+  if(!Array.isArray(candles))return 'ASSET_15M_CANDLES_MISSING';
+  const start=candles.length-steps;
+  if(start<96)return 'ASSET_15M_DAY_CONTEXT_MISSING';
+  if(!Array.isArray(btcCandles))return 'BTC_15M_CANDLES_MISSING';
+  const history=candles.slice(start-24);
+  if(history.length!==48)return 'ASSET_15M_SEQUENCE_WINDOW_TOO_SHORT';
+  if(history.some((row,index)=>index>0&&row.openTime-history[index-1].openTime!==15*60*1000))
+    return 'ASSET_15M_SEQUENCE_WINDOW_GAP';
+  const btcByClose=new Map(btcCandles.map(row=>[Number(row.closeTime),row]));
+  const btcIndexByClose=new Map(btcCandles.map((row,index)=>[Number(row.closeTime),index]));
+  for(let index=start;index<candles.length;index++){
+    const current=candles[index],previous=candles[index-1];
+    const volumeBase=mean(candles.slice(index-24,index).map(row=>row.quoteVolume));
+    const tradesBase=mean(candles.slice(index-24,index).map(row=>row.trades));
+    const rangeBase=mean(candles.slice(index-24,index).map(row=>(row.high-row.low)/row.close));
+    const rangeNow=(current.high-current.low)/current.close;
+    const buyShare=current.quoteVolume>0?current.takerBuyQuoteVolume/current.quoteVolume:null;
+    const btcCurrent=btcByClose.get(Number(current.closeTime));
+    const btcPrevious=btcByClose.get(Number(previous.closeTime));
+    const btcIndex=btcIndexByClose.get(Number(current.closeTime));
+    if(!btcCurrent||!btcPrevious||!(btcPrevious.close>0))return 'BTC_15M_TIMESTAMP_ALIGNMENT_MISSING';
+    const btcBaseline=Number.isInteger(btcIndex)&&btcIndex>=24?btcCandles.slice(btcIndex-24,btcIndex):[];
+    if(btcBaseline.length!==24)return 'BTC_15M_SHORT_CONTEXT_MISSING';
+    if(!btcBaseline.every((row,index)=>index===0||row.openTime-btcBaseline[index-1].openTime===15*60*1000))
+      return 'BTC_15M_SHORT_CONTEXT_GAP';
+    const btcDayBaseline=Number.isInteger(btcIndex)&&btcIndex>=96?btcCandles.slice(btcIndex-96,btcIndex):[];
+    if(btcDayBaseline.length!==96)return 'BTC_15M_DAY_CONTEXT_MISSING';
+    if(!btcDayBaseline.every((row,index)=>index===0||row.openTime-btcDayBaseline[index-1].openTime===15*60*1000))
+      return 'BTC_15M_DAY_CONTEXT_GAP';
+    const btcRangeBase=mean(btcBaseline.map(row=>(row.high-row.low)/row.close));
+    const btcRangeNow=(btcCurrent.high-btcCurrent.low)/btcCurrent.close;
+    const btcVolumeBase=mean(btcBaseline.map(row=>row.quoteVolume));
+    const btcTradesBase=mean(btcBaseline.map(row=>row.trades));
+    const btcVolumeRatio=btcCurrent.quoteVolume>0&&btcVolumeBase>0?btcCurrent.quoteVolume/btcVolumeBase:null;
+    const btcTradeRatio=btcCurrent.trades>0&&btcTradesBase>0?btcCurrent.trades/btcTradesBase:null;
+    const btcFourHourPrior=btcCandles[btcIndex-16]||null;
+    const btcDayPrior=btcDayBaseline[0]||null;
+    const btcReturn4h=btcFourHourPrior?.close>0?(btcCurrent.close/btcFourHourPrior.close-1)*100:null;
+    const btcReturn24h=btcDayPrior?.close>0?(btcCurrent.close/btcDayPrior.close-1)*100:null;
+    const btcDayVolatility=Math.sqrt(mean(btcDayBaseline.map(row=>((row.high-row.low)/row.close)**2)));
+    const btcDayHigh=Math.max(...btcDayBaseline.map(row=>row.high));
+    const btcDrawdownFromDayHigh=btcDayHigh>0?(btcCurrent.close/btcDayHigh-1)*100:null;
+    const assetDayBaseline=candles.slice(index-96,index);
+    if(assetDayBaseline.length!==96)return 'ASSET_15M_DAY_CONTEXT_MISSING';
+    if(!assetDayBaseline.every((row,offset)=>offset===0||row.openTime-assetDayBaseline[offset-1].openTime===15*60*1000))
+      return 'ASSET_15M_DAY_CONTEXT_GAP';
+    const assetFourHourPrior=candles[index-16]||null;
+    const assetDayPrior=assetDayBaseline[0]||null;
+    const assetReturn4h=assetFourHourPrior?.close>0?(current.close/assetFourHourPrior.close-1)*100:null;
+    const assetReturn24h=assetDayPrior?.close>0?(current.close/assetDayPrior.close-1)*100:null;
+    const assetRelativeReturn24h=assetReturn24h!==null&&btcReturn24h!==null?assetReturn24h-btcReturn24h:null;
+    const assetDayVolatility=Math.sqrt(mean(assetDayBaseline.map(row=>((row.high-row.low)/row.close)**2)));
+    const assetDayVolumeBase=mean(assetDayBaseline.map(row=>row.quoteVolume));
+    const assetDayTradesBase=mean(assetDayBaseline.map(row=>row.trades));
+    if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||!(buyShare>=0&&buyShare<=1))
+      return 'ASSET_15M_FLOW_FEATURES_INVALID';
+    if(!(btcRangeBase>0)||!(btcRangeNow>0)||!(btcVolumeRatio>0)||!(btcTradeRatio>0)||
+       !Number.isFinite(btcReturn4h)||!Number.isFinite(btcReturn24h)||
+       !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh))
+      return 'BTC_15M_CONTEXT_FEATURES_INVALID';
+    if(!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
+       !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
+       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0))
+      return 'ASSET_15M_DAY_FEATURES_INVALID';
+  }
+  return 'TEMPORAL_SEQUENCE_UNCLASSIFIED_FAILURE';
+}
 
 function buildTemporalSequence(candles, btcCandles, fastCandles) {
   const steps=24;
@@ -387,7 +549,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     real_order_execution: false
   };
 
-  if (!/^[A-Z0-9]{5,30}$/.test(cleanSymbol) || !cleanSymbol.endsWith('USDT') ||
+  if (!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol) || !cleanSymbol.endsWith('USDT') ||
       isLeveragedToken(cleanSymbol) || !(lastPrice > 0) || !(quoteVolume24h >= minQuoteVolume24h) ||
       change24hPct === null) {
     return { ...base, tier: 'DATA_REJECTED', score: null, reason_codes: ['UNIVERSE_OR_TICKER_GATE'] };
@@ -479,6 +641,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
+  const temporalSequenceMissingReason=temporalSequence?null:diagnoseTemporalSequenceMissingReason(candles,btcCandles);
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -547,6 +710,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    temporal_sequence_missing_reason:temporalSequenceMissingReason,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -608,7 +772,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   minQuoteVolume24h=POLICY.minQuoteVolume24h,maxSamples=8
 }={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT')||isLeveragedToken(cleanSymbol))return [];
   const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
   const candles=rows.map(raw=>({raw,candle:normalizeCandle(raw)}))
     .filter(item=>item.candle&&item.candle.closeTime<Number(now))
@@ -724,6 +888,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
+      temporal_sequence_missing_reason:candidate.temporal_sequence_missing_reason||null,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
@@ -738,7 +903,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
 
 export function buildAdaptiveTraderClosedCandleOutcomeLabels({symbol,klines,fastKlines=null,pendingSamples=[],now=Date.now()}={}){
   const cleanSymbol=String(symbol||'').trim().toUpperCase();
-  if(!/^[A-Z0-9]{5,30}$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
+  if(!/^[A-Z0-9]{1,30}USDT$/.test(cleanSymbol)||!cleanSymbol.endsWith('USDT'))return [];
   const rows=Array.isArray(klines?.data)?klines.data:Array.isArray(klines)?klines:[];
   const candles=rows.map(row=>normalizeCandle(row)).filter(candle=>candle&&candle.closeTime<Number(now)).sort((a,b)=>a.closeTime-b.closeTime);
   if(!candles.length)return [];
@@ -874,22 +1039,10 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       .then(value => ({value,error:null}))
       .catch(error => ({value:null,error:String(error?.message??error).slice(0,160)}))
   ]);
-  let btcKlines = btcResult.value;
-  if(Array.isArray(btcKlines?.data)&&btcKlines.data.length){
-    const earliestOpen=finite(btcKlines.data[0]?.[0]);
-    if(earliestOpen!==null){
-      try{
-        const older=await rest.request('/api/v3/klines',{
-          symbol:'BTCUSDT',interval:'15m',limit:1000,endTime:earliestOpen-1
-        });
-        btcKlines=mergeOlderKlinePage(btcKlines,older);
-      }catch(error){
-        btcKlines={...btcKlines,historical_pages_fetched:1,
-          historical_window_candles:btcKlines.data.length,
-          historical_backfill_error:String(error?.message??error).slice(0,120)};
-      }
-    }
-  }
+  let btcKlines=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'BTCUSDT',interval:'15m',firstPage:btcResult.value,maxPages:3
+  }).catch(error=>({data:[],historical_pages_fetched:0,historical_pages_attempted:0,
+    historical_window_candles:0,historical_backfill_error:String(error?.message??error).slice(0,160)}));
   const symbolInfo = Array.isArray(exchangeInfo?.data?.symbols) ? exchangeInfo.data.symbols : [];
   const activeSpot = new Set(symbolInfo.filter(item =>
     item && item.status === 'TRADING' && item.quoteAsset === 'USDT' &&
@@ -1100,22 +1253,11 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     const first15m=await rest.request('/api/v3/klines', {
       symbol:ticker.symbol,interval:'15m',limit:1000
     });
-    let result=first15m;
-    if(Array.isArray(first15m?.data)&&first15m.data.length){
-      const earliestOpen=finite(first15m.data[0]?.[0]);
-      if(earliestOpen!==null){
-        try{
-          const older=await rest.request('/api/v3/klines',{
-            symbol:ticker.symbol,interval:'15m',limit:1000,endTime:earliestOpen-1
-          });
-          result=mergeOlderKlinePage(first15m,older);
-        }catch(error){
-          result={...first15m,historical_pages_fetched:1,
-            historical_window_candles:first15m.data.length,
-            historical_backfill_error:String(error?.message??error).slice(0,120)};
-        }
-      }
-    }
+    const historyPageBudget=adaptiveTraderHistoryPageBudget(
+      ticker.symbol,now,scanOffset,coveragePlan.rotation_slots_per_cycle);
+    const result=await fetchAdaptiveTraderHistoricalKlines({
+      rest,symbol:ticker.symbol,interval:'15m',firstPage:first15m,maxPages:historyPageBudget.max_pages
+    });
     const fastLatest=await fastLatestPromise;
     const fastResult=fastLatest.value&&Array.isArray(fastLatest.value.data)
       ?{value:{
@@ -1137,6 +1279,9 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
     });
     return {candidate,historicalSamples,closedCandleOutcomes,history:{
       asset_15m_pages:Number(result?.historical_pages_fetched)||1,
+      asset_15m_pages_attempted:Number(result?.historical_pages_attempted)||0,
+      asset_15m_page_budget:historyPageBudget.max_pages,
+      asset_15m_page_wave:historyPageBudget.wave,
       asset_15m_candles:Array.isArray(result?.data)?result.data.length:0,
       asset_15m_backfill_error:String(result?.historical_backfill_error||''),
       asset_5m_pages:Number(fastResult.value?.historical_pages_fetched)||1,
@@ -1245,6 +1390,13 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       historical_training_samples_per_symbol:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,
       historical_sampling_strategy:'DETERMINISTIC_TIME_STRATIFIED_PER_SYMBOL_V1',
       asset_15m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=2).length,
+      asset_15m_three_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)>=3).length,
+      asset_15m_two_page_symbols:analyzed.filter(row=>Number(row?.history?.asset_15m_pages)===2).length,
+      asset_15m_page_wave:adaptiveTraderHistoryPageBudget('BTCUSDT',now,scanOffset,coveragePlan.rotation_slots_per_cycle).wave,
+      asset_15m_pages_fetched_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages)||0),0),
+      asset_15m_pages_attempted_total:analyzed.reduce((sum,row)=>sum+(Number(row?.history?.asset_15m_pages_attempted)||0),0),
+      asset_15m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0)),
+      asset_15m_median_history_candles:(()=>{const values=analyzed.map(row=>Number(row?.history?.asset_15m_candles)||0).sort((a,b)=>a-b);if(!values.length)return 0;const middle=Math.floor(values.length/2);return values.length%2?values[middle]:Math.round((values[middle-1]+values[middle])/2);})(),
       asset_5m_extended_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=2).length,
       asset_5m_deep_history_symbols:analyzed.filter(row=>Number(row?.history?.asset_5m_pages)>=4).length,
       asset_5m_max_history_candles:Math.max(0,...analyzed.map(row=>Number(row?.history?.asset_5m_candles)||0)),
@@ -1295,8 +1447,8 @@ export async function buildAdaptiveTraderMarketSnapshot({ rest, limit = POLICY.d
       execution: 'DISABLED',
       learning_scope: 'SERVER_MARKET_WIDE_AND_DEEP_CANDIDATE_OUTCOMES',
       source_host: source,
-      btc_benchmark_available: Boolean(btcKlines?.data),
-      btc_benchmark_error: btcResult.error,
+      btc_benchmark_available: Array.isArray(btcKlines?.data)&&btcKlines.data.length>0,
+      btc_benchmark_error: btcResult.error||btcKlines?.historical_backfill_error||null,
       btc_15m_historical_pages:Number(btcKlines?.historical_pages_fetched)||1,
       btc_15m_historical_window_candles:Number(btcKlines?.historical_window_candles)||btcKlines?.data?.length||0,
       btc_15m_historical_backfill_error:String(btcKlines?.historical_backfill_error||''),

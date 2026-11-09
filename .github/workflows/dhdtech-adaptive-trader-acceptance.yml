@@ -171,6 +171,12 @@ jobs:
                   (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3)
                 );
                 const sharedComparison=cognitiveProfile.comparison_contract||{};
+                const sharedPhaseNames=['training','member_selection','calibration','validation','holdout'];
+                const temporalStageFingerprints=temporalNetwork.shared_model_stage_fingerprints||{};
+                const neuralStageFingerprints=neuralNetwork.shared_phase_sample_fingerprints||{};
+                const sharedPhaseFingerprintsMatch=sharedPhaseNames.every(phase=>
+                  typeof temporalStageFingerprints[phase]==='string'&&
+                  temporalStageFingerprints[phase]===neuralStageFingerprints[phase]);
                 const sharedDatasetReady=Boolean(
                   sharedComparison.target_definition===temporalNetwork.target_definition&&
                   sharedComparison.sample_identity_matches===true&&
@@ -180,7 +186,14 @@ jobs:
                   sharedComparison.validation_start_at===temporalNetwork.outer_validation_start_at&&
                   sharedComparison.holdout_start_at===temporalNetwork.outer_holdout_start_at&&
                   sharedComparison.validation_sample_count_matches===true&&
-                  sharedComparison.holdout_sample_count_matches===true
+                  sharedComparison.holdout_sample_count_matches===true&&
+                  sharedComparison.shared_phase_identity_matches===true&&
+                  sharedComparison.shared_phase_alignment_ready===true&&
+                  neuralNetwork.shared_phase_alignment_ready===true&&
+                  sharedPhaseFingerprintsMatch&&
+                  Number(neuralNetwork.training_samples)===Number(temporalNetwork.shared_model_training_samples)&&
+                  Number(neuralNetwork.selection_samples)===Number(temporalNetwork.shared_model_selection_samples)&&
+                  Number(neuralNetwork.calibration_samples)===Number(temporalNetwork.shared_model_calibration_samples)
                 );
                 const cognitiveSplitReady=Boolean(
                   sharedDatasetReady&&

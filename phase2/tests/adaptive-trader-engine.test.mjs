@@ -13,12 +13,44 @@ import {
   applyAdaptiveLearning,
   findMissedMoverEvents,
   createAdaptiveTraderSnapshotService,
+  fetchAdaptiveTraderHistoricalKlines,
+  adaptiveTraderHistoryPageBudget,
   summarizePublicSpotOrderBook,
   createPaperPortfolio,
   openPaperPosition,
   advancePaperPortfolio,
   estimatePaperEquity
 } from '../core/adaptive-trader-engine.mjs';
+
+test('history page scheduling accepts short-base Spot symbols',()=>{
+  for(const symbol of ['OPUSDT','UNIUSDT','DOGEUSDT','1000PEPEUSDT'])
+    assert.ok([2,3].includes(adaptiveTraderHistoryPageBudget(symbol,Date.UTC(2026,10,9)).max_pages));
+});
+
+test('third-page history wave follows the persisted scan cursor across three scans',()=>{
+  const now=Date.UTC(2026,10,9,12,0,0);
+  const symbols=Array.from({length:240},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
+  const rotationSlots=19;
+  const waves=[0,1,2].map(wave=>symbols.map(symbol=>
+    adaptiveTraderHistoryPageBudget(symbol,now,wave*rotationSlots,rotationSlots)));
+  for(let wave=0;wave<3;wave++){
+    const threePageCount=waves[wave].filter(row=>row.max_pages===3).length;
+    assert.ok(threePageCount>=70&&threePageCount<=90,
+      'approximately one-third of the universe receives the third page on each persisted cursor wave');
+  }
+  for(let index=0;index<symbols.length;index++){
+    assert.equal(waves.map(wave=>wave[index].max_pages).filter(maxPages=>maxPages===3).length,1,
+      'every symbol must receive one third-page request in a three-scan rotation');
+    assert.deepEqual(waves.map(wave=>wave[index].wave),[0,1,2]);
+  }
+  assert.equal(adaptiveTraderHistoryPageBudget('BTCUSDT',now,0,rotationSlots).max_pages,3,
+    'BTC always keeps all three verified historical pages');
+  assert.equal(adaptiveTraderHistoryPageBudget('TESTUSDT',now,0,rotationSlots).wave_source,'PERSISTED_SCAN_CURSOR');
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now,57,rotationSlots).wave,0,
+    'the three-wave scan cursor schedule repeats deterministically');
+  assert.equal(adaptiveTraderHistoryPageBudget('PAIR000USDT',now,19,rotationSlots).wave,1);
+});
+
 
 test('fair scan plan reserves half of each bounded batch for complete eligible-universe rotation',()=>{
   const plan=buildAdaptiveTraderCoveragePlan(192,40);
@@ -1242,4 +1274,126 @@ test('fresh Binance closed-candle replay builds 24x29 TCN tensors with one 15m f
     'every eligible historical outcome must carry the same causal 24x29 closed-candle tensor');
   assert.equal(new Set(samples.map(row=>row.id)).size,samples.length,
     'rebuild output must not duplicate a symbol/baseline candle');
+});
+
+function rawKline(index,intervalMs=15*60*1000){
+  const openTime=Date.UTC(2026,0,1)+index*intervalMs;
+  return [openTime,'10','10.2','9.9','10.1','100',openTime+intervalMs-1,'1000',100,'55','550',0];
+}
+function klinePage(startIndex,count,intervalMs=15*60*1000){
+  return {data:Array.from({length:count},(_,index)=>rawKline(startIndex+index,intervalMs)),
+    source:'https://data-api.binance.vision',receivedAt:Date.UTC(2026,3,1)};
+}
+
+test('historical closed-candle fetch extends 15m history to three unique chronological pages',async()=>{
+  const calls=[];
+  const pages=[klinePage(1000,1000),klinePage(0,1000)];
+  const rest={async request(path,query){
+    calls.push({path,query});
+    assert.equal(path,'/api/v3/klines');
+    return pages.shift();
+  }};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(2000,1000),maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,3);
+  assert.equal(result.historical_pages_attempted,2);
+  assert.equal(result.historical_window_candles,3000);
+  assert.equal(result.data.length,3000);
+  assert.equal(new Set(result.data.map(row=>row[0])).size,3000);
+  assert.deepEqual(result.data.map(row=>row[0]),result.data.map(row=>row[0]).slice().sort((a,b)=>a-b));
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].query.endTime,klinePage(2000,1000).data[0][0]-1);
+  assert.equal(calls[1].query.endTime,klinePage(1000,1000).data[0][0]-1);
+  assert.equal(result.historical_backfill_error,null);
+});
+
+test('historical backfill stops cleanly when the public Spot archive is exhausted',async()=>{
+  const rest={async request(){return klinePage(0,300);}};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(1000,1000),maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,2);
+  assert.equal(result.historical_pages_attempted,1);
+  assert.equal(result.historical_window_candles,1300);
+  assert.equal(result.historical_backfill_error,null);
+});
+
+test('a failed third history page preserves verified prior pages and exposes the failure',async()=>{
+  let calls=0;
+  const rest={async request(){
+    calls++;
+    if(calls===1)return klinePage(1000,1000);
+    throw new Error('THIRD_PAGE_TIMEOUT');
+  }};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(2000,1000),maxPages:3
+  });
+  assert.equal(calls,2);
+  assert.equal(result.historical_pages_fetched,2);
+  assert.equal(result.historical_pages_attempted,2);
+  assert.equal(result.historical_window_candles,2000);
+  assert.match(result.historical_backfill_error,/THIRD_PAGE_TIMEOUT/);
+  assert.equal(new Set(result.data.map(row=>row[0])).size,2000);
+});
+
+test('overlapping-only history responses do not inflate page or candle counts',async()=>{
+  const current=klinePage(1000,1000);
+  const rest={async request(){return current;}};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:current,maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,1);
+  assert.equal(result.historical_pages_attempted,1);
+  assert.equal(result.historical_window_candles,1000);
+});
+
+test('three-page history backfill records verified additional 15m history on a live scan',async()=>{
+  const f=marketFixture();
+  const current=f.klines.data;
+  const interval=15*60*1000;
+  const older=[];
+  const older2=[];
+  for(let index=0;index<1000;index++){
+    const openTime=current[0][0]-(1000-index)*interval;
+    const open=10,close=10.01,quoteVolume=300000;
+    older.push([openTime,open,10.1,9.9,close,quoteVolume/close,
+      openTime+interval-1,quoteVolume,1000,quoteVolume/close*0.58,quoteVolume*0.58,0]);
+    const older2Open=older[0][0]-(1000-index)*interval;
+    older2.push([older2Open,open,10.1,9.9,close,quoteVolume/close,
+      older2Open+interval-1,quoteVolume,1000,quoteVolume/close*0.58,quoteVolume*0.58,0]);
+  }
+  const calls=[];
+  const rest={
+    async request(path,query={}){
+      calls.push({path,query});
+      if(path==='/api/v3/exchangeInfo')return {data:{symbols:[{
+        symbol:'TESTUSDT',status:'TRADING',quoteAsset:'USDT',isSpotTradingAllowed:true,permissions:['SPOT']
+      }]},source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/ticker/24hr')return {data:[{
+        symbol:'TESTUSDT',lastPrice:'10',quoteVolume:'5000000',priceChangePercent:'2',count:'30000'
+      }],source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines'&&query.symbol==='BTCUSDT')return {data:f.klines.data,source:'https://data-api.binance.vision',receivedAt:f.now};
+      if(path==='/api/v3/klines'&&query.symbol==='TESTUSDT'){
+        if(query.endTime===undefined)return f.klines;
+        if(query.endTime===current[0][0]-1)return {data:older,source:'https://data-api.binance.vision',receivedAt:f.now};
+        if(query.endTime===older[0][0]-1)return {data:older2,source:'https://data-api.binance.vision',receivedAt:f.now};
+        return {data:[],source:'https://data-api.binance.vision',receivedAt:f.now};
+      }
+      throw new Error('UNEXPECTED_REQUEST '+path+' '+JSON.stringify(query));
+    }
+  };
+  const snapshot=await createAdaptiveTraderSnapshotService({rest,ttlMs:0,scanTimeoutMs:60_000})({limit:20,now:f.now});
+  assert.equal(snapshot.status,'LIVE_DATA');
+  const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT'&&call.query.interval==='15m');
+  const budget=adaptiveTraderHistoryPageBudget('TESTUSDT',f.now,0,19);
+  const expectedCandles=20+(budget.max_pages-1)*1000;
+  assert.equal(pages.length,budget.max_pages,
+    'the scan must request only the page budget assigned to this symbol wave');
+  assert.equal(snapshot.universe.asset_15m_extended_symbols,1);
+  assert.equal(snapshot.universe.asset_15m_three_page_symbols,budget.max_pages===3?1:0);
+  assert.equal(snapshot.universe.asset_15m_two_page_symbols,budget.max_pages===2?1:0);
+  assert.equal(snapshot.universe.asset_15m_page_wave,budget.wave);
+  assert.equal(snapshot.universe.asset_15m_max_history_candles,expectedCandles);
+  assert.equal(snapshot.universe.asset_15m_median_history_candles,expectedCandles);
 });

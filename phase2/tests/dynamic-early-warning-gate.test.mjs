@@ -46,7 +46,7 @@ test('very strong long-window buy flow may emit only a watch when the completed 
     risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
     strong_move:{
       ...wLike().strong_move,score:86.87,
-      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']},
+      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_BUCKET_UNAVAILABLE']},
       metrics:{
         return_1m:0.6650,return_3m:0.6484,acceleration:0.3342,
         volume_ratio:43.5548,trade_ratio:11.0909,
@@ -59,7 +59,7 @@ test('very strong long-window buy flow may emit only a watch when the completed 
   const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:0.39},{
     now:NOW,alertScore:86.87,minQuoteVolume24h:1_000_000,
     strictFailures:['BASE_ALERT_NOT_ELIGIBLE','STRONG_MOVE_CORE_TRIGGER_NOT_CONFIRMED'],
-    coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    coreTriggerFailures:['THREE_SECOND_BUCKET_UNAVAILABLE']
   });
   assert.equal(result.eligible,true,JSON.stringify(result.failures));
   assert.equal(result.fallback_3s_flow,true);
@@ -97,7 +97,7 @@ test('borderline missing-3s fallback is rejected; only exceptional long-flow evi
     risk_flags:['THREE_SECOND_FLOW_UNAVAILABLE','VOLATILITY_EXTREME'],
     strong_move:{
       ...wLike().strong_move,score:88.3,
-      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']},
+      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_BUCKET_UNAVAILABLE']},
       metrics:{
         ...wLike().strong_move.metrics,
         return_1m:1.3741,return_3m:1.7384,acceleration:1.816,
@@ -111,12 +111,39 @@ test('borderline missing-3s fallback is rejected; only exceptional long-flow evi
   const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:10.09},{
     now:NOW,alertScore:88.3,
     strictFailures:['BASE_ALERT_NOT_ELIGIBLE'],
-    coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    coreTriggerFailures:['THREE_SECOND_BUCKET_UNAVAILABLE']
   });
   assert.equal(result.eligible,false);
   assert.equal(result.fallback_3s_flow,false);
   assert.ok(result.failures.includes('EARLY_WARNING_CORE_GATE_FAILED'));
   assert.ok(result.failures.includes('EARLY_WARNING_LOW_BASELINE_MOVE_REQUIRES_EXCEPTIONAL_EVIDENCE'));
+});
+
+test('an observed weak 3-second buy ratio is not misclassified as a missing bucket fallback',()=>{
+  const alert=wLike({
+    eligible:false,
+    strong_move:{
+      ...wLike().strong_move,
+      trigger_diagnostics:{eligible:false,failed_checks:['THREE_SECOND_TAKER_BUY_RATIO_NOT_ABOVE_70_PERCENT']},
+      metrics:{
+        ...wLike().strong_move.metrics,
+        taker_buy_ratio:0.93,
+        three_second_taker_buy_ratio:0.62,
+        three_second_liquidity:{available:true,taker_buy_ratio:0.62},
+        volume_ratio:12,trade_ratio:7,independent_confirmations:9,
+        return_1m:0.8,return_3m:0.9,acceleration:0.6,
+        breakout_up:true,micro_breakout:true
+      }
+    }
+  });
+  const result=evaluateDynamicEarlyWarningGate(alert,{...row,priceChange24h:8},{
+    now:NOW,alertScore:88.5,
+    coreTriggerFailures:['THREE_SECOND_TAKER_BUY_RATIO_NOT_ABOVE_70_PERCENT']
+  });
+  assert.equal(result.fallback_3s_flow,false);
+  assert.equal(result.eligible,false);
+  assert.ok(result.failures.includes('EARLY_WARNING_3S_BUY_FLOW_NOT_CONFIRMED'));
+  assert.ok(!result.soft_failures.includes('STRICT_CORE_MISSING_COMPLETED_3S_BUCKET_HIGHER_FLOW_EVIDENCE_USED'));
 });
 
 test('weak or absent buyer flow cannot pass the early-warning lane',()=>{

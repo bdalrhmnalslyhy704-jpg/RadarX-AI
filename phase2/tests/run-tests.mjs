@@ -96,6 +96,7 @@ const phase2=[
   'phase2/tests/cognitive-brain.test.mjs',
   'phase2/tests/temporal-neural-brain.test.mjs',
   'phase2/tests/adaptive-trader-engine.test.mjs',
+  'phase2/tests/adaptive-dataset-quality-audit.test.mjs',
   'phase2/tests/adaptive-trader-api.test.mjs',
   'phase2/tests/adaptive-trader-worker.test.mjs',
   'phase2/tests/adaptive-trader-execution.test.mjs'
