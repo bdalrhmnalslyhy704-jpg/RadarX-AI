@@ -628,8 +628,11 @@ recordServerPaperPortfolio(snapshot,now){
       if(resolvedAt>Number(now)+5000){historicalRejected.resolved_in_future++;continue;}
       if(resolvedAt-at<SAMPLE_HORIZON_MS){historicalRejected.horizon_too_short++;continue;}
       if(!temporalAlreadyKnown){
+        const hasVerifiedFirstPassage=row.target_definition===TEMPORAL_TARGET_DEFINITION&&
+          row.first_passage?.path_resolution==='15M'&&row.first_passage?.outcome===row.outcome;
         const inserted={...row,observation_type:'HISTORICAL_CLOSED_CANDLE',historical_baseline:true,
-          training_eligible:true,outcome_source:row.outcome_source||'HISTORICAL_CLOSED_CANDLE'};
+          training_eligible:true,outcome_source:row.outcome_source||
+            (hasVerifiedFirstPassage?'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1':'HISTORICAL_CLOSED_CANDLE')};
         this.state.samples.push(inserted);
         historicalSampleById.set(id,inserted);
         knownIds.add(id);newHistoricalSamples++;

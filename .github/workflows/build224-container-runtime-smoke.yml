@@ -176,10 +176,20 @@ jobs:
           const brainProfile=brain.profile||{};
           const neuralNetwork=brainProfile.neural_network||{};
           const temporalNetwork=brainProfile.temporal_network||{};
+          const sharedComparison=brainProfile.comparison_contract||{};
           const temporalBoostedTree=temporalNetwork.temporal_boosted_tree||{};
           const summary=x.last_summary||{};
           const boostedTree=brainProfile.boosted_tree_model||{};
           const hybridModel=brainProfile.hybrid_model||{};
+          if(Number(brainProfile.resolved_samples)>0&&
+             (sharedComparison.sample_identity_matches!==true||
+              sharedComparison.sample_fingerprint!==temporalNetwork.outer_sample_fingerprint||
+              sharedComparison.temporal_sample_fingerprint!==temporalNetwork.outer_sample_fingerprint)){
+            throw new Error('CONTAINER_SHARED_NEURAL_SAMPLE_IDENTITY_MISMATCH '+JSON.stringify({
+              cognitive_samples:sharedComparison.sample_fingerprint||null,
+              temporal_samples:temporalNetwork.outer_sample_fingerprint||null
+            }));
+          }
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V7'||
              temporalNetwork.architecture!=='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'||
              temporalNetwork.training_strategy!=='INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V21'||
@@ -226,6 +236,11 @@ jobs:
              'LIVE_GATE_PASSED_OUT_OF_SAMPLE'].includes(String(temporalNetwork.status));
           const cognitiveEvidence={
             method:String(brainProfile.method||brain.method||'UNKNOWN'),
+            shared_target_definition:String(sharedComparison.target_definition||'UNKNOWN'),
+            shared_sample_identity_matches:sharedComparison.sample_identity_matches===true,
+            shared_outer_split_applied:sharedComparison.shared_outer_split_applied===true,
+            shared_validation_sample_count_matches:sharedComparison.validation_sample_count_matches===true,
+            shared_holdout_sample_count_matches:sharedComparison.holdout_sample_count_matches===true,
             model_selected:String(brainProfile.model_selection?.selected_model||'NONE'),
             model_selection_reason:String(brainProfile.model_selection?.reason||'UNKNOWN'),
             challenger_holdout_passed:brainProfile.model_selection?.challenger_holdout_passed===true,

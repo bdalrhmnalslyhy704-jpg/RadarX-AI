@@ -167,9 +167,23 @@ jobs:
                   Number(neuralNetwork.output_neurons)===1&&
                   Number(neuralNetwork.samples_required)>=240&&
                   Number(neuralNetwork.ensemble_members_required)===3&&
+                  neuralNetwork.target_definition===temporalNetwork.target_definition&&
                   (!neuralNetwork.trained||Number(neuralNetwork.ensemble_members)===3)
                 );
+                const sharedComparison=cognitiveProfile.comparison_contract||{};
+                const sharedDatasetReady=Boolean(
+                  sharedComparison.target_definition===temporalNetwork.target_definition&&
+                  sharedComparison.sample_identity_matches===true&&
+                  sharedComparison.sample_fingerprint===temporalNetwork.outer_sample_fingerprint&&
+                  sharedComparison.temporal_sample_fingerprint===temporalNetwork.outer_sample_fingerprint&&
+                  sharedComparison.shared_outer_split_applied===true&&
+                  sharedComparison.validation_start_at===temporalNetwork.outer_validation_start_at&&
+                  sharedComparison.holdout_start_at===temporalNetwork.outer_holdout_start_at&&
+                  sharedComparison.validation_sample_count_matches===true&&
+                  sharedComparison.holdout_sample_count_matches===true
+                );
                 const cognitiveSplitReady=Boolean(
+                  sharedDatasetReady&&
                   cognitiveProfile.method==='NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5'&&
                   Number(cognitiveProfile.resolved_samples)>=100&&
                   Number(cognitiveProfile.training_samples)>=60&&
@@ -259,6 +273,8 @@ jobs:
                     validation_evaluated:cognitiveProfile.validation?.evaluated===true,
                     holdout_evaluated:cognitiveProfile.holdout?.evaluated===true,
                     chronological_split_ready:cognitiveSplitReady,
+                    shared_dataset_ready:sharedDatasetReady,
+                    shared_dataset_contract:sharedComparison,
                     purged_overlap_samples:Number(cognitiveProfile.purged_overlap_samples)||0,
                     journal_records:Number(cognitive.journal_records??cognitive.journal_rows)||0,
                     journal_resolved:Number(cognitiveCapture.journal_resolved??cognitive.resolved_journal_rows)||0,
@@ -420,6 +436,7 @@ jobs:
                 lastObserved.v5_neural_live_ready=v5NeuralLiveReady;
                 lastObserved.temporal_tcn_live_ready=neuralLiveReady;
                 lastObserved.cognitive_chronological_split_ready=cognitiveSplitReady;
+                lastObserved.shared_neural_dataset_ready=sharedDatasetReady;
                 lastObserved.neural_live_ready=neuralLiveReady;
                 lastObserved.temporal_network_contract=temporalNetworkContract;
                 lastObserved.neural_holdout_comparison=temporalComparison;
@@ -438,7 +455,7 @@ jobs:
                   meta.closed_candles_only===true&&meta.engine==='ADAPTIVE_TRADER_SIDECAR_V1'&&
                   Array.isArray(candidates)&&candidates.length>0&&
                   Array.isArray(prices)&&prices.length>0&&historyRows>0&&
-                  cognitive&&cognitiveV5&&cognitiveSplitReady&&neuralNetworkContract&&
+                  cognitive&&cognitiveV5&&cognitiveSplitReady&&sharedDatasetReady&&neuralNetworkContract&&
                   v5NeuralLiveReady&&temporalNetworkContract&&temporalNetwork.trained===true&&
                   Number(temporalNetwork.ensemble_members)===3&&Number(temporalNetwork.training_samples)>=160&&
                   fullUniverseCoverageReady&&paperTradingReady&&physicalDeviceDeliveryReady&&

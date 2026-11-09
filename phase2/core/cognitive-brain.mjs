@@ -75,6 +75,16 @@ const FACTORS = Object.freeze([
     finite(f.micro_5m_taker_buy_ratio) !== null && Number(f.micro_5m_taker_buy_ratio) >= 0.55 }
 ]);
 
+import {createHash} from 'node:crypto';
+
+function sampleIdentityFingerprint(rows){
+  const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
+    String(row?.id||''),String(row?.symbol||'').trim().toUpperCase(),
+    Number(row?.at),Number(row?.resolved_at),String(row?.outcome||'')
+  ]).sort((a,b)=>a[2]-b[2]||a[0].localeCompare(b[0]));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 const finite = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
   const parsed = Number(value);
@@ -917,6 +927,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   minNeuralTrainingSamples = NEURAL_POLICY.minTrainingSamples,
   maxNeuralTrainingSamples = NEURAL_POLICY.maxTrainingSamples,
   temporalSamples = samples,
+  temporalOptions = {},
   neuralIterations = NEURAL_POLICY.iterations,
   neuralLearningRate = NEURAL_POLICY.learningRate,
   neuralL2 = NEURAL_POLICY.l2,
@@ -924,7 +935,13 @@ export function buildCognitiveLearningProfile(samples = [], {
   maxResolvedSamples = 0
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
-  const temporalNetwork=buildTemporalNeuralProfile(temporalSamples);
+  const temporalNetwork=buildTemporalNeuralProfile(temporalSamples,temporalOptions);
+  const cognitiveSampleFingerprint=sampleIdentityFingerprint(validResolvedSamples(samples,{
+    outcomeHorizonMs,allowResolutionLag,allowedOutcomeSources
+  }));
+  const temporalSampleFingerprint=String(temporalNetwork?.outer_sample_fingerprint||'');
+  const sharedSampleIdentityMatches=Boolean(temporalSampleFingerprint&&
+    cognitiveSampleFingerprint===temporalSampleFingerprint);
   const allResolved = validResolvedSamples(samples, {
     outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources
   });
@@ -950,7 +967,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   const calculatedHoldoutStartAt=uniqueTimes[uniqueTimes.length-holdoutCount]??null;
   const sharedValidationStartAt=finite(temporalNetwork.outer_validation_start_at);
   const sharedHoldoutStartAt=finite(temporalNetwork.outer_holdout_start_at);
-  const sharedOuterSplitApplied=sharedValidationStartAt!==null&&sharedHoldoutStartAt!==null&&
+  const sharedOuterSplitApplied=sharedSampleIdentityMatches&&
+    sharedValidationStartAt!==null&&sharedHoldoutStartAt!==null&&
     sharedValidationStartAt<sharedHoldoutStartAt&&
     uniqueTimes.includes(sharedValidationStartAt)&&uniqueTimes.includes(sharedHoldoutStartAt);
   const validationStartAt=sharedOuterSplitApplied?sharedValidationStartAt:calculatedValidationStartAt;
@@ -965,6 +983,19 @@ export function buildCognitiveLearningProfile(samples = [], {
     return {
       method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
       outcome_horizon_ms: horizonMs,
+      comparison_contract:{
+        target_definition:TEMPORAL_TARGET_DEFINITION,
+        target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+        shared_outer_split_applied:false,
+        sample_identity_matches:sharedSampleIdentityMatches,
+        sample_fingerprint:cognitiveSampleFingerprint,
+        temporal_sample_fingerprint:temporalSampleFingerprint,
+        validation_start_at:null,holdout_start_at:null,
+        validation_samples:0,holdout_samples:0,
+        temporal_validation_samples:Number(temporalNetwork.outer_validation_samples)||0,
+        temporal_holdout_samples:Number(temporalNetwork.outer_holdout_samples)||0,
+        validation_sample_count_matches:false,holdout_sample_count_matches:false
+      },
       ranking_ready: false, probability_ready: false, ready: false,
       resolved_samples: resolved.length, training_samples: resolved.length,
       fit_samples: resolved.length, validation_samples: 0, holdout_samples: 0,
@@ -1380,6 +1411,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       target_definition:TEMPORAL_TARGET_DEFINITION,
       target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       shared_outer_split_applied:sharedOuterSplitApplied,
+      sample_identity_matches:sharedSampleIdentityMatches,
+      sample_fingerprint:cognitiveSampleFingerprint,
+      temporal_sample_fingerprint:temporalSampleFingerprint,
       validation_start_at:validationStartAt,
       holdout_start_at:holdoutStartAt,
       validation_samples:validation.length,

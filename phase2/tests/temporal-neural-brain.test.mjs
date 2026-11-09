@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_MODEL_ARCHITECTURE,
@@ -465,6 +466,53 @@ test('thin BTC regime cannot deploy a pooled logistic anchor as a substitute TCN
   assert.equal(off.baseline_anchor_source,'REGIME_SPECIFIC_TRAINING_ONLY');
   assert.equal(profile.live_eligibility_ready,false,
     'pooled diagnostic anchors must never unlock a regime-local TCN');
+});
+
+test('V5, GBDT, hybrid and TCN consume identical first-passage rows and outer holdout',()=>{
+  const rows=[];
+  const groups=32,perGroup=36;
+  for(let group=0;group<groups;group++){
+    const riskOn=group%2===0;
+    for(let index=0;index<perGroup;index++){
+      const up=index%4===0;
+      const row=sample(group,index,{up});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      row.features={
+        volume_ratio:up?2.1:0.8,trade_ratio:up?1.7:0.85,
+        taker_buy_ratio:up?0.62:0.44,close_location:up?0.82:0.32,
+        higher_low:up,breakout_above_prior_high:false,
+        compression_ratio:up?0.68:1.15,relative_strength_vs_btc_pct:up?1.1:-0.7,
+        recent_15m_return_pct:up?0.45:-0.55,trend_aligned:up,
+        micro_5m_available:true,micro_5m_taker_buy_ratio:up?0.61:0.43
+      };
+      rows.push(row);
+    }
+  }
+  const profile=buildCognitiveLearningProfile(rows,{
+    temporalSamples:rows,
+    temporalOptions:{epochs:1},
+    allowedOutcomeSources:['HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'],
+    iterations:30,neuralIterations:30
+  });
+  const temporal=profile.temporal_network;
+  const contract=profile.comparison_contract;
+  assert.equal(contract.target_definition,TEMPORAL_TARGET_DEFINITION);
+  assert.equal(contract.sample_identity_matches,true);
+  assert.equal(contract.shared_outer_split_applied,true);
+  assert.equal(contract.sample_fingerprint,contract.temporal_sample_fingerprint);
+  assert.equal(contract.validation_start_at,temporal.outer_validation_start_at);
+  assert.equal(contract.holdout_start_at,temporal.outer_holdout_start_at);
+  assert.equal(contract.validation_sample_count_matches,true);
+  assert.equal(contract.holdout_sample_count_matches,true);
+  assert.equal(contract.validation_samples,contract.temporal_validation_samples);
+  assert.equal(contract.holdout_samples,contract.temporal_holdout_samples);
+  assert.equal(profile.neural_network.target_definition,TEMPORAL_TARGET_DEFINITION);
+  assert.equal(temporal.target_definition,TEMPORAL_TARGET_DEFINITION);
+  assert.equal(profile.neural_network.holdout.sample_count,temporal.holdout.sample_count);
 });
 
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{

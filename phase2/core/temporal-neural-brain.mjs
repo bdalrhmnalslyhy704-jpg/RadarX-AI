@@ -27,6 +27,16 @@ const MIN_HOLDOUT = 40;
 const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
+import {createHash} from 'node:crypto';
+
+function sampleIdentityFingerprint(rows){
+  const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
+    String(row?.id||''),String(row?.symbol||'').trim().toUpperCase(),
+    Number(row?.at),Number(row?.resolved_at),String(row?.outcome||'')
+  ]).sort((a,b)=>a[2]-b[2]||a[0].localeCompare(b[0]));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 const finite = value => {
   if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
   const number = Number(value);
@@ -834,6 +844,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     validation_start_at:null,holdout_start_at:null,
     outer_validation_start_at:null,outer_holdout_start_at:null,
     outer_training_samples:0,outer_validation_samples:0,outer_holdout_samples:0,
+    outer_sample_fingerprint:sampleIdentityFingerprint(rows),
     max_training_outcome_resolved_at:null,
     trained:false,selected:false,regime_specialists:emptyCoverage,
     supported_regimes:[],
@@ -874,6 +885,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       outer_validation_start_at:validationStart,outer_holdout_start_at:holdoutStart,
       outer_training_samples:training.length,outer_validation_samples:validation.length,
       outer_holdout_samples:holdout.length,
+      outer_sample_fingerprint:sampleIdentityFingerprint(rows),
       max_training_outcome_resolved_at:maxTrainingOutcomeResolvedAt,
       trained:false,selected:false,regime_specialists:emptyCoverage,
       supported_regimes:[],
@@ -1680,6 +1692,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     outer_validation_start_at:validationStart,outer_holdout_start_at:holdoutStart,
     outer_training_samples:training.length,outer_validation_samples:validation.length,
     outer_holdout_samples:holdout.length,
+    outer_sample_fingerprint:sampleIdentityFingerprint(rows),
     max_training_outcome_resolved_at:reportMaxTrainingResolvedAt,
     training_positive_rate_pct:Number((reportTrainingPositive/Math.max(1,reportTrainingSamples)*100).toFixed(2)),
     training_positive_count:reportTrainingPositive,
