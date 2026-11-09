@@ -1671,6 +1671,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       model_kind:'RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1',
       architecture:boostedTreeFit?.architecture||'NEWTON_GBDT_VALIDATION_SELECTED_REGULARIZED_GRID_V2',
       search_grid_size:COGNITIVE_GBDT_VALIDATION_GRID.length,
+      selection_training_samples:boostedTrainingRows.length,
       selection_sample_count:boostedSelectionRows.length,
       selection_logistic:boostedSelectionLogistic,
       selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,

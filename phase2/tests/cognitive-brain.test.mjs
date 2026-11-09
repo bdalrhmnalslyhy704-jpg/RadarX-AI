@@ -722,16 +722,23 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(profile.boosted_tree_model.tree_count>0);
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
   assert.equal(profile.boosted_tree_model.search_grid_size,9);
-  assert.equal(profile.boosted_tree_model.candidate_validation_metrics.length,9,
-    'nine pre-declared GBDT schedules must be compared on the same outer validation rows');
-  const treeCandidates=profile.boosted_tree_model.candidate_validation_metrics;
-  assert.ok(treeCandidates.every(row=>row.training_samples===profile.boosted_tree_model.training_samples&&
-    row.validation_sample_count===profile.validation_samples));
-  const validationWinner=[...treeCandidates].sort((a,b)=>
-    a.validation_brier_score-b.validation_brier_score||
-    a.configuration.localeCompare(b.configuration))[0];
-  assert.equal(profile.boosted_tree_model.selected_configuration,validationWinner.configuration,
-    'only the minimum-Brier pre-declared candidate on validation is allowed to proceed');
+  assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,9,
+    'nine pre-declared GBDT schedules must be compared on a disjoint inner selection block');
+  const treeCandidates=profile.boosted_tree_model.candidate_selection_metrics;
+  assert.ok(treeCandidates.every(row=>
+    row.training_samples===profile.boosted_tree_model.selection_training_samples&&
+    row.selection_sample_count===profile.boosted_tree_model.selection_sample_count));
+  assert.equal(treeCandidates.filter(row=>row.selected_for_refit).length,1,
+    'only one selection-qualified GBDT configuration may be refit');
+  const selectionWinner=treeCandidates.find(row=>row.selected_for_refit);
+  assert.ok(selectionWinner.selection_beats_base_rate);
+  assert.ok(selectionWinner.selection_beats_same_window_logistic);
+  assert.equal(profile.boosted_tree_model.selected_configuration,selectionWinner.configuration,
+    'the GBDT configuration must be fixed before the outer validation block is scored');
+  assert.equal(selectionWinner.validation_sample_count,profile.validation_samples);
+  assert.ok(treeCandidates.filter(row=>!row.selected_for_refit)
+    .every(row=>row.validation_sample_count===0&&row.validation_brier_score===null),
+    'unselected configurations must never be evaluated against the outer validation block');
   const importance=profile.boosted_tree_model.feature_importance;
   assert.ok(importance.length>0,'every fitted tree must expose at least one gain-attributed feature');
   assert.ok(importance.every(row=>profile.feature_names.includes(row.feature)&&
