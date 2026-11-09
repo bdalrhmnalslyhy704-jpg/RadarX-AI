@@ -32,6 +32,19 @@ const finite = value => {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 };
+
+// The scientific acceptance policy requires a strict 0.003 Brier improvement
+// over every baseline. A tiny tolerance prevents floating-point equality from
+// accidentally passing a boundary that is meant to be strictly greater.
+export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0.003;
+export function hasTemporalBrierSuperiority(candidateScore, baselineScore,
+  margin = TEMPORAL_BRIER_SUPERIORITY_MARGIN) {
+  const candidate = finite(candidateScore);
+  const baseline = finite(baselineScore);
+  const required = finite(margin);
+  return candidate !== null && baseline !== null && required !== null && required >= 0 &&
+    baseline - candidate - required > 1e-12;
+}
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
@@ -633,7 +646,8 @@ function predictTemporalResidualTrees(sequence,fit,residualScale=1,treeCount=nul
 function evaluate(rows, predictFn, baseRate) {
   if (!rows.length) return {
     evaluated:false,sample_count:0,positive_count:0,negative_count:0,positive_rate_pct:null,
-    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN
   };
   const predictions = rows.map(row => predictFn(row.sequence));
   const targets=rows.map(row=>row.target);
@@ -644,6 +658,7 @@ function evaluate(rows, predictFn, baseRate) {
     evaluated:false,sample_count:rows.length,positive_count:positiveCount,
     negative_count:negativeCount,positive_rate_pct:positiveRatePct,
     model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     reason:'NON_FINITE_TEMPORAL_PREDICTION'
   };
   const modelBrier = mean(predictions.map((value, index) => (value - targets[index]) ** 2));
@@ -652,9 +667,12 @@ function evaluate(rows, predictFn, baseRate) {
     const probability = clamp(value, 0.001, 0.999);
     return -(targets[index] * Math.log(probability) + (1 - targets[index]) * Math.log(1 - probability));
   }));
-  const directional = rows.filter(row => row.outcome !== 'FLAT');
-  const correct = directional.filter(row =>
-    ((predictFn(row.sequence) >= 0.5) === (row.outcome === 'UP'))).length;
+  // Reuse the already-computed predictions: inference must be deterministic
+  // and each holdout row should be evaluated exactly once per metric pass.
+  const directional = rows.map((row,index)=>({row,index}))
+    .filter(item=>item.row.outcome !== 'FLAT');
+  const correct = directional.filter(({row,index}) =>
+    ((predictions[index] >= 0.5) === (row.outcome === 'UP'))).length;
   return {
     evaluated:true,sample_count:rows.length,
     positive_count:positiveCount,negative_count:negativeCount,positive_rate_pct:positiveRatePct,
@@ -662,7 +680,8 @@ function evaluate(rows, predictFn, baseRate) {
     base_rate_brier_score: Number(baseBrier.toFixed(5)),
     log_loss: Number(logLoss.toFixed(5)),
     directional_accuracy_pct: directional.length ? Number((correct / directional.length * 100).toFixed(1)) : null,
-    beat_base_rate: modelBrier + 0.002 < baseBrier,
+    beat_base_rate: hasTemporalBrierSuperiority(modelBrier,baseBrier),
+    required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     improvement_vs_base_rate: Number((baseBrier - modelBrier).toFixed(5))
   };
 }
@@ -673,7 +692,8 @@ function aggregateEvaluations(entries){
     Number.isFinite(Number(row.base_rate_brier_score)));
   const count=valid.reduce((sum,row)=>sum+Number(row.sample_count),0);
   if(!count)return {evaluated:false,sample_count:0,positive_count:0,negative_count:0,
-    positive_rate_pct:null,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false};
+    positive_rate_pct:null,model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN};
   const weighted=key=>valid.reduce((sum,row)=>sum+Number(row[key])*Number(row.sample_count),0)/count;
   const model=weighted('model_brier_score'),base=weighted('base_rate_brier_score');
   const positive=valid.reduce((sum,row)=>sum+Number(row.positive_count||0),0);
@@ -687,7 +707,8 @@ function aggregateEvaluations(entries){
     log_loss:valid.every(row=>Number.isFinite(Number(row.log_loss)))?Number(weighted('log_loss').toFixed(5)):null,
     directional_accuracy_pct:directionalCount?Number((directionalRows.reduce((sum,row)=>sum+
       Number(row.directional_accuracy_pct)*Number(row.sample_count),0)/directionalCount).toFixed(1)):null,
-    beat_base_rate:model+0.002<base,
+    beat_base_rate:hasTemporalBrierSuperiority(model,base),
+    required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     improvement_vs_base_rate:Number((base-model).toFixed(5))
   };
 }
