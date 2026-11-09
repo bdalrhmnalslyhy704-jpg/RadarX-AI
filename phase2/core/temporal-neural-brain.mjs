@@ -1168,9 +1168,10 @@ export function buildTemporalNeuralProfile(samples = [], {
     const regimeTraining=regimeSplit.training;
     const regimeMemberSelection=regimeSplit.memberSelection;
     const regimeCalibration=regimeSplit.calibration;
-    const innerValidation=regimeSplit.innerValidation;
     const outerValidation=validation.filter(row=>regimeOfSequence(row.sequence)===regime);
-    const regimeValidation=[...innerValidation,...outerValidation].sort((a,b)=>a.at-b.at);
+    // Pooled TCN calibration ends at the shared cutoff. Evaluate only the
+    // common outer validation block; local inner slices can begin too early.
+    const regimeValidation=outerValidation.sort((a,b)=>a.at-b.at);
     const targetsOf=block=>({
       samples:block.length,
       positive:block.filter(row=>row.target===1).length,
