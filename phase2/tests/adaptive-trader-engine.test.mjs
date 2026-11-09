@@ -1038,6 +1038,40 @@ test('deep historical capture keeps at least 116 causal tensors across the full 
   assert.ok(samples.every(row=>row.at<row.resolved_at&&row.horizon_ms===4*60*60*1000));
 });
 
+test('dense 2h historical surveillance cadence preserves causal scores and can omit unused TCN tensors',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,4000,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,12000,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,4000,15*60*1000,90_000,0.00002);
+  const standard=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DENSEGRIDUSDT',klines,fastKlines,btcKlines,now,maxSamples:1000,
+    includeTemporalSequence:false
+  });
+  const dense=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'DENSEGRIDUSDT',klines,fastKlines,btcKlines,now,maxSamples:1000,
+    sampleIntervalBars:8,includeTemporalSequence:false
+  });
+  assert.ok(standard.length>118,
+    'the research-only sample cap must allow more than the prior 118-row ceiling');
+  assert.ok(dense.length>standard.length,
+    'a 2h surveillance grid must create more observations than the default 4h grid');
+  assert.ok(dense.every(row=>row.temporal_sequence===null),
+    'the event census can omit tensors it does not train');
+  assert.ok(dense.every(row=>row.horizon_ms===4*60*60*1000&&
+    row.first_passage?.path_resolution==='15M'));
+  for(let index=1;index<dense.length;index++){
+    assert.ok(dense[index].at-dense[index-1].at>=2*60*60*1000,
+      'dense observations must retain their declared absolute 2h phase');
+  }
+  const standardById=new Map(standard.map(row=>[row.id,row]));
+  const shared=dense.find(row=>standardById.has(row.id));
+  assert.ok(shared,'dense and standard schedules must share stable baseline identities');
+  const original=standardById.get(shared.id);
+  assert.equal(shared.base_score,original.base_score);
+  assert.deepEqual(shared.features,original.features,
+    'changing the sampling cadence or skipping tensors cannot change causal feature values');
+});
+
 test('per-symbol historical capture keeps 110 independent first-passage outcomes while preserving the legacy 64',()=>{
   assert.equal(HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL,110);
   const now=Date.now();
