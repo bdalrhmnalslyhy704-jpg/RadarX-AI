@@ -108,6 +108,25 @@ export function classifyDailyEarlyRiserFirstPassage({
   const downLevel=baseline.close*(1-adverse/100);
   const maxHigh=Math.max(baseline.close,...path.map(row=>row.high));
   const minLow=Math.min(baseline.close,...path.map(row=>row.low));
+  // A pure market-move event is independent from whether the -2% adverse
+  // barrier was touched first. Keep both facts so volatile later winners are
+  // not erased from the daily mover census.
+  const firstTargetIndex=path.findIndex(row=>row.high>=upLevel);
+  const firstAdverseIndex=path.findIndex(row=>row.low<=downLevel);
+  const marketMoveEvent=firstTargetIndex>=0?{
+    status:'RESOLVED',outcome:'UP',reason:'TARGET_TOUCHED_WITHIN_24H',
+    first_touch_index:firstTargetIndex,
+    first_touch_at:path[firstTargetIndex].closeTime,
+    time_to_target_minutes:Number(((path[firstTargetIndex].closeTime-baseline.closeTime)/60000).toFixed(2)),
+    target_touch_after_adverse_barrier:firstAdverseIndex>=0&&firstAdverseIndex<firstTargetIndex,
+    target_and_adverse_touched_same_15m_candle:firstAdverseIndex===firstTargetIndex,
+    target_level:upLevel
+  }:{
+    status:'RESOLVED',outcome:'FLAT',reason:'TARGET_NOT_TOUCHED_WITHIN_24H',
+    first_touch_index:null,first_touch_at:validation.end_close_time,
+    time_to_target_minutes:null,target_touch_after_adverse_barrier:false,
+    target_and_adverse_touched_same_15m_candle:false,target_level:upLevel
+  };
   let result=null;
   for(let index=0;index<path.length;index++){
     const candle=path[index];
@@ -149,6 +168,7 @@ export function classifyDailyEarlyRiserFirstPassage({
   };
   return {
     ...result,
+    market_move_event:marketMoveEvent,
     target_pct:target,adverse_pct:adverse,horizon_bars:horizonBars,
     horizon_ms:horizonBars*DAILY_EARLY_RISER_INTERVAL_MS,
     baseline_close_time:baseline.closeTime,
