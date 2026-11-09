@@ -403,11 +403,11 @@ export function buildStrongMoveAlert(candidate,now=Date.now()){
   const threeSecond=a.metrics?.three_second_liquidity||{};
   const threeSecondRatio=strictFinite(a.metrics?.three_second_taker_buy_ratio);
   const threeSecondFailures=!threeSecond.available
-    ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']
+    ?['THREE_SECOND_BUCKET_UNAVAILABLE']
     :threeSecondRatio===null
       ?['THREE_SECOND_TRADE_BUCKET_EMPTY']
       :threeSecondRatio<=0.70
-        ?['THREE_SECOND_TAKER_BUY_RATIO_GT_70_PERCENT']:[];
+        ?['THREE_SECOND_TAKER_BUY_RATIO_NOT_ABOVE_70_PERCENT']:[];
   // The dynamic watch lane may use only one explicit missing-evidence fallback.
   // It cannot silently treat an empty or seller-dominated completed bucket as missing.
   a.trigger_diagnostics={
