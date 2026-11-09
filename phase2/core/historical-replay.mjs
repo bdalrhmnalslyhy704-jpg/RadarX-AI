@@ -1,4 +1,5 @@
 import {buildMoveOutcomeAnalysis} from './move-outcome-analysis.mjs';
+import {buildHybridSequence, resolveBarrierTrade} from './hybrid-tcn-attention-benchmark.mjs';
 
 const MINUTE_MS = 60_000;
 const FIVE_MINUTES_MS = 5 * MINUTE_MS;
@@ -250,7 +251,10 @@ export function runHistoricalReplay({
   tradeCoverageComplete = false, tradeCoverage = null, allowCandleOnlyFallback = false,
   alertCooldownMs = 12 * 60 * 1000, candidateCooldownMs = 12 * 60 * 1000,
   candidateResetMs = 5 * 60 * 1000,
-  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}, marketCohortCandles = null
+  outcomeHorizonMs = 24 * 60 * 60 * 1000, outcomeEndTime = null, timeframeCandles = {}, marketCohortCandles = null,
+  captureHybridBenchmarkRows = false,
+  captureHybridBenchmarkEveryMs = 10 * MINUTE_MS,
+  hybridBenchmarkCandles = []
 } = {}) {
   const start = finite(startTime), end = finite(endTime);
   if (!/^[A-Z0-9]{5,20}$/.test(String(symbol ?? "").toUpperCase())) throw new Error("INVALID_SYMBOL");
@@ -267,6 +271,18 @@ export function runHistoricalReplay({
   const five = aggregateFiveMinuteCandles(candles).filter(x => x.closeTime <= observationEnd);
   const marketCohortIndex = indexMarketCohort(marketCohortCandles, observationEnd);
   const trades = normalizeTrades(aggTrades, observationEnd);
+  const tradesByMinute=new Map();
+  if(tradeCoverageComplete){
+    for(const trade of trades){
+      const minuteOpen=Math.floor(Number(trade.T)/MINUTE_MS)*MINUTE_MS;
+      if(!tradesByMinute.has(minuteOpen))tradesByMinute.set(minuteOpen,[]);
+      tradesByMinute.get(minuteOpen).push({
+        price:Number(trade.p),quantity:Number(trade.q),isBuyerMaker:trade.m===true,
+        quoteQty:Number(trade.p)*Number(trade.q)
+      });
+    }
+  }
+  const hybridBenchmarkRows=[];
   // Missing aggregate-trade history must remain explicitly partial. In the opt-in
   // fallback mode, evaluate only verified closed candles and never substitute fake trades.
   const activeIndices = [];
@@ -320,6 +336,13 @@ export function runHistoricalReplay({
     actual70At !== null ? "BINANCE_AGGTRADE_TIMESTAMP" : "NOT_REACHED";
   const cooldown = Math.max(0, finite(alertCooldownMs) ?? 0);
   const horizon = Math.max(0, finite(outcomeHorizonMs) ?? 0);
+  if(captureHybridBenchmarkRows===true&&horizon!==4*HOUR_MS) {
+    throw new Error('HYBRID_BENCHMARK_REQUIRES_EXACT_4H_OUTCOME_HORIZON');
+  }
+  const hybridSampleInterval=Math.max(MINUTE_MS,Math.trunc(Number(captureHybridBenchmarkEveryMs)||10*MINUTE_MS));
+  if(captureHybridBenchmarkRows===true&&hybridSampleInterval%MINUTE_MS!==0) {
+    throw new Error('HYBRID_BENCHMARK_SAMPLING_MUST_ALIGN_TO_CLOSED_MINUTES');
+  }
   const rows = [];
   let priorAcceptedAt = -Infinity;
   let priorCandidateAt = -Infinity;
@@ -336,6 +359,7 @@ export function runHistoricalReplay({
   const candidateReset = Math.max(0, finite(candidateResetMs) ?? 5 * MINUTE_MS);
   let fiveIndex = 0;
   let tradeIndex = 0;
+  let lastHybridSampleBucket=-1;
   let acceptedCount = 0, rejectedCount = 0;
 
   for (const index of activeIndices) {
@@ -351,6 +375,9 @@ export function runHistoricalReplay({
       if (trades[t].T >= boundary - 60_000) tradeWindow.push(trades[t]);
     }
     const ticker = derivedTicker(tickerHistory, sym, at);
+    const hybridSampleBucket=Math.floor((at-start)/hybridSampleInterval);
+    const captureHybridSample=captureHybridBenchmarkRows===true&&hybridSampleBucket>lastHybridSampleBucket;
+    if(captureHybridSample)lastHybridSampleBucket=hybridSampleBucket;
     let raw = null;
     let reasons = [];
     let accepted = false;
@@ -459,6 +486,49 @@ export function runHistoricalReplay({
     const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
     const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
+    if(captureHybridSample&&horizonObserved){
+      const featureCandles=available1m.slice(-48).map(row=>({
+        ...row,
+        aggTrades:tradesByMinute.get(row.openTime)||[]
+      }));
+      const tensor=buildHybridSequence({
+        candles:featureCandles,benchmarkCandles:hybridBenchmarkCandles,
+        asOf:at,sequenceSteps:24
+      });
+      const bracket=resolveBarrierTrade({
+        entryPrice:close,decisionAt:at,futureCandles:forwardRows,
+        takeProfitPct:3,stopLossPct:2,horizonMs:4*HOUR_MS,
+        feeBpsPerSide:10,slippageBpsPerSide:5
+      });
+      const classicRaw=finite(raw?.score??raw?.alert?.opportunity_score??raw?.alert?.strong_move?.score);
+      if(tensor.ready===true&&bracket.resolved===true&&classicRaw!==null){
+        hybridBenchmarkRows.push({
+          id:sym+':'+String(at),
+          symbol:sym,
+          market:'BINANCE_SPOT_USDT',
+          outcome_source:'BINANCE_SPOT_CLOSED_1M_REPLAY',
+          at,
+          latest_input_at:tensor.latest_input_at,
+          resolved_at:bracket.exit_at,
+          gross_return_pct:bracket.gross_return_pct,
+          max_adverse_excursion_pct:bracket.max_adverse_excursion_pct,
+          max_adverse_excursion_at:bracket.max_adverse_excursion_at,
+          max_favorable_excursion_pct:bracket.max_favorable_excursion_pct,
+          max_favorable_excursion_at:bracket.max_favorable_excursion_at,
+          classic_score:Math.max(0,Math.min(1,classicRaw/100)),
+          kama_efficiency_ratio:tensor.kama_efficiency_ratio,
+          volatility_zscore:tensor.volatility_zscore,
+          btc_trend_return_pct:tensor.btc_trend_return_pct,
+          sequence:tensor.sequence,
+          feature_snapshot_sha:null,
+          outcome_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1',
+          outcome_exit_reason:bracket.exit_reason,
+          trade_flow_available:tensor.sequence.filter(step=>step[20]===1).length/tensor.sequence.length>=0.8,
+          trade_level_volume_profile_available:tensor.sequence.at(-1)?.[21]===1,
+          relative_btc_available:tensor.sequence.filter(step=>step[22]===1).length/tensor.sequence.length>=0.8
+        });
+      }
+    }
     const f5 = outcomeAtPrice(forwardRows, close * 1.05, horizonEndAt);
     const f15 = outcomeAtPrice(forwardRows, close * 1.15, horizonEndAt);
     const f50 = outcomeAtPrice(forwardRows, close * 1.5, horizonEndAt);
@@ -713,6 +783,7 @@ export function runHistoricalReplay({
         ? Math.round((actual50At - rows.find(x => x.core_trigger_eligible === true).timestamp) / MINUTE_MS * 100) / 100 : null
     },
     steps: rows,
+    ...(captureHybridBenchmarkRows===true?{hybrid_benchmark_rows:hybridBenchmarkRows}:{}),
     policy: {market: "SPOT", paper_trading: true, real_order_execution: false, confidence_score: "UNKNOWN"}
   };
   replay.evaluation = buildMoveOutcomeAnalysis(replay);
