@@ -47,3 +47,19 @@ test('existing-engine baselines evaluate identical rows with explicit extended-m
   assert.equal(metrics.existing_early_setup_gate.score_coverage_pct,25);
   assert.equal(metrics.simple_hourly_momentum.sample_count,4);
 });
+
+
+test('top-k ranking denominators match the cognitive model directional universe, not the FLAT-inclusive universe',()=>{
+  const rows=[];
+  for(let index=0;index<5;index++){
+    rows.push({id:'up-'+index,at:index*2+1,symbol:'UP'+index+'USDT',outcome:'UP',score:10-index});
+    rows.push({id:'down-'+index,at:index*2+2,symbol:'DN'+index+'USDT',outcome:'DOWN',score:5-index});
+  }
+  rows.push({id:'flat',at:20,symbol:'FLATUSDT',outcome:'FLAT',score:100});
+  const metric=evaluateFrozenRankingSignal(rows,row=>row.score);
+  assert.equal(metric.sample_count,11);
+  assert.equal(metric.directional_sample_count,10);
+  assert.equal(metric.top_10_pct.selected_count,1,
+    '10% of 10 directional outcomes is one, not 10% of 11 including FLAT');
+  assert.equal(metric.top_20_pct.selected_count,2);
+});
