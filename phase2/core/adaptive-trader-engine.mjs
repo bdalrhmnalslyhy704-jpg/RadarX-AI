@@ -624,7 +624,8 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   const btcByClose=new Map(btcCandles.map(item=>[item.candle.closeTime,item.candle]));
   const horizonBars=16,dayBars=96;
   const possible=[];
-  for(let index=dayBars;index+horizonBars<candles.length;index++){
+  // A 24-step tensor needs 96 day-context candles before its first step, then 24 model steps.
+  for(let index=Math.max(dayBars,119);index+horizonBars<candles.length;index++){
     const sequence=candles.slice(index-dayBars,index+horizonBars+1);
     if(sequence.length!==dayBars+horizonBars+1||
       sequence.some((item,offset)=>offset>0&&item.candle.openTime-sequence[offset-1].candle.openTime!==15*60*1000))continue;
