@@ -12,12 +12,12 @@ function stableTieBreak(a,b){
     String(a.row.symbol||'').localeCompare(String(b.row.symbol||''))||
     String(a.row.id||'').localeCompare(String(b.row.id||''));
 }
-function rankingSlice(rows,fraction){
+function rankingSlice(rows,fraction,totalOutcomeCount){
   const count=Math.max(1,Math.min(rows.length,Math.ceil(rows.length*fraction)));
   const selected=rows.slice(0,count);
   const positives=selected.filter(row=>row.row.outcome==='UP').length;
   const totalPositive=rows.filter(row=>row.row.outcome==='UP').length;
-  const prevalenceAll=totalPositive/Math.max(1,rows.length);
+  const prevalenceAll=totalPositive/Math.max(1,totalOutcomeCount);
   const directionalCount=rows.filter(row=>row.row.outcome==='UP'||row.row.outcome==='DOWN').length;
   const prevalenceDirectional=totalPositive/Math.max(1,directionalCount);
   const precision=positives/count;
@@ -42,11 +42,13 @@ function rankingSlice(rows,fraction){
 export function evaluateFrozenRankingSignal(rows,scoreSelector){
   if(typeof scoreSelector!=='function')throw new Error('SCORE_SELECTOR_REQUIRED');
   const observed=outcomeRows(rows);
-  const ranked=observed.map(row=>{
+  const scored=observed.map(row=>{
     const score=finite(scoreSelector(row));
     return {row,score:score===null?Number.NEGATIVE_INFINITY:score,has_score:score!==null};
-  }).sort((a,b)=>b.score-a.score||stableTieBreak(a,b));
-  const directional=ranked.filter(item=>item.row.outcome==='UP'||item.row.outcome==='DOWN');
+  });
+  const ranked=scored.filter(item=>item.row.outcome==='UP'||item.row.outcome==='DOWN')
+    .sort((a,b)=>b.score-a.score||stableTieBreak(a,b));
+  const directional=ranked;
   const positives=directional.filter(item=>item.row.outcome==='UP').length;
   const negatives=directional.length-positives;
   // Mann-Whitney/rank-sum AUC with average ranks for ties, O(n log n).
@@ -70,12 +72,14 @@ export function evaluateFrozenRankingSignal(rows,scoreSelector){
     sample_count:observed.length,
     directional_sample_count:directional.length,
     positive_samples:positives,negative_samples:negatives,
-    missing_score_samples:observed.filter(row=>finite(scoreSelector(row))===null).length,
+    missing_score_samples:scored.filter(item=>!item.has_score).length,
     score_coverage_pct:observed.length
-      ?Number((ranked.filter(item=>item.has_score).length/observed.length*100).toFixed(3)):0,
+      ?Number((scored.filter(item=>item.has_score).length/observed.length*100).toFixed(3)):0,
+    directional_score_coverage_pct:directional.length
+      ?Number((directional.filter(item=>item.has_score).length/directional.length*100).toFixed(3)):0,
     auc_roc:auc===null?null:Number(auc.toFixed(6)),
-    top_10_pct:ranked.length?rankingSlice(ranked,0.10):null,
-    top_20_pct:ranked.length?rankingSlice(ranked,0.20):null,
+    top_10_pct:ranked.length?rankingSlice(ranked,0.10,observed.length):null,
+    top_20_pct:ranked.length?rankingSlice(ranked,0.20,observed.length):null,
     score_direction:'HIGHER_IS_MORE_BULLISH',
     no_probability_calibration_claim:true
   };
