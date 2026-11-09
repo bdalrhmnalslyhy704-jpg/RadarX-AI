@@ -1106,7 +1106,7 @@ test('historical sample phases give the cognitive learner enough distinct time b
   assert.equal(temporal.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
   for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
     const specialist=temporal.regime_specialists?.[regime];
-    if(Number(specialist?.training_samples)>0){
+    if(Number(specialist?.regime_training_samples)>0){
       assert.ok(specialist.max_training_outcome_resolved_at<specialist.training_cutoff_at,
         regime+' pooled training labels must resolve before the shared training cutoff');
       assert.ok(specialist.training_cutoff_at<specialist.member_selection_cutoff_at,

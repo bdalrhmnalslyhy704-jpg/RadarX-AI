@@ -273,9 +273,10 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.ok(profile.member_training_profiles_by_regime.BTC_RISK_ON.slice(0,2).every(row=>
     row.trainingObjective==='UNWEIGHTED_BRIER_PROPER_SCORING_RULE'));
   assert.equal(expert.baseline_anchor_source,'SHARED_POOLED_TRAINING_ONLY');
-  assert.equal(expert.baseline_anchor_training_samples,expert.training_samples);
-  assert.ok(expert.training_samples>=160);
-  assert.ok(expert.regime_training_samples>=80);
+  assert.equal(expert.baseline_anchor_training_samples,expert.shared_training_samples);
+  assert.ok(expert.shared_training_samples>=160);
+  assert.ok(expert.training_samples>=80);
+  assert.equal(expert.training_samples,expert.regime_training_samples);
   assert.ok(expert.selection_samples>=10);
   assert.ok(expert.validation_samples>=24);
   assert.ok(expert.holdout_samples>=20);
@@ -392,8 +393,9 @@ test('sparse BTC regime cannot borrow selection or calibration labels from the o
   }
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   const expert=profile.regime_specialists.BTC_RISK_ON;
-  assert.ok(expert.training_samples>=160);
-  assert.ok(expert.regime_training_samples>=80);
+  assert.ok(expert.shared_training_samples>=160);
+  assert.ok(expert.training_samples>=80);
+  assert.equal(expert.training_samples,expert.regime_training_samples);
   assert.equal(expert.local_selection_samples,60);
   assert.equal(expert.local_selection_positive_samples,0);
   assert.equal(expert.member_selection_source,'SHARED_POOLED_MEMBER_SELECTION_BLOCK');
