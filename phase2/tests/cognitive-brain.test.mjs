@@ -312,6 +312,26 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       assert.equal(profile.hybrid_model.selected,true);
       assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
     }
+    // The single validation winner's final holdout evidence is preserved even
+    // when it fails; the audit must never hide a failed challenger evaluation.
+    if(profile.model_selection.validation_challenger==='GBDT_RESIDUAL'){
+      assert.equal(profile.boosted_tree_model.holdout.evaluated,true);
+      assert.ok(profile.boosted_tree_model.holdout_comparison);
+      assert.deepEqual(profile.model_selection.validation_challenger_holdout_comparison,
+        profile.boosted_tree_model.holdout_comparison);
+    }else if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP_W')){
+      assert.equal(profile.hybrid_model.holdout.evaluated,true);
+      assert.ok(profile.hybrid_model.holdout_comparison);
+      assert.equal(profile.hybrid_model.holdout_comparison.passed,
+        profile.model_selection.challenger_holdout_passed);
+      assert.deepEqual(profile.model_selection.validation_challenger_holdout_comparison,
+        profile.hybrid_model.holdout_comparison);
+      assert.deepEqual(profile.model_selection.validation_challenger_holdout,
+        profile.hybrid_model.holdout);
+    }else{
+      assert.equal(profile.model_selection.validation_challenger_holdout,null);
+      assert.equal(profile.model_selection.validation_challenger_holdout_comparison,null);
+    }
 
     const highEvidence = candidate();
     const renamedPair = candidate({ symbol: 'UNSEENPAIRUSDT' });
