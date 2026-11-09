@@ -476,6 +476,7 @@ async function main(){
       symbol_universe_scope:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY',
       current_symbol_list_sha256:sha256(universe.join('\n'))
     };
+    console.log('[HISTORICAL_UNIVERSE] '+JSON.stringify({symbols:symbols.length,months:months.length,window:{start:startText,end_exclusive:endText},concurrency}));
     if(!symbols.includes('BTCUSDT'))throw new Error('BTCUSDT_NOT_IN_RESEARCH_UNIVERSE');
 
     const [btc15,btc5]=await Promise.all([
@@ -485,23 +486,31 @@ async function main(){
     for(const file of [...btc15.files,...btc5.files])archiveManifest.push(file);
     if(btc15.rows.length<300||btc5.rows.length<300)
       throw new Error('BTC_ARCHIVE_HISTORY_INSUFFICIENT');
+    console.log('[BTC_ARCHIVE_READY] '+JSON.stringify({rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,verified_months_15m:btc15.verified_months,verified_months_5m:btc5.verified_months}));
     const btcKlines={data:btc15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'};
     const btcFastKlines={data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'};
 
+    let completedSymbols=0;
+    const emitSymbol=result=>{
+      completedSymbols++;
+      console.log('[HISTORICAL_SYMBOL_PROGRESS] '+JSON.stringify({completed:completedSymbols,total:symbols.length,symbol:result.symbol,status:result.status||'PROCESSED',samples:result.samples||0,temporal_sequences:result.temporal_sequences||0}));
+      return result;
+    };
     const symbolResults=await mapLimit(symbols,concurrency,async symbol=>{
+      console.log('[HISTORICAL_SYMBOL_START] '+symbol);
       if(symbol==='BTCUSDT'){
         const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
           symbol,klines:btcKlines,fastKlines:btcFastKlines,btcKlines,
           now:endExclusiveMs,minQuoteVolume24h:MIN_QUOTE_VOLUME_24H,
           maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
         });
-        return {
-          symbol,rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
+        return emitSymbol({
+          symbol,status:'PROCESSED',rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           verified_months_15m:btc15.verified_months,verified_months_5m:btc5.verified_months,
           missing_months_15m:btc15.missing_months,missing_months_5m:btc5.missing_months,
           samples:samples.length,temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
           output:samples
-        };
+        });
       }
       try{
         const [asset15,asset5]=await Promise.all([
@@ -510,12 +519,12 @@ async function main(){
         ]);
         archiveManifest.push(...asset15.files,...asset5.files);
         if(asset15.rows.length<240||asset5.rows.length<100){
-          return {
+          return emitSymbol({
             symbol,status:'INSUFFICIENT_ARCHIVE_HISTORY',
             rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
             verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
             samples:0,temporal_sequences:0,output:[]
-          };
+          });
         }
         const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
           symbol,
@@ -526,7 +535,7 @@ async function main(){
           minQuoteVolume24h:MIN_QUOTE_VOLUME_24H,
           maxSamples:HISTORICAL_TRAINING_SAMPLES_PER_SYMBOL
         });
-        return {
+        return emitSymbol({
           symbol,status:'PROCESSED',
           rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
           verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
@@ -535,11 +544,11 @@ async function main(){
           samples:samples.length,
           temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
           output:samples
-        };
+        });
       }catch(error){
         const failure={symbol,reason:String(error?.message||error).slice(0,240)};
         symbolFailures.push(failure);
-        return {symbol,status:'FAILED',samples:0,temporal_sequences:0,output:[],error:failure.reason};
+        return emitSymbol({symbol,status:'FAILED',samples:0,temporal_sequences:0,output:[],error:failure.reason});
       }
     });
 
@@ -566,6 +575,8 @@ async function main(){
     const samplesJsonl=writeSampleJsonl(samples);
     await mkdir(resolve(sampleOutput,'..'),{recursive:true});
     await writeFile(sampleOutput,samplesJsonl,'utf8');
+    console.log('[COGNITIVE_PROFILE_START] '+JSON.stringify({samples:samples.length,symbols:symbolsWithSamples,temporal_sequences:sequenceCount}));
+    const profileStartedAt=Date.now();
     const profile=buildCognitiveLearningProfile(samples,{
       temporalSamples:samples,
       allowedOutcomeSources:['HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'],
@@ -580,7 +591,9 @@ async function main(){
         liveHoldoutSamples:150
       }
     });
+    const modelProfileElapsedMs=Date.now()-profileStartedAt;
     const modelSummary=summarizeProfile(profile);
+    console.log('[COGNITIVE_PROFILE_COMPLETE] '+JSON.stringify({elapsed_ms:modelProfileElapsedMs,selected_model:modelSummary.model_selection?.selected_model||null,cognitive_probability_ready:modelSummary.probability_ready,temporal_live_eligibility_ready:modelSummary.temporal_network.live_eligibility_ready}));
     const temporalPass=modelSummary.temporal_network.live_eligibility_ready===true;
     const cognitivePass=modelSummary.probability_ready===true;
     baseReport.status=qualityReady?'DATA_QUALITY_READY':'DATA_QUALITY_INSUFFICIENT';
@@ -627,9 +640,16 @@ async function main(){
       note:'Predictive scores on chronological validation and untouched holdout are not a transaction-level profitability proof.',
       profile:modelSummary
     };
+    archiveManifest.sort((a,b)=>String(a.symbol).localeCompare(String(b.symbol))||String(a.interval).localeCompare(String(b.interval))||String(a.month).localeCompare(String(b.month)));
     baseReport.archive_manifest=archiveManifest;
     baseReport.symbol_failures=symbolFailures;
     baseReport.request_audit=REQUEST_AUDIT;
+    baseReport.production_touched=false;
+    baseReport.merged=false;
+    baseReport.deployed=false;
+    baseReport.paper_trading=true;
+    baseReport.real_order_execution=false;
+    baseReport.model_profile_elapsed_ms=modelProfileElapsedMs;
     baseReport.elapsed_ms=Date.now()-started;
     baseReport.completed_at=new Date().toISOString();
     await writeFile(output,JSON.stringify(baseReport,null,2),'utf8');
