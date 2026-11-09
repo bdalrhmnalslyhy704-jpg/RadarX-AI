@@ -70,6 +70,13 @@ function safeSymbol(value){
   const symbol=String(value||'').trim().toUpperCase();
   return /^[A-Z0-9]{5,30}$/.test(symbol)?symbol:null;
 }
+
+function hasValidTemporalSequence(row){
+  const sequence=row?.temporal_sequence;
+  return Array.isArray(sequence)&&sequence.length===24&&
+    sequence.every(step=>Array.isArray(step)&&step.length===29&&
+      step.every(value=>Number.isFinite(value)&&Math.abs(value)<=4));
+}
 function isLeveragedToken(symbol){
   return /(?:UP|DOWN|BULL|BEAR)USDT$/.test(String(symbol||'').toUpperCase());
 }
@@ -485,7 +492,7 @@ async function main(){
           expected_months_after_listing_5m:btc5.expected_months_after_first_available,
           complete_from_first_available_15m:btc15.complete_from_first_available,
           complete_from_first_available_5m:btc5.complete_from_first_available,
-          samples:samples.length,temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          samples:samples.length,temporal_sequences:samples.filter(row=>hasValidTemporalSequence(row)).length,
           output:samples
         });
       }
@@ -541,7 +548,7 @@ async function main(){
           expected_months_after_listing_5m:asset5.expected_months_after_first_available,
           rejected_15m:asset15.total_rejected,rejected_5m:asset5.total_rejected,
           samples:samples.length,
-          temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          temporal_sequences:samples.filter(row=>hasValidTemporalSequence(row)).length,
           output:samples
         });
       }catch(error){
