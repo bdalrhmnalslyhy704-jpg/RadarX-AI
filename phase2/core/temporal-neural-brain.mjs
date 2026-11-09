@@ -101,7 +101,7 @@ function cleanRows(samples) {
     outcome: row.outcome,
     target: targetOf(row),
     sequence: row.temporal_sequence.map(step => step.map(Number))
-  })).sort((a, b) => a.at - b.at || a.symbol.localeCompare(b.symbol));
+  })).sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
 }
 
 function zerosLike(value) {
@@ -1826,6 +1826,14 @@ export function buildTemporalNeuralProfile(samples = [], {
     outer_training_samples:training.length,outer_validation_samples:validation.length,
     outer_holdout_samples:holdout.length,
     outer_sample_fingerprint:sampleIdentityFingerprint(rows),
+    shared_model_fit_pool_samples:fitRows.length,
+    shared_model_stage_fingerprints:{
+      training:sampleIdentityFingerprint(sharedTrainingRows),
+      member_selection:sampleIdentityFingerprint(pooledMemberSelectionRows),
+      calibration:sampleIdentityFingerprint(sharedCalibrationRows),
+      validation:sampleIdentityFingerprint(validation),
+      holdout:sampleIdentityFingerprint(holdout)
+    },
     max_training_outcome_resolved_at:reportMaxTrainingResolvedAt,
     training_positive_rate_pct:Number((reportTrainingPositive/Math.max(1,reportTrainingSamples)*100).toFixed(2)),
     training_positive_count:reportTrainingPositive,
