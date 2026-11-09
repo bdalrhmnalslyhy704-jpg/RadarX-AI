@@ -516,6 +516,22 @@ test('V5, GBDT, hybrid and TCN consume identical first-passage rows and outer ho
   assert.equal(contract.holdout_samples,temporal.outer_holdout_samples);
 });
 
+test('cognitive challenger refuses shared-split claims when its rows differ from TCN',()=>{
+  const row={
+    ...sample(0,0),
+    features:{volume_ratio:1.8,trade_ratio:1.4,taker_buy_ratio:0.58,close_location:0.7},
+  };
+  const profile=buildCognitiveLearningProfile([row],{
+    temporalSamples:[],
+    allowedOutcomeSources:['HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1']
+  });
+  assert.equal(profile.comparison_contract.sample_identity_matches,false);
+  assert.equal(profile.comparison_contract.shared_outer_split_applied,false);
+  assert.equal(profile.comparison_contract.shared_outer_split_applied,false);
+  assert.equal(profile.comparison_contract.validation_sample_count_matches,false);
+  assert.equal(profile.comparison_contract.holdout_sample_count_matches,false);
+});
+
 test('temporal network rejects wrong horizon, wrong target definition and incomplete sequences',()=>{
   const valid=sample(0,0);
   const wrongHorizon={...sample(1,0),horizon_ms:FOUR_HOURS/2};

@@ -211,6 +211,7 @@ export class AdaptiveTraderWorker{
   cognitiveTrainingSamples(){
     // Require exactly the sequence-bearing, fully matured first-passage rows accepted by TCN.
     return this.trainingSamples().filter(row=>
+      row.features&&typeof row.features==='object'&&!Array.isArray(row.features)&&
       hasValidTemporalSequence(row.temporal_sequence)&&
       ['UP','DOWN','FLAT'].includes(row.outcome)&&
       row.first_passage?.path_resolution==='15M'&&
