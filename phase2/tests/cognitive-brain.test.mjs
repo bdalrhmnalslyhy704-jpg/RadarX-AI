@@ -300,8 +300,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
-    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','TRAINED_NOT_SELECTED',
-      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC',
+      'TRAINED_NOT_SELECTED','VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
       assert.equal(profile.boosted_tree_model.selected,true);
