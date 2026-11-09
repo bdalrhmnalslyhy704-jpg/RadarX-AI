@@ -668,7 +668,8 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
     'the model must reject any first-passage sample built at a different candle resolution');
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
-});\n
+});
+
 test('V5 and TCN use identical training, member-selection, calibration, validation and holdout rows',()=>{
   const rows=[];
   for(let group=0;group<40;group++){
