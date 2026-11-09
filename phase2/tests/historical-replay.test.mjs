@@ -48,6 +48,63 @@ test('high-activity historical watch shadow recognizes verified buyer flow while
   }),false,'strong flow without emerging price structure remains blocked');
 });
 
+test('historical replay preserves metrics from radar-specific analysis objects, not only strong_move alerts',()=>{
+  const rows=candles(300);
+  const source=rows[200];
+  const replay=runHistoricalReplay({
+    symbol:'IOSTUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:source.openTime,
+    endTime:source.closeTime,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    allowCandleOnlyFallback:true,
+    evaluate(){
+      return {
+        accepted:false,
+        candidate_detected:true,
+        candidate_mode:'LIQUIDITY_ABSORPTION_RADAR_CANDIDATE_SHADOW',
+        candidate_eligible:true,
+        alert:{
+          symbol:'IOSTUSDT',
+          radar:'LIQUIDITY_ABSORPTION_RADAR',
+          eligible:true,
+          data_quality:90,
+          closed_candles_only:true,
+          analysis:{
+            eligible:false,
+            score:69.9,
+            metrics:{
+              absorption_score:84.2,
+              depth_imbalance:0.32,
+              spread_bps:4.2,
+              taker_buy_ratio:0.63,
+              volume_ratio:2.4,
+              net_move_pct:0.8,
+              structure_score:77
+            }
+          }
+        },
+        reason_codes:['CANDLE_ONLY_MICROSTRUCTURE_PROXY']
+      };
+    }
+  });
+  assert.equal(replay.steps.length,1);
+  const row=replay.steps[0];
+  assert.equal(row.candidate_detected,true);
+  assert.equal(row.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(row.signal_metrics.volume_ratio,2.4);
+  assert.equal(row.signal_metrics.taker_buy_ratio_1m_3m,0.63);
+  assert.equal(row.market_evidence.spread_bps,4.2);
+  assert.equal(row.profile_metrics.absorption_score,84.2);
+  assert.equal(row.profile_metrics.depth_imbalance,0.32);
+  assert.equal(row.profile_metrics.net_move_pct,0.8);
+  assert.equal(row.profile_metrics.structure_score,77);
+  assert.equal(row.market_evidence.liquidity_quality,null,
+    'profile metrics must not be misrepresented as historical order-book liquidity quality');
+});
+
 test('CLI replay window count excludes the next candle that has not closed',()=>{
   const start=Date.UTC(2024,10,6,0,0,0,0);
   const nextOpen=Date.UTC(2024,10,6,6,0,0,0);
