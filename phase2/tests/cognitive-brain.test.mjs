@@ -10,7 +10,8 @@ import {
   hasCognitiveBrierSuperiority,
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_FEATURE_NAMES,
-  buildCognitiveFeatureVector
+  buildCognitiveFeatureVector,
+  evaluateCognitiveDirectionalRanking
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
@@ -822,4 +823,50 @@ test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
   assert.equal(audit.resolved_forecasts,8);
   assert.equal(audit.recent_window.brier_score,0.01);
   assert.equal(audit.previous_window.brier_score,0.01);
+});
+
+
+test('cognitive model ranking excludes FLAT from directional AUC and top-k denominators',()=>{
+  const rows=[
+    {outcome:'FLAT',target:0},
+    {outcome:'FLAT',target:0},
+    {outcome:'UP',target:1},
+    {outcome:'UP',target:1},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0},
+    {outcome:'DOWN',target:0}
+  ];
+  // The FLAT scores are deliberately highest. They must not take top-k slots.
+  const scores=[0.999,0.998,0.99,0.98,0.97,0.96,0.95,0.94,0.93,0.92,0.91,0.90];
+  const metrics=evaluateCognitiveDirectionalRanking(rows,scores);
+  assert.equal(metrics.all_outcome_sample_count,12);
+  assert.equal(metrics.directional_sample_count,10);
+  assert.equal(metrics.excluded_flat_samples,2);
+  assert.equal(metrics.positive_samples,2);
+  assert.equal(metrics.negative_samples,8);
+  assert.equal(metrics.top_10_pct.sample_count,1,
+    'top 10% must be 10% of the 10 directional cases, not 10% of 12 including FLAT');
+  assert.equal(metrics.top_10_pct.positive_samples,1);
+  assert.equal(metrics.top_10_pct.precision_pct,100);
+  assert.equal(metrics.top_20_pct.sample_count,2);
+  assert.equal(metrics.top_20_pct.positive_samples,2);
+  assert.equal(metrics.top_20_pct.recall_pct,100);
+});
+
+test('cognitive directional ranking keeps missing scores at the bottom without dropping directional rows',()=>{
+  const rows=[
+    {outcome:'UP',target:1},{outcome:'DOWN',target:0},
+    {outcome:'UP',target:1},{outcome:'DOWN',target:0},
+    {outcome:'FLAT',target:0}
+  ];
+  const metrics=evaluateCognitiveDirectionalRanking(rows,[null,0.8,0.7,null,0.99]);
+  assert.equal(metrics.directional_sample_count,4);
+  assert.equal(metrics.missing_score_samples,2);
+  assert.equal(metrics.top_10_pct.sample_count,1);
+  assert.equal(metrics.top_10_pct.positive_samples,0);
 });
