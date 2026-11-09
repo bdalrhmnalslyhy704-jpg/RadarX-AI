@@ -763,7 +763,7 @@ function predictFromFit(features, fit, residualScale=1) {
 }
 
 
-function fitAndSelectNeuralProbabilityCalibrator(fitRows,checkRows,fit,{
+function fitAndSelectProbabilityCalibrator(fitRows,checkRows,fit,{
   minimumFitSamples=30,minimumFitPositive=6,minimumFitNegative=6,
   minimumCheckSamples=20,minimumCheckPositive=3,minimumCheckNegative=3,
   iterations=260,learningRate=0.035,regularization=0.55,
@@ -776,7 +776,7 @@ function fitAndSelectNeuralProbabilityCalibrator(fitRows,checkRows,fit,{
   const fitPositive=fitPredictions.filter(row=>row.target>0.5).length;
   const fitNegative=fitPredictions.filter(row=>row.target<0.5).length;
   const base={
-    method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',
+    method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',
     fit_on:'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
     check_on:'LATER_DISJOINT_CALIBRATION_CHECK_BLOCK',
     fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
@@ -1278,16 +1278,16 @@ export function buildCognitiveLearningProfile(samples = [], {
     }
     // Fit calibration only after refitting; the calibration rows remain later.
     neuralFit.probability_calibrator=neuralFit.selected_member_index>=0
-      ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,neuralFit)
+      ?fitAndSelectProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,neuralFit)
       :null;
   }
   // Calibrate reference logits on the same disjoint chronological calibration
   // blocks used by the residual models. Rejected calibrators leave raw scores
   // unchanged; they never consume blend-selection, validation or holdout labels.
   const calibrateReferenceFit=fit=>{
-    if(!fit)return {method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',
+    if(!fit)return {method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',
       fitted:false,accepted:false,reason:'REFERENCE_FIT_UNAVAILABLE'};
-    const calibration=fitAndSelectNeuralProbabilityCalibrator(
+    const calibration=fitAndSelectProbabilityCalibrator(
       neuralCalibrationFit,neuralCalibrationCheck,fit);
     fit.probability_calibrator=calibration;
     return calibration;
@@ -1423,12 +1423,12 @@ export function buildCognitiveLearningProfile(samples = [], {
     ?evaluateHoldout(upEventHoldout,boostedTreeRefitBaselineFit,comparisonMargin)
     :{evaluated:false,sample_count:upEventHoldout.length,model_brier_score:null};
   const boostedTreeProbabilityCalibration=boostedTreeFit
-    ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,boostedTreeFit)
-    :{method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',fitted:false,accepted:false,reason:'GBDT_FIT_UNAVAILABLE'};
+    ?fitAndSelectProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,boostedTreeFit)
+    :{method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',fitted:false,accepted:false,reason:'GBDT_FIT_UNAVAILABLE'};
   if(boostedTreeFit)boostedTreeFit.probability_calibrator=boostedTreeProbabilityCalibration;
   const boostedSameWindowLogisticCalibration=boostedTreeRefitBaselineFit
-    ?fitAndSelectNeuralProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,boostedTreeRefitBaselineFit)
-    :{method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',fitted:false,accepted:false,reason:'GBDT_LOGISTIC_REFERENCE_UNAVAILABLE'};
+    ?fitAndSelectProbabilityCalibrator(neuralCalibrationFit,neuralCalibrationCheck,boostedTreeRefitBaselineFit)
+    :{method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',fitted:false,accepted:false,reason:'GBDT_LOGISTIC_REFERENCE_UNAVAILABLE'};
   if(boostedTreeRefitBaselineFit)boostedTreeRefitBaselineFit.probability_calibrator=boostedSameWindowLogisticCalibration;
   const boostedTreeValidation=boostedTreeFit
     ?evaluateHoldout(upEventValidation,boostedTreeFit,comparisonMargin)
@@ -1689,7 +1689,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       calibration_fit_samples:neuralCalibrationFit.length,
       calibration_check_samples:neuralCalibrationCheck.length,
       probability_calibration:neuralFit?.probability_calibrator??{
-        method:'DISJOINT_BRIER_PLATT_NEURAL_CALIBRATION_V1',fitted:false,accepted:false,
+        method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',fitted:false,accepted:false,
         reason:'NEURAL_MODEL_NOT_FITTED'
       },
       max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
