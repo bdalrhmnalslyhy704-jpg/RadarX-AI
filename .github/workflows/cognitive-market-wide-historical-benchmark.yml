@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - verify/cognitive-hybrid-nested-calibration-20261109
+      - research/fail-closed-replay-and-cognitive-audit-20261109
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'
@@ -82,7 +83,8 @@ jobs:
             --concurrency 6 \
             --min-symbols 80 \
             --min-samples 6000 \
-            --min-sequences 3000
+            --min-sequences 3000 \
+            --min-temporal-coverage 0.80
       - name: Upload raw provenance, dataset and model metrics even on failure
         if: always()
         uses: actions/upload-artifact@v4
