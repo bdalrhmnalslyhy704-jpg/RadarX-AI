@@ -22,6 +22,11 @@ import {
   estimatePaperEquity
 } from '../core/adaptive-trader-engine.mjs';
 
+test('history page scheduling accepts short-base Spot symbols',()=>{
+  for(const symbol of ['OPUSDT','UNIUSDT','DOGEUSDT','1000PEPEUSDT'])
+    assert.ok([2,3].includes(adaptiveTraderHistoryPageBudget(symbol,Date.UTC(2026,10,9)).max_pages));
+});
+
 test('third-page history wave alternates each Spot symbol while keeping each scan near half load',()=>{
   const now=Date.UTC(2026,10,9,12,0,0);
   const symbols=Array.from({length:200},(_,index)=>'PAIR'+String(index).padStart(3,'0')+'USDT');
