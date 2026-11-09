@@ -13,6 +13,7 @@ import {
   applyAdaptiveLearning,
   findMissedMoverEvents,
   createAdaptiveTraderSnapshotService,
+  fetchAdaptiveTraderHistoricalKlines,
   summarizePublicSpotOrderBook,
   createPaperPortfolio,
   openPaperPosition,
@@ -1242,4 +1243,76 @@ test('fresh Binance closed-candle replay builds 24x29 TCN tensors with one 15m f
     'every eligible historical outcome must carry the same causal 24x29 closed-candle tensor');
   assert.equal(new Set(samples.map(row=>row.id)).size,samples.length,
     'rebuild output must not duplicate a symbol/baseline candle');
+});
+
+function rawKline(index,intervalMs=15*60*1000){
+  const openTime=Date.UTC(2026,0,1)+index*intervalMs;
+  return [openTime,'10','10.2','9.9','10.1','100',openTime+intervalMs-1,'1000',100,'55','550',0];
+}
+function klinePage(startIndex,count,intervalMs=15*60*1000){
+  return {data:Array.from({length:count},(_,index)=>rawKline(startIndex+index,intervalMs)),
+    source:'https://data-api.binance.vision',receivedAt:Date.UTC(2026,3,1)};
+}
+
+test('historical closed-candle fetch extends 15m history to three unique chronological pages',async()=>{
+  const calls=[];
+  const pages=[klinePage(1000,1000),klinePage(0,1000)];
+  const rest={async request(path,query){
+    calls.push({path,query});
+    assert.equal(path,'/api/v3/klines');
+    return pages.shift();
+  }};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(2000,1000),maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,3);
+  assert.equal(result.historical_pages_attempted,2);
+  assert.equal(result.historical_window_candles,3000);
+  assert.equal(result.data.length,3000);
+  assert.equal(new Set(result.data.map(row=>row[0])).size,3000);
+  assert.deepEqual(result.data.map(row=>row[0]),result.data.map(row=>row[0]).slice().sort((a,b)=>a-b));
+  assert.equal(calls.length,2);
+  assert.equal(calls[0].query.endTime,klinePage(2000,1000).data[0][0]-1);
+  assert.equal(calls[1].query.endTime,klinePage(1000,1000).data[0][0]-1);
+  assert.equal(result.historical_backfill_error,null);
+});
+
+test('historical backfill stops cleanly when the public Spot archive is exhausted',async()=>{
+  const rest={async request(){return klinePage(0,300);}};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(1000,1000),maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,2);
+  assert.equal(result.historical_pages_attempted,1);
+  assert.equal(result.historical_window_candles,1300);
+  assert.equal(result.historical_backfill_error,null);
+});
+
+test('a failed third history page preserves verified prior pages and exposes the failure',async()=>{
+  let calls=0;
+  const rest={async request(){
+    calls++;
+    if(calls===1)return klinePage(1000,1000);
+    throw new Error('THIRD_PAGE_TIMEOUT');
+  }};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:klinePage(2000,1000),maxPages:3
+  });
+  assert.equal(calls,2);
+  assert.equal(result.historical_pages_fetched,2);
+  assert.equal(result.historical_pages_attempted,2);
+  assert.equal(result.historical_window_candles,2000);
+  assert.match(result.historical_backfill_error,/THIRD_PAGE_TIMEOUT/);
+  assert.equal(new Set(result.data.map(row=>row[0])).size,2000);
+});
+
+test('overlapping-only history responses do not inflate page or candle counts',async()=>{
+  const current=klinePage(1000,1000);
+  const rest={async request(){return current;}};
+  const result=await fetchAdaptiveTraderHistoricalKlines({
+    rest,symbol:'TESTUSDT',interval:'15m',firstPage:current,maxPages:3
+  });
+  assert.equal(result.historical_pages_fetched,1);
+  assert.equal(result.historical_pages_attempted,1);
+  assert.equal(result.historical_window_candles,1000);
 });
