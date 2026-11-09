@@ -300,7 +300,11 @@ async function main(){
   await writeFile(samplesOutput,'');
   const tempDir=await mkdtemp(join(tmpdir(),'radarx-daily-early-riser-'));
   const started=Date.now(),manifest=[],symbolFailures=[];
-  let completed=0,totalSamples=0,queue=Promise.resolve();
+  let completed=0,totalSamples=0,queue=Promise.resolve(),reportQueue=Promise.resolve();
+  const persistReport=()=>{
+    reportQueue=reportQueue.then(()=>writeJsonAtomic(output,report));
+    return reportQueue;
+  };
   const methods={
     market:'BINANCE_SPOT_USDT_ONLY',
     universe:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY',
@@ -467,10 +471,11 @@ async function main(){
         total_samples:totalSamples,archives:manifest.length
       }));
       await writeQueue;
-      await writeJsonAtomic(output,report);
+      await persistReport();
       return {...compactResult,metricRows};
     });
     await writeQueue;
+    await reportQueue;
     const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
       [String(target)+'_PCT',summarizeTarget(allMetricRows,target)]));
@@ -512,7 +517,6 @@ async function main(){
       feature_cutoff_violations:featureCutoffViolations,
       horizon_violations:horizonViolations
     };
-    const reportBytes=Buffer.from(JSON.stringify(report,null,2)+'\n');
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
       sha256:execHash(await (await import('node:fs/promises')).readFile(samplesOutput))
@@ -527,6 +531,12 @@ async function main(){
       archive_files:manifest.length,verified,missing,failed,
       targets:report.targets
     }));
+  }catch(error){
+    report.status='FAILED';
+    report.fatal_error=String(error?.stack||error).slice(0,2000);
+    report.failed_at=new Date().toISOString();
+    await persistReport().catch(()=>{});
+    throw error;
   }finally{
     await rm(tempDir,{recursive:true,force:true}).catch(()=>{});
   }
