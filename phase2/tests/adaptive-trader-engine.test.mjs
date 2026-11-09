@@ -1322,11 +1322,15 @@ test('three-page history backfill records verified additional 15m history on a l
   const current=f.klines.data;
   const interval=15*60*1000;
   const older=[];
+  const older2=[];
   for(let index=0;index<1000;index++){
     const openTime=current[0][0]-(1000-index)*interval;
     const open=10,close=10.01,quoteVolume=300000;
     older.push([openTime,open,10.1,9.9,close,quoteVolume/close,
       openTime+interval-1,quoteVolume,1000,quoteVolume/close*0.58,quoteVolume*0.58,0]);
+    const older2Open=older[0][0]-(1000-index)*interval;
+    older2.push([older2Open,open,10.1,9.9,close,quoteVolume/close,
+      older2Open+interval-1,quoteVolume,1000,quoteVolume/close*0.58,quoteVolume*0.58,0]);
   }
   const calls=[];
   const rest={
@@ -1342,6 +1346,7 @@ test('three-page history backfill records verified additional 15m history on a l
       if(path==='/api/v3/klines'&&query.symbol==='TESTUSDT'){
         if(query.endTime===undefined)return f.klines;
         if(query.endTime===current[0][0]-1)return {data:older,source:'https://data-api.binance.vision',receivedAt:f.now};
+        if(query.endTime===older[0][0]-1)return {data:older2,source:'https://data-api.binance.vision',receivedAt:f.now};
         return {data:[],source:'https://data-api.binance.vision',receivedAt:f.now};
       }
       throw new Error('UNEXPECTED_REQUEST '+path+' '+JSON.stringify(query));
@@ -1352,4 +1357,7 @@ test('three-page history backfill records verified additional 15m history on a l
   const pages=calls.filter(call=>call.path==='/api/v3/klines'&&call.query.symbol==='TESTUSDT'&&call.query.interval==='15m');
   assert.equal(pages.length,3,'initial page plus two bounded older-page attempts');
   assert.equal(snapshot.universe.asset_15m_extended_symbols,1);
+  assert.equal(snapshot.universe.asset_15m_three_page_symbols,1);
+  assert.equal(snapshot.universe.asset_15m_max_history_candles,2020);
+  assert.equal(snapshot.universe.asset_15m_median_history_candles,2020);
 });
