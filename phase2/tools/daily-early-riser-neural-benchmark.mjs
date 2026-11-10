@@ -238,27 +238,94 @@ async function main(){
           temporal_unexpected:loaded.temporal_unexpected
         }
       };
+      const neural=result.neural_network||{};
+      const boosted=result.boosted_tree_model||{};
+      const hybrid=result.hybrid_model||{};
+      const tcn=result.temporal_tcn||{};
+      const tree=result.temporal_tree_challenger||{};
+      const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
+        .map(([regime,value])=>[regime,{
+          status:value?.status??null,
+          training_samples:value?.training_samples??0,
+          validation_samples:value?.validation_samples??0,
+          holdout_samples:value?.holdout_samples??0,
+          selected:value?.selected===true,
+          validation_brier:value?.validation?.model_brier_score??null,
+          validation_logistic_brier:value?.validation_logistic?.model_brier_score??null,
+          holdout_brier:value?.holdout?.model_brier_score??null,
+          holdout_logistic_brier:value?.holdout_logistic?.model_brier_score??null
+        }]));
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
         target_pct:target,
         samples:result.samples.accepted,
         training:result.chronology.training_samples,
         validation:result.chronology.validation_samples,
         holdout:result.chronology.holdout_samples,
-        neural_status:result.neural_network.status,
-        neural_validation_brier:result.neural_network.validation?.model_brier_score??null,
-        neural_holdout_brier:result.neural_network.holdout?.model_brier_score??null,
-        gbdt_status:result.boosted_tree_model.status,
-        hybrid_status:result.hybrid_model.status,
-        tcn_status:result.temporal_tcn.status,
-        tcn_training_samples:result.temporal_tcn.training_samples,
-        tcn_validation_brier:result.temporal_tcn.validation?.model_brier_score??null,
-        tcn_holdout_brier:result.temporal_tcn.holdout?.model_brier_score??null,
-        tcn_holdout_passed:result.temporal_tcn.holdout_comparison?.passed===true,
-        temporal_tree_status:result.temporal_tree_challenger.status,
-        temporal_tree_training_samples:result.temporal_tree_challenger.training_samples,
-        temporal_tree_holdout_brier:result.temporal_tree_challenger.holdout?.model_brier_score??null,
-        temporal_tree_logistic_holdout_brier:result.temporal_tree_challenger.holdout_logistic?.model_brier_score??null,
-        temporal_tree_holdout_passed:result.temporal_tree_challenger.holdout_comparison?.passed===true,
+        neural:{
+          status:neural.status??null,trained:neural.trained===true,
+          preselection_training_samples:neural.preselection_training_samples??0,
+          fitted_training_samples:neural.training_samples??0,
+          required_training_samples:neural.samples_required??null,
+          selection:{
+            samples:neural.selection_samples??0,
+            positive:neural.selection_positive_samples??0,
+            negative:neural.selection_negative_samples??0,
+            required_samples:neural.required_selection_samples??null,
+            required_positive:neural.required_selection_positive_samples??null,
+            required_negative:neural.required_selection_negative_samples??null,
+            support_ready:neural.selection_support_ready===true,
+            diagnostics:neural.inner_selection_diagnostics??null
+          },
+          failure_reason:neural.inner_selection_diagnostics?.failure_reason??null,
+          validation_brier:neural.validation?.model_brier_score??null,
+          validation_same_window_logistic_brier:neural.validation_comparison?.same_window_logistic_brier_score??null,
+          holdout_brier:neural.holdout?.model_brier_score??null,
+          holdout_same_window_logistic_brier:neural.holdout_comparison?.same_window_logistic_brier_score??null,
+          holdout_comparison_passed:neural.holdout_comparison?.passed===true
+        },
+        gbdt:{
+          status:boosted.status??null,trained:boosted.trained===true,
+          training_samples:boosted.training_samples??0,
+          selection_training_samples:boosted.selection_training_samples??0,
+          selection_samples:boosted.selection_sample_count??0,
+          training_support_ready:boosted.training_support_ready===true,
+          selection_support_ready:boosted.selection_support_ready===true,
+          fit_failure_reason:boosted.fit_failure_reason??null,
+          selection_logistic_brier:boosted.selection_logistic?.model_brier_score??null,
+          validation_brier:boosted.validation?.model_brier_score??null,
+          same_window_logistic_validation_brier:boosted.same_window_logistic_validation?.model_brier_score??null,
+          holdout_brier:boosted.holdout?.model_brier_score??null,
+          same_window_logistic_holdout_brier:boosted.same_window_logistic_holdout?.model_brier_score??null
+        },
+        hybrid:{
+          status:hybrid.status??null,trained:hybrid.trained===true,
+          selected:hybrid.selected===true,selected_candidate:hybrid.selected_candidate??null,
+          boosted_weight:hybrid.boosted_weight??null,
+          candidates:hybrid.candidate_selection_metrics??[]
+        },
+        tcn:{
+          status:tcn.status??null,trained:tcn.trained===true,
+          sequence_samples:result.temporal_tcn_sequence_samples??0,
+          training_samples:tcn.training_samples??0,
+          shared_model_training_samples:tcn.shared_model_training_samples??0,
+          selection_samples:tcn.selection_samples??0,
+          supported_regimes:tcn.supported_regimes??[],
+          selected_regimes:tcn.selected_regimes??[],
+          regimes:regimeSummary,
+          validation:tcn.validation??null,
+          holdout:tcn.holdout??null,
+          holdout_comparison:tcn.holdout_comparison??null
+        },
+        temporal_tree:{
+          status:tree.status??null,trained:tree.trained===true,
+          training_samples:tree.training_samples??0,
+          selection_samples:tree.selection_samples??0,
+          validation:tree.validation??null,
+          validation_logistic:tree.validation_logistic??null,
+          holdout:tree.holdout??null,
+          holdout_logistic:tree.holdout_logistic??null,
+          holdout_comparison:tree.holdout_comparison??null
+        },
         selected_challenger:result.model_selection.validation_challenger,
         holdout_passed:result.model_selection.holdout_comparison?.passed===true
       }));
