@@ -166,7 +166,7 @@ test('neural inner selection requires enough total rows and both binary classes'
 test('daily profile reaches the decoupled selection gate without temporal-declaration-order errors',()=>{
   const horizon=24*60*60*1000;
   const samples=[];
-  for(let day=0;day<150;day++){
+  for(let day=0;day<300;day++){
     for(let symbolIndex=0;symbolIndex<5;symbolIndex++){
       const at=1_760_000_000_000+day*horizon;
       const symbol='T'+symbolIndex+'USDT';
