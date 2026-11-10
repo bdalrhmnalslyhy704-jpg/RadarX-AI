@@ -7,6 +7,8 @@
  * untouched holdout beat both a prevalence and same-window pooled-logistic
  * baseline. This module is analysis-only.
  */
+// Backward-compatible default contract. The daily benchmark opts into its
+// own target definition and horizon through buildTemporalNeuralProfile options.
 export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
@@ -17,6 +19,7 @@ export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
+// Default legacy horizon; parameterized daily experiments override this at the profile boundary.
 const HORIZON_MS = 4 * 60 * 60 * 1000;
 const SEEDS = Object.freeze([13, 29, 47]);
 const RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
@@ -59,7 +62,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 export function temporalBinaryTarget(outcome) {
-  // This network estimates the chance of reaching +3% before -2%.
+  // UP=1 is the sample-declared first-passage event; DOWN and FLAT are non-events.
   // DOWN and FLAT both mean that the success event did not occur.
   return outcome === 'UP' ? 1 : 0;
 }
