@@ -219,6 +219,39 @@ test('15m-only historical samples remain available to V5 but are marked ineligib
     'four-hour outcome labels remain resolved from complete closed 15m candles');
 });
 
+
+test('historical sampler audits and excludes samples missing the full 120-candle TCN warm-up',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,480,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,1440,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,480,15*60*1000,90_000,0.00002);
+  const baseline=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'WARMUPAUDITUSDT',klines,fastKlines,btcKlines,now,maxSamples:110
+  });
+  assert.ok(baseline.length>0);
+  assert.equal(baseline.generation_audit.skipped_incomplete_asset_15m_tensor_history,0);
+  assert.ok(baseline.every(row=>row.temporal_sequence?.length===24&&
+    row.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite))));
+
+  const target=baseline[Math.floor(baseline.length/2)];
+  const originalIndex=klines.data.findIndex(row=>row[6]===target.at);
+  assert.ok(originalIndex>=120,'chosen target has sufficient historical context');
+  // This bar is outside the 96-bar tabular baseline but inside the earliest
+  // 120-bar window needed by the first TCN step.
+  const removedIndex=originalIndex-110;
+  const brokenKlines={...klines,data:klines.data.filter((_,index)=>index!==removedIndex)};
+  const audited=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'WARMUPAUDITUSDT',klines:brokenKlines,fastKlines,btcKlines,now,maxSamples:110
+  });
+  assert.ok(audited.generation_audit.skipped_incomplete_asset_15m_tensor_history>0);
+  assert.ok(!audited.some(row=>row.at===target.at),
+    'an anchor missing its earliest TCN history must not be emitted as a valid training sample');
+  assert.ok(audited.every(row=>row.temporal_sequence?.length===24&&
+    row.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite))));
+  assert.ok(audited.generation_audit.rejected_samples.some(row=>
+    row.at===target.at&&row.reason==='ASSET_15M_TENSOR_WARMUP_GAP'));
+});
+
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);

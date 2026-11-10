@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - verify/cognitive-hybrid-nested-calibration-20261109
+      - research/historical-sequence-context-audit-20261110
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'
@@ -48,6 +49,7 @@ jobs:
     env:
       RADARX_COGNITIVE_BENCHMARK_REPORT: artifacts/cognitive-market-wide-historical-benchmark.json
       RADARX_COGNITIVE_BENCHMARK_SAMPLES: artifacts/cognitive-market-wide-historical-samples.jsonl
+      RADARX_COGNITIVE_BENCHMARK_REJECTIONS: artifacts/cognitive-market-wide-historical-rejections.jsonl
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4

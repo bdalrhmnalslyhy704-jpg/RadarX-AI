@@ -41,6 +41,8 @@ const OUTPUT_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REPORT||
   'artifacts/cognitive-market-wide-historical-benchmark.json');
 const SAMPLE_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_SAMPLES||
   'artifacts/cognitive-market-wide-historical-samples.jsonl');
+const REJECTION_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REJECTIONS||
+  'artifacts/cognitive-market-wide-historical-rejections.jsonl');
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
@@ -528,6 +530,7 @@ async function main(){
           complete_from_first_available_15m:btc15.complete_from_first_available,
           complete_from_first_available_5m:btc5.complete_from_first_available,
           samples:samples.length,temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          generation_audit:samples.generation_audit||null,
           output:samples
         });
       }
@@ -584,6 +587,7 @@ async function main(){
           rejected_15m:asset15.total_rejected,rejected_5m:asset5.total_rejected,
           samples:samples.length,
           temporal_sequences:samples.filter(row=>isValidTrainingSample(row)).length,
+          generation_audit:samples.generation_audit||null,
           output:samples
         });
       }catch(error){
@@ -595,6 +599,36 @@ async function main(){
 
     const sampleRows=symbolResults.flatMap(row=>Array.isArray(row.output)?row.output:[]);
     const audit=sampleAudit(sampleRows);
+    const generationAudits=symbolResults.map(row=>row.generation_audit).filter(Boolean);
+    const addCount=(target,source)=>{
+      for(const [key,value] of Object.entries(source||{}))
+        target[key]=(target[key]||0)+(Number(value)||0);
+    };
+    const temporalGeneration={
+      phase_anchors:0,selected_anchors:0,
+      skipped_incomplete_asset_15m_tensor_history:0,
+      tensor_rejection_counts:{},candidate_rejection_counts:{},
+      samples_emitted:0,rejected_samples:[]
+    };
+    for(const row of generationAudits){
+      temporalGeneration.phase_anchors+=Number(row.phase_anchors)||0;
+      temporalGeneration.selected_anchors+=Number(row.selected_anchors)||0;
+      temporalGeneration.skipped_incomplete_asset_15m_tensor_history+=
+        Number(row.skipped_incomplete_asset_15m_tensor_history)||0;
+      temporalGeneration.samples_emitted+=Number(row.samples_emitted)||0;
+      addCount(temporalGeneration.tensor_rejection_counts,row.tensor_rejection_counts);
+      addCount(temporalGeneration.candidate_rejection_counts,row.candidate_rejection_counts);
+      if(Array.isArray(row.rejected_samples))
+        temporalGeneration.rejected_samples.push(...row.rejected_samples);
+    }
+    const tensorFailureCount=Object.values(temporalGeneration.tensor_rejection_counts)
+      .reduce((sum,value)=>sum+(Number(value)||0),0)-
+      temporalGeneration.skipped_incomplete_asset_15m_tensor_history;
+    temporalGeneration.asset_warmup_rejection_ratio=temporalGeneration.phase_anchors
+      ?Number((temporalGeneration.skipped_incomplete_asset_15m_tensor_history/
+        temporalGeneration.phase_anchors).toFixed(6)):0;
+    temporalGeneration.selected_tensor_failure_ratio=temporalGeneration.selected_anchors
+      ?Number((Math.max(0,tensorFailureCount)/temporalGeneration.selected_anchors).toFixed(6)):0;
     const uniqueSamples=new Map();
     for(const row of sampleRows){
       const key=String(row?.id||'');
@@ -605,6 +639,10 @@ async function main(){
     const sequenceCount=samples.filter(row=>Array.isArray(row.temporal_sequence)&&
       row.temporal_sequence.length===24&&row.temporal_sequence.every(step=>
         Array.isArray(step)&&step.length===29&&step.every(Number.isFinite))).length;
+    const rejectionJsonl=temporalGeneration.rejected_samples.map(row=>JSON.stringify(row)).join('\\n')+
+      (temporalGeneration.rejected_samples.length?'\\n':'');
+    await mkdir(resolve(REJECTION_PATH,'..'),{recursive:true});
+    await writeFile(REJECTION_PATH,rejectionJsonl,'utf8');
     const archiveExpected=symbols.length*months.length*2;
     const archiveVerified=archiveManifest.filter(file=>file.status==='VERIFIED').length;
     const archiveMissing=archiveManifest.filter(file=>file.status==='MISSING').length;
@@ -627,6 +665,9 @@ async function main(){
     const qualityReady=symbolsWithSamples>=minSymbols&&samples.length>=minSamples&&
       sequenceCount>=minSequences&&audit.duplicate_ids===0&&
       audit.per_symbol_4h_spacing_violations===0&&audit.invalid_samples===0&&
+      temporalGeneration.asset_warmup_rejection_ratio<=0.20&&
+      temporalGeneration.selected_tensor_failure_ratio<=0.02&&
+      temporalGeneration.samples_emitted===samples.length&&
       archiveFailed===0&&archiveGapSymbols<=Math.max(2,Math.ceil(symbols.length*0.01))&&
       archiveCoverageAfterListing>=0.995&&symbolFailures.length===0;
     const samplesJsonl=writeSampleJsonl(samples);
@@ -766,6 +807,13 @@ async function main(){
       archive_coverage_required_after_listing:0.995,
       invalid_samples:audit.invalid_samples,duplicate_ids:audit.duplicate_ids,
       per_symbol_4h_spacing_violations:audit.per_symbol_4h_spacing_violations,
+      temporal_sequence_generation:{
+        ...temporalGeneration,
+        rejected_samples:undefined,
+        maximum_asset_warmup_rejection_ratio:0.20,
+        maximum_selected_tensor_failure_ratio:0.02,
+        rejection_ledger:REJECTION_PATH
+      },
       outcome_counts:audit.outcome_counts,sample_month_counts:audit.sample_month_counts,
       features_and_labels_audited:true,
       audit_rules:{
@@ -776,10 +824,21 @@ async function main(){
         no_overlapping_labels_per_symbol:true
       }
     };
-    baseReport.symbol_results=symbolResults.map(({output,...row})=>row);
+    baseReport.symbol_results=symbolResults.map(({output,generation_audit,...row})=>({
+      ...row,generation_audit:generation_audit?{
+        phase_anchors:generation_audit.phase_anchors,
+        selected_anchors:generation_audit.selected_anchors,
+        skipped_incomplete_asset_15m_tensor_history:generation_audit.skipped_incomplete_asset_15m_tensor_history,
+        tensor_rejection_counts:generation_audit.tensor_rejection_counts,
+        candidate_rejection_counts:generation_audit.candidate_rejection_counts,
+        samples_emitted:generation_audit.samples_emitted
+      }:null
+    }));
     baseReport.dataset={
       sample_file:sampleOutput,
       sample_file_sha256:sha256(samplesJsonl),
+      rejected_sample_ledger:REJECTION_PATH,
+      rejected_sample_ledger_sha256:sha256(rejectionJsonl),
       symbols_with_samples:symbolsWithSamples,
       sample_rows:samples.length,
       sequence_rows:sequenceCount,

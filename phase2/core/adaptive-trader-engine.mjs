@@ -161,13 +161,19 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 }
 
 
-function buildTemporalSequence(candles, btcCandles, fastCandles) {
+function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) {
+  const fail=(reason,stepIndex=null,at=null)=>({
+    sequence:null,rejection_reason:reason,step_index:stepIndex,at
+  });
   const steps=24;
+  if(!Array.isArray(candles)||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))
+    return fail('TEMPORAL_INPUT_ARRAY_INVALID');
   const start=candles.length-steps;
-  if(!Array.isArray(candles)||start<96||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))return null;
+  if(start<96)return fail('INSUFFICIENT_ASSET_TENSOR_CONTEXT');
   const history=candles.slice(start-24);
   if(history.length!==48||history.some((row,index)=>
-    index>0&&row.openTime-history[index-1].openTime!==15*60*1000))return null;
+    index>0&&row.openTime-history[index-1].openTime!==15*60*1000))
+    return fail('ASSET_RECENT_48_CANDLE_HISTORY_GAP');
   const btcByClose=new Map(btcCandles.map(row=>[Number(row.closeTime),row]));
   const btcIndexByClose=new Map(btcCandles.map((row,index)=>[Number(row.closeTime),index]));
   const fastByOpen=new Map(fastCandles.map(row=>[Number(row.openTime),row]));
@@ -268,18 +274,27 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const microTotalVolume=microAvailable?microCurrent.reduce((sum,row)=>sum+row.quoteVolume,0):null;
     const microBuyShare=microAvailable&&microTotalVolume>0?microBuyVolume/microTotalVolume:null;
     const microReturnPct=microAvailable?(microCurrent[2].close/microCurrent[0].open-1)*100:null;
-    if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
-       !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
-       !btcBaselineContiguous||!btcDayContiguous||!(btcRangeBase>0)||!(btcRangeNow>0)||
-       !(btcVolumeRatio>0)||!(btcTradeRatio>0)||
+    const stepIndex=index-start,stepAt=current.closeTime;
+    if(!btcCurrent||!btcPrevious||!(btcPrevious.close>0))
+      return fail('BTC_15M_CANDLE_ALIGNMENT_MISSING',stepIndex,stepAt);
+    if(!btcBaselineContiguous||!btcDayContiguous)
+      return fail('BTC_15M_HISTORY_GAP',stepIndex,stepAt);
+    if(!assetDayContiguous)
+      return fail('ASSET_96_CANDLE_CONTEXT_GAP',stepIndex,stepAt);
+    if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||!(buyShare>=0&&buyShare<=1))
+      return fail('ASSET_24_CANDLE_FEATURE_BASELINE_INVALID',stepIndex,stepAt);
+    if(!(btcRangeBase>0)||!(btcRangeNow>0)||!(btcVolumeRatio>0)||!(btcTradeRatio>0)||
        !Number.isFinite(btcReturn4h)||!Number.isFinite(btcReturn24h)||
-       !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh)||
-       !assetDayContiguous||!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
+       !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh))
+      return fail('BTC_FEATURE_CONTEXT_INVALID',stepIndex,stepAt);
+    if(!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
        !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
-       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0)||
-       (microAvailable&&(!(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
-        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||!(microBuyShare>=0&&microBuyShare<=1)||
-        !(microCurrentVolume>0)||!(microCurrentTrades>0)||!(microCurrentRange>0))))return null;
+       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0))
+      return fail('ASSET_DAILY_FEATURE_CONTEXT_INVALID',stepIndex,stepAt);
+    if(microAvailable&&(!(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
+       !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||!(microBuyShare>=0&&microBuyShare<=1)||
+       !(microCurrentVolume>0)||!(microCurrentTrades>0)||!(microCurrentRange>0)))
+      return fail('MICRO_5M_FEATURE_CONTEXT_INVALID',stepIndex,stepAt);
     const assetReturn=(current.close/previous.close-1)*100;
     const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
     const relativeReturn=assetReturn-btcReturn;
@@ -314,10 +329,17 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
       clamp(Math.log2(clamp(current.trades/assetDayTradesBase,0.05,20))/2,-2,2),
       microAvailable?1:0
     ];
-    if (!values.every(Number.isFinite)) return null;
+    if (!values.every(Number.isFinite))
+      return fail('NON_FINITE_TENSOR_CHANNEL',index-start,current.closeTime);
     sequence.push(values);
   }
-  return sequence.length === steps ? sequence : null;
+  if(sequence.length!==steps)
+    return fail('TEMPORAL_SEQUENCE_LENGTH_MISMATCH',sequence.length,null);
+  return {sequence,rejection_reason:null,step_index:null,at:null};
+}
+
+function buildTemporalSequence(candles,btcCandles,fastCandles) {
+  return buildTemporalSequenceWithDiagnostics(candles,btcCandles,fastCandles).sequence;
 }
 
 function firstPassageLabel(baseline, future15m) {
@@ -478,7 +500,8 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcContiguous = btcRecent.length===5 && btcRecent.every((candle,index)=>index===0||candle.openTime-btcRecent[index-1].openTime===15*60*1000);
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
-  const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
+  const temporalDiagnostics=buildTemporalSequenceWithDiagnostics(candles,btcCandles,fastCandles);
+  const temporalSequence=temporalDiagnostics.sequence;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -547,6 +570,10 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    temporal_sequence_status:temporalSequence?'READY':'UNAVAILABLE',
+    temporal_sequence_failure_reason:temporalDiagnostics.rejection_reason,
+    temporal_sequence_failure_step:temporalDiagnostics.step_index,
+    temporal_sequence_failure_at:temporalDiagnostics.at,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -623,6 +650,21 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     .sort((a,b)=>a.candle.closeTime-b.candle.closeTime);
   const btcByClose=new Map(btcCandles.map(item=>[item.candle.closeTime,item.candle]));
   const horizonBars=16,dayBars=96;
+  const generationAudit={
+    phase_anchors:0,selected_anchors:0,
+    skipped_incomplete_asset_15m_tensor_history:0,
+    tensor_rejection_counts:{},candidate_rejection_counts:{},
+    rejected_samples:[],samples_emitted:0
+  };
+  const recordRejection=(bucket,reason,details={})=>{
+    const key=String(reason||'UNKNOWN_REJECTION');
+    const counts=bucket==='tensor'?generationAudit.tensor_rejection_counts:
+      generationAudit.candidate_rejection_counts;
+    counts[key]=(counts[key]||0)+1;
+    generationAudit.rejected_samples.push({
+      symbol:cleanSymbol,reason:key,...details
+    });
+  };
   const possible=[];
   // A 24-step tensor needs 96 day-context candles before its first step, then 24 model steps.
   for(let index=Math.max(dayBars,119);index+horizonBars<candles.length;index++){
@@ -636,8 +678,15 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     if(!(volume24h>=minQuoteVolume24h))continue;
     const dailyReturn=pct(baseline.close,candles[index-dayBars].candle.close);
     if(dailyReturn===null)continue;
+    // A 24x29 tensor contains 24 steps, each requiring 96 prior closed
+    // candles. Its earliest step therefore needs the full 120-candle
+    // history ending at this baseline, not merely the 96 bars used by the
+    // tabular candidate snapshot. Audit this before candidate selection.
+    const tensorHistory=candles.slice(index-119,index+1);
+    const tensorWarmupReady=tensorHistory.length===120&&tensorHistory.every((item,offset)=>
+      offset===0||item.candle.openTime-tensorHistory[offset-1].candle.openTime===15*60*1000);
     const absolute15mBar=Math.floor((baseline.closeTime+1)/(15*60*1000));
-    possible.push({index,absolute15mBar,volume24h,dailyReturn,baseline,future});
+    possible.push({index,absolute15mBar,volume24h,dailyReturn,baseline,future,tensorWarmupReady});
   }
   const desired=Math.max(1,Math.min(118,Math.trunc(Number(maxSamples)||48)));
   // Anchor each symbol to a stable phase on the absolute 4h time grid. Using
@@ -651,24 +700,36 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
   }
   const samplingPhase=phaseHash%horizonBars;
   const phaseRows=possible.filter(item=>item.absolute15mBar%horizonBars===samplingPhase);
-  const selectedCount=Math.min(desired,phaseRows.length);
+  generationAudit.phase_anchors=phaseRows.length;
+  for(const item of phaseRows){
+    if(item.tensorWarmupReady!==true){
+      generationAudit.skipped_incomplete_asset_15m_tensor_history++;
+      recordRejection('tensor','ASSET_15M_TENSOR_WARMUP_GAP',{
+        id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(item.baseline.closeTime),
+        at:item.baseline.closeTime,baseline_index:item.index
+      });
+    }
+  }
+  const tensorReadyPhaseRows=phaseRows.filter(item=>item.tensorWarmupReady===true);
+  const selectedCount=Math.min(desired,tensorReadyPhaseRows.length);
+  generationAudit.selected_anchors=selectedCount;
   const selected=[];
   if(selectedCount>0&&selectedCount<=64){
     // Preserve the original 64-row schedule for stable IDs when the quota grows.
-    if(selectedCount===1)selected.push(phaseRows.at(-1));
+    if(selectedCount===1)selected.push(tensorReadyPhaseRows.at(-1));
     else for(let slot=0;slot<selectedCount;slot++){
-      const index=Math.round(slot*(phaseRows.length-1)/(selectedCount-1));
-      selected.push(phaseRows[index]);
+      const index=Math.round(slot*(tensorReadyPhaseRows.length-1)/(selectedCount-1));
+      selected.push(tensorReadyPhaseRows[index]);
     }
   }else if(selectedCount>64){
-    const legacyCount=Math.min(64,phaseRows.length);
+    const legacyCount=Math.min(64,tensorReadyPhaseRows.length);
     const legacyIndexes=new Set();
     for(let slot=0;slot<legacyCount;slot++){
-      const index=legacyCount===1?phaseRows.length-1:
-        Math.round(slot*(phaseRows.length-1)/(legacyCount-1));
+      const index=legacyCount===1?tensorReadyPhaseRows.length-1:
+        Math.round(slot*(tensorReadyPhaseRows.length-1)/(legacyCount-1));
       legacyIndexes.add(index);
     }
-    const remainingIndexes=phaseRows.map((_,index)=>index)
+    const remainingIndexes=tensorReadyPhaseRows.map((_,index)=>index)
       .filter(index=>!legacyIndexes.has(index));
     const extraCount=Math.max(0,selectedCount-legacyIndexes.size);
     const extraIndexes=[];
@@ -679,7 +740,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       }
     }
     for(const index of [...legacyIndexes,...extraIndexes].filter(Number.isInteger).sort((a,b)=>a-b))
-      selected.push(phaseRows[index]);
+      selected.push(tensorReadyPhaseRows[index]);
   }
   const out=[];
   // Selected anchors are chronological. Advance each reference-series cursor
@@ -718,10 +779,33 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       btcKlines:{data:baseBtcRaw,source:btcKlines?.source||'BINANCE_PUBLIC_REST',receivedAt:evaluationNow},
       now:evaluationNow,minQuoteVolume24h
     });
-    if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0))continue;
+    if(candidate.data_valid!==true||candidate.data_stale===true||!Number.isFinite(future.close)||!(baseline.close>0)){
+      recordRejection('candidate','HISTORICAL_CANDIDATE_DATA_INVALID',{
+        id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
+        at:baseline.closeTime,reason_codes:candidate.reason_codes||[]
+      });
+      continue;
+    }
+    const tensor=candidate.temporal_sequence;
+    const tensorValid=Array.isArray(tensor)&&tensor.length===24&&
+      tensor.every(step=>Array.isArray(step)&&step.length===29&&step.every(Number.isFinite));
+    if(!tensorValid){
+      recordRejection('tensor',candidate.temporal_sequence_failure_reason||'TEMPORAL_SEQUENCE_SHAPE_INVALID',{
+        id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
+        at:baseline.closeTime,step_index:candidate.temporal_sequence_failure_step??null,
+        failure_at:candidate.temporal_sequence_failure_at??null
+      });
+      continue;
+    }
     const move=(future.close/baseline.close-1)*100;
     const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
-    if(!passage)continue;
+    if(!passage){
+      recordRejection('candidate','FIRST_PASSAGE_LABEL_UNAVAILABLE',{
+        id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
+        at:baseline.closeTime
+      });
+      continue;
+    }
     const outcome=passage.outcome;
     const features={
       ...(candidate.features||{}),
@@ -746,6 +830,10 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       resolved_at:future.closeTime,horizon_ms:future.closeTime-baseline.closeTime
     });
   }
+  generationAudit.samples_emitted=out.length;
+  Object.defineProperty(out,'generation_audit',{
+    value:generationAudit,enumerable:false,configurable:false,writable:false
+  });
   return out;
 }
 
