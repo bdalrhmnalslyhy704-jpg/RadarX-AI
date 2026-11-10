@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
 
 test('ranking metrics preserve misses and score coverage while excluding FLAT only from AUC pairs',()=>{
   const rows=[
@@ -62,4 +62,17 @@ test('top-k ranking denominators match the cognitive model directional universe,
   assert.equal(metric.top_10_pct.selected_count,1,
     '10% of 10 directional outcomes is one, not 10% of 11 including FLAT');
   assert.equal(metric.top_20_pct.selected_count,2);
+});
+
+test('JSONL audit serialization writes one valid JSON record per actual line',()=>{
+  const rows=[
+    {symbol:'AAAUSDT',reason:'BTC_15M_HISTORY_GAP',at:1},
+    {symbol:'BBBUSDT',reason:'ASSET_96_CANDLE_CONTEXT_GAP',at:2}
+  ];
+  const serialized=serializeJsonlRows(rows);
+  const lines=serialized.trimEnd().split(String.fromCharCode(10));
+  assert.equal(lines.length,rows.length);
+  assert.deepEqual(lines.map(line=>JSON.parse(line)),rows);
+  assert.ok(serialized.endsWith(String.fromCharCode(10)));
+  assert.equal(serializeJsonlRows([]),'');
 });

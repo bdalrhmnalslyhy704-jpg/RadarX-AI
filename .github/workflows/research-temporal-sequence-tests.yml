@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/historical-sequence-context-audit-20261110
+      - research/historical-sequence-ledger-format-20261110
     paths:
       - 'phase2/core/adaptive-trader-engine.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'

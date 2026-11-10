@@ -105,3 +105,18 @@ export function evaluateExistingEngineBaselines(rows){
     )
   };
 }
+
+/**
+ * Serialize structured audit rows as valid JSON Lines. A literal "\\n" is
+ * not a line break; use the newline character so each record can be parsed
+ * independently by downstream audit tooling.
+ */
+export function serializeJsonlRows(rows) {
+  const values=Array.isArray(rows)?rows:[];
+  if(values.length===0)return '';
+  return values.map(row=>{
+    const encoded=JSON.stringify(row);
+    if(typeof encoded!=='string')throw new Error('JSONL_ROW_NOT_SERIALIZABLE');
+    return encoded;
+  }).join(String.fromCharCode(10))+String.fromCharCode(10);
+}

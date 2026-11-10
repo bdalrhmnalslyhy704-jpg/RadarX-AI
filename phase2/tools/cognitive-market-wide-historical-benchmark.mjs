@@ -23,7 +23,7 @@ import {
   buildCognitiveLearningProfile
 } from '../core/cognitive-brain.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
-import {evaluateExistingEngineBaselines} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateExistingEngineBaselines,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
 
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
@@ -639,8 +639,7 @@ async function main(){
     const sequenceCount=samples.filter(row=>Array.isArray(row.temporal_sequence)&&
       row.temporal_sequence.length===24&&row.temporal_sequence.every(step=>
         Array.isArray(step)&&step.length===29&&step.every(Number.isFinite))).length;
-    const rejectionJsonl=temporalGeneration.rejected_samples.map(row=>JSON.stringify(row)).join('\\n')+
-      (temporalGeneration.rejected_samples.length?'\\n':'');
+    const rejectionJsonl=serializeJsonlRows(temporalGeneration.rejected_samples);
     await mkdir(resolve(REJECTION_PATH,'..'),{recursive:true});
     await writeFile(REJECTION_PATH,rejectionJsonl,'utf8');
     const archiveExpected=symbols.length*months.length*2;
