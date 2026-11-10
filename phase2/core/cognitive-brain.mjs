@@ -1737,7 +1737,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     validation: selectedValidation,
     holdout: holdoutMetrics,
     neural_network: {
-      status: !neuralFit ? (neuralSelection.length<neuralSelectionMinimum
+      status: !neuralFit ? (!neuralSelectionSupportReady
           ?'WAITING_FOR_SELECTION_SUPPORT':'WAITING_FOR_MATURED_TRAINING_SAMPLES') :
         neuralFit.selected_member_index<0 ? 'TRAINED_NOT_SELECTED_ON_INNER_SELECTION' :
         neuralLiveReady ? 'LIVE_GATE_PASSED_OUT_OF_SAMPLE' :
