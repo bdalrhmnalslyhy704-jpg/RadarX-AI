@@ -1,4 +1,4 @@
-name: Build 224 Cognitive Market-Wide Historical Binance Benchmark
+name: Build 224 Cognitive Historical Benchmark — 80-Symbol Split Smoke
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - research/tcn-micro-mask-fallback-20261110
       - research/tcn-micro-coverage-diagnostics-20261110
       - research/cognitive-training-capacity-forward-holdout-20261110
+      - research/cognitive-split-contract-smoke-20261110
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'
@@ -77,13 +78,13 @@ jobs:
         run: |
           node --test --test-timeout=60000 phase2/tests/binance-spot-kline-archive.test.mjs
           node --test --test-timeout=60000 phase2/tests/cognitive-benchmark-metrics.test.mjs
-      - name: Replay verified monthly and daily Spot archives with expanded training and a fresh forward holdout
+      - name: Replay verified monthly and daily Spot archives for 80-symbol split smoke test
         id: benchmark
         run: |
           node phase2/tools/cognitive-market-wide-historical-benchmark.mjs \
             --start '${{ github.event.inputs.start || '2025-11-01' }}' \
             --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-10' }}' \
-            --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
+            --max-symbols '80' \
             --concurrency 6 \
             --min-symbols 80 \
             --min-samples 6000 \

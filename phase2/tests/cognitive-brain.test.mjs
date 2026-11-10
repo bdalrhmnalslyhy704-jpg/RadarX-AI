@@ -823,3 +823,67 @@ test('V5 prequential audit treats FLAT as a non-UP outcome',()=>{
   assert.equal(audit.recent_window.brier_score,0.01);
   assert.equal(audit.previous_window.brier_score,0.01);
 });
+
+
+test('shared forward split keeps V5 and TCN on identical rows and purges labels at both boundaries',()=>{
+  const rows=[];
+  const groups=50,perGroup=40;
+  const stepMs=8*60*60*1000;
+  const holdoutStart=BASE_TIME+40*stepMs;
+  const validationStart=BASE_TIME+30*stepMs;
+  for(let group=0;group<groups;group++){
+    for(let index=0;index<perGroup;index++){
+      const id='SHARED-SPLIT-'+group+'-'+index;
+      const outcome=index%4===0?'UP':index%4===1?'DOWN':'FLAT';
+      const at=BASE_TIME+group*stepMs;
+      const template=sample(group*perGroup+index,outcome);
+      const sequence=Array.from({length:24},()=>{
+        const values=Array(29).fill(0);
+        values[0]=(index%7)/7;
+        values[8]=index%3===0?0.4:0;
+        values[19]=-0.75;
+        values[28]=1;
+        return values;
+      });
+      rows.push({
+        ...template,id,
+        symbol:'CONTRACT'+String(index).padStart(3,'0')+'USDT',
+        at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+        outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+        training_eligible:true,closed_candle_baseline:true,historical_baseline:true,
+        target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+        first_passage:{outcome,path_resolution:'15M'},
+        temporal_sequence:sequence
+      });
+    }
+  }
+  const profile=buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:60,minimumValidationSamples:100,minimumHoldoutSamples:150,
+    minNeuralTrainingSamples:1000,maxNeuralTrainingSamples:800,
+    allowedOutcomeSources:['HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'],
+    iterations:10,neuralIterations:1,temporalSamples:rows,
+    temporalOptions:{
+      minTrainingSamples:160,maxTrainingSamples:800,
+      minimumValidationSamples:100,minimumHoldoutSamples:150,
+      liveHoldoutSamples:150,epochs:1,
+      outerValidationStartAt:validationStart,outerHoldoutStartAt:holdoutStart
+    }
+  });
+  const contract=profile.comparison_contract;
+  const temporal=profile.temporal_network;
+  assert.equal(contract.sample_identity_matches,true);
+  assert.equal(contract.shared_outer_split_applied,true);
+  assert.equal(contract.validation_start_at,validationStart);
+  assert.equal(contract.holdout_start_at,holdoutStart);
+  assert.equal(contract.validation_sample_count_matches,true);
+  assert.equal(contract.holdout_sample_count_matches,true);
+  assert.equal(contract.validation_samples,temporal.outer_validation_samples);
+  assert.equal(contract.holdout_samples,temporal.outer_holdout_samples);
+  assert.ok(profile.max_training_outcome_resolved_at<validationStart);
+  assert.ok(temporal.max_training_outcome_resolved_at<validationStart);
+  assert.ok(validationStart<holdoutStart);
+  assert.ok(contract.validation_samples>=100);
+  assert.ok(contract.holdout_samples>=150);
+  assert.equal(profile.validation_start_at,temporal.validation_start_at);
+  assert.equal(profile.holdout_start_at,temporal.holdout_start_at);
+});
