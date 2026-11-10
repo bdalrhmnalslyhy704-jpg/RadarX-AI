@@ -6,6 +6,7 @@ import {
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
+  buildCognitiveLearningProfile,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
 } from '../core/cognitive-brain.mjs';
@@ -159,4 +160,56 @@ test('neural inner selection requires enough total rows and both binary classes'
   assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:9,negativeCount:291,minimumSamples:300,minimumPositive:10,minimumNegative:30}),false);
   assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:10,negativeCount:290,minimumSamples:300,minimumPositive:10,minimumNegative:30}),true);
   assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:10,negativeCount:289,minimumSamples:300,minimumPositive:10,minimumNegative:30}),false);
+});
+
+
+test('daily profile reaches the decoupled selection gate without temporal-declaration-order errors',()=>{
+  const horizon=24*60*60*1000;
+  const samples=[];
+  for(let day=0;day<150;day++){
+    for(let symbolIndex=0;symbolIndex<5;symbolIndex++){
+      const at=1_760_000_000_000+day*horizon;
+      const symbol='T'+symbolIndex+'USDT';
+      const positive=(day*7+symbolIndex*3)%11===0;
+      samples.push({
+        id:'UNIT_TEST:'+symbol+':'+String(at),
+        symbol,at,resolved_at:at+horizon,horizon_ms:horizon,
+        outcome:positive?'UP':'DOWN',
+        outcome_source:'UNIT_TEST_DAILY',
+        training_eligible:true,closed_candle_baseline:true,
+        features:{
+          volume_ratio:1.4+(day%5)*0.1,trade_ratio:1.2,
+          taker_buy_ratio:positive?0.61:0.49,
+          relative_strength_vs_btc_pct:positive?0.8:-0.2,
+          recent_15m_return_pct:positive?0.4:-0.3,
+          current_range_pct:1.2,close_location:0.7,
+          upper_wick_pct:0.1,higher_low:positive,
+          breakout_above_prior_high:false,compression_ratio:0.7,
+          micro_5m_available:false
+        }
+      });
+    }
+  }
+  const profile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,
+    minimumValidationSamples:30,
+    minimumHoldoutSamples:30,
+    validationFraction:0.2,
+    holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,
+    allowedOutcomeSources:['UNIT_TEST_DAILY'],
+    minNeuralTrainingSamples:900,
+    maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,
+    minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,
+    temporalSamples:[],
+    neuralIterations:20
+  });
+  assert.equal(profile.neural_network.required_selection_samples,40);
+  assert.equal(profile.neural_network.required_selection_positive_samples,2);
+  assert.equal(profile.neural_network.required_selection_negative_samples,8);
+  assert.equal(profile.neural_network.selection_support_ready,true);
+  assert.equal(profile.neural_network.trained,false);
+  assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
 });
