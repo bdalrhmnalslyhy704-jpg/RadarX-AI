@@ -148,6 +148,7 @@ async function main(){
     temporal_input_file:temporalInput,
     census_report_file:censusReportPath,
     temporal_sidecar_audit:null,
+    main_sample_file_audit:null,
     target_results:{},
     methodology:{
       labels:'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
@@ -174,6 +175,15 @@ async function main(){
     const censusReport=JSON.parse(await readFile(censusReportPath,'utf8'));
     if(censusReport?.status!=='AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'&&
       censusReport?.status!=='READY')throw new Error('CENSUS_REPORT_NOT_AUDITED');
+    const expectedSamples=censusReport?.sample_file;
+    if(!expectedSamples||!Number.isInteger(Number(expectedSamples.rows))||Number(expectedSamples.rows)<1||
+      typeof expectedSamples.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedSamples.sha256)||
+      report.input_sha256.toLowerCase()!==expectedSamples.sha256.toLowerCase())
+      throw new Error('MAIN_SAMPLE_FILE_SHA256_OR_METADATA_MISMATCH');
+    report.main_sample_file_audit={
+      rows:Number(expectedSamples.rows),sha256:report.input_sha256,
+      verified_against_census_report:true
+    };
     const expectedTemporal=censusReport?.temporal_sample_file;
     if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1)
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
@@ -185,6 +195,8 @@ async function main(){
     };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
+      if(loaded.lines_read!==Number(expectedSamples.rows))
+        throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_MISMATCH:'+target);
       if(loaded.temporal_identity_mismatch!==0)
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
