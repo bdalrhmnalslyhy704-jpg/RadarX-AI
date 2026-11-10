@@ -162,13 +162,14 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 
 
 function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) {
-  const microDowngradeCounts={};
+  const microDowngradeCounts={},microUnavailableReasonCounts={};
   let microDowngradedSteps=0,microAvailableSteps=0,microUnavailableSteps=0;
   const diagnosticSummary=()=>({
     micro_downgraded_steps:microDowngradedSteps,
     micro_available_steps:microAvailableSteps,
     micro_unavailable_steps:microUnavailableSteps,
-    micro_downgrade_counts:{...microDowngradeCounts}
+    micro_downgrade_counts:{...microDowngradeCounts},
+    micro_unavailable_reason_counts:{...microUnavailableReasonCounts}
   });
   const fail=(reason,stepIndex=null,at=null)=>({
     sequence:null,rejection_reason:reason,step_index:stepIndex,at,
@@ -250,24 +251,37 @@ function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) 
     // never interpreted without the final mask channel.
     const microBase=[];
     const microCurrent=[];
-    let microAvailable=true;
+    let microAvailable=true,microUnavailableReason=null;
     for(let offset=24;offset>=1;offset--){
       const row=fastByOpen.get(Number(current.openTime)-offset*microStep);
-      if(!row){microAvailable=false;break;}
+      if(!row){
+        microAvailable=false;
+        microUnavailableReason='MICRO_5M_BASELINE_ROW_MISSING';
+        break;
+      }
       microBase.push(row);
     }
     if(microAvailable){
       for(let offset=0;offset<3;offset++){
         const row=fastByOpen.get(Number(current.openTime)+offset*microStep);
-        if(!row){microAvailable=false;break;}
+        if(!row){
+          microAvailable=false;
+          microUnavailableReason='MICRO_5M_CURRENT_ROW_MISSING';
+          break;
+        }
         microCurrent.push(row);
       }
     }
     if(microAvailable){
       const contiguousMicro=[...microBase,...microCurrent].every((row,slot,rows)=>
         slot===0||row.openTime-rows[slot-1].openTime===microStep);
-      microAvailable=contiguousMicro&&microCurrent.length===3&&
-        microCurrent[2].closeTime===current.closeTime;
+      if(!contiguousMicro){
+        microAvailable=false;
+        microUnavailableReason='MICRO_5M_WINDOW_NOT_CONTIGUOUS';
+      }else if(microCurrent.length!==3||microCurrent[2].closeTime!==current.closeTime){
+        microAvailable=false;
+        microUnavailableReason='MICRO_5M_15M_CLOSE_MISMATCH';
+      }
     }
     if(!microAvailable){microBase.length=0;microCurrent.length=0;}
     const microBaseVolume=microAvailable?mean(microBase.map(row=>row.quoteVolume)):null;
@@ -318,6 +332,7 @@ function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) 
         // not grounds to discard the valid 15m + BTC tensor. Clear every micro
         // channel and set channel 29 (index 28) to zero for this step only.
         microDowngradedSteps++;
+        microUnavailableReason='MICRO_5M_FEATURE_CONTEXT_INVALID';
         for(const reason of microInvalidReasons)
           microDowngradeCounts[reason]=(microDowngradeCounts[reason]||0)+1;
         microAvailable=false;
@@ -326,7 +341,11 @@ function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) 
       }
     }
     if(microAvailable)microAvailableSteps++;
-    else microUnavailableSteps++;
+    else{
+      microUnavailableSteps++;
+      const reason=microUnavailableReason||'MICRO_5M_UNAVAILABLE_REASON_UNKNOWN';
+      microUnavailableReasonCounts[reason]=(microUnavailableReasonCounts[reason]||0)+1;
+    }
     const assetReturn=(current.close/previous.close-1)*100;
     const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
     const relativeReturn=assetReturn-btcReturn;
@@ -613,6 +632,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     temporal_sequence_micro_available_steps:temporalDiagnostics.micro_available_steps||0,
     temporal_sequence_micro_unavailable_steps:temporalDiagnostics.micro_unavailable_steps||0,
     temporal_sequence_micro_downgrade_counts:temporalDiagnostics.micro_downgrade_counts||{},
+    temporal_sequence_micro_unavailable_reason_counts:temporalDiagnostics.micro_unavailable_reason_counts||{},
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -694,7 +714,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     skipped_incomplete_asset_15m_tensor_history:0,
     tensor_rejection_counts:{},candidate_rejection_counts:{},
     micro_downgraded_steps:0,micro_available_steps:0,micro_unavailable_steps:0,
-    micro_downgrade_counts:{},
+    micro_downgrade_counts:{},micro_unavailable_reason_counts:{},
     rejected_samples:[],samples_emitted:0
   };
   const recordRejection=(bucket,reason,details={})=>{
@@ -844,6 +864,9 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     for(const [reason,count] of Object.entries(candidate.temporal_sequence_micro_downgrade_counts||{}))
       generationAudit.micro_downgrade_counts[reason]=
         (generationAudit.micro_downgrade_counts[reason]||0)+(Number(count)||0);
+    for(const [reason,count] of Object.entries(candidate.temporal_sequence_micro_unavailable_reason_counts||{}))
+      generationAudit.micro_unavailable_reason_counts[reason]=
+        (generationAudit.micro_unavailable_reason_counts[reason]||0)+(Number(count)||0);
     const move=(future.close/baseline.close-1)*100;
     const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
     if(!passage){

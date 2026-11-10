@@ -6,6 +6,7 @@ on:
       - verify/cognitive-hybrid-nested-calibration-20261109
       - research/historical-sequence-context-audit-20261110
       - research/tcn-micro-mask-fallback-20261110
+      - research/tcn-micro-coverage-diagnostics-20261110
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'

@@ -300,6 +300,26 @@ test('unusable but aligned 5m microstructure is masked per step without discardi
   assert.equal(audited.generation_audit.tensor_rejection_counts.MICRO_5M_FEATURE_CONTEXT_INVALID,undefined);
 });
 
+test('missing 5m history is masked but separately audited from invalid zero-trade microstructure',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
+  const btcKlines=longClosedCandleFixture(now,480,15*60*1000,90_000,0.00002);
+  const samples=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'MICROMISSINGUSDT',klines,fastKlines:{data:[],source:'BINANCE_PUBLIC_REST'},
+    btcKlines,now,maxSamples:8
+  });
+  assert.equal(samples.length,8,'missing optional 5m archive must not remove valid 15m samples');
+  assert.ok(samples.every(row=>row.temporal_sequence.length===24));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.slice(8,14).every(value=>value===0))));
+  assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step[28]===0)));
+  assert.ok(samples.every(row=>
+    row.temporal_sequence_micro_unavailable_reason_counts.MICRO_5M_BASELINE_ROW_MISSING===24));
+  assert.equal(samples[0].temporal_sequence_micro_downgrade_counts.MICRO_5M_CURRENT_VOLUME_NONPOSITIVE,undefined);
+  assert.equal(samples[0].temporal_sequence_micro_unavailable_reason_counts.MICRO_5M_FEATURE_CONTEXT_INVALID,undefined);
+  assert.equal(samples.generation_audit.micro_unavailable_reason_counts.MICRO_5M_BASELINE_ROW_MISSING,
+    samples.length*24);
+});
+
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);

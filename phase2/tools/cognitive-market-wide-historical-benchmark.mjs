@@ -609,7 +609,7 @@ async function main(){
       skipped_incomplete_asset_15m_tensor_history:0,
       tensor_rejection_counts:{},candidate_rejection_counts:{},
       micro_downgraded_steps:0,micro_available_steps:0,micro_unavailable_steps:0,
-      micro_downgrade_counts:{},
+      micro_downgrade_counts:{},micro_unavailable_reason_counts:{},
       samples_emitted:0,rejected_samples:[]
     };
     for(const row of generationAudits){
@@ -624,6 +624,7 @@ async function main(){
       addCount(temporalGeneration.tensor_rejection_counts,row.tensor_rejection_counts);
       addCount(temporalGeneration.candidate_rejection_counts,row.candidate_rejection_counts);
       addCount(temporalGeneration.micro_downgrade_counts,row.micro_downgrade_counts);
+      addCount(temporalGeneration.micro_unavailable_reason_counts,row.micro_unavailable_reason_counts);
       if(Array.isArray(row.rejected_samples))
         temporalGeneration.rejected_samples.push(...row.rejected_samples);
     }
@@ -829,7 +830,8 @@ async function main(){
         micro_available_step_ratio:temporalGeneration.micro_available_step_ratio,
         micro_downgrade_step_ratio:temporalGeneration.micro_downgrade_step_ratio,
         micro_downgrade_reason_counts:temporalGeneration.micro_downgrade_counts,
-        micro_evidence_policy:'OPTIONAL_5M_MASKED_PER_STEP_WHEN_FEATURES_UNUSABLE',
+        micro_unavailable_reason_counts:temporalGeneration.micro_unavailable_reason_counts,
+        micro_evidence_policy:'OPTIONAL_5M_MASKED_PER_STEP_WITH_STRUCTURAL_AND_FEATURE_REASON_AUDIT',
         rejection_ledger:REJECTION_PATH
       },
       outcome_counts:audit.outcome_counts,sample_month_counts:audit.sample_month_counts,
@@ -853,6 +855,7 @@ async function main(){
         micro_available_steps:generation_audit.micro_available_steps,
         micro_unavailable_steps:generation_audit.micro_unavailable_steps,
         micro_downgrade_counts:generation_audit.micro_downgrade_counts,
+        micro_unavailable_reason_counts:generation_audit.micro_unavailable_reason_counts,
         samples_emitted:generation_audit.samples_emitted
       }:null
     }));
