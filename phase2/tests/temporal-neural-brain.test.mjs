@@ -669,3 +669,40 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
 });
+
+test('predeclared forward holdout boundaries override adaptive sizing and remain purged',()=>{
+  const rows=[];
+  const groups=50,perGroup=30;
+  for(let group=0;group<groups;group++){
+    for(let index=0;index<perGroup;index++){
+      const row=sample(group,index,{up:index<9});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=-0.75;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const validationBoundary=BASE_TIME+35*EIGHT_HOURS;
+  const holdoutBoundary=BASE_TIME+43*EIGHT_HOURS;
+  const profile=buildTemporalNeuralProfile(rows,{
+    minTrainingSamples:160,maxTrainingSamples:800,
+    minimumValidationSamples:100,minimumHoldoutSamples:150,
+    liveHoldoutSamples:150,epochs:1,
+    outerValidationStartAt:validationBoundary,
+    outerHoldoutStartAt:holdoutBoundary
+  });
+  assert.equal(profile.outer_validation_start_at,validationBoundary);
+  assert.equal(profile.outer_holdout_start_at,holdoutBoundary);
+  assert.equal(profile.validation_start_at,validationBoundary);
+  assert.equal(profile.holdout_start_at,holdoutBoundary);
+  assert.equal(profile.fit_window_samples,800);
+  assert.ok(profile.shared_model_training_samples>=300);
+  assert.ok(profile.shared_model_selection_samples>=80);
+  assert.ok(profile.shared_model_calibration_samples>=100);
+  assert.ok(profile.max_training_outcome_resolved_at<profile.outer_validation_start_at);
+  assert.ok(profile.outer_validation_start_at<profile.outer_holdout_start_at);
+  assert.ok(profile.outer_validation_samples>=100);
+  assert.ok(profile.outer_holdout_samples>=150);
+});

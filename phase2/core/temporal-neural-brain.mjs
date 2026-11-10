@@ -21,7 +21,7 @@ const HORIZON_MS = 4 * 60 * 60 * 1000;
 const SEEDS = Object.freeze([13, 29, 47]);
 const RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
 const MIN_TRAIN = 160;
-const MAX_TRAIN = 1280;
+const MAX_TRAIN = 4096;
 const MIN_VALIDATION = 24;
 const MIN_HOLDOUT = 40;
 const LIVE_HOLDOUT = 150;
@@ -789,7 +789,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   minTrainingSamples=MIN_TRAIN,maxTrainingSamples=MAX_TRAIN,
   minimumValidationSamples=MIN_VALIDATION,minimumHoldoutSamples=MIN_HOLDOUT,
   liveHoldoutSamples=LIVE_HOLDOUT,epochs=10,
-  learningRate=0.006,l2=0.012,comparisonMargin=0.003
+  learningRate=0.006,l2=0.012,comparisonMargin=0.003,
+  outerValidationStartAt=null,outerHoldoutStartAt=null
 }={}){
   const rows=cleanRows(samples);
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
@@ -834,7 +835,22 @@ export function buildTemporalNeuralProfile(samples = [], {
     :rows.length>=liveHoldoutSamples*4
       ?Math.max(liveHoldoutSamples+30,Math.ceil(rows.length*0.20))
       :minimumHoldoutSamples;
-  const holdoutCount=countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
+  // A predeclared forward holdout supersedes the adaptive sizing rule. Align
+  // each requested date to the first observed decision timestamp at/after it.
+  // If either boundary is missing, reversed or leaves no training rows, fail closed.
+  const requestedValidationAt=finite(outerValidationStartAt);
+  const requestedHoldoutAt=finite(outerHoldoutStartAt);
+  const forcedOuterSplitRequested=requestedValidationAt!==null||requestedHoldoutAt!==null;
+  const forcedValidationIndex=requestedValidationAt===null?-1:
+    uniqueTimes.findIndex(at=>at>=requestedValidationAt);
+  const forcedHoldoutIndex=requestedHoldoutAt===null?-1:
+    uniqueTimes.findIndex(at=>at>=requestedHoldoutAt);
+  const forcedOuterSplitValid=requestedValidationAt!==null&&requestedHoldoutAt!==null&&
+    requestedValidationAt<requestedHoldoutAt&&forcedValidationIndex>0&&
+    forcedHoldoutIndex>forcedValidationIndex&&forcedHoldoutIndex<uniqueTimes.length;
+  const holdoutCount=forcedOuterSplitValid
+    ?uniqueTimes.length-forcedHoldoutIndex
+    :countTrailingGroups(uniqueTimes.length,holdoutTargetSamples,0);
   // Mature histories use a wider inner validation block because the
   // first-passage positive class can be sparse and regime-skewed. This widens
   // sample support without touching the final holdout or reducing its floor.
@@ -843,10 +859,16 @@ export function buildTemporalNeuralProfile(samples = [], {
     :rows.length>=liveHoldoutSamples*5
       ?Math.ceil(liveHoldoutSamples*4/3)
       :Math.max(minimumValidationSamples*2,60);
-  const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
-    validationTargetSamples,2*HORIZON_MS+1);
-  const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
-  const enoughSplit=trainingEndIndex>0;
+  const validationCount=forcedOuterSplitValid
+    ?forcedHoldoutIndex-forcedValidationIndex
+    :countTrailingGroups(uniqueTimes.length-holdoutCount,
+      validationTargetSamples,2*HORIZON_MS+1);
+  const trainingEndIndex=forcedOuterSplitValid
+    ?forcedValidationIndex
+    :uniqueTimes.length-holdoutCount-validationCount;
+  const enoughSplit=forcedOuterSplitRequested
+    ?forcedOuterSplitValid
+    :trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
     architecture,target_definition:TEMPORAL_TARGET_DEFINITION,temporal_label_resolution:'15M_ONLY',
@@ -855,7 +877,10 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_specialist_count:2,
     regime_selection_mode:'INDEPENDENT_REGIME_LOCAL_TCN_OUT_OF_SAMPLE_GATES_V21',
     model_scope:'INDEPENDENT_TCN_RESIDUAL_WITH_REGIME_LOCAL_LOGISTIC_ANCHORS',
-    resolved_samples:rows.length,training_samples:0,validation_samples:0,holdout_samples:0,
+    resolved_samples:rows.length,training_samples:0,fit_window_samples:0,
+    validation_samples:0,holdout_samples:0,
+    requested_outer_validation_start_at:requestedValidationAt,
+    requested_outer_holdout_start_at:requestedHoldoutAt,
     required_training_samples:minTrainingSamples,
     required_validation_samples:minimumValidationSamples,
     required_holdout_samples:minimumHoldoutSamples,
@@ -1799,6 +1824,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     calibration_strategy:'SHARED_POOLED_CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
     calibration_fit_scope:'SHARED_POOLED_CALIBRATION_BLOCK_ONLY',
     resolved_samples:rows.length,training_samples:reportTrainingSamples,
+    fit_window_samples:fitRows.length,
+    max_training_samples_configured:Math.max(minTrainingSamples,maxTrainingSamples),
     regime_model_training_samples:sharedTrainingRows.length,
     pooled_model_selection_diagnostic_samples:pooledMemberSelectionDiagnostics.samples,
     member_selection_samples_total:reportSelectionSamples,
@@ -1825,6 +1852,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     required_validation_samples:minimumValidationSamples,
     required_holdout_samples:minimumHoldoutSamples,
     validation_start_at:reportValidationStartAt,holdout_start_at:holdoutStart,
+    requested_outer_validation_start_at:requestedValidationAt,
+    requested_outer_holdout_start_at:requestedHoldoutAt,
     outer_validation_start_at:validationStart,outer_holdout_start_at:holdoutStart,
     outer_training_samples:training.length,outer_validation_samples:validation.length,
     outer_holdout_samples:holdout.length,

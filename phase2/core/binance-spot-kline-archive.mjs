@@ -88,36 +88,68 @@ export function parseBinanceSpotKlineArchiveCsv(csv, {intervalMs} = {}) {
 
 
 /**
- * Missing monthly files before the first verified archive are treated as
- * pre-listing only when they are explicit 404s. Any failed request anywhere,
- * or a missing archive after the first verified month, invalidates coverage.
+ * Generic monthly/daily coverage. Explicit 404s before the first verified
+ * period are treated as pre-listing; gaps after the first verified period or
+ * any non-404 failure make the archive incomplete.
  */
-export function summarizeBinanceSpotArchiveMonthCoverage(files) {
+export function summarizeBinanceSpotArchiveCoverage(files) {
   const rows=Array.isArray(files)?files.slice().sort((a,b)=>
-    String(a?.month||'').localeCompare(String(b?.month||''))):[];
+    String(a?.period||a?.month||a?.date||'').localeCompare(
+      String(b?.period||b?.month||b?.date||''))):[];
   const firstVerifiedIndex=rows.findIndex(row=>row?.status==='VERIFIED');
-  const failedMonths=rows.filter(row=>row?.status==='FAILED').length;
+  const failedPeriods=rows.filter(row=>row?.status==='FAILED').length;
   const missingBeforeListing=firstVerifiedIndex<0
     ?rows.filter(row=>row?.status==='MISSING').length
     :rows.slice(0,firstVerifiedIndex).filter(row=>row?.status==='MISSING').length;
   const afterFirst=firstVerifiedIndex<0?[]:rows.slice(firstVerifiedIndex);
   const missingAfterListing=afterFirst.filter(row=>row?.status==='MISSING').length;
-  const failedAfterListing=afterFirst.filter(row=>row?.status==='FAILED').length;
   const verifiedAfterListing=afterFirst.filter(row=>row?.status==='VERIFIED').length;
   const expectedAfterListing=afterFirst.length;
-  const complete=firstVerifiedIndex>=0&&failedMonths===0&&missingAfterListing===0&&
+  const complete=firstVerifiedIndex>=0&&failedPeriods===0&&missingAfterListing===0&&
     verifiedAfterListing===expectedAfterListing;
   return {
-    first_available_month:firstVerifiedIndex<0?null:rows[firstVerifiedIndex].month,
-    pre_listing_missing_months:missingBeforeListing,
-    expected_months_after_first_available:expectedAfterListing,
-    verified_months_after_first_available:verifiedAfterListing,
-    missing_months_after_first_available:missingAfterListing,
-    failed_archive_months:failedMonths,
+    first_available_period:firstVerifiedIndex<0?null:
+      String(rows[firstVerifiedIndex].period||rows[firstVerifiedIndex].month||rows[firstVerifiedIndex].date||''),
+    pre_listing_missing_periods:missingBeforeListing,
+    expected_periods_after_first_available:expectedAfterListing,
+    verified_periods_after_first_available:verifiedAfterListing,
+    missing_periods_after_first_available:missingAfterListing,
+    failed_archive_periods:failedPeriods,
     coverage_ratio_after_first_available:expectedAfterListing
       ?Number((verifiedAfterListing/expectedAfterListing).toFixed(6)):0,
     complete_from_first_available:complete
   };
+}
+
+/** Backward-compatible monthly coverage result for existing callers. */
+export function summarizeBinanceSpotArchiveMonthCoverage(files) {
+  const result=summarizeBinanceSpotArchiveCoverage((Array.isArray(files)?files:[]).map(row=>({
+    ...row,period:String(row?.period||row?.month||'')
+  })));
+  return {
+    first_available_month:result.first_available_period,
+    pre_listing_missing_months:result.pre_listing_missing_periods,
+    expected_months_after_first_available:result.expected_periods_after_first_available,
+    verified_months_after_first_available:result.verified_periods_after_first_available,
+    missing_months_after_first_available:result.missing_periods_after_first_available,
+    failed_archive_months:result.failed_archive_periods,
+    coverage_ratio_after_first_available:result.coverage_ratio_after_first_available,
+    complete_from_first_available:result.complete_from_first_available
+  };
+}
+
+export function listBinanceSpotArchiveDays(startMs,endExclusiveMs) {
+  const start=Number(startMs),end=Number(endExclusiveMs);
+  if(!Number.isFinite(start)||!Number.isFinite(end)||start<=0||end<=start)
+    throw new Error('INVALID_ARCHIVE_WINDOW');
+  const first=new Date(start);
+  const cursor=new Date(Date.UTC(first.getUTCFullYear(),first.getUTCMonth(),first.getUTCDate()));
+  const days=[];
+  while(cursor.getTime()<end){
+    days.push(cursor.toISOString().slice(0,10));
+    cursor.setUTCDate(cursor.getUTCDate()+1);
+  }
+  return days;
 }
 
 export function listBinanceSpotArchiveMonths(startMs, endExclusiveMs) {
