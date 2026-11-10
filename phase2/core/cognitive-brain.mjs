@@ -1012,6 +1012,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   allowedOutcomeSources = null,
   iterations = 900, learningRate = 0.12,
   minNeuralTrainingSamples = NEURAL_POLICY.minTrainingSamples,
+  minimumNeuralSelectionSamples = null,
   maxNeuralTrainingSamples = NEURAL_POLICY.maxTrainingSamples,
   temporalSamples = samples,
   temporalOptions = {},
@@ -1235,7 +1236,12 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.resolved_at<neuralHybridSelectionStartAt);
   const neuralHybridSelection=neuralHybridSelectionStartAt===null?[]:neuralCalibration.filter(row=>
     row.at>=neuralHybridSelectionStartAt&&row.resolved_at<validationStartAt);
-  const neuralSelectionMinimum=Math.max(20,minimumValidationSamples);
+  // Keep the legacy coupling by default, but allow daily experiments to set
+  // an explicit inner member-selection floor independent of outer validation.
+  const configuredNeuralSelectionMinimum=finite(minimumNeuralSelectionSamples);
+  const neuralSelectionMinimum=configuredNeuralSelectionMinimum===null
+    ?Math.max(20,minimumValidationSamples)
+    :Math.max(20,Math.min(900,Math.trunc(configuredNeuralSelectionMinimum)));
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
   let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
@@ -1704,7 +1710,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     validation: selectedValidation,
     holdout: holdoutMetrics,
     neural_network: {
-      status: !neuralFit ? 'WAITING_FOR_MATURED_TRAINING_SAMPLES' :
+      status: !neuralFit ? (neuralSelection.length<neuralSelectionMinimum
+          ?'WAITING_FOR_SELECTION_SUPPORT':'WAITING_FOR_MATURED_TRAINING_SAMPLES') :
         neuralFit.selected_member_index<0 ? 'TRAINED_NOT_SELECTED_ON_INNER_SELECTION' :
         neuralLiveReady ? 'LIVE_GATE_PASSED_OUT_OF_SAMPLE' :
         neuralSelected ? 'VALIDATION_SELECTED_BUT_HOLDOUT_COMPARISON_FAILED' :
@@ -1713,7 +1720,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       feature_schema:COGNITIVE_FEATURE_SCHEMA,
       input_neurons: FEATURE_NAMES.length, hidden_neurons: NEURAL_POLICY.hiddenUnits,
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
-      samples_required:neuralMinimum,training_samples: neuralFit?.training_samples??neuralTraining.length,
+      samples_required:neuralMinimum,
+      required_selection_samples:neuralSelectionMinimum,
+      selection_support_ready:neuralSelection.length>=neuralSelectionMinimum,
+      training_samples: neuralFit?.training_samples??neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
       refit_training_samples:neuralFit?.refit_training_samples??0,
       refit_positive_samples:neuralFit?.refit_positive_samples??0,
@@ -1794,6 +1804,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     },
     boosted_tree_model: {
       status:!boostedTrainingReady?'WAITING_FOR_MATURED_TRAINING_SAMPLES':
+        !boostedSelectionSupported?'WAITING_FOR_SELECTION_SUPPORT':
         !boostedTreeFit?'NO_TRAINING_RESIDUAL_GAIN':
         activeChallenger==='GBDT_RESIDUAL'?'OUT_OF_SAMPLE_VALIDATED':
         validationWinner?.name==='GBDT_RESIDUAL'?'VALIDATION_SELECTED_HOLDOUT_FAILED':
@@ -1804,6 +1815,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       search_grid_size:COGNITIVE_GBDT_VALIDATION_GRID.length,
       selection_training_samples:boostedTrainingRows.length,
       selection_sample_count:boostedSelectionRows.length,
+      required_selection_samples:neuralSelectionMinimum,
       selection_logistic:boostedSelectionLogistic,
       selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,
       candidate_selection_metrics:boostedTreeCandidateMetrics,
