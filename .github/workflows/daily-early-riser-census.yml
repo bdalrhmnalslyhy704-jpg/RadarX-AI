@@ -55,6 +55,7 @@ jobs:
     env:
       RADARX_DAILY_EARLY_RISER_REPORT: artifacts/daily-early-riser-census.json
       RADARX_DAILY_EARLY_RISER_SAMPLES: artifacts/daily-early-riser-samples.jsonl
+      RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES: artifacts/daily-early-riser-temporal-sequences.jsonl
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4
@@ -69,6 +70,7 @@ jobs:
         run: |
           node --check phase2/core/daily-early-riser-census.mjs
           node --check phase2/tools/daily-early-riser-historical-census.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
       - name: Run daily early-riser label, cutoff, and neural-adapter tests
@@ -89,6 +91,8 @@ jobs:
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
             --output artifacts/daily-early-riser-neural-benchmark.json
       - name: Upload daily census and neural benchmark artifacts, labels, archive manifests and request provenance
         if: always()
@@ -120,6 +124,7 @@ jobs:
             daily_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-neural-benchmark.json')
               ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-neural-benchmark.json','utf8')):null,
             sample_file:report.sample_file,
+            temporal_sample_file:report.temporal_sample_file,
             production_touched:report.production_touched===true,
             deployed:report.deployed===true,
             merged:report.merged===true,
