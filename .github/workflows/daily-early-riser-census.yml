@@ -87,7 +87,7 @@ jobs:
             --min-quote-volume '${{ github.event.inputs.min_quote_volume || '750000' }}' \
             --max-samples-per-symbol '${{ github.event.inputs.max_samples_per_symbol || '500' }}' \
             --concurrency '${{ github.event.inputs.concurrency || '4' }}'
-      - name: Train and evaluate daily MLP, GBDT, and hybrid challengers
+      - name: Train and evaluate daily MLP, GBDT, hybrid, and 24x29 TCN challengers
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \
