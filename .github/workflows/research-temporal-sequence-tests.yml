@@ -1,0 +1,48 @@
+name: Build 224 Research Temporal Sequence and Sample Integrity Tests
+
+on:
+  push:
+    branches:
+      - research/historical-sequence-context-audit-20261110
+    paths:
+      - 'phase2/core/adaptive-trader-engine.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tests/adaptive-trader-engine.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/cognitive-brain.test.mjs'
+      - 'phase2/tests/binance-spot-kline-archive.test.mjs'
+      - 'phase2/tests/cognitive-benchmark-metrics.test.mjs'
+      - '.github/workflows/research-temporal-sequence-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  temporal-and-sample-integrity:
+    name: Verify historical 24x29 sample generation and model contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check modified research modules
+        run: |
+          node --check phase2/core/adaptive-trader-engine.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/cognitive-brain.mjs
+      - name: Run historical sample, TCN, MLP, archive and metric regression tests
+        run: |
+          node --test --test-timeout=60000 \
+            phase2/tests/adaptive-trader-engine.test.mjs \
+            phase2/tests/temporal-neural-brain.test.mjs \
+            phase2/tests/cognitive-brain.test.mjs \
+            phase2/tests/binance-spot-kline-archive.test.mjs \
+            phase2/tests/cognitive-benchmark-metrics.test.mjs
