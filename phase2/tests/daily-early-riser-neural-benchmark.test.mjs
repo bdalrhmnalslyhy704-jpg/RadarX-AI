@@ -5,6 +5,12 @@ import {
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
+import {
+  buildTemporalNeuralProfile,
+  TEMPORAL_TARGET_DEFINITION,
+  TEMPORAL_SEQUENCE_STEPS,
+  TEMPORAL_SEQUENCE_CHANNELS
+} from '../core/temporal-neural-brain.mjs';
 
 function sampleWith({
   at=1_800_000_000_000,
@@ -87,4 +93,29 @@ test('target definitions remain independent for +5%, +10% and +15%',()=>{
   assert.equal(prepareDailyEarlyRiserCognitiveRow(input,5).row.outcome,'UP');
   assert.equal(prepareDailyEarlyRiserCognitiveRow(input,10).row.outcome,'DOWN');
   assert.equal(prepareDailyEarlyRiserCognitiveRow(input,15).row.outcome,'FLAT');
+});
+
+
+test('daily 24h target contract is accepted only through explicit TCN opt-in; legacy 4h contract stays unchanged',()=>{
+  const input=sampleWith({targetPct:5,outcome:'UP'});
+  input.temporal_sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5);
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.first_passage.path_resolution,'15M');
+  assert.equal(prepared.row.first_passage.outcome,'UP');
+  assert.equal(prepared.row.temporal_sequence.length,24);
+  const dailyDefinition='FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+  const opts={
+    targetDefinition:dailyDefinition,
+    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE]
+  };
+  const dailyProfile=buildTemporalNeuralProfile([prepared.row],opts);
+  assert.equal(dailyProfile.resolved_samples,1);
+  assert.equal(dailyProfile.target_definition,dailyDefinition);
+  assert.equal(dailyProfile.sequence_steps,24);
+  assert.equal(dailyProfile.sequence_channels,29);
+  const legacyProfile=buildTemporalNeuralProfile([prepared.row]);
+  assert.equal(legacyProfile.resolved_samples,0);
+  assert.equal(legacyProfile.target_definition,TEMPORAL_TARGET_DEFINITION);
 });
