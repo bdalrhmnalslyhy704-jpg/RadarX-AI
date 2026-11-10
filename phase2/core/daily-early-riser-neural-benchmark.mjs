@@ -111,6 +111,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
     comparisonMargin:0.003
   });
+  const temporalTree=temporal.temporal_boosted_tree||{};
   const profile=buildCognitiveLearningProfile(rows,{
     minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
     minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
@@ -150,6 +151,31 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,
+    temporal_tree_training_performed:temporalTree.trained===true,
+    temporal_tree_challenger:{
+      status:temporalTree.status??'NOT_EVALUATED',
+      architecture:temporalTree.architecture??null,
+      model_kind:temporalTree.model_kind??null,
+      target_definition:temporalTree.target_definition??targetContract,
+      trained:temporalTree.trained===true,
+      selected_for_research:temporalTree.selected_for_research===true,
+      research_out_of_sample_validated:temporalTree.research_out_of_sample_validated===true,
+      probability_ready:temporalTree.probability_ready===true,
+      live_eligibility_ready:temporalTree.live_eligibility_ready===true,
+      training_samples:temporalTree.training_samples??0,
+      selection_samples:temporalTree.selection_samples??0,
+      calibration_samples:temporalTree.calibration_samples??0,
+      validation_samples:temporalTree.validation_samples??0,
+      holdout_samples:temporalTree.holdout_samples??0,
+      validation:temporalTree.validation??null,
+      validation_logistic:temporalTree.validation_logistic??null,
+      holdout:temporalTree.holdout??null,
+      holdout_logistic:temporalTree.holdout_logistic??null,
+      holdout_comparison:temporalTree.holdout_comparison??null,
+      supported_regimes:temporalTree.supported_regimes??[],
+      selected_regimes:temporalTree.selected_regimes??[],
+      feature_importance:temporalTree.feature_importance??[]
+    },
     temporal_tcn_reason:temporal.trained===true?null:
       (temporal.status|| (temporalRows.length?'TEMPORAL_TCN_TRAINING_NOT_COMPLETED':'NO_VALID_24X29_TEMPORAL_SEQUENCES')),
     temporal_tcn:{
