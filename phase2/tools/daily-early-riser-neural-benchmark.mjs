@@ -118,12 +118,14 @@ function compactTarget(result){
     target_pct:result.target_pct,
     samples:result.samples,
     chronology:result.chronology,
-    logistic_reference:result.logistic_reference,
+    legacy_three_way_diagnostic:result.legacy_three_way_diagnostic,
     neural_network:result.neural_network,
     boosted_tree_model:result.boosted_tree_model,
     hybrid_model:result.hybrid_model,
     model_selection:result.model_selection,
     temporal_tcn_training_performed:result.temporal_tcn_training_performed,
+    temporal_tcn_evaluation_performed:result.temporal_tcn_evaluation_performed,
+    temporal_tcn_sequence_samples:result.temporal_tcn_sequence_samples,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -183,6 +185,8 @@ async function main(){
     };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
+      if(loaded.temporal_identity_mismatch!==0)
+        throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
