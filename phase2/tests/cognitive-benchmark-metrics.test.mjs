@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateFrozenRankingSignal,evaluateExistingEngineBaselines,evaluateForwardMoveDiscovery,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
 
 test('ranking metrics preserve misses and score coverage while excluding FLAT only from AUC pairs',()=>{
   const rows=[
@@ -75,4 +75,49 @@ test('JSONL audit serialization writes one valid JSON record per actual line',()
   assert.deepEqual(lines.map(line=>JSON.parse(line)),rows);
   assert.ok(serialized.endsWith(String.fromCharCode(10)));
   assert.equal(serializeJsonlRows([]),'');
+});
+
+
+test('early-move discovery measures +5/+10/+15 before -2%, lead time, misses and false candidates',()=>{
+  const rows=[];
+  for(let index=0;index<20;index++){
+    const hit5=index<8,hit10=index<4,hit15=index<2;
+    const label=(hit,threshold,time)=>({
+      threshold_pct:threshold,
+      status:hit?'HIT_BEFORE_MINUS_2_STOP':'NOT_REACHED_WITHIN_4H',
+      time_to_hit_ms:hit?time*60_000:null,
+      path_resolution:'15M'
+    });
+    rows.push({
+      id:'MOVE-'+index,symbol:'MOVE'+index+'USDT',at:index,
+      score:100-index,
+      forward_move_thresholds:{
+        '5':label(hit5,5,15+index),
+        '10':label(hit10,10,30+index),
+        '15':label(hit15,15,45+index)
+      }
+    });
+  }
+  rows.push({id:'AMBIGUOUS',at:21,score:1000,forward_move_thresholds:{
+    '5':{status:'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE',threshold_pct:5,path_resolution:'15M'},
+    '10':{status:'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE',threshold_pct:10,path_resolution:'15M'},
+    '15':{status:'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE',threshold_pct:15,path_resolution:'15M'}
+  }});
+  const metrics=evaluateForwardMoveDiscovery(rows,row=>row.score);
+  const five=metrics.thresholds['5'],ten=metrics.thresholds['10'],fifteen=metrics.thresholds['15'];
+  assert.equal(five.eligible_rows,20);
+  assert.equal(five.positive_moves_before_stop,8);
+  assert.equal(five.ambiguous_excluded_count,1);
+  assert.equal(five.top_10_pct.selected_count,2);
+  assert.equal(five.top_10_pct.detected_count,2);
+  assert.equal(five.top_10_pct.false_candidate_count,0);
+  assert.equal(five.top_10_pct.missed_move_count,6);
+  assert.equal(five.top_10_pct.recall_pct,25);
+  assert.equal(five.median_time_to_hit_minutes,18.5);
+  assert.equal(ten.positive_moves_before_stop,4);
+  assert.equal(ten.top_20_pct.detected_count,4);
+  assert.equal(fifteen.positive_moves_before_stop,2);
+  assert.equal(fifteen.top_10_pct.detected_count,2);
+  const missing=evaluateForwardMoveDiscovery(rows,row=>row.id==='MOVE-0'?null:row.score);
+  assert.equal(missing.thresholds['5'].score_coverage_pct,95);
 });

@@ -8,6 +8,7 @@ import {
   scoreAdaptiveTraderCandidate,
   buildAdaptiveTraderHistoricalOutcomeSamples,
   buildAdaptiveTraderClosedCandleOutcomeLabels,
+  firstPassageUpsideThresholdLabel,
   buildAdaptiveTraderRecommendation,
   buildAdaptiveLearningProfile,
   applyAdaptiveLearning,
@@ -1338,9 +1339,56 @@ test('fresh Binance closed-candle replay builds 24x29 TCN tensors with one 15m f
   assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'&&
     row.first_passage?.outcome===row.outcome));
+  assert.ok(samples.every(row=>[5,10,15].every(threshold=>
+    ['5','10','15'].includes(String(threshold))&&
+    row.forward_move_thresholds?.[String(threshold)]?.path_resolution==='15M'&&
+    row.forward_move_thresholds?.[String(threshold)]?.status==='NOT_REACHED_WITHIN_4H')));
   assert.ok(samples.every(row=>Array.isArray(row.temporal_sequence)&&row.temporal_sequence.length===24&&
     row.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite))),
     'every eligible historical outcome must carry the same causal 24x29 closed-candle tensor');
   assert.equal(new Set(samples.map(row=>row.id)).size,samples.length,
     'rebuild output must not duplicate a symbol/baseline candle');
+});
+
+
+test('15m +5/+10/+15 labels require target before -2% stop and exclude same-candle ambiguity',()=>{
+  const interval=15*60*1000;
+  const closeAt=Date.UTC(2026,0,1)+interval-1;
+  const baseline={close:100,closeTime:closeAt};
+  const makePath=(mutate=()=>{})=>Array.from({length:16},(_,index)=>{
+    const openTime=closeAt+1+index*interval;
+    const row={openTime,closeTime:openTime+interval-1,high:101,low:99};
+    return mutate(row,index)||row;
+  });
+  const hit5=firstPassageUpsideThresholdLabel(baseline,
+    makePath((row,index)=>index===1?{...row,high:105.2}:row),5);
+  assert.equal(hit5.status,'HIT_BEFORE_MINUS_2_STOP');
+  assert.equal(hit5.bars_to_hit,2);
+  assert.equal(hit5.time_to_hit_ms,2*interval);
+  assert.equal(hit5.threshold_pct,5);
+  assert.ok(hit5.max_favorable_excursion_pct>=5.2);
+
+  const hit10=firstPassageUpsideThresholdLabel(baseline,
+    makePath((row,index)=>index===4?{...row,high:110.5}:row),10);
+  assert.equal(hit10.status,'HIT_BEFORE_MINUS_2_STOP');
+  assert.equal(hit10.bars_to_hit,5);
+
+  const hit15=firstPassageUpsideThresholdLabel(baseline,
+    makePath((row,index)=>index===7?{...row,high:115.1}:row),15);
+  assert.equal(hit15.status,'HIT_BEFORE_MINUS_2_STOP');
+  assert.equal(hit15.bars_to_hit,8);
+
+  const stopFirst=firstPassageUpsideThresholdLabel(baseline,
+    makePath((row,index)=>index===1?{...row,low:97.9}:index===4?{...row,high:106}:row),5);
+  assert.equal(stopFirst.status,'MINUS_2_STOP_FIRST');
+  assert.equal(stopFirst.time_to_hit_ms,null);
+
+  const ambiguous=firstPassageUpsideThresholdLabel(baseline,
+    makePath((row,index)=>index===0?{...row,high:106,low:97}:row),5);
+  assert.equal(ambiguous.status,'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE');
+  assert.equal(ambiguous.time_to_hit_ms,null);
+
+  const noHit=firstPassageUpsideThresholdLabel(baseline,makePath(),5);
+  assert.equal(noHit.status,'NOT_REACHED_WITHIN_4H');
+  assert.equal(firstPassageUpsideThresholdLabel(baseline,makePath().slice(0,15),5),null);
 });

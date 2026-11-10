@@ -396,6 +396,61 @@ function buildTemporalSequence(candles,btcCandles,fastCandles) {
   return buildTemporalSequenceWithDiagnostics(candles,btcCandles,fastCandles).sequence;
 }
 
+export function firstPassageUpsideThresholdLabel(baseline,future15m,thresholdPct){
+  const threshold=finite(thresholdPct);
+  const base=finite(baseline?.close);
+  const closeAt=finite(baseline?.closeTime);
+  if(!(base>0)||closeAt===null||!(threshold>0))return null;
+  const path=(Array.isArray(future15m)?future15m:[]).slice(0,16);
+  const endAt=closeAt+4*60*60*1000;
+  const complete=path.length===16&&path.every((row,index)=>
+    index===0?row.openTime===closeAt+1:
+      row.openTime-path[index-1].openTime===15*60*1000);
+  if(!complete||path[15].closeTime!==endAt)return null;
+  const targetPrice=base*(1+threshold/100);
+  const stopPrice=base*0.98;
+  const maxHigh=Math.max(...path.map(row=>Number(row.high)));
+  const minLow=Math.min(...path.map(row=>Number(row.low)));
+  const extrema={
+    max_favorable_excursion_pct:Number(((maxHigh/base-1)*100).toFixed(4)),
+    max_adverse_excursion_pct:Number(((minLow/base-1)*100).toFixed(4))
+  };
+  for(let index=0;index<path.length;index++){
+    const candle=path[index];
+    const targetHit=Number(candle.high)>=targetPrice;
+    const stopHit=Number(candle.low)<=stopPrice;
+    const common={
+      threshold_pct:threshold,
+      target_price:Number(targetPrice.toPrecision(12)),
+      stop_price:Number(stopPrice.toPrecision(12)),
+      target_at:Number(candle.closeTime),
+      bars_to_resolution:index+1,
+      path_resolution:'15M',
+      ...extrema
+    };
+    if(targetHit&&stopHit)return {
+      ...common,status:'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE',
+      hit_at:null,bars_to_hit:null,time_to_hit_ms:null
+    };
+    if(targetHit)return {
+      ...common,status:'HIT_BEFORE_MINUS_2_STOP',
+      hit_at:Number(candle.closeTime),bars_to_hit:index+1,
+      time_to_hit_ms:Number(candle.closeTime-closeAt)
+    };
+    if(stopHit)return {
+      ...common,status:'MINUS_2_STOP_FIRST',
+      hit_at:null,bars_to_hit:null,time_to_hit_ms:null
+    };
+  }
+  return {
+    threshold_pct:threshold,target_price:Number(targetPrice.toPrecision(12)),
+    stop_price:Number(stopPrice.toPrecision(12)),target_at:endAt,
+    hit_at:null,bars_to_hit:null,time_to_hit_ms:null,
+    bars_to_resolution:16,path_resolution:'15M',
+    status:'NOT_REACHED_WITHIN_4H',...extrema
+  };
+}
+
 function firstPassageLabel(baseline, future15m) {
   const upLevel = baseline.close * 1.03;
   const downLevel = baseline.close * 0.98;
@@ -868,7 +923,8 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       generationAudit.micro_unavailable_reason_counts[reason]=
         (generationAudit.micro_unavailable_reason_counts[reason]||0)+(Number(count)||0);
     const move=(future.close/baseline.close-1)*100;
-    const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
+    const future15m=candles.slice(index+1,index+17).map(item=>item.candle);
+    const passage=firstPassageLabel(baseline,future15m);
     if(!passage){
       recordRejection('candidate','FIRST_PASSAGE_LABEL_UNAVAILABLE',{
         id:'HISTORICAL_FIRST_PASSAGE_CLOSED_CANDLE:'+cleanSymbol+':'+String(baseline.closeTime),
@@ -893,6 +949,9 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       temporal_sequence:candidate.temporal_sequence,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
+      forward_move_thresholds:Object.fromEntries([5,10,15].map(threshold=>[
+        String(threshold),firstPassageUpsideThresholdLabel(baseline,future15m,threshold)
+      ])),
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
       mark_price:future.close,
       return_pct:Number((passage.outcome==='UP'?3:passage.outcome==='DOWN'?-2:move).toFixed(3)),

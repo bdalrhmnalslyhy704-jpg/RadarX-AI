@@ -120,3 +120,80 @@ export function serializeJsonlRows(rows) {
     return encoded;
   }).join(String.fromCharCode(10))+String.fromCharCode(10);
 }
+
+
+/**
+ * Measures detection of +5/+10/+15% moves reached before a -2% adverse
+ * excursion within four hours. Ambiguous same-bar target/stop events are
+ * excluded; missing scores remain at the bottom so misses are not hidden.
+ */
+export function evaluateForwardMoveDiscovery(rows,scoreSelector){
+  if(typeof scoreSelector!=='function')throw new Error('SCORE_SELECTOR_REQUIRED');
+  const thresholds=[5,10,15];
+  const result={method:'15M_FIRST_PASSAGE_UPSIDE_BEFORE_MINUS_2_STOP_V1',
+    horizon_ms:4*60*60*1000,bar_interval_ms:15*60*1000,
+    score_direction:'HIGHER_IS_MORE_BULLISH',thresholds:{}};
+  for(const threshold of thresholds){
+    const key=String(threshold);
+    const candidates=(Array.isArray(rows)?rows:[]).map(row=>({
+      row,label:row?.forward_move_thresholds?.[key]||null,
+      score:finite(scoreSelector(row))
+    })).filter(item=>item.row&&item.label&&
+      ['HIT_BEFORE_MINUS_2_STOP','MINUS_2_STOP_FIRST','NOT_REACHED_WITHIN_4H',
+        'AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE'].includes(item.label.status));
+    const ambiguous=candidates.filter(item=>item.label.status==='AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE').length;
+    const eligible=candidates.filter(item=>item.label.status!=='AMBIGUOUS_BOTH_LEVELS_SAME_CANDLE')
+      .sort((a,b)=>(b.score??Number.NEGATIVE_INFINITY)-(a.score??Number.NEGATIVE_INFINITY)||
+        Number(a.row.at)-Number(b.row.at)||
+        String(a.row.symbol||'').localeCompare(String(b.row.symbol||''))||
+        String(a.row.id||'').localeCompare(String(b.row.id||'')));
+    const positives=eligible.filter(item=>item.label.status==='HIT_BEFORE_MINUS_2_STOP');
+    const times=positives.map(item=>Number(item.label.time_to_hit_ms)/60_000)
+      .filter(value=>Number.isFinite(value)&&value>=0).sort((a,b)=>a-b);
+    const quantile=(values,q)=>values.length?values[Math.min(values.length-1,
+      Math.max(0,Math.ceil(values.length*q)-1))]:null;
+    const median=values=>quantile(values,0.5);
+    const top=(fraction)=>{
+      if(!eligible.length)return {selected_count:0,detected_count:0,false_candidate_count:0,
+        missed_move_count:positives.length,precision_pct:null,recall_pct:null,
+        false_candidate_rate_pct:null,score_coverage_pct:0,
+        detected_median_time_to_hit_minutes:null};
+      const count=Math.max(1,Math.ceil(eligible.length*fraction));
+      const selected=eligible.slice(0,count);
+      const detected=selected.filter(item=>item.label.status==='HIT_BEFORE_MINUS_2_STOP');
+      const falseCandidates=count-detected.length;
+      const detectedTimes=detected.map(item=>Number(item.label.time_to_hit_ms)/60_000)
+        .filter(value=>Number.isFinite(value)&&value>=0).sort((a,b)=>a-b);
+      return {
+        selected_count:count,detected_count:detected.length,
+        false_candidate_count:falseCandidates,
+        missed_move_count:Math.max(0,positives.length-detected.length),
+        precision_pct:Number((detected.length/count*100).toFixed(3)),
+        recall_pct:positives.length?Number((detected.length/positives.length*100).toFixed(3)):null,
+        false_candidate_rate_pct:Number((falseCandidates/count*100).toFixed(3)),
+        score_coverage_pct:Number((selected.filter(item=>item.score!==null).length/count*100).toFixed(3)),
+        detected_median_time_to_hit_minutes:median(detectedTimes)
+      };
+    };
+    result.thresholds[key]={
+      threshold_pct:threshold,
+      candidate_rows:candidates.length,
+      eligible_rows:eligible.length,
+      positive_moves_before_stop:positives.length,
+      stop_first_count:eligible.filter(item=>item.label.status==='MINUS_2_STOP_FIRST').length,
+      not_reached_count:eligible.filter(item=>item.label.status==='NOT_REACHED_WITHIN_4H').length,
+      ambiguous_excluded_count:ambiguous,
+      event_rate_pct:eligible.length?Number((positives.length/eligible.length*100).toFixed(3)):null,
+      median_time_to_hit_minutes:median(times),
+      p25_time_to_hit_minutes:quantile(times,0.25),
+      p75_time_to_hit_minutes:quantile(times,0.75),
+      top_10_pct:top(0.10),
+      top_20_pct:top(0.20),
+      total_missed_if_ranked_top_10:top(0.10).missed_move_count,
+      score_coverage_pct:eligible.length?Number((eligible.filter(item=>item.score!==null).length/eligible.length*100).toFixed(3)):0
+    };
+  }
+  result.evaluated=Object.values(result.thresholds).some(row=>row.eligible_rows>0);
+  result.sample_count=Math.max(0,...Object.values(result.thresholds).map(row=>row.eligible_rows));
+  return result;
+}
