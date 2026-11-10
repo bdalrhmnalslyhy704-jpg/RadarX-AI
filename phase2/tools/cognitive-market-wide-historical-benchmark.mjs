@@ -9,7 +9,8 @@ import {
   normalizeBinanceSpotKlineArchiveTimestamp,
   parseBinanceSpotKlineArchiveCsv,
   listBinanceSpotArchiveMonths,
-  summarizeBinanceSpotArchiveMonthCoverage
+  listBinanceSpotArchiveDays,
+  summarizeBinanceSpotArchiveCoverage
 } from '../core/binance-spot-kline-archive.mjs';
 import {
   buildAdaptiveTraderHistoricalOutcomeSamples,
@@ -28,6 +29,7 @@ import {evaluateExistingEngineBaselines,serializeJsonlRows} from '../core/cognit
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
 const ARCHIVE_ROOT='https://data.binance.vision/data/spot/monthly/klines';
+const DAILY_ARCHIVE_ROOT='https://data.binance.vision/data/spot/daily/klines';
 const FOUR_HOURS_MS=4*60*60*1000;
 const FIFTEEN_MINUTES_MS=15*60*1000;
 const FIVE_MINUTES_MS=5*60*1000;
@@ -35,7 +37,10 @@ const MIN_QUOTE_VOLUME_24H=750000;
 const MAX_ARCHIVE_BYTES=64*1024*1024;
 const MAX_UNZIPPED_BYTES=64*1024*1024;
 const DEFAULT_START='2025-11-01T00:00:00.000Z';
-const DEFAULT_END_EXCLUSIVE='2026-11-01T00:00:00.000Z';
+const DEFAULT_END_EXCLUSIVE='2026-11-10T00:00:00.000Z';
+const OUTER_VALIDATION_START_AT=Date.parse('2026-10-01T00:00:00.000Z');
+const FRESH_HOLDOUT_START_AT=Date.parse('2026-11-01T00:00:00.000Z');
+const MAX_NEURAL_TRAINING_SAMPLES=4096;
 const REQUEST_AUDIT=[];
 const OUTPUT_PATH=resolve(process.env.RADARX_COGNITIVE_BENCHMARK_REPORT||
   'artifacts/cognitive-market-wide-historical-benchmark.json');
@@ -116,34 +121,36 @@ async function getJson(url){
   if(!response.ok)throw new Error('BINANCE_API_HTTP_'+response.status+':'+url.split('?')[0]);
   return response.json();
 }
-function archiveUrl(symbol,interval,month){
-  return ARCHIVE_ROOT+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+month+'.zip';
+function archiveUrl(symbol,interval,period,periodType='monthly'){
+  const root=periodType==='daily'?DAILY_ARCHIVE_ROOT:ARCHIVE_ROOT;
+  return root+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+period+'.zip';
 }
-async function fetchVerifiedMonthlyArchive({symbol,interval,month,tempDir}){
-  const url=archiveUrl(symbol,interval,month);
+async function fetchVerifiedArchive({symbol,interval,period,periodType,tempDir}){
+  const url=archiveUrl(symbol,interval,period,periodType);
+  const label=periodType==='daily'?'date':'month';
   const checksumResponse=await fetchResponse(url+'.CHECKSUM',{timeoutMs:30000});
   if(checksumResponse.status===404)
-    return {status:'MISSING',reason:'CHECKSUM_404',symbol,interval,month,url};
+    return {status:'MISSING',reason:'CHECKSUM_404',symbol,interval,period,period_type:periodType,[label]:period,url};
   if(!checksumResponse.ok)
-    throw new Error('CHECKSUM_HTTP_'+checksumResponse.status+':'+symbol+':'+interval+':'+month);
+    throw new Error('CHECKSUM_HTTP_'+checksumResponse.status+':'+symbol+':'+interval+':'+period);
   const checksumText=await checksumResponse.text();
   const expected=checksumText.match(/[a-f0-9]{64}/i)?.[0]?.toLowerCase();
-  if(!expected)throw new Error('OFFICIAL_CHECKSUM_INVALID:'+symbol+':'+interval+':'+month);
+  if(!expected)throw new Error('OFFICIAL_CHECKSUM_INVALID:'+symbol+':'+interval+':'+period);
   const archiveResponse=await fetchResponse(url,{timeoutMs:120000});
   if(archiveResponse.status===404)
-    return {status:'MISSING',reason:'ARCHIVE_404',symbol,interval,month,url};
+    return {status:'MISSING',reason:'ARCHIVE_404',symbol,interval,period,period_type:periodType,[label]:period,url};
   if(!archiveResponse.ok)
-    throw new Error('ARCHIVE_HTTP_'+archiveResponse.status+':'+symbol+':'+interval+':'+month);
+    throw new Error('ARCHIVE_HTTP_'+archiveResponse.status+':'+symbol+':'+interval+':'+period);
   const announced=Number(archiveResponse.headers.get('content-length'));
   if(Number.isFinite(announced)&&announced>MAX_ARCHIVE_BYTES)
-    throw new Error('ARCHIVE_SIZE_LIMIT:'+symbol+':'+interval+':'+month);
+    throw new Error('ARCHIVE_SIZE_LIMIT:'+symbol+':'+interval+':'+period);
   const bytes=Buffer.from(await archiveResponse.arrayBuffer());
   if(!bytes.length||bytes.length>MAX_ARCHIVE_BYTES)
-    throw new Error('ARCHIVE_SIZE_INVALID:'+symbol+':'+interval+':'+month);
+    throw new Error('ARCHIVE_SIZE_INVALID:'+symbol+':'+interval+':'+period);
   const actual=sha256(bytes);
   if(actual!==expected)
-    throw new Error('ARCHIVE_SHA256_MISMATCH:'+symbol+':'+interval+':'+month);
-  const path=join(tempDir,symbol+'-'+interval+'-'+month+'.zip');
+    throw new Error('ARCHIVE_SHA256_MISMATCH:'+symbol+':'+interval+':'+period);
+  const path=join(tempDir,symbol+'-'+interval+'-'+periodType+'-'+period+'.zip');
   await writeFile(path,bytes,{flag:'wx'});
   let csv;
   try{
@@ -157,23 +164,29 @@ async function fetchVerifiedMonthlyArchive({symbol,interval,month,tempDir}){
   const intervalMs=interval==='15m'?FIFTEEN_MINUTES_MS:FIVE_MINUTES_MS;
   const parsed=parseBinanceSpotKlineArchiveCsv(csv,{intervalMs});
   return {
-    status:'VERIFIED',symbol,interval,month,url,sha256:actual,
-    compressed_bytes:bytes.length,row_count:parsed.rows.length,
-    rejected:parsed.rejected,continuity_ratio:parsed.continuity_ratio,
-    rows:parsed.rows
+    status:'VERIFIED',symbol,interval,period,period_type:periodType,[label]:period,
+    url,sha256:actual,compressed_bytes:bytes.length,row_count:parsed.rows.length,
+    rejected:parsed.rejected,continuity_ratio:parsed.continuity_ratio,rows:parsed.rows
   };
 }
-async function loadSymbolInterval({symbol,interval,months,tempDir}){
+async function loadSymbolInterval({symbol,interval,months,dailyDates=[],tempDir}){
   const rowsByOpen=new Map();
   const files=[];
   const totalRejected={malformed:0,invalid_timestamp:0,invalid_price_or_volume:0,
     invalid_close_boundary:0,duplicate_open_time:0};
-  for(const month of months){
+  const periods=[
+    ...months.map(period=>({period,periodType:'monthly'})),
+    ...dailyDates.map(period=>({period,periodType:'daily'}))
+  ];
+  for(const item of periods){
     let archive;
     try{
-      archive=await fetchVerifiedMonthlyArchive({symbol,interval,month,tempDir});
+      archive=await fetchVerifiedArchive({
+        symbol,interval,period:item.period,periodType:item.periodType,tempDir
+      });
     }catch(error){
-      archive={status:'FAILED',symbol,interval,month,url:archiveUrl(symbol,interval,month),
+      archive={status:'FAILED',symbol,interval,period:item.period,period_type:item.periodType,
+        url:archiveUrl(symbol,interval,item.period,item.periodType),
         reason:String(error?.message||error).slice(0,240)};
     }
     const {rows,...manifest}=archive;
@@ -184,13 +197,24 @@ async function loadSymbolInterval({symbol,interval,months,tempDir}){
     for(const row of rows)rowsByOpen.set(Number(row[0]),row);
   }
   const rows=[...rowsByOpen.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
-  const coverage=summarizeBinanceSpotArchiveMonthCoverage(files);
+  const coverage=summarizeBinanceSpotArchiveCoverage(files);
+  const monthly=files.filter(file=>file.period_type==='monthly');
+  const daily=files.filter(file=>file.period_type==='daily');
   return {
     rows,files,total_rejected:totalRejected,
-    verified_months:files.filter(file=>file.status==='VERIFIED').length,
-    missing_months:files.filter(file=>file.status==='MISSING').length,
-    failed_months:files.filter(file=>file.status==='FAILED').length,
-    ...coverage
+    verified_months:monthly.filter(file=>file.status==='VERIFIED').length,
+    missing_months:monthly.filter(file=>file.status==='MISSING').length,
+    failed_months:monthly.filter(file=>file.status==='FAILED').length,
+    verified_days:daily.filter(file=>file.status==='VERIFIED').length,
+    missing_days:daily.filter(file=>file.status==='MISSING').length,
+    failed_days:daily.filter(file=>file.status==='FAILED').length,
+    ...coverage,
+    // Compatibility aliases for existing per-symbol report consumers. These
+    // now describe all monthly + daily periods after the first available file.
+    first_available_month:coverage.first_available_period,
+    expected_months_after_first_available:coverage.expected_periods_after_first_available,
+    missing_months_after_first_available:coverage.missing_periods_after_first_available,
+    failed_archive_months:coverage.failed_archive_periods
   };
 }
 async function mapLimit(items,limit,worker){
@@ -290,6 +314,10 @@ function summarizeProfile(profile){
       probability_ready:neural.probability_ready===true,
       live_eligibility_ready:neural.live_eligibility_ready===true,
       training_samples:Number(neural.training_samples)||0,
+      selection_samples:Number(neural.selection_samples)||0,
+      calibration_samples:Number(neural.calibration_samples)||0,
+      calibration_fit_samples:Number(neural.calibration_fit_samples)||0,
+      calibration_check_samples:Number(neural.calibration_check_samples)||0,
       ensemble_members:Number(neural.ensemble_members)||0,
       validation:metricSummary(neural.validation),
       holdout:metricSummary(neural.holdout),
@@ -335,6 +363,10 @@ function summarizeProfile(profile){
       sequence_channels:Number(temporal.sequence_channels)||0,
       resolved_samples:Number(temporal.resolved_samples)||0,
       training_samples:Number(temporal.training_samples)||0,
+      fit_window_samples:Number(temporal.fit_window_samples)||0,
+      shared_model_training_samples:Number(temporal.shared_model_training_samples)||0,
+      shared_model_selection_samples:Number(temporal.shared_model_selection_samples)||0,
+      shared_model_calibration_samples:Number(temporal.shared_model_calibration_samples)||0,
       validation_samples:Number(temporal.validation_samples)||0,
       holdout_samples:Number(temporal.holdout_samples)||0,
       ensemble_members:Number(temporal.ensemble_members)||0,
@@ -414,7 +446,18 @@ async function main(){
   const startMs=parseUtc(startText,'START_DATE');
   const endExclusiveMs=parseUtc(endText,'END_DATE');
   if(endExclusiveMs<=startMs)throw new Error('END_MUST_BE_AFTER_START');
-  const months=listBinanceSpotArchiveMonths(startMs,endExclusiveMs);
+  // Monthly files are used only for completed months. The final partial month
+  // is assembled from official daily archives with per-file SHA-256 checksums.
+  const endDate=new Date(endExclusiveMs);
+  const partialMonthStartMs=Date.UTC(endDate.getUTCFullYear(),endDate.getUTCMonth(),1);
+  const monthlyEndExclusiveMs=Math.min(endExclusiveMs,partialMonthStartMs);
+  const months=monthlyEndExclusiveMs>startMs
+    ?listBinanceSpotArchiveMonths(startMs,monthlyEndExclusiveMs):[];
+  const dailyStartMs=Math.max(startMs,partialMonthStartMs);
+  const dailyDates=dailyStartMs<endExclusiveMs
+    ?listBinanceSpotArchiveDays(dailyStartMs,endExclusiveMs):[];
+  if(months.length===0&&dailyDates.length===0)
+    throw new Error('ARCHIVE_WINDOW_HAS_NO_FULL_OR_DAILY_PERIODS');
   const concurrency=Math.max(1,Math.min(12,Math.trunc(Number(args.concurrency)||6)));
   const requestedMaxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
   const minSymbols=Math.max(1,Math.trunc(Number(args['min-symbols'])||80));
@@ -435,8 +478,11 @@ async function main(){
     created_at:new Date(started).toISOString(),
     methodology:{
       market:'BINANCE_SPOT_USDT_ONLY',
-      data_source:'OFFICIAL_BINANCE_PUBLIC_DATA_MONTHLY_KLINE_ARCHIVES',
+      data_source:'OFFICIAL_BINANCE_PUBLIC_DATA_MONTHLY_AND_DAILY_KLINE_ARCHIVES',
       intervals:['15m','5m'],
+      outer_validation_start:'2026-10-01T00:00:00.000Z',
+      fresh_untouched_holdout_start:'2026-11-01T00:00:00.000Z',
+      neural_training_capacity:MAX_NEURAL_TRAINING_SAMPLES,
       target_definition:TEMPORAL_TARGET_DEFINITION,
       outcome:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_WITHIN_4H',
       label_resolution:'CLOSED_15M_CANDLES_ONLY',
@@ -456,14 +502,18 @@ async function main(){
         'No exchange orders are submitted and no production service is contacted.'
       ]
     },
-    window:{start:startText,end_exclusive:endText,months},
+    window:{start:startText,end_exclusive:endText,months,daily_dates:dailyDates,
+      model_validation_start:'2026-10-01T00:00:00.000Z',
+      fresh_holdout_start:'2026-11-01T00:00:00.000Z'},
     universe:{current_spot_usdt_symbols:0,directional_crypto_symbols:0,selected_symbols:0,
       symbol_universe_scope:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY'},
     data_quality:{status:'NOT_EVALUATED',minimum_symbols:minSymbols,
       minimum_samples:minSamples,minimum_temporal_sequences:minSequences,
       symbols_with_samples:0,samples:0,temporal_sequence_samples:0,
-      archive_files_expected:0,archive_files_verified:0,archive_files_missing:0,
-      archive_coverage_ratio:0,invalid_samples:0,duplicate_ids:0,
+      archive_files_expected:0,archive_files_expected_monthly:0,archive_files_expected_daily:0,
+      archive_files_verified:0,archive_files_verified_monthly:0,archive_files_verified_daily:0,
+      archive_files_missing:0,archive_files_missing_monthly:0,archive_files_missing_daily:0,
+      archive_files_failed:0,archive_coverage_ratio:0,invalid_samples:0,duplicate_ids:0,
       spacing_violations:0,features_and_labels_audited:false},
     models:{status:'NOT_RUN'},
     archive_manifest:archiveManifest,
@@ -489,12 +539,12 @@ async function main(){
       symbol_universe_scope:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY',
       current_symbol_list_sha256:sha256(universe.join('\n'))
     };
-    console.log('[HISTORICAL_UNIVERSE] '+JSON.stringify({symbols:symbols.length,months:months.length,window:{start:startText,end_exclusive:endText},concurrency}));
+    console.log('[HISTORICAL_UNIVERSE] '+JSON.stringify({symbols:symbols.length,months:months.length,daily_dates:dailyDates.length,window:{start:startText,end_exclusive:endText},concurrency}));
     if(!symbols.includes('BTCUSDT'))throw new Error('BTCUSDT_NOT_IN_RESEARCH_UNIVERSE');
 
     const [btc15,btc5]=await Promise.all([
-      loadSymbolInterval({symbol:'BTCUSDT',interval:'15m',months,tempDir}),
-      loadSymbolInterval({symbol:'BTCUSDT',interval:'5m',months,tempDir})
+      loadSymbolInterval({symbol:'BTCUSDT',interval:'15m',months,dailyDates,tempDir}),
+      loadSymbolInterval({symbol:'BTCUSDT',interval:'5m',months,dailyDates,tempDir})
     ]);
     for(const file of [...btc15.files,...btc5.files])archiveManifest.push(file);
     if(btc15.rows.length<300||btc5.rows.length<300)
@@ -524,6 +574,9 @@ async function main(){
           verified_months_15m:btc15.verified_months,verified_months_5m:btc5.verified_months,
           missing_months_15m:btc15.missing_months,missing_months_5m:btc5.missing_months,
           failed_months_15m:btc15.failed_months,failed_months_5m:btc5.failed_months,
+          verified_days_15m:btc15.verified_days,verified_days_5m:btc5.verified_days,
+          missing_days_15m:btc15.missing_days,missing_days_5m:btc5.missing_days,
+          failed_days_15m:btc15.failed_days,failed_days_5m:btc5.failed_days,
           first_available_month_15m:btc15.first_available_month,first_available_month_5m:btc5.first_available_month,
           expected_months_after_listing_15m:btc15.expected_months_after_first_available,
           expected_months_after_listing_5m:btc5.expected_months_after_first_available,
@@ -536,8 +589,8 @@ async function main(){
       }
       try{
         const [asset15,asset5]=await Promise.all([
-          loadSymbolInterval({symbol,interval:'15m',months,tempDir}),
-          loadSymbolInterval({symbol,interval:'5m',months,tempDir})
+          loadSymbolInterval({symbol,interval:'15m',months,dailyDates,tempDir}),
+          loadSymbolInterval({symbol,interval:'5m',months,dailyDates,tempDir})
         ]);
         archiveManifest.push(...asset15.files,...asset5.files);
         if(!asset15.complete_from_first_available||!asset5.complete_from_first_available){
@@ -581,6 +634,9 @@ async function main(){
           verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
           missing_months_15m:asset15.missing_months,missing_months_5m:asset5.missing_months,
           failed_months_15m:asset15.failed_months,failed_months_5m:asset5.failed_months,
+          verified_days_15m:asset15.verified_days,verified_days_5m:asset5.verified_days,
+          missing_days_15m:asset15.missing_days,missing_days_5m:asset5.missing_days,
+          failed_days_15m:asset15.failed_days,failed_days_5m:asset5.failed_days,
           first_available_month_15m:asset15.first_available_month,first_available_month_5m:asset5.first_available_month,
           expected_months_after_listing_15m:asset15.expected_months_after_first_available,
           expected_months_after_listing_5m:asset5.expected_months_after_first_available,
@@ -655,11 +711,17 @@ async function main(){
     const rejectionJsonl=serializeJsonlRows(temporalGeneration.rejected_samples);
     await mkdir(resolve(REJECTION_PATH,'..'),{recursive:true});
     await writeFile(REJECTION_PATH,rejectionJsonl,'utf8');
-    const archiveExpected=symbols.length*months.length*2;
+    const archiveExpected=symbols.length*(months.length+dailyDates.length)*2;
     const archiveVerified=archiveManifest.filter(file=>file.status==='VERIFIED').length;
     const archiveMissing=archiveManifest.filter(file=>file.status==='MISSING').length;
     const archiveFailed=archiveManifest.filter(file=>file.status==='FAILED').length;
     const archiveCoverage=archiveExpected?archiveVerified/archiveExpected:0;
+    const archiveExpectedMonthly=symbols.length*months.length*2;
+    const archiveExpectedDaily=symbols.length*dailyDates.length*2;
+    const archiveVerifiedMonthly=archiveManifest.filter(file=>file.status==='VERIFIED'&&file.period_type==='monthly').length;
+    const archiveVerifiedDaily=archiveManifest.filter(file=>file.status==='VERIFIED'&&file.period_type==='daily').length;
+    const archiveMissingMonthly=archiveManifest.filter(file=>file.status==='MISSING'&&file.period_type==='monthly').length;
+    const archiveMissingDaily=archiveManifest.filter(file=>file.status==='MISSING'&&file.period_type==='daily').length;
     const expectedAfterListing=symbolResults.reduce((sum,row)=>
       sum+Math.max(0,Number(row.expected_months_after_listing_15m)||0)+
         Math.max(0,Number(row.expected_months_after_listing_5m)||0),0);
@@ -694,11 +756,14 @@ async function main(){
       minimumValidationSamples:20,
       minimumHoldoutSamples:20,
       minNeuralTrainingSamples:240,
-      maxNeuralTrainingSamples:1280,
+      maxNeuralTrainingSamples:MAX_NEURAL_TRAINING_SAMPLES,
       maxResolvedSamples:0,
       temporalOptions:{
         minimumHoldoutSamples:150,
-        liveHoldoutSamples:150
+        liveHoldoutSamples:150,
+        maxTrainingSamples:MAX_NEURAL_TRAINING_SAMPLES,
+        outerValidationStartAt:OUTER_VALIDATION_START_AT,
+        outerHoldoutStartAt:FRESH_HOLDOUT_START_AT
       }
     });
     const modelProfileElapsedMs=Date.now()-profileStartedAt;
@@ -808,12 +873,22 @@ async function main(){
       symbols_with_incomplete_archive_coverage:archiveGapSymbols,
       symbols_with_insufficient_archive_history:symbolResults.filter(row=>row.status==='INSUFFICIENT_ARCHIVE_HISTORY').length,
       samples:samples.length,temporal_sequence_samples:sequenceCount,
-      archive_files_expected_all_symbols_all_months:archiveExpected,archive_files_verified:archiveVerified,
-      archive_files_missing_404:archiveMissing,archive_files_failed:archiveFailed,
-      archive_coverage_ratio_all_symbols_all_months:Number(archiveCoverage.toFixed(5)),
+      archive_files_expected_all_symbols_all_periods:archiveExpected,
+      archive_files_expected_monthly:archiveExpectedMonthly,
+      archive_files_expected_daily:archiveExpectedDaily,
+      archive_files_verified:archiveVerified,
+      archive_files_verified_monthly:archiveVerifiedMonthly,
+      archive_files_verified_daily:archiveVerifiedDaily,
+      archive_files_missing_404:archiveMissing,
+      archive_files_missing_monthly:archiveMissingMonthly,
+      archive_files_missing_daily:archiveMissingDaily,
+      archive_files_failed:archiveFailed,
+      archive_coverage_ratio_all_symbols_all_periods:Number(archiveCoverage.toFixed(5)),
       archive_files_expected_after_first_available:expectedAfterListing,
       archive_files_verified_after_first_available:verifiedAfterListing,
       archive_coverage_ratio_after_first_available:Number(archiveCoverageAfterListing.toFixed(6)),
+      archive_window_full_months:months,
+      archive_window_daily_dates:dailyDates,
       archive_gap_symbols:archiveGapSymbols,
       allowed_archive_gap_symbols:Math.max(2,Math.ceil(symbols.length*0.01)),
       archive_coverage_required_after_listing:0.995,
@@ -929,7 +1004,7 @@ main().catch(async error=>{
     completed_at:new Date().toISOString(),
     methodology:{
       market:'BINANCE_SPOT_USDT_ONLY',
-      data_source:'OFFICIAL_BINANCE_PUBLIC_DATA_MONTHLY_KLINE_ARCHIVES',
+      data_source:'OFFICIAL_BINANCE_PUBLIC_DATA_MONTHLY_AND_DAILY_KLINE_ARCHIVES',
       paper_trading:true,real_order_execution:false,
       production_touched:false
     }

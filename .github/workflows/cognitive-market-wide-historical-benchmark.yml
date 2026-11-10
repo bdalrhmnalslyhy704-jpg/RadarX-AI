@@ -7,6 +7,7 @@ on:
       - research/historical-sequence-context-audit-20261110
       - research/tcn-micro-mask-fallback-20261110
       - research/tcn-micro-coverage-diagnostics-20261110
+      - research/cognitive-training-capacity-forward-holdout-20261110
     paths:
       - 'phase2/core/binance-spot-kline-archive.mjs'
       - 'phase2/core/cognitive-benchmark-metrics.mjs'
@@ -26,9 +27,9 @@ on:
         default: '2025-11-01'
         type: string
       end_exclusive:
-        description: Exclusive UTC end date (YYYY-MM-DD; use first day after last full month)
+        description: Exclusive UTC end date (YYYY-MM-DD; partial final month uses daily archives)
         required: false
-        default: '2026-11-01'
+        default: '2026-11-10'
         type: string
       max_symbols:
         description: 0 means all currently trading directional Spot USDT symbols
@@ -76,12 +77,12 @@ jobs:
         run: |
           node --test --test-timeout=60000 phase2/tests/binance-spot-kline-archive.test.mjs
           node --test --test-timeout=60000 phase2/tests/cognitive-benchmark-metrics.test.mjs
-      - name: Replay verified monthly Spot archives and evaluate all cognitive models
+      - name: Replay verified monthly and daily Spot archives with expanded training and a fresh forward holdout
         id: benchmark
         run: |
           node phase2/tools/cognitive-market-wide-historical-benchmark.mjs \
             --start '${{ github.event.inputs.start || '2025-11-01' }}' \
-            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-10' }}' \
             --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
             --concurrency 6 \
             --min-symbols 80 \
