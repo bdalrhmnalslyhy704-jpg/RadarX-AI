@@ -617,6 +617,7 @@ async function main(){
     };
     report.temporal_sample_file={
       path:temporalSamplesOutput,rows:temporalSequenceRows,
+      declared_sequence_count:temporalSequenceRows+temporalSequenceInvalidDeclared,
       rejected_or_missing_sequences:temporalSequenceRejected,
       invalid_declared_sequences:temporalSequenceInvalidDeclared,
       sequence_steps:24,sequence_channels:29,
