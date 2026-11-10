@@ -60,7 +60,7 @@ async function loadTemporalSequences(path,expectedSha256,expectedRows){
       invalidShape++;continue;
     }
     if(byId.has(id)){duplicateIds++;continue;}
-    byId.set(id,row.temporal_sequence);
+    byId.set(id,{symbol,at,sequence:row.temporal_sequence});
   }
   if(malformed||invalidShape||duplicateIds||byId.size!==Number(expectedRows))
     throw new Error('TEMPORAL_SIDECAR_ROW_AUDIT_FAILED:'+JSON.stringify({
@@ -75,7 +75,7 @@ async function loadTargetSamples(path,targetPct,temporalById){
   const input=createReadStream(path,{encoding:'utf8'});
   const lines=readline.createInterface({input,crlfDelay:Infinity});
   const samples=[];
-  let linesRead=0,malformed=0,missingTarget=0,temporalAttached=0,temporalMissing=0;
+  let linesRead=0,malformed=0,missingTarget=0,temporalAttached=0,temporalMissing=0,temporalIdentityMismatch=0;
   for await(const line of lines){
     if(!line.trim())continue;
     linesRead++;
@@ -85,8 +85,15 @@ async function loadTargetSamples(path,targetPct,temporalById){
     const label=sample?.targets?.[key];
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
-    const temporal_sequence=temporalById.get(String(sample.id||''))||null;
-    if(temporal_sequence)temporalAttached++;else temporalMissing++;
+    const temporalRow=temporalById.get(String(sample.id||''))||null;
+    const identityMatches=temporalRow&&temporalRow.symbol===String(sample.symbol||'').trim().toUpperCase()&&
+      temporalRow.at===Number(sample.at);
+    const temporal_sequence=identityMatches?temporalRow.sequence:null;
+    if(temporal_sequence)temporalAttached++;
+    else{
+      temporalMissing++;
+      if(temporalRow&&!identityMatches)temporalIdentityMismatch++;
+    }
     samples.push({
       id:sample.id,symbol:sample.symbol,at:sample.at,
       feature_information_cutoff_at:sample.feature_information_cutoff_at,
@@ -97,7 +104,8 @@ async function loadTargetSamples(path,targetPct,temporalById){
     });
   }
   return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
-    temporal_attached:temporalAttached,temporal_missing:temporalMissing};
+    temporal_attached:temporalAttached,temporal_missing:temporalMissing,
+    temporal_identity_mismatch:temporalIdentityMismatch};
 }
 async function writeJsonAtomic(path,value){
   await mkdir(dirname(path),{recursive:true});
