@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/daily-early-riser-census-20261109
+      - research/daily-early-riser-neural-20261110
     paths:
       - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
   workflow_dispatch:
@@ -68,8 +69,12 @@ jobs:
         run: |
           node --check phase2/core/daily-early-riser-census.mjs
           node --check phase2/tools/daily-early-riser-historical-census.mjs
-      - name: Run daily early-riser target and feature-cutoff tests
-        run: node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+      - name: Run daily early-riser label, cutoff, and neural-adapter tests
+        run: |
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
       - name: Replay checksum-verified monthly Spot archives and build daily event census
         id: census
         run: |
@@ -80,7 +85,12 @@ jobs:
             --min-quote-volume '${{ github.event.inputs.min_quote_volume || '750000' }}' \
             --max-samples-per-symbol '${{ github.event.inputs.max_samples_per_symbol || '500' }}' \
             --concurrency '${{ github.event.inputs.concurrency || '4' }}'
-      - name: Upload daily census report, labels, archive manifests and request provenance
+      - name: Train and evaluate daily MLP, GBDT, and hybrid challengers
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --output artifacts/daily-early-riser-neural-benchmark.json
+      - name: Upload daily census and neural benchmark artifacts, labels, archive manifests and request provenance
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -107,6 +117,8 @@ jobs:
             methodology:report.methodology,
             data_quality:report.data_quality,
             targets:report.targets,
+            daily_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-neural-benchmark.json')
+              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-neural-benchmark.json','utf8')):null,
             sample_file:report.sample_file,
             production_touched:report.production_touched===true,
             deployed:report.deployed===true,
