@@ -211,6 +211,7 @@ async function main(){
       expectedTemporal.sha256,Number(expectedTemporal.rows));
     report.temporal_sidecar_audit={
       rows:temporalSidecar.rows,bytes:temporalSidecar.bytes,sha256:temporalSidecar.sha256,
+      coverage_pct:Number((temporalSidecar.rows/Number(expectedSamples.rows)*100).toFixed(3)),
       sequence_steps:24,sequence_channels:29,verified_against_census_report:true
     };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
