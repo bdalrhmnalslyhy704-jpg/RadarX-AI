@@ -146,7 +146,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
     horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
-    feature_schema_note:'Uses the existing 18-feature Cognitive V5 vector. Daily 24h return, daily BTC-relative return and absolute quote volume are not added as new neural channels in this first benchmark.',
+    feature_schema_note:'MLP/GBDT use the existing 18-feature Cognitive V5 vector. The daily TCN uses the pre-existing 24x29 temporal channels, which already encode asset/BTC 24h returns, relative return, volatility and volume/trade ratios; absolute 24h USDT quote volume remains an upstream universe gate, not a neural channel.',
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,
