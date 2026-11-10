@@ -33,7 +33,8 @@ async function sha256File(path){
 function validTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===24&&
     sequence.every(step=>Array.isArray(step)&&step.length===29&&
-      step.every(value=>Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
+      step.every(value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&
+        Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
 }
 async function loadTemporalSequences(path,expectedSha256,expectedRows){
   const sourceStat=await stat(path);
