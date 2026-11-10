@@ -127,6 +127,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
     learningRate:0.10,
     minNeuralTrainingSamples:240,
+    minimumNeuralSelectionSamples:200,
     maxNeuralTrainingSamples:6000,
     temporalSamples:[],
     temporalOptions:{},
