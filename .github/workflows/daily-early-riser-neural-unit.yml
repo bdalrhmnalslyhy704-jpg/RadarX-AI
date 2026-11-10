@@ -1,0 +1,56 @@
+name: Build 224 Daily Early-Riser Neural Unit Gate
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-neural-20261110
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-neural-unit.yml'
+  pull_request:
+    branches:
+      - research/daily-early-riser-census-20261109
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-neural-unit.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-early-riser-neural-unit-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-neural-contract:
+    name: Syntax and daily neural contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated research revision
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check daily neural modules and benchmark runner
+        run: |
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+      - name: Test daily labels, temporal sidecar adapter and selection gates
+        run: |
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
