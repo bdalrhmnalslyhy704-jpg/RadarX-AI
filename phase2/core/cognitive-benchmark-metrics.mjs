@@ -152,7 +152,9 @@ export function evaluateForwardMoveDiscovery(rows,scoreSelector){
       .filter(value=>Number.isFinite(value)&&value>=0).sort((a,b)=>a-b);
     const quantile=(values,q)=>values.length?values[Math.min(values.length-1,
       Math.max(0,Math.ceil(values.length*q)-1))]:null;
-    const median=values=>quantile(values,0.5);
+    const median=values=>!values.length?null:values.length%2
+      ?values[Math.floor(values.length/2)]
+      :(values[values.length/2-1]+values[values.length/2])/2;
     const top=(fraction)=>{
       if(!eligible.length)return {selected_count:0,detected_count:0,false_candidate_count:0,
         missed_move_count:positives.length,precision_pct:null,recall_pct:null,

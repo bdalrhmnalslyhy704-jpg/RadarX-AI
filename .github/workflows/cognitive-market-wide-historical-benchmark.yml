@@ -119,6 +119,7 @@ jobs:
             baseline_split_integrity:m.baseline_split_integrity,
             existing_engine_baselines:m.existing_engine_baselines,
             model_vs_existing_engine:m.model_vs_existing_engine,
+            forward_move_detection:m.forward_move_detection,
             neural:{status:p.neural_network?.status,validation:p.neural_network?.validation,holdout:p.neural_network?.holdout},
             boosted_tree:{status:p.boosted_tree_model?.status,validation:p.boosted_tree_model?.validation,holdout:p.boosted_tree_model?.holdout},
             hybrid:{status:p.hybrid_model?.status,selection:p.hybrid_model?.candidate_selection_metrics,validation:p.hybrid_model?.validation,holdout:p.hybrid_model?.holdout},

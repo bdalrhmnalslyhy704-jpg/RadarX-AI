@@ -21,10 +21,10 @@ import {
   isTokenizedSecurityCandidateSymbol
 } from '../core/market-wide-light-scan.mjs';
 import {
-  buildCognitiveLearningProfile
+  buildCognitiveLearningProfile,assessCognitiveCandidate
 } from '../core/cognitive-brain.mjs';
 import {TEMPORAL_TARGET_DEFINITION} from '../core/temporal-neural-brain.mjs';
-import {evaluateExistingEngineBaselines,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
+import {evaluateExistingEngineBaselines,evaluateForwardMoveDiscovery,serializeJsonlRows} from '../core/cognitive-benchmark-metrics.mjs';
 
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
@@ -485,6 +485,14 @@ async function main(){
       neural_training_capacity:MAX_NEURAL_TRAINING_SAMPLES,
       target_definition:TEMPORAL_TARGET_DEFINITION,
       outcome:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_WITHIN_4H',
+      independent_forward_move_audit:{
+        thresholds_pct:[5,10,15],
+        event_definition:'THRESHOLD_REACHED_BEFORE_MINUS_2PCT_STOP_WITHIN_4H',
+        bar_resolution:'CLOSED_15M_CANDLES_ONLY',
+        same_bar_target_stop:'AMBIGUOUS_EXCLUDED',
+        metrics:['top_10_pct','top_20_pct','precision','recall','missed_moves',
+          'false_candidates','score_coverage','time_to_hit_minutes']
+      },
       label_resolution:'CLOSED_15M_CANDLES_ONLY',
       features_use_future_data:false,
       outcome_uses_strictly_later_candles:true,
@@ -797,6 +805,41 @@ async function main(){
       baselineSplitIntegrity.training_outcomes_end_before_validation&&
       baselineSplitIntegrity.validation_count_matches&&baselineSplitIntegrity.holdout_count_matches&&
       validationRows.length>0&&holdoutRows.length>0;
+    const selectedModelReady=profile.probability_ready===true||
+      profile.temporal_network?.probability_ready===true;
+    const selectedThresholdModel=profile.temporal_network?.probability_ready===true
+      ?'TEMPORAL_TCN':String(profile.model_selection?.selected_model||'');
+    const scoreThresholdRows=rows=>rows.map(row=>{
+      if(!selectedModelReady)return {...row,validated_model_probability_pct:null};
+      const assessment=assessCognitiveCandidate({
+        symbol:row.symbol,price:row.price,score:row.base_score,
+        tier:row.tier,data_valid:true,data_stale:false,closed_candles_only:true,
+        candle_age_ms:0,features:row.features,temporal_sequence:row.temporal_sequence
+      },profile,Number(row.at)||Date.now());
+      return {...row,validated_model_probability_pct:finite(assessment.predicted_up_probability)};
+    });
+    const evaluateForwardMoveSignals=rows=>{
+      const scoredRows=scoreThresholdRows(rows);
+      return {
+        current_engine_base_score:evaluateForwardMoveDiscovery(scoredRows,row=>row.base_score),
+        current_engine_score_excluding_late_move:evaluateForwardMoveDiscovery(scoredRows,
+          row=>String(row.tier||'').toUpperCase()==='LATE_MOVE'?null:row.base_score),
+        existing_early_setup_gate:evaluateForwardMoveDiscovery(scoredRows,
+          row=>String(row.tier||'').toUpperCase()==='EARLY_SETUP'?row.base_score:null),
+        simple_hourly_momentum:evaluateForwardMoveDiscovery(scoredRows,row=>row.features?.hourly_return_pct),
+        selected_validated_model:selectedModelReady
+          ?evaluateForwardMoveDiscovery(scoredRows,row=>row.validated_model_probability_pct)
+          :{evaluated:false,reason:'NO_SELECTED_MODEL_PASSED_BOTH_CHRONOLOGICAL_GATES'}
+      };
+    };
+    const forwardMoveDetection=baselineSplitIntegrity.ready?{
+      status:'EVALUATED_ON_FROZEN_CHRONOLOGICAL_ROWS',
+      target:'5/10/15_PERCENT_FIRST_PASSAGE_BEFORE_MINUS_2_PERCENT_WITHIN_4H',
+      validation:evaluateForwardMoveSignals(validationRows),
+      untouched_holdout:evaluateForwardMoveSignals(holdoutRows),
+      selected_validated_model:selectedModelReady?selectedThresholdModel:null,
+      ambiguous_same_bar_events:'EXCLUDED_FROM_EVENT_DENOMINATORS'
+    }:{status:'BLOCKED_SPLIT_INTEGRITY_FAILED'};
     const existingEngineBaselines=baselineSplitIntegrity.ready?{
       validation:evaluateExistingEngineBaselines(validationRows),
       holdout:evaluateExistingEngineBaselines(holdoutRows),
@@ -952,6 +995,7 @@ async function main(){
       predictive_superiority_verified:predictiveSuperiorityVerified,
       existing_engine_baselines:existingEngineBaselines,
       model_vs_existing_engine:modelVsExistingEngine,
+      forward_move_detection:forwardMoveDetection,
       selected_model_name:selectedModelName,
       selected_model_beats_existing_engine:selectedModelBeatsEngine,
       temporal_tcn_beats_existing_engine:temporalModelBeatsEngine,
