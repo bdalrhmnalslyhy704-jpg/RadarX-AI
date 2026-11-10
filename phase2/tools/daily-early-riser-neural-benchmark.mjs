@@ -195,7 +195,8 @@ async function main(){
           malformed_lines:loaded.malformed_lines,
           missing_target_rows:loaded.missing_target_rows,
           temporal_attached:loaded.temporal_attached,
-          temporal_missing:loaded.temporal_missing
+          temporal_missing:loaded.temporal_missing,
+          temporal_identity_mismatch:loaded.temporal_identity_mismatch
         }
       };
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
