@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/build224-market-wide-light-scan-20261010
+      - feature/build224-outcome-validation-20261011
     paths:
       - 'phase2/tools/market-wide-light-outcome-backtest.mjs'
       - '.github/workflows/market-wide-light-outcome-backtest.yml'
