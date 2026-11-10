@@ -1,4 +1,5 @@
 import {buildCognitiveLearningProfile,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
+import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
 export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
@@ -12,6 +13,12 @@ const finite=value=>{
   return Number.isFinite(number)?number:null;
 };
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
+const targetDefinition=target=>'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+function validTemporalSequence(sequence){
+  return Array.isArray(sequence)&&sequence.length===TEMPORAL_SEQUENCE_STEPS&&
+    sequence.every(step=>Array.isArray(step)&&step.length===TEMPORAL_SEQUENCE_CHANNELS&&
+      step.every(value=>finite(value)!==null&&Math.abs(Number(value))<=4));
+}
 
 export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
   const target=finite(targetPct);
@@ -32,7 +39,7 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
     sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
     return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
   if(label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
-    typeof label.target_definition!=='string'||!label.target_definition.includes('24H_15M'))
+    label.target_definition!==targetDefinition(target))
     return {row:null,reason:'OUTCOME_SOURCE_OR_DEFINITION_MISMATCH'};
   const symbol=String(sample.symbol||'').trim().toUpperCase();
   const id=String(sample.id||'').trim();
@@ -49,6 +56,8 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
       outcome:label.outcome,
       outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
       target_definition:label.target_definition,
+      first_passage:{path_resolution:'15M',outcome:label.outcome},
+      temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
       historical_baseline:true,
       closed_candle_baseline:true,
       training_eligible:true,
@@ -88,6 +97,20 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   }
   rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
   const outcomeCounts=countOutcomes(rows);
+  const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
+  const targetContract=targetDefinition(target);
+  const temporal=buildTemporalNeuralProfile(temporalRows,{
+    minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
+    maxTrainingSamples:Math.max(160,Math.min(1280,Math.trunc(options.temporalMaxTrainingSamples||1280))),
+    minimumValidationSamples:Math.max(24,Math.trunc(options.temporalMinValidationSamples||24)),
+    minimumHoldoutSamples:Math.max(40,Math.trunc(options.temporalMinHoldoutSamples||40)),
+    liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
+    epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
+    targetDefinition:targetContract,
+    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    comparisonMargin:0.003
+  });
   const profile=buildCognitiveLearningProfile(rows,{
     minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
     minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
@@ -124,8 +147,36 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_schema_note:'Uses the existing 18-feature Cognitive V5 vector. Daily 24h return, daily BTC-relative return and absolute quote volume are not added as new neural channels in this first benchmark.',
-    temporal_tcn_training_performed:false,
-    temporal_tcn_reason:'Daily 24h TCN requires an explicit 24h target contract; the existing production TCN remains bound to its separate 4h target.',
+    temporal_tcn_training_performed:temporal.trained===true,
+    temporal_tcn_reason:temporalRows.length?'DAILY_24H_TCN_TRAINED_OR_EVALUATED':'NO_VALID_24X29_TEMPORAL_SEQUENCES',
+    temporal_tcn:{
+      status:temporal.status??'NOT_EVALUATED',
+      architecture:temporal.architecture??null,
+      target_definition:temporal.target_definition??targetContract,
+      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      sequence_steps:temporal.sequence_steps??TEMPORAL_SEQUENCE_STEPS,
+      sequence_channels:temporal.sequence_channels??TEMPORAL_SEQUENCE_CHANNELS,
+      resolved_samples:temporal.resolved_samples??0,
+      training_samples:temporal.training_samples??0,
+      validation_samples:temporal.validation_samples??0,
+      holdout_samples:temporal.holdout_samples??0,
+      outer_training_samples:temporal.outer_training_samples??0,
+      outer_validation_samples:temporal.outer_validation_samples??0,
+      outer_holdout_samples:temporal.outer_holdout_samples??0,
+      validation_start_at:temporal.validation_start_at??null,
+      holdout_start_at:temporal.holdout_start_at??null,
+      max_training_outcome_resolved_at:temporal.max_training_outcome_resolved_at??null,
+      trained:temporal.trained===true,
+      selected:temporal.selected===true,
+      probability_ready:temporal.probability_ready===true,
+      live_eligibility_ready:temporal.live_eligibility_ready===true,
+      validation:temporal.validation??null,
+      holdout:temporal.holdout??null,
+      holdout_comparison:temporal.holdout_comparison??null,
+      regime_specialists:temporal.regime_specialists??null,
+      supported_regimes:temporal.supported_regimes??[],
+      selected_regimes:temporal.selected_regimes??[]
+    },
     samples:{
       accepted:rows.length,
       rejected:Object.values(rejected).reduce((sum,value)=>sum+value,0),
@@ -145,11 +196,20 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       maximum_training_outcome_resolved_at:profile.max_training_outcome_resolved_at??null,
       label_horizon_purged_at_both_outer_boundaries:true
     },
-    logistic_reference:{
+    legacy_three_way_diagnostic:{
+      target_semantics:'UP=1, DOWN=0, FLAT=0.5; this legacy soft-label diagnostic is not the binary up-event comparator',
       selected_model:profile.model_selection?.selected_model??null,
       validation:profile.validation??null,
       holdout:profile.holdout??null,
       model_selection_reason:selected.reason??null
+    },
+    binary_up_event_contract:{
+      target_semantics:'UP=1; DOWN and FLAT=0 for all primary probability comparisons',
+      required_brier_margin:0.003,
+      neural_validation_comparison:neural.validation_comparison??null,
+      neural_holdout_comparison:neural.holdout_comparison??null,
+      boosted_tree_same_window_logistic_validation:boosted.same_window_logistic_validation??null,
+      boosted_tree_same_window_logistic_holdout:boosted.same_window_logistic_holdout??null
     },
     neural_network:{
       status:neural.status??'NOT_EVALUATED',
@@ -201,6 +261,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     approval:{
       historical_prediction_gate_passed:profile.challenger_holdout_comparison?.passed===true||
         selected.challenger_holdout_comparison?.passed===true,
+      daily_tcn_historical_holdout_gate_passed:temporal.holdout_comparison?.passed===true,
       forward_shadow_required:true,
       predictive_superiority_verified:false,
       profitability_verified:false,
