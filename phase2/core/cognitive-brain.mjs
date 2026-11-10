@@ -1238,6 +1238,9 @@ export function buildCognitiveLearningProfile(samples = [], {
     Math.trunc(Number(minimumNeuralSelectionNegativeSamples)||0)));
   const neuralSelectionPositiveSamples=neuralSelection.filter(row=>Number(row.target)===1).length;
   const neuralSelectionNegativeSamples=neuralSelection.length-neuralSelectionPositiveSamples;
+  // The outer validation minimum remains independent from inner selection.
+  const neuralSelectionMinimum=effectiveNeuralSelectionMinimum(
+    minimumValidationSamples,minimumNeuralSelectionSamples);
   const neuralSelectionSupportReady=hasNeuralSelectionSupport({
     sampleCount:neuralSelection.length,positiveCount:neuralSelectionPositiveSamples,
     negativeCount:neuralSelectionNegativeSamples,minimumSamples:neuralSelectionMinimum,
@@ -1265,9 +1268,6 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.resolved_at<neuralHybridSelectionStartAt);
   const neuralHybridSelection=neuralHybridSelectionStartAt===null?[]:neuralCalibration.filter(row=>
     row.at>=neuralHybridSelectionStartAt&&row.resolved_at<validationStartAt);
-  // The outer validation minimum remains independent from inner selection.
-  const neuralSelectionMinimum=effectiveNeuralSelectionMinimum(
-    minimumValidationSamples,minimumNeuralSelectionSamples);
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
   let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
