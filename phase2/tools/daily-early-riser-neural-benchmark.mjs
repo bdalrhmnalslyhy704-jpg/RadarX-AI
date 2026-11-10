@@ -216,8 +216,9 @@ async function main(){
     };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
-      if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.missing_target_rows!==0)
-        throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_OR_TARGET_MISMATCH:'+target);
+      if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.samples.length!==Number(expectedSamples.rows)||
+        loaded.malformed_lines!==0||loaded.missing_target_rows!==0)
+        throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_PARSE_OR_TARGET_MISMATCH:'+target);
       if(loaded.temporal_identity_mismatch!==0||loaded.temporal_flagged_missing!==0||
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
