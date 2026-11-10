@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
-import {mkdir,stat,writeFile,rename} from 'node:fs/promises';
+import {mkdir,stat,writeFile,rename,readFile} from 'node:fs/promises';
 import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
@@ -10,6 +10,8 @@ import {
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 
 const DEFAULT_INPUT='artifacts/daily-early-riser-samples.jsonl';
+const DEFAULT_TEMPORAL_INPUT='artifacts/daily-early-riser-temporal-sequences.jsonl';
+const DEFAULT_CENSUS_REPORT='artifacts/daily-early-riser-census.json';
 const DEFAULT_OUTPUT='artifacts/daily-early-riser-neural-benchmark.json';
 
 function parseArgs(argv){
@@ -28,12 +30,51 @@ async function sha256File(path){
   for await(const chunk of createReadStream(path))hash.update(chunk);
   return hash.digest('hex');
 }
-async function loadTargetSamples(path,targetPct){
+function validTemporalSequence(sequence){
+  return Array.isArray(sequence)&&sequence.length===24&&
+    sequence.every(step=>Array.isArray(step)&&step.length===29&&
+      step.every(value=>Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
+}
+async function loadTemporalSequences(path,expectedSha256,expectedRows){
+  const sourceStat=await stat(path);
+  if(!sourceStat.isFile()||sourceStat.size<=0)throw new Error('TEMPORAL_SIDECAR_NOT_READABLE');
+  const actualSha256=await sha256File(path);
+  if(typeof expectedSha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedSha256)||
+    actualSha256.toLowerCase()!==expectedSha256.toLowerCase())
+    throw new Error('TEMPORAL_SIDECAR_SHA256_MISMATCH');
+  const input=createReadStream(path,{encoding:'utf8'});
+  const lines=readline.createInterface({input,crlfDelay:Infinity});
+  const byId=new Map();
+  let linesRead=0,malformed=0,invalidShape=0,duplicateIds=0;
+  for await(const line of lines){
+    if(!line.trim())continue;
+    linesRead++;
+    let row;
+    try{row=JSON.parse(line);}
+    catch{malformed++;continue;}
+    const id=String(row?.id||'').trim();
+    const symbol=String(row?.symbol||'').trim().toUpperCase();
+    const at=Number(row?.at);
+    if(!id||!symbol||!Number.isFinite(at)||at<=0||!validTemporalSequence(row.temporal_sequence)){
+      invalidShape++;continue;
+    }
+    if(byId.has(id)){duplicateIds++;continue;}
+    byId.set(id,row.temporal_sequence);
+  }
+  if(malformed||invalidShape||duplicateIds||byId.size!==Number(expectedRows))
+    throw new Error('TEMPORAL_SIDECAR_ROW_AUDIT_FAILED:'+JSON.stringify({
+      lines_read:linesRead,valid_rows:byId.size,expected_rows:expectedRows,
+      malformed_lines:malformed,invalid_shape:invalidShape,duplicate_ids:duplicateIds
+    }));
+  return {by_id:byId,sha256:actualSha256,rows:byId.size,bytes:sourceStat.size,
+    sequence_steps:24,sequence_channels:29};
+}
+async function loadTargetSamples(path,targetPct,temporalById){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   const input=createReadStream(path,{encoding:'utf8'});
   const lines=readline.createInterface({input,crlfDelay:Infinity});
   const samples=[];
-  let linesRead=0,malformed=0,missingTarget=0;
+  let linesRead=0,malformed=0,missingTarget=0,temporalAttached=0,temporalMissing=0;
   for await(const line of lines){
     if(!line.trim())continue;
     linesRead++;
@@ -43,15 +84,19 @@ async function loadTargetSamples(path,targetPct){
     const label=sample?.targets?.[key];
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
+    const temporal_sequence=temporalById.get(String(sample.id||''))||null;
+    if(temporal_sequence)temporalAttached++;else temporalMissing++;
     samples.push({
       id:sample.id,symbol:sample.symbol,at:sample.at,
       feature_information_cutoff_at:sample.feature_information_cutoff_at,
       observation_source:sample.observation_source,
       features:sample.features,
+      temporal_sequence,
       targets:{[key]:label}
     });
   }
-  return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget};
+  return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
+    temporal_attached:temporalAttached,temporal_missing:temporalMissing};
 }
 async function writeJsonAtomic(path,value){
   await mkdir(dirname(path),{recursive:true});
@@ -69,12 +114,19 @@ function compactTarget(result){
     boosted_tree_model:result.boosted_tree_model,
     hybrid_model:result.hybrid_model,
     model_selection:result.model_selection,
+    temporal_tcn_training_performed:result.temporal_tcn_training_performed,
+    temporal_tcn_reason:result.temporal_tcn_reason,
+    temporal_tcn:result.temporal_tcn,
+    binary_up_event_contract:result.binary_up_event_contract,
+    legacy_three_way_diagnostic:result.legacy_three_way_diagnostic,
     approval:result.approval
   };
 }
 async function main(){
   const args=parseArgs(process.argv.slice(2));
   const input=resolve(args.input||DEFAULT_INPUT);
+  const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
+  const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const output=resolve(args.output||DEFAULT_OUTPUT);
   const started=Date.now();
   const report={
@@ -82,15 +134,18 @@ async function main(){
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
+    temporal_input_file:temporalInput,
+    census_report_file:censusReportPath,
+    temporal_sidecar_audit:null,
     target_results:{},
     methodology:{
       labels:'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
-      feature_schema:'Existing Cognitive V5 18-feature schema; no new daily-return feature channels are introduced in this first neural benchmark',
+      feature_schema:'MLP/GBDT use the existing Cognitive V5 18-feature vector; the independent daily TCN uses the original 24x29 closed-candle temporal sequence, including 24h asset/BTC/relative-strength and liquidity context',
       models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid'],
       comparison_margin_brier:0.003,
-      tcn:'Not trained in this step; current TCN remains bound to the distinct 4h target until a separately validated daily TCN contract is implemented',
+      tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
     },
     production_touched:false,
@@ -105,15 +160,29 @@ async function main(){
     const sourceStat=await stat(input);
     if(!sourceStat.isFile()||sourceStat.size<=0)throw new Error('SAMPLE_FILE_NOT_READABLE');
     report.input_sha256=await sha256File(input);
+    const censusReport=JSON.parse(await readFile(censusReportPath,'utf8'));
+    if(censusReport?.status!=='AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'&&
+      censusReport?.status!=='READY')throw new Error('CENSUS_REPORT_NOT_AUDITED');
+    const expectedTemporal=censusReport?.temporal_sample_file;
+    if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1)
+      throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
+    const temporalSidecar=await loadTemporalSequences(temporalInput,
+      expectedTemporal.sha256,Number(expectedTemporal.rows));
+    report.temporal_sidecar_audit={
+      rows:temporalSidecar.rows,bytes:temporalSidecar.bytes,sha256:temporalSidecar.sha256,
+      sequence_steps:24,sequence_channels:29,verified_against_census_report:true
+    };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
-      const loaded=await loadTargetSamples(input,target);
+      const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
         source_rows:{
           lines_read:loaded.lines_read,
           malformed_lines:loaded.malformed_lines,
-          missing_target_rows:loaded.missing_target_rows
+          missing_target_rows:loaded.missing_target_rows,
+          temporal_attached:loaded.temporal_attached,
+          temporal_missing:loaded.temporal_missing
         }
       };
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
