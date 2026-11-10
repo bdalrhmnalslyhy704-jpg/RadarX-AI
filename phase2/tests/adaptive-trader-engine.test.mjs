@@ -312,14 +312,14 @@ test('missing 5m history is masked but separately audited from invalid zero-trad
   assert.ok(samples.every(row=>row.temporal_sequence.length===24));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.slice(8,14).every(value=>value===0))));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step[28]===0)));
-  assert.ok(samples.every(row=>
-    row.temporal_sequence_micro_unavailable_reason_counts.MICRO_5M_BASELINE_ROW_MISSING===24));
-  assert.equal(samples[0].temporal_sequence_micro_downgrade_counts.MICRO_5M_CURRENT_VOLUME_NONPOSITIVE,undefined);
-  assert.equal(samples[0].temporal_sequence_micro_unavailable_reason_counts.MICRO_5M_FEATURE_CONTEXT_INVALID,undefined);
   assert.equal(samples.generation_audit.micro_unavailable_reason_counts.MICRO_5M_BASELINE_ROW_MISSING,
-    samples.length*24);
+    samples.length*24,
+    'missing 5m history is counted at the per-step generation audit, not copied into every sample row');
+  assert.equal(samples.generation_audit.micro_downgraded_steps,0,
+    'missing rows are a structural availability reason, not a zero-trade feature downgrade');
+  assert.equal(samples.generation_audit.micro_downgrade_counts.MICRO_5M_CURRENT_VOLUME_NONPOSITIVE,undefined);
+  assert.equal(samples.generation_audit.micro_unavailable_reason_counts.MICRO_5M_FEATURE_CONTEXT_INVALID,undefined);
 });
-
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
