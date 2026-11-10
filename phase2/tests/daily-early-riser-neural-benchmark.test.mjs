@@ -125,7 +125,18 @@ test('daily 24h target contract is accepted only through explicit TCN opt-in; le
   assert.equal(dailyProfile.target_definition,dailyDefinition);
   assert.equal(dailyProfile.sequence_steps,24);
   assert.equal(dailyProfile.sequence_channels,29);
-  const legacyProfile=buildTemporalNeuralProfile([prepared.row]);
-  assert.equal(legacyProfile.resolved_samples,0);
+  const dailyOnLegacyDefault=buildTemporalNeuralProfile([prepared.row]);
+  assert.equal(dailyOnLegacyDefault.resolved_samples,0);
+  assert.equal(dailyOnLegacyDefault.target_definition,TEMPORAL_TARGET_DEFINITION);
+  const legacySample={
+    ...prepared.row,
+    id:'LEGACY_4H:AAAUSDT:'+String(prepared.row.at),
+    resolved_at:prepared.row.at+4*60*60*1000,
+    horizon_ms:4*60*60*1000,
+    outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
+    target_definition:TEMPORAL_TARGET_DEFINITION
+  };
+  const legacyProfile=buildTemporalNeuralProfile([legacySample]);
+  assert.equal(legacyProfile.resolved_samples,1);
   assert.equal(legacyProfile.target_definition,TEMPORAL_TARGET_DEFINITION);
 });
