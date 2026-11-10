@@ -6,6 +6,9 @@ import {
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
+  effectiveNeuralSelectionMinimum
+} from '../core/cognitive-brain.mjs';
+import {
   buildTemporalNeuralProfile,
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_SEQUENCE_STEPS,
@@ -139,4 +142,12 @@ test('daily 24h target contract is accepted only through explicit TCN opt-in; le
   const legacyProfile=buildTemporalNeuralProfile([legacySample]);
   assert.equal(legacyProfile.resolved_samples,1);
   assert.equal(legacyProfile.target_definition,TEMPORAL_TARGET_DEFINITION);
+});
+
+
+test('daily inner neural selection floor is independent from outer validation minimum while legacy default is preserved',()=>{
+  assert.equal(effectiveNeuralSelectionMinimum(3000),3000);
+  assert.equal(effectiveNeuralSelectionMinimum(3000,200),200);
+  assert.equal(effectiveNeuralSelectionMinimum(3000,5),20);
+  assert.equal(effectiveNeuralSelectionMinimum(100,1200),900);
 });
