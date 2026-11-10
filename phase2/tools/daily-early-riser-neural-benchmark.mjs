@@ -134,6 +134,8 @@ function compactTarget(result){
     temporal_tcn_training_performed:result.temporal_tcn_training_performed,
     temporal_tcn_evaluation_performed:result.temporal_tcn_evaluation_performed,
     temporal_tcn_sequence_samples:result.temporal_tcn_sequence_samples,
+    temporal_tree_training_performed:result.temporal_tree_training_performed,
+    temporal_tree_challenger:result.temporal_tree_challenger,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -250,6 +252,11 @@ async function main(){
         tcn_validation_brier:result.temporal_tcn.validation?.model_brier_score??null,
         tcn_holdout_brier:result.temporal_tcn.holdout?.model_brier_score??null,
         tcn_holdout_passed:result.temporal_tcn.holdout_comparison?.passed===true,
+        temporal_tree_status:result.temporal_tree_challenger.status,
+        temporal_tree_training_samples:result.temporal_tree_challenger.training_samples,
+        temporal_tree_holdout_brier:result.temporal_tree_challenger.holdout?.model_brier_score??null,
+        temporal_tree_logistic_holdout_brier:result.temporal_tree_challenger.holdout_logistic?.model_brier_score??null,
+        temporal_tree_holdout_passed:result.temporal_tree_challenger.holdout_comparison?.passed===true,
         selected_challenger:result.model_selection.validation_challenger,
         holdout_passed:result.model_selection.holdout_comparison?.passed===true
       }));
