@@ -1877,11 +1877,14 @@ export function buildCognitivePrequentialProfile(journal = [], {
       (String(row.selected_model||row.model_variant||'')==='TEMPORAL_TCN'
         ? row.target_definition===TEMPORAL_TARGET_DEFINITION &&
           ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
-        : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
+        : row.target_definition===TEMPORAL_TARGET_DEFINITION
           ? isCognitiveBinaryModelVariant(row.selected_model||row.model_variant) &&
-            ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
-          : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
-            ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
+            ['CLOSED_CANDLE_4H_FIRST_PASSAGE_V1','HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'].includes(row.outcome_source)
+          : row.target_definition==='UP_CLOSE_RETURN_BINARY_V1'
+            ? isCognitiveBinaryModelVariant(row.selected_model||row.model_variant) &&
+              ['CLOSED_CANDLE_4H','HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)
+            : (row.target_definition===undefined||row.target_definition===null||row.target_definition==='LEGACY_4H_CLOSE_RETURN') &&
+              ['CLOSED_CANDLE_4H', 'HISTORICAL_CLOSED_CANDLE'].includes(row.outcome_source)) &&
       finite(row.at) !== null && finite(row.resolved_at) !== null &&
       finite(row.trained_through_at) !== null &&
       Number(row.trained_through_at) < Number(row.at) &&
