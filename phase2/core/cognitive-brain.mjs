@@ -130,6 +130,11 @@ export function hasCognitiveBrierSuperiority(candidateScore, baselineScore,
   return candidate !== null && baseline !== null && required !== null && required >= 0 &&
     baseline - candidate - required > 1e-12;
 }
+export function effectiveNeuralSelectionMinimum(minimumValidationSamples, requestedMinimum=null) {
+  const requested=finite(requestedMinimum);
+  if(requested===null)return Math.max(20,Math.trunc(Number(minimumValidationSamples)||20));
+  return Math.max(20,Math.min(900,Math.trunc(requested)));
+}
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)));
@@ -1236,12 +1241,9 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.resolved_at<neuralHybridSelectionStartAt);
   const neuralHybridSelection=neuralHybridSelectionStartAt===null?[]:neuralCalibration.filter(row=>
     row.at>=neuralHybridSelectionStartAt&&row.resolved_at<validationStartAt);
-  // Keep the legacy coupling by default, but allow daily experiments to set
-  // an explicit inner member-selection floor independent of outer validation.
-  const configuredNeuralSelectionMinimum=finite(minimumNeuralSelectionSamples);
-  const neuralSelectionMinimum=configuredNeuralSelectionMinimum===null
-    ?Math.max(20,minimumValidationSamples)
-    :Math.max(20,Math.min(900,Math.trunc(configuredNeuralSelectionMinimum)));
+  // The outer validation minimum remains independent from inner selection.
+  const neuralSelectionMinimum=effectiveNeuralSelectionMinimum(
+    minimumValidationSamples,minimumNeuralSelectionSamples);
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
   let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
