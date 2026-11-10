@@ -210,6 +210,11 @@ async function main(){
         neural_holdout_brier:result.neural_network.holdout?.model_brier_score??null,
         gbdt_status:result.boosted_tree_model.status,
         hybrid_status:result.hybrid_model.status,
+        tcn_status:result.temporal_tcn.status,
+        tcn_training_samples:result.temporal_tcn.training_samples,
+        tcn_validation_brier:result.temporal_tcn.validation?.model_brier_score??null,
+        tcn_holdout_brier:result.temporal_tcn.holdout?.model_brier_score??null,
+        tcn_holdout_passed:result.temporal_tcn.holdout_comparison?.passed===true,
         selected_challenger:result.model_selection.validation_challenger,
         holdout_passed:result.model_selection.holdout_comparison?.passed===true
       }));
