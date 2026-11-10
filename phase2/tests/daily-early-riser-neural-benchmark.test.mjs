@@ -6,7 +6,8 @@ import {
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
-  effectiveNeuralSelectionMinimum
+  effectiveNeuralSelectionMinimum,
+  hasNeuralSelectionSupport
 } from '../core/cognitive-brain.mjs';
 import {
   buildTemporalNeuralProfile,
@@ -150,4 +151,12 @@ test('daily inner neural selection floor is independent from outer validation mi
   assert.equal(effectiveNeuralSelectionMinimum(3000,200),200);
   assert.equal(effectiveNeuralSelectionMinimum(3000,5),20);
   assert.equal(effectiveNeuralSelectionMinimum(100,1200),900);
+});
+
+
+test('neural inner selection requires enough total rows and both binary classes',()=>{
+  assert.equal(hasNeuralSelectionSupport({sampleCount:299,positiveCount:10,negativeCount:289,minimumSamples:300,minimumPositive:10,minimumNegative:30}),false);
+  assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:9,negativeCount:291,minimumSamples:300,minimumPositive:10,minimumNegative:30}),false);
+  assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:10,negativeCount:290,minimumSamples:300,minimumPositive:10,minimumNegative:30}),true);
+  assert.equal(hasNeuralSelectionSupport({sampleCount:300,positiveCount:10,negativeCount:289,minimumSamples:300,minimumPositive:10,minimumNegative:30}),false);
 });
