@@ -80,7 +80,8 @@ const FEATURE_NAMES=COGNITIVE_FEATURE_NAMES;
 
 function isCognitiveBinaryModelVariant(value) {
   const variant=String(value||'').trim();
-  return variant==='NEURAL_GLOBAL'||variant==='GBDT_RESIDUAL'||
+  return variant==='GLOBAL_HISTORY'||variant==='RECENT_WINDOW'||
+    variant==='NEURAL_GLOBAL'||variant==='GBDT_RESIDUAL'||
     /^HYBRID_GBDT_MLP_W(?:25|50|75)$/.test(variant);
 }
 

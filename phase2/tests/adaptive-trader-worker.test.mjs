@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableStore} from '../core/store.mjs';
-import {AdaptiveTraderWorker} from '../core/adaptive-trader-worker.mjs';
+import {AdaptiveTraderWorker,MAX_COGNITIVE_TRAINING_SAMPLES} from '../core/adaptive-trader-worker.mjs';
 import {COGNITIVE_MODEL_BUILD_CONTRACT} from '../core/cognitive-brain.mjs';
 
 
@@ -726,3 +726,8 @@ test('cognitive journal freezes the first forecast for a closed candle and block
   }
 });
 
+
+
+test('live cognitive learner uses the full 4,096-sample verified training budget',()=>{
+  assert.equal(MAX_COGNITIVE_TRAINING_SAMPLES,4096);
+});

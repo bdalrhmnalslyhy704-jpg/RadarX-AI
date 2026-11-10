@@ -887,3 +887,33 @@ test('shared forward split keeps V5 and TCN on identical rows and purges labels 
   assert.equal(profile.validation_start_at,temporal.validation_start_at);
   assert.equal(profile.holdout_start_at,temporal.holdout_start_at);
 });
+
+
+test('prequential audit includes selected logistic fallback forecasts on the shared first-passage target',()=>{
+  const journal=[];
+  for(const model of ['GLOBAL_HISTORY','RECENT_WINDOW','NEURAL_GLOBAL']){
+    for(let index=0;index<12;index++){
+      const at=BASE_TIME+(model==='GLOBAL_HISTORY'?0:model==='RECENT_WINDOW'?100:200)*FOUR_HOURS+
+        index*5*60*60*1000;
+      const outcome=index%2===0?'UP':'DOWN';
+      journal.push({
+        id:model+'-FIRST-PASSAGE-'+index,model_version:5,selected_model:model,
+        target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+        at,trained_through_at:at-60_000,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+        outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',outcome,
+        predicted_up_probability:outcome==='UP'?90:10
+      });
+    }
+  }
+  for(const model of ['GLOBAL_HISTORY','RECENT_WINDOW','NEURAL_GLOBAL']){
+    const audit=buildCognitivePrequentialProfile(journal,{
+      minimumWindowSamples:4,windowSize:6,modelVariant:model
+    });
+    assert.equal(audit.audited_model_variant,model);
+    assert.equal(audit.resolved_forecasts,12,
+      'selected '+model+' first-passage forecasts must not be silently discarded');
+    assert.equal(audit.excluded_other_model_variant_forecasts,24);
+    assert.equal(audit.recent_window.brier_score,0.01);
+    assert.equal(audit.previous_window.brier_score,0.01);
+  }
+});

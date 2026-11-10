@@ -1,4 +1,4 @@
-name: Build 224 Cognitive Historical Benchmark — 80-Symbol Split Smoke
+name: Build 224 Cognitive Historical Benchmark — 90-Symbol / 80-Valid Split Smoke
 
 on:
   push:
@@ -78,13 +78,13 @@ jobs:
         run: |
           node --test --test-timeout=60000 phase2/tests/binance-spot-kline-archive.test.mjs
           node --test --test-timeout=60000 phase2/tests/cognitive-benchmark-metrics.test.mjs
-      - name: Replay verified monthly and daily Spot archives for 80-symbol split smoke test
+      - name: Replay verified monthly and daily Spot archives for 90 requested symbols; require 80 with samples
         id: benchmark
         run: |
           node phase2/tools/cognitive-market-wide-historical-benchmark.mjs \
             --start '${{ github.event.inputs.start || '2025-11-01' }}' \
             --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-10' }}' \
-            --max-symbols '80' \
+            --max-symbols '90' \
             --concurrency 6 \
             --min-symbols 80 \
             --min-samples 6000 \

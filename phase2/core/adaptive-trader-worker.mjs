@@ -13,6 +13,7 @@ const SAMPLE_HORIZON_MS=4*60*60*1000;
 const HISTORY_MIN_INTERVAL_MS=15*60*1000;
 const SNAPSHOT_LIMIT=80;
 const MAX_SAMPLES=6000;
+export const MAX_COGNITIVE_TRAINING_SAMPLES=4096;
 const MAX_HISTORY=60000;
 const MAX_MISSED=500;
 const MAX_COGNITIVE_JOURNAL=3000;
@@ -234,7 +235,7 @@ export class AdaptiveTraderWorker{
         'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1',
         'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
       ],
-      maxNeuralTrainingSamples:1280
+      maxNeuralTrainingSamples:MAX_COGNITIVE_TRAINING_SAMPLES
     });
   }
 
