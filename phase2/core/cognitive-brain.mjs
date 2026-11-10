@@ -135,6 +135,17 @@ export function effectiveNeuralSelectionMinimum(minimumValidationSamples, reques
   if(requested===null)return Math.max(20,Math.trunc(Number(minimumValidationSamples)||20));
   return Math.max(20,Math.min(900,Math.trunc(requested)));
 }
+export function hasNeuralSelectionSupport({
+  sampleCount=0,positiveCount=0,negativeCount=0,
+  minimumSamples=20,minimumPositive=0,minimumNegative=0
+}={}){
+  const sample=finite(sampleCount),positive=finite(positiveCount),negative=finite(negativeCount);
+  return sample!==null&&positive!==null&&negative!==null&&
+    sample>=Math.max(20,Math.trunc(Number(minimumSamples)||20))&&
+    positive>=Math.max(0,Math.trunc(Number(minimumPositive)||0))&&
+    negative>=Math.max(0,Math.trunc(Number(minimumNegative)||0))&&
+    positive+negative===sample;
+}
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logit = p => Math.log(clamp(p, 0.001, 0.999) / (1 - clamp(p, 0.001, 0.999)));
@@ -1227,9 +1238,11 @@ export function buildCognitiveLearningProfile(samples = [], {
     Math.trunc(Number(minimumNeuralSelectionNegativeSamples)||0)));
   const neuralSelectionPositiveSamples=neuralSelection.filter(row=>Number(row.target)===1).length;
   const neuralSelectionNegativeSamples=neuralSelection.length-neuralSelectionPositiveSamples;
-  const neuralSelectionSupportReady=neuralSelection.length>=neuralSelectionMinimum&&
-    neuralSelectionPositiveSamples>=neuralSelectionPositiveMinimum&&
-    neuralSelectionNegativeSamples>=neuralSelectionNegativeMinimum;
+  const neuralSelectionSupportReady=hasNeuralSelectionSupport({
+    sampleCount:neuralSelection.length,positiveCount:neuralSelectionPositiveSamples,
+    negativeCount:neuralSelectionNegativeSamples,minimumSamples:neuralSelectionMinimum,
+    minimumPositive:neuralSelectionPositiveMinimum,minimumNegative:neuralSelectionNegativeMinimum
+  });
   const neuralCalibration=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
     row.at>=neuralCalibrationStartAt&&row.resolved_at<validationStartAt);
   const neuralCalibrationTimes=[...new Set(neuralCalibration.map(row=>row.at))].sort((a,b)=>a-b);
