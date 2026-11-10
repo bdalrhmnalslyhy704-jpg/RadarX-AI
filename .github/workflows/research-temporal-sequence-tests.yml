@@ -9,6 +9,7 @@ on:
       - research/tcn-micro-coverage-diagnostics-20261110
       - research/cognitive-training-capacity-forward-holdout-20261110
       - research/cognitive-split-contract-smoke-20261110
+      - research/live-forward-audit-capacity-20261110
       - research/cognitive-training-capacity-forward-holdout-20261110
       - research/cognitive-split-contract-smoke-20261110
     paths:
