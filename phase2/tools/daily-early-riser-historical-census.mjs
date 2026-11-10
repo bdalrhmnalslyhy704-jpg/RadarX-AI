@@ -442,6 +442,7 @@ async function main(){
     let temporalWriteQueue=Promise.resolve();
     let temporalSequenceRows=0;
     let temporalSequenceRejected=0;
+    let temporalSequenceInvalidDeclared=0;
     const persist=rows=>{
       if(!rows.length)return Promise.all([writeQueue,temporalWriteQueue]);
       const content=rows.map(row=>JSON.stringify(compactSample(row))).join('\n')+'\n';
@@ -452,7 +453,10 @@ async function main(){
             id:row.id,symbol:row.symbol,at:row.at,
             temporal_sequence:row.temporal_sequence
           }));
-        }else temporalSequenceRejected++;
+        }else{
+          temporalSequenceRejected++;
+          if(row.temporal_sequence_available===true)temporalSequenceInvalidDeclared++;
+        }
       }
       writeQueue=writeQueue.then(()=>appendFile(samplesOutput,content));
       if(temporalRows.length){
@@ -614,6 +618,7 @@ async function main(){
     report.temporal_sample_file={
       path:temporalSamplesOutput,rows:temporalSequenceRows,
       rejected_or_missing_sequences:temporalSequenceRejected,
+      invalid_declared_sequences:temporalSequenceInvalidDeclared,
       sequence_steps:24,sequence_channels:29,
       sha256:await sha256File(temporalSamplesOutput)
     };
