@@ -96,6 +96,16 @@ test('target definitions remain independent for +5%, +10% and +15%',()=>{
 });
 
 
+test('invalid temporal channels are withheld without discarding a valid tabular sample',()=>{
+  const input=sampleWith({targetPct:5,outcome:'UP'});
+  input.temporal_sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  input.temporal_sequence[0][0]=null;
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5);
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.training_eligible,true);
+  assert.equal(prepared.row.temporal_sequence,null);
+});
+
 test('daily 24h target contract is accepted only through explicit TCN opt-in; legacy 4h contract stays unchanged',()=>{
   const input=sampleWith({targetPct:5,outcome:'UP'});
   input.temporal_sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
