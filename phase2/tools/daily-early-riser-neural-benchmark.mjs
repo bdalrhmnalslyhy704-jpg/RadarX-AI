@@ -76,6 +76,7 @@ async function loadTargetSamples(path,targetPct,temporalById){
   const lines=readline.createInterface({input,crlfDelay:Infinity});
   const samples=[];
   let linesRead=0,malformed=0,missingTarget=0,temporalAttached=0,temporalMissing=0,temporalIdentityMismatch=0;
+  let temporalFlaggedAvailable=0,temporalFlaggedMissing=0,temporalUnexpected=0;
   for await(const line of lines){
     if(!line.trim())continue;
     linesRead++;
@@ -86,9 +87,13 @@ async function loadTargetSamples(path,targetPct,temporalById){
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
     const temporalRow=temporalById.get(String(sample.id||''))||null;
+    const declaredAvailable=sample.temporal_sequence_available===true;
+    if(declaredAvailable)temporalFlaggedAvailable++;
     const identityMatches=temporalRow&&temporalRow.symbol===String(sample.symbol||'').trim().toUpperCase()&&
       temporalRow.at===Number(sample.at);
     const temporal_sequence=identityMatches?temporalRow.sequence:null;
+    if(declaredAvailable&&!temporal_sequence)temporalFlaggedMissing++;
+    if(!declaredAvailable&&temporalRow)temporalUnexpected++;
     if(temporal_sequence)temporalAttached++;
     else{
       temporalMissing++;
@@ -105,7 +110,10 @@ async function loadTargetSamples(path,targetPct,temporalById){
   }
   return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
     temporal_attached:temporalAttached,temporal_missing:temporalMissing,
-    temporal_identity_mismatch:temporalIdentityMismatch};
+    temporal_identity_mismatch:temporalIdentityMismatch,
+    temporal_flagged_available:temporalFlaggedAvailable,
+    temporal_flagged_missing:temporalFlaggedMissing,
+    temporal_unexpected:temporalUnexpected};
 }
 async function writeJsonAtomic(path,value){
   await mkdir(dirname(path),{recursive:true});
@@ -192,6 +200,7 @@ async function main(){
     };
     const expectedTemporal=censusReport?.temporal_sample_file;
     if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1||
+      Number(expectedTemporal.invalid_declared_sequences)!==0||
       expectedTemporal.sequence_steps!==24||expectedTemporal.sequence_channels!==29||
       typeof expectedTemporal.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedTemporal.sha256))
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
@@ -203,10 +212,11 @@ async function main(){
     };
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
-      if(loaded.lines_read!==Number(expectedSamples.rows))
-        throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_MISMATCH:'+target);
-      if(loaded.temporal_identity_mismatch!==0)
-        throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_MISMATCH:'+target);
+      if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.missing_target_rows!==0)
+        throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_OR_TARGET_MISMATCH:'+target);
+      if(loaded.temporal_identity_mismatch!==0||loaded.temporal_flagged_missing!==0||
+        loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows)
+        throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
@@ -216,7 +226,10 @@ async function main(){
           missing_target_rows:loaded.missing_target_rows,
           temporal_attached:loaded.temporal_attached,
           temporal_missing:loaded.temporal_missing,
-          temporal_identity_mismatch:loaded.temporal_identity_mismatch
+          temporal_identity_mismatch:loaded.temporal_identity_mismatch,
+          temporal_flagged_available:loaded.temporal_flagged_available,
+          temporal_flagged_missing:loaded.temporal_flagged_missing,
+          temporal_unexpected:loaded.temporal_unexpected
         }
       };
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
