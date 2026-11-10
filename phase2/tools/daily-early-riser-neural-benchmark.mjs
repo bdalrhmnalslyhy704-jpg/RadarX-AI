@@ -175,6 +175,12 @@ async function main(){
     const censusReport=JSON.parse(await readFile(censusReportPath,'utf8'));
     if(censusReport?.status!=='AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'&&
       censusReport?.status!=='READY')throw new Error('CENSUS_REPORT_NOT_AUDITED');
+    const quality=censusReport?.data_quality||{};
+    if(quality.all_sample_audits_ready!==true||quality.no_overlapping_daily_labels!==true||
+      Number(quality.feature_cutoff_violations)!==0||Number(quality.horizon_violations)!==0||
+      Number(quality.symbols_failed)!==0||Number(quality.symbols_incomplete_archive)!==0||
+      Number(quality.archive_coverage_after_first_available_pct)!==100)
+      throw new Error('CENSUS_DATA_QUALITY_GATE_FAILED');
     const expectedSamples=censusReport?.sample_file;
     if(!expectedSamples||!Number.isInteger(Number(expectedSamples.rows))||Number(expectedSamples.rows)<1||
       typeof expectedSamples.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedSamples.sha256)||
@@ -185,7 +191,9 @@ async function main(){
       verified_against_census_report:true
     };
     const expectedTemporal=censusReport?.temporal_sample_file;
-    if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1)
+    if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1||
+      expectedTemporal.sequence_steps!==24||expectedTemporal.sequence_channels!==29||
+      typeof expectedTemporal.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedTemporal.sha256))
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
     const temporalSidecar=await loadTemporalSequences(temporalInput,
       expectedTemporal.sha256,Number(expectedTemporal.rows));
