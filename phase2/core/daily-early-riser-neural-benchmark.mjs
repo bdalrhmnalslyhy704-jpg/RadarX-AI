@@ -148,7 +148,10 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_schema_note:'Uses the existing 18-feature Cognitive V5 vector. Daily 24h return, daily BTC-relative return and absolute quote volume are not added as new neural channels in this first benchmark.',
     temporal_tcn_training_performed:temporal.trained===true,
-    temporal_tcn_reason:temporalRows.length?'DAILY_24H_TCN_TRAINED_OR_EVALUATED':'NO_VALID_24X29_TEMPORAL_SEQUENCES',
+    temporal_tcn_evaluation_performed:temporalRows.length>0,
+    temporal_tcn_sequence_samples:temporalRows.length,
+    temporal_tcn_reason:temporal.trained===true?null:
+      (temporal.status|| (temporalRows.length?'TEMPORAL_TCN_TRAINING_NOT_COMPLETED':'NO_VALID_24X29_TEMPORAL_SEQUENCES')),
     temporal_tcn:{
       status:temporal.status??'NOT_EVALUATED',
       architecture:temporal.architecture??null,
