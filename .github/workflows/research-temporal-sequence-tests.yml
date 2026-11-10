@@ -5,6 +5,7 @@ on:
     branches:
       - research/historical-sequence-context-audit-20261110
       - research/historical-sequence-ledger-format-20261110
+      - research/tcn-micro-mask-fallback-20261110
     paths:
       - 'phase2/core/adaptive-trader-engine.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
@@ -14,6 +15,7 @@ on:
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/binance-spot-kline-archive.test.mjs'
       - 'phase2/tests/cognitive-benchmark-metrics.test.mjs'
+      - 'phase2/tools/cognitive-market-wide-historical-benchmark.mjs'
       - '.github/workflows/research-temporal-sequence-tests.yml'
 
 permissions:
@@ -39,6 +41,7 @@ jobs:
           node --check phase2/core/adaptive-trader-engine.mjs
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/tools/cognitive-market-wide-historical-benchmark.mjs
       - name: Run historical sample, TCN, MLP, archive and metric regression tests
         run: |
           node --test --test-timeout=60000 \

@@ -252,6 +252,54 @@ test('historical sampler audits and excludes samples missing the full 120-candle
     row.at===target.at&&row.reason==='ASSET_15M_TENSOR_WARMUP_GAP'));
 });
 
+test('unusable but aligned 5m microstructure is masked per step without discarding valid 15m/BTC samples',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,480,15*60*1000,10,0.0001);
+  const fastKlines=longClosedCandleFixture(now,1440,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,480,15*60*1000,90_000,0.00002);
+  const original=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'MICROMASKUSDT',klines,fastKlines,btcKlines,now,maxSamples:12
+  });
+  assert.equal(original.length,12);
+  const target=original[Math.floor(original.length/2)];
+  const baseIndex=klines.data.findIndex(row=>row[6]===target.at);
+  assert.ok(baseIndex>=23);
+  const firstTensorStepOpen=klines.data[baseIndex-23][0];
+  const noTradeOpens=new Set([
+    firstTensorStepOpen,
+    firstTensorStepOpen+5*60*1000,
+    firstTensorStepOpen+10*60*1000
+  ]);
+  const damagedFast={
+    ...fastKlines,
+    data:fastKlines.data.map(row=>{
+      if(!noTradeOpens.has(row[0]))return row;
+      const copy=[...row];
+      copy[5]='0';copy[7]='0';copy[8]='0';copy[9]='0';copy[10]='0';
+      return copy;
+    })
+  };
+  const audited=buildAdaptiveTraderHistoricalOutcomeSamples({
+    symbol:'MICROMASKUSDT',klines,fastKlines:damagedFast,btcKlines,now,maxSamples:12
+  });
+  assert.equal(audited.length,12,
+    'an unusable optional 5m window must not discard the valid closed 15m/ BTC sample');
+  const masked=audited.find(row=>row.id===target.id);
+  assert.ok(masked,'the selected historical baseline must remain in the training set');
+  assert.equal(masked.temporal_sequence.length,24);
+  assert.ok(masked.temporal_sequence.every(step=>step.length===29&&step.every(Number.isFinite)));
+  assert.deepEqual(masked.temporal_sequence[0].slice(8,14),[0,0,0,0,0,0],
+    'all six 5m derived channels are neutralized for the step with zero volume/trades');
+  assert.equal(masked.temporal_sequence[0][28],0,
+    'the final mask channel explicitly marks that microstructure evidence as unavailable');
+  assert.ok(masked.temporal_sequence.slice(1).every(step=>step[28]===1),
+    'the other aligned and valid 5m windows remain available');
+  assert.ok(audited.generation_audit.micro_downgraded_steps>=1);
+  assert.ok(audited.generation_audit.micro_downgrade_counts.MICRO_5M_CURRENT_VOLUME_NONPOSITIVE>=1);
+  assert.ok(audited.generation_audit.micro_downgrade_counts.MICRO_5M_CURRENT_TRADES_NONPOSITIVE>=1);
+  assert.equal(audited.generation_audit.tensor_rejection_counts.MICRO_5M_FEATURE_CONTEXT_INVALID,undefined);
+});
+
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);

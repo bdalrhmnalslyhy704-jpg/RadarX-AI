@@ -162,8 +162,17 @@ function normalizeCandle(row, intervalMs = 15 * 60 * 1000) {
 
 
 function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) {
+  const microDowngradeCounts={};
+  let microDowngradedSteps=0,microAvailableSteps=0,microUnavailableSteps=0;
+  const diagnosticSummary=()=>({
+    micro_downgraded_steps:microDowngradedSteps,
+    micro_available_steps:microAvailableSteps,
+    micro_unavailable_steps:microUnavailableSteps,
+    micro_downgrade_counts:{...microDowngradeCounts}
+  });
   const fail=(reason,stepIndex=null,at=null)=>({
-    sequence:null,rejection_reason:reason,step_index:stepIndex,at
+    sequence:null,rejection_reason:reason,step_index:stepIndex,at,
+    ...diagnosticSummary()
   });
   const steps=24;
   if(!Array.isArray(candles)||!Array.isArray(btcCandles)||!Array.isArray(fastCandles))
@@ -291,10 +300,33 @@ function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) 
        !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
        !(assetDayVolumeBase>0)||!(assetDayTradesBase>0))
       return fail('ASSET_DAILY_FEATURE_CONTEXT_INVALID',stepIndex,stepAt);
-    if(microAvailable&&(!(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
-       !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||!(microBuyShare>=0&&microBuyShare<=1)||
-       !(microCurrentVolume>0)||!(microCurrentTrades>0)||!(microCurrentRange>0)))
-      return fail('MICRO_5M_FEATURE_CONTEXT_INVALID',stepIndex,stepAt);
+    if(microAvailable){
+      const microInvalidReasons=[];
+      if(!(microBaseVolume>0))microInvalidReasons.push('MICRO_5M_BASE_VOLUME_NONPOSITIVE');
+      if(!(microBaseTrades>0))microInvalidReasons.push('MICRO_5M_BASE_TRADES_NONPOSITIVE');
+      if(!(microBaseRange>0))microInvalidReasons.push('MICRO_5M_BASE_RANGE_NONPOSITIVE');
+      if(!(microBaseBuyShare>=0&&microBaseBuyShare<=1))
+        microInvalidReasons.push('MICRO_5M_BASE_BUY_SHARE_INVALID');
+      if(!(microBuyShare>=0&&microBuyShare<=1))
+        microInvalidReasons.push('MICRO_5M_CURRENT_BUY_SHARE_INVALID');
+      if(!(microCurrentVolume>0))microInvalidReasons.push('MICRO_5M_CURRENT_VOLUME_NONPOSITIVE');
+      if(!(microCurrentTrades>0))microInvalidReasons.push('MICRO_5M_CURRENT_TRADES_NONPOSITIVE');
+      if(!(microCurrentRange>0))microInvalidReasons.push('MICRO_5M_CURRENT_RANGE_NONPOSITIVE');
+      if(microInvalidReasons.length){
+        // Five-minute evidence is an optional microstructure lens. A structurally
+        // aligned window with a zero-trade/zero-volume interval is unavailable,
+        // not grounds to discard the valid 15m + BTC tensor. Clear every micro
+        // channel and set channel 29 (index 28) to zero for this step only.
+        microDowngradedSteps++;
+        for(const reason of microInvalidReasons)
+          microDowngradeCounts[reason]=(microDowngradeCounts[reason]||0)+1;
+        microAvailable=false;
+        microBase.length=0;
+        microCurrent.length=0;
+      }
+    }
+    if(microAvailable)microAvailableSteps++;
+    else microUnavailableSteps++;
     const assetReturn=(current.close/previous.close-1)*100;
     const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
     const relativeReturn=assetReturn-btcReturn;
@@ -335,7 +367,10 @@ function buildTemporalSequenceWithDiagnostics(candles, btcCandles, fastCandles) 
   }
   if(sequence.length!==steps)
     return fail('TEMPORAL_SEQUENCE_LENGTH_MISMATCH',sequence.length,null);
-  return {sequence,rejection_reason:null,step_index:null,at:null};
+  return {
+    sequence,rejection_reason:null,step_index:null,at:null,
+    ...diagnosticSummary()
+  };
 }
 
 function buildTemporalSequence(candles,btcCandles,fastCandles) {
@@ -574,6 +609,10 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     temporal_sequence_failure_reason:temporalDiagnostics.rejection_reason,
     temporal_sequence_failure_step:temporalDiagnostics.step_index,
     temporal_sequence_failure_at:temporalDiagnostics.at,
+    temporal_sequence_micro_downgraded_steps:temporalDiagnostics.micro_downgraded_steps||0,
+    temporal_sequence_micro_available_steps:temporalDiagnostics.micro_available_steps||0,
+    temporal_sequence_micro_unavailable_steps:temporalDiagnostics.micro_unavailable_steps||0,
+    temporal_sequence_micro_downgrade_counts:temporalDiagnostics.micro_downgrade_counts||{},
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -654,6 +693,8 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
     phase_anchors:0,selected_anchors:0,
     skipped_incomplete_asset_15m_tensor_history:0,
     tensor_rejection_counts:{},candidate_rejection_counts:{},
+    micro_downgraded_steps:0,micro_available_steps:0,micro_unavailable_steps:0,
+    micro_downgrade_counts:{},
     rejected_samples:[],samples_emitted:0
   };
   const recordRejection=(bucket,reason,details={})=>{
@@ -797,6 +838,12 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       });
       continue;
     }
+    generationAudit.micro_downgraded_steps+=candidate.temporal_sequence_micro_downgraded_steps||0;
+    generationAudit.micro_available_steps+=candidate.temporal_sequence_micro_available_steps||0;
+    generationAudit.micro_unavailable_steps+=candidate.temporal_sequence_micro_unavailable_steps||0;
+    for(const [reason,count] of Object.entries(candidate.temporal_sequence_micro_downgrade_counts||{}))
+      generationAudit.micro_downgrade_counts[reason]=
+        (generationAudit.micro_downgrade_counts[reason]||0)+(Number(count)||0);
     const move=(future.close/baseline.close-1)*100;
     const passage=firstPassageLabel(baseline,candles.slice(index+1,index+17).map(item=>item.candle));
     if(!passage){
