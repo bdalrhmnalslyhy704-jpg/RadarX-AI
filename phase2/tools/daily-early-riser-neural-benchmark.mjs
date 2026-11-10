@@ -154,7 +154,7 @@ async function main(){
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       feature_schema:'MLP/GBDT use the existing Cognitive V5 18-feature vector; the independent daily TCN uses the original 24x29 closed-candle temporal sequence, including 24h asset/BTC/relative-strength and liquidity context',
-      models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid'],
+      models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
