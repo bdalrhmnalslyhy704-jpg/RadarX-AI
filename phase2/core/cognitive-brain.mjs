@@ -1018,6 +1018,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   iterations = 900, learningRate = 0.12,
   minNeuralTrainingSamples = NEURAL_POLICY.minTrainingSamples,
   minimumNeuralSelectionSamples = null,
+  minimumNeuralSelectionPositiveSamples = 0,
+  minimumNeuralSelectionNegativeSamples = 0,
   maxNeuralTrainingSamples = NEURAL_POLICY.maxTrainingSamples,
   temporalSamples = samples,
   temporalOptions = {},
@@ -1187,7 +1189,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     selectionReason = 'RECENT_MODEL_BEAT_GLOBAL_MODEL_ON_MIDDLE_WINDOW';
   }
 
-  const neuralLimit=Math.max(240,Math.min(6000,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
+  const neuralLimit=Math.max(240,Math.min(12000,Math.trunc(Number(maxNeuralTrainingSamples)||NEURAL_POLICY.maxTrainingSamples)));
   const neuralMinimum=Math.max(200,Math.min(900,Math.trunc(Number(minNeuralTrainingSamples)||NEURAL_POLICY.minTrainingSamples)));
   const upEventTraining=asUpEventRows(training);
   const upEventRecentTraining=asUpEventRows(recentTraining);
@@ -1219,6 +1221,15 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralSelection=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
     row.at>=neuralSelectionStartAt&&row.at<neuralCalibrationStartAt&&
     row.resolved_at<neuralCalibrationStartAt);
+  const neuralSelectionPositiveMinimum=Math.max(0,Math.min(1000,
+    Math.trunc(Number(minimumNeuralSelectionPositiveSamples)||0)));
+  const neuralSelectionNegativeMinimum=Math.max(0,Math.min(1000,
+    Math.trunc(Number(minimumNeuralSelectionNegativeSamples)||0)));
+  const neuralSelectionPositiveSamples=neuralSelection.filter(row=>Number(row.target)===1).length;
+  const neuralSelectionNegativeSamples=neuralSelection.length-neuralSelectionPositiveSamples;
+  const neuralSelectionSupportReady=neuralSelection.length>=neuralSelectionMinimum&&
+    neuralSelectionPositiveSamples>=neuralSelectionPositiveMinimum&&
+    neuralSelectionNegativeSamples>=neuralSelectionNegativeMinimum;
   const neuralCalibration=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
     row.at>=neuralCalibrationStartAt&&row.resolved_at<validationStartAt);
   const neuralCalibrationTimes=[...new Set(neuralCalibration.map(row=>row.at))].sort((a,b)=>a-b);
@@ -1249,7 +1260,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
   const neuralFit=neuralTraining.length>=neuralMinimum&&
-    neuralSelection.length>=neuralSelectionMinimum&&neuralSameWindowLogisticFit
+    neuralSelectionSupportReady&&neuralSameWindowLogisticFit
     ?fitNeuralEnsemble(neuralTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
@@ -1344,7 +1355,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralSelectionFailureReason=!neuralFit
     ?!neuralSameWindowLogisticFit?'NEURAL_SELECTION_LOGISTIC_BASELINE_UNAVAILABLE'
       :neuralTraining.length<neuralMinimum?'NEURAL_TRAINING_SAMPLE_MINIMUM_NOT_MET'
-      :neuralSelection.length<neuralSelectionMinimum?'NEURAL_SELECTION_SAMPLE_MINIMUM_NOT_MET'
+      :!neuralSelectionSupportReady?'NEURAL_SELECTION_SAMPLE_MINIMUM_NOT_MET'
       :'NEURAL_ENSEMBLE_FIT_FAILED'
     :neuralFit.selected_member_index<0
       ?neuralSelectionLogistic.evaluated===true
@@ -1436,7 +1447,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     negative:boostedSelectionRows.filter(row=>row.target===0).length
   };
   const boostedSelectionSupported=boostedSelectionTargets.samples>=neuralSelectionMinimum&&
-    boostedSelectionTargets.positive>=3&&boostedSelectionTargets.negative>=8;
+    boostedSelectionTargets.positive>=Math.max(3,neuralSelectionPositiveMinimum)&&
+    boostedSelectionTargets.negative>=Math.max(8,neuralSelectionNegativeMinimum);
   const boostedTreeCandidates=boostedTrainingReady
     ?COGNITIVE_GBDT_VALIDATION_GRID.map(configuration=>{
       const fit=fitResidualBoostedTrees(boostedTrainingRows,boostedTrainingBaselineFit,configuration);
@@ -1724,7 +1736,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       second_hidden_neurons: NEURAL_POLICY.secondHiddenUnits, output_neurons: 1,
       samples_required:neuralMinimum,
       required_selection_samples:neuralSelectionMinimum,
-      selection_support_ready:neuralSelection.length>=neuralSelectionMinimum,
+      required_selection_positive_samples:neuralSelectionPositiveMinimum,
+      required_selection_negative_samples:neuralSelectionNegativeMinimum,
+      selection_positive_samples:neuralSelectionPositiveSamples,
+      selection_negative_samples:neuralSelectionNegativeSamples,
+      selection_support_ready:neuralSelectionSupportReady,
       training_samples: neuralFit?.training_samples??neuralTraining.length,
       preselection_training_samples:neuralTraining.length,
       refit_training_samples:neuralFit?.refit_training_samples??0,
@@ -1818,6 +1834,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       selection_training_samples:boostedTrainingRows.length,
       selection_sample_count:boostedSelectionRows.length,
       required_selection_samples:neuralSelectionMinimum,
+      required_selection_positive_samples:Math.max(3,neuralSelectionPositiveMinimum),
+      required_selection_negative_samples:Math.max(8,neuralSelectionNegativeMinimum),
       selection_logistic:boostedSelectionLogistic,
       selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,
       candidate_selection_metrics:boostedTreeCandidateMetrics,
