@@ -201,6 +201,7 @@ async function main(){
     const expectedTemporal=censusReport?.temporal_sample_file;
     if(!expectedTemporal||!Number.isInteger(Number(expectedTemporal.rows))||Number(expectedTemporal.rows)<1||
       Number(expectedTemporal.invalid_declared_sequences)!==0||
+      Number(expectedTemporal.declared_sequence_count)!==Number(expectedTemporal.rows)+Number(expectedTemporal.invalid_declared_sequences)||
       expectedTemporal.sequence_steps!==24||expectedTemporal.sequence_channels!==29||
       typeof expectedTemporal.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedTemporal.sha256))
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
@@ -215,7 +216,8 @@ async function main(){
       if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.missing_target_rows!==0)
         throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_OR_TARGET_MISMATCH:'+target);
       if(loaded.temporal_identity_mismatch!==0||loaded.temporal_flagged_missing!==0||
-        loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows)
+        loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
+        loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
       report.target_results[String(target)+'_PCT']={
