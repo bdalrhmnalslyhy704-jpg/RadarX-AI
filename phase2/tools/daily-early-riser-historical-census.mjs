@@ -2,7 +2,7 @@
 import {createHash} from 'node:crypto';
 import {execFile as execFileCallback} from 'node:child_process';
 import {promisify} from 'node:util';
-import {appendFile,mkdir,mkdtemp,rename,rm,writeFile,readFile} from 'node:fs/promises';
+import {appendFile,mkdir,mkdtemp,rename,rm,writeFile} from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -609,7 +609,7 @@ async function main(){
     };
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
-      sha256:execHash(await readFile(samplesOutput))
+      sha256:await sha256File(samplesOutput)
     };
     report.temporal_sample_file={
       path:temporalSamplesOutput,rows:temporalSequenceRows,
