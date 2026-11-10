@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
-import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
+import {mkdir,stat,writeFile,rename} from 'node:fs/promises';
 import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
@@ -102,8 +102,8 @@ async function main(){
     profitability_verified:false
   };
   try{
-    const sourceStat=await readFile(input,{encoding:'utf8',flag:'r'}).then(()=>true);
-    if(!sourceStat)throw new Error('SAMPLE_FILE_NOT_READABLE');
+    const sourceStat=await stat(input);
+    if(!sourceStat.isFile()||sourceStat.size<=0)throw new Error('SAMPLE_FILE_NOT_READABLE');
     report.input_sha256=await sha256File(input);
     for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
       const loaded=await loadTargetSamples(input,target);
