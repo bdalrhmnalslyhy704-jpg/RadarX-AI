@@ -111,14 +111,14 @@ async function recordMode(args){
     if(observation?.schema!==OBSERVATION_SCHEMA){reject('OBSERVATION_SCHEMA_MISMATCH');continue;}
     const at=finite(observation.at),recorded=finite(observation.recorded_at)??now;
     if(at===null||finite(observation.feature_information_cutoff_at)!==at||
-      recorded<=at||at>now+60_000||now-at>maxAge||recorded-at>maxAge){
+      recorded<=at||recorded>now+60_000||at>now+60_000||now-at>maxAge||recorded-at>maxAge){
       reject('OBSERVATION_TIME_OR_CLOSED_CANDLE_CUTOFF_INVALID');continue;
     }
     const volume=finite(observation.features?.quote_volume_24h);
     if(volume===null||volume<minVolume){reject('MINIMUM_24H_QUOTE_VOLUME_NOT_MET');continue;}
-    const before=records.length;
+    const staged=[];
     let rejected=false;
-    for(const {target,bundle,hash} of bundles){
+    for(const {bundle,hash} of bundles){
       try{
         const pair=createDailyEarlyRiserForwardForecastPairFromModelBundle({
           model_bundle:bundle,model_bundle_sha256:hash,
@@ -130,15 +130,20 @@ async function recordMode(args){
         });
         const pairId=pair[0].pair_id;
         if(seenPairs.has(pairId)){duplicatePairs++;continue;}
-        seenPairs.add(pairId);
-        records.push(...pair);
-        createdPairs++;
+        staged.push({pairId,pair});
       }catch(error){
         reject(String(error?.message||'FORWARD_FORECAST_REJECTED'));
         rejected=true;
       }
     }
-    if(rejected&&records.length===before)continue;
+    // An observation is atomic across targets: a corrupt target bundle cannot
+    // leave only a partial +5/+10/+15 forecast set in the ledger.
+    if(rejected)continue;
+    for(const item of staged){
+      seenPairs.add(item.pairId);
+      records.push(...item.pair);
+      createdPairs++;
+    }
   }
   if(records.length){
     await ensureOutputDirectory(outputPath);
