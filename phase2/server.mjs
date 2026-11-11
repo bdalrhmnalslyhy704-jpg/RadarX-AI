@@ -162,17 +162,33 @@ export async function startServer({
   if(dailyForwardShadowEnabled){
     const modelBundleFile=String(process.env.RADARX_DAILY_FORWARD_SHADOW_MODEL_BUNDLE_PATH||
       resolve(archiveDir,'daily-forward-shadow-model-bundles.json')).trim();
-    dailyForwardShadowRuntime=await DailyEarlyRiserForwardShadowRuntime.create({
-      store,rest:adaptiveTraderRest,modelBundleFile,logger,
-      maxNewSymbolsPerCycle:8,maxResolutionsPerCycle:1
-    });
-    const shadowStatus=dailyForwardShadowRuntime.snapshot();
-    logger.info?.('[DAILY_FORWARD_SHADOW_RUNTIME_READY] '+JSON.stringify({
-      enabled:true,model_targets:shadowStatus.model_targets,
-      model_bundle_hashes:shadowStatus.model_bundle_hashes,
-      storage_dir:archiveDir,mode:'READ_ONLY_PAIRED_FORWARD_SHADOW',
-      production_eligible:false,real_order_execution:false
-    }));
+    try{
+      // Separate, low-budget public-Spot client: one short resolution request
+      // must never consume the Adaptive Trader's normal market snapshot budget.
+      const dailyShadowRest=new RestClient({
+        ...config.rest,baseUrls:activeSpotRestUrls.slice(0,2),
+        timeoutMs:3500,minIntervalMs:250,maxRequestsPerMinute:30
+      });
+      dailyForwardShadowRuntime=await DailyEarlyRiserForwardShadowRuntime.create({
+        store,rest:dailyShadowRest,modelBundleFile,logger,
+        maxNewSymbolsPerCycle:4,maxResolutionsPerCycle:1
+      });
+      const shadowStatus=dailyForwardShadowRuntime.snapshot();
+      logger.info?.('[DAILY_FORWARD_SHADOW_RUNTIME_READY] '+JSON.stringify({
+        enabled:true,model_targets:shadowStatus.model_targets,
+        model_bundle_hashes:shadowStatus.model_bundle_hashes,
+        storage_dir:archiveDir,model_bundle_file:modelBundleFile,
+        mode:'READ_ONLY_PAIRED_FORWARD_SHADOW',
+        production_eligible:false,real_order_execution:false
+      }));
+    }catch(error){
+      dailyForwardShadowRuntime=null;
+      logger.warn?.('[DAILY_FORWARD_SHADOW_RUNTIME_DISABLED] '+JSON.stringify({
+        requested:true,reason:String(error?.message??error).slice(0,180),
+        model_bundle_file:modelBundleFile,storage_dir:archiveDir,
+        production_eligible:false,real_order_execution:false
+      }));
+    }
   }else{
     logger.info?.('[DAILY_FORWARD_SHADOW_RUNTIME_DISABLED] opt-in flag is not true');
   }
