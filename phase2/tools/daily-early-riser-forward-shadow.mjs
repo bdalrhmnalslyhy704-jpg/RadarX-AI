@@ -66,17 +66,22 @@ async function readExistingIds(path,field){
   return ids;
 }
 function targetsFromReport(report,requestedTarget){
-  const targets=requestedTarget===undefined
-    ?[5,10,15]:[Number(requestedTarget)];
+  const explicit=requestedTarget!==undefined;
+  const targets=explicit?[Number(requestedTarget)]:[5,10,15];
   const bundles=[];
   for(const target of targets){
     if(![5,10,15].includes(target))throw new Error('UNSUPPORTED_TARGET:'+target);
     const key=String(target)+'_PCT';
     const bundle=report.target_results?.[key]?.shadow_model_export;
-    if(!bundle||bundle.enabled!==true||!isSha256(bundle.model_bundle_sha256))
-      throw new Error('VERIFIED_SHADOW_MODEL_BUNDLE_UNAVAILABLE:'+key);
+    if(!bundle||bundle.enabled!==true){
+      if(explicit)throw new Error('VERIFIED_SHADOW_MODEL_BUNDLE_UNAVAILABLE:'+key);
+      continue;
+    }
+    if(!isSha256(bundle.model_bundle_sha256))
+      throw new Error('VERIFIED_SHADOW_MODEL_BUNDLE_HASH_MISSING:'+key);
     bundles.push({target,bundle,hash:bundle.model_bundle_sha256});
   }
+  if(!bundles.length)throw new Error('NO_VERIFIED_SHADOW_MODEL_BUNDLES_AVAILABLE');
   return bundles;
 }
 async function loadReport(path){
