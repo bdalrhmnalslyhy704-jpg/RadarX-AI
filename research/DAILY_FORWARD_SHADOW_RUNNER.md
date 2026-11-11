@@ -95,9 +95,32 @@ node phase2/tools/daily-early-riser-forward-shadow.mjs \
 
 The gate requires at least 150 paired resolved forecasts, a MLP Brier improvement of at least 0.003 over the paired logistic baseline, and a positive lower 95% confidence bound for the paired improvement. The score is separated by target and exact model-bundle hash so model versions cannot be mixed.
 
+## 4. Build 224 runtime integration (explicit opt-in)
+
+The research branch also contains an optional runtime sidecar inside the existing Adaptive Trader worker. It uses the same live candidate scan, but it records forecasts only; it does not change candidate scores, analyst decisions, alerts, paper positions or order gates.
+
+The latest verified model package is published by the GitHub Actions workflow **Build 224 Daily Shadow Model Bundle Verification**. Download the artifact named `radarx-build224-daily-shadow-model-verification-8` from [run #43074532310](https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI/actions/runs/43074532310), and place `daily-forward-shadow-model-bundles.json` on the DHDTech persistent data volume used by RadarX. The package contains the complete MLP and logistic weight objects for each enabled target, not just their hashes. The runtime rechecks the feature schema and bundle identities when it loads the file.
+
+To request activation after this research change has been reviewed, merged through the intended release process and deployed to DHDTech, set:
+
+```text
+RADARX_DAILY_EARLY_RISER_FORWARD_SHADOW_ENABLED=true
+RADARX_DAILY_FORWARD_SHADOW_MODEL_BUNDLE_PATH=<absolute path to daily-forward-shadow-model-bundles.json>
+```
+
+The path variable is optional when the file is named `daily-forward-shadow-model-bundles.json` in the same persistent directory RadarX uses for its durable store. The feature is disabled unless the first variable is exactly `true`. A missing or invalid bundle disables only this research sidecar and is logged; it must not prevent the rest of RadarX from starting.
+
+At runtime, the sidecar accepts only fresh candidates with a valid closed 15m baseline and a continuous 96-bar daily feature window. It records at most four new symbols per Adaptive Trader cycle and attempts at most one matured 24-hour path per cycle through a dedicated, bounded public Spot REST client. The paired forecasts and resolutions are stored in two append-only files in the durable store:
+
+- `daily-forward-shadow-forecasts.jsonl`
+- `daily-forward-shadow-resolved.jsonl`
+
+The sidecar's status is exposed in the Adaptive Trader worker snapshot as `daily_forward_shadow`. A cycle failure or Binance 451/429 does not fail the existing Adaptive Trader scan; an invalid, incomplete or gapped 96-candle path remains pending rather than being assigned FLAT.
+
 ## Scope and limits
 
 - Binance Spot USDT only; no futures, leverage, orders or live trading.
 - Historical census results are not forward-shadow results. A new model-bundle hash starts a new forward cohort.
-- This runner consumes scanner-produced observation JSONL and Binance REST response JSONL. It does not yet install itself in DHDTech or schedule the scanner. That runtime wiring must be reviewed and tested before this ledger can collect real forward samples.
+- The code is integrated only on this unmerged research branch. No DHDTech deployment has been performed and the opt-in flag has not been enabled, so no real forward forecasts have yet been collected.
+- Forward evaluation still requires at least 150 paired resolved observations per target, a MLP Brier improvement of at least 0.003 over the paired logistic baseline and a positive lower 95% confidence bound.
 - Even a passing forward Brier gate is not production approval. Net fees/slippage, positive net returns, maximum drawdown no greater than 8%, operational reliability and a separate shadow period remain required.
