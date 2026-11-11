@@ -122,6 +122,17 @@ export function effectiveCognitiveChallengerMargin(requestedMargin) {
     Math.max(COGNITIVE_CHALLENGER_BRIER_MARGIN, requested);
 }
 
+// Inner member selection is only a model-choice step on the training-side
+// selection block. It may use a smaller predeclared margin, but never weakens
+// the independent outer validation/holdout requirement.
+export function effectiveNeuralInnerSelectionMargin(requestedMargin, outerMargin=COGNITIVE_CHALLENGER_BRIER_MARGIN) {
+  const outer=finite(outerMargin);
+  const requiredOuter=outer===null?COGNITIVE_CHALLENGER_BRIER_MARGIN:
+    Math.max(COGNITIVE_CHALLENGER_BRIER_MARGIN,outer);
+  const requested=finite(requestedMargin);
+  return requested===null?requiredOuter:Math.max(0,Math.min(requiredOuter,requested));
+}
+
 export function hasCognitiveBrierSuperiority(candidateScore, baselineScore,
   margin = COGNITIVE_CHALLENGER_BRIER_MARGIN) {
   const candidate = finite(candidateScore);
@@ -1038,6 +1049,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralLearningRate = NEURAL_POLICY.learningRate,
   neuralL2 = NEURAL_POLICY.l2,
   neuralSelectionMargin = NEURAL_POLICY.selectionMargin,
+  neuralInnerSelectionMargin = null,
   maxResolvedSamples = 0
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
@@ -1284,21 +1296,23 @@ export function buildCognitiveLearningProfile(samples = [], {
   // Enforce at least the declared V5 challenger margin; caller options may
   // demand a stricter improvement but cannot weaken the 0.003 policy floor.
   const comparisonMargin=effectiveCognitiveChallengerMargin(neuralSelectionMargin);
+  const innerSelectionMargin=effectiveNeuralInnerSelectionMargin(
+    neuralInnerSelectionMargin,comparisonMargin);
   // Select the ensemble member and nonlinear residual contribution exclusively
   // from the disjoint selection block. Outer validation and holdout stay unused.
   const neuralResidualScales=NEURAL_RESIDUAL_SCALES;
   const neuralSelectionLogistic=neuralSameWindowLogisticFit
-    ?evaluateHoldout(neuralSelection,neuralSameWindowLogisticFit,comparisonMargin)
+    ?evaluateHoldout(neuralSelection,neuralSameWindowLogisticFit,innerSelectionMargin)
     :{evaluated:false,model_brier_score:null};
   const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
     neuralResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
-      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale},comparisonMargin)
+      metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale},innerSelectionMargin)
     }))
   ):[];
   const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true&&
     neuralSelectionLogistic.evaluated===true&&
-    row.metrics.model_brier_score+comparisonMargin<neuralSelectionLogistic.model_brier_score)
+    row.metrics.model_brier_score+innerSelectionMargin<neuralSelectionLogistic.model_brier_score)
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
   const neuralBestMemberCandidate=neuralMemberSelection
@@ -1792,7 +1806,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
       member_training_profiles:neuralFit?.member_training_profiles||[],
       internal_selection_logistic_brier:neuralSelectionLogistic.model_brier_score??null,
-      internal_selection_required_margin:comparisonMargin,
+      internal_selection_required_margin:innerSelectionMargin,
+      outer_validation_required_margin:comparisonMargin,
       internal_selection_qualified_members:neuralMemberOrder.length,
       inner_selection_diagnostics:{
         training_sample_count:neuralTraining.length,
@@ -1801,7 +1816,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         selection_negative_samples:neuralSelection.filter(row=>Number(row.target)===0).length,
         logistic_baseline_evaluated:neuralSelectionLogistic.evaluated===true,
         logistic_baseline_brier_score:neuralSelectionLogistic.model_brier_score??null,
-        required_brier_margin:comparisonMargin,
+        required_brier_margin:innerSelectionMargin,
+        outer_validation_required_margin:comparisonMargin,
         candidate_member_scale_count:neuralMemberSelection.length,
         qualifying_member_scale_count:neuralMemberOrder.length,
         best_candidate:neuralBestMemberCandidate?{
@@ -1810,7 +1826,7 @@ export function buildCognitiveLearningProfile(samples = [], {
           brier_score:neuralBestMemberCandidate.metrics.model_brier_score,
           base_rate_brier_score:neuralBestMemberCandidate.metrics.base_rate_brier_score,
           beats_same_window_logistic:neuralSelectionLogistic.evaluated===true&&
-            neuralBestMemberCandidate.metrics.model_brier_score+comparisonMargin<
+            neuralBestMemberCandidate.metrics.model_brier_score+innerSelectionMargin<
               neuralSelectionLogistic.model_brier_score
         }:null,
         passed:Number.isInteger(neuralFit?.selected_member_index)&&neuralFit.selected_member_index>=0,
@@ -1820,7 +1836,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         index:row.index,residual_scale:row.residual_scale,brier_score:row.metrics.model_brier_score,
         base_rate_brier_score:row.metrics.base_rate_brier_score,beat_base_rate:row.metrics.beat_base_rate,
         beats_same_window_logistic:neuralSelectionLogistic.evaluated===true&&
-          row.metrics.model_brier_score+comparisonMargin<neuralSelectionLogistic.model_brier_score
+          row.metrics.model_brier_score+innerSelectionMargin<neuralSelectionLogistic.model_brier_score
       })),
       member_validation_brier_scores:[],
       trained: neuralFit!==null, selected: neuralSelected,

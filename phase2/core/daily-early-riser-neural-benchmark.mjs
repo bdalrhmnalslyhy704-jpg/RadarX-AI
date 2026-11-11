@@ -4,6 +4,8 @@ import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHA
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
 export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
 export const DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES = 8192;
+// Inner MLP member-choice margin only; outer validation and holdout remain 0.003.
+export const DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN = 0.00025;
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_FEATURE_SCHEMA;
@@ -139,6 +141,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neuralLearningRate:0.012,
     neuralL2:0.04,
     neuralSelectionMargin:0.003,
+    neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
+      DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
     maxResolvedSamples:0
   });
   const neural=profile.neural_network||{};

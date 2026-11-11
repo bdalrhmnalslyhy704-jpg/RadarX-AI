@@ -282,6 +282,8 @@ async function main(){
             required_positive:neural.required_selection_positive_samples??null,
             required_negative:neural.required_selection_negative_samples??null,
             support_ready:neural.selection_support_ready===true,
+            inner_selection_required_margin:neural.inner_selection_diagnostics?.required_brier_margin??null,
+            outer_validation_required_margin:neural.inner_selection_diagnostics?.outer_validation_required_margin??null,
             diagnostics:neural.inner_selection_diagnostics??null
           },
           failure_reason:neural.inner_selection_diagnostics?.failure_reason??null,

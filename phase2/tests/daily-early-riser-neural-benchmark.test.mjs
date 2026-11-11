@@ -4,10 +4,12 @@ import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
+  DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
   buildCognitiveLearningProfile,
+  effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
 } from '../core/cognitive-brain.mjs';
@@ -205,16 +207,29 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
     minimumNeuralSelectionPositiveSamples:2,
     minimumNeuralSelectionNegativeSamples:8,
     temporalSamples:[],
-    neuralIterations:20
+    neuralIterations:20,
+    neuralInnerSelectionMargin:0.00025
   });
   assert.equal(profile.neural_network.required_selection_samples,40);
   assert.equal(profile.neural_network.required_selection_positive_samples,2);
   assert.equal(profile.neural_network.required_selection_negative_samples,8);
   assert.equal(profile.neural_network.selection_support_ready,true);
+  assert.equal(profile.neural_network.inner_selection_diagnostics.required_brier_margin,0.00025);
+  assert.equal(profile.neural_network.inner_selection_diagnostics.outer_validation_required_margin,0.003);
+  assert.equal(profile.neural_network.selection_margin,0.003);
   assert.equal(profile.neural_network.trained,false);
   assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
 });
 
+
+test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 gate',()=>{
+  assert.equal(DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,0.00025);
+  assert.equal(effectiveNeuralInnerSelectionMargin(null,0.003),0.003);
+  assert.equal(effectiveNeuralInnerSelectionMargin(0.00025,0.003),0.00025);
+  assert.equal(effectiveNeuralInnerSelectionMargin(0.01,0.003),0.003);
+  assert.equal(effectiveNeuralInnerSelectionMargin(-0.01,0.003),0);
+  assert.equal(effectiveNeuralInnerSelectionMargin(0.00025,0.006),0.00025);
+});
 
 test('daily TCN uses a larger isolated training budget without changing the legacy default',()=>{
   assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,8192);
