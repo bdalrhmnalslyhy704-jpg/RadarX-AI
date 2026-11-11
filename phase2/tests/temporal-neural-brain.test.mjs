@@ -517,6 +517,76 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
     'a research fixture must not satisfy the 150-outcome live holdout requirement');
 });
 
+test('independent regime-local TCNs train, select and calibrate only on their own purged BTC regime',()=>{
+  const rows=[];
+  for(let group=0;group<100;group++){
+    const riskOn=group%2===0;
+    for(let index=0;index<7;index++){
+      let up;
+      if(group>=85)up=index===0;
+      else if(group>=61)up=index<2;
+      else if(group>=48)up=index<2;
+      else if(group>=33)up=index%2===0;
+      else up=index<2;
+      const row=sample(group,index,{up});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
+  const local=profile.regime_local_tcn_challenger;
+  assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
+  assert.equal(local.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1');
+  assert.equal(local.model_scope,'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR');
+  assert.deepEqual(local.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  assert.equal(local.probability_ready,false,
+    'the research challenger cannot unlock production probability or live execution');
+  const on=local.regime_specialists.BTC_RISK_ON;
+  const off=local.regime_specialists.BTC_RISK_OFF;
+  for(const [regime,expert] of [['BTC_RISK_ON',on],['BTC_RISK_OFF',off]]){
+    assert.equal(expert.trained,true,regime+' must have an independently fitted TCN');
+    assert.equal(expert.baseline_anchor_source,'REGIME_LOCAL_TRAINING_ONLY');
+    assert.ok(expert.training_samples>0&&expert.training_samples<=4096);
+    assert.ok(expert.training_sample_fingerprint);
+    assert.ok(expert.selection_sample_fingerprint);
+    assert.ok(expert.calibration_sample_fingerprint);
+    assert.equal(expert.chronology_valid,true);
+    assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
+    assert.ok(expert.max_selection_outcome_resolved_at<expert.calibration_start_at);
+    assert.ok(expert.max_calibration_outcome_resolved_at<expert.validation_start_at);
+    assert.ok(expert.validation_start_at<expert.holdout_start_at);
+    assert.equal(expert.training_targets.positive+expert.training_targets.negative,
+      expert.training_samples);
+    assert.equal(expert.selection_targets.positive+expert.selection_targets.negative,
+      expert.selection_samples);
+    assert.equal(expert.calibration_targets.positive+expert.calibration_targets.negative,
+      expert.calibration_samples);
+    assert.equal(expert.probability_calibration.fit_on,'REGIME_LOCAL_TCN_CALIBRATION_BLOCK');
+    assert.equal(expert.logistic_probability_calibration.fit_on,'REGIME_LOCAL_LOGISTIC_CALIBRATION_BLOCK');
+    assert.equal(expert.probability_calibration.sample_count,expert.calibration_samples);
+    assert.equal(expert.logistic_probability_calibration.sample_count,expert.calibration_samples);
+    if(!expert.validation_passed){
+      assert.equal(expert.holdout.evaluated,false,
+        'the untouched holdout must remain unscored until the local outer validation gate passes');
+    }
+    if(!expert.holdout_passed){
+      assert.equal(expert.probability_ready,false);
+    }
+  }
+  assert.notEqual(on.training_sample_fingerprint,off.training_sample_fingerprint,
+    'risk-on and risk-off must not share the same fitted training rows');
+  assert.notEqual(on.baseline_anchor_fingerprint,off.baseline_anchor_fingerprint,
+    'each regime must have its own training-only logistic anchor');
+  assert.equal(local.holdout_comparison.passed,
+    local.selected_regimes.length>0&&local.holdout.evaluated===true&&
+      local.holdout_logistic.evaluated===true&&
+      local.holdout.model_brier_score+0.003<local.holdout_logistic.model_brier_score);
+});
+
 test('thin BTC regime uses shared TCN weights but cannot publish a logistic-only substitute',()=>{
   const rows=[];
   for(let group=0;group<80;group++){
