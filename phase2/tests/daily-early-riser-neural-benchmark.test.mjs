@@ -374,6 +374,6 @@ test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 
   assert.equal(effectiveNeuralInnerSelectionMargin(0.00025,0.006),0.00025);
 });
 
-test('daily TCN uses a larger isolated training budget without changing the legacy default',()=>{
-  assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,8192);
+test('daily TCN history ablation uses a 32768-row cap without changing the legacy 4h contract',()=>{
+  assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,32768);
 });
