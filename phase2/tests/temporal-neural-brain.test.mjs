@@ -12,6 +12,7 @@ import {
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
   TEMPORAL_BASELINE_FEATURE_CACHE,
+  TEMPORAL_GRADIENT_BUFFER_SCOPE,
   TEMPORAL_BRIER_SUPERIORITY_MARGIN,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
@@ -182,6 +183,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.baseline_feature_cache,TEMPORAL_BASELINE_FEATURE_CACHE);
   assert.equal(profile.baseline_feature_cache,'PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1',
     'immutable pooled input features must be computed once per sample, not once per epoch');
+  assert.equal(profile.gradient_buffer_scope,TEMPORAL_GRADIENT_BUFFER_SCOPE);
+  assert.equal(profile.gradient_buffer_scope,'TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1',
+    'per-sample backprop must reuse only the trainable gradient buffers and exclude frozen/model metadata arrays');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
