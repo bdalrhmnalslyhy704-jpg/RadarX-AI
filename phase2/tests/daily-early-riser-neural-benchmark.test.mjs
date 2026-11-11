@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
@@ -388,4 +389,11 @@ test('daily TCN and MLP history experiments use isolated 32768-row caps without 
   assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,32768);
   assert.equal(DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,32768);
   assert.equal(DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,0.60);
+});
+
+
+test('persisted benchmark report retains the independent regime-local TCN challenger',async()=>{
+  const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes('temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger'),
+    'compactTarget must serialize the independent TCN challenger instead of dropping it');
 });
