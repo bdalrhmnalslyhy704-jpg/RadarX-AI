@@ -19,6 +19,22 @@ const finite=value=>{
 };
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
 const targetDefinition=target=>'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+
+export function summarizeDailyNeuralAnchorDiagnostics(
+  neural={},requestedMode=DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION
+){
+  return {
+    anchor_adaptation_requested:requestedMode,
+    anchor_adaptation:neural?.anchor_adaptation??'NOT_REPORTED',
+    anchor_trust_radius:finite(neural?.anchor_trust_radius),
+    anchor_bias_trust_radius:finite(neural?.anchor_bias_trust_radius),
+    anchor_tether_strength:finite(neural?.anchor_tether_strength),
+    anchor_learning_rate_scale:finite(neural?.anchor_learning_rate_scale),
+    max_anchor_skip_delta:finite(neural?.max_anchor_skip_delta),
+    anchor_output_bias_delta:finite(neural?.anchor_output_bias_delta)
+  };
+}
+
 function validTemporalSequence(sequence){
   return Array.isArray(sequence)&&sequence.length===TEMPORAL_SEQUENCE_STEPS&&
     sequence.every(step=>Array.isArray(step)&&step.length===TEMPORAL_SEQUENCE_CHANNELS&&
@@ -158,6 +174,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     maxResolvedSamples:0
   });
   const neural=profile.neural_network||{};
+  const neuralAnchorMode=options.neuralAnchorAdaptation ??
+    DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION;
   const boosted=profile.boosted_tree_model||{};
   const hybrid=profile.hybrid_model||{};
   const selected=profile.model_selection||{};
@@ -282,6 +300,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       required_selection_positive_samples:neural.required_selection_positive_samples??null,
       required_selection_negative_samples:neural.required_selection_negative_samples??null,
       selection_support_ready:neural.selection_support_ready===true,
+      ...summarizeDailyNeuralAnchorDiagnostics(neural,neuralAnchorMode),
       trained:neural.trained===true,
       selected:neural.selected===true,
       validation:neural.validation??null,

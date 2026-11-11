@@ -7,6 +7,7 @@ import {
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+  summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
@@ -337,8 +338,29 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(profile.neural_network.holdout.evaluated,true);
 });
 
-test('daily MLP anchor adaptation is opt-in and has explicit bounded parameters',()=>{
-  assert.equal(DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,'TRUST_REGION_TETHERED_V1');
+test('daily anchor diagnostics report requested and applied modes without a false frozen default',()=>{
+  assert.deepEqual(summarizeDailyNeuralAnchorDiagnostics({},DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION),{
+    anchor_adaptation_requested:'TRUST_REGION_TETHERED_V1',
+    anchor_adaptation:'NOT_REPORTED',
+    anchor_trust_radius:null,
+    anchor_bias_trust_radius:null,
+    anchor_tether_strength:null,
+    anchor_learning_rate_scale:null,
+    max_anchor_skip_delta:null,
+    anchor_output_bias_delta:null
+  });
+  assert.deepEqual(summarizeDailyNeuralAnchorDiagnostics({
+    anchor_adaptation:'TRUST_REGION_TETHERED_V1',
+    anchor_trust_radius:0.12,anchor_bias_trust_radius:0.15,
+    anchor_tether_strength:0.35,anchor_learning_rate_scale:0.25,
+    max_anchor_skip_delta:0.08,anchor_output_bias_delta:0.03
+  }),{
+    anchor_adaptation_requested:'TRUST_REGION_TETHERED_V1',
+    anchor_adaptation:'TRUST_REGION_TETHERED_V1',
+    anchor_trust_radius:0.12,anchor_bias_trust_radius:0.15,
+    anchor_tether_strength:0.35,anchor_learning_rate_scale:0.25,
+    max_anchor_skip_delta:0.08,anchor_output_bias_delta:0.03
+  });
 });
 
 test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 gate',()=>{
