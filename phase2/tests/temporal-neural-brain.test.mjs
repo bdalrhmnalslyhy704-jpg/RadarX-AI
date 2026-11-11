@@ -196,12 +196,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
-  const profile=buildTemporalNeuralProfile(rows,{
-    epochs:2,minimumHoldoutSamples:80,
-    enableRegimeLocalTcn:true,
-    regimeLocalTcnMaxTrainingSamples:80,
-    regimeLocalTcnEpochs:1
-  });
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
   assert.equal(profile.resolved_samples,32*36);
   assert.equal(profile.trained,true,JSON.stringify({
     status:profile.status,
