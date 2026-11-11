@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
@@ -23,11 +24,18 @@ import {
   predictCognitiveProbability
 } from '../core/cognitive-brain.mjs';
 import {
+  createDailyEarlyRiserForwardForecastPairFromModelBundle
+} from '../core/daily-early-riser-forward-shadow.mjs';
+import {
   buildTemporalNeuralProfile,
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS
 } from '../core/temporal-neural-brain.mjs';
+
+function createHashForTest(value){
+  return createHash('sha256').update(value).digest('hex');
+}
 
 function sampleWith({
   at=1_800_000_000_000,
@@ -351,6 +359,60 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     );
     assert.ok(neuralProbability>=0.02&&neuralProbability<=0.98);
     assert.ok(logisticProbability>=0.02&&logisticProbability<=0.98);
+
+    const stable=value=>{
+      if(value===null||typeof value!=='object')return JSON.stringify(value);
+      if(Array.isArray(value))return '['+value.map(stable).join(',')+']';
+      return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stable(value[key])).join(',')+'}';
+    };
+    const digest=value=>createHashForTest(stable(value));
+    const modelBundle={
+      schema:'RADARX_DAILY_EARLY_RISER_SHADOW_MODEL_V1',
+      enabled:true,target_pct:5,
+      target_definition:'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
+      horizon_ms:horizon,feature_schema:COGNITIVE_DAILY_FEATURE_SCHEMA,
+      feature_names:[...profile.feature_names],
+      trained_through_at:profile.neural_network.max_refit_training_outcome_resolved_at,
+      selected_member_index:profile.neural_network.selected_member_index,
+      selected_residual_scale:profile.neural_network.selected_residual_scale,
+      historical_holdout_passed:profile.neural_network.holdout_comparison?.passed===true,
+      model_fit:profile.neural_network.model_fit,
+      same_window_logistic_fit:profile.neural_network.same_window_logistic_fit,
+      research_only:true,production_eligible:false,real_order_execution:false,
+      training_dataset_sha256:'a'.repeat(64),source_code_commit:'b'.repeat(40)
+    };
+    modelBundle.mlp_model_sha256=digest(modelBundle.model_fit);
+    modelBundle.logistic_model_sha256=digest(modelBundle.same_window_logistic_fit);
+    const identity={
+      schema:modelBundle.schema,target_pct:modelBundle.target_pct,
+      target_definition:modelBundle.target_definition,horizon_ms:modelBundle.horizon_ms,
+      feature_schema:modelBundle.feature_schema,feature_names:modelBundle.feature_names,
+      trained_through_at:modelBundle.trained_through_at,
+      training_dataset_sha256:modelBundle.training_dataset_sha256,
+      source_code_commit:modelBundle.source_code_commit,
+      mlp_model_sha256:modelBundle.mlp_model_sha256,
+      logistic_model_sha256:modelBundle.logistic_model_sha256,
+      selected_member_index:modelBundle.selected_member_index,
+      selected_residual_scale:modelBundle.selected_residual_scale
+    };
+    const modelBundleSha=digest(identity);
+    const at=Math.max(Date.now(),Number(modelBundle.trained_through_at)+horizon+1);
+    const baseline={
+      openTime:at-15*60*1000+1,open:100,high:101,low:99,close:100,closeTime:at,
+      quoteVolume:1_000_000,trades:1000,takerBuyQuoteVolume:500_000
+    };
+    const forecasts=createDailyEarlyRiserForwardForecastPairFromModelBundle({
+      model_bundle:modelBundle,model_bundle_sha256:modelBundleSha,
+      symbol:'AAAUSDT',at,feature_information_cutoff_at:at,recorded_at:at+1,
+      baseline,features:samples.at(-1).features
+    });
+    assert.equal(forecasts.length,2);
+    assert.equal(forecasts[0].model_variant,'DAILY_MLP_CHALLENGER_V1');
+    assert.equal(forecasts[1].model_variant,'SAME_WINDOW_LOGISTIC_BASELINE_V1');
+    assert.ok(Math.abs(forecasts[0].up_probability-predictCognitiveProbability(
+      samples.at(-1).features,modelBundle.model_fit))<1e-12);
+    assert.ok(Math.abs(forecasts[1].up_probability-predictCognitiveProbability(
+      samples.at(-1).features,modelBundle.same_window_logistic_fit))<1e-12);
   }else{
     assert.equal(profile.neural_network.model_fit,undefined);
   }
