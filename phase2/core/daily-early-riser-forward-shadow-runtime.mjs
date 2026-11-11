@@ -243,6 +243,7 @@ export class DailyEarlyRiserForwardShadowRuntime{
         }
       }
       if(targetPairs.length){
+        stagedSymbols.add(symbol);
         for(const pair of targetPairs){
           const pairId=pair[0].pair_id;
           stagedPairs.push({pairId,pair,symbol,at,modelBundleSha:pair[0].model_bundle_sha256});
