@@ -1,4 +1,10 @@
 import {createHash} from 'node:crypto';
+import {createHash} from 'node:crypto';
+import {
+  predictCognitiveProbability,
+  buildCognitiveFeatureVector,
+  COGNITIVE_DAILY_FEATURE_SCHEMA
+} from './cognitive-brain.mjs';
 import {
   classifyDailyEarlyRiserFirstPassage,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
@@ -22,6 +28,87 @@ const finite=value=>{
 const isSha256=value=>typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value);
 const cleanSymbol=value=>String(value||'').trim().toUpperCase();
 const targetDefinition=target=>'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+
+function stableStringify(value){
+  if(value===null||typeof value!=='object')return JSON.stringify(value);
+  if(Array.isArray(value))return '['+value.map(stableStringify).join(',')+']';
+  return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stableStringify(value[key])).join(',')+'}';
+}
+function sha256Value(value){
+  return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+function expectedBundleIdentity(bundle){
+  return {
+    schema:bundle.schema,target_pct:bundle.target_pct,
+    target_definition:bundle.target_definition,horizon_ms:bundle.horizon_ms,
+    feature_schema:bundle.feature_schema,feature_names:bundle.feature_names,
+    trained_through_at:bundle.trained_through_at,
+    training_dataset_sha256:bundle.training_dataset_sha256,
+    source_code_commit:bundle.source_code_commit,
+    mlp_model_sha256:bundle.mlp_model_sha256,
+    logistic_model_sha256:bundle.logistic_model_sha256,
+    selected_member_index:bundle.selected_member_index,
+    selected_residual_scale:bundle.selected_residual_scale
+  };
+}
+
+/**
+ * Verify a benchmark-exported, target-specific model bundle and calculate
+ * both probabilities from its exact immutable MLP/logistic weights.
+ */
+export function createDailyEarlyRiserForwardForecastPairFromModelBundle({
+  model_bundle,model_bundle_sha256,symbol,at,feature_information_cutoff_at,
+  recorded_at,observation_source='BINANCE_OFFICIAL_CLOSED_15M_BASELINE',
+  baseline,features
+}={}){
+  const bundle=model_bundle;
+  if(!bundle||bundle.schema!=='RADARX_DAILY_EARLY_RISER_SHADOW_MODEL_V1'||
+    bundle.enabled!==true||bundle.research_only!==true||
+    bundle.production_eligible!==false||bundle.real_order_execution!==false)
+    throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_NOT_RESEARCH_EXPORTABLE');
+  if(bundle.feature_schema!==COGNITIVE_DAILY_FEATURE_SCHEMA||
+    !Array.isArray(bundle.feature_names)||bundle.feature_names.length!==35||
+    finite(bundle.target_pct)===null||
+    !DAILY_EARLY_RISER_TARGETS_PCT.includes(Number(bundle.target_pct))||
+    bundle.target_definition!==targetDefinition(Number(bundle.target_pct))||
+    Number(bundle.horizon_ms)!==HORIZON_MS)
+    throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_CONTRACT_MISMATCH');
+  if(!isSha256(model_bundle_sha256)||sha256Value(expectedBundleIdentity(bundle))!==model_bundle_sha256.toLowerCase())
+    throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_SHA256_MISMATCH');
+  if(!isSha256(bundle.mlp_model_sha256)||sha256Value(bundle.model_fit)!==bundle.mlp_model_sha256.toLowerCase()||
+    !isSha256(bundle.logistic_model_sha256)||
+    sha256Value(bundle.same_window_logistic_fit)!==bundle.logistic_model_sha256.toLowerCase())
+    throw new Error('FORWARD_SHADOW_MODEL_WEIGHT_SHA256_MISMATCH');
+  if(!Number.isInteger(bundle.selected_member_index)||bundle.selected_member_index<0||
+    !Number.isFinite(Number(bundle.trained_through_at)))
+    throw new Error('FORWARD_SHADOW_MODEL_SELECTION_OR_CUTOFF_MISSING');
+  if(!features||typeof features!=='object'||Array.isArray(features))
+    throw new Error('FORWARD_SHADOW_FEATURE_SNAPSHOT_INVALID');
+  const vector=buildCognitiveFeatureVector(features,bundle.feature_schema);
+  if(vector.length!==bundle.feature_names.length||vector.some(value=>!Number.isFinite(value)))
+    throw new Error('FORWARD_SHADOW_FEATURE_VECTOR_SCHEMA_MISMATCH');
+  const mlpProbability=predictCognitiveProbability(features,bundle.model_fit);
+  const logisticProbability=predictCognitiveProbability(features,bundle.same_window_logistic_fit);
+  if(!Number.isFinite(mlpProbability)||!Number.isFinite(logisticProbability))
+    throw new Error('FORWARD_SHADOW_MODEL_INFERENCE_FAILED');
+  const forecasts=createDailyEarlyRiserForwardForecastPair({
+    symbol,target_pct:Number(bundle.target_pct),at,feature_information_cutoff_at,recorded_at,
+    trained_through_at:Number(bundle.trained_through_at),observation_source,baseline,features,
+    model_bundle_sha256,mlp_model_sha256:bundle.mlp_model_sha256,
+    logistic_model_sha256:bundle.logistic_model_sha256,
+    mlp_up_probability:mlpProbability,logistic_up_probability:logisticProbability
+  });
+  return forecasts.map(row=>({
+    ...row,
+    feature_schema:bundle.feature_schema,
+    feature_names:[...bundle.feature_names],
+    feature_snapshot:{...features},
+    selected_member_index:bundle.selected_member_index,
+    selected_residual_scale:bundle.selected_residual_scale,
+    training_dataset_sha256:bundle.training_dataset_sha256,
+    source_code_commit:bundle.source_code_commit
+  }));
+}
 
 function stableStringify(value){
   if(value===null||typeof value!=='object')return JSON.stringify(value);
