@@ -1,4 +1,4 @@
-import {buildCognitiveLearningProfile,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
+import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -8,7 +8,7 @@ export const DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES = 8192;
 export const DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN = 0.00025;
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
-export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_FEATURE_SCHEMA;
+export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
 
 const finite=value=>{
   if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
@@ -49,6 +49,13 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
   if(!symbol||!id||!sample.features||typeof sample.features!=='object'||
     Array.isArray(sample.features))
     return {row:null,reason:'IDENTITY_OR_FEATURES_INVALID'};
+  const baselineFeatures={...sample.features};
+  // These values are independently calculated from the 96 closed 15m
+  // candles ending exactly at the observation baseline.
+  for(const key of ['quote_volume_24h','daily_change_pct','relative_strength_vs_btc_24h_pct']){
+    const value=finite(sample[key]);
+    if(value!==null)baselineFeatures[key]=value;
+  }
   return {
     row:{
       id:id+':TRADEABLE_FIRST_PASSAGE_PLUS_'+target+'_PCT',
@@ -64,7 +71,7 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
       historical_baseline:true,
       closed_candle_baseline:true,
       training_eligible:true,
-      features:sample.features
+      features:baselineFeatures
     },
     reason:null
   };
@@ -143,6 +150,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neuralSelectionMargin:0.003,
     neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
       DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     maxResolvedSamples:0
   });
   const neural=profile.neural_network||{};
@@ -156,7 +164,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
     horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
-    feature_schema_note:'MLP/GBDT use the existing 18-feature Cognitive V5 vector. The daily TCN uses the pre-existing 24x29 temporal channels, which already encode asset/BTC 24h returns, relative return, volatility and volume/trade ratios; absolute 24h USDT quote volume remains an upstream universe gate, not a neural channel.',
+    feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema: the legacy 18 channels plus baseline-only 30m/1h/3h/24h momentum, BTC-relative strength, 24h quote-volume scale, breakout/range/wick structure and 5m flow. Daily context is computed from closed candles at the baseline; the legacy 18-channel schema remains unchanged elsewhere. TCN continues using the separate 24x29 temporal sidecar.',
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,

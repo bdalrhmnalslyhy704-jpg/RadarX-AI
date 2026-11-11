@@ -5,10 +5,14 @@ import {
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+  DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
   buildCognitiveLearningProfile,
+  buildCognitiveFeatureVector,
+  COGNITIVE_DAILY_FEATURE_NAMES,
+  COGNITIVE_DAILY_FEATURE_SCHEMA,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
@@ -65,6 +69,41 @@ test('daily cognitive row preserves the 24h first-passage label and baseline-onl
   assert.equal(result.row.closed_candle_baseline,true);
   assert.equal(result.row.training_eligible,true);
   assert.deepEqual(result.row.features,input.features);
+});
+
+test('daily feature adapter carries baseline-time multi-horizon context into the isolated 35-channel schema',()=>{
+  const input=sampleWith({targetPct:5,outcome:'UP'});
+  input.quote_volume_24h=2_250_000;
+  input.daily_change_pct=2.4;
+  input.relative_strength_vs_btc_24h_pct=1.8;
+  Object.assign(input.features,{
+    return_30m_pct:0.6,hourly_return_pct:1.1,return_3h_pct:2.0,
+    btc_hourly_return_pct:0.2,breakout_distance_pct:0.35,
+    lower_wick_pct:0.3,micro_5m_available:true,
+    micro_5m_volume_ratio:1.8,micro_5m_trade_ratio:1.4,
+    micro_5m_return_pct:0.25,micro_5m_close_location:0.72,
+    micro_5m_taker_buy_ratio:0.66
+  });
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5);
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.features.quote_volume_24h,2_250_000);
+  assert.equal(prepared.row.features.daily_change_pct,2.4);
+  assert.equal(prepared.row.features.relative_strength_vs_btc_24h_pct,1.8);
+  const vector=buildCognitiveFeatureVector(prepared.row.features,DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.equal(DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,COGNITIVE_DAILY_FEATURE_SCHEMA);
+  assert.equal(vector.length,COGNITIVE_DAILY_FEATURE_NAMES.length);
+  assert.equal(vector.length,35);
+  assert.ok(vector.every(Number.isFinite));
+  const names=Object.fromEntries(COGNITIVE_DAILY_FEATURE_NAMES.map((name,index)=>[name,index]));
+  for(const name of ['momentum_30m','momentum_1h','momentum_3h','daily_momentum',
+    'relative_strength_24h','quote_volume_scale','breakout_distance','lower_wick_support',
+    'micro_volume_expansion','micro_trade_expansion','micro_momentum','micro_close_location',
+    'micro_buyer_divergence','timeframe_trend_consensus',
+    'relative_strength_timeframe_divergence'])
+    assert.ok(Number.isInteger(names[name]),'missing '+name);
+  assert.ok(vector[names.quote_volume_scale]>0);
+  assert.ok(vector[names.micro_buyer_divergence]>0);
+  assert.ok(vector[names.timeframe_trend_consensus]>0);
 });
 
 test('ambiguous, invalid and unresolved labels are excluded rather than mapped to FLAT',()=>{
@@ -208,7 +247,8 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
     minimumNeuralSelectionNegativeSamples:8,
     temporalSamples:[],
     neuralIterations:20,
-    neuralInnerSelectionMargin:0.00025
+    neuralInnerSelectionMargin:0.00025,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
   });
   assert.equal(profile.neural_network.required_selection_samples,40);
   assert.equal(profile.neural_network.required_selection_positive_samples,2);
@@ -217,6 +257,10 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
   assert.equal(profile.neural_network.inner_selection_diagnostics.required_brier_margin,0.00025);
   assert.equal(profile.neural_network.inner_selection_diagnostics.outer_validation_required_margin,0.003);
   assert.equal(profile.neural_network.selection_margin,0.003);
+  assert.equal(profile.feature_schema,DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.equal(profile.feature_names.length,COGNITIVE_DAILY_FEATURE_NAMES.length);
+  assert.equal(profile.neural_network.input_neurons,COGNITIVE_DAILY_FEATURE_NAMES.length);
+  assert.equal(profile.neural_network.architecture,'35-10-6-1+RESIDUAL');
   assert.equal(profile.neural_network.trained,false);
   assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
 });

@@ -265,6 +265,8 @@ async function main(){
         }]));
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
         target_pct:target,
+        feature_schema:result.feature_schema,
+        feature_count:result.feature_names?.length??null,
         samples:result.samples.accepted,
         training:result.chronology.training_samples,
         validation:result.chronology.validation_samples,
