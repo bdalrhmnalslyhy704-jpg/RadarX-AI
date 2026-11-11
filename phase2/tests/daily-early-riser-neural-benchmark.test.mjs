@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
@@ -212,4 +213,9 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
   assert.equal(profile.neural_network.selection_support_ready,true);
   assert.equal(profile.neural_network.trained,false);
   assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
+});
+
+
+test('daily TCN uses a larger isolated training budget without changing the legacy default',()=>{
+  assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,8192);
 });
