@@ -1426,8 +1426,9 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.resolved_at<neuralHybridSelectionStartAt);
   const neuralHybridSelection=neuralHybridSelectionStartAt===null?[]:neuralCalibration.filter(row=>
     row.at>=neuralHybridSelectionStartAt&&row.resolved_at<validationStartAt);
-  // Fit the logistic anchor and every nonlinear residual on the earliest
-  // chronological training slice only. Selection labels cannot enter gradients.
+  // Fit the logistic anchor and every nonlinear residual on the configured
+  // timestamp-safe recency subset of the chronological training block. The
+  // member-selection/calibration/outer labels cannot enter gradient updates.
   let neuralSameWindowLogisticFit=neuralModelTraining.length>=neuralMinimum
     ?fitLogisticModel(neuralModelTraining,{l2,iterations,learningRate}):null;
   const neuralFit=neuralModelTraining.length>=neuralMinimum&&
