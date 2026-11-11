@@ -171,7 +171,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
       DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
     featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
-    maxResolvedSamples:0
+    maxResolvedSamples:0,
+    includeNeuralModelFit:true
   });
   const neural=profile.neural_network||{};
   const neuralAnchorMode=options.neuralAnchorAdaptation ??
@@ -313,6 +314,22 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       holdout:neural.holdout??null,
       holdout_comparison:neural.holdout_comparison??null,
       inner_selection_diagnostics:neural.inner_selection_diagnostics??null
+    },
+    shadow_model_export:{
+      schema:'RADARX_DAILY_EARLY_RISER_SHADOW_MODEL_V1',
+      enabled:Boolean(neural.model_fit&&neural.same_window_logistic_fit&&
+        Number.isInteger(neural.selected_member_index)&&neural.selected_member_index>=0&&
+        finite(neural.max_refit_training_outcome_resolved_at)!==null),
+      target_pct:target,target_definition:targetContract,horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+      feature_names:profile.feature_names??[],
+      trained_through_at:finite(neural.max_refit_training_outcome_resolved_at),
+      selected_member_index:finite(neural.selected_member_index),
+      selected_residual_scale:finite(neural.selected_residual_scale),
+      historical_holdout_passed:neural.holdout_comparison?.passed===true,
+      model_fit:neural.model_fit??null,
+      same_window_logistic_fit:neural.same_window_logistic_fit??null,
+      research_only:true,production_eligible:false,real_order_execution:false
     },
     boosted_tree_model:{
       status:boosted.status??'NOT_EVALUATED',

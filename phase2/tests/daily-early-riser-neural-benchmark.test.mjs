@@ -19,7 +19,8 @@ import {
   COGNITIVE_DAILY_FEATURE_SCHEMA,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
-  hasNeuralSelectionSupport
+  hasNeuralSelectionSupport,
+  predictCognitiveProbability
 } from '../core/cognitive-brain.mjs';
 import {
   buildTemporalNeuralProfile,
@@ -321,7 +322,8 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     iterations:40,learningRate:0.08,neuralIterations:10,
     neuralInnerSelectionMargin:0.00025,
     neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
-    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    includeNeuralModelFit:true
   });
   assert.equal(profile.neural_network.trained,true);
   assert.equal(profile.neural_network.input_neurons,35);
@@ -338,6 +340,20 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     'the adjusted output bias must stay inside the declared trust region');
   assert.equal(profile.neural_network.validation.evaluated,true);
   assert.equal(profile.neural_network.holdout.evaluated,true);
+  if(profile.neural_network.selected_member_index>=0){
+    assert.ok(profile.neural_network.model_fit);
+    assert.ok(profile.neural_network.same_window_logistic_fit);
+    const neuralProbability=predictCognitiveProbability(
+      samples.at(-1).features,profile.neural_network.model_fit
+    );
+    const logisticProbability=predictCognitiveProbability(
+      samples.at(-1).features,profile.neural_network.same_window_logistic_fit
+    );
+    assert.ok(neuralProbability>=0.02&&neuralProbability<=0.98);
+    assert.ok(logisticProbability>=0.02&&logisticProbability<=0.98);
+  }else{
+    assert.equal(profile.neural_network.model_fit,undefined);
+  }
 });
 
 test('daily anchor diagnostics report requested and applied modes without a false frozen default',()=>{
