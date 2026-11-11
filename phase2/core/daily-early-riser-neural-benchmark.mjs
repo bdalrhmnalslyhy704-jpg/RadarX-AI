@@ -300,6 +300,11 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       required_selection_positive_samples:neural.required_selection_positive_samples??null,
       required_selection_negative_samples:neural.required_selection_negative_samples??null,
       selection_support_ready:neural.selection_support_ready===true,
+      selected_member_index:finite(neural.selected_member_index),
+      selected_residual_scale:finite(neural.selected_residual_scale),
+      probability_calibration:neural.probability_calibration??null,
+      member_selection_brier_scores:Array.isArray(neural.member_selection_brier_scores)
+        ?neural.member_selection_brier_scores:[],
       ...summarizeDailyNeuralAnchorDiagnostics(neural,neuralAnchorMode),
       trained:neural.trained===true,
       selected:neural.selected===true,
