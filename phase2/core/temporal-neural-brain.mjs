@@ -950,7 +950,7 @@ function fitRegimeLocalTemporalTcn({
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const baseline=fitLogistic(training);
   const fitted=fitEnsemble(training,{
-    epochs:Math.max(4,Math.min(8,Math.trunc(Number(epochs)||6))),
+    epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
     learningRate,l2,baseRate,baselineFit:baseline
   });
   const selectionLogistic=evaluate(selection,
@@ -1092,7 +1092,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   learningRate=0.006,l2=0.012,comparisonMargin=0.003,
   targetDefinition=TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs=HORIZON_MS,
-  allowedOutcomeSources=null
+  allowedOutcomeSources=null,
+  enableRegimeLocalTcn=false,
+  regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  regimeLocalTcnEpochs=6
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
@@ -1525,11 +1528,12 @@ export function buildTemporalNeuralProfile(samples = [], {
     // Keeping this above the support checks avoids a temporal-dead-zone ReferenceError.
     const regimeBaseline=regimeBaselines[regime];
     const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
-    regimeLocalTcnResults[regime]=fitRegimeLocalTemporalTcn({
+    regimeLocalTcnResults[regime]=enableRegimeLocalTcn
+      ?fitRegimeLocalTemporalTcn({
       regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
       calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
-      epochs:6,learningRate,l2,comparisonMargin,
-      maxTrainingSamples:TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+      epochs:regimeLocalTcnEpochs,learningRate,l2,comparisonMargin,
+      maxTrainingSamples:regimeLocalTcnMaxTrainingSamples,
       minTrainingSamples:minRegimeTraining,
       minTrainingPositive:minRegimeTrainingPositive,
       minTrainingNegative:minRegimeNegative,
@@ -1539,7 +1543,16 @@ export function buildTemporalNeuralProfile(samples = [], {
       minValidationNegative:minRegimeNegative,
       minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
       minHoldoutNegative:minRegimeNegative
-    });
+    })
+      :{
+        regime,status:'NOT_ENABLED_FOR_THIS_PROFILE',
+        model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+        model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+        training_strategy:TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+        training_samples:0,trained:false,selected_for_research:false,
+        validation_passed:false,holdout_passed:false,probability_ready:false,
+        live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
+      };
     const supportGaps=[];
     if(sharedRegimeTraining.length<minRegimeTraining)supportGaps.push('REGIME_TRAINING_SAMPLE_COUNT');
     if(!pooledBaseline)supportGaps.push('SHARED_POOLED_LOGISTIC_ANCHOR_UNAVAILABLE');
