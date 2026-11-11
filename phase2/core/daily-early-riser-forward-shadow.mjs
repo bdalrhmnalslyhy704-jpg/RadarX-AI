@@ -193,7 +193,7 @@ export function scoreDailyEarlyRiserForwardShadow(rows,{
     !isSha256(model_bundle_sha256)||requiredGain===null||requiredGain<DAILY_FORWARD_SHADOW_REQUIRED_BRIER_GAIN)
     throw new Error('FORWARD_SHADOW_SCORE_CONFIGURATION_INVALID');
   const records=Array.isArray(rows)?rows:[];
-  const byPair=new Map(),seenIds=new Set();
+  const byPair=new Map(),seenIds=new Set(),duplicatePairIds=new Set();
   let duplicateForecastIds=0,invalidRecords=0,ambiguousRecords=0;
   for(const row of records){
     if(!row||row.schema!==DAILY_FORWARD_SHADOW_SCHEMA||row.target_pct!==target||
