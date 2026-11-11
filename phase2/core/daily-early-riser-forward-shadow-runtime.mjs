@@ -108,7 +108,7 @@ function validateClosedRestResponse(result,symbol,baselineCloseTime){
 export class DailyEarlyRiserForwardShadowRuntime{
   constructor({
     store,rest,modelBundles,logger=console,
-    maxNewSymbolsPerCycle=8,maxResolutionsPerCycle=4
+    maxNewSymbolsPerCycle=4,maxResolutionsPerCycle=1
   }={}){
     if(!store||typeof store.appendDailyForwardShadowForecasts!=='function'||
       typeof store.appendDailyForwardShadowResolutions!=='function'||
@@ -119,8 +119,8 @@ export class DailyEarlyRiserForwardShadowRuntime{
     if(!(modelBundles instanceof Map)||!modelBundles.size)
       throw new Error('DAILY_FORWARD_SHADOW_VERIFIED_MODEL_BUNDLES_REQUIRED');
     this.store=store;this.rest=rest;this.modelBundles=modelBundles;this.logger=logger;
-    this.maxNewSymbolsPerCycle=Math.max(1,Math.min(16,Math.trunc(Number(maxNewSymbolsPerCycle)||8)));
-    this.maxResolutionsPerCycle=Math.max(1,Math.min(8,Math.trunc(Number(maxResolutionsPerCycle)||4)));
+    this.maxNewSymbolsPerCycle=Math.max(1,Math.min(8,Math.trunc(Number(maxNewSymbolsPerCycle)||4)));
+    this.maxResolutionsPerCycle=Math.max(1,Math.min(2,Math.trunc(Number(maxResolutionsPerCycle)||1)));
     this.initialized=false;this.initializing=null;
     this.latestAtByModelSymbol=new Map();
     this.seenPairIds=new Set();this.resolvedForecastIds=new Set();
@@ -153,33 +153,52 @@ export class DailyEarlyRiserForwardShadowRuntime{
     if(this.initializing)return this.initializing;
     this.initializing=(async()=>{
       const resolvedById=new Set();
+      const resolvedPairs=new Map();
       for await(const row of jsonLines(this.store.files.dailyForwardShadowResolved)){
         if(row?.schema!==DAILY_FORWARD_SHADOW_SCHEMA||!isSha256(row.forecast_id))continue;
         this.resolvedForecastIds.add(row.forecast_id);
         resolvedById.add(row.forecast_id);
+        if(isSha256(row.pair_id)){
+          if(!resolvedPairs.has(row.pair_id))resolvedPairs.set(row.pair_id,[]);
+          resolvedPairs.get(row.pair_id).push(row);
+        }
       }
+      for(const rows of resolvedPairs.values()){
+        if(rows.length===2){
+          if(rows.every(row=>row.status==='AMBIGUOUS'))this.ambiguousPairs++;
+          else if(rows.every(row=>row.status==='RESOLVED'))this.resolvedPairs++;
+        }
+      }
+      const restoredForecastPairs=new Set();
       for await(const row of jsonLines(this.store.files.dailyForwardShadowForecasts)){
         if(row?.schema!==DAILY_FORWARD_SHADOW_SCHEMA||!isSha256(row.pair_id)||
-          !isSha256(row.model_bundle_sha256)||!Number.isFinite(Number(row.at)))continue;
+          !isSha256(row.forecast_id)||!isSha256(row.model_bundle_sha256)||
+          !Number.isFinite(Number(row.at)))continue;
         const target=Number(row.target_pct);
         const bundle=this.modelBundles.get(target);
         if(!bundle||bundle.model_bundle_sha256!==row.model_bundle_sha256)continue;
         this.seenPairIds.add(row.pair_id);
         const symbol=cleanSymbol(row.symbol);
-        const identity=pairKey(symbol,target,row.at,row.model_bundle_sha256);
-        const prior=this.latestAtByModelSymbol.get(identity.split('|').slice(0,1).join('|')+'|'+
-          row.model_bundle_sha256);
+        const cadenceKey=symbol+'|'+row.model_bundle_sha256;
+        const prior=this.latestAtByModelSymbol.get(cadenceKey);
         if(prior===undefined||Number(row.at)>prior)
-          this.latestAtByModelSymbol.set(symbol+'|'+row.model_bundle_sha256,Number(row.at));
+          this.latestAtByModelSymbol.set(cadenceKey,Number(row.at));
+        if(!restoredForecastPairs.has(row.pair_id)){
+          restoredForecastPairs.add(row.pair_id);
+          this.capturedPairs++;
+        }
         if(row.status==='PENDING'&&!resolvedById.has(row.forecast_id)){
           if(!this.pendingPairs.has(row.pair_id))this.pendingPairs.set(row.pair_id,[]);
           this.pendingPairs.get(row.pair_id).push(row);
         }
       }
-      // Ignore incomplete, duplicated, or already-resolved pairs during restore.
+      // Ignore incomplete, duplicated, mixed-model or already-resolved pairs.
       for(const [id,rows] of this.pendingPairs){
-        const complete=rows.length===2&&rows.every(row=>row.model_bundle_sha256===rows[0].model_bundle_sha256&&
-          row.symbol===rows[0].symbol&&row.at===rows[0].at&&row.target_pct===rows[0].target_pct);
+        const complete=rows.length===2&&
+          rows.some(row=>row.model_variant==='DAILY_MLP_CHALLENGER_V1')&&
+          rows.some(row=>row.model_variant==='SAME_WINDOW_LOGISTIC_BASELINE_V1')&&
+          rows.every(row=>row.model_bundle_sha256===rows[0].model_bundle_sha256&&
+            row.symbol===rows[0].symbol&&row.at===rows[0].at&&row.target_pct===rows[0].target_pct);
         if(!complete)this.pendingPairs.delete(id);
       }
       this.initialized=true;
@@ -221,6 +240,7 @@ export class DailyEarlyRiserForwardShadowRuntime{
         skippedInvalid++;continue;
       }
       const targetPairs=[];
+      let candidateInvalid=false;
       for(const [target,bundle] of this.modelBundles.entries()){
         const identity=symbol+'|'+bundle.model_bundle_sha256;
         const lastAt=this.latestAtByModelSymbol.get(identity);
@@ -239,10 +259,10 @@ export class DailyEarlyRiserForwardShadowRuntime{
           targetPairs.push(pair);
         }catch(error){
           this.reject(String(error?.message??error));
-          skippedInvalid++;continue;
+          skippedInvalid++;candidateInvalid=true;break;
         }
       }
-      if(targetPairs.length){
+      if(targetPairs.length&&!candidateInvalid){
         stagedSymbols.add(symbol);
         for(const pair of targetPairs){
           const pairId=pair[0].pair_id;
