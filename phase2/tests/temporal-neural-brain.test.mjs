@@ -8,6 +8,8 @@ import {
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS,
+  TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,
+  isValidTemporalPooledBaselineFeatures,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -22,6 +24,18 @@ import {
 const FOUR_HOURS=4*60*60*1000;
 const EIGHT_HOURS=8*60*60*1000;
 const BASE_TIME=1_710_000_000_000;
+
+test('cached TCN baseline vector accepts exactly 58 finite pooled features',()=>{
+  assert.equal(TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,58);
+  assert.equal(isValidTemporalPooledBaselineFeatures(Array(58).fill(0)),true,
+    'the cache contains 29 full-window means plus 29 recent-window means');
+  assert.equal(isValidTemporalPooledBaselineFeatures(Array(29).fill(0)),false,
+    'the raw 29-channel count is not the pooled baseline vector length');
+  const invalid=Array(58).fill(0);
+  invalid[17]=Number.NaN;
+  assert.equal(isValidTemporalPooledBaselineFeatures(invalid),false,
+    'non-finite cached features must be rejected and recomputed safely');
+});
 
 function sequenceFor(up,index=0){
   return Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,step)=>{
