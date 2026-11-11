@@ -203,7 +203,9 @@ export function scoreDailyEarlyRiserForwardShadow(rows,{
     }
     if(row.status!=='RESOLVED')continue;
     if(!isSha256(row.forecast_id)||seenIds.has(row.forecast_id)){
-      duplicateForecastIds++;continue;
+      duplicateForecastIds++;
+      if(isSha256(row.pair_id))duplicatePairIds.add(row.pair_id);
+      continue;
     }
     seenIds.add(row.forecast_id);
     const at=finite(row.at),resolvedAt=finite(row.resolved_at);
