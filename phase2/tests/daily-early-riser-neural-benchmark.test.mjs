@@ -5,6 +5,7 @@ import {
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
+  DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
@@ -321,10 +322,18 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
     iterations:40,learningRate:0.08,neuralIterations:10,
     neuralInnerSelectionMargin:0.00025,
+    neuralTrainingHistoryFraction:DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
     neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
     featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
   });
   assert.equal(profile.neural_network.trained,true);
+  assert.equal(profile.neural_network.training_history_fraction,0.60);
+  assert.ok(profile.neural_network.fit_training_samples<profile.neural_network.preselection_training_samples,
+    'the MLP gradient fit must use the newest 60% of its timestamp-grouped training block');
+  assert.ok(profile.neural_network.fit_training_samples>=240,
+    'the recency window must preserve the minimum neural training support');
+  assert.ok(profile.neural_network.max_training_outcome_resolved_at<profile.neural_network.selection_start_at,
+    'recency selection must not leak into the later member-selection block');
   assert.equal(profile.neural_network.input_neurons,35);
   assert.equal(profile.neural_network.architecture,'35-10-6-1+RESIDUAL');
   assert.equal(profile.neural_network.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
@@ -378,4 +387,5 @@ test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 
 test('daily TCN and MLP history experiments use isolated 32768-row caps without changing the legacy 4h contract',()=>{
   assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,32768);
   assert.equal(DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,32768);
+  assert.equal(DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,0.60);
 });
