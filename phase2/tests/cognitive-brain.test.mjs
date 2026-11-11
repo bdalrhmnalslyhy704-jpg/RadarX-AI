@@ -234,6 +234,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.identifier_features_used, false);
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
+    assert.equal(profile.neural_network.training_history_fraction,1,
+      'legacy callers keep the full chronological training history by default');
+    assert.equal(profile.neural_network.fit_training_samples,profile.neural_network.preselection_training_samples,
+      'the default 100% history setting preserves the existing training rows');
     assert.equal(profile.neural_network.anchor_adaptation,'FROZEN_LOGISTIC',
       'legacy V5 callers must keep the original frozen logistic skip path');
     assert.equal(profile.neural_network.anchor_trust_radius,0);
