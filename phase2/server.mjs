@@ -30,6 +30,7 @@ import {MarketUniverseScanner} from './market/universe-scanner.mjs';
 import {createApiServer} from './http/api.mjs';
 import {createAdaptiveTraderSnapshotService} from './core/adaptive-trader-engine.mjs';
 import {AdaptiveTraderWorker} from './core/adaptive-trader-worker.mjs';
+import {DailyEarlyRiserForwardShadowRuntime} from './core/daily-early-riser-forward-shadow-runtime.mjs';
 import {AdaptiveTraderExecutionController} from './core/adaptive-trader-execution.mjs';
 import {assertDeploymentEnvironment,assertReadOnlyStagingConfig} from './deploy/preflight.mjs';
 import {sanitizeLogMessage} from './runtime.mjs';
@@ -156,6 +157,25 @@ export async function startServer({
   // It does not feed, configure, or modify any of the twelve existing radar decisions.
   const adaptiveTraderRest=createRadarRest();
   const adaptiveTraderSnapshotProvider=createAdaptiveTraderSnapshotService({rest:adaptiveTraderRest});
+  const dailyForwardShadowEnabled=process.env.RADARX_DAILY_EARLY_RISER_FORWARD_SHADOW_ENABLED==='true';
+  let dailyForwardShadowRuntime=null;
+  if(dailyForwardShadowEnabled){
+    const modelBundleFile=String(process.env.RADARX_DAILY_FORWARD_SHADOW_MODEL_BUNDLE_PATH||
+      resolve(archiveDir,'daily-forward-shadow-model-bundles.json')).trim();
+    dailyForwardShadowRuntime=await DailyEarlyRiserForwardShadowRuntime.create({
+      store,rest:adaptiveTraderRest,modelBundleFile,logger,
+      maxNewSymbolsPerCycle:8,maxResolutionsPerCycle:1
+    });
+    const shadowStatus=dailyForwardShadowRuntime.snapshot();
+    logger.info?.('[DAILY_FORWARD_SHADOW_RUNTIME_READY] '+JSON.stringify({
+      enabled:true,model_targets:shadowStatus.model_targets,
+      model_bundle_hashes:shadowStatus.model_bundle_hashes,
+      storage_dir:archiveDir,mode:'READ_ONLY_PAIRED_FORWARD_SHADOW',
+      production_eligible:false,real_order_execution:false
+    }));
+  }else{
+    logger.info?.('[DAILY_FORWARD_SHADOW_RUNTIME_DISABLED] opt-in flag is not true');
+  }
   const adaptiveTraderExecutionController=new AdaptiveTraderExecutionController({store,env:process.env,logger});
   // Stagger the 40-symbol learning batch away from the 60s Pre-Move worker
   // on the 0.5-CPU DHDTech tier. The first learning scan still starts after 25s;
@@ -168,7 +188,8 @@ export async function startServer({
   const adaptiveTraderScanLimit=Math.max(40,Math.min(60,
     Math.trunc(Number(process.env.RADARX_ADAPTIVE_TRADER_SCAN_LIMIT)||40)));
   const adaptiveTraderWorker=new AdaptiveTraderWorker({
-    store,snapshotProvider:adaptiveTraderSnapshotProvider,executionController:adaptiveTraderExecutionController,logger,
+    store,snapshotProvider:adaptiveTraderSnapshotProvider,executionController:adaptiveTraderExecutionController,
+    dailyForwardShadowRuntime,logger,
     intervalMs:adaptiveTraderIntervalMs,scanLimit:adaptiveTraderScanLimit
   });
   const moveConfig={...(config.moveRadar||{})};
@@ -318,7 +339,7 @@ export async function startServer({
   }
   if(!stagingSmokeMode)safeStart('RADAR_SIGNAL_OUTCOME_WORKER',radarSignalOutcomeWorker);
   logger.info('Push provider: '+provider.status().provider+' enabled='+provider.status().enabled);
-  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,adaptiveTraderWorker,adaptiveTraderSnapshotProvider,adaptiveTraderExecutionController,push,close:async()=>{api.stopPreMoveWatchWorker?.();api.stopAdaptiveTraderWorker?.();radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
+  return {server:api,monitor,moveSentinel,strongMoveRadar,rotationLagRadar,liquidityAbsorptionRadar,kahirRadar,professorRadar,doomsdayRadar,alMuqawimRadar,earlyExpansionRadar,marketWideKlineCache,coinHunterRadar,whaleAccumulationRadar,falconEyeRadar,radarSwarm,multiAnalystRadar,symbolDeepAnalyzer,store,strongRadarRest,rotationRadarRest,liquidityRadarRest,kahirRadarRest,multiAnalystRest,coinHunterRest,whaleAccumulationRest,marketRadarRest,radarSignalOutcomeWorker,adaptiveTraderWorker,adaptiveTraderSnapshotProvider,adaptiveTraderExecutionController,dailyForwardShadowRuntime,push,close:async()=>{api.stopPreMoveWatchWorker?.();api.stopAdaptiveTraderWorker?.();radarSignalOutcomeWorker.stop();await radarSwarm.stop();multiAnalystRadar.stop();await monitor.stop();api.closeAllConnections?.();await new Promise(r=>api.close(r));}};
 }
 
 if(process.argv[1]&&resolve(fileURLToPath(import.meta.url))===resolve(process.argv[1])){
