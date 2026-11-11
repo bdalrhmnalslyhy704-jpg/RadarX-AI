@@ -547,7 +547,7 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
   assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
   assert.equal(local.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1');
   assert.equal(local.model_scope,'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR');
-  assert.deepEqual(local.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  assert.deepEqual(local.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF'],JSON.stringify(local.regime_specialists,null,2));
   assert.equal(local.probability_ready,false,
     'the research challenger cannot unlock production probability or live execution');
   const on=local.regime_specialists.BTC_RISK_ON;
