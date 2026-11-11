@@ -141,13 +141,23 @@ function zeroTrainableGradients(model) {
     outputWeights:zerosLike(model.outputWeights)
   };
 }
-function resetGradientBuffer(target) {
+export function resetGradientBuffer(target) {
   if(Array.isArray(target)){
     for(let index=0;index<target.length;index++){
-      if(Array.isArray(target[index]))resetGradientBuffer(target[index]);
+      const value=target[index];
+      if(Array.isArray(value)||(value&&typeof value==='object'))resetGradientBuffer(value);
       else target[index]=0;
     }
+    return target;
   }
+  if(target&&typeof target==='object'){
+    for(const key of Object.keys(target)){
+      const value=target[key];
+      if(Array.isArray(value)||(value&&typeof value==='object'))resetGradientBuffer(value);
+      else target[key]=0;
+    }
+  }
+  return target;
 }
 // Accumulate one sample's weighted gradient directly into the reusable
 // epoch buffer. The previous recursive map created a complete second gradient
