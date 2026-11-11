@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {execFile as execFileCallback} from 'node:child_process';
 import {promisify} from 'node:util';
 import {appendFile,mkdir,mkdtemp,rename,rm,writeFile} from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {
@@ -38,6 +39,17 @@ const SAMPLES_PATH=resolve(process.env.RADARX_DAILY_EARLY_RISER_SAMPLES||
   'artifacts/daily-early-riser-samples.jsonl');
 const REQUEST_AUDIT=[];
 const execHash=bytes=>createHash('sha256').update(bytes).digest('hex');
+async function sha256File(path){
+  const hash=createHash('sha256');
+  for await(const chunk of createReadStream(path))hash.update(chunk);
+  return hash.digest('hex');
+}
+function validTemporalSequence(sequence){
+  return Array.isArray(sequence)&&sequence.length===24&&
+    sequence.every(step=>Array.isArray(step)&&step.length===29&&
+      step.every(value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&
+        Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
+}
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
   const n=Number(value);
@@ -351,9 +363,14 @@ async function main(){
   const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
   const maxSamples=Math.max(1,Math.min(2000,Math.trunc(Number(args['max-samples-per-symbol'])||500)));
   const output=resolve(args.output||OUTPUT_PATH),samplesOutput=resolve(args['samples-output']||SAMPLES_PATH);
+  const temporalSamplesOutput=resolve(args['temporal-samples-output']||
+    process.env.RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES||
+    'artifacts/daily-early-riser-temporal-sequences.jsonl');
   await mkdir(resolve(output,'..'),{recursive:true});
   await mkdir(resolve(samplesOutput,'..'),{recursive:true});
+  await mkdir(resolve(temporalSamplesOutput,'..'),{recursive:true});
   await writeFile(samplesOutput,'');
+  await writeFile(temporalSamplesOutput,'');
   const tempDir=await mkdtemp(join(tmpdir(),'radarx-daily-early-riser-'));
   const started=Date.now(),manifest=[],symbolFailures=[];
   let completed=0,totalSamples=0,queue=Promise.resolve(),reportQueue=Promise.resolve();
@@ -383,7 +400,7 @@ async function main(){
       'Universe is limited to symbols trading on Binance Spot at run time; delisted-symbol survivorship bias remains.',
       'The fixed one-per-24h anchor grid tiles decision windows but cannot measure every intraday alert opportunity or production notification latency.',
       'This stage builds labels and baseline ranking diagnostics only; it does not train a model or establish profitability.',
-      'The compact JSONL omits the raw 24x29 tensors; tensors can be regenerated from the checksum-verified archives when the model-training phase begins.'
+      'The main compact JSONL omits raw 24x29 tensors; a separate SHA-256-audited temporal sidecar stores each valid sequence for the dedicated daily TCN benchmark.'
     ]
   };
   const report={
@@ -422,11 +439,32 @@ async function main(){
       throw new Error('BTC_ARCHIVE_COVERAGE_INCOMPLETE');
     const btcKlines={data:btc15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'};
     let writeQueue=Promise.resolve();
+    let temporalWriteQueue=Promise.resolve();
+    let temporalSequenceRows=0;
+    let temporalSequenceRejected=0;
+    let temporalSequenceInvalidDeclared=0;
     const persist=rows=>{
-      if(!rows.length)return writeQueue;
+      if(!rows.length)return Promise.all([writeQueue,temporalWriteQueue]);
       const content=rows.map(row=>JSON.stringify(compactSample(row))).join('\n')+'\n';
+      const temporalRows=[];
+      for(const row of rows){
+        if(validTemporalSequence(row.temporal_sequence)){
+          temporalRows.push(JSON.stringify({
+            id:row.id,symbol:row.symbol,at:row.at,
+            temporal_sequence:row.temporal_sequence
+          }));
+        }else{
+          temporalSequenceRejected++;
+          if(row.temporal_sequence_available===true)temporalSequenceInvalidDeclared++;
+        }
+      }
       writeQueue=writeQueue.then(()=>appendFile(samplesOutput,content));
-      return writeQueue;
+      if(temporalRows.length){
+        temporalSequenceRows+=temporalRows.length;
+        temporalWriteQueue=temporalWriteQueue.then(()=>
+          appendFile(temporalSamplesOutput,temporalRows.join('\n')+'\n'));
+      }
+      return Promise.all([writeQueue,temporalWriteQueue]);
     };
     const results=await mapLimit(symbols,concurrency,async symbol=>{
       let result;
@@ -526,11 +564,11 @@ async function main(){
         completed,total:symbols.length,symbol,status:result.status,samples:result.samples,
         total_samples:totalSamples,archives:manifest.length
       }));
-      await writeQueue;
+      await Promise.all([writeQueue,temporalWriteQueue]);
       await persistReport();
       return {...compactResult,metricRows};
     });
-    await writeQueue;
+    await Promise.all([writeQueue,temporalWriteQueue]);
     await reportQueue;
     const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
@@ -575,7 +613,15 @@ async function main(){
     };
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
-      sha256:execHash(await (await import('node:fs/promises')).readFile(samplesOutput))
+      sha256:await sha256File(samplesOutput)
+    };
+    report.temporal_sample_file={
+      path:temporalSamplesOutput,rows:temporalSequenceRows,
+      declared_sequence_count:temporalSequenceRows+temporalSequenceInvalidDeclared,
+      rejected_or_missing_sequences:temporalSequenceRejected,
+      invalid_declared_sequences:temporalSequenceInvalidDeclared,
+      sequence_steps:24,sequence_channels:29,
+      sha256:await sha256File(temporalSamplesOutput)
     };
     report.status=report.data_quality.status;
     report.completed_at=new Date().toISOString();

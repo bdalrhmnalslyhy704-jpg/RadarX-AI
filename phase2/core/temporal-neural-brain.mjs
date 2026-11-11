@@ -7,6 +7,8 @@
  * untouched holdout beat both a prevalence and same-window pooled-logistic
  * baseline. This module is analysis-only.
  */
+// Backward-compatible default contract. The daily benchmark opts into its
+// own target definition and horizon through buildTemporalNeuralProfile options.
 export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
@@ -17,6 +19,7 @@ export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
+// Default legacy horizon; parameterized daily experiments override this at the profile boundary.
 const HORIZON_MS = 4 * 60 * 60 * 1000;
 const SEEDS = Object.freeze([13, 29, 47]);
 const RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
@@ -59,7 +62,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 export function temporalBinaryTarget(outcome) {
-  // This network estimates the chance of reaching +3% before -2%.
+  // UP=1 is the sample-declared first-passage event; DOWN and FLAT are non-events.
   // DOWN and FLAT both mean that the success event did not occur.
   return outcome === 'UP' ? 1 : 0;
 }
@@ -71,25 +74,33 @@ function validSequence(sequence) {
       row.every(value => finite(value) !== null && Math.abs(Number(value)) <= 4));
 }
 
-function cleanRows(samples) {
+function cleanRows(samples, {
+  targetDefinition = TEMPORAL_TARGET_DEFINITION,
+  outcomeHorizonMs = HORIZON_MS,
+  allowedOutcomeSources = null
+} = {}) {
+  const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
+  const allowedSources = Array.isArray(allowedOutcomeSources)
+    ? new Set(allowedOutcomeSources.map(String)) : null;
   const seen = new Set();
   return (Array.isArray(samples) ? samples : []).filter(row => {
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
-        row.target_definition !== TEMPORAL_TARGET_DEFINITION ||
+        row.target_definition !== targetDefinition ||
         row.first_passage?.path_resolution !== '15M' ||
         row.first_passage?.outcome !== row.outcome ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
-        row.outcome_source !== (row.historical_baseline === true
-          ? 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
-          : 'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1') ||
+        !(allowedSources ? allowedSources.has(String(row.outcome_source || '')) :
+          row.outcome_source === (row.historical_baseline === true
+            ? 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+            : 'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1')) ||
         !validSequence(row.temporal_sequence)) return false;
     const at = finite(row.at), resolvedAt = finite(row.resolved_at), horizon = finite(row.horizon_ms);
     const symbol = String(row.symbol || '').trim().toUpperCase();
     const id = String(row.id || '');
     const baseline = symbol + ':' + String(Math.trunc(at || 0));
     if (!id || !symbol || at === null || at <= 0 || resolvedAt === null ||
-        resolvedAt - at !== HORIZON_MS || horizon !== HORIZON_MS ||
+        resolvedAt - at !== horizonMs || horizon !== horizonMs ||
         seen.has(id) || seen.has(baseline)) return false;
     seen.add(id); seen.add(baseline);
     return true;
@@ -789,9 +800,13 @@ export function buildTemporalNeuralProfile(samples = [], {
   minTrainingSamples=MIN_TRAIN,maxTrainingSamples=MAX_TRAIN,
   minimumValidationSamples=MIN_VALIDATION,minimumHoldoutSamples=MIN_HOLDOUT,
   liveHoldoutSamples=LIVE_HOLDOUT,epochs=10,
-  learningRate=0.006,l2=0.012,comparisonMargin=0.003
+  learningRate=0.006,l2=0.012,comparisonMargin=0.003,
+  targetDefinition=TEMPORAL_TARGET_DEFINITION,
+  outcomeHorizonMs=HORIZON_MS,
+  allowedOutcomeSources=null
 }={}){
-  const rows=cleanRows(samples);
+  const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
+  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
@@ -812,7 +827,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected:false,probability_ready:false,live_eligibility_ready:false
   }]));
   const architecture=TEMPORAL_MODEL_ARCHITECTURE;
-  const countTrailingGroups=(endExclusive,targetRows,minSpanMs=HORIZON_MS+1)=>{
+  const countTrailingGroups=(endExclusive,targetRows,minSpanMs=horizonMs+1)=>{
     let groups=0,total=0;
     const latestAt=endExclusive>0?uniqueTimes[endExclusive-1]:null;
     for(let index=endExclusive-1;index>=0;index--){
@@ -844,12 +859,12 @@ export function buildTemporalNeuralProfile(samples = [], {
       ?Math.ceil(liveHoldoutSamples*4/3)
       :Math.max(minimumValidationSamples*2,60);
   const validationCount=countTrailingGroups(uniqueTimes.length-holdoutCount,
-    validationTargetSamples,2*HORIZON_MS+1);
+    validationTargetSamples,2*horizonMs+1);
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture,target_definition:TEMPORAL_TARGET_DEFINITION,temporal_label_resolution:'15M_ONLY',
+    architecture,target_definition:targetDefinition,temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
@@ -887,7 +902,7 @@ export function buildTemporalNeuralProfile(samples = [], {
      holdout.length<minimumHoldoutSamples){
     return{
       status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-      architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      architecture,target_definition:targetDefinition,
       temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
@@ -997,7 +1012,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   if(fitTimes.length<4||!hasTrainableRegime){
     return{
       status:'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE',
-      architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+      architecture,target_definition:targetDefinition,
       temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
@@ -1545,7 +1560,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       'TEMPORAL_GBDT_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
     model_kind:'TEMPORAL_FIRST_PASSAGE_RESIDUAL_GBDT_V1',
     architecture:'TEMPORAL_POOLED_58_NEWTON_GBDT_DEPTH2_24_ROUNDS',
-    target_definition:TEMPORAL_TARGET_DEFINITION,
+    target_definition:targetDefinition,
     model_split_scope:'INDEPENDENT_BTC_REGIME_PURGED_WALK_FORWARD',
     model_scope:'REGIME_LOCAL_TEMPORAL_TREE_WITH_FROZEN_LOGISTIC_ANCHOR',
     feature_source:'24_STEP_MEANS_PLUS_RECENT_8_STEP_MEANS',
@@ -1755,7 +1770,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     !allSupportedRegimesValidated?'PARTIAL_REGIME_OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY':
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
-    status,architecture,target_definition:TEMPORAL_TARGET_DEFINITION,
+    status,architecture,target_definition:targetDefinition,
     temporal_boosted_tree:temporalBoostedTreeProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,

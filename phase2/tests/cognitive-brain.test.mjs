@@ -234,6 +234,10 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.identifier_features_used, false);
     assert.equal(profile.neural_network.architecture, '18-10-6-1+RESIDUAL');
     assert.equal(profile.neural_network.trained, true);
+    assert.equal(profile.neural_network.anchor_adaptation,'FROZEN_LOGISTIC',
+      'legacy V5 callers must keep the original frozen logistic skip path');
+    assert.equal(profile.neural_network.anchor_trust_radius,0);
+    assert.equal(profile.neural_network.max_anchor_skip_delta,0);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
     assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
     assert.equal(profile.neural_network.training_strategy,
