@@ -165,12 +165,26 @@ test('DHDTech forward-shadow runtime captures paired model targets and resolves 
     assert.ok(resolved.every(row=>/^[a-f0-9]{64}$/.test(row.resolution_provenance.response_sha256)));
     assert.equal(runtime.snapshot().resolved_pairs,1);
 
+    // Simulate a process interruption after only one resolution row reached
+    // the append-only ledger. The original paired forecasts must be restored
+    // together, then the missing model row must be resolved without rewriting
+    // or duplicating the row already present.
+    await writeFile(store.files.dailyForwardShadowResolved,JSON.stringify(resolved[0])+'\n');
     const restored=await DailyEarlyRiserForwardShadowRuntime.create({
       store,rest,modelBundleFile:bundleFile,maxNewSymbolsPerCycle:8,maxResolutionsPerCycle:1,
       logger:{warn(){},info(){}}
     });
-    assert.equal(restCalls,1,'restart restore must not redownload a path already resolved');
+    assert.equal(restCalls,1,'restart restore must not redownload until the remaining pair is due');
+    assert.equal(restored.snapshot().pending_pairs,1,'a partial resolution must retain the complete original pair');
+    const recovery=await restored.resolveMatured(at+HORIZON+20_000);
+    assert.equal(restCalls,2);
+    assert.equal(recovery.resolved_model_rows,1,'only the missing model forecast is appended on recovery');
     assert.equal(restored.snapshot().pending_pairs,0);
+    const recoveredRows=(await readFile(store.files.dailyForwardShadowResolved,'utf8'))
+      .trim().split(/\r?\n/).map(JSON.parse);
+    assert.equal(recoveredRows.length,2);
+    assert.equal(new Set(recoveredRows.map(row=>row.forecast_id)).size,2);
+
     const duplicate=await restored.captureCandidates([candidate],now+2000);
     assert.equal(duplicate.new_paired_forecasts,0);
     assert.equal(duplicate.skipped_daily_cadence,1);
