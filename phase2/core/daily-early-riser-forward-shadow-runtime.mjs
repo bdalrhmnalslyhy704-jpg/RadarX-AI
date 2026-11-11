@@ -61,8 +61,9 @@ function validateBundlePayload(payload){
       !Array.isArray(entry.feature_names)||
       JSON.stringify(entry.feature_names)!==JSON.stringify(COGNITIVE_DAILY_FEATURE_NAMES))
       throw new Error('DAILY_FORWARD_SHADOW_MODEL_BUNDLE_CONTRACT_INVALID:'+key);
-    if(!entry.historical_holdout_passed||entry.production_eligible!==false||entry.real_order_execution!==false)
-      throw new Error('DAILY_FORWARD_SHADOW_MODEL_BUNDLE_NOT_HISTORICALLY_VALIDATED:'+key);
+    if(typeof entry.historical_holdout_passed!=='boolean'||
+      entry.production_eligible!==false||entry.real_order_execution!==false)
+      throw new Error('DAILY_FORWARD_SHADOW_MODEL_BUNDLE_RESEARCH_STATUS_INVALID:'+key);
     bundles.set(target,entry);
   }
   if(!bundles.size)throw new Error('DAILY_FORWARD_SHADOW_NO_ENABLED_MODEL_BUNDLES');
@@ -268,15 +269,23 @@ export class DailyEarlyRiserForwardShadowRuntime{
   async resolveMatured(now=Date.now()){
     if(!this.initialized)await this.initialize();
     const atNow=finite(now)??Date.now();
-    const due=[...this.pendingPairs.entries()]
-      .filter(([,rows])=>rows.length===2&&Number(rows[0].at)+HORIZON_MS<=atNow&&
-        rows.some(row=>!this.resolvedForecastIds.has(row.forecast_id)))
-      .sort((a,b)=>Number(a[1][0].at)-Number(b[1][0].at))
+    // All three target pairs for a symbol/baseline share one closed-candle
+    // request. Grouping avoids tripling Binance REST traffic per observation.
+    const byPath=new Map();
+    for(const [pairId,rows] of this.pendingPairs.entries()){
+      if(rows.length!==2||Number(rows[0].at)+HORIZON_MS>atNow||
+        !rows.some(row=>!this.resolvedForecastIds.has(row.forecast_id)))continue;
+      const pathKey=cleanSymbol(rows[0].symbol)+'|'+String(rows[0].at);
+      if(!byPath.has(pathKey))byPath.set(pathKey,[]);
+      byPath.get(pathKey).push({pairId,rows});
+    }
+    const due=[...byPath.entries()]
+      .sort((a,b)=>Number(a[1][0].rows[0].at)-Number(b[1][0].rows[0].at))
       .slice(0,this.maxResolutionsPerCycle);
     const appended=[];
     let attempts=0,failed=0;
-    for(const [pairId,rows] of due){
-      const forecast=rows[0],symbol=cleanSymbol(forecast.symbol),at=Number(forecast.at);
+    for(const [pathKey,pairs] of due){
+      const first=pairs[0].rows[0],symbol=cleanSymbol(first.symbol),at=Number(first.at);
       attempts++;
       try{
         const response=await this.rest.request('/api/v3/klines',{
@@ -288,28 +297,37 @@ export class DailyEarlyRiserForwardShadowRuntime{
         }
         const future15m=JSON.parse(provenance.responseBody);
         const recordedAt=finite(response.receivedAt)??atNow;
-        const resolvedRows=[];
-        for(const row of rows){
-          const result=resolveDailyEarlyRiserForwardForecast(row,{future15m,recorded_at:recordedAt});
-          if(!result.accepted){
-            throw new Error('DAILY_FORWARD_SHADOW_RESOLUTION_REJECTED:'+String(result.reason));
+        const pathResolved=[];
+        for(const {pairId,rows} of pairs){
+          const pairRows=[];
+          for(const row of rows){
+            if(this.resolvedForecastIds.has(row.forecast_id))continue;
+            const result=resolveDailyEarlyRiserForwardForecast(row,{future15m,recorded_at:recordedAt});
+            if(!result.accepted)
+              throw new Error('DAILY_FORWARD_SHADOW_RESOLUTION_REJECTED:'+String(result.reason));
+            pairRows.push({
+              ...result.forecast,
+              resolution_provenance:{
+                source:'BINANCE_OFFICIAL_SPOT_REST_KLINES',
+                request_url:provenance.requestUrl,http_status:200,
+                response_sha256:provenance.responseSha256,
+                recorded_at:recordedAt
+              }
+            });
           }
-          resolvedRows.push({
-            ...result.forecast,
-            resolution_provenance:{
-              source:'BINANCE_OFFICIAL_SPOT_REST_KLINES',
-              request_url:provenance.requestUrl,http_status:200,
-              response_sha256:provenance.responseSha256,
-              recorded_at:recordedAt
-            }
-          });
+          if(pairRows.length===2)pathResolved.push({pairId,pairRows});
         }
-        await this.store.appendDailyForwardShadowResolutions(resolvedRows);
-        for(const row of resolvedRows)this.resolvedForecastIds.add(row.forecast_id);
-        this.pendingPairs.delete(pairId);
-        appended.push(...resolvedRows);
-        if(resolvedRows[0].status==='AMBIGUOUS')this.ambiguousPairs++;
-        else this.resolvedPairs++;
+        const resolvedRows=pathResolved.flatMap(item=>item.pairRows);
+        if(resolvedRows.length){
+          await this.store.appendDailyForwardShadowResolutions(resolvedRows);
+          for(const item of pathResolved){
+            this.pendingPairs.delete(item.pairId);
+            for(const row of item.pairRows)this.resolvedForecastIds.add(row.forecast_id);
+            if(item.pairRows[0].status==='AMBIGUOUS')this.ambiguousPairs++;
+            else this.resolvedPairs++;
+          }
+          appended.push(...resolvedRows);
+        }
       }catch(error){
         this.reject(String(error?.message??error));
         failed++;
@@ -317,8 +335,8 @@ export class DailyEarlyRiserForwardShadowRuntime{
     }
     if(appended.length)this.lastResolveAt=atNow;
     return {
-      status:'RESOLUTION_CHECKED',due_pairs:due.length,attempted_pairs:attempts,
-      resolved_model_rows:appended.length,failed_pairs:failed,
+      status:'RESOLUTION_CHECKED',due_pairs:due.length,attempted_paths:attempts,
+      resolved_model_rows:appended.length,failed_paths:failed,
       pending_pairs:this.pendingPairs.size
     };
   }
