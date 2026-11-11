@@ -13,6 +13,7 @@ export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS=29;
+export const TEMPORAL_POOLED_BASELINE_FEATURE_COUNT=TEMPORAL_SEQUENCE_CHANNELS*2;
 export const TEMPORAL_LATENT_CHANNELS=16;
 export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
 export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
@@ -48,6 +49,11 @@ const finite = value => {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 };
+
+export function isValidTemporalPooledBaselineFeatures(features){
+  return Array.isArray(features)&&features.length===TEMPORAL_POOLED_BASELINE_FEATURE_COUNT&&
+    features.every(value=>finite(value)!==null);
+}
 
 // The scientific acceptance policy requires a strict 0.003 Brier improvement
 // over every baseline. A tiny tolerance prevents floating-point equality from
@@ -304,9 +310,8 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   for(let time=poolStart;time<final.length;time++){
     for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
   }
-  const baselineFeatures=Array.isArray(precomputedBaselineFeatures)&&
-    precomputedBaselineFeatures.length===TEMPORAL_SEQUENCE_CHANNELS
-      ?precomputedBaselineFeatures:pooledSequence(sequence);
+  const baselineFeatures=isValidTemporalPooledBaselineFeatures(precomputedBaselineFeatures)
+    ?precomputedBaselineFeatures:pooledSequence(sequence);
   const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
   const baselineWeights=Array.isArray(regimeBaseline?.weights)?regimeBaseline.weights:model.skipWeights;
   const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))?Number(regimeBaseline.bias):model.outputBias;
@@ -1820,6 +1825,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_strategy:fitted.training_strategy,
     gradient_accumulation:TEMPORAL_GRADIENT_ACCUMULATION,
     baseline_feature_cache:TEMPORAL_BASELINE_FEATURE_CACHE,
+    baseline_feature_count:TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,
     gradient_buffer_scope:TEMPORAL_GRADIENT_BUFFER_SCOPE,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
