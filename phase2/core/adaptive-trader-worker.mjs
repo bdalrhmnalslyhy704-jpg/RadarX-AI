@@ -90,11 +90,14 @@ function mapCurrentPrices(rows){
 
 export class AdaptiveTraderWorker{
   constructor({store,snapshotProvider,logger=console,intervalMs=DEFAULT_INTERVAL_MS,scanLimit=SNAPSHOT_LIMIT,
-    executionController=null,scanTimeoutMs=75_000,executionTimeoutMs=15_000,persistTimeoutMs=12_000}={}){
+    executionController=null,dailyForwardShadowRuntime=null,
+    scanTimeoutMs=75_000,executionTimeoutMs=15_000,persistTimeoutMs=12_000}={}){
     if(!store||typeof store.getAdaptiveTraderState!=='function'||typeof store.putAdaptiveTraderState!=='function')
       throw new Error('ADAPTIVE_TRADER_DURABLE_STORE_UNAVAILABLE');
     if(typeof snapshotProvider!=='function')throw new Error('ADAPTIVE_TRADER_SNAPSHOT_PROVIDER_UNAVAILABLE');
-    this.store=store;this.snapshotProvider=snapshotProvider;this.logger=logger;this.executionController=executionController;this.lastExecutionResult=null;
+    this.store=store;this.snapshotProvider=snapshotProvider;this.logger=logger;this.executionController=executionController;
+    this.dailyForwardShadowRuntime=dailyForwardShadowRuntime;this.lastDailyForwardShadowResult=null;
+    this.lastExecutionResult=null;
     this.intervalMs=Math.max(60_000,Math.min(10*60_000,Math.trunc(Number(intervalMs)||DEFAULT_INTERVAL_MS)));
     this.scanLimit=Math.max(40,Math.min(120,Math.trunc(Number(scanLimit)||SNAPSHOT_LIMIT)));
     // The market snapshot service has its own 60s REST deadline. The worker adds
@@ -396,6 +399,30 @@ export class AdaptiveTraderWorker{
           ?'TEMPORAL_TCN':this.state.cognitive_profile?.model_selection?.selected_model||null
       });
       this.state.cognitive_capture=this.buildCognitiveCapture(cognitiveAssessments,now);
+      // Isolated, opt-in research sidecar: it records probabilities only and
+      // cannot modify candidate scores, alerts, paper positions or order gates.
+      if(this.dailyForwardShadowRuntime){
+        this.activeScanStage='DAILY_FORWARD_SHADOW';
+        try{
+          this.lastDailyForwardShadowResult=await withStageTimeout(
+            this.dailyForwardShadowRuntime.processSnapshot(adaptiveCandidates,now),
+            12_000,'DAILY_FORWARD_SHADOW'
+          );
+          this.logger.info?.('[DAILY_FORWARD_SHADOW_CYCLE] '+JSON.stringify({
+            ...this.lastDailyForwardShadowResult,
+            runtime:this.dailyForwardShadowRuntime.snapshot?.()||null,
+            paper_trading:true,real_order_execution:false
+          }));
+        }catch(error){
+          this.lastDailyForwardShadowResult={
+            status:'RESEARCH_SIDECAR_FAILED',
+            error:String(error?.message??error).slice(0,180)
+          };
+          // Failure or Binance 451/429 on this sidecar must never fail the
+          // original Adaptive Trader scan or affect the twelve radar workers.
+          this.logger.warn?.('[DAILY_FORWARD_SHADOW_CYCLE_FAILED] '+this.lastDailyForwardShadowResult.error);
+        }
+      }
       const executionSnapshot={...snapshot,candidates:adaptiveCandidates};
       this.recordServerPaperPortfolio(executionSnapshot,now);
       this.lastExecutionResult=null;
@@ -1007,6 +1034,8 @@ recordServerPaperPortfolio(snapshot,now){
       last_duration_ms:this.state.last_duration_ms,last_error:this.state.last_error,
       next_scan_at:this.enabled?new Date(Date.now()+this.intervalMs).toISOString():null,
       last_summary:this.state.last_summary,
+      daily_forward_shadow:this.dailyForwardShadowRuntime?.snapshot?.()||null,
+      last_daily_forward_shadow_result:this.lastDailyForwardShadowResult,
       learning_profile:this.state.learning_profile||buildAdaptiveLearningProfile(this.trainingSamples()),
       learning_capture:this.state.last_learning_capture||null,
       cognitive_brain:{
