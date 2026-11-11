@@ -11,6 +11,8 @@ import {
 import {
   buildCognitiveLearningProfile,
   buildCognitiveFeatureVector,
+  COGNITIVE_FEATURE_NAMES,
+  COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
   effectiveNeuralInnerSelectionMargin,
@@ -93,6 +95,10 @@ test('daily feature adapter carries baseline-time multi-horizon context into the
   assert.equal(DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,COGNITIVE_DAILY_FEATURE_SCHEMA);
   assert.equal(vector.length,COGNITIVE_DAILY_FEATURE_NAMES.length);
   assert.equal(vector.length,35);
+  assert.equal(COGNITIVE_FEATURE_SCHEMA,'CROSS_ASSET_EARLY_FLOW_FEATURES_V2');
+  assert.equal(COGNITIVE_FEATURE_NAMES.length,18);
+  assert.equal(buildCognitiveFeatureVector(prepared.row.features).length,18,
+    'legacy callers must retain the original 18-channel vector');
   assert.ok(vector.every(Number.isFinite));
   const names=Object.fromEntries(COGNITIVE_DAILY_FEATURE_NAMES.map((name,index)=>[name,index]));
   for(const name of ['momentum_30m','momentum_1h','momentum_3h','daily_momentum',
@@ -265,6 +271,62 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
   assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
 });
 
+
+test('daily feature schema can train and evaluate a real 35-input MLP without dimension fallback',()=>{
+  const horizon=24*60*60*1000;
+  const samples=[];
+  for(let day=0;day<500;day++){
+    for(let symbolIndex=0;symbolIndex<3;symbolIndex++){
+      const at=1_740_000_000_000+day*horizon;
+      const symbol='D'+symbolIndex+'USDT';
+      const positive=(day*7+symbolIndex*3)%11===0;
+      samples.push({
+        id:'DAILY_35_INPUT:'+symbol+':'+String(at),
+        symbol,at,resolved_at:at+horizon,horizon_ms:horizon,
+        outcome:positive?'UP':'DOWN',outcome_source:'UNIT_TEST_DAILY_35',
+        training_eligible:true,closed_candle_baseline:true,
+        features:{
+          volume_ratio:positive?2.1:0.9,trade_ratio:positive?1.8:0.8,
+          taker_buy_ratio:positive?0.64:0.47,
+          relative_strength_vs_btc_pct:positive?1.1:-0.4,
+          recent_15m_return_pct:positive?0.5:-0.35,
+          return_30m_pct:positive?0.8:-0.5,hourly_return_pct:positive?1.2:-0.8,
+          return_3h_pct:positive?2.2:-1.4,btc_hourly_return_pct:0.2,
+          daily_change_pct:positive?3.2:-2.1,
+          relative_strength_vs_btc_24h_pct:positive?2.3:-1.2,
+          quote_volume_24h:positive?2_400_000:1_100_000,
+          breakout_distance_pct:positive?0.25:-0.15,
+          current_range_pct:1.3,lower_wick_pct:positive?0.42:0.08,
+          close_location:positive?0.76:0.38,upper_wick_pct:0.12,
+          higher_low:positive,breakout_above_prior_high:false,
+          compression_ratio:0.72,micro_5m_available:true,
+          micro_5m_volume_ratio:positive?1.9:0.85,
+          micro_5m_trade_ratio:positive?1.6:0.9,
+          micro_5m_return_pct:positive?0.3:-0.2,
+          micro_5m_close_location:positive?0.75:0.4,
+          micro_5m_taker_buy_ratio:positive?0.68:0.46
+        }
+      });
+    }
+  }
+  const profile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,minimumValidationSamples:30,minimumHoldoutSamples:30,
+    validationFraction:0.2,holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,allowedOutcomeSources:['UNIT_TEST_DAILY_35'],
+    minNeuralTrainingSamples:240,maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
+    iterations:40,learningRate:0.08,neuralIterations:10,
+    neuralInnerSelectionMargin:0.00025,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  });
+  assert.equal(profile.neural_network.trained,true);
+  assert.equal(profile.neural_network.input_neurons,35);
+  assert.equal(profile.neural_network.architecture,'35-10-6-1+RESIDUAL');
+  assert.equal(profile.neural_network.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
+  assert.equal(profile.neural_network.validation.evaluated,true);
+  assert.equal(profile.neural_network.holdout.evaluated,true);
+});
 
 test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 gate',()=>{
   assert.equal(DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,0.00025);
