@@ -342,7 +342,9 @@ export class DailyEarlyRiserForwardShadowRuntime{
               }
             });
           }
-          if(pairRows.length===2)pathResolved.push({pairId,pairRows});
+          // Recover safely if a process stopped during a two-row append and only
+          // one model forecast reached the resolved ledger before restart.
+          if(pairRows.length>0)pathResolved.push({pairId,pairRows});
         }
         const resolvedRows=pathResolved.flatMap(item=>item.pairRows);
         if(resolvedRows.length){
