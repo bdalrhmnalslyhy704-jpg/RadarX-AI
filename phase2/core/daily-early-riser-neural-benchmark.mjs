@@ -3,6 +3,7 @@ import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHA
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
 export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
+export const DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES = 8192;
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_FEATURE_SCHEMA;
@@ -101,7 +102,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const targetContract=targetDefinition(target);
   const temporal=buildTemporalNeuralProfile(temporalRows,{
     minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
-    maxTrainingSamples:Math.max(160,Math.min(1280,Math.trunc(options.temporalMaxTrainingSamples||1280))),
+    maxTrainingSamples:Math.max(160,Math.min(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
+      Math.trunc(options.temporalMaxTrainingSamples||DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES))),
     minimumValidationSamples:Math.max(24,Math.trunc(options.temporalMinValidationSamples||24)),
     minimumHoldoutSamples:Math.max(40,Math.trunc(options.temporalMinHoldoutSamples||40)),
     liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
@@ -190,6 +192,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       sequence_channels:temporal.sequence_channels??TEMPORAL_SEQUENCE_CHANNELS,
       resolved_samples:temporal.resolved_samples??0,
       training_samples:temporal.training_samples??0,
+      training_sample_budget:Math.min(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
+        Math.max(160,Math.trunc(options.temporalMaxTrainingSamples||DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES))),
       validation_samples:temporal.validation_samples??0,
       holdout_samples:temporal.holdout_samples??0,
       outer_training_samples:temporal.outer_training_samples??0,
@@ -251,7 +255,16 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       second_hidden_neurons:neural.second_hidden_neurons??null,
       training_samples:neural.training_samples??0,
       preselection_training_samples:neural.preselection_training_samples??0,
+      samples_required:neural.samples_required??null,
       selection_samples:neural.selection_samples??0,
+      selection_positive_samples:neural.selection_positive_samples??
+        neural.inner_selection_diagnostics?.selection_positive_samples??0,
+      selection_negative_samples:neural.selection_negative_samples??
+        neural.inner_selection_diagnostics?.selection_negative_samples??0,
+      required_selection_samples:neural.required_selection_samples??null,
+      required_selection_positive_samples:neural.required_selection_positive_samples??null,
+      required_selection_negative_samples:neural.required_selection_negative_samples??null,
+      selection_support_ready:neural.selection_support_ready===true,
       trained:neural.trained===true,
       selected:neural.selected===true,
       validation:neural.validation??null,
