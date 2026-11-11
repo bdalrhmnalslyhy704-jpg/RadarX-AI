@@ -101,6 +101,13 @@ jobs:
             tcn:result.temporal_tcn?.status??null,
             tcn_training:result.temporal_tcn?.training_samples??null,
             tcn_selected_regimes:result.temporal_tcn?.selected_regimes??[],
+            regime_local_tcn:result.temporal_regime_local_tcn_challenger?.status??null,
+            regime_local_tcn_training:result.temporal_regime_local_tcn_challenger?.training_samples??null,
+            regime_local_tcn_validation:result.temporal_regime_local_tcn_challenger?.validation??null,
+            regime_local_tcn_validation_logistic:result.temporal_regime_local_tcn_challenger?.validation_logistic??null,
+            regime_local_tcn_holdout:result.temporal_regime_local_tcn_challenger?.holdout??null,
+            regime_local_tcn_holdout_logistic:result.temporal_regime_local_tcn_challenger?.holdout_logistic??null,
+            regime_local_tcn_selected_regimes:result.temporal_regime_local_tcn_challenger?.selected_regimes??[],
             temporal_tree:result.temporal_tree_challenger?.status??null
           }));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
