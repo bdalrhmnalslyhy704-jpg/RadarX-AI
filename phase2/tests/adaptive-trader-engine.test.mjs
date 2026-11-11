@@ -298,7 +298,7 @@ test('daily forward shadow context uses exactly 96 contiguous closed asset and B
   assert.ok(candidate.features.relative_strength_vs_btc_24h_pct>0,
     'the daily relative-strength comparison must use BTC at the exact two matching baseline closes');
 
-  const gapped={...asset,data:asset.data.map((row,index)=>index===30
+  const gapped={...asset,data:asset.data.map((row,index)=>index===90
     ?[row[0]+interval,...row.slice(1)]:row)};
   const invalid=scoreAdaptiveTraderCandidate({
     symbol:'TESTUSDT',
