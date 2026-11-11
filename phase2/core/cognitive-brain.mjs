@@ -811,7 +811,9 @@ function fitNeuralEnsemble(training, options = {}) {
     anchor_adaptation:members[0].anchor_adaptation,
     anchor_adaptation_mode:options.anchorAdaptation||'FROZEN',
     anchor_trust_radius:members[0].anchor_trust_radius,
+    anchor_bias_trust_radius:members[0].anchor_bias_trust_radius,
     anchor_tether_strength:members[0].anchor_tether_strength,
+    anchor_learning_rate_scale:members[0].anchor_learning_rate_scale,
     max_anchor_skip_delta:Math.max(...members.map(member=>member.max_anchor_skip_delta||0)),
     anchor_output_bias_delta:Math.max(...members.map(member=>member.anchor_output_bias_delta||0)),
     training_samples:members[0].training_samples,
@@ -1465,6 +1467,10 @@ export function buildCognitiveLearningProfile(samples = [], {
     if(refitMember&&refitBaseline){
       neuralFit.members[selectedIndex]=refitMember;
       neuralFit.anchor_adaptation=refitMember.anchor_adaptation;
+      neuralFit.anchor_trust_radius=refitMember.anchor_trust_radius;
+      neuralFit.anchor_bias_trust_radius=refitMember.anchor_bias_trust_radius;
+      neuralFit.anchor_tether_strength=refitMember.anchor_tether_strength;
+      neuralFit.anchor_learning_rate_scale=refitMember.anchor_learning_rate_scale;
       neuralFit.max_anchor_skip_delta=refitMember.max_anchor_skip_delta;
       neuralFit.anchor_output_bias_delta=refitMember.anchor_output_bias_delta;
       neuralSameWindowLogisticFit=refitBaseline;
