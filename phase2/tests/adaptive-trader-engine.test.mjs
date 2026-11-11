@@ -277,6 +277,39 @@ test('matured live samples are labeled only by matching baseline and four-hour c
   assert.deepEqual(premature,[],'a label cannot mature before four full hours and a matching closed bar');
 });
 
+test('daily forward shadow context uses exactly 96 contiguous closed asset and BTC candles',()=>{
+  const now=Date.now(),interval=15*60*1000;
+  const asset=longClosedCandleFixture(now,150,interval,100,0.0002);
+  const btc=longClosedCandleFixture(now,150,interval,60_000,0.00005);
+  const last=asset.data.at(-1);
+  const candidate=scoreAdaptiveTraderCandidate({
+    symbol:'TESTUSDT',
+    ticker:{symbol:'TESTUSDT',lastPrice:String(last[4]),quoteVolume:'2400000',priceChangePercent:'2.1'},
+    klines:asset,btcKlines:btc,now,minQuoteVolume24h:750000
+  });
+  assert.equal(candidate.data_valid,true);
+  assert.equal(candidate.daily_forward_context_ready,true);
+  assert.equal(candidate.observation_source,'BINANCE_OFFICIAL_CLOSED_15M_BASELINE');
+  assert.equal(candidate.feature_information_cutoff_at,candidate.candle_close_time);
+  assert.equal(candidate.candle_baseline.closeTime,candidate.candle_close_time);
+  assert.equal(candidate.features.quote_volume_24h,96*300000);
+  assert.ok(Number.isFinite(candidate.features.daily_change_pct));
+  assert.ok(Number.isFinite(candidate.features.relative_strength_vs_btc_24h_pct));
+  assert.ok(candidate.features.relative_strength_vs_btc_24h_pct>0,
+    'the daily relative-strength comparison must use BTC at the exact two matching baseline closes');
+
+  const gapped={...asset,data:asset.data.filter((row,index)=>index!==90)};
+  const invalid=scoreAdaptiveTraderCandidate({
+    symbol:'TESTUSDT',
+    ticker:{symbol:'TESTUSDT',lastPrice:String(last[4]),quoteVolume:'2400000',priceChangePercent:'2.1'},
+    klines:gapped,btcKlines:btc,now,minQuoteVolume24h:750000
+  });
+  assert.equal(invalid.data_valid,true,
+    'a gap older than the core 12-candle validity window must not invalidate the existing Adaptive Trader scan');
+  assert.equal(invalid.daily_forward_context_ready,false,
+    'only the daily research sidecar must reject a discontinuous 96-candle context');
+});
+
 test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m score',()=>{
   const f=marketFixture();
   const result=scoreAdaptiveTraderCandidate({...f,fastKlines:fiveMinuteFixture(f.now)});

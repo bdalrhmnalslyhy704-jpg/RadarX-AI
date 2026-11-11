@@ -909,6 +909,15 @@ function predictFromFit(features, fit, residualScale=1) {
 }
 
 
+/**
+ * Stable public probability scorer used by research shadow runners. It calls
+ * the same calibrated inference path used by the Cognitive V5 runtime.
+ */
+export function predictCognitiveProbability(features={},modelFit=null){
+  const probability=predictFromFit(features,modelFit);
+  return Number.isFinite(probability)?clamp(probability,0.02,0.98):null;
+}
+
 function fitAndSelectProbabilityCalibrator(fitRows,checkRows,fit,{
   minimumFitSamples=30,minimumFitPositive=6,minimumFitNegative=6,
   minimumCheckSamples=20,minimumCheckPositive=3,minimumCheckNegative=3,
@@ -1172,7 +1181,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralInnerSelectionMargin = null,
   neuralAnchorAdaptation = 'FROZEN',
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
-  maxResolvedSamples = 0
+  maxResolvedSamples = 0,
+  includeNeuralModelFit = false
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
   const activeFeatureNames=featureNamesForSchema(featureSchema);
@@ -1996,7 +2006,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       validation_comparison:neuralValidationComparison,
       holdout: neuralHoldout,
       holdout_comparison:neuralHoldoutComparison,
-      selection_margin: comparisonMargin
+      selection_margin: comparisonMargin,
+      ...(includeNeuralModelFit===true&&Number.isInteger(neuralFit?.selected_member_index)&&
+        neuralFit.selected_member_index>=0
+        ?{model_fit:neuralFit,same_window_logistic_fit:neuralSameWindowLogisticFit}
+        :{})
     },
     boosted_tree_model: {
       status:!boostedTrainingReady?'WAITING_FOR_MATURED_TRAINING_SAMPLES':

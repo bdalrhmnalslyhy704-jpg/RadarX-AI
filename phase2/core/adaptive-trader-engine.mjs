@@ -482,6 +482,27 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
+  // Daily shadow inputs use the same closed baseline candle as the historical
+  // census: 96 contiguous 15m bars ending at current. No rolling ticker values.
+  const dailyContext=candles.slice(-97);
+  const dailyContextContiguous=dailyContext.length===97&&dailyContext.every((candle,index)=>
+    index===0||candle.openTime-dailyContext[index-1].openTime===15*60*1000);
+  const dailyPrior=dailyContextContiguous?dailyContext[0]:null;
+  const dailyBars=dailyContextContiguous?dailyContext.slice(1):[];
+  const dailyQuoteVolume=dailyBars.length===96
+    ?dailyBars.reduce((sum,candle)=>sum+candle.quoteVolume,0):null;
+  const dailyChangePct=dailyPrior?pct(current.close,dailyPrior.close):null;
+  const btcByClose=new Map(btcCandles.map(candle=>[candle.closeTime,candle]));
+  const btcDailyPrior=dailyPrior?btcByClose.get(dailyPrior.closeTime):null;
+  const btcDailyCurrent=btcByClose.get(current.closeTime);
+  const btcDailyContiguous=Boolean(btcDailyPrior&&btcDailyCurrent&&
+    btcDailyCurrent.closeTime-btcDailyPrior.closeTime===96*15*60*1000);
+  const btcDailyChangePct=btcDailyContiguous?pct(btcDailyCurrent.close,btcDailyPrior.close):null;
+  const relativeStrengthVsBtc24hPct=dailyChangePct!==null&&btcDailyChangePct!==null
+    ?Number((dailyChangePct-btcDailyChangePct).toFixed(5)):null;
+  const dailyForwardReady=dailyContextContiguous&&dailyBars.length===96&&
+    dailyQuoteVolume!==null&&dailyChangePct!==null;
+
   const volumeScore = volumeRatio === null ? 0 : clamp((volumeRatio - 0.5) / 2.5 * 100, 0, 100);
   const tradeScore = tradeRatio === null ? 0 : clamp((tradeRatio - 0.5) / 2.0 * 100, 0, 100);
   const flowScore = takerBuyRatio === null ? 0 : clamp((takerBuyRatio - 0.45) / 0.25 * 100, 0, 100);
@@ -545,6 +566,14 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     as_of: new Date(evaluationNow).toISOString(),
     candle_close_time: current.closeTime,
     candle_close_price: current.close,
+    feature_information_cutoff_at:current.closeTime,
+    observation_source:'BINANCE_OFFICIAL_CLOSED_15M_BASELINE',
+    candle_baseline:{
+      openTime:current.openTime,open:current.open,high:current.high,low:current.low,
+      close:current.close,closeTime:current.closeTime,quoteVolume:current.quoteVolume,
+      trades:current.trades,takerBuyQuoteVolume:current.takerBuyQuoteVolume
+    },
+    daily_forward_context_ready:dailyForwardReady,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
     temporal_sequence_steps: temporalSequence?.length || 0,
@@ -586,6 +615,11 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
       micro_5m_taker_buy_ratio: microTakerBuyRatio === null ? null : Number(microTakerBuyRatio.toFixed(4)),
       micro_5m_close_location: microCloseLocation === null ? null : Number(microCloseLocation.toFixed(4)),
       micro_5m_return_pct: microReturnPct === null ? null : Number(microReturnPct.toFixed(3)),
+      // Additional 17-channel daily context used only by the separate 24h MLP.
+      // Null is preserved when the aligned 96-bar/BTC baseline is unavailable.
+      daily_change_pct:dailyForwardReady?Number(dailyChangePct.toFixed(5)):null,
+      relative_strength_vs_btc_24h_pct:relativeStrengthVsBtc24hPct,
+      quote_volume_24h:dailyForwardReady?Number(dailyQuoteVolume.toFixed(2)):null,
       base_price: current.close
     },
     reason_codes: reasons,

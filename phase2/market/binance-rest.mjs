@@ -478,8 +478,9 @@ export class RestClient {
     if(gap<this.minIntervalMs)await waitWithinRestWindow(this.minIntervalMs-gap,waitControls);
     await waitSharedBudget(path,query,waitControls);
   }
-  async request(path,query={}) {
+  async request(path,query={},options={}) {
     if(!String(path).startsWith('/api/v3/')) throw new Error('REST_PATH_NOT_ALLOWED');
+    const includeResponseBody=options?.includeResponseBody===true;
     const startedAt=Date.now();
     // RadarX consumes public Spot data only. Binance exchangeInfo defaults to
     // symbols with several permission classes; explicitly request active Spot
@@ -511,13 +512,14 @@ export class RestClient {
     };
     assertRequestDeadline();
     const key=cacheKey(this.baseUrls,path,requestQuery);
+    const requestKey=includeResponseBody?key+'|WITH_RESPONSE_BODY':key;
     const ttl=sharedResponseCacheTtlMs(path,requestQuery);
-    const hit=cachedValue(key);
+    const hit=includeResponseBody?null:cachedValue(key);
     if(hit){
       return annotateClientSuccess(this,{data:hit.data,source:hit.source,receivedAt:Date.now()},null);
     }
-    if(SHARED.inflight.has(key)){
-      const sharedTask=SHARED.inflight.get(key);
+    if(SHARED.inflight.has(requestKey)){
+      const sharedTask=SHARED.inflight.get(requestKey);
       // A coalesced public request is useful only while its owner is responsive.
       // Bound the wait independently from the enclosing scan deadline. If a
       // peer's response body/parser stalls, evict only that exact in-flight
@@ -537,7 +539,7 @@ export class RestClient {
           this.state='ERROR';
           return error;
         },this.requestAbortSignal);
-        return annotateClientSuccess(this,{data:shared.data,source:shared.source,receivedAt:Date.now()},null);
+        return annotateClientSuccess(this,{...shared,receivedAt:Date.now()},null);
       }catch(error){
         this.lastError=String(error?.message??error);
         if(error?.name==='ScanDeadlineError'){
@@ -545,7 +547,7 @@ export class RestClient {
           throw error;
         }
         if(error?.name!=='RestTimeoutError'&&this.requestAbortSignal?.aborted!==true)throw error;
-        if(SHARED.inflight.get(key)===sharedTask)SHARED.inflight.delete(key);
+        if(SHARED.inflight.get(requestKey)===sharedTask)SHARED.inflight.delete(requestKey);
         if(this.requestAbortSignal?.aborted===true){
           const aborted=new Error('MULTI_ANALYST_SCAN_DEADLINE_EXCEEDED');
           aborted.name='ScanDeadlineError';this.lastError=aborted.message;this.state='ERROR';throw aborted;
@@ -606,12 +608,28 @@ export class RestClient {
           // The fetch timeout may fire after headers arrive while response.json()
           // is still stalled reading the body. Race body parsing against the same
           // per-host deadline so a radar cannot keep its busy latch forever.
-          const data=await awaitBeforeDeadline(r.json(),Date.now()+requestTimeoutMs,()=>{
-            const timeout=new Error(`REST_RESPONSE_BODY_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`);
-            timeout.name='RestTimeoutError';
-            return timeout;
-          },ac.signal);
-          const result={data,source:this.baseUrls[idx],receivedAt:Date.now()};
+          const responseValue=includeResponseBody
+            ?await awaitBeforeDeadline(r.text(),Date.now()+requestTimeoutMs,()=>{
+              const timeout=new Error(`REST_RESPONSE_BODY_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`);
+              timeout.name='RestTimeoutError';
+              return timeout;
+            },ac.signal)
+            :await awaitBeforeDeadline(r.json(),Date.now()+requestTimeoutMs,()=>{
+              const timeout=new Error(`REST_RESPONSE_BODY_TIMEOUT path=${path} timeout_ms=${requestTimeoutMs} base=${this.baseUrls[idx]}`);
+              timeout.name='RestTimeoutError';
+              return timeout;
+            },ac.signal);
+          let data=responseValue;
+          let responseBody=null;
+          if(includeResponseBody){
+            responseBody=String(responseValue);
+            try{data=JSON.parse(responseBody);}
+            catch{throw new Error('REST_RESPONSE_BODY_JSON_INVALID path='+path);}
+          }
+          const result={
+            data,source:this.baseUrls[idx],receivedAt:Date.now(),
+            ...(includeResponseBody?{requestUrl:url,httpStatus:Number(r.status)||null,responseBody}: {})
+          };
           // Do not retain malformed/seconds-based Kline payloads in the short
           // shared cache: another consumer must be able to try REST fallback.
           const cacheableKlines=path!=='/api/v3/klines' || (
@@ -620,7 +638,7 @@ export class RestClient {
               Number(row[0])>1e12 && Number.isFinite(Number(row[6])) && Number(row[6])>1e12
             )
           );
-          if(ttl>0 && cacheableKlines) {
+          if(!includeResponseBody&&ttl>0 && cacheableKlines) {
             const cacheNow=Date.now();
             const expiresAt=sharedResponseCacheExpiresAt(path,requestQuery,result,cacheNow);
             if(expiresAt>cacheNow) cacheSharedValue(key,{expiresAt,value:result},cacheNow);
@@ -659,10 +677,10 @@ export class RestClient {
       throw error??new Error('REST_REQUEST_FAILED');
     })();
 
-    SHARED.inflight.set(key,task);
+    SHARED.inflight.set(requestKey,task);
     try{
       const result=await task;
-      return annotateClientSuccess(this,{data:result.data,source:result.source,receivedAt:Date.now()},null);
+      return annotateClientSuccess(this,{...result,receivedAt:Date.now()},null);
     }catch(error){
       this.state=error?.name==='RestRateLimitError'?'RATE_LIMITED':
         error?.name==='RestRegionRestrictedError'?'REGION_RESTRICTED':'ERROR';
@@ -670,7 +688,7 @@ export class RestClient {
       this.lastRequestPhase='FAILED';this.lastRequestDurationMs=Math.max(0,Date.now()-startedAt);
       throw error;
     }finally{
-      if(SHARED.inflight.get(key)===task) SHARED.inflight.delete(key);
+      if(SHARED.inflight.get(requestKey)===task) SHARED.inflight.delete(requestKey);
     }
   }
   async klines(symbol,interval,opts={}) {

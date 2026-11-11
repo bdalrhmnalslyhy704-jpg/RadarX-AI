@@ -25,6 +25,14 @@ function parseArgs(argv){
   }
   return values;
 }
+function stableJson(value){
+  if(value===null||typeof value!=='object')return JSON.stringify(value);
+  if(Array.isArray(value))return '['+value.map(stableJson).join(',')+']';
+  return '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+stableJson(value[key])).join(',')+'}';
+}
+function sha256Value(value){
+  return createHash('sha256').update(stableJson(value)).digest('hex');
+}
 async function sha256File(path){
   const hash=createHash('sha256');
   for await(const chunk of createReadStream(path))hash.update(chunk);
@@ -130,6 +138,7 @@ function compactTarget(result){
     chronology:result.chronology,
     legacy_three_way_diagnostic:result.legacy_three_way_diagnostic,
     neural_network:result.neural_network,
+    shadow_model_export:result.shadow_model_export,
     boosted_tree_model:result.boosted_tree_model,
     hybrid_model:result.hybrid_model,
     model_selection:result.model_selection,
@@ -226,6 +235,25 @@ async function main(){
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
+      const shadowModel=result.shadow_model_export;
+      if(shadowModel?.enabled===true){
+        shadowModel.mlp_model_sha256=sha256Value(shadowModel.model_fit);
+        shadowModel.logistic_model_sha256=sha256Value(shadowModel.same_window_logistic_fit);
+        shadowModel.training_dataset_sha256=report.input_sha256;
+        shadowModel.source_code_commit=process.env.GITHUB_SHA||null;
+        shadowModel.model_bundle_sha256=sha256Value({
+          schema:shadowModel.schema,target_pct:shadowModel.target_pct,
+          target_definition:shadowModel.target_definition,horizon_ms:shadowModel.horizon_ms,
+          feature_schema:shadowModel.feature_schema,feature_names:shadowModel.feature_names,
+          trained_through_at:shadowModel.trained_through_at,
+          training_dataset_sha256:shadowModel.training_dataset_sha256,
+          source_code_commit:shadowModel.source_code_commit,
+          mlp_model_sha256:shadowModel.mlp_model_sha256,
+          logistic_model_sha256:shadowModel.logistic_model_sha256,
+          selected_member_index:shadowModel.selected_member_index,
+          selected_residual_scale:shadowModel.selected_residual_scale
+        });
+      }
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
         source_rows:{

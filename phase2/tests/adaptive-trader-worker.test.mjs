@@ -647,6 +647,53 @@ test('worker ingests real closed-candle historical outcomes before collecting li
   }
 });
 
+test('daily forward-shadow sidecar failure cannot fail the existing adaptive scan',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-worker-forward-shadow-isolation-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now();
+  const candidate={
+    symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2.1,
+    score:82,tier:'EARLY_SETUP',data_valid:true,data_stale:false,closed_candles_only:true,
+    paper_candidate:true,entry_eligible:false,paper_trading:true,real_order_execution:false,
+    candle_close_time:now-60_000,candle_close_price:1,candle_age_ms:60_000,
+    as_of:new Date(now).toISOString(),thresholds:{no_chase:true},
+    features:{volume_ratio:2.1,trade_ratio:1.7,taker_buy_ratio:0.59,close_location:0.72,
+      higher_low:true,breakout_above_prior_high:false,compression_ratio:0.7,
+      hourly_return_pct:1.1,relative_strength_vs_btc_pct:0.8}
+  };
+  const snapshotProvider=async()=>({
+    status:'LIVE_DATA',source:'Binance Public REST',as_of:new Date().toISOString(),
+    universe:{eligible_spot_symbols:1,analyzed_symbols:1,valid_symbols:1,requested_limit:40,coverage_pct:100,scan_complete:true},
+    candidates:[candidate],
+    latest_prices:[{symbol:'PAPERUSDT',price:1,quote_volume_24h:5_000_000,change_24h_pct:2}],
+    meta:{live:true,paper_trading:true,real_order_execution:false,closed_candles_only:true,
+      confidence_score:'UNKNOWN',engine:'ADAPTIVE_TRADER_SIDECAR_V1',
+      source_host:'data-api.binance.vision',btc_benchmark_available:true,
+      historical_learning_enabled:true}
+  });
+  const dailyForwardShadowRuntime={
+    async processSnapshot(){throw new Error('BINANCE_REGION_RESTRICTED_HTTP_451');},
+    snapshot(){return {enabled:true,mode:'READ_ONLY_PAIRED_FORWARD_SHADOW',real_order_execution:false};}
+  };
+  const worker=new AdaptiveTraderWorker({
+    store,snapshotProvider,dailyForwardShadowRuntime,intervalMs:60_000,scanLimit:40,
+    logger:{info(){},warn(){}}
+  });
+  try{
+    await worker.start({initialDelayMs:60_000});
+    const result=await worker.runOnce();
+    assert.equal(result.status,'SUCCESS');
+    assert.equal(worker.snapshot().successful_scans,1);
+    assert.equal(worker.snapshot().daily_forward_shadow.enabled,true);
+    assert.equal(worker.snapshot().last_daily_forward_shadow_result.status,'RESEARCH_SIDECAR_FAILED');
+    assert.match(worker.snapshot().last_daily_forward_shadow_result.error,/HTTP_451/);
+    assert.equal(worker.snapshot().last_summary.meta.real_order_execution,false);
+  }finally{
+    await worker.stop();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('manual worker scan accepts a valid per-request universe limit and rejects unsafe values',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-adaptive-worker-limit-'));
   const store=await new DurableStore({dir}).init();
