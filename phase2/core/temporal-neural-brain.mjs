@@ -17,6 +17,7 @@ export const TEMPORAL_LATENT_CHANNELS=16;
 export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
 export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
 export const TEMPORAL_BASELINE_FEATURE_CACHE='PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1';
+export const TEMPORAL_GRADIENT_BUFFER_SCOPE='TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -123,6 +124,24 @@ function zerosLike(value) {
     return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, zerosLike(child)]));
   }
   return 0;
+}
+function zeroTrainableGradients(model) {
+  return {
+    projectionWeights:zerosLike(model.projectionWeights),
+    projectionBiases:zerosLike(model.projectionBiases),
+    depthWeights:zerosLike(model.depthWeights),
+    pointWeights:zerosLike(model.pointWeights),
+    biases:zerosLike(model.biases),
+    outputWeights:zerosLike(model.outputWeights)
+  };
+}
+function resetGradientBuffer(target) {
+  if(Array.isArray(target)){
+    for(let index=0;index<target.length;index++){
+      if(Array.isArray(target[index]))resetGradientBuffer(target[index]);
+      else target[index]=0;
+    }
+  }
 }
 // Accumulate one sample's weighted gradient directly into the reusable
 // epoch buffer. The previous recursive map created a complete second gradient
@@ -302,8 +321,10 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,baselineFeatures};
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE') {
-  const gradients=zerosLike(model),channels=TEMPORAL_LATENT_CHANNELS;
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
+  const targetGradients=gradients||zeroTrainableGradients(model);
+  resetGradientBuffer(targetGradients);
+  const channels=TEMPORAL_LATENT_CHANNELS;
   const activationGradients=Array(DILATIONS.length+1);
   const final=cache.activations.at(-1);
   activationGradients[DILATIONS.length]=final.map(()=>Array(channels).fill(0));
@@ -316,7 +337,7 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
       ?0.5*brierGradient+0.5*logLossGradient
       :brierGradient;
   for(let channel=0;channel<channels;channel++){
-    gradients.outputWeights[channel]=error*cache.pooled[channel];
+    targetGradients.outputWeights[channel]=error*cache.pooled[channel];
     for(let time=cache.poolStart;time<final.length;time++){
       activationGradients[DILATIONS.length][time][channel]+=
         error*model.outputWeights[channel]/cache.poolCount;
@@ -331,16 +352,16 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
       for(let outputChannel=0;outputChannel<channels;outputChannel++){
         const activation=output[time][outputChannel];
         const dz=outputGradient[time][outputChannel]*(1-activation*activation);
-        gradients.biases[layer][outputChannel]+=dz;
+        targetGradients.biases[layer][outputChannel]+=dz;
         inputGradient[time][outputChannel]+=dz;
         for(let inputChannel=0;inputChannel<channels;inputChannel++){
-          gradients.pointWeights[layer][inputChannel][outputChannel]+=depth[time][inputChannel]*dz;
+          targetGradients.pointWeights[layer][inputChannel][outputChannel]+=depth[time][inputChannel]*dz;
           const depthGradient=model.pointWeights[layer][inputChannel][outputChannel]*dz;
           inputGradient[time][inputChannel]+=depthGradient;
           for(let tap=1;tap<=KERNEL_TAPS;tap++){
             const previous=time-tap*dilation;
             if(previous<0)continue;
-            gradients.depthWeights[layer][tap-1][inputChannel]+=
+            targetGradients.depthWeights[layer][tap-1][inputChannel]+=
               input[previous][inputChannel]*depthGradient;
             inputGradient[previous][inputChannel]+=
               model.depthWeights[layer][tap-1][inputChannel]*depthGradient;
@@ -355,13 +376,13 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
     for(let outputChannel=0;outputChannel<channels;outputChannel++){
       const activation=projected[time][outputChannel];
       const dz=activationGradients[0][time][outputChannel]*(1-activation*activation);
-      gradients.projectionBiases[outputChannel]+=dz;
+      targetGradients.projectionBiases[outputChannel]+=dz;
       for(let inputChannel=0;inputChannel<TEMPORAL_SEQUENCE_CHANNELS;inputChannel++){
-        gradients.projectionWeights[inputChannel][outputChannel]+=sequence[time][inputChannel]*dz;
+        targetGradients.projectionWeights[inputChannel][outputChannel]+=sequence[time][inputChannel]*dz;
       }
     }
   }
-  return gradients;
+  return targetGradients;
 }
 
 function fitMember(rows, seed, {
@@ -389,11 +410,12 @@ function fitMember(rows, seed, {
     biases:model.biases,outputWeights:model.outputWeights
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
+  const rowGradientScratch=zeroTrainableGradients(model);
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
       const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective);
+      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective,rowGradientScratch);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
@@ -1798,6 +1820,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     training_strategy:fitted.training_strategy,
     gradient_accumulation:TEMPORAL_GRADIENT_ACCUMULATION,
     baseline_feature_cache:TEMPORAL_BASELINE_FEATURE_CACHE,
+    gradient_buffer_scope:TEMPORAL_GRADIENT_BUFFER_SCOPE,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
