@@ -246,6 +246,7 @@ async function main(){
       const hybrid=result.hybrid_model||{};
       const tcn=result.temporal_tcn||{};
       const tree=result.temporal_tree_challenger||{};
+      const localTcn=result.temporal_regime_local_tcn_challenger||{};
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -343,6 +344,21 @@ async function main(){
           validation:tcn.validation??null,
           holdout:tcn.holdout??null,
           holdout_comparison:tcn.holdout_comparison??null
+        },
+        regime_local_tcn:{
+          status:localTcn.status??null,
+          trained:localTcn.trained===true,
+          training_sample_budget:localTcn.training_sample_budget??0,
+          training_samples:localTcn.training_samples??0,
+          supported_regimes:localTcn.supported_regimes??[],
+          validation_selected_regimes:localTcn.validation_selected_regimes??[],
+          selected_regimes:localTcn.selected_regimes??[],
+          validation:localTcn.validation??null,
+          validation_logistic:localTcn.validation_logistic??null,
+          holdout:localTcn.holdout??null,
+          holdout_logistic:localTcn.holdout_logistic??null,
+          holdout_comparison:localTcn.holdout_comparison??null,
+          regimes:localTcn.regime_specialists??{}
         },
         temporal_tree:{
           status:tree.status??null,trained:tree.trained===true,
