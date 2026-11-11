@@ -4,8 +4,11 @@ on:
   push:
     branches:
       - research/daily-early-riser-neural-20261110
+      - research/daily-early-riser-forward-shadow-20261111
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/daily-early-riser-forward-shadow.mjs'
+      - 'phase2/tests/daily-early-riser-forward-shadow.test.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
