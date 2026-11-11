@@ -5,6 +5,7 @@ export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
 export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
 export const DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES = 32768;
 export const DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES = 32768;
+export const DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION = 0.60;
 // Inner MLP member-choice margin only; outer validation and holdout remain 0.003.
 export const DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN = 0.00025;
 // Experimental MLP anchor update; coefficients stay inside a narrow trust region.
@@ -161,6 +162,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     minimumNeuralSelectionPositiveSamples:10,
     minimumNeuralSelectionNegativeSamples:30,
     maxNeuralTrainingSamples:DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
+    neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
+      DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
     temporalSamples:[],
     temporalOptions:{},
     neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
