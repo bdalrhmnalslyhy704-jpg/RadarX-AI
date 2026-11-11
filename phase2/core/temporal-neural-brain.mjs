@@ -19,6 +19,8 @@ export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
 export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
 export const TEMPORAL_BASELINE_FEATURE_CACHE='PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1';
 export const TEMPORAL_GRADIENT_BUFFER_SCOPE='TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1';
+export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES=4096;
+export const TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY='INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -843,6 +845,239 @@ function fitEnsemble(rows, options = {}) {
   };
 }
 
+/**
+ * Independent BTC-regime TCN challenger.
+ *
+ * Unlike the pooled TCN control above, this model fits one ensemble and one
+ * logistic anchor per regime. Training, member selection, calibration,
+ * validation and holdout are all regime-local and chronologically disjoint.
+ * The training window is capped to its newest 4,096 eligible rows to limit
+ * regime drift; its logistic comparator is fitted on exactly the same rows.
+ * This remains research-only and never relaxes the 0.003 Brier gates.
+ */
+function fitRegimeLocalTemporalTcn({
+  regime,trainingRows=[],memberSelectionRows=[],calibrationRows=[],
+  validationRows=[],holdoutRows=[],epochs=6,learningRate=0.006,l2=0.012,
+  comparisonMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+  maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
+  minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
+  minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
+  minValidationSamples=12,minValidationPositive=5,minValidationNegative=20,
+  minHoldoutSamples=20,minHoldoutPositive=5,minHoldoutNegative=20
+}={}){
+  const sortRows=rows=>(Array.isArray(rows)?rows:[])
+    .filter(row=>regimeOfSequence(row?.sequence)===regime)
+    .sort((a,b)=>a.at-b.at||String(a.symbol||'').localeCompare(String(b.symbol||'')));
+  const allTraining=sortRows(trainingRows),selection=sortRows(memberSelectionRows);
+  const calibration=sortRows(calibrationRows),validation=sortRows(validationRows);
+  const holdout=sortRows(holdoutRows);
+  const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+    Math.trunc(Number(maxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES)));
+  const training=allTraining.slice(-limit);
+  const counts=rows=>({
+    samples:rows.length,
+    positive:rows.filter(row=>row.target===1).length,
+    negative:rows.filter(row=>row.target===0).length
+  });
+  const trainCounts=counts(training),selectionCounts=counts(selection),
+    calibrationCounts=counts(calibration),validationCounts=counts(validation),
+    holdoutCounts=counts(holdout);
+  const supportGaps=[];
+  if(training.length<minTrainingSamples)supportGaps.push('REGIME_LOCAL_TRAINING_SAMPLE_COUNT');
+  if(trainCounts.positive<minTrainingPositive)supportGaps.push('REGIME_LOCAL_TRAINING_POSITIVE_CLASS');
+  if(trainCounts.negative<minTrainingNegative)supportGaps.push('REGIME_LOCAL_TRAINING_NEGATIVE_CLASS');
+  if(selectionCounts.samples<minSelectionSamples)supportGaps.push('REGIME_LOCAL_SELECTION_SAMPLE_COUNT');
+  if(selectionCounts.positive<minSelectionPositive)supportGaps.push('REGIME_LOCAL_SELECTION_POSITIVE_CLASS');
+  if(selectionCounts.negative<minSelectionNegative)supportGaps.push('REGIME_LOCAL_SELECTION_NEGATIVE_CLASS');
+  if(calibrationCounts.samples<minCalibrationSamples)supportGaps.push('REGIME_LOCAL_CALIBRATION_SAMPLE_COUNT');
+  if(calibrationCounts.positive<minCalibrationPositive)supportGaps.push('REGIME_LOCAL_CALIBRATION_POSITIVE_CLASS');
+  if(calibrationCounts.negative<minCalibrationNegative)supportGaps.push('REGIME_LOCAL_CALIBRATION_NEGATIVE_CLASS');
+  if(validationCounts.samples<minValidationSamples)supportGaps.push('REGIME_LOCAL_VALIDATION_SAMPLE_COUNT');
+  if(validationCounts.positive<minValidationPositive)supportGaps.push('REGIME_LOCAL_VALIDATION_POSITIVE_CLASS');
+  if(validationCounts.negative<minValidationNegative)supportGaps.push('REGIME_LOCAL_VALIDATION_NEGATIVE_CLASS');
+  if(holdoutCounts.samples<minHoldoutSamples)supportGaps.push('REGIME_LOCAL_HOLDOUT_SAMPLE_COUNT');
+  if(holdoutCounts.positive<minHoldoutPositive)supportGaps.push('REGIME_LOCAL_HOLDOUT_POSITIVE_CLASS');
+  if(holdoutCounts.negative<minHoldoutNegative)supportGaps.push('REGIME_LOCAL_HOLDOUT_NEGATIVE_CLASS');
+
+  const latestResolved=rows=>rows.length?Math.max(...rows.map(row=>Number(row.resolved_at))):null;
+  const firstAt=rows=>rows[0]?.at??null;
+  const trainingResolved=latestResolved(training),selectionResolved=latestResolved(selection),
+    calibrationResolved=latestResolved(calibration);
+  const chronologyValid=training.length>0&&selection.length>0&&calibration.length>0&&
+    validation.length>0&&holdout.length>0&&
+    trainingResolved<firstAt(selection)&&
+    selectionResolved<firstAt(calibration)&&
+    calibrationResolved<firstAt(validation)&&
+    latestResolved(validation)<firstAt(holdout);
+  if(!chronologyValid)supportGaps.push('REGIME_LOCAL_CHRONOLOGY_OR_PURGE_VIOLATION');
+  const base={
+    regime,status:supportGaps.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':'READY_FOR_REGIME_LOCAL_TCN_FIT',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    training_strategy:TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
+    training_sample_budget:limit,
+    training_samples:training.length,available_training_samples:allTraining.length,
+    selection_samples:selection.length,calibration_samples:calibration.length,
+    validation_samples:validation.length,holdout_samples:holdout.length,
+    training_targets:trainCounts,selection_targets:selectionCounts,
+    calibration_targets:calibrationCounts,validation_targets:validationCounts,
+    holdout_targets:holdoutCounts,
+    training_start_at:firstAt(training),training_end_at:training.at(-1)?.at??null,
+    selection_start_at:firstAt(selection),calibration_start_at:firstAt(calibration),
+    validation_start_at:firstAt(validation),holdout_start_at:firstAt(holdout),
+    max_training_outcome_resolved_at:trainingResolved,
+    max_selection_outcome_resolved_at:selectionResolved,
+    max_calibration_outcome_resolved_at:calibrationResolved,
+    chronology_valid:chronologyValid,
+    training_sample_fingerprint:sampleIdentityFingerprint(training),
+    selection_sample_fingerprint:sampleIdentityFingerprint(selection),
+    calibration_sample_fingerprint:sampleIdentityFingerprint(calibration),
+    support_gaps:supportGaps,
+    trained:false,selected_for_research:false,validation_passed:false,holdout_passed:false,
+    probability_ready:false,live_eligibility_ready:false,
+    validation:{evaluated:false,sample_count:validation.length,reason:'REGIME_LOCAL_TCN_NOT_SELECTED'},
+    validation_logistic:{evaluated:false,sample_count:validation.length},
+    holdout:{evaluated:false,sample_count:holdout.length,reason:'REGIME_LOCAL_TCN_DID_NOT_PASS_VALIDATION'},
+    holdout_logistic:{evaluated:false,sample_count:holdout.length},
+    selected_member_index:null,selected_residual_scale:null,
+    diagnostic_member_index:null,diagnostic_residual_scale:null,
+    member_selection_scores:[]
+  };
+  if(supportGaps.length)return base;
+
+  const targets=training.map(row=>row.target);
+  const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
+  const baseline=fitLogistic(training);
+  const fitted=fitEnsemble(training,{
+    epochs:Math.max(4,Math.min(8,Math.trunc(Number(epochs)||6))),
+    learningRate,l2,baseRate,baselineFit:baseline
+  });
+  const selectionLogistic=evaluate(selection,
+    sequence=>predictLogistic(sequence,baseline),baseRate);
+  const candidates=fitted.members.flatMap((member,index)=>
+    RESIDUAL_SCALES.map(residualScale=>({
+      index,residual_scale:residualScale,
+      metrics:evaluate(selection,
+        sequence=>forward(sequence,member,residualScale).probability,baseRate)
+    }))
+  ).filter(row=>row.metrics.evaluated===true);
+  const diagnostic=[...candidates].sort((a,b)=>
+    a.metrics.model_brier_score-b.metrics.model_brier_score||
+    a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
+  const qualified=candidates.filter(row=>row.residual_scale>0&&
+    row.metrics.beat_base_rate===true&&selectionLogistic.evaluated===true&&
+    row.metrics.model_brier_score+comparisonMargin<selectionLogistic.model_brier_score)
+    .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
+      a.index-b.index||a.residual_scale-b.residual_scale);
+  const selected=qualified[0]||null;
+  const calibrationSupported=calibrationCounts.samples>=minCalibrationSamples&&
+    calibrationCounts.positive>=minCalibrationPositive&&
+    calibrationCounts.negative>=minCalibrationNegative;
+  const calibrator=selected&&calibrationSupported
+    ?fitSelectionProbabilityCalibrator(calibration,
+      sequence=>forward(sequence,fitted.members[selected.index],selected.residual_scale).probability,
+      {minimumSamples:minCalibrationSamples,minimumPositive:minCalibrationPositive,
+       minimumNegative:minCalibrationNegative,iterations:300,learningRate:0.03,
+       regularization:0.45,fitOn:'REGIME_LOCAL_TCN_CALIBRATION_BLOCK'})
+    :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
+      fit_on:'REGIME_LOCAL_TCN_CALIBRATION_BLOCK',sample_count:0,
+      positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
+      reason:selected?'REGIME_LOCAL_CALIBRATION_SUPPORT_BELOW_MINIMUM':
+        'REGIME_LOCAL_TCN_DID_NOT_BEAT_SELECTION_LOGISTIC'};
+  const logisticCalibrator=calibrationSupported
+    ?fitSelectionProbabilityCalibrator(calibration,
+      sequence=>predictLogistic(sequence,baseline),
+      {minimumSamples:minCalibrationSamples,minimumPositive:minCalibrationPositive,
+       minimumNegative:minCalibrationNegative,iterations:300,learningRate:0.03,
+       regularization:0.45,fitOn:'REGIME_LOCAL_LOGISTIC_CALIBRATION_BLOCK'})
+    :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
+      fit_on:'REGIME_LOCAL_LOGISTIC_CALIBRATION_BLOCK',sample_count:0,
+      positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
+      reason:'REGIME_LOCAL_CALIBRATION_SUPPORT_BELOW_MINIMUM'};
+  const predictCandidate=selected&&calibrator.fitted
+    ?sequence=>calibratedProbability(
+      forward(sequence,fitted.members[selected.index],selected.residual_scale).probability,calibrator)
+    :()=>null;
+  const predictBaseline=logisticCalibrator.fitted
+    ?sequence=>calibratedProbability(predictLogistic(sequence,baseline),logisticCalibrator)
+    :sequence=>predictLogistic(sequence,baseline);
+  const validationModel=selected&&calibrator.fitted&&logisticCalibrator.fitted
+    ?evaluate(validation,predictCandidate,baseRate)
+    :{evaluated:false,sample_count:validation.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'REGIME_LOCAL_TCN_SELECTION_OR_CALIBRATION_NOT_PASSED'};
+  const validationLogistic=evaluate(validation,predictBaseline,baseRate);
+  const validationPassed=Boolean(selected&&calibrator.fitted&&logisticCalibrator.fitted&&
+    validationModel.evaluated&&validationLogistic.evaluated&&
+    validationModel.beat_base_rate===true&&
+    validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score);
+  const holdoutModel=validationPassed
+    ?evaluate(holdout,predictCandidate,baseRate)
+    :{evaluated:false,sample_count:holdout.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,
+      reason:'REGIME_LOCAL_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
+  const holdoutLogistic=validationPassed
+    ?evaluate(holdout,predictBaseline,baseRate)
+    :{evaluated:false,sample_count:holdout.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,
+      reason:'REGIME_LOCAL_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
+  const holdoutPassed=Boolean(validationPassed&&holdoutModel.evaluated&&
+    holdoutLogistic.evaluated&&holdoutModel.beat_base_rate===true&&
+    holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score);
+  return {
+    ...base,
+    status:!qualified.length?'REGIME_LOCAL_TCN_DID_NOT_BEAT_SELECTION_LOGISTIC':
+      !calibrator.fitted?'REGIME_LOCAL_TCN_CALIBRATION_NOT_READY':
+      !validationPassed?'REGIME_LOCAL_TCN_DID_NOT_PASS_VALIDATION':
+      holdoutPassed?'REGIME_LOCAL_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY':
+      'REGIME_LOCAL_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
+    model_architecture:fitted.architecture,
+    model_training_strategy:fitted.training_strategy,
+    trained:true,selected_for_research:validationPassed,
+    validation_passed:validationPassed,holdout_passed:holdoutPassed,
+    selected_member_index:selected?.index??null,
+    selected_residual_scale:selected?.residual_scale??null,
+    diagnostic_member_index:diagnostic?.index??null,
+    diagnostic_residual_scale:diagnostic?.residual_scale??0,
+    neural_residual_contributes:Boolean(selected&&selected.residual_scale>0),
+    ensemble_members:fitted.members.length,
+    member_training_profiles:fitted.member_training_profiles,
+    baseline_anchor_source:'REGIME_LOCAL_TRAINING_ONLY',
+    baseline_anchor_training_samples:training.length,
+    baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
+    member_selection_logistic_brier:selectionLogistic.model_brier_score??null,
+    selection_best_candidate:diagnostic?{
+      member_index:diagnostic.index,residual_scale:diagnostic.residual_scale,
+      brier_score:diagnostic.metrics.model_brier_score,
+      base_rate_brier_score:diagnostic.metrics.base_rate_brier_score
+    }:null,
+    member_selection_scores:candidates.map(row=>({
+      index:row.index,residual_scale:row.residual_scale,
+      brier_score:row.metrics.model_brier_score,
+      base_rate_brier_score:row.metrics.base_rate_brier_score,
+      beat_base_rate:row.metrics.beat_base_rate,
+      same_window_logistic_brier_score:selectionLogistic.model_brier_score??null,
+      beats_same_window_logistic:selectionLogistic.evaluated===true&&
+        row.metrics.model_brier_score+comparisonMargin<selectionLogistic.model_brier_score,
+      selected:Boolean(selected&&row.index===selected.index&&row.residual_scale===selected.residual_scale)
+    })),
+    selection_passed:Boolean(selected),
+    probability_calibration:calibrator,
+    logistic_probability_calibration:logisticCalibrator,
+    validation:validationModel,validation_logistic:validationLogistic,
+    holdout:holdoutModel,holdout_logistic:holdoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:holdoutModel.model_brier_score??null,
+      logistic_brier_score:holdoutLogistic.model_brier_score??null,
+      beats_base_rate:holdoutModel.beat_base_rate===true,
+      beats_logistic:holdoutModel.evaluated===true&&holdoutLogistic.evaluated===true&&
+        holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score,
+      passed:holdoutPassed
+    }
+  };
+}
+
 function regimeOfSequence(sequence){
   const last=Array.isArray(sequence)?sequence[TEMPORAL_SEQUENCE_STEPS-1]:null;
   const btc24h=finite(last?.[19]);
@@ -1155,6 +1390,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   };
 
   const regimeResults={};
+  const regimeLocalTcnResults={};
   const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -1288,6 +1524,22 @@ export function buildTemporalNeuralProfile(samples = [], {
     // Resolve the training-only regime baseline before evaluating specialist support.
     // Keeping this above the support checks avoids a temporal-dead-zone ReferenceError.
     const regimeBaseline=regimeBaselines[regime];
+    const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
+    regimeLocalTcnResults[regime]=fitRegimeLocalTemporalTcn({
+      regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
+      calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
+      epochs:6,learningRate,l2,comparisonMargin,
+      maxTrainingSamples:TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+      minTrainingSamples:minRegimeTraining,
+      minTrainingPositive:minRegimeTrainingPositive,
+      minTrainingNegative:minRegimeNegative,
+      minSelectionSamples,minSelectionPositive,minSelectionNegative,
+      minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+      minValidationSamples:minRegimeValidation,minValidationPositive:minRegimePositive,
+      minValidationNegative:minRegimeNegative,
+      minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
+      minHoldoutNegative:minRegimeNegative
+    });
     const supportGaps=[];
     if(sharedRegimeTraining.length<minRegimeTraining)supportGaps.push('REGIME_TRAINING_SAMPLE_COUNT');
     if(!pooledBaseline)supportGaps.push('SHARED_POOLED_LOGISTIC_ANCHOR_UNAVAILABLE');
@@ -1359,7 +1611,6 @@ export function buildTemporalNeuralProfile(samples = [], {
       continue;
     }
 
-    const regimePrior=(regimeTraining.reduce((sum,row)=>sum+row.target,0)+2)/(regimeTraining.length+4);
     const regimeFit=sharedTcnFit;
     // Same first-passage target, same regime-local training/selection/calibration
     // blocks, and the exact same frozen logistic anchor used by the TCN.
@@ -1665,6 +1916,75 @@ export function buildTemporalNeuralProfile(samples = [], {
     feature_importance:temporalTreeFeatureImportance,
     feature_importance_total_gain:Number(temporalTreeTotalGain.toFixed(7))
   };
+  const regimeLocalTcnSupportedRegimes=regimes.filter(regime=>
+    regimeLocalTcnResults[regime]?.trained===true);
+  const regimeLocalTcnValidationRegimes=regimes.filter(regime=>
+    regimeLocalTcnResults[regime]?.validation_passed===true);
+  const regimeLocalTcnSelectedRegimes=regimes.filter(regime=>
+    regimeLocalTcnResults[regime]?.holdout_passed===true);
+  const regimeLocalTcnValidation=aggregateEvaluations(regimeLocalTcnSupportedRegimes.map(regime=>
+    regimeLocalTcnResults[regime]?.validation));
+  const regimeLocalTcnValidationLogistic=aggregateEvaluations(regimeLocalTcnSupportedRegimes.map(regime=>
+    regimeLocalTcnResults[regime]?.validation_logistic));
+  const regimeLocalTcnHoldout=aggregateEvaluations(regimeLocalTcnSelectedRegimes.map(regime=>
+    regimeLocalTcnResults[regime]?.holdout));
+  const regimeLocalTcnHoldoutLogistic=aggregateEvaluations(regimeLocalTcnSelectedRegimes.map(regime=>
+    regimeLocalTcnResults[regime]?.holdout_logistic));
+  const regimeLocalTcnTrainingSamples=regimeLocalTcnSupportedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnResults[regime]?.training_samples||0),0);
+  const regimeLocalTcnHoldoutSamples=regimeLocalTcnSelectedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnResults[regime]?.holdout?.sample_count||0),0);
+  const regimeLocalTcnProfile={
+    status:!regimeLocalTcnSupportedRegimes.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':
+      !regimeLocalTcnValidationRegimes.length?'REGIME_LOCAL_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !regimeLocalTcnSelectedRegimes.length?'REGIME_LOCAL_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'REGIME_LOCAL_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    architecture:TEMPORAL_MODEL_ARCHITECTURE,
+    model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+    training_strategy:TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    training_sample_budget:TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+    target_definition:targetDefinition,
+    trained:regimeLocalTcnSupportedRegimes.length>0,
+    selected_for_research:regimeLocalTcnValidationRegimes.length>0,
+    research_out_of_sample_validated:regimeLocalTcnSelectedRegimes.length>0,
+    probability_ready:false,live_eligibility_ready:false,
+    supported_regimes:regimeLocalTcnSupportedRegimes,
+    validation_selected_regimes:regimeLocalTcnValidationRegimes,
+    selected_regimes:regimeLocalTcnSelectedRegimes,
+    training_samples:regimeLocalTcnTrainingSamples,
+    selection_samples:regimeLocalTcnSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnResults[regime]?.selection_samples||0),0),
+    calibration_samples:regimeLocalTcnSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnResults[regime]?.calibration_samples||0),0),
+    validation_samples:regimeLocalTcnValidation.sample_count||0,
+    validation:regimeLocalTcnValidation,
+    validation_logistic:regimeLocalTcnValidationLogistic,
+    holdout_samples:regimeLocalTcnHoldout.sample_count||0,
+    holdout:regimeLocalTcnHoldout,
+    holdout_logistic:regimeLocalTcnHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:regimeLocalTcnHoldout.model_brier_score??null,
+      logistic_brier_score:regimeLocalTcnHoldoutLogistic.model_brier_score??null,
+      beats_base_rate:regimeLocalTcnHoldout.beat_base_rate===true,
+      beats_logistic:regimeLocalTcnHoldout.evaluated===true&&
+        regimeLocalTcnHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnHoldoutLogistic.model_brier_score,
+      passed:regimeLocalTcnSelectedRegimes.length>0&&
+        regimeLocalTcnHoldout.evaluated===true&&
+        regimeLocalTcnHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnHoldoutLogistic.model_brier_score,
+      holdout_sample_count:regimeLocalTcnHoldoutSamples,
+      selected_regimes:regimeLocalTcnSelectedRegimes,
+      supported_regimes:regimeLocalTcnSupportedRegimes,
+      all_supported_regimes_validated:regimeLocalTcnSupportedRegimes.length>0&&
+        regimeLocalTcnSupportedRegimes.every(regime=>regimeLocalTcnSelectedRegimes.includes(regime))
+    },
+    regime_specialists:regimeLocalTcnResults
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
@@ -1826,6 +2146,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   return{
     status,architecture,target_definition:targetDefinition,
     temporal_boosted_tree:temporalBoostedTreeProfile,
+    regime_local_tcn_challenger:regimeLocalTcnProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
