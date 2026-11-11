@@ -182,6 +182,7 @@ export class DurableStore {
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
       dailyForwardShadowForecasts:join(dir,'daily-forward-shadow-forecasts.jsonl'),
       dailyForwardShadowResolved:join(dir,'daily-forward-shadow-resolved.jsonl'),
+      dailyForwardShadowMarketPaths:join(dir,'daily-forward-shadow-market-paths.jsonl'),
       intelligenceMemory:join(dir,'intelligence-memory.json'),adaptiveTraderState:join(dir,'adaptive-trader-state.json'),adaptiveTraderExecutionState:join(dir,'adaptive-trader-execution-state.json'),strongMoveAlerts:join(dir,'strong-move-alerts.jsonl'),predictionCalibration:join(dir,'prediction-calibration.json'),rotationAlerts:join(dir,'rotation-alerts.jsonl'),liquidityAbsorptionAlerts:join(dir,'liquidity-absorption-alerts.jsonl'),kahirAlerts:join(dir,'kahir-alerts.jsonl'),doomsdayAlerts:join(dir,'doomsday-alerts.jsonl'),professorAlerts:join(dir,'professor-alerts.jsonl'),alMuqawimAlerts:join(dir,'al-muqawim-alerts.jsonl'),coinHunterAlerts:join(dir,'coin-hunter-alerts.jsonl'),whaleAccumulationAlerts:join(dir,'whale-accumulation-alerts.jsonl'),falconEyeAlerts:join(dir,'falcon-eye-alerts.jsonl'),schedulerEvents:join(dir,'scan-scheduler-events.jsonl'),earlyExpansionEvents:join(dir,'early-expansion-events.jsonl')};}
   async init({legacyDir=null}={}){
     await mkdir(this.dir,{recursive:true});
@@ -265,6 +266,17 @@ export class DurableStore {
     if(!rows.length)return {written:0};
     return this.dailyForwardShadowLock(async()=>{
       await appendFile(this.files.dailyForwardShadowResolved,
+        rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+      this.lastWriteAt=Date.now();
+      return {written:rows.length};
+    });
+  }
+  async appendDailyForwardShadowMarketPaths(values){
+    const rows=(Array.isArray(values)?values:[values]).filter(row=>
+      row&&typeof row==='object'&&!Array.isArray(row));
+    if(!rows.length)return {written:0};
+    return this.dailyForwardShadowLock(async()=>{
+      await appendFile(this.files.dailyForwardShadowMarketPaths,
         rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
       this.lastWriteAt=Date.now();
       return {written:rows.length};
