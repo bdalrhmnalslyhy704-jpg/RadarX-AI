@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {
   predictCognitiveProbability,
   buildCognitiveFeatureVector,
+  COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA
 } from './cognitive-brain.mjs';
 import {
@@ -66,11 +67,15 @@ export function createDailyEarlyRiserForwardForecastPairFromModelBundle({
     bundle.production_eligible!==false||bundle.real_order_execution!==false)
     throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_NOT_RESEARCH_EXPORTABLE');
   if(bundle.feature_schema!==COGNITIVE_DAILY_FEATURE_SCHEMA||
-    !Array.isArray(bundle.feature_names)||bundle.feature_names.length!==35||
+    !Array.isArray(bundle.feature_names)||
+    stableStringify(bundle.feature_names)!==stableStringify(COGNITIVE_DAILY_FEATURE_NAMES)||
     finite(bundle.target_pct)===null||
     !DAILY_EARLY_RISER_TARGETS_PCT.includes(Number(bundle.target_pct))||
     bundle.target_definition!==targetDefinition(Number(bundle.target_pct))||
-    Number(bundle.horizon_ms)!==HORIZON_MS)
+    Number(bundle.horizon_ms)!==HORIZON_MS||
+    !isSha256(bundle.training_dataset_sha256)||
+    (bundle.source_code_commit!==null&&
+      (typeof bundle.source_code_commit!=='string'||!/^[a-f0-9]{40}$/i.test(bundle.source_code_commit))))
     throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_CONTRACT_MISMATCH');
   if(!isSha256(model_bundle_sha256)||sha256Value(expectedBundleIdentity(bundle))!==model_bundle_sha256.toLowerCase())
     throw new Error('FORWARD_SHADOW_MODEL_BUNDLE_SHA256_MISMATCH');
@@ -79,7 +84,12 @@ export function createDailyEarlyRiserForwardForecastPairFromModelBundle({
     sha256Value(bundle.same_window_logistic_fit)!==bundle.logistic_model_sha256.toLowerCase())
     throw new Error('FORWARD_SHADOW_MODEL_WEIGHT_SHA256_MISMATCH');
   if(!Number.isInteger(bundle.selected_member_index)||bundle.selected_member_index<0||
-    !Number.isFinite(Number(bundle.trained_through_at)))
+    !Number.isFinite(Number(bundle.trained_through_at))||
+    bundle.model_fit?.feature_schema!==bundle.feature_schema||
+    bundle.model_fit?.selected_member_index!==bundle.selected_member_index||
+    bundle.model_fit?.selected_residual_scale!==bundle.selected_residual_scale||
+    Number(bundle.model_fit?.refit_max_outcome_resolved_at)!==Number(bundle.trained_through_at)||
+    bundle.same_window_logistic_fit?.feature_schema!==bundle.feature_schema)
     throw new Error('FORWARD_SHADOW_MODEL_SELECTION_OR_CUTOFF_MISSING');
   if(!features||typeof features!=='object'||Array.isArray(features))
     throw new Error('FORWARD_SHADOW_FEATURE_SNAPSHOT_INVALID');
