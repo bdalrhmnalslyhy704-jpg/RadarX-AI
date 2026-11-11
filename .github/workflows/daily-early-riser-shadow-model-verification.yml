@@ -45,7 +45,8 @@ jobs:
           node --check phase2/tools/verify-daily-early-riser-shadow-models.mjs
           node phase2/tools/verify-daily-early-riser-shadow-models.mjs \
             artifacts/daily-early-riser-neural-benchmark.json \
-            artifacts/daily-shadow-model-verification.json
+            artifacts/daily-shadow-model-verification.json \
+            artifacts/daily-forward-shadow-model-bundles.json
       - name: Publish bundle verification summary
         if: always()
         run: |
@@ -59,6 +60,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: radarx-build224-daily-shadow-model-verification-${{ github.run_number }}
-          path: artifacts/daily-shadow-model-verification.json
+          path: |
+            artifacts/daily-shadow-model-verification.json
+            artifacts/daily-forward-shadow-model-bundles.json
           if-no-files-found: warn
           retention-days: 30
