@@ -48,7 +48,6 @@ jobs:
           node phase2/tools/verify-daily-early-riser-shadow-models.mjs \
             artifacts/daily-early-riser-neural-benchmark.json \
             artifacts/daily-shadow-model-verification.json \
-            artifacts/daily-forward-shadow-model-bundles.json \
             artifacts/daily-forward-shadow-model-bundles.json
       - name: Publish bundle verification summary
         if: always()
