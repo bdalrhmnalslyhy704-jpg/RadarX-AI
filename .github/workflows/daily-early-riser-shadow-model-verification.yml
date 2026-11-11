@@ -1,0 +1,67 @@
+name: Build 224 Daily Shadow Model Bundle Verification
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-shadow-runner-20261111
+    paths:
+      - 'phase2/tools/verify-daily-early-riser-shadow-models.mjs'
+      - 'phase2/core/daily-early-riser-forward-shadow.mjs'
+      - '.github/workflows/daily-early-riser-shadow-model-verification.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-shadow-model-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-frozen-census-model-bundles:
+    name: Verify exported MLP and logistic weights from completed frozen-census run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out isolated research runner
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Download completed frozen-census neural benchmark report
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-frozen-census-neural-rebenchmark-17
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 43067482442
+          path: artifacts
+      - name: Recompute bundle hashes and exercise exact model inference
+        run: |
+          node --check phase2/tools/verify-daily-early-riser-shadow-models.mjs
+          node phase2/tools/verify-daily-early-riser-shadow-models.mjs \
+            artifacts/daily-early-riser-neural-benchmark.json \
+            artifacts/daily-shadow-model-verification.json \
+            artifacts/daily-forward-shadow-model-bundles.json
+      - name: Publish bundle verification summary
+        if: always()
+        run: |
+          if [ -f artifacts/daily-shadow-model-verification.json ]; then
+            cat artifacts/daily-shadow-model-verification.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Model bundle verification did not produce a report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload verified bundle diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-daily-shadow-model-verification-${{ github.run_number }}
+          path: |
+            artifacts/daily-shadow-model-verification.json
+            artifacts/daily-forward-shadow-model-bundles.json
+          if-no-files-found: warn
+          retention-days: 30
