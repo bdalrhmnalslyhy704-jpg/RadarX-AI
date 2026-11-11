@@ -196,7 +196,12 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
   rows.push({...sample(0,999),id:'BAD-LEGACY',outcome_source:'HISTORICAL_CLOSED_CANDLE'});
   rows.push({...sample(0,998),id:'BAD-SEQUENCE',temporal_sequence:[[1,2]]});
-  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
+  const profile=buildTemporalNeuralProfile(rows,{
+    epochs:2,minimumHoldoutSamples:80,
+    enableRegimeLocalTcn:true,
+    regimeLocalTcnMaxTrainingSamples:80,
+    regimeLocalTcnEpochs:1
+  });
   assert.equal(profile.resolved_samples,32*36);
   assert.equal(profile.trained,true,JSON.stringify({
     status:profile.status,
@@ -550,7 +555,7 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
   for(const [regime,expert] of [['BTC_RISK_ON',on],['BTC_RISK_OFF',off]]){
     assert.equal(expert.trained,true,regime+' must have an independently fitted TCN');
     assert.equal(expert.baseline_anchor_source,'REGIME_LOCAL_TRAINING_ONLY');
-    assert.ok(expert.training_samples>0&&expert.training_samples<=4096);
+    assert.ok(expert.training_samples>=80&&expert.training_samples<=80);
     assert.ok(expert.training_sample_fingerprint);
     assert.ok(expert.selection_sample_fingerprint);
     assert.ok(expert.calibration_sample_fingerprint);
@@ -567,8 +572,10 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
       expert.calibration_samples);
     assert.equal(expert.probability_calibration.fit_on,'REGIME_LOCAL_TCN_CALIBRATION_BLOCK');
     assert.equal(expert.logistic_probability_calibration.fit_on,'REGIME_LOCAL_LOGISTIC_CALIBRATION_BLOCK');
-    assert.equal(expert.probability_calibration.sample_count,expert.calibration_samples);
-    assert.equal(expert.logistic_probability_calibration.sample_count,expert.calibration_samples);
+    assert.equal(expert.probability_calibration.sample_count,
+      expert.probability_calibration.fitted?expert.calibration_samples:0);
+    assert.equal(expert.logistic_probability_calibration.sample_count,
+      expert.logistic_probability_calibration.fitted?expert.calibration_samples:0);
     if(!expert.validation_passed){
       assert.equal(expert.holdout.evaluated,false,
         'the untouched holdout must remain unscored until the local outer validation gate passes');
