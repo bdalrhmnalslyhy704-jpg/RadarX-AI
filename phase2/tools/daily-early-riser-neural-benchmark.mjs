@@ -290,6 +290,11 @@ async function main(){
             outer_validation_required_margin:neural.inner_selection_diagnostics?.outer_validation_required_margin??null,
             diagnostics:neural.inner_selection_diagnostics??null
           },
+          anchor_adaptation:neural.anchor_adaptation??'FROZEN_LOGISTIC',
+          anchor_trust_radius:neural.anchor_trust_radius??0,
+          anchor_tether_strength:neural.anchor_tether_strength??0,
+          max_anchor_skip_delta:neural.max_anchor_skip_delta??0,
+          anchor_output_bias_delta:neural.anchor_output_bias_delta??0,
           failure_reason:neural.inner_selection_diagnostics?.failure_reason??null,
           validation_brier:neural.validation?.model_brier_score??null,
           validation_same_window_logistic_brier:neural.validation_comparison?.same_window_logistic_brier_score??null,

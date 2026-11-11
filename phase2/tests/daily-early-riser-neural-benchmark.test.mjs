@@ -5,6 +5,7 @@ import {
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+  DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   prepareDailyEarlyRiserCognitiveRow
 } from '../core/daily-early-riser-neural-benchmark.mjs';
@@ -318,14 +319,26 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
     iterations:40,learningRate:0.08,neuralIterations:10,
     neuralInnerSelectionMargin:0.00025,
+    neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
     featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
   });
   assert.equal(profile.neural_network.trained,true);
   assert.equal(profile.neural_network.input_neurons,35);
   assert.equal(profile.neural_network.architecture,'35-10-6-1+RESIDUAL');
   assert.equal(profile.neural_network.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
+  assert.equal(profile.neural_network.anchor_adaptation,'TRUST_REGION_TETHERED_V1');
+  assert.equal(profile.neural_network.anchor_trust_radius,0.12);
+  assert.equal(profile.neural_network.anchor_tether_strength,0.35);
+  assert.ok(profile.neural_network.max_anchor_skip_delta<=0.120001,
+    'all adjusted logistic skip coefficients must stay inside the declared trust region');
+  assert.ok(profile.neural_network.anchor_output_bias_delta<=0.150001,
+    'the adjusted output bias must stay inside the declared trust region');
   assert.equal(profile.neural_network.validation.evaluated,true);
   assert.equal(profile.neural_network.holdout.evaluated,true);
+});
+
+test('daily MLP anchor adaptation is opt-in and has explicit bounded parameters',()=>{
+  assert.equal(DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,'TRUST_REGION_TETHERED_V1');
 });
 
 test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 gate',()=>{

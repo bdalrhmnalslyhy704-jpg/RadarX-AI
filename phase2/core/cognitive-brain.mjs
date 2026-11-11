@@ -546,7 +546,8 @@ function fitNeuralNetworkModel(training, {
   seed = 1,
   baselineFit = null,
   trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-  positiveClassWeighting = 'NONE'
+  positiveClassWeighting = 'NONE',
+  anchorAdaptation = 'FROZEN'
 } = {}) {
   const featureNames=training[0]?.feature_names||FEATURE_NAMES;
   const featureSchema=training[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
@@ -602,6 +603,13 @@ function fitNeuralNetworkModel(training, {
     ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
     :Array(inputSize).fill(0);
   let outputBias=hasBaseline?Number(baselineFit.intercept):logit(baseRate);
+  const initialSkipWeights=[...skipWeights];
+  const initialOutputBias=outputBias;
+  const anchorAdaptationEnabled=hasBaseline&&anchorAdaptation==='TRUST_REGION_TETHERED_V1';
+  const anchorTrustRadius=0.12;
+  const anchorBiasTrustRadius=0.15;
+  const anchorTetherStrength=0.35;
+  const anchorLearningRateScale=0.25;
 
   const zerosLike=values=>Array.isArray(values)
     ?values.map(value=>Array.isArray(value)?zerosLike(value):0):0;
@@ -613,7 +621,7 @@ function fitNeuralNetworkModel(training, {
   const mSkip=zerosLike(skipWeights),vSkip=zerosLike(skipWeights);
   let mOutputBias=0,vOutputBias=0;
 
-  const update=(value,gradient,moment,variance,step,bound=3,decay=true)=>{
+  const update=(value,gradient,moment,variance,step,bound=3,decay=true,learningRateScale=1)=>{
     const g=clamp(gradient,-3,3);
     const nextMoment=0.9*moment+0.1*g;
     const nextVariance=0.999*variance+0.001*g*g;
@@ -621,7 +629,7 @@ function fitNeuralNetworkModel(training, {
     const correctedVariance=nextVariance/(1-Math.pow(0.999,step));
     const regularized=decay?regularization*value:0;
     return {
-      value:clamp(value-rate*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
+      value:clamp(value-rate*learningRateScale*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
       moment:nextMoment,variance:nextVariance
     };
   };
@@ -630,6 +638,8 @@ function fitNeuralNetworkModel(training, {
     const gradInput=zerosLike(inputWeights),gradHidden=zerosLike(hiddenWeights);
     const gradBias1=Array(units1).fill(0),gradBias2=Array(units2).fill(0);
     const gradOutput=Array(units2).fill(0);
+    const gradSkip=anchorAdaptationEnabled?Array(inputSize).fill(0):null;
+    let gradOutputBias=0;
 
     for(const row of rows){
       const hidden1=new Array(units1);
@@ -662,6 +672,10 @@ function fitNeuralNetworkModel(training, {
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
+      if(anchorAdaptationEnabled){
+        gradOutputBias+=error;
+        for(let i=0;i<inputSize;i++)gradSkip[i]+=error*row.vector[i];
+      }
       const hidden2Error=new Array(units2);
       for(let j=0;j<units2;j++){
         gradOutput[j]+=error*hidden2[j];
@@ -679,6 +693,29 @@ function fitNeuralNetworkModel(training, {
     }
 
     const n=Math.max(1,totalSampleWeight);
+    if(anchorAdaptationEnabled){
+      // This research mode updates the logistic skip path only inside a narrow
+      // trust region around the training-only anchor. No validation/holdout
+      // gradients or labels are ever used.
+      for(let i=0;i<inputSize;i++){
+        const gradient=gradSkip[i]/n+
+          anchorTetherStrength*(skipWeights[i]-initialSkipWeights[i]);
+        const result=update(skipWeights[i],gradient,mSkip[i],vSkip[i],epoch,4,false,
+          anchorLearningRateScale);
+        skipWeights[i]=clamp(result.value,
+          initialSkipWeights[i]-anchorTrustRadius,
+          initialSkipWeights[i]+anchorTrustRadius);
+        mSkip[i]=result.moment;vSkip[i]=result.variance;
+      }
+      const biasGradient=gradOutputBias/n+
+        anchorTetherStrength*(outputBias-initialOutputBias);
+      const biasResult=update(outputBias,biasGradient,mOutputBias,vOutputBias,epoch,12,false,
+        anchorLearningRateScale);
+      outputBias=clamp(biasResult.value,
+        initialOutputBias-anchorBiasTrustRadius,
+        initialOutputBias+anchorBiasTrustRadius);
+      mOutputBias=biasResult.moment;vOutputBias=biasResult.variance;
+    }
     for(let i=0;i<inputSize;i++)for(let j=0;j<units1;j++){
       const result=update(inputWeights[i][j],gradInput[i][j]/n,mInput[i][j],vInput[i][j],epoch);
       inputWeights[i][j]=result.value;mInput[i][j]=result.moment;vInput[i][j]=result.variance;
@@ -697,10 +734,14 @@ function fitNeuralNetworkModel(training, {
       const output=update(outputWeights[j],gradOutput[j]/n,mOutput[j],vOutput[j],epoch);
       outputWeights[j]=output.value;mOutput[j]=output.moment;vOutput[j]=output.variance;
     }
-    // Keep skipWeights and outputBias frozen at the training-only logistic
-    // anchor. The nonlinear residual may add information but cannot rewrite it.
+    // In the default mode, skipWeights and outputBias remain exactly frozen.
+    // The opt-in trust-region experiment constrains all linear-anchor movement.
   }
 
+  const maxAnchorSkipDelta=skipWeights.reduce((maximum,value,index)=>
+    Math.max(maximum,Math.abs(value-initialSkipWeights[index])),0);
+  const anchorAdaptationMode=anchorAdaptationEnabled
+    ?'TRUST_REGION_TETHERED_V1':hasBaseline?'FROZEN_LOGISTIC':'FROZEN_TRAINING_PRIOR';
   return {
     kind:'RESIDUAL_DEEP_MLP_V2',
     architecture:inputSize+'-'+units1+'-'+units2+'-1+RESIDUAL',
@@ -714,7 +755,16 @@ function fitNeuralNetworkModel(training, {
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
     training_objective:trainingObjective,
-    residual_anchor:hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
+    anchor_adaptation:anchorAdaptationMode,
+    anchor_trust_radius:anchorAdaptationEnabled?anchorTrustRadius:0,
+    anchor_bias_trust_radius:anchorAdaptationEnabled?anchorBiasTrustRadius:0,
+    anchor_tether_strength:anchorAdaptationEnabled?anchorTetherStrength:0,
+    anchor_learning_rate_scale:anchorAdaptationEnabled?anchorLearningRateScale:0,
+    max_anchor_skip_delta:Number(maxAnchorSkipDelta.toFixed(6)),
+    anchor_output_bias_delta:Number(Math.abs(outputBias-initialOutputBias).toFixed(6)),
+    residual_anchor:anchorAdaptationEnabled
+      ?'SAME_WINDOW_LOGISTIC_TRUST_REGION_TETHERED_V1'
+      :hasBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR'
   };
 }
 
@@ -758,6 +808,12 @@ function fitNeuralEnsemble(training, options = {}) {
     base_rate:mean(members.map(member=>member.base_rate)),
     feature_names:[...members[0].feature_names],
     feature_schema:members[0].feature_schema,
+    anchor_adaptation:members[0].anchor_adaptation,
+    anchor_adaptation_mode:options.anchorAdaptation||'FROZEN',
+    anchor_trust_radius:members[0].anchor_trust_radius,
+    anchor_tether_strength:members[0].anchor_tether_strength,
+    max_anchor_skip_delta:Math.max(...members.map(member=>member.max_anchor_skip_delta||0)),
+    anchor_output_bias_delta:Math.max(...members.map(member=>member.anchor_output_bias_delta||0)),
     training_samples:members[0].training_samples,
     iterations:baseIterations,
     l2:baseL2
@@ -1112,6 +1168,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralL2 = NEURAL_POLICY.l2,
   neuralSelectionMargin = NEURAL_POLICY.selectionMargin,
   neuralInnerSelectionMargin = null,
+  neuralAnchorAdaptation = 'FROZEN',
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
   maxResolvedSamples = 0
 } = {}) {
@@ -1221,6 +1278,10 @@ export function buildCognitiveLearningProfile(samples = [], {
         target_definition:TEMPORAL_TARGET_DEFINITION,
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
+        anchor_adaptation:'FROZEN_LOGISTIC',
+        anchor_trust_radius:0,
+        max_anchor_skip_delta:0,
+        anchor_output_bias_delta:0,
         selection_samples:0,selection_start_at:null,max_training_outcome_resolved_at:null,
         max_selection_outcome_resolved_at:null,selected_residual_scale:null,
         ensemble_members:0,ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length
@@ -1355,7 +1416,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
-      baselineFit:neuralSameWindowLogisticFit
+      baselineFit:neuralSameWindowLogisticFit,
+      anchorAdaptation:neuralAnchorAdaptation
     }):null;
   let neuralFinalTraining=neuralTraining;
   // Enforce at least the declared V5 challenger margin; caller options may
@@ -1397,10 +1459,14 @@ export function buildCognitiveLearningProfile(samples = [], {
     const refitMember=selectedIndex>=0&&refitBaseline
       ?fitNeuralNetworkModel(refitRows,{
         hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline
+        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline,
+        anchorAdaptation:neuralFit.anchor_adaptation_mode
       }):null;
     if(refitMember&&refitBaseline){
       neuralFit.members[selectedIndex]=refitMember;
+      neuralFit.anchor_adaptation=refitMember.anchor_adaptation;
+      neuralFit.max_anchor_skip_delta=refitMember.max_anchor_skip_delta;
+      neuralFit.anchor_output_bias_delta=refitMember.anchor_output_bias_delta;
       neuralSameWindowLogisticFit=refitBaseline;
       neuralFinalTraining=refitRows;
       // All validation metrics must use the prevalence of the exact final refit
@@ -1842,7 +1908,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       scoring_base_rate:neuralFit?.base_rate??null,
       maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+      training_strategy:neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
+        ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
+        :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:TEMPORAL_TARGET_DEFINITION,
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -1868,6 +1936,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       ensemble_members:neuralFit?.members?.length||0,
       ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
       selected_member_index:neuralFit?.selected_member_index??null,
+      anchor_adaptation:neuralFit?.anchor_adaptation??'FROZEN_LOGISTIC',
+      anchor_trust_radius:neuralFit?.anchor_trust_radius??0,
+      anchor_tether_strength:neuralFit?.anchor_tether_strength??0,
+      max_anchor_skip_delta:neuralFit?.max_anchor_skip_delta??0,
+      anchor_output_bias_delta:neuralFit?.anchor_output_bias_delta??0,
       member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
       member_training_profiles:neuralFit?.member_training_profiles||[],
       internal_selection_logistic_brier:neuralSelectionLogistic.model_brier_score??null,

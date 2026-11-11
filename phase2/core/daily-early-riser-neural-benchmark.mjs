@@ -6,6 +6,8 @@ export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
 export const DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES = 8192;
 // Inner MLP member-choice margin only; outer validation and holdout remain 0.003.
 export const DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN = 0.00025;
+// Experimental MLP anchor update; coefficients stay inside a narrow trust region.
+export const DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION = 'TRUST_REGION_TETHERED_V1';
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
@@ -150,6 +152,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neuralSelectionMargin:0.003,
     neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
       DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
+      DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
     featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     maxResolvedSamples:0
   });
@@ -165,7 +169,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_names:profile.feature_names??[],
-    feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema: the legacy 18 channels plus baseline-only 30m/1h/3h/24h momentum, BTC-relative strength, 24h quote-volume scale, breakout/range/wick structure and 5m flow. Daily context is computed from closed candles at the baseline; the legacy 18-channel schema remains unchanged elsewhere. TCN continues using the separate 24x29 temporal sidecar.',
+    feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema. Daily MLP research also compares a frozen logistic anchor with a trust-region-tethered anchor (max coefficient delta 0.12, bias delta 0.15); the outer validation and untouched holdout still require 0.003 Brier improvement. TCN remains the separate 24x29 temporal model.',
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,
