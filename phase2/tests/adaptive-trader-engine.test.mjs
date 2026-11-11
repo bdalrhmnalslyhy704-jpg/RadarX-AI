@@ -305,7 +305,10 @@ test('daily forward shadow context uses exactly 96 contiguous closed asset and B
     ticker:{symbol:'TESTUSDT',lastPrice:String(last[4]),quoteVolume:'2400000',priceChangePercent:'2.1'},
     klines:gapped,btcKlines:btc,now,minQuoteVolume24h:750000
   });
-  assert.equal(invalid.data_valid,false);
+  assert.equal(invalid.data_valid,true,
+    'a gap older than the core 12-candle validity window must not invalidate the existing Adaptive Trader scan');
+  assert.equal(invalid.daily_forward_context_ready,false,
+    'only the daily research sidecar must reject a discontinuous 96-candle context');
 });
 
 test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m score',()=>{
