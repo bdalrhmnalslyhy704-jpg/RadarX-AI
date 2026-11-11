@@ -204,6 +204,46 @@ test('DHDTech forward-shadow runtime captures paired model targets and resolves 
   }
 });
 
+test('runtime rejects non-Binance forward paths and leaves the paired forecasts unresolved',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'radarx-forward-shadow-untrusted-path-'));
+  const store=await new DurableStore({dir}).init();
+  const now=Date.now(),at=now-30_000,trainedThrough=at-2*HORIZON;
+  const bundle=makeBundle(5,trainedThrough);
+  const bundleFile=join(dir,'daily-forward-shadow-model-bundles.json');
+  await writeFile(bundleFile,JSON.stringify({
+    schema:'RADARX_DAILY_FORWARD_SHADOW_MODEL_BUNDLES_V1',
+    targets:{'5_PCT':bundle},production_eligible:false,real_order_execution:false
+  }));
+  const rawPath=JSON.stringify(futurePath(at));
+  let restCalls=0;
+  const rest={async request(){
+    restCalls++;
+    return {
+      data:JSON.parse(rawPath),httpStatus:200,receivedAt:at+HORIZON+1000,
+      requestUrl:'https://attacker.example/api/v3/klines?symbol=AAAUSDT&interval=15m&startTime='+
+        String(at+1)+'&endTime='+String(at+HORIZON)+'&limit=96',
+      responseBody:rawPath
+    };
+  }};
+  try{
+    const runtime=await DailyEarlyRiserForwardShadowRuntime.create({
+      store,rest,modelBundleFile:bundleFile,logger:{warn(){},info(){}}
+    });
+    const capture=await runtime.captureCandidates([candidateAt(at)],now);
+    assert.equal(capture.new_paired_forecasts,1);
+    const resolution=await runtime.resolveMatured(at+HORIZON+10_000);
+    assert.equal(restCalls,1);
+    assert.equal(resolution.failed_paths,1);
+    assert.equal(resolution.resolved_model_rows,0);
+    assert.equal(runtime.snapshot().pending_pairs,1);
+    assert.equal(runtime.snapshot().stored_market_paths,0);
+    assert.equal((await readFile(store.files.dailyForwardShadowResolved,'utf8')).trim(),'');
+    assert.equal((await readFile(store.files.dailyForwardShadowMarketPaths,'utf8')).trim(),'');
+  }finally{
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
 test('daily-shadow runtime rejects malformed or production-enabled bundle envelopes',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'radarx-forward-shadow-invalid-bundle-'));
   const store=await new DurableStore({dir}).init();
