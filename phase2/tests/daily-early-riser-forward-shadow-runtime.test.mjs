@@ -164,20 +164,29 @@ test('DHDTech forward-shadow runtime captures paired model targets and resolves 
     assert.ok(resolved.every(row=>row.status==='RESOLVED'&&row.outcome==='UP'));
     assert.ok(resolved.every(row=>/^[a-f0-9]{64}$/.test(row.resolution_provenance.response_sha256)));
     assert.equal(runtime.snapshot().resolved_pairs,1);
+    const storedPaths=(await readFile(store.files.dailyForwardShadowMarketPaths,'utf8'))
+      .trim().split(/\r?\n/).map(JSON.parse);
+    assert.equal(storedPaths.length,1);
+    assert.equal(storedPaths[0].schema,'RADARX_DAILY_FORWARD_SHADOW_MARKET_PATH_V1');
+    assert.equal(storedPaths[0].symbol,'AAAUSDT');
+    assert.equal(storedPaths[0].baseline_close_time,at);
+    assert.equal(storedPaths[0].response_body,rawPath);
+    assert.equal(storedPaths[0].response_sha256,createHash('sha256').update(rawPath,'utf8').digest('hex'));
+    assert.equal(runtime.snapshot().stored_market_paths,1);
 
-    // Simulate a process interruption after only one resolution row reached
-    // the append-only ledger. The original paired forecasts must be restored
-    // together, then the missing model row must be resolved without rewriting
-    // or duplicating the row already present.
+    // Simulate interruption after one outcome row reached the append-only
+    // ledger. Restart must reuse the immutable raw path and resolve only the
+    // missing model row without a second Binance request.
     await writeFile(store.files.dailyForwardShadowResolved,JSON.stringify(resolved[0])+'\n');
     const restored=await DailyEarlyRiserForwardShadowRuntime.create({
       store,rest,modelBundleFile:bundleFile,maxNewSymbolsPerCycle:8,maxResolutionsPerCycle:1,
       logger:{warn(){},info(){}}
     });
-    assert.equal(restCalls,1,'restart restore must not redownload until the remaining pair is due');
+    assert.equal(restCalls,1,'restart restore must load the saved raw market path without redownloading');
+    assert.equal(restored.snapshot().stored_market_paths,1);
     assert.equal(restored.snapshot().pending_pairs,1,'a partial resolution must retain the complete original pair');
     const recovery=await restored.resolveMatured(at+HORIZON+20_000);
-    assert.equal(restCalls,2);
+    assert.equal(restCalls,1,'a persisted official raw path is replayed instead of requesting Binance again');
     assert.equal(recovery.resolved_model_rows,1,'only the missing model forecast is appended on recovery');
     assert.equal(restored.snapshot().pending_pairs,0);
     const recoveredRows=(await readFile(store.files.dailyForwardShadowResolved,'utf8'))
