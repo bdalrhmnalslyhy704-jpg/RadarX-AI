@@ -8,6 +8,7 @@ import {
 
 const reportPath=resolve(process.argv[2]||'artifacts/daily-early-riser-neural-benchmark.json');
 const outputPath=resolve(process.argv[3]||'artifacts/daily-shadow-model-verification.json');
+const bundlePath=resolve(process.argv[4]||outputPath.replace(/\.json$/i,'.bundles.json'));
 const stable=value=>{
   if(value===null||typeof value!=='object')return JSON.stringify(value);
   if(Array.isArray(value))return '['+value.map(stable).join(',')+']';
@@ -20,7 +21,7 @@ if(report.status!=='COMPLETED_RESEARCH_ONLY'||report.production_touched===true||
   report.deployed===true||report.merged===true||report.real_order_execution===true)
   throw new Error('MODEL_REPORT_NOT_RESEARCH_ONLY_OR_NOT_COMPLETED');
 
-const results=[],disabled=[];
+const results=[],disabled=[],verifiedTargets={};
 for(const target of [5,10,15]){
   const key=String(target)+'_PCT';
   const bundle=report.target_results?.[key]?.shadow_model_export;
@@ -62,6 +63,8 @@ for(const target of [5,10,15]){
   if(pair.length!==2||pair.some(row=>!Number.isFinite(row.up_probability)||
     row.up_probability<0.02||row.up_probability>0.98))
     throw new Error('MODEL_BUNDLE_INFERENCE_VERIFICATION_FAILED:'+key);
+  verifiedTargets[key]={...bundle,historical_holdout_passed:bundle.historical_holdout_passed===true,
+    production_eligible:false,real_order_execution:false};
   results.push({
     target_pct:target,feature_schema:bundle.feature_schema,
     feature_count:bundle.feature_names.length,
@@ -86,6 +89,17 @@ const output={
   verified_bundle_count:results.length,disabled_targets:disabled,
   bundles:results,production_eligible:false,real_order_execution:false
 };
+const deployableResearchBundleFile={
+  schema:'RADARX_DAILY_FORWARD_SHADOW_MODEL_BUNDLES_V1',
+  status:'VERIFIED_RESEARCH_EXPORTS',
+  source_report_sha256:sha(report),source_dataset_sha256:report.input_sha256,
+  verified_at:new Date().toISOString(),targets:verifiedTargets,
+  production_eligible:false,real_order_execution:false
+};
 await mkdir(dirname(outputPath),{recursive:true});
-await writeFile(outputPath,JSON.stringify(output,null,2)+'\n');
-process.stdout.write(JSON.stringify(output,null,2)+'\n');
+await mkdir(dirname(bundlePath),{recursive:true});
+await Promise.all([
+  writeFile(outputPath,JSON.stringify(output,null,2)+'\n'),
+  writeFile(bundlePath,JSON.stringify(deployableResearchBundleFile)+'\n')
+]);
+process.stdout.write(JSON.stringify({...output,bundle_file:bundlePath},null,2)+'\n');
