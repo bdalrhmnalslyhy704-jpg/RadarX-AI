@@ -99,7 +99,7 @@ The gate requires at least 150 paired resolved forecasts, a MLP Brier improvemen
 
 The research branch also contains an optional runtime sidecar inside the existing Adaptive Trader worker. It uses the same live candidate scan, but it records forecasts only; it does not change candidate scores, analyst decisions, alerts, paper positions or order gates.
 
-The latest verified model package is published by the GitHub Actions workflow **Build 224 Daily Shadow Model Bundle Verification**. Download the artifact named `radarx-build224-daily-shadow-model-verification-8` from [run #43074532310](https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI/actions/runs/43074532310), and place `daily-forward-shadow-model-bundles.json` on the DHDTech persistent data volume used by RadarX. The package contains the complete MLP and logistic weight objects for each enabled target, not just their hashes. The runtime rechecks the feature schema and bundle identities when it loads the file.
+The latest verified model package is published by the GitHub Actions workflow **Build 224 Daily Shadow Model Bundle Verification**. Download the artifact named `radarx-build224-daily-shadow-model-verification-9` from [run #43075556756](https://github.com/bdalrhmnalslyhy704-jpg/RadarX-AI/actions/runs/43075556756), and place `daily-forward-shadow-model-bundles.json` on the DHDTech persistent data volume used by RadarX. The package contains the complete MLP and logistic weight objects for each enabled target, not just their hashes. The runtime rechecks the feature schema and bundle identities when it loads the file.
 
 To request activation after this research change has been reviewed, merged through the intended release process and deployed to DHDTech, set:
 
@@ -114,8 +114,9 @@ At runtime, the sidecar accepts only fresh candidates with a valid closed 15m ba
 
 - `daily-forward-shadow-forecasts.jsonl`
 - `daily-forward-shadow-resolved.jsonl`
+- `daily-forward-shadow-market-paths.jsonl`
 
-The sidecar's status is exposed in the Adaptive Trader worker snapshot as `daily_forward_shadow`. A cycle failure or Binance 451/429 does not fail the existing Adaptive Trader scan; an invalid, incomplete or gapped 96-candle path remains pending rather than being assigned FLAT.
+The sidecar's status is exposed in the Adaptive Trader worker snapshot as `daily_forward_shadow`. A cycle failure or Binance 451/429 does not fail the existing Adaptive Trader scan; an invalid, incomplete or gapped 96-candle path remains pending rather than being assigned FLAT. Each successfully validated 96-candle Binance response is stored once in `daily-forward-shadow-market-paths.jsonl` with its exact request URL, raw response body, HTTP status, timestamp and SHA-256. On restart or recovery from a partial resolution write, the sidecar reuses this immutable path and only appends the missing outcome row; it does not need to download the same path again.
 
 ## Scope and limits
 
