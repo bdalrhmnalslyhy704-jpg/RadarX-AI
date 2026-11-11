@@ -4,6 +4,7 @@ import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
+  DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
@@ -374,6 +375,7 @@ test('inner MLP selection margin is decoupled but cannot weaken the outer 0.003 
   assert.equal(effectiveNeuralInnerSelectionMargin(0.00025,0.006),0.00025);
 });
 
-test('daily TCN history ablation uses a 32768-row cap without changing the legacy 4h contract',()=>{
+test('daily TCN and MLP history experiments use isolated 32768-row caps without changing the legacy 4h contract',()=>{
   assert.equal(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,32768);
+  assert.equal(DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,32768);
 });
