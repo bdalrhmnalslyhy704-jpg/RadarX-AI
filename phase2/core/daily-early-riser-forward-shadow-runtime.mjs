@@ -187,7 +187,7 @@ export class DailyEarlyRiserForwardShadowRuntime{
           restoredForecastPairs.add(row.pair_id);
           this.capturedPairs++;
         }
-        if(row.status==='PENDING'){
+        if(row.status==='PENDING'&&!resolvedById.has(row.forecast_id)){
           if(!this.pendingPairs.has(row.pair_id))this.pendingPairs.set(row.pair_id,[]);
           const pendingRows=this.pendingPairs.get(row.pair_id);
           if(!pendingRows.some(existing=>existing.forecast_id===row.forecast_id))
