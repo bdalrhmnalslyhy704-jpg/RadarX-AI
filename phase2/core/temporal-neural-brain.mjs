@@ -15,6 +15,7 @@ export const TEMPORAL_SEQUENCE_STEPS = 24;
 export const TEMPORAL_SEQUENCE_CHANNELS=29;
 export const TEMPORAL_LATENT_CHANNELS=16;
 export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
+export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -1787,6 +1788,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ensemble_members:sharedTcnFit?SEEDS.length:0,
     ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
+    gradient_accumulation:TEMPORAL_GRADIENT_ACCUMULATION,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
