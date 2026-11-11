@@ -247,13 +247,21 @@ async function main(){
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
           training_samples:value?.training_samples??0,
+          training_positive_samples:value?.training_positive_samples??0,
+          training_negative_samples:value?.training_negative_samples??0,
+          selection_samples:value?.member_selection_samples??0,
+          selection_positive_samples:value?.selection_positive_samples??0,
+          selection_negative_samples:value?.selection_negative_samples??0,
           validation_samples:value?.validation_samples??0,
           holdout_samples:value?.holdout_samples??0,
           selected:value?.selected===true,
-          validation_brier:value?.validation?.model_brier_score??null,
-          validation_logistic_brier:value?.validation_logistic?.model_brier_score??null,
-          holdout_brier:value?.holdout?.model_brier_score??null,
-          holdout_logistic_brier:value?.holdout_logistic?.model_brier_score??null
+          validation_passed:value?.selected===true,
+          holdout_passed:value?.probability_ready===true,
+          validation_brier:value?.validation_brier??null,
+          validation_logistic_brier:value?.validation_pooled_logistic_brier??null,
+          holdout_brier:value?.holdout_brier??null,
+          holdout_logistic_brier:value?.holdout_pooled_logistic_brier??null,
+          support_gaps:value?.support_gaps??[]
         }]));
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
         target_pct:target,
@@ -268,8 +276,8 @@ async function main(){
           required_training_samples:neural.samples_required??null,
           selection:{
             samples:neural.selection_samples??0,
-            positive:neural.selection_positive_samples??0,
-            negative:neural.selection_negative_samples??0,
+            positive:neural.selection_positive_samples??neural.inner_selection_diagnostics?.selection_positive_samples??0,
+            negative:neural.selection_negative_samples??neural.inner_selection_diagnostics?.selection_negative_samples??0,
             required_samples:neural.required_selection_samples??null,
             required_positive:neural.required_selection_positive_samples??null,
             required_negative:neural.required_selection_negative_samples??null,
@@ -307,7 +315,8 @@ async function main(){
           status:tcn.status??null,trained:tcn.trained===true,
           sequence_samples:result.temporal_tcn_sequence_samples??0,
           training_samples:tcn.training_samples??0,
-          shared_model_training_samples:tcn.shared_model_training_samples??0,
+          training_sample_budget:tcn.training_sample_budget??null,
+          shared_model_training_samples:tcn.shared_training_samples??tcn.shared_model_training_samples??0,
           selection_samples:tcn.selection_samples??0,
           supported_regimes:tcn.supported_regimes??[],
           selected_regimes:tcn.selected_regimes??[],
