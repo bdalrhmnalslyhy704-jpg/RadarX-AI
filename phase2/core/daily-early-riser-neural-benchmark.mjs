@@ -164,6 +164,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
     horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    feature_names:profile.feature_names??[],
     feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema: the legacy 18 channels plus baseline-only 30m/1h/3h/24h momentum, BTC-relative strength, 24h quote-volume scale, breakout/range/wick structure and 5m flow. Daily context is computed from closed candles at the baseline; the legacy 18-channel schema remains unchanged elsewhere. TCN continues using the separate 24x29 temporal sidecar.',
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
