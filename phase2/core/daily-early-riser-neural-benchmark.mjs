@@ -140,7 +140,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     targetDefinition:targetContract,
     outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
     allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
-    comparisonMargin:0.003
+    comparisonMargin:0.003,
+    enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
+    regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
+      Math.trunc(options.temporalRegimeLocalTcnMaxTrainingSamples||4096))),
+    regimeLocalTcnEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnEpochs||6)))
   });
   const temporalTree=temporal.temporal_boosted_tree||{};
   const profile=buildCognitiveLearningProfile(rows,{
