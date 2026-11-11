@@ -16,6 +16,7 @@ export const TEMPORAL_SEQUENCE_CHANNELS=29;
 export const TEMPORAL_LATENT_CHANNELS=16;
 export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
 export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
+export const TEMPORAL_BASELINE_FEATURE_CACHE='PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
@@ -250,7 +251,7 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   };
 }
 
-function forward(sequence, model, residualScale=1) {
+function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=null) {
   const channels=TEMPORAL_LATENT_CHANNELS;
   const projected=sequence.map(row=>Array.from({length:channels},(_,outputChannel)=>{
     let value=model.projectionBiases[outputChannel];
@@ -284,7 +285,9 @@ function forward(sequence, model, residualScale=1) {
   for(let time=poolStart;time<final.length;time++){
     for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
   }
-  const baselineFeatures=pooledSequence(sequence);
+  const baselineFeatures=Array.isArray(precomputedBaselineFeatures)&&
+    precomputedBaselineFeatures.length===TEMPORAL_SEQUENCE_CHANNELS
+      ?precomputedBaselineFeatures:pooledSequence(sequence);
   const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
   const baselineWeights=Array.isArray(regimeBaseline?.weights)?regimeBaseline.weights:model.skipWeights;
   const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))?Number(regimeBaseline.bias):model.outputBias;
@@ -389,7 +392,7 @@ function fitMember(rows, seed, {
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     for (const row of rows) {
-      const cache = forward(row.sequence, model);
+      const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
@@ -782,7 +785,12 @@ function fitEnsemble(rows, options = {}) {
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT}
   ];
-  const members=SEEDS.map((seed,index)=>fitMember(rows,seed,{
+  // These features depend only on the immutable 24x29 input, not on model
+  // weights. Prepare them once and reuse across all epochs and ensemble members.
+  const preparedRows=rows.map(row=>({...row,
+    _pooled_baseline_features:pooledSequence(row.sequence)
+  }));
+  const members=SEEDS.map((seed,index)=>fitMember(preparedRows,seed,{
     ...options,...memberProfiles[index],baseRate
   }));
   return {
@@ -1789,6 +1797,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     ensemble_members_required:SEEDS.length,
     training_strategy:fitted.training_strategy,
     gradient_accumulation:TEMPORAL_GRADIENT_ACCUMULATION,
+    baseline_feature_cache:TEMPORAL_BASELINE_FEATURE_CACHE,
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
