@@ -97,6 +97,14 @@ function validateClosedRestResponse(result,symbol,baselineCloseTime){
   catch{return {valid:false,reason:'BINANCE_REST_RESPONSE_JSON_INVALID'};}
   if(!Array.isArray(parsed)||JSON.stringify(parsed)!==JSON.stringify(result.data))
     return {valid:false,reason:'BINANCE_REST_PARSED_BODY_MISMATCH'};
+  if(parsed.length!==HORIZON_BARS)
+    return {valid:false,reason:'BINANCE_REST_CLOSED_PATH_NOT_96_CANDLES'};
+  for(let index=0;index<parsed.length;index++){
+    const expectedOpen=baselineCloseTime+1+index*INTERVAL_MS;
+    if(finite(parsed[index]?.[0])!==expectedOpen||
+      finite(parsed[index]?.[6])!==expectedOpen+INTERVAL_MS-1)
+      return {valid:false,reason:'BINANCE_REST_CLOSED_PATH_GAP_OR_TIME_MISMATCH'};
+  }
   return {valid:true,requestUrl:url.toString(),responseSha256:actual,responseBody:result.responseBody};
 }
 
@@ -112,7 +120,9 @@ export class DailyEarlyRiserForwardShadowRuntime{
   }={}){
     if(!store||typeof store.appendDailyForwardShadowForecasts!=='function'||
       typeof store.appendDailyForwardShadowResolutions!=='function'||
-      !store.files?.dailyForwardShadowForecasts||!store.files?.dailyForwardShadowResolved)
+      typeof store.appendDailyForwardShadowMarketPaths!=='function'||
+      !store.files?.dailyForwardShadowForecasts||!store.files?.dailyForwardShadowResolved||
+      !store.files?.dailyForwardShadowMarketPaths)
       throw new Error('DAILY_FORWARD_SHADOW_DURABLE_LEDGER_UNAVAILABLE');
     if(!rest||typeof rest.request!=='function')
       throw new Error('DAILY_FORWARD_SHADOW_BINANCE_REST_UNAVAILABLE');
@@ -125,6 +135,7 @@ export class DailyEarlyRiserForwardShadowRuntime{
     this.latestAtByModelSymbol=new Map();
     this.seenPairIds=new Set();this.resolvedForecastIds=new Set();
     this.pendingPairs=new Map();
+    this.marketPathBySymbolBaseline=new Map();
     this.lastError=null;this.lastCaptureAt=null;this.lastResolveAt=null;
     this.capturedPairs=0;this.resolvedPairs=0;this.ambiguousPairs=0;
     this.rejectedReasons={};
@@ -154,6 +165,31 @@ export class DailyEarlyRiserForwardShadowRuntime{
     this.initializing=(async()=>{
       const resolvedById=new Set();
       const resolvedPairs=new Map();
+      for await(const row of jsonLines(this.store.files.dailyForwardShadowMarketPaths)){
+        const symbol=cleanSymbol(row?.symbol),at=finite(row?.baseline_close_time);
+        if(row?.schema!=='RADARX_DAILY_FORWARD_SHADOW_MARKET_PATH_V1'||
+          !symbol||at===null||typeof row.response_body!=='string')continue;
+        let data;
+        try{data=JSON.parse(row.response_body);}
+        catch{this.reject('DAILY_FORWARD_SHADOW_STORED_PATH_JSON_INVALID');continue;}
+        const provenance=validateClosedRestResponse({
+          httpStatus:row.http_status,requestUrl:row.request_url,
+          responseBody:row.response_body,responseSha256:row.response_sha256,data
+        },symbol,at);
+        const recordedAt=finite(row.recorded_at);
+        if(!provenance.valid||recordedAt===null||recordedAt<at+HORIZON_MS){
+          this.reject(provenance.reason||'DAILY_FORWARD_SHADOW_STORED_PATH_TIME_INVALID');
+          continue;
+        }
+        const key=symbol+'|'+String(at);
+        if(!this.marketPathBySymbolBaseline.has(key)){
+          this.marketPathBySymbolBaseline.set(key,{
+            symbol,baseline_close_time:at,future15m:data,
+            requestUrl:provenance.requestUrl,responseBody:provenance.responseBody,
+            responseSha256:provenance.responseSha256,recordedAt
+          });
+        }
+      }
       for await(const row of jsonLines(this.store.files.dailyForwardShadowResolved)){
         if(row?.schema!==DAILY_FORWARD_SHADOW_SCHEMA||!isSha256(row.forecast_id))continue;
         this.resolvedForecastIds.add(row.forecast_id);
@@ -319,15 +355,46 @@ export class DailyEarlyRiserForwardShadowRuntime{
       const first=pairs[0].rows[0],symbol=cleanSymbol(first.symbol),at=Number(first.at);
       attempts++;
       try{
-        const response=await this.rest.request('/api/v3/klines',{
-          symbol,interval:'15m',startTime:at+1,endTime:at+HORIZON_MS,limit:96
-        },{includeResponseBody:true});
-        const provenance=validateClosedRestResponse(response,symbol,at);
-        if(!provenance.valid){
-          this.reject(provenance.reason);failed++;continue;
+        let savedPath=this.marketPathBySymbolBaseline.get(pathKey);
+        let provenance,future15m,recordedAt;
+        if(savedPath){
+          future15m=savedPath.future15m;
+          recordedAt=savedPath.recordedAt;
+          provenance=validateClosedRestResponse({
+            httpStatus:200,requestUrl:savedPath.requestUrl,
+            responseBody:savedPath.responseBody,responseSha256:savedPath.responseSha256,
+            data:future15m
+          },symbol,at);
+        }else{
+          const response=await this.rest.request('/api/v3/klines',{
+            symbol,interval:'15m',startTime:at+1,endTime:at+HORIZON_MS,limit:96
+          },{includeResponseBody:true});
+          provenance=validateClosedRestResponse(response,symbol,at);
+          if(provenance.valid){
+            future15m=JSON.parse(provenance.responseBody);
+            recordedAt=finite(response.receivedAt)??atNow;
+            const storedPath={
+              schema:'RADARX_DAILY_FORWARD_SHADOW_MARKET_PATH_V1',
+              symbol,baseline_close_time:at,source:'BINANCE_OFFICIAL_SPOT_REST_KLINES',
+              request_url:provenance.requestUrl,http_status:200,
+              response_sha256:provenance.responseSha256,
+              response_body:provenance.responseBody,recorded_at:recordedAt
+            };
+            // Persist the exact raw response before writing labels. After a crash,
+            // the same immutable candles can be re-audited without another API call.
+            await this.store.appendDailyForwardShadowMarketPaths(storedPath);
+            savedPath={
+              symbol,baseline_close_time:at,future15m,requestUrl:provenance.requestUrl,
+              responseBody:provenance.responseBody,responseSha256:provenance.responseSha256,
+              recordedAt
+            };
+            this.marketPathBySymbolBaseline.set(pathKey,savedPath);
+          }
         }
-        const future15m=JSON.parse(provenance.responseBody);
-        const recordedAt=finite(response.receivedAt)??atNow;
+        if(!provenance?.valid){
+          this.reject(provenance?.reason||'DAILY_FORWARD_SHADOW_STORED_PATH_INVALID');
+          failed++;continue;
+        }
         const pathResolved=[];
         for(const {pairId,rows} of pairs){
           const pairRows=[];
@@ -388,6 +455,7 @@ export class DailyEarlyRiserForwardShadowRuntime{
         [String(target),bundle.model_bundle_sha256])),
       captured_pairs:this.capturedPairs,resolved_pairs:this.resolvedPairs,
       ambiguous_pairs:this.ambiguousPairs,pending_pairs:this.pendingPairs.size,
+      stored_market_paths:this.marketPathBySymbolBaseline.size,
       last_capture_at:this.lastCaptureAt,last_resolve_at:this.lastResolveAt,
       last_error:this.lastError,rejections:{...this.rejectedReasons},
       real_order_execution:false,production_eligible:false
