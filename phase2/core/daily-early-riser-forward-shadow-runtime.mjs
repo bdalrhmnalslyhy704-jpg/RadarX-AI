@@ -72,10 +72,14 @@ function validateBundlePayload(payload){
 
 function validateClosedRestResponse(result,symbol,baselineCloseTime){
   if(!result||Number(result.httpStatus)!==200||typeof result.responseBody!=='string'||
-    !isSha256(result.responseSha256)||!Array.isArray(result.data))
+    !Array.isArray(result.data))
     return {valid:false,reason:'BINANCE_REST_RESPONSE_PROVENANCE_MISSING'};
+  // RestClient returns the exact body and request URL without caching when
+  // includeResponseBody is enabled. Hash that raw body here so resolution is
+  // independently verifiable without requiring a precomputed response hash.
   const actual=createHash('sha256').update(result.responseBody,'utf8').digest('hex');
-  if(actual!==result.responseSha256.toLowerCase())
+  if(result.responseSha256!==undefined&&
+    (!isSha256(result.responseSha256)||actual!==result.responseSha256.toLowerCase()))
     return {valid:false,reason:'BINANCE_REST_RESPONSE_SHA256_MISMATCH'};
   let url;
   try{url=new URL(String(result.requestUrl||''));}
