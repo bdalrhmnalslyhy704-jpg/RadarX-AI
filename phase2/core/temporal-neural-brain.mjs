@@ -122,11 +122,22 @@ function zerosLike(value) {
   }
   return 0;
 }
-function addTree(target, source) {
-  if (Array.isArray(target)) {
-    for (let index = 0; index < target.length; index++) addTree(target[index], source[index]);
-  } else return target + source;
-  return target;
+// Accumulate one sample's weighted gradient directly into the reusable
+// epoch buffer. The previous recursive map created a complete second gradient
+// tree for every row in every epoch, causing avoidable allocation/GC pressure.
+// Traversal and floating-point operation order remain identical.
+function addScaledTreeInPlace(target, source, scale = 1) {
+  if (!Array.isArray(target) || !Array.isArray(source) ||
+      target.length !== source.length) {
+    throw new TypeError('TEMPORAL_GRADIENT_SHAPE_MISMATCH');
+  }
+  for (let index = 0; index < target.length; index++) {
+    if (Array.isArray(target[index])) {
+      addScaledTreeInPlace(target[index], source[index], scale);
+    } else {
+      target[index] += source[index] * scale;
+    }
+  }
 }
 function scaleTree(target, scale) {
   if (Array.isArray(target)) return target.map(value => scaleTree(value, scale));
@@ -380,11 +391,8 @@ function fitMember(rows, seed, {
       const cache = forward(row.sequence, model);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
-      const plus = (target, source) => Array.isArray(target)
-        ? target.map((value, index) => plus(value, source[index]))
-        : target + source*sampleWeight;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
-        gradient[key] = plus(gradient[key], itemGradient[key]);
+        addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
