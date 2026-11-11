@@ -9,9 +9,16 @@ on:
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/core/daily-early-riser-forward-shadow.mjs'
+      - 'phase2/core/daily-early-riser-forward-shadow-runtime.mjs'
       - 'phase2/tests/daily-early-riser-forward-shadow.test.mjs'
       - 'phase2/tests/daily-early-riser-forward-shadow-cli.test.mjs'
+      - 'phase2/tests/daily-early-riser-forward-shadow-runtime.test.mjs'
       - 'phase2/tools/daily-early-riser-forward-shadow.mjs'
+      - 'phase2/tools/verify-daily-early-riser-shadow-models.mjs'
+      - 'phase2/market/binance-rest.mjs'
+      - 'phase2/core/store.mjs'
+      - 'phase2/core/adaptive-trader-worker.mjs'
+      - 'phase2/server.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
@@ -61,7 +68,13 @@ jobs:
         run: |
           node --check phase2/core/daily-early-riser-neural-benchmark.mjs
           node --check phase2/core/daily-early-riser-forward-shadow.mjs
+          node --check phase2/core/daily-early-riser-forward-shadow-runtime.mjs
           node --check phase2/tools/daily-early-riser-forward-shadow.mjs
+          node --check phase2/tools/verify-daily-early-riser-shadow-models.mjs
+          node --check phase2/market/binance-rest.mjs
+          node --check phase2/core/store.mjs
+          node --check phase2/core/adaptive-trader-worker.mjs
+          node --check phase2/server.mjs
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
@@ -71,6 +84,7 @@ jobs:
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-forward-shadow.test.mjs
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-forward-shadow-cli.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-forward-shadow-runtime.test.mjs
       - name: Regression-test legacy Cognitive V5 and adaptive trader paths
         run: |
           node --test --test-timeout=60000 phase2/tests/cognitive-brain.test.mjs
