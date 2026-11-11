@@ -17,6 +17,7 @@ on:
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/adaptive-trader-engine.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
       - '.github/workflows/daily-early-riser-neural-unit.yml'
       - '.github/workflows/daily-early-riser-neural-rebenchmark.yml'
   pull_request:
@@ -64,6 +65,7 @@ jobs:
         run: |
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
       - name: Regression-test legacy Cognitive V5 and adaptive trader paths
         run: |
           node --test --test-timeout=60000 phase2/tests/cognitive-brain.test.mjs
