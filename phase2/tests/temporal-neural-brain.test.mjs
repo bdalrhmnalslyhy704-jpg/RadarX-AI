@@ -196,11 +196,11 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.sequence_channels,29);
   assert.equal(profile.latent_channels,TEMPORAL_LATENT_CHANNELS);
   assert.equal(profile.trainable_parameter_count,TEMPORAL_TRAINABLE_PARAMETER_COUNT);
-  assert.equal(TEMPORAL_LATENT_CHANNELS,8);
-  assert.equal(TEMPORAL_TRAINABLE_PARAMETER_COUNT,512,
-    'the learned 29-to-8 projection must reduce the TCN residual to 512 parameters');
+  assert.equal(TEMPORAL_LATENT_CHANNELS,16);
+  assert.equal(TEMPORAL_TRAINABLE_PARAMETER_COUNT,1408,
+    'the learned 29-to-16 projection must keep the expanded residual under 1,500 parameters');
   assert.ok(profile.member_training_profiles.every(row=>
-    row.latentChannels===8&&row.trainableParameters===512));
+    row.latentChannels===16&&row.trainableParameters===1408));
   assert.ok(profile.training_samples>=160);
   assert.equal(profile.training_samples,profile.shared_model_training_samples);
   assert.ok(profile.shared_model_selection_samples>=10);

@@ -148,7 +148,7 @@ jobs:
                 const boostedTree=cognitiveProfile.boosted_tree_model||cognitiveCapture.boosted_tree_model||{};
                 const hybridModel=cognitiveProfile.hybrid_model||cognitiveCapture.hybrid_model||{};
                 const temporalNetworkContract=Boolean(
-                  temporalNetwork.architecture==='TCN_24x29_TO8_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V7'&&
+                  temporalNetwork.architecture==='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8'&&
                   temporalNetwork.training_strategy==='SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1'&&
                   temporalNetwork.model_split_scope==='SHARED_POOLED_CHRONOLOGICAL_PURGED_WALK_FORWARD_WITH_REGIME_GATES_V1'&&
                   temporalNetwork.model_scope==='SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR'&&
