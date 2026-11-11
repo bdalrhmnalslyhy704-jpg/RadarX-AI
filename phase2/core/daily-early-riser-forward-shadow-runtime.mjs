@@ -187,7 +187,10 @@ export class DailyEarlyRiserForwardShadowRuntime{
           restoredForecastPairs.add(row.pair_id);
           this.capturedPairs++;
         }
-        if(row.status==='PENDING'&&!resolvedById.has(row.forecast_id)){
+        if(row.status==='PENDING'){
+          // Restore both immutable original rows together. Resolution state is
+          // tracked separately so a partial resolved-ledger append can recover
+          // its remaining model row without losing the pair identity.
           if(!this.pendingPairs.has(row.pair_id))this.pendingPairs.set(row.pair_id,[]);
           const pendingRows=this.pendingPairs.get(row.pair_id);
           if(!pendingRows.some(existing=>existing.forecast_id===row.forecast_id))
@@ -201,7 +204,8 @@ export class DailyEarlyRiserForwardShadowRuntime{
           rows.some(row=>row.model_variant==='SAME_WINDOW_LOGISTIC_BASELINE_V1')&&
           rows.every(row=>row.model_bundle_sha256===rows[0].model_bundle_sha256&&
             row.symbol===rows[0].symbol&&row.at===rows[0].at&&row.target_pct===rows[0].target_pct);
-        if(!complete)this.pendingPairs.delete(id);
+        const fullyResolved=complete&&rows.every(row=>resolvedById.has(row.forecast_id));
+        if(!complete||fullyResolved)this.pendingPairs.delete(id);
       }
       this.initialized=true;
       return this.snapshot();
