@@ -124,6 +124,8 @@ async function writeJsonAtomic(path,value){
 function compactTarget(result){
   return {
     target_pct:result.target_pct,
+    feature_schema:result.feature_schema,
+    feature_names:result.feature_names,
     samples:result.samples,
     chronology:result.chronology,
     legacy_three_way_diagnostic:result.legacy_three_way_diagnostic,
@@ -151,7 +153,7 @@ async function main(){
   const output=resolve(args.output||DEFAULT_OUTPUT);
   const started=Date.now();
   const report={
-    schema:'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V1',
+    schema:'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
@@ -164,7 +166,7 @@ async function main(){
       labels:'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
-      feature_schema:'MLP/GBDT use the existing Cognitive V5 18-feature vector; the independent daily TCN uses the original 24x29 closed-candle temporal sequence, including 24h asset/BTC/relative-strength and liquidity context',
+      feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
       models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
