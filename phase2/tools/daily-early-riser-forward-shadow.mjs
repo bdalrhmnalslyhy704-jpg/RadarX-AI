@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {createHash} from 'node:crypto';
 import {createReadStream} from 'node:fs';
 import {appendFile,mkdir,readFile,stat,writeFile} from 'node:fs/promises';
 import {dirname,resolve} from 'node:path';
@@ -165,14 +166,39 @@ async function resolveMode(args){
   const pathsPath=resolve(args['closed-paths']||'artifacts/daily-forward-closed-paths.jsonl');
   const outputPath=resolve(args.output||'artifacts/daily-forward-resolved.jsonl');
   const [forecasts,paths]=await Promise.all([readJsonlArray(forecastsPath),readJsonlArray(pathsPath)]);
-  const pathMap=new Map();
+  const pathMap=new Map(),pathRejections={};
   for(const row of paths){
     const symbol=String(row?.symbol||'').trim().toUpperCase();
     const at=finite(row?.baseline_close_time);
-    if(!symbol||at===null||!Array.isArray(row.future15m))continue;
+    const reject=reason=>{pathRejections[reason]=(pathRejections[reason]||0)+1;};
+    if(!symbol||at===null){reject('CLOSED_PATH_IDENTITY_INVALID');continue;}
+    if(row.source!=='BINANCE_SPOT_REST_KLINES_V1'||Number(row.http_status)!==200){
+      reject('CLOSED_PATH_NOT_FROM_SUCCESSFUL_BINANCE_SPOT_REST_RESPONSE');continue;
+    }
+    let url,parsed;
+    try{
+      url=new URL(String(row.request_url||''));
+      if(url.protocol!=='https:'||url.hostname!=='api.binance.com'||
+        url.pathname!=='/api/v3/klines'||
+        url.searchParams.get('symbol')!==symbol||
+        url.searchParams.get('interval')!=='15m'||
+        url.searchParams.get('startTime')!==String(at+1)||
+        url.searchParams.get('limit')!=='96'){
+        reject('BINANCE_KLINE_REQUEST_PROVENANCE_MISMATCH');continue;
+      }
+      if(typeof row.response_body!=='string'||
+        !isSha256(row.response_sha256)||
+        createHash('sha256').update(row.response_body,'utf8').digest('hex')!==row.response_sha256.toLowerCase()){
+        reject('BINANCE_KLINE_RESPONSE_SHA256_MISMATCH');continue;
+      }
+      parsed=JSON.parse(row.response_body);
+      if(!Array.isArray(parsed)){reject('BINANCE_KLINE_RESPONSE_NOT_AN_ARRAY');continue;}
+    }catch{
+      reject('BINANCE_KLINE_RESPONSE_PARSE_OR_URL_INVALID');continue;
+    }
     const key=keyOf(symbol,at);
     if(pathMap.has(key))throw new Error('DUPLICATE_CLOSED_PATH:'+key);
-    pathMap.set(key,row);
+    pathMap.set(key,{...row,future15m:parsed});
   }
   const existing=await readExistingIds(outputPath,'forecast_id');
   const appended=[],rejections={};
@@ -203,6 +229,7 @@ async function resolveMode(args){
     schema:DAILY_FORWARD_SHADOW_SCHEMA,mode:'RESOLVE',
     forecasts_path:forecastsPath,closed_paths_path:pathsPath,output_path:outputPath,
     forecast_rows:forecasts.length,closed_path_rows:paths.length,
+    rejected_closed_path_rows:pathRejections,
     appended_resolutions:appended.length,resolved,ambiguous,pending_without_path:pending,
     duplicate_resolutions_skipped:duplicateResolutions,rejections,
     immutable_source_forecasts_preserved:true,
