@@ -329,7 +329,9 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(profile.neural_network.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
   assert.equal(profile.neural_network.anchor_adaptation,'TRUST_REGION_TETHERED_V1');
   assert.equal(profile.neural_network.anchor_trust_radius,0.12);
+  assert.equal(profile.neural_network.anchor_bias_trust_radius,0.15);
   assert.equal(profile.neural_network.anchor_tether_strength,0.35);
+  assert.equal(profile.neural_network.anchor_learning_rate_scale,0.25);
   assert.ok(profile.neural_network.max_anchor_skip_delta<=0.120001,
     'all adjusted logistic skip coefficients must stay inside the declared trust region');
   assert.ok(profile.neural_network.anchor_output_bias_delta<=0.150001,
