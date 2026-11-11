@@ -10,6 +10,7 @@ import {
   TEMPORAL_SEQUENCE_CHANNELS,
   TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,
   isValidTemporalPooledBaselineFeatures,
+  resetGradientBuffer,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -24,6 +25,26 @@ import {
 const FOUR_HOURS=4*60*60*1000;
 const EIGHT_HOURS=8*60*60*1000;
 const BASE_TIME=1_710_000_000_000;
+
+test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
+  const scratch={
+    projectionWeights:[[1.25,-0.5],[3,4]],
+    depthWeights:[[[5,6],[7,8]]],
+    biases:[[9,-10]],
+    outputWeights:[11,12],
+    diagnostics:{nested:[13,14]}
+  };
+  const reference=scratch;
+  const reset=resetGradientBuffer(scratch);
+  assert.equal(reset,reference,'reset must preserve the reusable scratch object identity');
+  assert.deepEqual(scratch,{
+    projectionWeights:[[0,0],[0,0]],
+    depthWeights:[[[0,0],[0,0]]],
+    biases:[[0,0]],
+    outputWeights:[0,0],
+    diagnostics:{nested:[0,0]}
+  });
+});
 
 test('cached TCN baseline vector accepts exactly 58 finite pooled features',()=>{
   assert.equal(TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,58);
