@@ -224,8 +224,8 @@ export function scoreDailyEarlyRiserForwardShadow(rows,{
     byPair.get(row.pair_id).push(row);
   }
   const pairs=[];
-  for(const group of byPair.values()){
-    if(group.length!==2){invalidRecords+=group.length;continue;}
+  for(const [pairId,group] of byPair.entries()){
+    if(duplicatePairIds.has(pairId)||group.length!==2){invalidRecords+=group.length;continue;}
     const mlp=group.find(row=>row.model_variant===DAILY_FORWARD_SHADOW_MODEL_MLP);
     const logistic=group.find(row=>row.model_variant===DAILY_FORWARD_SHADOW_MODEL_LOGISTIC);
     if(!mlp||!logistic||mlp.forecast_id===logistic.forecast_id||
