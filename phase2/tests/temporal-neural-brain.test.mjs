@@ -542,7 +542,12 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
       rows.push(row);
     }
   }
-  const profile=buildTemporalNeuralProfile(rows,{epochs:2,minimumHoldoutSamples:80});
+  const profile=buildTemporalNeuralProfile(rows,{
+    epochs:2,minimumHoldoutSamples:80,
+    enableRegimeLocalTcn:true,
+    regimeLocalTcnMaxTrainingSamples:80,
+    regimeLocalTcnEpochs:1
+  });
   const local=profile.regime_local_tcn_challenger;
   assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
   assert.equal(local.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1');
