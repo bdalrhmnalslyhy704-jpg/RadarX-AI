@@ -11,6 +11,7 @@ on:
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - '.github/workflows/daily-early-riser-neural-unit.yml'
+      - '.github/workflows/daily-early-riser-neural-rebenchmark.yml'
   pull_request:
     branches:
       - research/daily-early-riser-census-20261109
