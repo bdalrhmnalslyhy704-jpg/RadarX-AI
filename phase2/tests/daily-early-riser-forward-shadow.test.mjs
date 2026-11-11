@@ -123,5 +123,6 @@ test('forward gate rejects unmatched or duplicated forecast rows instead of cher
   });
   assert.equal(score.paired_resolved_samples,0);
   assert.equal(score.excluded_duplicate_forecast_ids,1);
-  assert.equal(score.status,'FORWARD_SHADOW_DID_NOT_BEAT_LOGISTIC');
+  assert.equal(score.excluded_invalid_records,2);
+  assert.equal(score.status,'INSUFFICIENT_FORWARD_PAIRED_OUTCOMES');
 });
