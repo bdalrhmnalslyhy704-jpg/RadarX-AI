@@ -197,10 +197,10 @@ export class DailyEarlyRiserForwardShadowRuntime{
         candidate?.shock_move_audit_only!==true&&candidate?.candle_baseline&&candidate?.features)
       .sort((a,b)=>(Number(b.cognitive_rank_score??b.score)||0)-
         (Number(a.cognitive_rank_score??a.score)||0));
-    const rowsToAppend=[],stagedPairs=[];
+    const rowsToAppend=[],stagedPairs=[],stagedSymbols=new Set();
     let skippedInvalid=0,skippedCadence=0,skippedDuplicate=0;
     for(const candidate of ranked){
-      if(stagedPairs.length>=this.maxNewSymbolsPerCycle)break;
+      if(stagedSymbols.size>=this.maxNewSymbolsPerCycle)break;
       const symbol=cleanSymbol(candidate.symbol);
       const at=finite(candidate.candle_close_time);
       const cutoff=finite(candidate.feature_information_cutoff_at);
