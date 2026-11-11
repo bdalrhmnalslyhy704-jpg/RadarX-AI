@@ -176,7 +176,7 @@ async function readBoundedOutcomeLedger(path,recordLimit){
 
 
 export class DurableStore {
-  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.preExpansionOutcomeQueue=Promise.resolve();this.preExpansionOutcomeState=null;this.preExpansionOutcomeStateLoaded=false;this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
+  constructor({dir='./.radarx-data'}={}){this.dir=dir;this.queue=Promise.resolve();this.schedulerEventsQueue=Promise.resolve();this.adaptiveTraderStateQueue=Promise.resolve();this.preMoveStateQueue=Promise.resolve();this.preExpansionOutcomeQueue=Promise.resolve();this.dailyForwardShadowQueue=Promise.resolve();this.preExpansionOutcomeState=null;this.preExpansionOutcomeStateLoaded=false;this.ready=false;this.lastWriteAt=null;this.migratedFiles=[];
     this.scanJourneyDir=join(dir,'scan-journeys');
     this.files={scanJourneyManifest:join(dir,'scan-journey-manifest.json'),subscriptions:join(dir,'subscriptions.json'),settings:join(dir,'settings.json'),dedup:join(dir,'dedup.json'),preMoveState:join(dir,'pre-move-state.json'),signalSnapshots:join(dir,'signal-snapshots.json'),
       signals:join(dir,'signals.jsonl'),notifications:join(dir,'notifications.jsonl'),moveAlerts:join(dir,'move-alerts.jsonl'),earlyExpansionAlerts:join(dir,'early-expansion-alerts.jsonl'),preExpansionOutcomes:join(dir,'pre-expansion-outcomes.json'),radarSignalOutcomes:join(dir,'radar-signal-outcomes.json'),
@@ -238,6 +238,35 @@ export class DurableStore {
     const p=this.preExpansionOutcomeQueue.then(fn);
     this.preExpansionOutcomeQueue=p.catch(()=>{});
     return p;
+  }
+  // Forward-shadow ledgers are immutable research records. Keep their append
+  // queue isolated from user-visible radar/archive writes and Adaptive Trader state.
+  async dailyForwardShadowLock(fn){
+    const p=this.dailyForwardShadowQueue.then(fn);
+    this.dailyForwardShadowQueue=p.catch(()=>{});
+    return p;
+  }
+  async appendDailyForwardShadowForecasts(values){
+    const rows=(Array.isArray(values)?values:[values]).filter(row=>
+      row&&typeof row==='object'&&!Array.isArray(row));
+    if(!rows.length)return {written:0};
+    return this.dailyForwardShadowLock(async()=>{
+      await appendFile(this.files.dailyForwardShadowForecasts,
+        rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+      this.lastWriteAt=Date.now();
+      return {written:rows.length};
+    });
+  }
+  async appendDailyForwardShadowResolutions(values){
+    const rows=(Array.isArray(values)?values:[values]).filter(row=>
+      row&&typeof row==='object'&&!Array.isArray(row));
+    if(!rows.length)return {written:0};
+    return this.dailyForwardShadowLock(async()=>{
+      await appendFile(this.files.dailyForwardShadowResolved,
+        rows.map(row=>JSON.stringify(row)).join('\n')+'\n');
+      this.lastWriteAt=Date.now();
+      return {written:rows.length};
+    });
   }
   async readJson(p){try{return JSON.parse(await readFile(p,'utf8'));}catch{return{};}}
   async writeJson(p,v){
