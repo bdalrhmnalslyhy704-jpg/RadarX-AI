@@ -1,0 +1,112 @@
+name: Build 224 Frozen-Census Neural Rebenchmark
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-neural-20261110
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-neural-rebenchmark.yml'
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Completed full-census workflow run ID
+        required: true
+        default: '42898061153'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-early-riser-neural-rebenchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frozen-census-neural-rebenchmark:
+    name: Re-train challengers against the same verified Binance census
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out isolated Build 224 research revision
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Re-run daily label and neural contract tests
+        run: |
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+      - name: Download immutable source census artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-10
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.inputs.source_run_id || '42898061153' }}
+          path: artifacts
+      - name: Verify source files and run updated neural diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-neural-benchmark.json
+      - name: Publish concise target and regime diagnostics
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-neural-benchmark.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Neural benchmark output missing; inspect the failed step logs.\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const rows=Object.entries(report.target_results||{}).map(([target,result])=>({
+            target,
+            samples:result.samples?.accepted??null,
+            neural:result.neural_network?.status??null,
+            neural_trained:result.neural_network?.trained===true,
+            neural_preselection_training:result.neural_network?.preselection_training_samples??null,
+            neural_selection_samples:result.neural_network?.selection_samples??null,
+            neural_selection_positive:result.neural_network?.selection_positive_samples??null,
+            neural_selection_negative:result.neural_network?.selection_negative_samples??null,
+            neural_selection_failure:result.neural_network?.inner_selection_diagnostics?.failure_reason??null,
+            neural_best_inner_candidate:result.neural_network?.inner_selection_diagnostics?.best_candidate??null,
+            gbdt:result.boosted_tree_model?.status??null,
+            gbdt_failure:result.boosted_tree_model?.fit_failure_reason??null,
+            hybrid:result.hybrid_model?.status??null,
+            tcn:result.temporal_tcn?.status??null,
+            tcn_training:result.temporal_tcn?.training_samples??null,
+            tcn_selected_regimes:result.temporal_tcn?.selected_regimes??[],
+            temporal_tree:result.temporal_tree_challenger?.status??null
+          }));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify({status:report.status,source_input_sha256:report.input_sha256,targets:rows,
+              production_touched:false,real_order_execution:false},null,2)+'\n');
+          NODE
+      - name: Upload compact neural benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-frozen-census-neural-rebenchmark-${{ github.run_number }}
+          path: artifacts/daily-early-riser-neural-benchmark.json
+          if-no-files-found: warn
+          retention-days: 30
