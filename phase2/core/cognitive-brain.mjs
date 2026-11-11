@@ -1170,6 +1170,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralL2 = NEURAL_POLICY.l2,
   neuralSelectionMargin = NEURAL_POLICY.selectionMargin,
   neuralInnerSelectionMargin = null,
+  neuralTrainingHistoryFraction = 1.0,
   neuralAnchorAdaptation = 'FROZEN',
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
   maxResolvedSamples = 0
@@ -1372,6 +1373,20 @@ export function buildCognitiveLearningProfile(samples = [], {
     ?neuralCandidateTimes[neuralSelectionCutIndex]:null;
   const neuralTraining=neuralSelectionStartAt===null?[]:neuralCandidateRows.filter(row=>
     row.at<neuralSelectionStartAt&&row.resolved_at<neuralSelectionStartAt);
+  // Restrict the gradient-fit window by distinct timestamps, never by raw row
+  // count, so all symbols observed at one market time stay in the same slice.
+  // The later member-selection/calibration/outer blocks remain untouched.
+  const requestedNeuralHistoryFraction=Number(neuralTrainingHistoryFraction);
+  const effectiveNeuralHistoryFraction=Number.isFinite(requestedNeuralHistoryFraction)
+    ?Math.max(0.35,Math.min(1,requestedNeuralHistoryFraction)):1;
+  const neuralTrainingTimes=[...new Set(neuralTraining.map(row=>row.at))].sort((a,b)=>a-b);
+  const neuralHistoryStartIndex=neuralTrainingTimes.length
+    ?Math.max(0,Math.min(neuralTrainingTimes.length-1,
+      Math.floor(neuralTrainingTimes.length*(1-effectiveNeuralHistoryFraction)))):-1;
+  const neuralHistoryStartAt=neuralHistoryStartIndex>=0
+    ?neuralTrainingTimes[neuralHistoryStartIndex]:null;
+  const neuralModelTraining=neuralHistoryStartAt===null?[]:neuralTraining.filter(row=>
+    row.at>=neuralHistoryStartAt);
   const neuralSelection=neuralCalibrationStartAt===null?[]:neuralCandidateRows.filter(row=>
     row.at>=neuralSelectionStartAt&&row.at<neuralCalibrationStartAt&&
     row.resolved_at<neuralCalibrationStartAt);
@@ -1413,18 +1428,18 @@ export function buildCognitiveLearningProfile(samples = [], {
     row.at>=neuralHybridSelectionStartAt&&row.resolved_at<validationStartAt);
   // Fit the logistic anchor and every nonlinear residual on the earliest
   // chronological training slice only. Selection labels cannot enter gradients.
-  let neuralSameWindowLogisticFit=neuralTraining.length>=neuralMinimum
-    ?fitLogisticModel(neuralTraining,{l2,iterations,learningRate}):null;
-  const neuralFit=neuralTraining.length>=neuralMinimum&&
+  let neuralSameWindowLogisticFit=neuralModelTraining.length>=neuralMinimum
+    ?fitLogisticModel(neuralModelTraining,{l2,iterations,learningRate}):null;
+  const neuralFit=neuralModelTraining.length>=neuralMinimum&&
     neuralSelectionSupportReady&&neuralSameWindowLogisticFit
-    ?fitNeuralEnsemble(neuralTraining,{
+    ?fitNeuralEnsemble(neuralModelTraining,{
       hiddenUnits:NEURAL_POLICY.hiddenUnits,
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit,
       anchorAdaptation:neuralAnchorAdaptation
     }):null;
-  let neuralFinalTraining=neuralTraining;
+  let neuralFinalTraining=neuralModelTraining;
   // Enforce at least the declared V5 challenger margin; caller options may
   // demand a stricter improvement but cannot weaken the 0.003 policy floor.
   const comparisonMargin=effectiveCognitiveChallengerMargin(neuralSelectionMargin);
@@ -1457,7 +1472,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     // Refit only the selected member on the union of model-fit + selection rows.
     // All labels must mature before the separate calibration window begins.
     const selectedIndex=neuralFit.selected_member_index;
-    const refitRows=[...neuralTraining,...neuralSelection]
+    const refitRows=[...neuralModelTraining,...neuralSelection]
       .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
     const refitBaseline=selectedIndex>=0?fitLogisticModel(refitRows,{l2,iterations,learningRate}):null;
     const selectedProfile=selectedIndex>=0?neuralFit.member_training_profiles[selectedIndex]||{}:{};
@@ -1521,7 +1536,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   // member selection and calibration, so it is an honest outer comparison.
   const neuralSelectionFailureReason=!neuralFit
     ?!neuralSameWindowLogisticFit?'NEURAL_SELECTION_LOGISTIC_BASELINE_UNAVAILABLE'
-      :neuralTraining.length<neuralMinimum?'NEURAL_TRAINING_SAMPLE_MINIMUM_NOT_MET'
+      :neuralModelTraining.length<neuralMinimum?'NEURAL_TRAINING_SAMPLE_MINIMUM_NOT_MET'
       :!neuralSelectionSupportReady?'NEURAL_SELECTION_SAMPLE_MINIMUM_NOT_MET'
       :'NEURAL_ENSEMBLE_FIT_FAILED'
     :neuralFit.selected_member_index<0
@@ -1835,7 +1850,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralProbabilityReady=rankingReady&&probabilityReady&&neuralSelected&&
     neuralValidation.evaluated===true&&neuralValidation.beat_base_rate===true&&neuralHoldoutReady&&
     holdoutMetrics.evaluated===true&&holdoutMetrics.beat_base_rate===true;
-  const neuralLiveReady=neuralProbabilityReady&&neuralTraining.length>=NEURAL_POLICY.minTrainingSamples&&
+  const neuralLiveReady=neuralProbabilityReady&&neuralFinalTraining.length>=NEURAL_POLICY.minTrainingSamples&&
     holdout.length>=100;
   const outcomes = {
     up: training.filter(row => row.outcome === 'UP').length,
@@ -1908,8 +1923,12 @@ export function buildCognitiveLearningProfile(samples = [], {
       selection_positive_samples:neuralSelectionPositiveSamples,
       selection_negative_samples:neuralSelectionNegativeSamples,
       selection_support_ready:neuralSelectionSupportReady,
-      training_samples: neuralFit?.training_samples??neuralTraining.length,
+      training_samples: neuralFit?.training_samples??neuralModelTraining.length,
       preselection_training_samples:neuralTraining.length,
+      fit_training_samples:neuralModelTraining.length,
+      training_history_fraction:effectiveNeuralHistoryFraction,
+      training_history_start_at:neuralHistoryStartAt,
+      training_history_end_at:neuralModelTraining.at(-1)?.at??null,
       refit_training_samples:neuralFit?.refit_training_samples??0,
       refit_positive_samples:neuralFit?.refit_positive_samples??0,
       refit_negative_samples:neuralFit?.refit_negative_samples??0,
@@ -1936,7 +1955,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',fitted:false,accepted:false,
         reason:'NEURAL_MODEL_NOT_FITTED'
       },
-      max_training_outcome_resolved_at:neuralTraining.length?Math.max(...neuralTraining.map(row=>row.resolved_at)):null,
+      max_training_outcome_resolved_at:neuralModelTraining.length?Math.max(...neuralModelTraining.map(row=>row.resolved_at)):null,
       max_refit_training_outcome_resolved_at:neuralFit?.refit_max_outcome_resolved_at??null,
       max_selection_outcome_resolved_at:neuralSelection.length?Math.max(...neuralSelection.map(row=>row.resolved_at)):null,
       max_calibration_fit_outcome_resolved_at:neuralCalibrationFit.length?Math.max(...neuralCalibrationFit.map(row=>row.resolved_at)):null,
@@ -1959,7 +1978,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       outer_validation_required_margin:comparisonMargin,
       internal_selection_qualified_members:neuralMemberOrder.length,
       inner_selection_diagnostics:{
-        training_sample_count:neuralTraining.length,
+        training_sample_count:neuralModelTraining.length,
         selection_sample_count:neuralSelection.length,
         selection_positive_samples:neuralSelection.filter(row=>Number(row.target)===1).length,
         selection_negative_samples:neuralSelection.filter(row=>Number(row.target)===0).length,
