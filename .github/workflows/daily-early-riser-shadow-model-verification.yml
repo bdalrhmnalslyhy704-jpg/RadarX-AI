@@ -7,6 +7,8 @@ on:
     paths:
       - 'phase2/tools/verify-daily-early-riser-shadow-models.mjs'
       - 'phase2/core/daily-early-riser-forward-shadow.mjs'
+      - 'phase2/core/daily-early-riser-forward-shadow-runtime.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
       - '.github/workflows/daily-early-riser-shadow-model-verification.yml'
 
 permissions:
@@ -46,6 +48,7 @@ jobs:
           node phase2/tools/verify-daily-early-riser-shadow-models.mjs \
             artifacts/daily-early-riser-neural-benchmark.json \
             artifacts/daily-shadow-model-verification.json \
+            artifacts/daily-forward-shadow-model-bundles.json \
             artifacts/daily-forward-shadow-model-bundles.json
       - name: Publish bundle verification summary
         if: always()
