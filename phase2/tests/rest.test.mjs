@@ -607,3 +607,34 @@ test('TEST_FIXTURE: a long Retry-After never blocks a radar request for hours',a
   assert.equal(calls,1,'while the shared ban is active no extra request should be sent');
   assert.ok(client.health().rate_limited_until>Date.now()+80_000_000);
 });
+
+test('optional Binance REST provenance retains exact response body without polluting shared JSON cache',async()=>{
+  let calls=0;
+  const body=JSON.stringify([[1,'100','101','99','100','10',900000,'100000','20','5','50000','0']]);
+  const client=new RestClient({
+    baseUrls:['https://data-api.binance.vision'],
+    timeoutMs:250,minIntervalMs:0,maxRequestsPerMinute:100,
+    fetchImpl:async url=>{
+      calls++;
+      return {
+        status:200,ok:true,headers:new Map(),
+        text:async()=>body,
+        json:async()=>JSON.parse(body)
+      };
+    }
+  });
+  const ordinary=await client.request('/api/v3/klines',{
+    symbol:'PROVENANCEUSDT',interval:'15m',startTime:1,endTime:900000,limit:1
+  });
+  assert.equal(ordinary.data.length,1);
+  assert.equal(ordinary.responseBody,undefined);
+  const traced=await client.request('/api/v3/klines',{
+    symbol:'PROVENANCEUSDT',interval:'15m',startTime:1,endTime:900000,limit:1
+  },{includeResponseBody:true});
+  assert.equal(calls,2,'provenance request must bypass ordinary cache and fetch the response body');
+  assert.equal(traced.httpStatus,200);
+  assert.equal(traced.responseBody,body);
+  assert.equal(traced.requestUrl,
+    'https://data-api.binance.vision/api/v3/klines?symbol=PROVENANCEUSDT&interval=15m&startTime=1&endTime=900000&limit=1');
+  assert.deepEqual(traced.data,JSON.parse(body));
+});
