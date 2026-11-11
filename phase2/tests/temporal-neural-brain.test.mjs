@@ -10,6 +10,7 @@ import {
   TEMPORAL_SEQUENCE_CHANNELS,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
+  TEMPORAL_GRADIENT_ACCUMULATION,
   TEMPORAL_BRIER_SUPERIORITY_MARGIN,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
@@ -174,6 +175,9 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
+  assert.equal(profile.gradient_accumulation,TEMPORAL_GRADIENT_ACCUMULATION);
+  assert.equal(profile.gradient_accumulation,'IN_PLACE_WEIGHTED_SUM_V1',
+    'full-batch gradient accumulation must reuse its epoch buffers instead of allocating one copy per sample');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
