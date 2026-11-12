@@ -9,6 +9,7 @@ import {
   classifyDailyEarlyRiserTargetSet,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
+import {summarizeDailyTargetDiagnostics} from '../tools/daily-early-riser-historical-census.mjs';
 
 const INTERVAL=15*60*1000;
 const FIVE=5*60*1000;
@@ -277,3 +278,45 @@ test('malformed future OHLC candles are rejected even when timestamps and number
   assert.equal(result.status,'INVALID');
   assert.equal(result.reason,'INVALID_FUTURE_CANDLE');
 });
+
+test('historical report keeps 72h upside events independent from drawdown and separates Micro Watch',()=>{
+  const make=(id,score,up,lane,mae,mfe)=>{
+    const target={status:'RESOLVED',outcome:up?'UP':'FLAT',
+      time_to_target_minutes:up?210:null,max_favorable_excursion_pct:mfe,
+      max_adverse_excursion_pct:mae};
+    const risk={status:'RESOLVED',outcome:mae<=-2?'DOWN':'FLAT',
+      time_to_drawdown_minutes:mae<=-2?90:null,
+      max_adverse_excursion_pct:mae,max_favorable_excursion_pct:mfe};
+    return {
+      id,base_score:score,tier:'WATCH',liquidity_lane:lane,
+      targets:{plus_5_pct:{
+        status:'RESOLVED',outcome:'DOWN',time_to_first_touch_minutes:null,
+        market_move_event:{status:'RESOLVED',outcome:'UP',time_to_target_minutes:210,
+          target_touch_after_adverse_barrier:true,target_and_adverse_touched_same_15m_candle:false}
+      }},
+      opportunity_targets:{'72h':{plus_5_pct:target}},
+      drawdown_risks:{'72h':{minus_2_pct:risk}}
+    };
+  };
+  const summary=summarizeDailyTargetDiagnostics([
+    make('micro-late-rally',0.9,true,'MICRO_WATCH_ONLY_UNDER_750K',-4.2,8.1),
+    make('standard-steady',0.8,false,'STANDARD_750K_PLUS',-1.1,2.0),
+    make('standard-rally',0.7,true,'STANDARD_750K_PLUS',-2.8,6.4),
+    make('micro-no-touch',0.6,false,'MICRO_WATCH_ONLY_UNDER_750K',-0.8,1.2)
+  ],5);
+  const event=summary.independent_opportunity_and_drawdown_diagnostics['72h'].opportunity.plus_5_pct;
+  assert.equal(event.eligible_samples,4);
+  assert.equal(event.upside_events,2);
+  assert.equal(event.no_touch_events,2);
+  assert.equal(event.micro_watch_only.samples,2);
+  assert.equal(event.micro_watch_only.upside_events,1);
+  assert.equal(event.standard_750k_plus.samples,2);
+  assert.equal(event.standard_750k_plus.upside_events,1);
+  const risk=summary.independent_opportunity_and_drawdown_diagnostics['72h']
+    .independent_drawdown_risk.minus_2_pct;
+  assert.equal(risk.eligible_samples,4);
+  assert.equal(risk.drawdown_events,2);
+  assert.equal(summary.tradeable_first_passage.successful_event_count,0);
+  assert.equal(summary.market_move_event.successful_event_count,4);
+});
+
