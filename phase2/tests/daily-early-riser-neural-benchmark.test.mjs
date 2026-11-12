@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
@@ -188,6 +189,65 @@ test('target definitions remain independent for +5%, +10% and +15%',()=>{
   assert.equal(prepareDailyEarlyRiserCognitiveRow(input,15).row.outcome,'FLAT');
 });
 
+
+
+test('72h upside opportunity adapter keeps a later rally positive after an early drawdown',()=>{
+  const at=1_800_000_000_000;
+  const input=sampleWith({at,targetPct:5,outcome:'DOWN'});
+  const label={
+    status:'RESOLVED',outcome:'UP',
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome_source:DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
+    target_definition:'ANY_UPSIDE_TOUCH_PLUS_5_PCT_WITHIN_72H_15M_V1',
+    target_reached:true,first_target_index:210,
+    independent_of_adverse_barrier:true
+  };
+  input.opportunity_targets={'72h':{plus_5_pct:label}};
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'upside_opportunity',horizonHours:72
+  });
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.outcome,'UP');
+  assert.equal(prepared.row.horizon_ms,72*60*60*1000);
+  assert.equal(prepared.row.target_definition,label.target_definition);
+  assert.equal(prepared.row.first_passage,undefined,
+    'opportunity labels must not masquerade as first-passage tradeability labels');
+  assert.deepEqual(prepared.row.outcome_contract,{
+    kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:'UP',
+    horizon_hours:72,independent_of_adverse_barrier:true
+  });
+});
+
+test('temporal TCN accepts the explicitly typed 72h upside contract without relabelling it as first passage',()=>{
+  const at=1_800_000_000_000;
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const row={
+    id:'AAAUSDT:UPSIDE72',symbol:'AAAUSDT',at,
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome:'UP',outcome_source:DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
+    target_definition:'ANY_UPSIDE_TOUCH_PLUS_5_PCT_WITHIN_72H_15M_V1',
+    outcome_contract:{kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:'UP',horizon_hours:72},
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    temporal_sequence:sequence
+  };
+  const result=buildTemporalNeuralProfile([row],{
+    targetDefinition:row.target_definition,
+    outcomeHorizonMs:72*60*60*1000,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE],
+    outcomeContractKind:'UPSIDE_TOUCH'
+  });
+  assert.equal(result.resolved_samples,1);
+  assert.equal(result.target_definition,row.target_definition);
+  assert.equal(result.outcome_contract_kind,'UPSIDE_TOUCH');
+  assert.equal(result.status,'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES');
+});
+
+test('opportunity benchmark refuses the first-passage dataset instead of silently training on the wrong objective',()=>{
+  const input=sampleWith({targetPct:5,outcome:'UP'});
+  assert.equal(prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'upside_opportunity',horizonHours:72
+  }).reason,'LABEL_NOT_RESOLVED');
+});
 
 test('invalid temporal channels are withheld without discarding a valid tabular sample',()=>{
   const input=sampleWith({targetPct:5,outcome:'UP'});
