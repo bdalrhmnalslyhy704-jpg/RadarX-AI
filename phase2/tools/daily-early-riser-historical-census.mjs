@@ -6,6 +6,7 @@ import {appendFile,mkdir,mkdtemp,rename,rm,writeFile} from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {
   parseBinanceSpotKlineArchiveCsv,
   listBinanceSpotArchiveMonths,
@@ -391,7 +392,7 @@ function summarizeIndependentDrawdown(rows,horizonKey,riskKey){
     median_max_favorable_excursion_pct:median(values('max_favorable_excursion_pct'))
   };
 }
-function summarizeTarget(rows,targetPct){
+export function summarizeDailyTargetDiagnostics(rows,targetPct){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   // Tradeability: target must be reached before the -2% adverse barrier.
   const tradeableOutcomes=countsForTarget(rows,key);
@@ -769,7 +770,7 @@ async function main(){
     await reportQueue;
     const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
-      [String(target)+'_PCT',summarizeTarget(allMetricRows,target)]));
+      [String(target)+'_PCT',summarizeDailyTargetDiagnostics(allMetricRows,target)]));
     const archiveFilesExpected=symbols.length*(months.length+dailyDates.length)*2;
     const verified=manifest.filter(row=>row.status==='VERIFIED').length;
     const missing=manifest.filter(row=>row.status==='MISSING').length;
@@ -840,7 +841,9 @@ async function main(){
     await rm(tempDir,{recursive:true,force:true}).catch(()=>{});
   }
 }
-main().catch(error=>{
-  console.error('[DAILY_CENSUS_FATAL] '+String(error?.stack||error));
-  process.exitCode=1;
-});
+if(process.argv[1]&&resolve(process.argv[1])===resolve(fileURLToPath(import.meta.url))){
+  main().catch(error=>{
+    console.error('[DAILY_CENSUS_FATAL] '+String(error?.stack||error));
+    process.exitCode=1;
+  });
+}
