@@ -4,13 +4,13 @@ import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.m
 import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS} from '../core/early-expansion-radar.mjs';
 
 const SYMBOLS=[['INITUSDT',107.41]];
-const EVENT_START=Date.parse('2026-11-09T00:00:00Z');
-const THROUGH='2026-11-11T00:00:00Z';
+const EVENT_START=Date.parse(process.env.INITUSDT_EVENT_START||'2026-11-09T00:00:00Z');
+const THROUGH=process.env.INITUSDT_THROUGH||'2026-11-11T00:00:00Z';
 const CHECKPOINTS=[24,12,6,3,1,.25,(5/60)];
 const throughMs=Date.parse(THROUGH);
 if(!Number.isFinite(throughMs))throw new Error('INVALID_FORENSIC_THROUGH');
 const targetStart=EVENT_START;
-const fetchStart=throughMs-15*24*60*60*1000;
+const fetchStart=targetStart-15*24*60*60*1000;
 
 const rest=new RestClient({
   baseUrls:[
@@ -247,8 +247,14 @@ async function run(){
   const audit=staticRadarAudit();
   const allScores=cases.flatMap(x=>(x.checkpoints||[]).map(c=>Number(c.score_forensic_only)).filter(Number.isFinite));
   const detectedPartial=cases.filter(x=>x.first_partial_evidence?.status==='PARTIAL_EVIDENCE_ONLY').length;
+  const timeline=cases[0]?.full_15m_timeline||[];
+  const first58=cases[0]?.first_klines_only_thresholds?.watch_58||null;
+  const first70=cases[0]?.first_klines_only_thresholds?.pre_expansion_70||null;
+  const first82=cases[0]?.first_klines_only_thresholds?.alert_score_82||null;
   const report={
-    report_version:'RADAR8_FORENSIC_V2',
+    report_version:'RADAR8_INITUSDT_FORENSIC_V1',
+    event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},
+    threshold_summary:{timeline_candles_15m:timeline.length,first_watch_58:first58,first_pre_expansion_70:first70,first_alert_score_82:first82},
     as_of:THROUGH,
     data_policy:{spot_only:true,closed_candles_only:true,no_lookahead_in_features:true,confidence_score:'UNKNOWN',paper_trading:true,real_order_execution:false},
     event_definition:'major move onset = earliest 1m closed candle before the 24h-window peak with a forward 1h high >= max(3%, 18% of expected move), forward 4h high >= max(3%, 12% of expected move), and no prior 1h move reaching the trigger.',
@@ -273,6 +279,13 @@ async function run(){
   md.push('');
   md.push('## Data integrity policy');
   md.push('Only closed Binance Spot candles are used as feature inputs. Historical order-book, historical spread, and historical external-news snapshots are not fabricated; where unavailable the report says INSUFFICIENT_HISTORICAL_EVIDENCE / UNAVAILABLE.');
+  md.push('');
+  md.push('## Threshold crossings (forensic candle-score proxy; not a guaranteed historical push)');
+  md.push(`15m rows evaluated: ${timeline.length}`);
+  md.push(`First >=58 WATCH_EARLY proxy: ${first58?`${first58.close_time} @ ${first58.price}`:'NONE'}`);
+  md.push(`First >=70 PRE_EXPANSION proxy: ${first70?`${first70.close_time} @ ${first70.price}`:'NONE'}`);
+  md.push(`First >=82 alert-score proxy: ${first82?`${first82.close_time} @ ${first82.price}`:'NONE'}`);
+  md.push('A candle-score crossing is not proof of actual alert delivery: historical order-book, spread, market-universe admission, deep-scan scheduling and push logs are not available for this past event.');
   md.push('');
   md.push('## Event definition');
   md.push(report.event_definition);
