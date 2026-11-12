@@ -165,7 +165,7 @@ function zerosLike(value) {
   return 0;
 }
 function zeroTrainableGradients(model) {
-  return {
+  const gradients={
     projectionWeights:zerosLike(model.projectionWeights),
     projectionBiases:zerosLike(model.projectionBiases),
     depthWeights:zerosLike(model.depthWeights),
@@ -173,6 +173,11 @@ function zeroTrainableGradients(model) {
     biases:zerosLike(model.biases),
     outputWeights:zerosLike(model.outputWeights)
   };
+  if(Array.isArray(model.attentionQuery)){
+    gradients.attentionQuery=zerosLike(model.attentionQuery);
+    gradients.attentionPositionBiases=zerosLike(model.attentionPositionBiases);
+  }
+  return gradients;
 }
 export function resetGradientBuffer(target) {
   if(Array.isArray(target)){
@@ -885,15 +890,42 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
     :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brierGradient+0.5*logLossGradient
       :brierGradient;
-  const poolRoutes=Array.isArray(cache.poolRoutes)?cache.poolRoutes:null;
-  for(let feature=0;feature<cache.pooled.length;feature++){
-    const route=poolRoutes?.[feature];
-    if(!route||!Array.isArray(route.time_weights))
-      throw new TypeError('TEMPORAL_POOLING_GRADIENT_ROUTE_MISSING');
-    targetGradients.outputWeights[feature]=error*cache.pooled[feature];
-    for(const item of route.time_weights){
-      activationGradients[dilations.length][item.time][route.channel]+=
-        error*model.outputWeights[feature]*item.weight;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const weights=cache.attention_weights;
+    if(!Array.isArray(weights)||weights.length!==TEMPORAL_SEQUENCE_STEPS||
+      !Array.isArray(targetGradients.attentionQuery)||
+      !Array.isArray(targetGradients.attentionPositionBiases))
+      throw new TypeError('TEMPORAL_ATTENTION_GRADIENT_CACHE_INVALID');
+    const pooledGradient=model.outputWeights.map((weight,feature)=>{
+      targetGradients.outputWeights[feature]=error*cache.pooled[feature];
+      return error*weight;
+    });
+    const scale=1/Math.sqrt(channels);
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      let scoreGradient=0;
+      for(let channel=0;channel<channels;channel++)
+        scoreGradient+=pooledGradient[channel]*(final[time][channel]-cache.pooled[channel]);
+      scoreGradient*=weights[time];
+      targetGradients.attentionPositionBiases[time]+=scoreGradient;
+      for(let channel=0;channel<channels;channel++){
+        activationGradients[dilations.length][time][channel]+=
+          weights[time]*pooledGradient[channel]+
+          scoreGradient*model.attentionQuery[channel]*scale;
+        targetGradients.attentionQuery[channel]+=
+          scoreGradient*final[time][channel]*scale;
+      }
+    }
+  }else{
+    const poolRoutes=Array.isArray(cache.poolRoutes)?cache.poolRoutes:null;
+    for(let feature=0;feature<cache.pooled.length;feature++){
+      const route=poolRoutes?.[feature];
+      if(!route||!Array.isArray(route.time_weights))
+        throw new TypeError('TEMPORAL_POOLING_GRADIENT_ROUTE_MISSING');
+      targetGradients.outputWeights[feature]=error*cache.pooled[feature];
+      for(const item of route.time_weights){
+        activationGradients[dilations.length][item.time][route.channel]+=
+          error*model.outputWeights[feature]*item.weight;
+      }
     }
   }
   for(let layer=dilations.length-1;layer>=0;layer--){
@@ -1086,7 +1118,11 @@ function fitMember(rows, seed, {
   const trainableParameters=()=>({
     projectionWeights:model.projectionWeights,projectionBiases:model.projectionBiases,
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
-    biases:model.biases,outputWeights:model.outputWeights
+    biases:model.biases,outputWeights:model.outputWeights,
+    ...(Array.isArray(model.attentionQuery)?{
+      attentionQuery:model.attentionQuery,
+      attentionPositionBiases:model.attentionPositionBiases
+    }:{})
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
@@ -1105,7 +1141,7 @@ function fitMember(rows, seed, {
       weightedObjectiveLoss+=rowLoss*sampleWeight;
       if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
       else negativeObjectiveLoss+=rowLoss;
-      for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
+      for (const key of Object.keys(gradient)) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
