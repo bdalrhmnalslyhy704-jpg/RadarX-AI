@@ -1,1 +1,14 @@
-Build 224 full opportunity research validation at latest audited code revision. Checksum-verified Binance Spot monthly archives plus complete daily archives through 2026-11-11 UTC. Preserve 24h first-passage labels and independent +5/+10/+15 upside touch labels at 24h/48h/72h with separate -2%/-5% drawdown outcomes. Enforce exact presence, source, definition, OHLC validity and maturity of all 9 opportunity labels and all 6 drawdown labels per sample. Non-overlapping 72h anchors. Sub-750k USDT stays MICRO_WATCH_ONLY_UNDER_750K; verify lane metadata, never standard-alert eligible. Train +5% 72h MLP/GBDT/hybrid/24x29 TCN challengers against same-window logistic; unchanged 0.003 Brier margin, chronological horizon purge, untampered holdout. Verify sidecar SHA-256, paper-only, no production changes, merge, deployment or exchange orders.
+Build 224 risk-aware safe-entry research validation at the latest audited code revision.
+
+Replay checksum-verified official Binance Spot monthly archives plus complete daily archives through 2026-11-11 UTC. Use closed 15m and 5m candles only, feature cutoff exactly at the baseline candle close, and non-overlapping 72h anchors.
+
+Preserve the 24h first-passage labels. Separately calculate:
+- upside opportunity touch labels for +5%, +10%, +15% at 24h/48h/72h, independent of drawdown;
+- independent -2%/-5% drawdown labels at 24h/48h/72h;
+- safe first-touch labels: +5%/+10%/+15% must be touched before -2% within the same 24h/48h/72h horizon; same-15m-candle ordering is AMBIGUOUS and excluded from supervised fit.
+
+Strictly audit exact presence, outcomes, sources, definitions, horizons, maturity, OHLC continuity, 24x29 temporal sidecar identity/SHA-256, and liquidity lane for all labels. Preserve the 750,000 USDT normal liquidity threshold. Any sample below 750,000 USDT remains MICRO_WATCH_ONLY_UNDER_750K and must never become standard-entry eligible.
+
+Train +5% / 72h safe-first-touch MLP, GBDT, and hybrid challengers in an isolated tabular run; train the 24x29 TCN separately on the exact same safe target. Compare each neural/hybrid challenger against a chronological, same-window Logistic baseline with the unchanged >0.003 Brier improvement requirement on validation and untouched holdout, purged horizon boundaries, disjoint calibration/selection blocks, and no peeking.
+
+This is research-only. Paper trading remains true; real order execution false. Do not touch production, merge, deploy, relax liquidity, or place exchange orders.
