@@ -116,11 +116,12 @@ function cleanRows(samples, {
     ? new Set(allowedOutcomeSources.map(String)) : null;
   const seen = new Set();
   return (Array.isArray(samples) ? samples : []).filter(row => {
+    const labelContract=row?.label_contract??row?.first_passage;
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
         row.target_definition !== targetDefinition ||
-        row.first_passage?.path_resolution !== '15M' ||
-        row.first_passage?.outcome !== row.outcome ||
+        labelContract?.path_resolution !== '15M' ||
+        labelContract?.outcome !== row.outcome ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
         !(allowedSources ? allowedSources.has(String(row.outcome_source || '')) :
           row.outcome_source === (row.historical_baseline === true
