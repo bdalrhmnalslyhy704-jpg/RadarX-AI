@@ -21,6 +21,7 @@ import {
   DAILY_EARLY_RISER_HORIZON_BARS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS,
+  DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
 
@@ -64,7 +65,8 @@ const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 export function auditSampleLabelHorizons(samples,{
   opportunityHorizonsHours=[24,48,72],drawdownAdversePcts=[2,5]
 }={}){
-  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0,laneViolations=0;
+  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0,
+    safeFirstTouchViolations=0,laneViolations=0;
   const targets=[...DAILY_EARLY_RISER_TARGETS_PCT];
   const horizons=[...new Set(opportunityHorizonsHours.map(finite)
     .filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))];
@@ -72,7 +74,8 @@ export function auditSampleLabelHorizons(samples,{
     .filter(value=>value!==null&&value>0&&value<=50))];
   for(const sample of Array.isArray(samples)?samples:[]){
     const at=finite(sample?.at),volume=finite(sample?.quote_volume_24h);
-    if(at===null){firstPassageViolations++;opportunityViolations++;drawdownViolations++;continue;}
+    if(at===null){firstPassageViolations++;opportunityViolations++;drawdownViolations++;
+      safeFirstTouchViolations++;continue;}
     if(volume===null||
       sample.liquidity_lane!==(volume>=750000?'STANDARD_750K_PLUS':'MICRO_WATCH_ONLY_UNDER_750K'))
       laneViolations++;
@@ -112,14 +115,29 @@ export function auditSampleLabelHorizons(samples,{
           label.independent_of_upside_barrier!==true)
           drawdownViolations++;
       }
+      for(const target of targets){
+        const key='plus_'+String(target).replace('.','_')+'_pct';
+        const label=sample.safe_opportunity_targets?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+        const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+        if(!label||(!validResolved&&!validAmbiguous)||
+          label.outcome_source!==DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE||
+          label.target_definition!=='FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_future_after_first_touch!==true)
+          safeFirstTouchViolations++;
+      }
     }
   }
   return {
     first_passage_horizon_violations:firstPassageViolations,
     opportunity_horizon_violations:opportunityViolations,
     drawdown_horizon_violations:drawdownViolations,
+    safe_first_touch_horizon_violations:safeFirstTouchViolations,
     liquidity_lane_violations:laneViolations,
-    total:firstPassageViolations+opportunityViolations+drawdownViolations+laneViolations
+    total:firstPassageViolations+opportunityViolations+drawdownViolations+
+      safeFirstTouchViolations+laneViolations
   };
 }
 
