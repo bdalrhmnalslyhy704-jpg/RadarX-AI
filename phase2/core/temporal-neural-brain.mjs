@@ -2815,7 +2815,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     trainable_parameter_count:TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
     training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
-    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT,
       Math.trunc(Number(regimeLocalTcnMultiscaleMaxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES))),
     target_definition:targetDefinition,
     trained:regimeLocalTcnMultiscaleSupportedRegimes.length>0,
