@@ -129,7 +129,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
       Math.sin((time+1)*(channel+2)*0.017)*0.8+
       Math.cos((time+3)*(channel+1)*0.011)*0.2));
   const report=benchmarkTemporalTrainingWorkspace(sequence,1,{
-    iterations:12,warmupIterations:2,measurementRounds:2
+    iterations:40,warmupIterations:6,measurementRounds:3
   });
   console.log('[TCN_WORKSPACE_THROUGHPUT_SUMMARY]',JSON.stringify({
     measured_cases:report.measured_cases,
@@ -144,7 +144,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
   assert.equal(report.measured_cases,9);
-  assert.equal(report.measurement_rounds,2);
+  assert.equal(report.measurement_rounds,3);
   assert.equal(report.changes_training_math,false);
   assert.equal(report.all_checksums_finite,true);
   assert.ok(report.results.every(row=>
