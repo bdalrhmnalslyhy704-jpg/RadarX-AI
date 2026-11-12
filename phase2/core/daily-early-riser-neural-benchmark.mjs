@@ -145,7 +145,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
       Math.trunc(options.temporalRegimeLocalTcnMaxTrainingSamples||4096))),
     regimeLocalTcnEpochs:Math.max(1,Math.min(8,
-      Math.trunc(options.temporalRegimeLocalTcnEpochs||6)))
+      Math.trunc(options.temporalRegimeLocalTcnEpochs||6))),
+    enableRegimeLocalTcnPyramid:options.enableRegimeLocalTcnPyramid!==false,
+    regimeLocalTcnPyramidMaxTrainingSamples:Math.max(80,Math.min(4096,
+      Math.trunc(options.temporalRegimeLocalTcnPyramidMaxTrainingSamples||4096))),
+    regimeLocalTcnPyramidEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6)))
   });
   const temporalTree=temporal.temporal_boosted_tree||{};
   const profile=buildCognitiveLearningProfile(rows,{
@@ -256,6 +261,35 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       regime_specialists:temporal.regime_specialists??null,
       supported_regimes:temporal.supported_regimes??[],
       selected_regimes:temporal.selected_regimes??[]
+    },
+    temporal_regime_local_tcn_pyramid_challenger:{
+      status:temporal.regime_local_tcn_pyramid_challenger?.status??'NOT_EVALUATED',
+      model_kind:temporal.regime_local_tcn_pyramid_challenger?.model_kind??'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1',
+      architecture:temporal.regime_local_tcn_pyramid_challenger?.architecture??null,
+      temporal_pooling:temporal.regime_local_tcn_pyramid_challenger?.temporal_pooling??null,
+      pooling_segments:temporal.regime_local_tcn_pyramid_challenger?.pooling_segments??0,
+      output_features:temporal.regime_local_tcn_pyramid_challenger?.output_features??0,
+      trainable_parameter_count:temporal.regime_local_tcn_pyramid_challenger?.trainable_parameter_count??0,
+      training_strategy:temporal.regime_local_tcn_pyramid_challenger?.training_strategy??null,
+      training_sample_budget:temporal.regime_local_tcn_pyramid_challenger?.training_sample_budget??0,
+      trained:temporal.regime_local_tcn_pyramid_challenger?.trained===true,
+      selected_for_research:temporal.regime_local_tcn_pyramid_challenger?.selected_for_research===true,
+      research_out_of_sample_validated:temporal.regime_local_tcn_pyramid_challenger?.research_out_of_sample_validated===true,
+      probability_ready:false,live_eligibility_ready:false,
+      supported_regimes:temporal.regime_local_tcn_pyramid_challenger?.supported_regimes??[],
+      validation_selected_regimes:temporal.regime_local_tcn_pyramid_challenger?.validation_selected_regimes??[],
+      selected_regimes:temporal.regime_local_tcn_pyramid_challenger?.selected_regimes??[],
+      training_samples:temporal.regime_local_tcn_pyramid_challenger?.training_samples??0,
+      selection_samples:temporal.regime_local_tcn_pyramid_challenger?.selection_samples??0,
+      calibration_samples:temporal.regime_local_tcn_pyramid_challenger?.calibration_samples??0,
+      validation_samples:temporal.regime_local_tcn_pyramid_challenger?.validation_samples??0,
+      validation:temporal.regime_local_tcn_pyramid_challenger?.validation??null,
+      validation_logistic:temporal.regime_local_tcn_pyramid_challenger?.validation_logistic??null,
+      holdout_samples:temporal.regime_local_tcn_pyramid_challenger?.holdout_samples??0,
+      holdout:temporal.regime_local_tcn_pyramid_challenger?.holdout??null,
+      holdout_logistic:temporal.regime_local_tcn_pyramid_challenger?.holdout_logistic??null,
+      holdout_comparison:temporal.regime_local_tcn_pyramid_challenger?.holdout_comparison??null,
+      regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{}
     },
     temporal_regime_local_tcn_challenger:{
       status:temporal.regime_local_tcn_challenger?.status??'NOT_EVALUATED',
