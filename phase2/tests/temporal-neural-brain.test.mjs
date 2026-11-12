@@ -32,8 +32,12 @@ import {
   TEMPORAL_MULTISCALE_RECEPTIVE_FIELD,
   TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+  TEMPORAL_ATTENTION_POOLING_MODE,
+  TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+  TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
   poolOrderedTemporalSegments,
   poolMultiscaleTemporalSegments,
+  poolLearnedTemporalAttention,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalProbability
@@ -90,9 +94,9 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
   assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
   assert.equal(report.input_shape[0],24);
   assert.equal(report.input_shape[1],29);
-  assert.equal(report.pooling_modes.length,3);
+  assert.equal(report.pooling_modes.length,4);
   assert.equal(report.objectives.length,3);
-  assert.equal(report.results.length,9);
+  assert.equal(report.results.length,12);
   assert.ok(report.checked_parameter_derivatives>=100);
   assert.equal(report.failed_parameter_derivatives,0,
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
@@ -113,7 +117,7 @@ test('reused TCN training workspace is numerically equivalent to allocation-base
     passed:report.passed
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
-  assert.equal(report.result_cases,18);
+  assert.equal(report.result_cases,24);
   assert.ok(report.results.every(row=>
     row.output_values_compared>0&&row.gradient_values_compared>0));
   assert.ok(report.maximum_output_absolute_error<=1e-12,
@@ -143,7 +147,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
     }))
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
-  assert.equal(report.measured_cases,9);
+  assert.equal(report.measured_cases,12);
   assert.equal(report.measurement_rounds,3);
   assert.equal(report.changes_training_math,false);
   assert.equal(report.all_checksums_finite,true);
@@ -200,6 +204,30 @@ test('V10 full-window multiscale pooling preserves segment means, endpoints and 
     'non-numeric latent values must fail closed');
   assert.equal(poolMultiscaleTemporalSegments(linear.slice(1)),null,
     'incomplete windows must fail closed');
+});
+
+test('V11 learned temporal query attention focuses probability mass on informative relative-time steps',()=>{
+  const latent=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_LATENT_CHANNELS},(_,channel)=>channel===0?time/24:0));
+  const query=Array.from({length:TEMPORAL_LATENT_CHANNELS},(_,channel)=>channel===0?1:0);
+  const biases=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+  const pooled=poolLearnedTemporalAttention(latent,query,biases);
+  assert.equal(TEMPORAL_ATTENTION_POOLING_MODE,'LEARNED_QUERY_TIME_ATTENTION_V1');
+  assert.equal(TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11');
+  assert.equal(TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+    TEMPORAL_TRAINABLE_PARAMETER_COUNT+TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS);
+  assert.ok(pooled);
+  assert.equal(pooled.features.length,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(pooled.weights.length,TEMPORAL_SEQUENCE_STEPS);
+  assert.ok(Math.abs(pooled.weights.reduce((sum,value)=>sum+value,0)-1)<1e-12);
+  assert.ok(pooled.weights.every(value=>value>0&&Number.isFinite(value)));
+  assert.ok(pooled.weights.at(-1)>pooled.weights[0],
+    'query attention should assign more mass to higher query-aligned latent activations');
+  assert.ok(pooled.features[0]>latent.reduce((sum,row)=>sum+row[0],0)/TEMPORAL_SEQUENCE_STEPS,
+    'attention-weighted features should differ from a uniform temporal mean');
+  assert.equal(poolLearnedTemporalAttention(latent,query.slice(1),biases),null);
+  assert.equal(poolLearnedTemporalAttention(latent,query,biases.slice(1)),null);
 });
 
 test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
