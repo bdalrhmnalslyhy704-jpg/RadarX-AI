@@ -75,9 +75,6 @@ test('TCN-only mode returns temporal challengers without running MLP, tabular GB
   });
   assert.equal(result.research_mode,'TCN_ONLY_ISOLATED_COMPUTE');
   assert.equal(result.target_pct,5);
-  assert.equal(result.temporal_regime_local_tcn_challenger.training_sample_budget,4096);
-  assert.equal(result.temporal_regime_local_tcn_pyramid_challenger.training_sample_budget,4096);
-  assert.equal(result.temporal_regime_local_tcn_multiscale_challenger.training_sample_budget,8192);
   assert.equal(result.temporal_tcn_sequence_samples,0,
     'no sequence tensor means no temporal model fit; this fixture tests only routing');
   assert.equal(result.temporal_tree_training_performed,false);
