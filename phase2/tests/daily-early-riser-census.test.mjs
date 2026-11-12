@@ -189,7 +189,7 @@ test('72h upside opportunity remains positive after an earlier drawdown; risk is
   const baseline=baselineCandle();
   const future=pathAfterBars(baseline,288,(row,index)=>{
     if(index===5)return {...row,low:97.5,high:100.4,close:98.1};
-    if(index===210)return {...row,low:101,high:106.4,close:105.8};
+    if(index===210)return {...row,open:101.5,low:101,high:106.4,close:105.8};
     return row;
   });
   const upside=classifyDailyEarlyRiserUpsideOpportunity({
