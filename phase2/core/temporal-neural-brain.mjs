@@ -1816,7 +1816,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture,target_definition:targetDefinition,temporal_label_resolution:'15M_ONLY',
+    architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
@@ -1854,7 +1854,7 @@ export function buildTemporalNeuralProfile(samples = [], {
      holdout.length<minimumHoldoutSamples){
     return{
       status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-      architecture,target_definition:targetDefinition,
+      architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,
       temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
