@@ -22,6 +22,15 @@ export const TEMPORAL_GRADIENT_BUFFER_SCOPE='TRAINABLE_PARAMETERS_ONLY_REUSED_RO
 export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES=4096;
 export const TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY='INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
+export const TEMPORAL_ORDERED_POOLING_MODE='ORDERED_FOUR_SEGMENT_MEAN_V1';
+export const TEMPORAL_ORDERED_POOLING_SEGMENTS=4;
+export const TEMPORAL_ORDERED_POOLING_FEATURE_COUNT=
+  TEMPORAL_LATENT_CHANNELS*TEMPORAL_ORDERED_POOLING_SEGMENTS;
+export const TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT=
+  TEMPORAL_TRAINABLE_PARAMETER_COUNT-
+  TEMPORAL_LATENT_CHANNELS+TEMPORAL_ORDERED_POOLING_FEATURE_COUNT;
+export const TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE=
+  'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_ORDERED_FOUR_SEGMENT_POOLING_V9';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -250,7 +259,7 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
   return { parameters: next.value, state: { m: next.moment, v: next.variance } };
 }
 
-function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
+function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPoolingMode='LAST_12_MEAN_V1') {
   const inputChannels=TEMPORAL_SEQUENCE_CHANNELS;
   const channels=TEMPORAL_LATENT_CHANNELS;
   const layers=DILATIONS.length;
@@ -271,8 +280,13 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
   const biases=Array.from({length:layers},(_,layer)=>
     Array.from({length:channels},(_,channel)=>
       0.002*Math.sin((layer+1)*5.3+(channel+1)*1.7+offset)));
-  const outputWeights=Array.from({length:channels},(_,channel)=>
-    0.01*Math.sin((channel+1)*4.73+offset));
+  const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
+  const outputFeatureCount=orderedPooling
+    ?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:channels;
+  const trainableParameterCount=TEMPORAL_TRAINABLE_PARAMETER_COUNT-
+    channels+outputFeatureCount;
+  const outputWeights=Array.from({length:outputFeatureCount},(_,feature)=>
+    0.01*Math.sin((feature+1)*4.73+offset));
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
   const baselineWeights=Array.isArray(baselineFit?.weights)&&
     baselineFit.weights.length===inputChannels*2
@@ -284,8 +298,34 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null) {
     projectionWeights,projectionBiases,depthWeights,pointWeights,biases,outputWeights,
     skipWeights:baselineWeights,outputBias:baselineBias,baseline_by_regime:null,
     residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR',
-    latent_channels:channels,trainable_parameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT
+    temporal_pooling:temporalPoolingMode,
+    output_features:outputFeatureCount,
+    latent_channels:channels,trainable_parameters:trainableParameterCount
   };
+}
+
+/**
+ * Preserve the order of a full 24-step latent sequence by averaging four
+ * contiguous six-step segments independently. The output layout is
+ * [segment_0 channels..., segment_1 channels..., segment_2..., segment_3...].
+ */
+export function poolOrderedTemporalSegments(latentRows){
+  if(!Array.isArray(latentRows)||latentRows.length!==TEMPORAL_SEQUENCE_STEPS||
+    latentRows.some(row=>!Array.isArray(row)||row.length!==TEMPORAL_LATENT_CHANNELS||
+      row.some(value=>!Number.isFinite(Number(value)))))return null;
+  const features=[],poolSegments=[];
+  for(let segment=0;segment<TEMPORAL_ORDERED_POOLING_SEGMENTS;segment++){
+    const start=Math.floor(segment*latentRows.length/TEMPORAL_ORDERED_POOLING_SEGMENTS);
+    const end=Math.floor((segment+1)*latentRows.length/TEMPORAL_ORDERED_POOLING_SEGMENTS);
+    const count=end-start,featureOffset=features.length;
+    for(let channel=0;channel<TEMPORAL_LATENT_CHANNELS;channel++){
+      let sum=0;
+      for(let time=start;time<end;time++)sum+=Number(latentRows[time][channel]);
+      features.push(sum/Math.max(1,count));
+    }
+    poolSegments.push({start,count,feature_offset:featureOffset,segment_index:segment});
+  }
+  return {features,poolSegments};
 }
 
 function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=null) {
@@ -317,10 +357,21 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     }));
     depthCaches.push(depth);activations.push(output);
   }
-  const final=activations.at(-1),poolStart=Math.max(0,final.length-12);
-  const pooled=Array(channels).fill(0),poolCount=final.length-poolStart;
-  for(let time=poolStart;time<final.length;time++){
-    for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
+  const final=activations.at(-1);
+  let pooled,poolSegments,poolStart,poolCount;
+  if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+    const pyramid=poolOrderedTemporalSegments(final);
+    if(!pyramid)throw new TypeError('TEMPORAL_ORDERED_POOLING_INPUT_INVALID');
+    pooled=pyramid.features;poolSegments=pyramid.poolSegments;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+  }else{
+    poolStart=Math.max(0,final.length-12);
+    poolCount=final.length-poolStart;
+    pooled=Array(channels).fill(0);
+    for(let time=poolStart;time<final.length;time++){
+      for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
+    }
+    poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
   }
   const baselineFeatures=isValidTemporalPooledBaselineFeatures(precomputedBaselineFeatures)
     ?precomputedBaselineFeatures:pooledSequence(sequence);
@@ -332,10 +383,10 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     logit+=baselineFeatures[feature]*(Number(baselineWeights?.[feature])||0);
   }
   const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
-  for(let channel=0;channel<pooled.length;channel++){
-    logit+=pooled[channel]*model.outputWeights[channel]*boundedResidualScale;
+  for(let feature=0;feature<pooled.length;feature++){
+    logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
   }
-  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,baselineFeatures};
+  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,baselineFeatures};
 }
 
 function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
@@ -353,11 +404,17 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
     :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brierGradient+0.5*logLossGradient
       :brierGradient;
-  for(let channel=0;channel<channels;channel++){
-    targetGradients.outputWeights[channel]=error*cache.pooled[channel];
-    for(let time=cache.poolStart;time<final.length;time++){
+  const poolSegments=Array.isArray(cache.poolSegments)&&cache.poolSegments.length
+    ?cache.poolSegments:[{start:cache.poolStart,count:cache.poolCount,feature_offset:0,segment_index:0}];
+  for(let feature=0;feature<cache.pooled.length;feature++){
+    const segmentIndex=Math.floor(feature/channels);
+    const channel=feature%channels;
+    const segment=poolSegments[segmentIndex];
+    if(!segment)throw new TypeError('TEMPORAL_POOLING_GRADIENT_SEGMENT_MISSING');
+    targetGradients.outputWeights[feature]=error*cache.pooled[feature];
+    for(let time=segment.start;time<segment.start+segment.count;time++){
       activationGradients[DILATIONS.length][time][channel]+=
-        error*model.outputWeights[channel]/cache.poolCount;
+        error*model.outputWeights[feature]/segment.count;
     }
   }
   for(let layer=DILATIONS.length-1;layer>=0;layer--){
@@ -406,9 +463,10 @@ function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-  positiveClassWeighting='NONE'
+  positiveClassWeighting='NONE',
+  temporalPoolingMode='LAST_12_MEAN_V1'
 } = {}) {
-  const model = initializeModel(seed,baseRate,baselineFit);
+  const model = initializeModel(seed,baseRate,baselineFit,temporalPoolingMode);
   const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
   const negativeSamples=Math.max(0,rows.length-positiveSamples);
   const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
@@ -812,17 +870,24 @@ function fitEnsemble(rows, options = {}) {
   const baseEpochs=Math.max(1,Math.trunc(Number(options.epochs)||10));
   const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
   const baseL2=Math.max(0,Number(options.l2)||0.012);
+  const temporalPoolingMode=String(options.temporalPoolingMode||'LAST_12_MEAN_V1');
+  const outputFeatureCount=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+    ?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:TEMPORAL_LATENT_CHANNELS;
+  const trainableParameterCount=TEMPORAL_TRAINABLE_PARAMETER_COUNT-
+    TEMPORAL_LATENT_CHANNELS+outputFeatureCount;
+  const architecture=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+    ?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:TEMPORAL_TRAINABLE_PARAMETER_COUNT}
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode}
   ];
   // These features depend only on the immutable 24x29 input, not on model
   // weights. Prepare them once and reuse across all epochs and ensemble members.
@@ -834,8 +899,13 @@ function fitEnsemble(rows, options = {}) {
   }));
   return {
     members,seeds:[...SEEDS],
-    architecture:TEMPORAL_MODEL_ARCHITECTURE,
-    training_strategy:'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
+    architecture,
+    temporal_pooling:temporalPoolingMode,
+    output_features:outputFeatureCount,
+    trainable_parameter_count:trainableParameterCount,
+    training_strategy:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+      ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
+      :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
@@ -860,6 +930,7 @@ function fitRegimeLocalTemporalTcn({
   validationRows=[],holdoutRows=[],epochs=6,learningRate=0.006,l2=0.012,
   comparisonMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN,
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  temporalPoolingMode='LAST_12_MEAN_V1',
   minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
   minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
   minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
@@ -913,8 +984,13 @@ function fitRegimeLocalTemporalTcn({
   if(!chronologyValid)supportGaps.push('REGIME_LOCAL_CHRONOLOGY_OR_PURGE_VIOLATION');
   const base={
     regime,status:supportGaps.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':'READY_FOR_REGIME_LOCAL_TCN_FIT',
+    model_kind:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+      ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
-    training_strategy:TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    temporal_pooling:temporalPoolingMode,
+    training_strategy:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+      ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
+      :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
     training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
     training_sample_budget:limit,
     training_samples:training.length,available_training_samples:allTraining.length,
@@ -951,7 +1027,7 @@ function fitRegimeLocalTemporalTcn({
   const baseline=fitLogistic(training);
   const fitted=fitEnsemble(training,{
     epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
-    learningRate,l2,baseRate,baselineFit:baseline
+    learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode
   });
   const selectionLogistic=evaluate(selection,
     sequence=>predictLogistic(sequence,baseline),baseRate);
@@ -1032,6 +1108,9 @@ function fitRegimeLocalTemporalTcn({
       holdoutPassed?'REGIME_LOCAL_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY':
       'REGIME_LOCAL_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
     model_architecture:fitted.architecture,
+    temporal_pooling:fitted.temporal_pooling,
+    output_features:fitted.output_features,
+    trainable_parameter_count:fitted.trainable_parameter_count,
     model_training_strategy:fitted.training_strategy,
     trained:true,selected_for_research:validationPassed,
     validation_passed:validationPassed,holdout_passed:holdoutPassed,
@@ -1095,7 +1174,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   allowedOutcomeSources=null,
   enableRegimeLocalTcn=false,
   regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
-  regimeLocalTcnEpochs=6
+  regimeLocalTcnEpochs=6,
+  enableRegimeLocalTcnPyramid=false,
+  regimeLocalTcnPyramidMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  regimeLocalTcnPyramidEpochs=6
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
@@ -1394,6 +1476,7 @@ export function buildTemporalNeuralProfile(samples = [], {
 
   const regimeResults={};
   const regimeLocalTcnResults={};
+  const regimeLocalTcnPyramidResults={};
   const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -1549,6 +1632,33 @@ export function buildTemporalNeuralProfile(samples = [], {
         model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_V1',
         model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
         training_strategy:TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+        training_samples:0,trained:false,selected_for_research:false,
+        validation_passed:false,holdout_passed:false,probability_ready:false,
+        live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
+      };
+    regimeLocalTcnPyramidResults[regime]=enableRegimeLocalTcnPyramid
+      ?fitRegimeLocalTemporalTcn({
+        regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
+        calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
+        epochs:regimeLocalTcnPyramidEpochs,learningRate,l2,comparisonMargin,
+        maxTrainingSamples:regimeLocalTcnPyramidMaxTrainingSamples,
+        temporalPoolingMode:TEMPORAL_ORDERED_POOLING_MODE,
+        minTrainingSamples:minRegimeTraining,
+        minTrainingPositive:minRegimeTrainingPositive,
+        minTrainingNegative:minRegimeNegative,
+        minSelectionSamples,minSelectionPositive,minSelectionNegative,
+        minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+        minValidationSamples:minRegimeValidation,minValidationPositive:minRegimePositive,
+        minValidationNegative:minRegimeNegative,
+        minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
+        minHoldoutNegative:minRegimeNegative
+      })
+      :{
+        regime,status:'NOT_ENABLED_FOR_THIS_PROFILE',
+        model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1',
+        model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+        temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE,
+        training_strategy:'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1',
         training_samples:0,trained:false,selected_for_research:false,
         validation_passed:false,holdout_passed:false,probability_ready:false,
         live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
@@ -1998,6 +2108,81 @@ export function buildTemporalNeuralProfile(samples = [], {
     },
     regime_specialists:regimeLocalTcnResults
   };
+  const regimeLocalTcnPyramidSupportedRegimes=regimes.filter(regime=>
+    regimeLocalTcnPyramidResults[regime]?.trained===true);
+  const regimeLocalTcnPyramidValidationRegimes=regimes.filter(regime=>
+    regimeLocalTcnPyramidResults[regime]?.validation_passed===true);
+  const regimeLocalTcnPyramidSelectedRegimes=regimes.filter(regime=>
+    regimeLocalTcnPyramidResults[regime]?.holdout_passed===true);
+  const regimeLocalTcnPyramidValidation=aggregateEvaluations(
+    regimeLocalTcnPyramidSupportedRegimes.map(regime=>regimeLocalTcnPyramidResults[regime]?.validation));
+  const regimeLocalTcnPyramidValidationLogistic=aggregateEvaluations(
+    regimeLocalTcnPyramidSupportedRegimes.map(regime=>regimeLocalTcnPyramidResults[regime]?.validation_logistic));
+  const regimeLocalTcnPyramidHoldout=aggregateEvaluations(
+    regimeLocalTcnPyramidSelectedRegimes.map(regime=>regimeLocalTcnPyramidResults[regime]?.holdout));
+  const regimeLocalTcnPyramidHoldoutLogistic=aggregateEvaluations(
+    regimeLocalTcnPyramidSelectedRegimes.map(regime=>regimeLocalTcnPyramidResults[regime]?.holdout_logistic));
+  const regimeLocalTcnPyramidTrainingSamples=regimeLocalTcnPyramidSupportedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnPyramidResults[regime]?.training_samples||0),0);
+  const regimeLocalTcnPyramidHoldoutSamples=regimeLocalTcnPyramidSelectedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnPyramidResults[regime]?.holdout?.sample_count||0),0);
+  const regimeLocalTcnPyramidProfile={
+    status:!regimeLocalTcnPyramidSupportedRegimes.length?'WAITING_FOR_ORDERED_POOLING_TCN_SUPPORT':
+      !regimeLocalTcnPyramidValidationRegimes.length?'ORDERED_POOLING_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !regimeLocalTcnPyramidSelectedRegimes.length?'ORDERED_POOLING_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'ORDERED_POOLING_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    architecture:TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+    model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1',
+    temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE,
+    pooling_segments:TEMPORAL_ORDERED_POOLING_SEGMENTS,
+    output_features:TEMPORAL_ORDERED_POOLING_FEATURE_COUNT,
+    trainable_parameter_count:TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT,
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+      Math.trunc(Number(regimeLocalTcnPyramidMaxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES))),
+    target_definition:targetDefinition,
+    trained:regimeLocalTcnPyramidSupportedRegimes.length>0,
+    selected_for_research:regimeLocalTcnPyramidValidationRegimes.length>0,
+    research_out_of_sample_validated:regimeLocalTcnPyramidSelectedRegimes.length>0,
+    probability_ready:false,live_eligibility_ready:false,
+    supported_regimes:regimeLocalTcnPyramidSupportedRegimes,
+    validation_selected_regimes:regimeLocalTcnPyramidValidationRegimes,
+    selected_regimes:regimeLocalTcnPyramidSelectedRegimes,
+    training_samples:regimeLocalTcnPyramidTrainingSamples,
+    selection_samples:regimeLocalTcnPyramidSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnPyramidResults[regime]?.selection_samples||0),0),
+    calibration_samples:regimeLocalTcnPyramidSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnPyramidResults[regime]?.calibration_samples||0),0),
+    validation_samples:regimeLocalTcnPyramidValidation.sample_count||0,
+    validation:regimeLocalTcnPyramidValidation,
+    validation_logistic:regimeLocalTcnPyramidValidationLogistic,
+    holdout_samples:regimeLocalTcnPyramidHoldout.sample_count||0,
+    holdout:regimeLocalTcnPyramidHoldout,
+    holdout_logistic:regimeLocalTcnPyramidHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:regimeLocalTcnPyramidHoldout.model_brier_score??null,
+      logistic_brier_score:regimeLocalTcnPyramidHoldoutLogistic.model_brier_score??null,
+      beats_base_rate:regimeLocalTcnPyramidHoldout.beat_base_rate===true,
+      beats_logistic:regimeLocalTcnPyramidHoldout.evaluated===true&&
+        regimeLocalTcnPyramidHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnPyramidHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnPyramidHoldoutLogistic.model_brier_score,
+      passed:regimeLocalTcnPyramidSelectedRegimes.length>0&&
+        regimeLocalTcnPyramidHoldout.evaluated===true&&
+        regimeLocalTcnPyramidHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnPyramidHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnPyramidHoldoutLogistic.model_brier_score,
+      holdout_sample_count:regimeLocalTcnPyramidHoldoutSamples,
+      selected_regimes:regimeLocalTcnPyramidSelectedRegimes,
+      supported_regimes:regimeLocalTcnPyramidSupportedRegimes,
+      all_supported_regimes_validated:regimeLocalTcnPyramidSupportedRegimes.length>0&&
+        regimeLocalTcnPyramidSupportedRegimes.every(regime=>
+          regimeLocalTcnPyramidSelectedRegimes.includes(regime))
+    },
+    regime_specialists:regimeLocalTcnPyramidResults
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
@@ -2160,6 +2345,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     status,architecture,target_definition:targetDefinition,
     temporal_boosted_tree:temporalBoostedTreeProfile,
     regime_local_tcn_challenger:regimeLocalTcnProfile,
+    regime_local_tcn_pyramid_challenger:regimeLocalTcnPyramidProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
