@@ -42,6 +42,11 @@ export const TEMPORAL_MULTISCALE_RECEPTIVE_FIELD=31;
 export const TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT=1888;
 export const TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE=
   'TCN_24x29_TO16_LATENT_FOUR_LAYER_DILATED_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V10';
+export const TEMPORAL_ATTENTION_POOLING_MODE='LEARNED_QUERY_TIME_ATTENTION_V1';
+export const TEMPORAL_ATTENTION_MODEL_ARCHITECTURE=
+  'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11';
+export const TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT=
+  TEMPORAL_TRAINABLE_PARAMETER_COUNT+TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS;
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -301,12 +306,17 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
       0.002*Math.sin((layer+1)*5.3+(channel+1)*1.7+offset)));
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
   const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
+  const attentionPooling=temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE;
   const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
     orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:channels;
   const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*channels+channels+
-    layers*(KERNEL_TAPS*channels+channels*channels+channels)+outputFeatureCount;
+    layers*(KERNEL_TAPS*channels+channels*channels+channels)+outputFeatureCount+
+    (attentionPooling?channels+TEMPORAL_SEQUENCE_STEPS:0);
   const outputWeights=Array.from({length:outputFeatureCount},(_,feature)=>
     0.01*Math.sin((feature+1)*4.73+offset));
+  const attentionQuery=attentionPooling?Array.from({length:channels},(_,channel)=>
+    0.025*Math.sin((channel+1)*2.91+offset)):null;
+  const attentionPositionBiases=attentionPooling?Array(TEMPORAL_SEQUENCE_STEPS).fill(0):null;
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
   const baselineWeights=Array.isArray(baselineFit?.weights)&&
     baselineFit.weights.length===inputChannels*2
@@ -316,10 +326,12 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
     ?Number(baselineFit.bias):Math.log(prior/(1-prior));
   return {
     projectionWeights,projectionBiases,depthWeights,pointWeights,biases,outputWeights,
+    ...(attentionPooling?{attentionQuery,attentionPositionBiases}:{}),
     skipWeights:baselineWeights,outputBias:baselineBias,baseline_by_regime:null,
     residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR',
     temporal_pooling:temporalPoolingMode,dilations,
     output_features:outputFeatureCount,
+    attention_dimension:attentionPooling?channels:0,
     latent_channels:channels,trainable_parameters:trainableParameterCount
   };
 }
