@@ -275,6 +275,25 @@ test('temporal TCN accepts the explicitly typed safe first-touch contract',()=>{
   assert.equal(result.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
 });
 
+test('standard-lane training excludes Micro Watch rows instead of mixing liquidity cohorts',()=>{
+  const standard=sampleWith({at:1_800_000_000_000,outcome:'UP'});
+  standard.symbol='STANDARDUSDT';standard.id='STANDARDUSDT:STANDARD';
+  standard.liquidity_lane='STANDARD_750K_PLUS';standard.quote_volume_24h=1_200_000;
+  const micro=sampleWith({at:1_800_000_000_000+15*60*1000,outcome:'UP'});
+  micro.symbol='MICROUSDT';micro.id='MICROUSDT:MICRO';
+  micro.liquidity_lane='MICRO_WATCH_ONLY_UNDER_750K';micro.quote_volume_24h=420_000;
+  const result=benchmarkDailyEarlyRiserTarget([standard,micro],5,{
+    requiredLiquidityLane:'STANDARD_750K_PLUS',skipTemporal:true
+  });
+  assert.equal(result.required_liquidity_lane,'STANDARD_750K_PLUS');
+  assert.equal(result.samples.accepted,1);
+  assert.equal(result.samples.rejection_reasons.LIQUIDITY_LANE_FILTER,1);
+  assert.equal(result.approval.real_order_execution,false);
+  assert.throws(()=>benchmarkDailyEarlyRiserTarget([standard],5,{
+    requiredLiquidityLane:'ALL_LANES'
+  }),/UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE/);
+});
+
 test('skip-temporal research split lets tabular challengers finish without competing for TCN compute',()=>{
   const samples=Array.from({length:40},(_,index)=>sampleWith({
     at:1_800_000_000_000+index*24*60*60*1000,
