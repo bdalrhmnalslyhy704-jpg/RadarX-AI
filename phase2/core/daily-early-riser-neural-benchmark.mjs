@@ -30,6 +30,8 @@ export function effectiveDailyTcnMultiscaleTrainingBudget(options={}) {
 }
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
+export const DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE =
+  'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
 
 const finite=value=>{
@@ -38,7 +40,12 @@ const finite=value=>{
   return Number.isFinite(number)?number:null;
 };
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
-const targetDefinition=target=>'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+const targetDefinition=(target,labelMode='first_passage',horizonHours=24)=>
+  labelMode==='upside_opportunity'
+    ?'ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+horizonHours+'H_15M_V1'
+    :'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+const outcomeSourceFor=labelMode=>labelMode==='upside_opportunity'
+  ?DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE:DAILY_EARLY_RISER_OUTCOME_SOURCE;
 
 export function summarizeDailyNeuralAnchorDiagnostics(
   neural={},requestedMode=DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION
@@ -61,26 +68,38 @@ function validTemporalSequence(sequence){
       step.every(value=>finite(value)!==null&&Math.abs(Number(value))<=4));
 }
 
-export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
+export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
   const target=finite(targetPct);
   if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
     return {row:null,reason:'UNSUPPORTED_TARGET'};
   if(!sample||typeof sample!=='object')
     return {row:null,reason:'SAMPLE_INVALID'};
-  const label=sample.targets?.[targetKey(target)];
-  if(!label||label.status!=='RESOLVED'||!['UP','DOWN','FLAT'].includes(label.outcome))
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity'].includes(labelMode))
+    return {row:null,reason:'UNSUPPORTED_LABEL_MODE'};
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||
+    (labelMode==='first_passage'&&horizonHours!==24))
+    return {row:null,reason:'UNSUPPORTED_LABEL_HORIZON'};
+  const horizonMs=horizonHours*60*60*1000;
+  const key=targetKey(target);
+  const label=labelMode==='first_passage'
+    ?sample.targets?.[key]
+    :sample.opportunity_targets?.[String(horizonHours)+'h']?.[key];
+  const allowedOutcomes=labelMode==='first_passage'?['UP','DOWN','FLAT']:['UP','FLAT'];
+  if(!label||label.status!=='RESOLVED'||!allowedOutcomes.includes(label.outcome))
     return {row:null,reason:'LABEL_NOT_RESOLVED'};
   const at=finite(sample.at);
   const resolvedAt=finite(label.resolved_at);
-  const horizon=finite(label.horizon_ms);
-  if(at===null||resolvedAt===null||resolvedAt-at!==DAILY_EARLY_RISER_HORIZON_MS||
-    horizon!==DAILY_EARLY_RISER_HORIZON_MS)
+  const labelHorizon=finite(label.horizon_ms);
+  if(at===null||resolvedAt===null||resolvedAt-at!==horizonMs||labelHorizon!==horizonMs)
     return {row:null,reason:'LABEL_HORIZON_MISMATCH'};
   if(finite(sample.feature_information_cutoff_at)!==at||
     sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
     return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
-  if(label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
-    label.target_definition!==targetDefinition(target))
+  const expectedSource=outcomeSourceFor(labelMode);
+  const expectedDefinition=targetDefinition(target,labelMode,horizonHours);
+  if(label.outcome_source!==expectedSource||label.target_definition!==expectedDefinition)
     return {row:null,reason:'OUTCOME_SOURCE_OR_DEFINITION_MISMATCH'};
   const symbol=String(sample.symbol||'').trim().toUpperCase();
   const id=String(sample.id||'').trim();
@@ -94,25 +113,26 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
     const value=finite(sample[key]);
     if(value!==null)baselineFeatures[key]=value;
   }
-  return {
-    row:{
-      id:id+':TRADEABLE_FIRST_PASSAGE_PLUS_'+target+'_PCT',
-      symbol,
-      at,
-      resolved_at:resolvedAt,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
-      outcome:label.outcome,
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
-      target_definition:label.target_definition,
-      first_passage:{path_resolution:'15M',outcome:label.outcome},
-      temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
-      historical_baseline:true,
-      closed_candle_baseline:true,
-      training_eligible:true,
-      features:baselineFeatures
-    },
-    reason:null
+  const row={
+    id:id+':'+(labelMode==='first_passage'?'TRADEABLE_FIRST_PASSAGE':'UPSIDE_OPPORTUNITY')+
+      '_PLUS_'+target+'_PCT_'+horizonHours+'H',
+    symbol,at,resolved_at:resolvedAt,horizon_ms:horizonMs,
+    outcome:label.outcome,outcome_source:expectedSource,
+    target_definition:expectedDefinition,
+    temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    features:baselineFeatures,
+    liquidity_lane:sample.liquidity_lane||null,
+    quote_volume_24h:finite(sample.quote_volume_24h)
   };
+  if(labelMode==='first_passage')
+    row.first_passage={path_resolution:'15M',outcome:label.outcome};
+  else
+    row.outcome_contract={
+      kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:label.outcome,
+      horizon_hours:horizonHours,independent_of_adverse_barrier:true
+    };
+  return {row,reason:null};
 }
 
 function countOutcomes(rows){
@@ -125,11 +145,20 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const target=finite(targetPct);
   if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET');
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity'].includes(labelMode))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE');
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||(labelMode==='first_passage'&&horizonHours!==24))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_HORIZON');
+  const outcomeHorizonMs=horizonHours*60*60*1000;
+  const contractKind=labelMode==='first_passage'?'FIRST_PASSAGE':'UPSIDE_TOUCH';
+  const selectedOutcomeSource=outcomeSourceFor(labelMode);
   const rows=[];
   const rejected={};
   const seen=new Set();
   for(const sample of Array.isArray(samples)?samples:[]){
-    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target);
+    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target,{labelMode,horizonHours});
     if(!prepared.row){
       const reason=prepared.reason||'UNKNOWN_REJECTION';
       rejected[reason]=(rejected[reason]||0)+1;
@@ -146,7 +175,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
   const outcomeCounts=countOutcomes(rows);
   const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
-  const targetContract=targetDefinition(target);
+  const targetContract=targetDefinition(target,labelMode,horizonHours);
   const temporal=buildTemporalNeuralProfile(temporalRows,{
     minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
     maxTrainingSamples:Math.max(160,Math.min(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
@@ -156,8 +185,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
     epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
     targetDefinition:targetContract,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    outcomeHorizonMs,
+    allowedOutcomeSources:[selectedOutcomeSource],
+    outcomeContractKind:contractKind,
     comparisonMargin:0.003,
     enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
     regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
@@ -179,10 +209,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   if(options.tcnOnly===true){
     return {
       target_pct:target,
-      outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      outcome_semantics:labelMode==='upside_opportunity'?'ANY_UPSIDE_TOUCH_WITHIN_HORIZON_INDEPENDENT_OF_DRAWDOWN':'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+      label_mode:labelMode,
+      horizon_hours:horizonHours,
+      outcome_source:selectedOutcomeSource,
       target_definition:targetContract,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      horizon_ms:outcomeHorizonMs,
       feature_schema:'TCN_ONLY_24X29_CLOSED_CANDLE_SEQUENCE',
       feature_names:[],
       research_mode:'TCN_ONLY_ISOLATED_COMPUTE',
@@ -234,8 +266,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     recentWindowFraction:0.60,
     recentSelectionMargin:0.005,
     l2:0.08,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    outcomeHorizonMs,
+    allowedOutcomeSources:[selectedOutcomeSource],
     iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
     learningRate:0.10,
     minNeuralTrainingSamples:240,
@@ -266,10 +298,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const selected=profile.model_selection||{};
   return {
     target_pct:target,
-    outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-    outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
-    target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
-    horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+    outcome_semantics:labelMode==='upside_opportunity'?'ANY_UPSIDE_TOUCH_WITHIN_HORIZON_INDEPENDENT_OF_DRAWDOWN':'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+    label_mode:labelMode,
+    horizon_hours:horizonHours,
+    outcome_source:selectedOutcomeSource,
+    target_definition:targetContract,
+    horizon_ms:outcomeHorizonMs,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_names:profile.feature_names??[],
     feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema. Daily MLP research also compares a frozen logistic anchor with a trust-region-tethered anchor (max coefficient delta 0.12, bias delta 0.15); the outer validation and untouched holdout still require 0.003 Brier improvement. TCN remains the separate 24x29 temporal model.',
@@ -307,7 +341,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       status:temporal.status??'NOT_EVALUATED',
       architecture:temporal.architecture??null,
       target_definition:temporal.target_definition??targetContract,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      horizon_ms:outcomeHorizonMs,
       sequence_steps:temporal.sequence_steps??TEMPORAL_SEQUENCE_STEPS,
       sequence_channels:temporal.sequence_channels??TEMPORAL_SEQUENCE_CHANNELS,
       resolved_samples:temporal.resolved_samples??0,
