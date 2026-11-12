@@ -139,6 +139,7 @@ function compactTarget(result){
     temporal_tree_training_performed:result.temporal_tree_training_performed,
     temporal_tree_challenger:result.temporal_tree_challenger,
     temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger,
+    temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
