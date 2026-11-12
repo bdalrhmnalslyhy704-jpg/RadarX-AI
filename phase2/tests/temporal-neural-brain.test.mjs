@@ -76,6 +76,15 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
       Math.sin((time+1)*(channel+2)*0.017)*0.8+
       Math.cos((time+3)*(channel+1)*0.011)*0.2));
   const report=auditTemporalGradientNumerics(sequence,1);
+  console.log('[TCN_GRADIENT_AUDIT_SUMMARY]',JSON.stringify({
+    checked_parameter_derivatives:report.checked_parameter_derivatives,
+    failed_parameter_derivatives:report.failed_parameter_derivatives,
+    maximum_absolute_error:report.maximum_absolute_error,
+    passed:report.passed,
+    objectives:report.results.map(row=>({pooling_mode:row.pooling_mode,objective:row.objective,
+      checked:row.checked_parameters,maximum_absolute_error:row.maximum_absolute_error,
+      failed:row.failed_parameters}))
+  }));
   assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
   assert.equal(report.input_shape[0],24);
   assert.equal(report.input_shape[1],29);
