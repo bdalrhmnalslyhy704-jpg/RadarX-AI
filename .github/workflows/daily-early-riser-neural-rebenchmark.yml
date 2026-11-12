@@ -9,6 +9,7 @@ on:
       - research/daily-early-riser-tcn-capacity-20261111
       - research/daily-early-riser-mlp-recency-v2-20261111
       - research/daily-early-riser-tcn-grad-accum-20261111
+      - research/daily-early-riser-tcn-v10-multiscale-20261112
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/core/cognitive-brain.mjs'
