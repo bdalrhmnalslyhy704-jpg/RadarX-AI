@@ -1473,10 +1473,99 @@ function predictTemporalResidualTrees(sequence,fit,residualScale=1,treeCount=nul
   return logistic(clamp(value,-12,12));
 }
 
+function timeGroupedRankingMetrics(rows,predictions,targets){
+  const groups=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=Number(rows[index]?.at);
+    const key=Number.isFinite(at)?String(at):'UNKNOWN_TIME';
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push({
+      score:Number(predictions[index]),target:Number(targets[index]),
+      symbol:String(rows[index]?.symbol||''),index
+    });
+  }
+  const fractions=[5,10,20],stats=new Map(fractions.map(key=>
+    [key,{precision:[],recall:[],lift:[],selected:[]}]));
+  let averagePrecisionSum=0,averagePrecisionGroups=0,totalPositives=0;
+  for(const items of groups.values()){
+    const ordered=[...items].sort((a,b)=>b.score-a.score||
+      a.symbol.localeCompare(b.symbol)||a.index-b.index);
+    const positives=ordered.reduce((sum,row)=>sum+(row.target===1?1:0),0);
+    totalPositives+=positives;
+    if(positives>0){
+      let hits=0,precisionSum=0;
+      for(let rank=0;rank<ordered.length;rank++)if(ordered[rank].target===1){
+        hits++;precisionSum+=hits/(rank+1);
+      }
+      averagePrecisionSum+=precisionSum/positives;averagePrecisionGroups++;
+    }
+    for(const pct of fractions){
+      const selected=Math.max(1,Math.ceil(ordered.length*pct/100));
+      const hits=ordered.slice(0,selected).reduce((sum,row)=>sum+(row.target===1?1:0),0);
+      const metric=stats.get(pct);
+      metric.precision.push(hits/selected);metric.selected.push(selected);
+      if(positives>0){
+        metric.recall.push(hits/positives);
+        metric.lift.push((hits/selected)/(positives/ordered.length));
+      }
+    }
+  }
+  const average=values=>values.length?values.reduce((sum,value)=>sum+value,0)/values.length:null;
+  const result={method:'WITHIN_TIMESTAMP_TOP_K_MACRO_V1',groups:groups.size,
+    groups_with_positive:averagePrecisionGroups,positive_events:totalPositives,
+    average_precision:averagePrecisionGroups
+      ?Number((averagePrecisionSum/averagePrecisionGroups).toFixed(5)):null};
+  for(const pct of fractions){
+    const metric=stats.get(pct);
+    result['top_'+pct+'_pct']={
+      groups:metric.precision.length,
+      mean_selected_per_timestamp:average(metric.selected)===null?null:
+        Number(average(metric.selected).toFixed(3)),
+      precision_pct:average(metric.precision)===null?null:
+        Number((average(metric.precision)*100).toFixed(2)),
+      recall_pct:average(metric.recall)===null?null:
+        Number((average(metric.recall)*100).toFixed(2)),
+      lift:average(metric.lift)===null?null:Number(average(metric.lift).toFixed(5))
+    };
+  }
+  return result;
+}
+
+function aggregateRankingMetrics(entries){
+  const valid=(Array.isArray(entries)?entries:[]).filter(row=>
+    row?.ranking_metrics&&Number(row.ranking_metrics.groups)>0);
+  if(!valid.length)return null;
+  const weighted=(path,weightKey='groups')=>{
+    const usable=valid.map(row=>({
+      value:path(row.ranking_metrics),weight:Number(row.ranking_metrics[weightKey])||0
+    })).filter(item=>Number.isFinite(Number(item.value))&&item.weight>0);
+    const count=usable.reduce((sum,item)=>sum+item.weight,0);
+    return count?usable.reduce((sum,item)=>sum+Number(item.value)*item.weight,0)/count:null;
+  };
+  const result={
+    method:'WITHIN_TIMESTAMP_TOP_K_MACRO_V1',
+    groups:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups||0),0),
+    groups_with_positive:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups_with_positive||0),0),
+    positive_events:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.positive_events||0),0),
+    average_precision:weighted(metric=>metric.average_precision,'groups_with_positive')
+  };
+  for(const pct of [5,10,20]){
+    const name='top_'+pct+'_pct';
+    result[name]={
+      groups:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics[name]?.groups||0),0),
+      mean_selected_per_timestamp:weighted(metric=>metric[name]?.mean_selected_per_timestamp),
+      precision_pct:weighted(metric=>metric[name]?.precision_pct),
+      recall_pct:weighted(metric=>metric[name]?.recall_pct,'groups_with_positive'),
+      lift:weighted(metric=>metric[name]?.lift,'groups_with_positive')
+    };
+  }
+  return result;
+}
+
 function evaluate(rows, predictFn, baseRate) {
   if (!rows.length) return {
     evaluated:false,sample_count:0,positive_count:0,negative_count:0,positive_rate_pct:null,
-    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,ranking_metrics:null,
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN
   };
   const predictions = rows.map(row => predictFn(row.sequence));
@@ -1487,7 +1576,7 @@ function evaluate(rows, predictFn, baseRate) {
   if (predictions.some(value => !Number.isFinite(value))) return {
     evaluated:false,sample_count:rows.length,positive_count:positiveCount,
     negative_count:negativeCount,positive_rate_pct:positiveRatePct,
-    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,ranking_metrics:null,
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     reason:'NON_FINITE_TEMPORAL_PREDICTION'
   };
@@ -1510,6 +1599,7 @@ function evaluate(rows, predictFn, baseRate) {
     base_rate_brier_score: Number(baseBrier.toFixed(5)),
     log_loss: Number(logLoss.toFixed(5)),
     directional_accuracy_pct: directional.length ? Number((correct / directional.length * 100).toFixed(1)) : null,
+    ranking_metrics:timeGroupedRankingMetrics(rows,predictions,targets),
     beat_base_rate: hasTemporalBrierSuperiority(modelBrier,baseBrier),
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     improvement_vs_base_rate: Number((baseBrier - modelBrier).toFixed(5))
@@ -1527,6 +1617,7 @@ function aggregateEvaluations(entries){
   const weighted=key=>valid.reduce((sum,row)=>sum+Number(row[key])*Number(row.sample_count),0)/count;
   const model=weighted('model_brier_score'),base=weighted('base_rate_brier_score');
   const positive=valid.reduce((sum,row)=>sum+Number(row.positive_count||0),0);
+  const rankingMetrics=aggregateRankingMetrics(valid);
   const negative=count-positive;
   const directionalRows=valid.filter(row=>Number.isFinite(Number(row.directional_accuracy_pct)));
   const directionalCount=directionalRows.reduce((sum,row)=>sum+Number(row.sample_count),0);
@@ -1535,6 +1626,7 @@ function aggregateEvaluations(entries){
     positive_rate_pct:Number((positive/count*100).toFixed(2)),
     model_brier_score:Number(model.toFixed(5)),base_rate_brier_score:Number(base.toFixed(5)),
     log_loss:valid.every(row=>Number.isFinite(Number(row.log_loss)))?Number(weighted('log_loss').toFixed(5)):null,
+    ranking_metrics:rankingMetrics,
     directional_accuracy_pct:directionalCount?Number((directionalRows.reduce((sum,row)=>sum+
       Number(row.directional_accuracy_pct)*Number(row.sample_count),0)/directionalCount).toFixed(1)):null,
     beat_base_rate:hasTemporalBrierSuperiority(model,base),
