@@ -5,6 +5,7 @@ on:
     branches:
       - research/daily-early-riser-tcn-fit-diagnostics-20261112
       - research/daily-early-riser-tcn-workspace-optimization-20261112
+      - research/daily-early-riser-tcn-window8192-20261112
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
