@@ -396,4 +396,6 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
   assert.ok(source.includes('temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger'),
     'compactTarget must serialize the independent TCN challenger instead of dropping it');
+  assert.ok(source.includes('temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger'),
+    'compactTarget must serialize the ordered-pooling TCN challenger instead of dropping it');
 });
