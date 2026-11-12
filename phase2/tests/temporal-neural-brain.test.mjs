@@ -12,6 +12,8 @@ import {
   isValidTemporalPooledBaselineFeatures,
   resetGradientBuffer,
   auditTemporalGradientNumerics,
+  auditTemporalTrainingWorkspace,
+  benchmarkTemporalTrainingWorkspace,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -96,6 +98,59 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
   assert.equal(report.passed,true);
   assert.equal(report.training_behavior_changed,false);
+});
+
+test('reused TCN training workspace is numerically equivalent to allocation-based forward and backward passes',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=auditTemporalTrainingWorkspace(sequence,1);
+  console.log('[TCN_WORKSPACE_EQUIVALENCE_SUMMARY]',JSON.stringify({
+    result_cases:report.result_cases,
+    maximum_output_absolute_error:report.maximum_output_absolute_error,
+    maximum_gradient_absolute_error:report.maximum_gradient_absolute_error,
+    passed:report.passed
+  }));
+  assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
+  assert.equal(report.result_cases,18);
+  assert.ok(report.results.every(row=>
+    row.output_values_compared>0&&row.gradient_values_compared>0));
+  assert.ok(report.maximum_output_absolute_error<=1e-12,
+    'forward outputs must remain numerically unchanged');
+  assert.ok(report.maximum_gradient_absolute_error<=1e-12,
+    'backpropagated gradients must remain numerically unchanged');
+  assert.equal(report.passed,true);
+});
+
+test('reusable TCN workspace throughput is measured against the allocation-based reference',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=benchmarkTemporalTrainingWorkspace(sequence,1,{
+    iterations:40,warmupIterations:6,measurementRounds:3
+  });
+  console.log('[TCN_WORKSPACE_THROUGHPUT_SUMMARY]',JSON.stringify({
+    measured_cases:report.measured_cases,
+    mean_speedup:report.mean_speedup,
+    median_speedup:report.median_speedup,
+    results:report.results.map(row=>({
+      mode:row.pooling_mode,objective:row.objective,speedup:row.speedup,
+      reference_median_ms:row.reference_median_ms,
+      workspace_median_ms:row.workspace_median_ms,
+      checksum_difference:row.checksum_difference
+    }))
+  }));
+  assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
+  assert.equal(report.measured_cases,9);
+  assert.equal(report.measurement_rounds,3);
+  assert.equal(report.changes_training_math,false);
+  assert.equal(report.all_checksums_finite,true);
+  assert.ok(report.results.every(row=>
+    Number.isFinite(row.speedup)&&row.speedup>0&&
+    row.reference_median_ms>0&&row.workspace_median_ms>0&&
+    row.checksum_difference===0));
 });
 
 test('TCN gradient audit rejects malformed tensors and non-binary labels',()=>{
