@@ -9,6 +9,7 @@ import {
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+  effectiveDailyTcnMultiscaleTrainingBudget,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
