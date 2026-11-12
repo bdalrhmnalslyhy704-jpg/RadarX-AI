@@ -56,6 +56,7 @@ const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
+import {performance} from 'node:perf_hooks';
 
 function sampleIdentityFingerprint(rows){
   const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
@@ -683,6 +684,77 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
     maximum_output_absolute_error:maximumOutputError,
     maximum_gradient_absolute_error:maximumGradientError,
     passed:maximumOutputError<=1e-12&&maximumGradientError<=1e-12,
+    results
+  };
+}
+
+
+// A repeatable throughput diagnostic for allocation-based versus reusable
+// forward/backward workspaces. Timing is reported, never used to alter training.
+export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
+  iterations=60,warmupIterations=8,baseRate=0.41
+}={}) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
+  const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||60)));
+  const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||8)));
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const baselineFeatures=pooledSequence(sequence);
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(71,baseRate,null,mode);
+    const workspace=createTemporalTrainingWorkspace(model);
+    const referenceGradients=zeroTrainableGradients(model);
+    const workspaceGradients=zeroTrainableGradients(model);
+    for(const objective of objectives){
+      const runReference=()=>{
+        const cache=forward(sequence,model,1,baselineFeatures);
+        gradientsFor(sequence,target,model,cache,objective,referenceGradients);
+        return cache.probability;
+      };
+      const runWorkspace=()=>{
+        const cache=forwardWithWorkspace(sequence,model,1,baselineFeatures,workspace);
+        gradientsFor(sequence,target,model,cache,objective,workspaceGradients,workspace);
+        return cache.probability;
+      };
+      // Symmetric warmup and alternated measurement reduce order/cache bias.
+      for(let index=0;index<warmup;index++){
+        runReference();runWorkspace();
+      }
+      let referenceChecksum=0,workspaceChecksum=0;
+      const referenceStart=performance.now();
+      for(let index=0;index<count;index++)referenceChecksum+=runReference();
+      const referenceMs=performance.now()-referenceStart;
+      const workspaceStart=performance.now();
+      for(let index=0;index<count;index++)workspaceChecksum+=runWorkspace();
+      const workspaceMs=performance.now()-workspaceStart;
+      results.push({
+        pooling_mode:mode,objective,iterations:count,
+        reference_ms:Number(referenceMs.toFixed(3)),
+        workspace_ms:Number(workspaceMs.toFixed(3)),
+        speedup:Number((referenceMs/Math.max(workspaceMs,1e-9)).toFixed(4)),
+        reference_ops_per_second:Number((count*1000/Math.max(referenceMs,1e-9)).toFixed(3)),
+        workspace_ops_per_second:Number((count*1000/Math.max(workspaceMs,1e-9)).toFixed(3)),
+        checksum_difference:Number(Math.abs(referenceChecksum-workspaceChecksum).toExponential(6))
+      });
+    }
+  }
+  const meanSpeedup=results.reduce((sum,row)=>sum+row.speedup,0)/results.length;
+  return {
+    schema:'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1',
+    diagnostic_only:true,
+    changes_training_math:false,
+    iterations_per_case:count,
+    warmup_iterations:warmup,
+    measured_cases:results.length,
+    mean_speedup:Number(meanSpeedup.toFixed(4)),
+    median_speedup:Number([...results].sort((a,b)=>a.speedup-b.speedup)[Math.floor(results.length/2)].speedup.toFixed(4)),
+    all_checksums_finite:results.every(row=>Number.isFinite(row.checksum_difference)),
     results
   };
 }
