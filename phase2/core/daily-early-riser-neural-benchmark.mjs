@@ -256,6 +256,7 @@ export function benchmarkDailyEarlyRiserMultiHorizonTarget(
     temporal_model:{
       status:temporal.status??'NOT_EVALUATED',
       architecture:temporal.architecture??null,
+      resolved_samples:temporal.resolved_samples??0,
       trained:temporal.trained===true,selected:temporal.selected===true,
       probability_ready:temporal.probability_ready===true,
       validation:temporal.validation??null,holdout:temporal.holdout??null,
