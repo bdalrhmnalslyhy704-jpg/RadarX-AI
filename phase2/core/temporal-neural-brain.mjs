@@ -1889,6 +1889,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableRegimeLocalTcnMultiscale=false,
   regimeLocalTcnMultiscaleMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnMultiscaleEpochs=6,
+  enableRegimeLocalTcnAttention=false,
+  regimeLocalTcnAttentionMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  regimeLocalTcnAttentionEpochs=6,
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
@@ -2190,6 +2193,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeLocalTcnResults={};
   const regimeLocalTcnPyramidResults={};
   const regimeLocalTcnMultiscaleResults={};
+  const regimeLocalTcnAttentionResults={};
   const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -2399,6 +2403,32 @@ export function buildTemporalNeuralProfile(samples = [], {
         model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
         temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE,
         training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
+        training_samples:0,trained:false,selected_for_research:false,
+        validation_passed:false,holdout_passed:false,probability_ready:false,
+        live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
+      };
+    regimeLocalTcnAttentionResults[regime]=enableRegimeLocalTcnAttention
+      ?fitRegimeLocalTemporalTcn({
+        regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
+        calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
+        epochs:regimeLocalTcnAttentionEpochs,learningRate,l2,comparisonMargin,
+        maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
+        temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
+        minTrainingSamples:minRegimeTraining,
+        minTrainingPositive:minRegimeTrainingPositive,minTrainingNegative:minRegimeNegative,
+        minSelectionSamples,minSelectionPositive,minSelectionNegative,
+        minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+        minValidationSamples:minRegimeValidation,minValidationPositive:minRegimePositive,
+        minValidationNegative:minRegimeNegative,
+        minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
+        minHoldoutNegative:minRegimeNegative
+      })
+      :{
+        regime,status:'NOT_ENABLED_FOR_THIS_PROFILE',
+        model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1',
+        model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+        temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+        training_strategy:'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1',
         training_samples:0,trained:false,selected_for_research:false,
         validation_passed:false,holdout_passed:false,probability_ready:false,
         live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
