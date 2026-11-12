@@ -65,6 +65,17 @@ function sampleWith({
   };
 }
 
+test('TCN-only V10 training-window ablation is capped at 8,192 while standard profiles stay at 4,096',()=>{
+  assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({tcnOnly:true}),8192);
+  assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({tcnOnly:false}),4096);
+  assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({
+    tcnOnly:true,temporalRegimeLocalTcnMultiscaleMaxTrainingSamples:12000
+  }),8192);
+  assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({
+    tcnOnly:false,temporalRegimeLocalTcnMultiscaleMaxTrainingSamples:8192
+  }),4096);
+});
+
 test('TCN-only mode returns temporal challengers without running MLP, tabular GBDT or hybrid profiles',()=>{
   const samples=Array.from({length:4},(_,index)=>sampleWith({
     at:1_800_000_000_000+index*15*60*1000,targetPct:5,
