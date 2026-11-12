@@ -116,6 +116,14 @@ jobs:
             regime_local_tcn_pyramid_holdout:result.temporal_regime_local_tcn_pyramid_challenger?.holdout??null,
             regime_local_tcn_pyramid_holdout_logistic:result.temporal_regime_local_tcn_pyramid_challenger?.holdout_logistic??null,
             regime_local_tcn_pyramid_selected_regimes:result.temporal_regime_local_tcn_pyramid_challenger?.selected_regimes??[],
+            regime_local_tcn_multiscale:result.temporal_regime_local_tcn_multiscale_challenger?.status??null,
+            regime_local_tcn_multiscale_training:result.temporal_regime_local_tcn_multiscale_challenger?.training_samples??null,
+            regime_local_tcn_multiscale_pooling:result.temporal_regime_local_tcn_multiscale_challenger?.temporal_pooling??null,
+            regime_local_tcn_multiscale_validation:result.temporal_regime_local_tcn_multiscale_challenger?.validation??null,
+            regime_local_tcn_multiscale_validation_logistic:result.temporal_regime_local_tcn_multiscale_challenger?.validation_logistic??null,
+            regime_local_tcn_multiscale_holdout:result.temporal_regime_local_tcn_multiscale_challenger?.holdout??null,
+            regime_local_tcn_multiscale_holdout_logistic:result.temporal_regime_local_tcn_multiscale_challenger?.holdout_logistic??null,
+            regime_local_tcn_multiscale_selected_regimes:result.temporal_regime_local_tcn_multiscale_challenger?.selected_regimes??[],
             temporal_tree:result.temporal_tree_challenger?.status??null
           }));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
