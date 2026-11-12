@@ -627,6 +627,30 @@ export function auditTemporalGradientNumerics(
   };
 }
 
+function summarizeNumericTree(value,state={sumSquares:0,maxAbsolute:0,count:0}) {
+  if(Array.isArray(value)){
+    for(const child of value)summarizeNumericTree(child,state);
+  }else if(value&&typeof value==='object'){
+    for(const child of Object.values(value))summarizeNumericTree(child,state);
+  }else if(typeof value==='number'&&Number.isFinite(value)){
+    state.sumSquares+=value*value;
+    state.maxAbsolute=Math.max(state.maxAbsolute,Math.abs(value));
+    state.count++;
+  }
+  return state;
+}
+function vectorL2Norm(values){
+  return Math.sqrt((Array.isArray(values)?values:[]).reduce((sum,value)=>
+    sum+(Number(value)||0)**2,0));
+}
+function trainingObjectiveLoss(probability,target,objective) {
+  const p=clamp(probability,1e-12,1-1e-12);
+  const brier=(p-target)**2;
+  const logLoss=-(target*Math.log(p)+(1-target)*Math.log(1-p));
+  return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+    objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      ?0.5*brier+0.5*logLoss:brier;
+}
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
@@ -654,23 +678,53 @@ function fitMember(rows, seed, {
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
+  const epochHistory=[];
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
+    let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     for (const row of rows) {
       const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective,rowGradientScratch);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
+      const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
+      weightedObjectiveLoss+=rowLoss*sampleWeight;
+      if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
+      else negativeObjectiveLoss+=rowLoss;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
+    const gradientStats=summarizeNumericTree(averaged);
     const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
     optimizer = step.state;
+    epochHistory.push({
+      epoch,
+      // Loss is measured on training rows immediately before this epoch's update.
+      // It is diagnostic only and is never used for selection or early stopping.
+      mean_weighted_training_objective_loss:Number((weightedObjectiveLoss/
+        Math.max(1,totalSampleWeight)).toFixed(8)),
+      mean_positive_training_objective_loss:positiveSamples
+        ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
+      mean_negative_training_objective_loss:negativeSamples
+        ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
+      averaged_gradient_l2_norm:Number(Math.sqrt(gradientStats.sumSquares).toFixed(8)),
+      maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
+      residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
+    });
   }
+  model.training_diagnostics={
+    schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
+    diagnostic_only:true,
+    loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
+    epochs_completed:epochHistory.length,
+    training_sample_profile:model.training_sample_profile,
+    objective:trainingObjective,
+    epoch_history:epochHistory
+  };
   return model;
 }
 
@@ -1082,6 +1136,11 @@ function fitEnsemble(rows, options = {}) {
         :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
+    member_training_diagnostics:members.map((member,index)=>({
+      member_index:index,
+      seed:SEEDS[index],
+      ...(member.training_diagnostics||{})
+    })),
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
     training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
