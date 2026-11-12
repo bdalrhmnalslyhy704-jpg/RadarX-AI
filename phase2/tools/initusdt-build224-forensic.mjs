@@ -292,6 +292,8 @@ function firstMicroCandidates(all,market,startMs,endMs){
     cooldown_watch_event_samples:[],first_watch_candidate_by_utc_day:{},
     watch_confirmation_filter_counts:{taker_buy_ge_054:0,relative_strength_nonnegative:0,both_taker_and_relative_strength:0,
       positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0},
+    cooldown_watch_event_filter_counts:{taker_buy_ge_054:0,relative_strength_nonnegative:0,both_taker_and_relative_strength:0,
+      positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0},
     proxy_method:'Exact Build224 Micro fingerprint on closed 1m/5m/BTC 5m candles; rolling 24h ticker is built from 1,440 closed 1m candles; fast ticker deltas are approximated from 1m bars; market-wide rank/depth remain unavailable'};
   let lastCooldownWatchAt=-Infinity;
   for(const candle of all['1m'].filter(x=>Number(x.closeTime)>=scanStart&&Number(x.closeTime)<=endMs)){
@@ -379,6 +381,12 @@ function firstMicroCandidates(all,market,startMs,endMs){
           risk_flags:fingerprint.risk_flags||[],reason_codes:fingerprint.reasons||[]
         };
         out.cooldown_watch_event_samples.push(event);
+        if(taker>=.54)out.cooldown_watch_event_filter_counts.taker_buy_ge_054++;
+        if(relative>=0)out.cooldown_watch_event_filter_counts.relative_strength_nonnegative++;
+        if(taker>=.54&&relative>=0)out.cooldown_watch_event_filter_counts.both_taker_and_relative_strength++;
+        if(return5>0)out.cooldown_watch_event_filter_counts.positive_5m_return++;
+        if(rvol5>=1)out.cooldown_watch_event_filter_counts.five_minute_rvol_ge_1++;
+        if(taker>=.54&&relative>=0&&rvol5>=1)out.cooldown_watch_event_filter_counts.both_taker_relative_and_5m_rvol++;
         out.last_cooldown_watch_candidate=event;
       }
     }
@@ -437,6 +445,7 @@ async function run(){
       const microCandidates=firstMicroCandidates(got.series,market,targetStart,throughMs);
       microCandidates.first_watch_post_signal_path=postSignalPath(got.series['1m'],microCandidates.first_micro_watch_candidate,throughMs);
       microCandidates.first_watch_path_by_utc_day=Object.fromEntries(Object.entries(microCandidates.first_watch_candidate_by_utc_day).map(([day,signal])=>[day,postSignalPath(got.series['1m'],signal,throughMs)]));
+      microCandidates.first_underfloor_deep_post_signal_path=postSignalPath(got.series['1m'],microCandidates.first_underfloor_deep_gate_pass,throughMs);
       microCandidates.first_deep_post_signal_path=postSignalPath(got.series['1m'],microCandidates.first_micro_eligible_deep,throughMs);
       const rawCandleHistory=Object.fromEntries(Object.entries(got.series).map(([tf,rows])=>[tf,rows.filter(x=>Number(x.closeTime)<=throughMs).map(x=>({open_time:new Date(Number(x.openTime)).toISOString(),close_time:new Date(Number(x.closeTime)).toISOString(),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close),base_volume:Number(x.volume),quote_volume_usdt:Number(x.quoteVolume),trade_count:Number(x.tradeCount),taker_buy_base_volume:Number(x.takerBuyBaseVolume),taker_buy_quote_volume_usdt:Number(x.takerBuyQuoteVolume)}))]));
       const row={symbol,expected_move_pct:expected,anchor,sources:got.sources,micro_replay:microCandidates,event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},raw_candle_history:rawCandleHistory,full_15m_timeline:timeline,first_klines_only_thresholds:{watch_58:firstScoreRow(timeline,58),pre_expansion_70:firstScoreRow(timeline,70),alert_score_82:firstScoreRow(timeline,82)}};
@@ -498,6 +507,20 @@ async function run(){
   md.push(`Raw Micro watch candidates: ${cases[0]?.micro_replay?.raw_micro_watch_candidates??0}; after 10-minute cooldown: ${cases[0]?.micro_replay?.cooldown_watch_events??0}`);
   md.push(`Micro profiles marked eligible: ${cases[0]?.micro_replay?.micro_profile_eligible_count??0}; underfloor Deep watch-gate passes: ${cases[0]?.micro_replay?.underfloor_deep_watch_gate_pass_count??0}`);
   md.push(`Watch candidates passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.watch_confirmation_filter_counts?.both_taker_and_relative_strength??0}`);
+  md.push(`After 10-minute cooldown, watch events passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.both_taker_and_relative_strength??0}`);
+  md.push('');
+  md.push('### First watch candidate each UTC day and subsequent path');
+  md.push('| UTC day | First watch time | Price | Score | Taker buy | 5m relative strength | 5m RVOL | Worst drawdown to end | First later recovery above entry |');
+  md.push('|---|---|---:|---:|---:|---:|---:|---:|---|');
+  for(const [day,signal] of Object.entries(cases[0]?.micro_replay?.first_watch_candidate_by_utc_day||{})){
+    const path=cases[0]?.micro_replay?.first_watch_path_by_utc_day?.[day]||{};
+    md.push(`|${day}|${signal.time}|${Number(signal.price).toFixed(5)}|${signal.score}|${Number(signal.taker_buy_ratio).toFixed(3)}|${Number(signal.relative_strength_5m_pct).toFixed(3)}|${Number(signal.rvol_5m).toFixed(3)}|${path.worst_adverse_excursion_pct??'—'}%|${path.first_close_reclaim_entry_after_trough||'—'}|`);
+  }
+  const underfloorPath=cases[0]?.micro_replay?.first_underfloor_deep_post_signal_path;
+  if(underfloorPath){
+    md.push('');
+    md.push(`First underfloor Deep gate pass path: entry ${Number(underfloorPath.entry_price).toFixed(5)} at ${underfloorPath.signal_time}; maximum adverse excursion ${underfloorPath.worst_adverse_excursion_pct}% to ${underfloorPath.trough_low}; first later close above entry ${underfloorPath.first_close_reclaim_entry_after_trough||'not reached'}.`);
+  }
   md.push(`First Micro early-flow watch candidate: ${cases[0]?.micro_replay?.first_micro_watch_candidate?.time||'NONE'}`);
   md.push(`First underfloor Deep watch gate pass: ${cases[0]?.micro_replay?.first_underfloor_deep_gate_pass?.time||'NONE'}`);
   md.push('Micro OHLCV signals use exact Build 224 scoring on closed candles, but the live 20-second ticker delta is approximated from 1-minute bars; this does not reconstruct the historical 18-symbol selection rank, market-wide candidate pool, or book liquidity.');
