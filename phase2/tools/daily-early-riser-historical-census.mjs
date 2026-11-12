@@ -61,31 +61,55 @@ const finite=value=>{
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 
 
-function auditSampleLabelHorizons(samples){
-  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0;
+export function auditSampleLabelHorizons(samples,{
+  opportunityHorizonsHours=[24,48,72],drawdownAdversePcts=[2,5]
+}={}){
+  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0,laneViolations=0;
+  const targets=[...DAILY_EARLY_RISER_TARGETS_PCT];
+  const horizons=[...new Set(opportunityHorizonsHours.map(finite)
+    .filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))];
+  const risks=[...new Set(drawdownAdversePcts.map(finite)
+    .filter(value=>value!==null&&value>0&&value<=50))];
   for(const sample of Array.isArray(samples)?samples:[]){
-    const at=finite(sample?.at);
+    const at=finite(sample?.at),volume=finite(sample?.quote_volume_24h);
     if(at===null){firstPassageViolations++;opportunityViolations++;drawdownViolations++;continue;}
-    for(const label of Object.values(sample.targets||{})){
-      const expected=24*60*60*1000;
-      if(finite(label?.resolved_at)-at!==expected||finite(label?.horizon_ms)!==expected)
+    if(volume===null||
+      sample.liquidity_lane!==(volume>=750000?'STANDARD_750K_PLUS':'MICRO_WATCH_ONLY_UNDER_750K'))
+      laneViolations++;
+    for(const target of targets){
+      const key='plus_'+String(target).replace('.','_')+'_pct';
+      const label=sample.targets?.[key];
+      if(!label||label.status!=='RESOLVED'||
+        !['UP','DOWN','FLAT'].includes(label.outcome)||
+        label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
+        label.target_definition!=='FIRST_PASSAGE_PLUS_'+target+
+          '_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'||
+        finite(label.resolved_at)-at!==24*60*60*1000||
+        finite(label.horizon_ms)!==24*60*60*1000)
         firstPassageViolations++;
     }
-    for(const horizon of Object.values(sample.opportunity_targets||{})){
-      for(const label of Object.values(horizon||{})){
-        const hours=finite(label?.horizon_hours);
-        const expected=hours===null?null:hours*60*60*1000;
-        if(expected===null||finite(label?.resolved_at)-at!==expected||
-          finite(label?.horizon_ms)!==expected||label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1')
+    for(const hours of horizons){
+      const horizonKey=String(hours)+'h';
+      for(const target of targets){
+        const key='plus_'+String(target).replace('.','_')+'_pct';
+        const label=sample.opportunity_targets?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        if(!label||label.status!=='RESOLVED'||!['UP','FLAT'].includes(label.outcome)||
+          label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1'||
+          label.target_definition!=='ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_adverse_barrier!==true)
           opportunityViolations++;
       }
-    }
-    for(const horizon of Object.values(sample.drawdown_risks||{})){
-      for(const label of Object.values(horizon||{})){
-        const hours=finite(label?.horizon_hours);
-        const expected=hours===null?null:hours*60*60*1000;
-        if(expected===null||finite(label?.resolved_at)-at!==expected||
-          finite(label?.horizon_ms)!==expected||label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1')
+      for(const threshold of risks){
+        const key='minus_'+String(threshold).replace('.','_')+'_pct';
+        const label=sample.drawdown_risks?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        if(!label||label.status!=='RESOLVED'||!['DOWN','FLAT'].includes(label.outcome)||
+          label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1'||
+          label.target_definition!=='ANY_DRAWDOWN_TOUCH_MINUS_'+threshold+'_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_upside_barrier!==true)
           drawdownViolations++;
       }
     }
@@ -94,7 +118,8 @@ function auditSampleLabelHorizons(samples){
     first_passage_horizon_violations:firstPassageViolations,
     opportunity_horizon_violations:opportunityViolations,
     drawdown_horizon_violations:drawdownViolations,
-    total:firstPassageViolations+opportunityViolations+drawdownViolations
+    liquidity_lane_violations:laneViolations,
+    total:firstPassageViolations+opportunityViolations+drawdownViolations+laneViolations
   };
 }
 
@@ -675,7 +700,7 @@ async function main(){
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
-        const horizonAudit=auditSampleLabelHorizons(census.samples);
+        const horizonAudit=auditSampleLabelHorizons(census.samples,{opportunityHorizonsHours,drawdownAdversePcts});
         const horizonViolations=horizonAudit.total;
         result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
