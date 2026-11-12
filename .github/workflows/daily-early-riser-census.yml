@@ -104,6 +104,7 @@ jobs:
             --label-mode safe_opportunity \
             --horizon-hours 72 \
             --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
             --skip-temporal true \
             --output artifacts/daily-early-riser-safe-72h-5pct-neural.json
       - name: Train isolated 24x29 TCN on the same safe first-touch target
@@ -116,6 +117,7 @@ jobs:
             --label-mode safe_opportunity \
             --horizon-hours 72 \
             --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
             --tcn-only true \
             --output artifacts/daily-early-riser-safe-72h-5pct-tcn.json
       - name: Train standard daily baseline and neural challengers on legacy census branches
