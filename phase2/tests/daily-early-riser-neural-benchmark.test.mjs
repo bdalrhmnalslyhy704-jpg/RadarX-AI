@@ -80,7 +80,7 @@ test('TCN-only mode returns temporal challengers without running MLP, tabular GB
   assert.equal(result.neural_network,undefined);
   assert.equal(result.boosted_tree_model,undefined);
   assert.equal(result.hybrid_model,undefined);
-  assert.equal(result.temporal_regime_local_tcn_challenger.status,'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES');
+  assert.equal(result.temporal_tcn.status,'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES');
   assert.equal(result.approval.probability_ready,false);
   assert.equal(result.approval.live_eligibility_ready,false);
   assert.equal(result.approval.real_order_execution,false);
