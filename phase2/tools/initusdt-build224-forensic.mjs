@@ -141,10 +141,11 @@ function firstPartialEvidence(all,anchorMs,market){
     const e=buildEarlyExpansionEvidence({series:s,ticker,depth:null,marketContext:market,fastContext:fastContext(all['1m'],ts),now:ts,historicalReplay:true});
     if(e.decision_band==='DATA_INSUFFICIENT')continue;
     if(!best||e.forensic_evidence_score>best.forensic_evidence_score)best={ts,e};
-    if(!first&&e.forensic_evidence_score>=58&&Number(ticker.priceChange24h)<=12&&Number(ticker.quoteVolume24h)>=750000){first={ts,e};break;}
+    if(!first&&e.forensic_evidence_score>=58&&Number(ticker.priceChange24h)<=12&&Number(ticker.quoteVolume24h)>=750000){first={ts,e,ticker};break;}
   }
-  if(!first)return {status:'UNKNOWN',estimated_lead_time:'UNKNOWN',best_partial_evidence:best?{time:new Date(best.ts).toISOString(),score:best.e.forensic_evidence_score}:null};
-  return {status:'PARTIAL_EVIDENCE_ONLY',first_time:new Date(first.ts).toISOString(),estimated_lead_time_minutes:Math.round((anchorMs-first.ts)/60000),score:first.e.forensic_evidence_score,decision_band:first.e.decision_band,reason_codes:first.e.reason_codes};
+  const brief=x=>x?{time:new Date(x.ts).toISOString(),price:Number(x.ticker.lastPrice),price_change_24h_pct:Number(x.ticker.priceChange24h),quote_volume_24h_usdt:Number(x.ticker.quoteVolume24h),trade_count_24h:Number(x.ticker.tradeCount24h),score:x.e.forensic_evidence_score,decision_band:x.e.decision_band,score_allowed:x.e.gates?.score_allowed??null,liquidity_gate:x.e.gates?.liquidity_gate??null,anti_chase:x.e.gates?.anti_chase??null,reason_codes:x.e.reason_codes,risk_flags:x.e.risk_flags,metrics:x.e.metrics}:null;
+  if(!first)return {status:'UNKNOWN',estimated_lead_time:'UNKNOWN',best_partial_evidence:brief(best)};
+  return {status:'PARTIAL_EVIDENCE_ONLY',first_time:new Date(first.ts).toISOString(),estimated_lead_time_minutes:Math.round((anchorMs-first.ts)/60000),...brief(first)};
 }
 function fullTimeline(all,startMs,endMs,market){
   const out=[];
@@ -171,6 +172,10 @@ function fullTimeline(all,startMs,endMs,market){
       quote_volume_24h_usdt:Number(ticker.quoteVolume24h.toFixed(2)),
       trade_count_24h:Number(ticker.tradeCount24h),
       forensic_evidence_score:evidence.forensic_evidence_score,
+      decision_band:evidence.decision_band,
+      early_expansion_score:evidence.early_expansion_score,
+      score_allowed:evidence.gates?.score_allowed??null,
+      liquidity_gate:evidence.gates?.liquidity_gate??null,
       score_components:evidence.score_components,
       risk_flags:evidence.risk_flags,
       reason_codes:evidence.reason_codes,
@@ -229,7 +234,8 @@ async function run(){
       const got=await fetchSymbol(symbol);
       const anchor=deriveAnchor(got.series['1m'],expected);
       const timeline=fullTimeline(got.series,targetStart,throughMs,market);
-      const row={symbol,expected_move_pct:expected,anchor,sources:got.sources,event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},full_15m_timeline:timeline,first_klines_only_thresholds:{watch_58:firstScoreRow(timeline,58),pre_expansion_70:firstScoreRow(timeline,70),alert_score_82:firstScoreRow(timeline,82)}};
+      const rawCandleHistory=Object.fromEntries(Object.entries(got.series).map(([tf,rows])=>[tf,rows.filter(x=>Number(x.closeTime)>=targetStart&&Number(x.closeTime)<=throughMs).map(x=>({open_time:new Date(Number(x.openTime)).toISOString(),close_time:new Date(Number(x.closeTime)).toISOString(),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close),base_volume:Number(x.volume),quote_volume_usdt:Number(x.quoteVolume),trade_count:Number(x.tradeCount),taker_buy_base_volume:Number(x.takerBuyBaseVolume),taker_buy_quote_volume_usdt:Number(x.takerBuyQuoteVolume)}))]));
+      const row={symbol,expected_move_pct:expected,anchor,sources:got.sources,event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},raw_candle_history:rawCandleHistory,full_15m_timeline:timeline,first_klines_only_thresholds:{watch_58:firstScoreRow(timeline,58),pre_expansion_70:firstScoreRow(timeline,70),alert_score_82:firstScoreRow(timeline,82)}};
       if(anchor.status==='OK'){
         row.checkpoints=checkpointRows(got.series,anchor.anchor_time,expected,market);
         row.first_partial_evidence=firstPartialEvidence(got.series,anchor.anchor_time,market);
