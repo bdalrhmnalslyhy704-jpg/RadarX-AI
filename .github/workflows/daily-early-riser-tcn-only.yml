@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/daily-early-riser-tcn-only-20261112
+      - research/daily-early-riser-tcn-window8192-20261112
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
