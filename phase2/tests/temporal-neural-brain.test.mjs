@@ -233,7 +233,7 @@ test('V11 learned temporal query attention focuses probability mass on informati
 test('safe-opportunity temporal profile trains the isolated V11 attention readout under the same purged Logistic gate',()=>{
   const horizonMs=72*60*60*1000;
   const targetDefinition='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1';
-  const outcomeSource='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_V1';
+  const outcomeSource='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1';
   const rows=[];
   const groups=70,perGroup=20;
   for(let group=0;group<groups;group++){
