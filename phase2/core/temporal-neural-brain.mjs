@@ -1555,13 +1555,16 @@ function fitEnsemble(rows, options = {}) {
   const temporalPoolingMode=String(options.temporalPoolingMode||'LAST_12_MEAN_V1');
   const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
+  const attentionPooling=temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE;
   const layerCount=multiscalePooling?TEMPORAL_MULTISCALE_DILATIONS.length:DILATIONS.length;
   const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
     orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:TEMPORAL_LATENT_CHANNELS;
   const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*TEMPORAL_LATENT_CHANNELS+
     TEMPORAL_LATENT_CHANNELS+layerCount*(KERNEL_TAPS*TEMPORAL_LATENT_CHANNELS+
-      TEMPORAL_LATENT_CHANNELS*TEMPORAL_LATENT_CHANNELS+TEMPORAL_LATENT_CHANNELS)+outputFeatureCount;
-  const architecture=multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
+      TEMPORAL_LATENT_CHANNELS*TEMPORAL_LATENT_CHANNELS+TEMPORAL_LATENT_CHANNELS)+outputFeatureCount+
+    (attentionPooling?TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS:0);
+  const architecture=attentionPooling?TEMPORAL_ATTENTION_MODEL_ARCHITECTURE:
+    multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
     orderedPooling?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
@@ -1589,11 +1592,13 @@ function fitEnsemble(rows, options = {}) {
     temporal_pooling:temporalPoolingMode,
     output_features:outputFeatureCount,
     trainable_parameter_count:trainableParameterCount,
-    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
-        :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
+    training_strategy:attentionPooling
+      ?'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
+          :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
     member_training_diagnostics:members.map((member,index)=>({
@@ -1677,17 +1682,21 @@ function fitRegimeLocalTemporalTcn({
   if(!chronologyValid)supportGaps.push('REGIME_LOCAL_CHRONOLOGY_OR_PURGE_VIOLATION');
   const base={
     regime,status:supportGaps.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':'READY_FOR_REGIME_LOCAL_TCN_FIT',
-    model_kind:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+    model_kind:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
     temporal_pooling:temporalPoolingMode,
-    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
-        :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    training_strategy:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
+          :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
     training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
     training_sample_budget:limit,
     training_samples:training.length,available_training_samples:allTraining.length,
