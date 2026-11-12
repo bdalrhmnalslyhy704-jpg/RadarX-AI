@@ -294,7 +294,9 @@ function firstMicroCandidates(all,market,startMs,endMs){
       positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0},
     cooldown_watch_event_filter_counts:{taker_buy_ge_054:0,relative_strength_nonnegative:0,both_taker_and_relative_strength:0,
       positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0,
-      research_composite_taker_rs_15m_24h:0},
+      research_composite_taker_rs_15m_24h:0,
+      strict_taker_rs_positive_5m_15m_abs_24h_lt_12:0,
+      strict_steps:{taker_and_rs:0,taker_rs_and_positive_5m:0,taker_rs_and_positive_15m:0,taker_rs_and_both_positive:0,taker_rs_both_positive_and_abs_24h_lt_12:0}},
     proxy_method:'Exact Build224 Micro fingerprint on closed 1m/5m/BTC 5m candles; rolling 24h ticker is built from 1,440 closed 1m candles; fast ticker deltas are approximated from 1m bars; market-wide rank/depth remain unavailable'};
   let lastCooldownWatchAt=-Infinity;
   for(const candle of all['1m'].filter(x=>Number(x.closeTime)>=scanStart&&Number(x.closeTime)<=endMs)){
@@ -395,7 +397,24 @@ function firstMicroCandidates(all,market,startMs,endMs){
         if(return5>0)out.cooldown_watch_event_filter_counts.positive_5m_return++;
         if(rvol5>=1)out.cooldown_watch_event_filter_counts.five_minute_rvol_ge_1++;
         if(taker>=.54&&relative>=0&&rvol5>=1)out.cooldown_watch_event_filter_counts.both_taker_relative_and_5m_rvol++;
-        if(taker>=.54&&relative>=0&&Number(ticker.priceChange24h)<12&&Number(metrics.return_15m)>0)
+        const return5ForGate=Number(metrics.return_5m)||0;
+        const return15ForGate=Number(metrics.return_15m)||0;
+        const dailyAbsForGate=Math.abs(Number(ticker.priceChange24h));
+        const strictSteps=out.cooldown_watch_event_filter_counts.strict_steps;
+        const takerRsGate=taker>=.54&&relative>=0;
+        if(takerRsGate){
+          strictSteps.taker_and_rs++;
+          if(return5ForGate>0)strictSteps.taker_rs_and_positive_5m++;
+          if(return15ForGate>0)strictSteps.taker_rs_and_positive_15m++;
+          if(return5ForGate>0&&return15ForGate>0){
+            strictSteps.taker_rs_and_both_positive++;
+            if(dailyAbsForGate<12){
+              strictSteps.taker_rs_both_positive_and_abs_24h_lt_12++;
+              out.cooldown_watch_event_filter_counts.strict_taker_rs_positive_5m_15m_abs_24h_lt_12++;
+            }
+          }
+        }
+        if(takerRsGate&&dailyAbsForGate<12&&return15ForGate>0)
           out.cooldown_watch_event_filter_counts.research_composite_taker_rs_15m_24h++;
         out.last_cooldown_watch_candidate=event;
       }
@@ -519,6 +538,8 @@ async function run(){
   md.push(`Watch candidates passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.watch_confirmation_filter_counts?.both_taker_and_relative_strength??0}`);
   md.push(`After 10-minute cooldown, watch events passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.both_taker_and_relative_strength??0}`);
   md.push(`Research-only composite pass (taker >=0.54 + 5m relative strength >=0 + 15m return >0 + 24h change <12%): ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.research_composite_taker_rs_15m_24h??0} events.`);
+  md.push(`Stricter research gate (taker >=0.54 + 5m RS >=0 + 5m return >0 + 15m return >0 + absolute 24h move <12%): ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.strict_taker_rs_positive_5m_15m_abs_24h_lt_12??0} events.`);
+  md.push(`Strict gate step counts: ${JSON.stringify(cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.strict_steps||{})}`);
   md.push('');
   md.push('### First watch candidate each UTC day and subsequent path');
   md.push('| UTC day | First watch time | Price | Score | Taker buy | 5m relative strength | 5m RVOL | Worst drawdown to end | First later recovery above entry |');
@@ -575,10 +596,13 @@ async function run(){
   const missingCompositeFields=savedWatchEvents.filter(x=>!Number.isFinite(Number(x.return_15m))||
     !Number.isFinite(Number(x.price_change_24h_pct))||!Number.isFinite(Number(x.vwap_distance_pct))).length;
   const calculatedComposite=savedWatchEvents.filter(x=>Number(x.taker_buy_ratio)>=.54&&
-    Number(x.relative_strength_5m_pct)>=0&&Number(x.price_change_24h_pct)<12&&Number(x.return_15m)>0).length;
+    Number(x.relative_strength_5m_pct)>=0&&Math.abs(Number(x.price_change_24h_pct))<12&&Number(x.return_15m)>0).length;
   const recordedComposite=Number(cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.research_composite_taker_rs_15m_24h)||0;
-  if(missingCompositeFields>0||calculatedComposite!==recordedComposite){
-    console.error('COOLDOWN_FILTER_AUDIT_MISMATCH '+JSON.stringify({missingCompositeFields,calculatedComposite,recordedComposite}));
+  const calculatedStrict=savedWatchEvents.filter(x=>Number(x.taker_buy_ratio)>=.54&&
+    Number(x.relative_strength_5m_pct)>=0&&Number(x.return_5m)>0&&Number(x.return_15m)>0&&Math.abs(Number(x.price_change_24h_pct))<12).length;
+  const recordedStrict=Number(cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.strict_taker_rs_positive_5m_15m_abs_24h_lt_12)||0;
+  if(missingCompositeFields>0||calculatedComposite!==recordedComposite||calculatedStrict!==recordedStrict){
+    console.error('COOLDOWN_FILTER_AUDIT_MISMATCH '+JSON.stringify({missingCompositeFields,calculatedComposite,recordedComposite,calculatedStrict,recordedStrict}));
     process.exitCode=1;
   }
   const failedCases=cases.filter(c=>c.status==='NOT_VERIFIED'||c.anchor?.status!=='OK');
