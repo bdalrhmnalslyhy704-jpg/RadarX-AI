@@ -5,6 +5,7 @@ import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
@@ -216,6 +217,78 @@ test('72h upside opportunity adapter keeps a later rally positive after an early
     kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:'UP',
     horizon_hours:72,independent_of_adverse_barrier:true
   });
+});
+
+test('safe-opportunity adapter preserves the target-before-drawdown entry objective',()=>{
+  const at=1_800_000_000_000;
+  const input=sampleWith({at,targetPct:5,outcome:'DOWN'});
+  const label={
+    status:'RESOLVED',outcome:'UP',resolved_at:at+72*60*60*1000,
+    horizon_ms:72*60*60*1000,outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+    target_definition:'FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1',
+    first_touch_index:12,independent_of_future_after_first_touch:true
+  };
+  input.safe_opportunity_targets={'72h':{plus_5_pct:label}};
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.outcome,'UP');
+  assert.equal(prepared.row.outcome_source,DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE);
+  assert.equal(prepared.row.target_definition,label.target_definition);
+  assert.deepEqual(prepared.row.outcome_contract,{
+    kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome:'UP',
+    horizon_hours:72,adverse_pct:2
+  });
+
+  label.outcome='DOWN';
+  const down=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.equal(down.row.outcome,'DOWN');
+  label.outcome='AMBIGUOUS';label.status='AMBIGUOUS';
+  assert.equal(prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  }).reason,'LABEL_NOT_RESOLVED');
+});
+
+test('temporal TCN accepts the explicitly typed safe first-touch contract',()=>{
+  const at=1_800_000_000_000;
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const row={
+    id:'AAAUSDT:SAFE72',symbol:'AAAUSDT',at,
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome:'UP',outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+    target_definition:'FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1',
+    outcome_contract:{kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome:'UP',
+      horizon_hours:72,adverse_pct:2},
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    temporal_sequence:sequence
+  };
+  const result=buildTemporalNeuralProfile([row],{
+    targetDefinition:row.target_definition,
+    outcomeHorizonMs:72*60*60*1000,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    outcomeContractKind:'SAFE_FIRST_PASSAGE'
+  });
+  assert.equal(result.resolved_samples,1);
+  assert.equal(result.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
+});
+
+test('skip-temporal research split lets tabular challengers finish without competing for TCN compute',()=>{
+  const samples=Array.from({length:40},(_,index)=>sampleWith({
+    at:1_800_000_000_000+index*24*60*60*1000,
+    outcome:index%7===0?'UP':'DOWN'
+  }));
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    skipTemporal:true,enableTemporalBoostedTree:true,
+    minTrainingSamples:10,minimumValidationSamples:5,minimumHoldoutSamples:5,
+    minNeuralTrainingSamples:240
+  });
+  assert.equal(result.temporal_tcn_reason,'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT');
+  assert.equal(result.temporal_tcn_training_performed,false);
+  assert.equal(result.temporal_tcn.status,'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT');
+  assert.equal(result.approval.real_order_execution,false);
 });
 
 test('temporal TCN accepts the explicitly typed 72h upside contract without relabelling it as first passage',()=>{
