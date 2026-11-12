@@ -293,7 +293,8 @@ function firstMicroCandidates(all,market,startMs,endMs){
     watch_confirmation_filter_counts:{taker_buy_ge_054:0,relative_strength_nonnegative:0,both_taker_and_relative_strength:0,
       positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0},
     cooldown_watch_event_filter_counts:{taker_buy_ge_054:0,relative_strength_nonnegative:0,both_taker_and_relative_strength:0,
-      positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0},
+      positive_5m_return:0,five_minute_rvol_ge_1:0,both_taker_relative_and_5m_rvol:0,
+      research_composite_taker_rs_15m_24h:0},
     proxy_method:'Exact Build224 Micro fingerprint on closed 1m/5m/BTC 5m candles; rolling 24h ticker is built from 1,440 closed 1m candles; fast ticker deltas are approximated from 1m bars; market-wide rank/depth remain unavailable'};
   let lastCooldownWatchAt=-Infinity;
   for(const candle of all['1m'].filter(x=>Number(x.closeTime)>=scanStart&&Number(x.closeTime)<=endMs)){
@@ -359,7 +360,9 @@ function firstMicroCandidates(all,market,startMs,endMs){
           quote_volume_24h_usdt:Number(ticker.quoteVolume24h),underfloor_burst_bypass_selected:underfloorSelection.length>0,
           taker_buy_ratio:taker,relative_strength_5m_pct:relative,rvol_1m:Number(metrics.rvol_1m)||0,
           rvol_5m:rvol5,trade_rvol_5m:Number(metrics.trade_rvol_5m)||0,
-          return_1m:Number(metrics.return_1m)||0,return_5m:return5,mode:fingerprint.mode
+          return_1m:Number(metrics.return_1m)||0,return_5m:return5,return_15m:Number(metrics.return_15m)||0,
+          acceleration_5m_pct:Number(metrics.acceleration_5m_pct)||0,vwap_distance_pct:Number(metrics.vwap_distance_pct)||0,
+          price_change_24h_pct:Number(ticker.priceChange24h),mode:fingerprint.mode
         };
       }
       if(taker>=.54)out.watch_confirmation_filter_counts.taker_buy_ge_054++;
@@ -387,6 +390,8 @@ function firstMicroCandidates(all,market,startMs,endMs){
         if(return5>0)out.cooldown_watch_event_filter_counts.positive_5m_return++;
         if(rvol5>=1)out.cooldown_watch_event_filter_counts.five_minute_rvol_ge_1++;
         if(taker>=.54&&relative>=0&&rvol5>=1)out.cooldown_watch_event_filter_counts.both_taker_relative_and_5m_rvol++;
+        if(taker>=.54&&relative>=0&&Number(ticker.priceChange24h)<12&&Number(metrics.return_15m)>0)
+          out.cooldown_watch_event_filter_counts.research_composite_taker_rs_15m_24h++;
         out.last_cooldown_watch_candidate=event;
       }
     }
@@ -508,6 +513,7 @@ async function run(){
   md.push(`Micro profiles marked eligible: ${cases[0]?.micro_replay?.micro_profile_eligible_count??0}; underfloor Deep watch-gate passes: ${cases[0]?.micro_replay?.underfloor_deep_watch_gate_pass_count??0}`);
   md.push(`Watch candidates passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.watch_confirmation_filter_counts?.both_taker_and_relative_strength??0}`);
   md.push(`After 10-minute cooldown, watch events passing both taker-buy >=0.54 and nonnegative 5m relative strength: ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.both_taker_and_relative_strength??0}`);
+  md.push(`Research-only composite pass (taker >=0.54 + 5m relative strength >=0 + 15m return >0 + 24h change <12%): ${cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.research_composite_taker_rs_15m_24h??0} events.`);
   md.push('');
   md.push('### First watch candidate each UTC day and subsequent path');
   md.push('| UTC day | First watch time | Price | Score | Taker buy | 5m relative strength | 5m RVOL | Worst drawdown to end | First later recovery above entry |');
