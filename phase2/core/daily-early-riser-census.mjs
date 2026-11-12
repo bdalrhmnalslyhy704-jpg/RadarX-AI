@@ -12,6 +12,8 @@ export const DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1';
 export const DAILY_EARLY_RISER_DRAWDOWN_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1';
+export const DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE =
+  'BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1';
 
 const finite=value=>{
   if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
@@ -271,6 +273,63 @@ export function classifyDailyEarlyRiserDrawdownRisk({
   };
 }
 
+/**
+ * Tradability label for an early entry: the upside target must be touched
+ * before the -2% adverse barrier inside the same closed-candle horizon.
+ * Separate upside and drawdown facts remain available for diagnostics.
+ * Same-candle touches are ambiguous because OHLC cannot establish ordering.
+ */
+export function classifyDailyEarlyRiserSafeOpportunity({
+  upside,drawdown,targetPct,adversePct=2,horizonHours=24
+}={}){
+  const target=finite(targetPct),adverse=finite(adversePct),hours=finite(horizonHours);
+  if(target===null||target<=0||adverse===null||adverse<=0||
+    !DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(hours))
+    return {status:'INVALID',outcome:'INVALID',reason:'SAFE_TARGET_OR_HORIZON_INVALID'};
+  const horizonMs=hours*60*60*1000;
+  if(!upside||!drawdown||upside.status!=='RESOLVED'||drawdown.status!=='RESOLVED'||
+    finite(upside.horizon_ms)!==horizonMs||finite(drawdown.horizon_ms)!==horizonMs||
+    finite(upside.resolved_at)!==finite(drawdown.resolved_at)||
+    upside.outcome_source!==DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE||
+    drawdown.outcome_source!==DAILY_EARLY_RISER_DRAWDOWN_OUTCOME_SOURCE)
+    return {status:'INVALID',outcome:'INVALID',reason:'SAFE_COMPONENT_LABELS_INCOMPLETE_OR_MISMATCHED'};
+  const targetIndex=upside.first_target_index===null?null:finite(upside.first_target_index);
+  const drawdownIndex=drawdown.first_drawdown_index===null?null:finite(drawdown.first_drawdown_index);
+  if((targetIndex!==null&&(!Number.isInteger(targetIndex)||targetIndex<0))||
+    (drawdownIndex!==null&&(!Number.isInteger(drawdownIndex)||drawdownIndex<0)))
+    return {status:'INVALID',outcome:'INVALID',reason:'SAFE_COMPONENT_TOUCH_INDEX_INVALID'};
+  if(targetIndex!==null&&drawdownIndex!==null&&targetIndex===drawdownIndex)
+    return {
+      status:'AMBIGUOUS',outcome:'AMBIGUOUS',
+      reason:'UPSIDE_AND_DRAWDOWN_TOUCHED_IN_SAME_15M_CANDLE',
+      first_touch_index:targetIndex,first_touch_at:upside.target_touch_at,
+      target_pct:target,adverse_pct:adverse,horizon_hours:hours,
+      horizon_ms:horizonMs,resolved_at:upside.resolved_at,
+      outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+      target_definition:'FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_'+adverse+
+        '_PCT_WITHIN_'+hours+'H_15M_V1',
+      independent_of_future_after_first_touch:true
+    };
+  let outcome='FLAT',firstTouchIndex=null,firstTouchAt=upside.resolved_at,reason='NEITHER_BARRIER_TOUCHED';
+  if(targetIndex!==null&&(drawdownIndex===null||targetIndex<drawdownIndex)){
+    outcome='UP';firstTouchIndex=targetIndex;firstTouchAt=upside.target_touch_at;
+    reason='UPSIDE_TARGET_TOUCHED_BEFORE_DRAWDOWN_BARRIER';
+  }else if(drawdownIndex!==null){
+    outcome='DOWN';firstTouchIndex=drawdownIndex;firstTouchAt=drawdown.drawdown_touch_at;
+    reason='DRAWDOWN_BARRIER_TOUCHED_BEFORE_UPSIDE_TARGET';
+  }
+  return {
+    status:'RESOLVED',outcome,reason,first_touch_index:firstTouchIndex,
+    first_touch_at:firstTouchAt,target_pct:target,adverse_pct:adverse,
+    horizon_hours:hours,horizon_bars:horizonMs/DAILY_EARLY_RISER_INTERVAL_MS,
+    horizon_ms:horizonMs,resolved_at:upside.resolved_at,
+    outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+    target_definition:'FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_'+adverse+
+      '_PCT_WITHIN_'+hours+'H_15M_V1',
+    independent_of_future_after_first_touch:true
+  };
+}
+
 export function classifyDailyEarlyRiserTargetSet({
   baseline,future15m,targetsPct=DAILY_EARLY_RISER_TARGETS_PCT,
   adversePct=DAILY_EARLY_RISER_DEFAULT_ADVERSE_PCT
@@ -309,8 +368,8 @@ export function buildDailyEarlyRiserHistoricalSamples({
     return {samples:[],audit:{status:'SYMBOL_REJECTED',reason:'SPOT_USDT_DIRECTIONAL_SYMBOL_REQUIRED'}};
   const opportunityHorizons=[...new Set((Array.isArray(opportunityHorizonsHours)?opportunityHorizonsHours:[])
     .map(finite).filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))].sort((a,b)=>a-b);
-  const drawdownThresholds=[...new Set((Array.isArray(drawdownAdversePcts)?drawdownAdversePcts:[])
-    .map(finite).filter(value=>value!==null&&value>0&&value<=50))].sort((a,b)=>a-b);
+  const drawdownThresholds=[...new Set([2,...(Array.isArray(drawdownAdversePcts)?drawdownAdversePcts:[])
+    .map(finite).filter(value=>value!==null&&value>0&&value<=50)])].sort((a,b)=>a-b);
   if(!opportunityHorizons.length)
     return {samples:[],audit:{status:'INVALID_POLICY',reason:'NO_VALID_OPPORTUNITY_HORIZONS'}};
   const maxOpportunityHorizonHours=Math.max(...opportunityHorizons);
@@ -368,12 +427,14 @@ export function buildDailyEarlyRiserHistoricalSamples({
       targetsPct:targets,adversePct});
     const opportunityTargets={};
     const drawdownRisks={};
+    const safeOpportunityTargets={};
     for(const hours of opportunityHorizons){
       const bars=hours*60*60*1000/DAILY_EARLY_RISER_INTERVAL_MS;
       const horizonPath=futureMax.slice(0,bars);
       const key=''+hours+'h';
       opportunityTargets[key]={};
       drawdownRisks[key]={};
+      safeOpportunityTargets[key]={};
       for(const target of targets){
         const targetKey='plus_'+String(target).replace('.','_')+'_pct';
         opportunityTargets[key][targetKey]=classifyDailyEarlyRiserUpsideOpportunity({
@@ -384,6 +445,14 @@ export function buildDailyEarlyRiserHistoricalSamples({
         const riskKey='minus_'+String(threshold).replace('.','_')+'_pct';
         drawdownRisks[key][riskKey]=classifyDailyEarlyRiserDrawdownRisk({
           baseline,future15m:horizonPath,adversePct:threshold,horizonHours:hours
+        });
+      }
+      const canonicalDrawdown=drawdownRisks[key].minus_2_pct;
+      for(const target of targets){
+        const targetKey='plus_'+String(target).replace('.','_')+'_pct';
+        safeOpportunityTargets[key][targetKey]=classifyDailyEarlyRiserSafeOpportunity({
+          upside:opportunityTargets[key][targetKey],drawdown:canonicalDrawdown,
+          targetPct:target,adversePct:2,horizonHours:hours
         });
       }
     }
@@ -454,6 +523,7 @@ export function buildDailyEarlyRiserHistoricalSamples({
       targets:targetSet.targets,
       opportunity_targets:opportunityTargets,
       drawdown_risks:drawdownRisks,
+      safe_opportunity_targets:safeOpportunityTargets,
       liquidity_lane:volume24h>=750000?'STANDARD_750K_PLUS':'MICRO_WATCH_ONLY_UNDER_750K'
     });
   }
