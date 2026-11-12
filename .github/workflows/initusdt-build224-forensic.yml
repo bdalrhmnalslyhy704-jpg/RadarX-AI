@@ -1,0 +1,52 @@
+name: Build 224 INITUSDT Historical Forensic Replay
+
+on:
+  push:
+    branches:
+      - research/initusdt-build224-forensic-20261112
+    paths:
+      - 'phase2/tools/initusdt-build224-forensic.mjs'
+      - '.github/workflows/initusdt-build224-forensic.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-initusdt-forensic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Replay closed Binance Spot candles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout isolated Build 224 research branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify replay script syntax
+        run: node --check phase2/tools/initusdt-build224-forensic.mjs
+
+      - name: Fetch Binance Spot history and replay INITUSDT
+        run: node phase2/tools/initusdt-build224-forensic.mjs
+        env:
+          NODE_OPTIONS: --max-old-space-size=320
+
+      - name: Upload complete INITUSDT forensic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: initusdt-build224-forensic-2026-11-09-10
+          path: |
+            reports/initusdt-build224-forensic-2026-11-09-10.json
+            reports/initusdt-build224-forensic-2026-11-09-10.md
+          if-no-files-found: error
+          retention-days: 30
