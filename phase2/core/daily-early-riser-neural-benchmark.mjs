@@ -311,6 +311,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       live_eligibility_ready:temporal.live_eligibility_ready===true,
       validation:temporal.validation??null,
       holdout:temporal.holdout??null,
+      member_training_diagnostics:temporal.member_training_diagnostics??[],
       holdout_comparison:temporal.holdout_comparison??null,
       regime_specialists:temporal.regime_specialists??null,
       supported_regimes:temporal.supported_regimes??[],
@@ -343,7 +344,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       holdout:temporal.regime_local_tcn_pyramid_challenger?.holdout??null,
       holdout_logistic:temporal.regime_local_tcn_pyramid_challenger?.holdout_logistic??null,
       holdout_comparison:temporal.regime_local_tcn_pyramid_challenger?.holdout_comparison??null,
-      regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{}
+      regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{},
+      member_training_diagnostics:temporal.regime_local_tcn_pyramid_challenger?.member_training_diagnostics??[]
     },
     temporal_regime_local_tcn_multiscale_challenger:{
       status:temporal.regime_local_tcn_multiscale_challenger?.status??'NOT_EVALUATED',
@@ -372,7 +374,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       holdout:temporal.regime_local_tcn_multiscale_challenger?.holdout??null,
       holdout_logistic:temporal.regime_local_tcn_multiscale_challenger?.holdout_logistic??null,
       holdout_comparison:temporal.regime_local_tcn_multiscale_challenger?.holdout_comparison??null,
-      regime_specialists:temporal.regime_local_tcn_multiscale_challenger?.regime_specialists??{}
+      regime_specialists:temporal.regime_local_tcn_multiscale_challenger?.regime_specialists??{},
+      member_training_diagnostics:temporal.regime_local_tcn_multiscale_challenger?.member_training_diagnostics??[]
     },
     temporal_regime_local_tcn_challenger:{
       status:temporal.regime_local_tcn_challenger?.status??'NOT_EVALUATED',
@@ -397,7 +400,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       holdout:temporal.regime_local_tcn_challenger?.holdout??null,
       holdout_logistic:temporal.regime_local_tcn_challenger?.holdout_logistic??null,
       holdout_comparison:temporal.regime_local_tcn_challenger?.holdout_comparison??null,
-      regime_specialists:temporal.regime_local_tcn_challenger?.regime_specialists??{}
+      regime_specialists:temporal.regime_local_tcn_challenger?.regime_specialists??{},
+      member_training_diagnostics:temporal.regime_local_tcn_challenger?.member_training_diagnostics??[]
     },
     samples:{
       accepted:rows.length,

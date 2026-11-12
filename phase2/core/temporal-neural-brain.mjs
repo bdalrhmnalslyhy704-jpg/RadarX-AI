@@ -526,6 +526,131 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   return targetGradients;
 }
 
+
+// Deterministic central-difference audit of the analytical backpropagation.
+// This is a diagnostic utility for tests/research only; it does not alter
+// training behavior, model weights, acceptance thresholds or production state.
+export function auditTemporalGradientNumerics(
+  sequence,
+  target=1,
+  {epsilon=1e-5,tolerance=2e-7,baseRate=0.37}={}
+) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_GRADIENT_AUDIT_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_GRADIENT_AUDIT_TARGET_INVALID');
+  const step=Number(epsilon),allowed=Number(tolerance);
+  if(!Number.isFinite(step)||step<=0||step>1e-2||
+    !Number.isFinite(allowed)||allowed<=0||allowed>1e-2)
+    throw new TypeError('TEMPORAL_GRADIENT_AUDIT_NUMERIC_OPTIONS_INVALID');
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const modes=[
+    'LAST_12_MEAN_V1',
+    TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE
+  ];
+  const baselineFeatures=pooledSequence(sequence);
+  const lossFor=(model,objective)=>{
+    const probability=clamp(forward(sequence,model,1,baselineFeatures).probability,1e-12,1-1e-12);
+    const brier=(probability-target)**2;
+    const logLoss=-(target*Math.log(probability)+(1-target)*Math.log(1-probability));
+    return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+      objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+        ?0.5*brier+0.5*logLoss:brier;
+  };
+  const paths=[
+    ['projectionWeights',[0,0]],
+    ['projectionBiases',[0]],
+    ['depthWeights',[0,0,0]],
+    ['pointWeights',[0,0,0]],
+    ['biases',[0,0]]
+  ];
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(53,baseRate,null,mode);
+    const outputIndices=mode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?Array.from({length:TEMPORAL_MULTISCALE_POOLING_SEGMENTS},(_,segment)=>
+        [segment*48,segment*48+16,segment*48+32]).flat()
+      :mode===TEMPORAL_ORDERED_POOLING_MODE?[0,16,32,48]:[0];
+    for(const index of outputIndices)paths.push(['outputWeights',[index]]);
+    for(const objective of objectives){
+      const cache=forward(sequence,model,1,baselineFeatures);
+      const analytical=gradientsFor(sequence,target,model,cache,objective);
+      let maximumAbsoluteError=0,maximumRelativeError=0;
+      let checked=0,failed=0;
+      const details=[];
+      for(const [key,path] of paths){
+        let parameter=model[key];
+        for(const index of path.slice(0,-1))parameter=parameter[index];
+        const index=path.at(-1);
+        const original=parameter[index];
+        parameter[index]=original+step;
+        const upper=lossFor(model,objective);
+        parameter[index]=original-step;
+        const lower=lossFor(model,objective);
+        parameter[index]=original;
+        const numerical=(upper-lower)/(2*step);
+        let analyticalValue=analytical[key];
+        for(const part of path)analyticalValue=analyticalValue[part];
+        const absoluteError=Math.abs(numerical-analyticalValue);
+        const relativeError=absoluteError/Math.max(1e-10,
+          Math.abs(numerical),Math.abs(analyticalValue));
+        const threshold=allowed+2e-4*Math.max(Math.abs(numerical),Math.abs(analyticalValue));
+        const passed=Number.isFinite(numerical)&&Number.isFinite(analyticalValue)&&
+          absoluteError<=threshold;
+        checked++;if(!passed)failed++;
+        maximumAbsoluteError=Math.max(maximumAbsoluteError,absoluteError);
+        maximumRelativeError=Math.max(maximumRelativeError,relativeError);
+        details.push({parameter:key,path,numerical:Number(numerical.toExponential(6)),
+          analytical:Number(analyticalValue.toExponential(6)),
+          absolute_error:Number(absoluteError.toExponential(6)),
+          relative_error:Number(relativeError.toExponential(6)),passed});
+      }
+      results.push({
+        pooling_mode:mode,objective,checked_parameters:checked,
+        failed_parameters:failed,maximum_absolute_error:maximumAbsoluteError,
+        maximum_relative_error:maximumRelativeError,passed:failed===0,details
+      });
+    }
+  }
+  return {
+    schema:'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1',
+    diagnostic_only:true,training_behavior_changed:false,
+    input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+    pooling_modes:modes,objectives,
+    checked_parameter_derivatives:results.reduce((sum,row)=>sum+row.checked_parameters,0),
+    failed_parameter_derivatives:results.reduce((sum,row)=>sum+row.failed_parameters,0),
+    maximum_absolute_error:Math.max(...results.map(row=>row.maximum_absolute_error)),
+    passed:results.every(row=>row.passed),results
+  };
+}
+
+function summarizeNumericTree(value,state={sumSquares:0,maxAbsolute:0,count:0}) {
+  if(Array.isArray(value)){
+    for(const child of value)summarizeNumericTree(child,state);
+  }else if(value&&typeof value==='object'){
+    for(const child of Object.values(value))summarizeNumericTree(child,state);
+  }else if(typeof value==='number'&&Number.isFinite(value)){
+    state.sumSquares+=value*value;
+    state.maxAbsolute=Math.max(state.maxAbsolute,Math.abs(value));
+    state.count++;
+  }
+  return state;
+}
+function vectorL2Norm(values){
+  return Math.sqrt((Array.isArray(values)?values:[]).reduce((sum,value)=>
+    sum+(Number(value)||0)**2,0));
+}
+function trainingObjectiveLoss(probability,target,objective) {
+  const p=clamp(probability,1e-12,1-1e-12);
+  const brier=(p-target)**2;
+  const logLoss=-(target*Math.log(p)+(1-target)*Math.log(1-p));
+  return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+    objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      ?0.5*brier+0.5*logLoss:brier;
+}
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
@@ -553,23 +678,53 @@ function fitMember(rows, seed, {
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
+  const epochHistory=[];
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
+    let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     for (const row of rows) {
       const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
       const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective,rowGradientScratch);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
+      const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
+      weightedObjectiveLoss+=rowLoss*sampleWeight;
+      if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
+      else negativeObjectiveLoss+=rowLoss;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
+    const gradientStats=summarizeNumericTree(averaged);
     const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
     optimizer = step.state;
+    epochHistory.push({
+      epoch,
+      // Loss is measured on training rows immediately before this epoch's update.
+      // It is diagnostic only and is never used for selection or early stopping.
+      mean_weighted_training_objective_loss:Number((weightedObjectiveLoss/
+        Math.max(1,totalSampleWeight)).toFixed(8)),
+      mean_positive_training_objective_loss:positiveSamples
+        ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
+      mean_negative_training_objective_loss:negativeSamples
+        ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
+      averaged_gradient_l2_norm:Number(Math.sqrt(gradientStats.sumSquares).toFixed(8)),
+      maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
+      residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
+    });
   }
+  model.training_diagnostics={
+    schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
+    diagnostic_only:true,
+    loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
+    epochs_completed:epochHistory.length,
+    training_sample_profile:model.training_sample_profile,
+    objective:trainingObjective,
+    epoch_history:epochHistory
+  };
   return model;
 }
 
@@ -981,6 +1136,11 @@ function fitEnsemble(rows, options = {}) {
         :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
+    member_training_diagnostics:members.map((member,index)=>({
+      member_index:index,
+      seed:SEEDS[index],
+      ...(member.training_diagnostics||{})
+    })),
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
     training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
@@ -1198,6 +1358,7 @@ function fitRegimeLocalTemporalTcn({
     neural_residual_contributes:Boolean(selected&&selected.residual_scale>0),
     ensemble_members:fitted.members.length,
     member_training_profiles:fitted.member_training_profiles,
+    member_training_diagnostics:fitted.member_training_diagnostics,
     baseline_anchor_source:'REGIME_LOCAL_TRAINING_ONLY',
     baseline_anchor_training_samples:training.length,
     baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
@@ -2546,8 +2707,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
+    member_training_diagnostics:sharedTcnFit?.member_training_diagnostics||[],
     member_training_profiles_by_regime:Object.fromEntries(regimes.map(regime=>
       [regime,sharedTcnFit?.member_training_profiles||[]])),
+    member_training_diagnostics_by_regime:Object.fromEntries(regimes.map(regime=>
+      [regime,sharedTcnFit?.member_training_diagnostics||[]])),
     member_validation_scores:Object.fromEntries(regimes.map(regime=>[
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),
