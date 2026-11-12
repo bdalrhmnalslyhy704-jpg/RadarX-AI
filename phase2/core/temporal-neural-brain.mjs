@@ -31,6 +31,16 @@ export const TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT=
   TEMPORAL_LATENT_CHANNELS+TEMPORAL_ORDERED_POOLING_FEATURE_COUNT;
 export const TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE=
   'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_ORDERED_FOUR_SEGMENT_POOLING_V9';
+export const TEMPORAL_MULTISCALE_POOLING_MODE='ORDERED_SEGMENT_MEAN_ENDPOINT_SLOPE_V1';
+export const TEMPORAL_MULTISCALE_POOLING_SEGMENTS=4;
+export const TEMPORAL_MULTISCALE_POOLING_FEATURES_PER_SEGMENT=TEMPORAL_LATENT_CHANNELS*3;
+export const TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT=
+  TEMPORAL_MULTISCALE_POOLING_SEGMENTS*TEMPORAL_MULTISCALE_POOLING_FEATURES_PER_SEGMENT;
+export const TEMPORAL_MULTISCALE_DILATIONS=Object.freeze([1,2,4,8]);
+export const TEMPORAL_MULTISCALE_RECEPTIVE_FIELD=31;
+export const TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT=1888;
+export const TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE=
+  'TCN_24x29_TO16_LATENT_FOUR_LAYER_DILATED_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V10';
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -262,7 +272,9 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
 function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPoolingMode='LAST_12_MEAN_V1') {
   const inputChannels=TEMPORAL_SEQUENCE_CHANNELS;
   const channels=TEMPORAL_LATENT_CHANNELS;
-  const layers=DILATIONS.length;
+  const dilations=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+    ?[...TEMPORAL_MULTISCALE_DILATIONS]:[...DILATIONS];
+  const layers=dilations.length;
   const offset=Number(seed)*0.6180339887498949;
   const projectionWeights=Array.from({length:inputChannels},(_,input)=>
     Array.from({length:channels},(_,output)=>
@@ -281,10 +293,11 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
     Array.from({length:channels},(_,channel)=>
       0.002*Math.sin((layer+1)*5.3+(channel+1)*1.7+offset)));
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
-  const outputFeatureCount=orderedPooling
-    ?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:channels;
-  const trainableParameterCount=TEMPORAL_TRAINABLE_PARAMETER_COUNT-
-    channels+outputFeatureCount;
+  const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
+  const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
+    orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:channels;
+  const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*channels+channels+
+    layers*(KERNEL_TAPS*channels+channels*channels+channels)+outputFeatureCount;
   const outputWeights=Array.from({length:outputFeatureCount},(_,feature)=>
     0.01*Math.sin((feature+1)*4.73+offset));
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
@@ -298,7 +311,7 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
     projectionWeights,projectionBiases,depthWeights,pointWeights,biases,outputWeights,
     skipWeights:baselineWeights,outputBias:baselineBias,baseline_by_regime:null,
     residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR',
-    temporal_pooling:temporalPoolingMode,
+    temporal_pooling:temporalPoolingMode,dilations,
     output_features:outputFeatureCount,
     latent_channels:channels,trainable_parameters:trainableParameterCount
   };
@@ -328,6 +341,48 @@ export function poolOrderedTemporalSegments(latentRows){
   return {features,poolSegments};
 }
 
+/**
+ * Retain three complementary summaries for each of four ordered six-step
+ * latent segments: segment mean, endpoint activation, and per-step slope.
+ * The slope uses exact endpoint finite differences, with explicit routes
+ * so backpropagation reaches both endpoint activations.
+ */
+export function poolMultiscaleTemporalSegments(latentRows){
+  if(!Array.isArray(latentRows)||latentRows.length!==TEMPORAL_SEQUENCE_STEPS||
+    latentRows.some(row=>!Array.isArray(row)||row.length!==TEMPORAL_LATENT_CHANNELS||
+      row.some(value=>typeof value!=='number'||!Number.isFinite(value))))return null;
+  const features=[],featureRoutes=[],poolSegments=[];
+  const statistics=['MEAN','ENDPOINT','SLOPE_PER_STEP'];
+  for(let segment=0;segment<TEMPORAL_MULTISCALE_POOLING_SEGMENTS;segment++){
+    const start=Math.floor(segment*latentRows.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+    const end=Math.floor((segment+1)*latentRows.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+    const count=end-start,featureOffset=features.length;
+    for(let statistic=0;statistic<statistics.length;statistic++){
+      for(let channel=0;channel<TEMPORAL_LATENT_CHANNELS;channel++){
+        let value=0,weights=[];
+        if(statistic===0){
+          for(let time=start;time<end;time++){
+            value+=latentRows[time][channel]/count;
+            weights.push({time,weight:1/count});
+          }
+        }else if(statistic===1){
+          value=latentRows[end-1][channel];
+          weights=[{time:end-1,weight:1}];
+        }else{
+          const scale=1/Math.max(1,count-1);
+          value=(latentRows[end-1][channel]-latentRows[start][channel])*scale;
+          weights=[{time:start,weight:-scale},{time:end-1,weight:scale}];
+        }
+        features.push(value);
+        featureRoutes.push({channel,statistic:statistics[statistic],time_weights:weights});
+      }
+    }
+    poolSegments.push({start,count,feature_offset:featureOffset,
+      feature_count:features.length-featureOffset,segment_index:segment});
+  }
+  return {features,featureRoutes,poolSegments};
+}
+
 function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=null) {
   const channels=TEMPORAL_LATENT_CHANNELS;
   const projected=sequence.map(row=>Array.from({length:channels},(_,outputChannel)=>{
@@ -337,9 +392,10 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     }
     return Math.tanh(value);
   }));
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
   const activations=[projected],depthCaches=[];
-  for(let layer=0;layer<DILATIONS.length;layer++){
-    const input=activations[layer],dilation=DILATIONS[layer];
+  for(let layer=0;layer<dilations.length;layer++){
+    const input=activations[layer],dilation=dilations[layer];
     const depth=input.map((row,time)=>row.map((_,channel)=>{
       let value=input[time][channel];
       for(let tap=1;tap<=KERNEL_TAPS;tap++){
@@ -358,8 +414,13 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     depthCaches.push(depth);activations.push(output);
   }
   const final=activations.at(-1);
-  let pooled,poolSegments,poolStart,poolCount;
-  if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+  let pooled,poolSegments,poolStart,poolCount,poolRoutes;
+  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+    const multi=poolMultiscaleTemporalSegments(final);
+    if(!multi)throw new TypeError('TEMPORAL_MULTISCALE_POOLING_INPUT_INVALID');
+    pooled=multi.features;poolSegments=multi.poolSegments;poolRoutes=multi.featureRoutes;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+  }else if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
     const pyramid=poolOrderedTemporalSegments(final);
     if(!pyramid)throw new TypeError('TEMPORAL_ORDERED_POOLING_INPUT_INVALID');
     pooled=pyramid.features;poolSegments=pyramid.poolSegments;
@@ -372,6 +433,13 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
       for(let channel=0;channel<pooled.length;channel++)pooled[channel]+=final[time][channel]/poolCount;
     }
     poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
+  }
+  if(!poolRoutes){
+    poolRoutes=pooled.map((_,feature)=>{
+      const segment=poolSegments[Math.floor(feature/channels)];
+      return {channel:feature%channels,time_weights:Array.from(
+        {length:segment.count},(_,index)=>({time:segment.start+index,weight:1/segment.count}))};
+    });
   }
   const baselineFeatures=isValidTemporalPooledBaselineFeatures(precomputedBaselineFeatures)
     ?precomputedBaselineFeatures:pooledSequence(sequence);
@@ -386,14 +454,15 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   for(let feature=0;feature<pooled.length;feature++){
     logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
   }
-  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,baselineFeatures};
+  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,poolRoutes,baselineFeatures};
 }
 
 function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
-  const activationGradients=Array(DILATIONS.length+1);
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
+  const activationGradients=Array(dilations.length+1);
   const final=cache.activations.at(-1);
   activationGradients[DILATIONS.length]=final.map(()=>Array(channels).fill(0));
   const probabilityError=cache.probability-target;
@@ -404,22 +473,20 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
     :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brierGradient+0.5*logLossGradient
       :brierGradient;
-  const poolSegments=Array.isArray(cache.poolSegments)&&cache.poolSegments.length
-    ?cache.poolSegments:[{start:cache.poolStart,count:cache.poolCount,feature_offset:0,segment_index:0}];
+  const poolRoutes=Array.isArray(cache.poolRoutes)?cache.poolRoutes:null;
   for(let feature=0;feature<cache.pooled.length;feature++){
-    const segmentIndex=Math.floor(feature/channels);
-    const channel=feature%channels;
-    const segment=poolSegments[segmentIndex];
-    if(!segment)throw new TypeError('TEMPORAL_POOLING_GRADIENT_SEGMENT_MISSING');
+    const route=poolRoutes?.[feature];
+    if(!route||!Array.isArray(route.time_weights))
+      throw new TypeError('TEMPORAL_POOLING_GRADIENT_ROUTE_MISSING');
     targetGradients.outputWeights[feature]=error*cache.pooled[feature];
-    for(let time=segment.start;time<segment.start+segment.count;time++){
-      activationGradients[DILATIONS.length][time][channel]+=
-        error*model.outputWeights[feature]/segment.count;
+    for(const item of route.time_weights){
+      activationGradients[dilations.length][item.time][route.channel]+=
+        error*model.outputWeights[feature]*item.weight;
     }
   }
-  for(let layer=DILATIONS.length-1;layer>=0;layer--){
+  for(let layer=dilations.length-1;layer>=0;layer--){
     const input=cache.activations[layer],output=cache.activations[layer+1];
-    const depth=cache.depthCaches[layer],dilation=DILATIONS[layer];
+    const depth=cache.depthCaches[layer],dilation=dilations[layer];
     const inputGradient=input.map(()=>Array(channels).fill(0));
     const outputGradient=activationGradients[layer+1];
     for(let time=0;time<output.length;time++){
@@ -871,12 +938,16 @@ function fitEnsemble(rows, options = {}) {
   const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const temporalPoolingMode=String(options.temporalPoolingMode||'LAST_12_MEAN_V1');
-  const outputFeatureCount=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-    ?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:TEMPORAL_LATENT_CHANNELS;
-  const trainableParameterCount=TEMPORAL_TRAINABLE_PARAMETER_COUNT-
-    TEMPORAL_LATENT_CHANNELS+outputFeatureCount;
-  const architecture=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-    ?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
+  const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
+  const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
+  const layerCount=multiscalePooling?TEMPORAL_MULTISCALE_DILATIONS.length:DILATIONS.length;
+  const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
+    orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:TEMPORAL_LATENT_CHANNELS;
+  const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*TEMPORAL_LATENT_CHANNELS+
+    TEMPORAL_LATENT_CHANNELS+layerCount*(KERNEL_TAPS*TEMPORAL_LATENT_CHANNELS+
+      TEMPORAL_LATENT_CHANNELS*TEMPORAL_LATENT_CHANNELS+TEMPORAL_LATENT_CHANNELS)+outputFeatureCount;
+  const architecture=multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
+    orderedPooling?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
@@ -984,13 +1055,17 @@ function fitRegimeLocalTemporalTcn({
   if(!chronologyValid)supportGaps.push('REGIME_LOCAL_CHRONOLOGY_OR_PURGE_VIOLATION');
   const base={
     regime,status:supportGaps.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':'READY_FOR_REGIME_LOCAL_TCN_FIT',
-    model_kind:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-      ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+    model_kind:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
+      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+        ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
     temporal_pooling:temporalPoolingMode,
-    training_strategy:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-      ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
-      :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+        ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
+        :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
     training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
     training_sample_budget:limit,
     training_samples:training.length,available_training_samples:allTraining.length,
@@ -1177,7 +1252,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   regimeLocalTcnEpochs=6,
   enableRegimeLocalTcnPyramid=false,
   regimeLocalTcnPyramidMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
-  regimeLocalTcnPyramidEpochs=6
+  regimeLocalTcnPyramidEpochs=6,
+  enableRegimeLocalTcnMultiscale=false,
+  regimeLocalTcnMultiscaleMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  regimeLocalTcnMultiscaleEpochs=6
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
@@ -1477,6 +1555,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeResults={};
   const regimeLocalTcnResults={};
   const regimeLocalTcnPyramidResults={};
+  const regimeLocalTcnMultiscaleResults={};
   const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -1659,6 +1738,33 @@ export function buildTemporalNeuralProfile(samples = [], {
         model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
         temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE,
         training_strategy:'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1',
+        training_samples:0,trained:false,selected_for_research:false,
+        validation_passed:false,holdout_passed:false,probability_ready:false,
+        live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
+      };
+    regimeLocalTcnMultiscaleResults[regime]=enableRegimeLocalTcnMultiscale
+      ?fitRegimeLocalTemporalTcn({
+        regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
+        calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
+        epochs:regimeLocalTcnMultiscaleEpochs,learningRate,l2,comparisonMargin,
+        maxTrainingSamples:regimeLocalTcnMultiscaleMaxTrainingSamples,
+        temporalPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE,
+        minTrainingSamples:minRegimeTraining,
+        minTrainingPositive:minRegimeTrainingPositive,
+        minTrainingNegative:minRegimeNegative,
+        minSelectionSamples,minSelectionPositive,minSelectionNegative,
+        minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+        minValidationSamples:minRegimeValidation,minValidationPositive:minRegimePositive,
+        minValidationNegative:minRegimeNegative,
+        minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
+        minHoldoutNegative:minRegimeNegative
+      })
+      :{
+        regime,status:'NOT_ENABLED_FOR_THIS_PROFILE',
+        model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
+        model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+        temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE,
+        training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
         training_samples:0,trained:false,selected_for_research:false,
         validation_passed:false,holdout_passed:false,probability_ready:false,
         live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
@@ -2183,6 +2289,81 @@ export function buildTemporalNeuralProfile(samples = [], {
     },
     regime_specialists:regimeLocalTcnPyramidResults
   };
+  const regimeLocalTcnMultiscaleSupportedRegimes=regimes.filter(regime=>
+    regimeLocalTcnMultiscaleResults[regime]?.trained===true);
+  const regimeLocalTcnMultiscaleValidationRegimes=regimes.filter(regime=>
+    regimeLocalTcnMultiscaleResults[regime]?.validation_passed===true);
+  const regimeLocalTcnMultiscaleSelectedRegimes=regimes.filter(regime=>
+    regimeLocalTcnMultiscaleResults[regime]?.holdout_passed===true);
+  const regimeLocalTcnMultiscaleValidation=aggregateEvaluations(
+    regimeLocalTcnMultiscaleSupportedRegimes.map(regime=>regimeLocalTcnMultiscaleResults[regime]?.validation));
+  const regimeLocalTcnMultiscaleValidationLogistic=aggregateEvaluations(
+    regimeLocalTcnMultiscaleSupportedRegimes.map(regime=>regimeLocalTcnMultiscaleResults[regime]?.validation_logistic));
+  const regimeLocalTcnMultiscaleHoldout=aggregateEvaluations(
+    regimeLocalTcnMultiscaleSelectedRegimes.map(regime=>regimeLocalTcnMultiscaleResults[regime]?.holdout));
+  const regimeLocalTcnMultiscaleHoldoutLogistic=aggregateEvaluations(
+    regimeLocalTcnMultiscaleSelectedRegimes.map(regime=>regimeLocalTcnMultiscaleResults[regime]?.holdout_logistic));
+  const regimeLocalTcnMultiscaleTrainingSamples=regimeLocalTcnMultiscaleSupportedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnMultiscaleResults[regime]?.training_samples||0),0);
+  const regimeLocalTcnMultiscaleHoldoutSamples=regimeLocalTcnMultiscaleSelectedRegimes.reduce((sum,regime)=>
+    sum+Number(regimeLocalTcnMultiscaleResults[regime]?.holdout?.sample_count||0),0);
+  const regimeLocalTcnMultiscaleProfile={
+    status:!regimeLocalTcnMultiscaleSupportedRegimes.length?'WAITING_FOR_MULTISCALE_TCN_SUPPORT':
+      !regimeLocalTcnMultiscaleValidationRegimes.length?'MULTISCALE_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !regimeLocalTcnMultiscaleSelectedRegimes.length?'MULTISCALE_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'MULTISCALE_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    architecture:TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+    model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
+    temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE,
+    pooling_segments:TEMPORAL_MULTISCALE_POOLING_SEGMENTS,
+    output_features:TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT,
+    trainable_parameter_count:TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+      Math.trunc(Number(regimeLocalTcnMultiscaleMaxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES))),
+    target_definition:targetDefinition,
+    trained:regimeLocalTcnMultiscaleSupportedRegimes.length>0,
+    selected_for_research:regimeLocalTcnMultiscaleValidationRegimes.length>0,
+    research_out_of_sample_validated:regimeLocalTcnMultiscaleSelectedRegimes.length>0,
+    probability_ready:false,live_eligibility_ready:false,
+    supported_regimes:regimeLocalTcnMultiscaleSupportedRegimes,
+    validation_selected_regimes:regimeLocalTcnMultiscaleValidationRegimes,
+    selected_regimes:regimeLocalTcnMultiscaleSelectedRegimes,
+    training_samples:regimeLocalTcnMultiscaleTrainingSamples,
+    selection_samples:regimeLocalTcnMultiscaleSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnMultiscaleResults[regime]?.selection_samples||0),0),
+    calibration_samples:regimeLocalTcnMultiscaleSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnMultiscaleResults[regime]?.calibration_samples||0),0),
+    validation_samples:regimeLocalTcnMultiscaleValidation.sample_count||0,
+    validation:regimeLocalTcnMultiscaleValidation,
+    validation_logistic:regimeLocalTcnMultiscaleValidationLogistic,
+    holdout_samples:regimeLocalTcnMultiscaleHoldout.sample_count||0,
+    holdout:regimeLocalTcnMultiscaleHoldout,
+    holdout_logistic:regimeLocalTcnMultiscaleHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:regimeLocalTcnMultiscaleHoldout.model_brier_score??null,
+      logistic_brier_score:regimeLocalTcnMultiscaleHoldoutLogistic.model_brier_score??null,
+      beats_base_rate:regimeLocalTcnMultiscaleHoldout.beat_base_rate===true,
+      beats_logistic:regimeLocalTcnMultiscaleHoldout.evaluated===true&&
+        regimeLocalTcnMultiscaleHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnMultiscaleHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnMultiscaleHoldoutLogistic.model_brier_score,
+      passed:regimeLocalTcnMultiscaleSelectedRegimes.length>0&&
+        regimeLocalTcnMultiscaleHoldout.evaluated===true&&
+        regimeLocalTcnMultiscaleHoldoutLogistic.evaluated===true&&
+        regimeLocalTcnMultiscaleHoldout.model_brier_score+comparisonMargin<
+          regimeLocalTcnMultiscaleHoldoutLogistic.model_brier_score,
+      holdout_sample_count:regimeLocalTcnMultiscaleHoldoutSamples,
+      selected_regimes:regimeLocalTcnMultiscaleSelectedRegimes,
+      supported_regimes:regimeLocalTcnMultiscaleSupportedRegimes,
+      all_supported_regimes_validated:regimeLocalTcnMultiscaleSupportedRegimes.length>0&&
+        regimeLocalTcnMultiscaleSupportedRegimes.every(regime=>
+          regimeLocalTcnMultiscaleSelectedRegimes.includes(regime))
+    },
+    regime_specialists:regimeLocalTcnMultiscaleResults
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
@@ -2346,6 +2527,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     temporal_boosted_tree:temporalBoostedTreeProfile,
     regime_local_tcn_challenger:regimeLocalTcnProfile,
     regime_local_tcn_pyramid_challenger:regimeLocalTcnPyramidProfile,
+    regime_local_tcn_multiscale_challenger:regimeLocalTcnMultiscaleProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
