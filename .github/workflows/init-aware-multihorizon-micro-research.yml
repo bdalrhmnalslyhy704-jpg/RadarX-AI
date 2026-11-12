@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      NODE_OPTIONS: --max-old-space-size=320 --optimize-for-size
+      NODE_OPTIONS: --max-old-space-size=320
       RADARX_DAILY_EARLY_RISER_REPORT: artifacts/init-aware-micro-census.json
       RADARX_DAILY_EARLY_RISER_SAMPLES: artifacts/init-aware-micro-samples.jsonl
       RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES: artifacts/init-aware-micro-temporal.jsonl
@@ -150,7 +150,7 @@ jobs:
           }
           fs.mkdirSync('artifacts',{recursive:true});
           fs.writeFileSync('artifacts/init-aware-micro-summary.json',
-            JSON.stringify(summary,null,2)+'\\n');
+            JSON.stringify(summary,null,2)+'\n');
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
             JSON.stringify(summary,null,2)+'\\n');
           NODE
