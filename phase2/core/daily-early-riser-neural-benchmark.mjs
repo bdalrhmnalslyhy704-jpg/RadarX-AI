@@ -168,6 +168,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const contractKind=labelMode==='first_passage'?'FIRST_PASSAGE':
     labelMode==='safe_opportunity'?'SAFE_FIRST_PASSAGE':'UPSIDE_TOUCH';
   const selectedOutcomeSource=outcomeSourceFor(labelMode);
+  const requiredLiquidityLane=String(options.requiredLiquidityLane||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
   const rows=[];
   const rejected={};
   const seen=new Set();
@@ -176,6 +179,10 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     if(!prepared.row){
       const reason=prepared.reason||'UNKNOWN_REJECTION';
       rejected[reason]=(rejected[reason]||0)+1;
+      continue;
+    }
+    if(requiredLiquidityLane&&prepared.row.liquidity_lane!==requiredLiquidityLane){
+      rejected.LIQUIDITY_LANE_FILTER=(rejected.LIQUIDITY_LANE_FILTER||0)+1;
       continue;
     }
     const identity=prepared.row.symbol+':'+String(prepared.row.at);
@@ -234,6 +241,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       horizon_hours:horizonHours,
       outcome_source:selectedOutcomeSource,
       target_definition:targetContract,
+      required_liquidity_lane:requiredLiquidityLane||null,
       horizon_ms:outcomeHorizonMs,
       feature_schema:'TCN_ONLY_24X29_CLOSED_CANDLE_SEQUENCE',
       feature_names:[],
@@ -324,6 +332,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     horizon_hours:horizonHours,
     outcome_source:selectedOutcomeSource,
     target_definition:targetContract,
+    required_liquidity_lane:requiredLiquidityLane||null,
     horizon_ms:outcomeHorizonMs,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_names:profile.feature_names??[],
