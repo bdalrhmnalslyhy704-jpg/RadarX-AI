@@ -6,6 +6,8 @@ import {
   classifyDailyEarlyRiserFirstPassage,
   classifyDailyEarlyRiserUpsideOpportunity,
   classifyDailyEarlyRiserDrawdownRisk,
+  classifyDailyEarlyRiserSafeOpportunity,
+  DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
   classifyDailyEarlyRiserTargetSet,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
@@ -265,8 +267,48 @@ test('extended census can retain under-750k events for Micro Watch research with
       assert.equal(sample.drawdown_risks[key].minus_2_pct.horizon_hours,hours);
       assert.equal(sample.opportunity_targets[key].plus_5_pct.status,'RESOLVED');
       assert.equal(sample.drawdown_risks[key].minus_2_pct.status,'RESOLVED');
+      assert.ok(['RESOLVED','AMBIGUOUS'].includes(sample.safe_opportunity_targets[key].plus_5_pct.status));
     }
   }
+});
+
+test('safe first-touch labels distinguish tradable upside, early drawdown, same-candle ambiguity and no-touch paths',()=>{
+  const baseline=baselineCandle();
+  const makeLabels=mutate=>{
+    const future=pathAfterBars(baseline,288,mutate);
+    const upside=classifyDailyEarlyRiserUpsideOpportunity({
+      baseline,future15m:future,targetPct:5,horizonHours:72
+    });
+    const drawdown=classifyDailyEarlyRiserDrawdownRisk({
+      baseline,future15m:future,adversePct:2,horizonHours:72
+    });
+    return classifyDailyEarlyRiserSafeOpportunity({
+      upside,drawdown,targetPct:5,adversePct:2,horizonHours:72
+    });
+  };
+  const targetFirst=makeLabels((row,index)=>index===4
+    ?{...row,high:106,low:99,close:105.5}
+    :index===10?{...row,high:100.4,low:97.5,close:98}:row);
+  assert.equal(targetFirst.status,'RESOLVED');
+  assert.equal(targetFirst.outcome,'UP');
+  assert.equal(targetFirst.first_touch_index,4);
+  assert.equal(targetFirst.outcome_source,DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE);
+
+  const drawdownFirst=makeLabels((row,index)=>index===4
+    ?{...row,high:100.4,low:97.5,close:98}
+    :index===210?{...row,high:106,low:99,close:105.5}:row);
+  assert.equal(drawdownFirst.status,'RESOLVED');
+  assert.equal(drawdownFirst.outcome,'DOWN');
+  assert.equal(drawdownFirst.first_touch_index,4);
+
+  const sameCandle=makeLabels((row,index)=>index===7
+    ?{...row,high:106,low:97.5,close:100}:row);
+  assert.equal(sameCandle.status,'AMBIGUOUS');
+  assert.equal(sameCandle.outcome,'AMBIGUOUS');
+
+  const noTouch=makeLabels(row=>row);
+  assert.equal(noTouch.status,'RESOLVED');
+  assert.equal(noTouch.outcome,'FLAT');
 });
 
 test('malformed future OHLC candles are rejected even when timestamps and numbers are finite',()=>{
@@ -282,7 +324,7 @@ test('malformed future OHLC candles are rejected even when timestamps and number
 
 test('label audit rejects missing horizon labels and any incorrect under-floor liquidity lane',()=>{
   const at=1_800_000_000_000,volume=520_000;
-  const targets={},opportunity_targets={},drawdown_risks={};
+  const targets={},opportunity_targets={},drawdown_risks={},safe_opportunity_targets={};
   for(const target of [5,10,15]){
     const key='plus_'+target+'_pct';
     targets[key]={
@@ -294,7 +336,7 @@ test('label audit rejects missing horizon labels and any incorrect under-floor l
   }
   for(const hours of [24,48,72]){
     const h=hours+'h',ms=hours*60*60*1000;
-    opportunity_targets[h]={};drawdown_risks[h]={};
+    opportunity_targets[h]={};drawdown_risks[h]={};safe_opportunity_targets[h]={};
     for(const target of [5,10,15]){
       const key='plus_'+target+'_pct';
       opportunity_targets[h][key]={
@@ -302,6 +344,12 @@ test('label audit rejects missing horizon labels and any incorrect under-floor l
         outcome_source:'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1',
         target_definition:'ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+hours+'H_15M_V1',
         independent_of_adverse_barrier:true
+      };
+      safe_opportunity_targets[h][key]={
+        status:'RESOLVED',outcome:'FLAT',resolved_at:at+ms,horizon_ms:ms,
+        outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+        target_definition:'FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_'+hours+'H_15M_V1',
+        independent_of_future_after_first_touch:true
       };
     }
     for(const threshold of [2,5]){
@@ -317,14 +365,16 @@ test('label audit rejects missing horizon labels and any incorrect under-floor l
   const sample={
     id:'AUDITUSDT',symbol:'AUDITUSDT',at,quote_volume_24h:volume,
     liquidity_lane:'MICRO_WATCH_ONLY_UNDER_750K',
-    targets,opportunity_targets,drawdown_risks
+    targets,opportunity_targets,drawdown_risks,safe_opportunity_targets
   };
   const clean=auditSampleLabelHorizons([sample]);
   assert.equal(clean.total,0,JSON.stringify(clean));
   delete sample.opportunity_targets['72h'].plus_10_pct;
+  delete sample.safe_opportunity_targets['72h'].plus_15_pct;
   sample.liquidity_lane='STANDARD_750K_PLUS';
   const bad=auditSampleLabelHorizons([sample]);
   assert.equal(bad.opportunity_horizon_violations,1);
+  assert.equal(bad.safe_first_touch_horizon_violations,1);
   assert.equal(bad.liquidity_lane_violations,1);
 });
 
