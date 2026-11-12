@@ -1,7 +1,8 @@
 import {mkdir,writeFile} from 'node:fs/promises';
 import {RestClient} from '../market/binance-rest.mjs';
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
-import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS,buildMicroFingerprint,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
+import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS,buildMicroFingerprint,buildMicroEarlyFlowWatchCandidate,selectUnderfloorFastShockCandidates} from '../core/early-expansion-radar.mjs';
+import {isFastEarlyWatchCandidate,isFastActivityShockCandidate} from '../core/activity-shock.mjs';
 
 const SYMBOLS=[['INITUSDT',107.41]];
 const EVENT_START=Date.parse(process.env.INITUSDT_EVENT_START||'2026-11-08T00:00:00Z');
@@ -214,14 +215,31 @@ function firstMicroCandidates(all,market,startMs,endMs){
     const btc=at(market.fiveMinute||[],ts).slice(-120);
     const fingerprint=buildMicroFingerprint({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker,now:ts,config:EARLY_EXPANSION_RADAR_DEFAULTS});
     const fast=fastDeltaProxy(all['1m'],ts);
-    const micro={row:ticker,fast,oneMinute:one,fiveMinute:five,micro_fingerprint:fingerprint,source:['BINANCE_PUBLIC_REST']};
+    const fastEarlyWatch=isFastEarlyWatchCandidate(ticker,fast,EARLY_EXPANSION_RADAR_DEFAULTS);
+    const fastActivityShock=isFastActivityShockCandidate(ticker,fast,EARLY_EXPANSION_RADAR_DEFAULTS);
+    const pendingUntilBySymbol=new Map();
+    if(fastEarlyWatch||fastActivityShock)pendingUntilBySymbol.set('INITUSDT',
+      ts+Math.max(Number(EARLY_EXPANSION_RADAR_DEFAULTS.fastShockHoldMs||0),Number(EARLY_EXPANSION_RADAR_DEFAULTS.pollMs||0)*2));
+    const underfloorSelection=selectUnderfloorFastShockCandidates({
+      rows:[ticker],fastBySymbol:new Map([['INITUSDT',fast]]),pendingUntilBySymbol,now:ts,
+      minQuoteVolume24h:EARLY_EXPANSION_RADAR_DEFAULTS.minQuoteVolume24h,
+      minQuoteVolumeRatio:EARLY_EXPANSION_RADAR_DEFAULTS.lowLiquidityBurstMinQuoteVolumeRatio,
+      limit:EARLY_EXPANSION_RADAR_DEFAULTS.lowLiquidityBurstBypassMaxCandidates,
+      config:EARLY_EXPANSION_RADAR_DEFAULTS
+    });
+    const microRow=underfloorSelection[0]||ticker;
+    const micro={row:microRow,fast,oneMinute:one,fiveMinute:five,micro_fingerprint:fingerprint,source:['BINANCE_PUBLIC_REST']};
     const result={
       time:new Date(ts).toISOString(),price:Number(ticker.lastPrice),
       price_change_24h_pct:Number(ticker.priceChange24h),quote_volume_24h_usdt:Number(ticker.quoteVolume24h),
       trade_count_24h:Number(ticker.tradeCount24h),score:fingerprint.score,
       confirmation_count:fingerprint.confirmation_count,stage:fingerprint.stage,mode:fingerprint.mode,
       eligible:fingerprint.eligible,category_scores:fingerprint.category_scores,metrics:fingerprint.metrics,
-      reasons:fingerprint.reasons,risk_flags:fingerprint.risk_flags,fast_proxy:fast
+      reasons:fingerprint.reasons,risk_flags:fingerprint.risk_flags,fast_proxy:fast,
+      fast_early_watch_qualifies:fastEarlyWatch,fast_activity_shock_qualifies:fastActivityShock,
+      underfloor_burst_bypass_selected:underfloorSelection.length>0,
+      underfloor_burst_bypass_flag:microRow._low_liquidity_burst_bypass===true,
+      underfloor_min_quote_volume_usdt:EARLY_EXPANSION_RADAR_DEFAULTS.minQuoteVolume24h*EARLY_EXPANSION_RADAR_DEFAULTS.lowLiquidityBurstMinQuoteVolumeRatio
     };
     if(!out.first_micro_score_58&&Number(fingerprint.score)>=58&&Number(fingerprint.confirmation_count)>=3&&
       Math.abs(Number(ticker.priceChange24h))<18&&Math.abs(Number(fingerprint.metrics?.return_15m))<6)
