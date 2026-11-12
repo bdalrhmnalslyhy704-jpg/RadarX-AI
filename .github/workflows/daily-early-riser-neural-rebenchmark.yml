@@ -8,6 +8,7 @@ on:
       - research/daily-early-riser-mlp-history-20261111
       - research/daily-early-riser-tcn-capacity-20261111
       - research/daily-early-riser-mlp-recency-v2-20261111
+      - research/daily-early-riser-tcn-grad-accum-20261111
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/core/cognitive-brain.mjs'
@@ -100,6 +101,21 @@ jobs:
             tcn:result.temporal_tcn?.status??null,
             tcn_training:result.temporal_tcn?.training_samples??null,
             tcn_selected_regimes:result.temporal_tcn?.selected_regimes??[],
+            regime_local_tcn:result.temporal_regime_local_tcn_challenger?.status??null,
+            regime_local_tcn_training:result.temporal_regime_local_tcn_challenger?.training_samples??null,
+            regime_local_tcn_validation:result.temporal_regime_local_tcn_challenger?.validation??null,
+            regime_local_tcn_validation_logistic:result.temporal_regime_local_tcn_challenger?.validation_logistic??null,
+            regime_local_tcn_holdout:result.temporal_regime_local_tcn_challenger?.holdout??null,
+            regime_local_tcn_holdout_logistic:result.temporal_regime_local_tcn_challenger?.holdout_logistic??null,
+            regime_local_tcn_selected_regimes:result.temporal_regime_local_tcn_challenger?.selected_regimes??[],
+            regime_local_tcn_pyramid:result.temporal_regime_local_tcn_pyramid_challenger?.status??null,
+            regime_local_tcn_pyramid_training:result.temporal_regime_local_tcn_pyramid_challenger?.training_samples??null,
+            regime_local_tcn_pyramid_pooling:result.temporal_regime_local_tcn_pyramid_challenger?.temporal_pooling??null,
+            regime_local_tcn_pyramid_validation:result.temporal_regime_local_tcn_pyramid_challenger?.validation??null,
+            regime_local_tcn_pyramid_validation_logistic:result.temporal_regime_local_tcn_pyramid_challenger?.validation_logistic??null,
+            regime_local_tcn_pyramid_holdout:result.temporal_regime_local_tcn_pyramid_challenger?.holdout??null,
+            regime_local_tcn_pyramid_holdout_logistic:result.temporal_regime_local_tcn_pyramid_challenger?.holdout_logistic??null,
+            regime_local_tcn_pyramid_selected_regimes:result.temporal_regime_local_tcn_pyramid_challenger?.selected_regimes??[],
             temporal_tree:result.temporal_tree_challenger?.status??null
           }));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,

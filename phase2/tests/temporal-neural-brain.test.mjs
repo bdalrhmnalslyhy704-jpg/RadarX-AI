@@ -8,9 +8,21 @@ import {
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_SEQUENCE_CHANNELS,
+  TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,
+  isValidTemporalPooledBaselineFeatures,
+  resetGradientBuffer,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
+  TEMPORAL_GRADIENT_ACCUMULATION,
+  TEMPORAL_BASELINE_FEATURE_CACHE,
+  TEMPORAL_GRADIENT_BUFFER_SCOPE,
   TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+  TEMPORAL_ORDERED_POOLING_MODE,
+  TEMPORAL_ORDERED_POOLING_SEGMENTS,
+  TEMPORAL_ORDERED_POOLING_FEATURE_COUNT,
+  TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT,
+  TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+  poolOrderedTemporalSegments,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalProbability
@@ -19,6 +31,67 @@ import {
 const FOUR_HOURS=4*60*60*1000;
 const EIGHT_HOURS=8*60*60*1000;
 const BASE_TIME=1_710_000_000_000;
+
+test('ordered four-segment pooling preserves temporal order instead of collapsing all 24 steps',()=>{
+  const early=Array.from({length:TEMPORAL_SEQUENCE_STEPS},
+    (_,time)=>Array.from({length:TEMPORAL_LATENT_CHANNELS},()=>time<6?1:0));
+  const late=Array.from({length:TEMPORAL_SEQUENCE_STEPS},
+    (_,time)=>Array.from({length:TEMPORAL_LATENT_CHANNELS},()=>time>=18?1:0));
+  const pooledEarly=poolOrderedTemporalSegments(early);
+  const pooledLate=poolOrderedTemporalSegments(late);
+  assert.equal(TEMPORAL_ORDERED_POOLING_MODE,'ORDERED_FOUR_SEGMENT_MEAN_V1');
+  assert.equal(TEMPORAL_ORDERED_POOLING_SEGMENTS,4);
+  assert.equal(TEMPORAL_ORDERED_POOLING_FEATURE_COUNT,64);
+  assert.equal(TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT,1456);
+  assert.equal(TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+    'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_ORDERED_FOUR_SEGMENT_POOLING_V9');
+  assert.equal(pooledEarly.features.length,64);
+  assert.equal(pooledLate.features.length,64);
+  assert.equal(pooledEarly.poolSegments.length,4);
+  assert.deepEqual(pooledEarly.poolSegments.map(row=>row.count),[6,6,6,6]);
+  assert.notDeepEqual(pooledEarly.features,pooledLate.features,
+    'same global mean but early and late movement must occupy different temporal feature groups');
+  for(let channel=0;channel<TEMPORAL_LATENT_CHANNELS;channel++){
+    assert.equal(pooledEarly.features[channel],1);
+    assert.equal(pooledEarly.features[3*TEMPORAL_LATENT_CHANNELS+channel],0);
+    assert.equal(pooledLate.features[channel],0);
+    assert.equal(pooledLate.features[3*TEMPORAL_LATENT_CHANNELS+channel],1);
+  }
+  assert.equal(poolOrderedTemporalSegments(early.slice(1)),null,
+    'incomplete latent windows must fail closed');
+});
+
+test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
+  const scratch={
+    projectionWeights:[[1.25,-0.5],[3,4]],
+    depthWeights:[[[5,6],[7,8]]],
+    biases:[[9,-10]],
+    outputWeights:[11,12],
+    diagnostics:{nested:[13,14]}
+  };
+  const reference=scratch;
+  const reset=resetGradientBuffer(scratch);
+  assert.equal(reset,reference,'reset must preserve the reusable scratch object identity');
+  assert.deepEqual(scratch,{
+    projectionWeights:[[0,0],[0,0]],
+    depthWeights:[[[0,0],[0,0]]],
+    biases:[[0,0]],
+    outputWeights:[0,0],
+    diagnostics:{nested:[0,0]}
+  });
+});
+
+test('cached TCN baseline vector accepts exactly 58 finite pooled features',()=>{
+  assert.equal(TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,58);
+  assert.equal(isValidTemporalPooledBaselineFeatures(Array(58).fill(0)),true,
+    'the cache contains 29 full-window means plus 29 recent-window means');
+  assert.equal(isValidTemporalPooledBaselineFeatures(Array(29).fill(0)),false,
+    'the raw 29-channel count is not the pooled baseline vector length');
+  const invalid=Array(58).fill(0);
+  invalid[17]=Number.NaN;
+  assert.equal(isValidTemporalPooledBaselineFeatures(invalid),false,
+    'non-finite cached features must be rejected and recomputed safely');
+});
 
 function sequenceFor(up,index=0){
   return Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,step)=>{
@@ -174,6 +247,15 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE);
   assert.equal(profile.ensemble_members,3);
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
+  assert.equal(profile.gradient_accumulation,TEMPORAL_GRADIENT_ACCUMULATION);
+  assert.equal(profile.gradient_accumulation,'IN_PLACE_WEIGHTED_SUM_V1',
+    'full-batch gradient accumulation must reuse its epoch buffers instead of allocating one copy per sample');
+  assert.equal(profile.baseline_feature_cache,TEMPORAL_BASELINE_FEATURE_CACHE);
+  assert.equal(profile.baseline_feature_cache,'PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1',
+    'immutable pooled input features must be computed once per sample, not once per epoch');
+  assert.equal(profile.gradient_buffer_scope,TEMPORAL_GRADIENT_BUFFER_SCOPE);
+  assert.equal(profile.gradient_buffer_scope,'TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1',
+    'per-sample backprop must reuse only the trainable gradient buffers and exclude frozen/model metadata arrays');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
@@ -468,6 +550,111 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
   }
   assert.equal(profile.live_eligibility_ready,false,
     'a research fixture must not satisfy the 150-outcome live holdout requirement');
+});
+
+test('independent regime-local TCNs train, select and calibrate only on their own purged BTC regime',()=>{
+  const rows=[];
+  for(let group=0;group<100;group++){
+    const riskOn=group%2===0;
+    for(let index=0;index<7;index++){
+      let up;
+      if(group>=85)up=index===0;
+      else if(group>=61)up=index<2;
+      else if(group>=48)up=index<2;
+      else if(group>=33)up=index%2===0;
+      else up=index<2;
+      const row=sample(group,index,{up});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();
+        copy[19]=riskOn?1.35:-1.35;
+        return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{
+    epochs:2,minimumHoldoutSamples:80,
+    enableRegimeLocalTcn:true,
+    regimeLocalTcnMaxTrainingSamples:80,
+    regimeLocalTcnEpochs:1,
+    enableRegimeLocalTcnPyramid:true,
+    regimeLocalTcnPyramidMaxTrainingSamples:80,
+    regimeLocalTcnPyramidEpochs:1
+  });
+  const local=profile.regime_local_tcn_challenger;
+  assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
+  assert.equal(local.training_strategy,'INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1');
+  assert.equal(local.model_scope,'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR');
+  assert.deepEqual(local.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF'],JSON.stringify(local.regime_specialists,null,2));
+  assert.equal(local.probability_ready,false,
+    'the research challenger cannot unlock production probability or live execution');
+  const on=local.regime_specialists.BTC_RISK_ON;
+  const off=local.regime_specialists.BTC_RISK_OFF;
+  for(const [regime,expert] of [['BTC_RISK_ON',on],['BTC_RISK_OFF',off]]){
+    assert.equal(expert.trained,true,regime+' must have an independently fitted TCN');
+    assert.equal(expert.baseline_anchor_source,'REGIME_LOCAL_TRAINING_ONLY');
+    assert.ok(expert.training_samples>=80&&expert.training_samples<=80);
+    assert.ok(expert.training_sample_fingerprint);
+    assert.ok(expert.selection_sample_fingerprint);
+    assert.ok(expert.calibration_sample_fingerprint);
+    assert.equal(expert.chronology_valid,true);
+    assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
+    assert.ok(expert.max_selection_outcome_resolved_at<expert.calibration_start_at);
+    assert.ok(expert.max_calibration_outcome_resolved_at<expert.validation_start_at);
+    assert.ok(expert.validation_start_at<expert.holdout_start_at);
+    assert.equal(expert.training_targets.positive+expert.training_targets.negative,
+      expert.training_samples);
+    assert.equal(expert.selection_targets.positive+expert.selection_targets.negative,
+      expert.selection_samples);
+    assert.equal(expert.calibration_targets.positive+expert.calibration_targets.negative,
+      expert.calibration_samples);
+    assert.equal(expert.probability_calibration.fit_on,'REGIME_LOCAL_TCN_CALIBRATION_BLOCK');
+    assert.equal(expert.logistic_probability_calibration.fit_on,'REGIME_LOCAL_LOGISTIC_CALIBRATION_BLOCK');
+    assert.equal(expert.probability_calibration.sample_count,
+      expert.probability_calibration.fitted?expert.calibration_samples:0);
+    assert.equal(expert.logistic_probability_calibration.sample_count,
+      expert.logistic_probability_calibration.fitted?expert.calibration_samples:0);
+    if(!expert.validation_passed){
+      assert.equal(expert.holdout.evaluated,false,
+        'the untouched holdout must remain unscored until the local outer validation gate passes');
+    }
+    if(!expert.holdout_passed){
+      assert.equal(expert.probability_ready,false);
+    }
+  }
+  assert.notEqual(on.training_sample_fingerprint,off.training_sample_fingerprint,
+    'risk-on and risk-off must not share the same fitted training rows');
+  assert.notEqual(on.baseline_anchor_fingerprint,off.baseline_anchor_fingerprint,
+    'each regime must have its own training-only logistic anchor');
+  assert.equal(local.holdout_comparison.passed,
+    local.selected_regimes.length>0&&local.holdout.evaluated===true&&
+      local.holdout_logistic.evaluated===true&&
+      local.holdout.model_brier_score+0.003<local.holdout_logistic.model_brier_score);
+
+  const pyramid=profile.regime_local_tcn_pyramid_challenger;
+  assert.equal(pyramid.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1');
+  assert.equal(pyramid.temporal_pooling,TEMPORAL_ORDERED_POOLING_MODE);
+  assert.equal(pyramid.pooling_segments,4);
+  assert.equal(pyramid.output_features,64);
+  assert.equal(pyramid.trainable_parameter_count,1456);
+  assert.deepEqual(pyramid.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  assert.equal(pyramid.probability_ready,false);
+  for(const [regime,expert] of Object.entries(pyramid.regime_specialists)){
+    assert.equal(expert.trained,true,regime+' ordered-pooling TCN must train independently');
+    assert.equal(expert.temporal_pooling,TEMPORAL_ORDERED_POOLING_MODE);
+    assert.equal(expert.output_features,64);
+    assert.equal(expert.trainable_parameter_count,1456);
+    assert.equal(expert.model_architecture,TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE);
+    assert.ok(expert.member_training_profiles.every(row=>
+      row.temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE&&row.trainableParameters===1456));
+    assert.equal(expert.chronology_valid,true);
+    if(!expert.validation_passed)assert.equal(expert.holdout.evaluated,false);
+    assert.equal(expert.probability_ready,false);
+  }
+  assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE,
+    'the established shared TCN V8 control must remain unchanged');
+  assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+    'the original independent TCN remains available as a control');
 });
 
 test('thin BTC regime uses shared TCN weights but cannot publish a logistic-only substitute',()=>{

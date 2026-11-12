@@ -138,6 +138,8 @@ function compactTarget(result){
     temporal_tcn_sequence_samples:result.temporal_tcn_sequence_samples,
     temporal_tree_training_performed:result.temporal_tree_training_performed,
     temporal_tree_challenger:result.temporal_tree_challenger,
+    temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger,
+    temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -246,6 +248,8 @@ async function main(){
       const hybrid=result.hybrid_model||{};
       const tcn=result.temporal_tcn||{};
       const tree=result.temporal_tree_challenger||{};
+      const localTcn=result.temporal_regime_local_tcn_challenger||{};
+      const localTcnPyramid=result.temporal_regime_local_tcn_pyramid_challenger||{};
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -343,6 +347,42 @@ async function main(){
           validation:tcn.validation??null,
           holdout:tcn.holdout??null,
           holdout_comparison:tcn.holdout_comparison??null
+        },
+        regime_local_tcn:{
+          status:localTcn.status??null,
+          trained:localTcn.trained===true,
+          training_sample_budget:localTcn.training_sample_budget??0,
+          training_samples:localTcn.training_samples??0,
+          supported_regimes:localTcn.supported_regimes??[],
+          validation_selected_regimes:localTcn.validation_selected_regimes??[],
+          selected_regimes:localTcn.selected_regimes??[],
+          validation:localTcn.validation??null,
+          validation_logistic:localTcn.validation_logistic??null,
+          holdout:localTcn.holdout??null,
+          holdout_logistic:localTcn.holdout_logistic??null,
+          holdout_comparison:localTcn.holdout_comparison??null,
+          regimes:localTcn.regime_specialists??{}
+        },
+        regime_local_tcn_pyramid:{
+          status:localTcnPyramid.status??null,
+          model_kind:localTcnPyramid.model_kind??null,
+          architecture:localTcnPyramid.architecture??null,
+          temporal_pooling:localTcnPyramid.temporal_pooling??null,
+          pooling_segments:localTcnPyramid.pooling_segments??0,
+          output_features:localTcnPyramid.output_features??0,
+          trainable_parameter_count:localTcnPyramid.trainable_parameter_count??0,
+          training_sample_budget:localTcnPyramid.training_sample_budget??0,
+          trained:localTcnPyramid.trained===true,
+          training_samples:localTcnPyramid.training_samples??0,
+          supported_regimes:localTcnPyramid.supported_regimes??[],
+          validation_selected_regimes:localTcnPyramid.validation_selected_regimes??[],
+          selected_regimes:localTcnPyramid.selected_regimes??[],
+          validation:localTcnPyramid.validation??null,
+          validation_logistic:localTcnPyramid.validation_logistic??null,
+          holdout:localTcnPyramid.holdout??null,
+          holdout_logistic:localTcnPyramid.holdout_logistic??null,
+          holdout_comparison:localTcnPyramid.holdout_comparison??null,
+          regimes:localTcnPyramid.regime_specialists??{}
         },
         temporal_tree:{
           status:tree.status??null,trained:tree.trained===true,
