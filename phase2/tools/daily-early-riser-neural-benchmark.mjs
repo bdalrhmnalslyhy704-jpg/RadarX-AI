@@ -477,6 +477,9 @@ async function main(){
 
           holdout_comparison:localTcnAttention.holdout_comparison??null,
 
+          member_selection_logistic_ranking_metrics_by_regime:localTcnAttention.member_selection_logistic_ranking_metrics_by_regime??{},
+          selection_best_candidate_by_regime:localTcnAttention.selection_best_candidate_by_regime??{},
+          member_selection_scores_by_regime:localTcnAttention.member_selection_scores_by_regime??{},
           regimes:localTcnAttention.regime_specialists??{}
 
         },
