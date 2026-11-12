@@ -508,6 +508,8 @@ test('multi-horizon TCN benchmark passes its separate label contract into the te
   assert.equal(result.samples.outcomes.UP,2);
   assert.equal(result.samples.outcomes.FLAT,1);
   assert.equal(result.target_definition,'MOVEMENT_TOUCH_PLUS_5_PCT_WITHIN_48H_REGARDLESS_OF_ADVERSE_V1');
+  assert.equal(result.temporal_model.resolved_samples,3,
+    'the temporal learner must accept the explicit multi-horizon label contract');
   assert.equal(result.temporal_model.probability_ready,false);
   assert.equal(result.approval.status,'RESEARCH_ONLY_NOT_APPROVED_FOR_LIVE_USE');
 });
