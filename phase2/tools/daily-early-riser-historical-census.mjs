@@ -19,6 +19,7 @@ import {
   DAILY_EARLY_RISER_TARGETS_PCT,
   DAILY_EARLY_RISER_HORIZON_BARS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
 
@@ -361,6 +362,17 @@ async function main(){
   const concurrency=Math.max(1,Math.min(8,Math.trunc(Number(args.concurrency)||4)));
   const maxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
   const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
+  const opportunityHorizonsHours=[...new Set(String(args['opportunity-horizons']||'24')
+    .split(',').map(value=>finite(value.trim()))
+    .filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))].sort((a,b)=>a-b);
+  if(!opportunityHorizonsHours.length)
+    throw new Error('NO_VALID_OPPORTUNITY_HORIZONS');
+  const maxOpportunityHorizonHours=Math.max(...opportunityHorizonsHours);
+  const sampleStrideHours=Math.max(1,Math.trunc(Number(args['sample-stride-hours'])||maxOpportunityHorizonHours));
+  if(sampleStrideHours<maxOpportunityHorizonHours||sampleStrideHours%24!==0)
+    throw new Error('SAMPLE_STRIDE_MUST_BE_NON_OVERLAPPING_MULTIPLE_OF_24H');
+  const sampleStrideBars=sampleStrideHours*60*60*1000/FIFTEEN_MS;
+  const drawdownAdversePcts=[2,5];
   const maxSamples=Math.max(1,Math.min(2000,Math.trunc(Number(args['max-samples-per-symbol'])||500)));
   const output=resolve(args.output||OUTPUT_PATH),samplesOutput=resolve(args['samples-output']||SAMPLES_PATH);
   const temporalSamplesOutput=resolve(args['temporal-samples-output']||
@@ -387,7 +399,11 @@ async function main(){
     adverse_pct:DEFAULT_ADVERSE_PCT,
     horizon_bars:DAILY_EARLY_RISER_HORIZON_BARS,
     horizon_hours:24,
-    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
+    opportunity_horizons_hours:opportunityHorizonsHours,
+    drawdown_adverse_pcts:drawdownAdversePcts,
+    max_opportunity_horizon_hours:maxOpportunityHorizonHours,
+    anchor_stride_hours:sampleStrideHours,
+    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_'+sampleStrideHours+'_HOURS',
     volume_floor_usdt:minVolume,
     closed_candles_only:true,
     baseline_features_have_future_data:false,
@@ -472,7 +488,8 @@ async function main(){
         const census=buildDailyEarlyRiserHistoricalSamples({
           symbol,klines:btcKlines,
           fastKlines:{data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+          opportunityHorizonsHours,drawdownAdversePcts,sampleStrideBars
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
@@ -516,7 +533,8 @@ async function main(){
             const census=buildDailyEarlyRiserHistoricalSamples({
               symbol,klines:{data:asset15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               fastKlines:{data:asset5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+              opportunityHorizonsHours,drawdownAdversePcts,sampleStrideBars
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
