@@ -94,17 +94,30 @@ jobs:
             --sample-stride-hours "$ANCHOR_STRIDE_HOURS" \
             --max-samples-per-symbol '${{ github.event.inputs.max_samples_per_symbol || '500' }}' \
             --concurrency '${{ github.event.inputs.concurrency || '4' }}'
-      - name: Train the 72h upside-opportunity challenger on the isolated research branch
+      - name: Train risk-aware 72h MLP, GBDT and hybrid challengers separately
         if: github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113'
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \
             --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
             --census-report artifacts/daily-early-riser-census.json \
-            --label-mode upside_opportunity \
+            --label-mode safe_opportunity \
             --horizon-hours 72 \
             --target 5 \
-            --output artifacts/daily-early-riser-opportunity-72h-5pct-neural.json
+            --skip-temporal true \
+            --output artifacts/daily-early-riser-safe-72h-5pct-neural.json
+      - name: Train isolated 24x29 TCN on the same safe first-touch target
+        if: github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113'
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --tcn-only true \
+            --output artifacts/daily-early-riser-safe-72h-5pct-tcn.json
       - name: Train standard daily baseline and neural challengers on legacy census branches
         if: github.ref_name != 'research/daily-early-riser-opportunity-targets-20261113'
         run: |
@@ -140,8 +153,10 @@ jobs:
             methodology:report.methodology,
             data_quality:report.data_quality,
             targets:report.targets,
-            daily_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-neural-benchmark.json')
-              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-neural-benchmark.json','utf8')):null,
+            daily_safe_opportunity_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-safe-72h-5pct-neural.json')
+              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-safe-72h-5pct-neural.json','utf8')):null,
+            daily_safe_opportunity_tcn_benchmark:fs.existsSync('artifacts/daily-early-riser-safe-72h-5pct-tcn.json')
+              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-safe-72h-5pct-tcn.json','utf8')):null,
             sample_file:report.sample_file,
             temporal_sample_file:report.temporal_sample_file,
             production_touched:report.production_touched===true,
