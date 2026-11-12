@@ -9,7 +9,7 @@ import {
   classifyDailyEarlyRiserTargetSet,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
-import {summarizeDailyTargetDiagnostics} from '../tools/daily-early-riser-historical-census.mjs';
+import {summarizeDailyTargetDiagnostics,auditSampleLabelHorizons} from '../tools/daily-early-riser-historical-census.mjs';
 
 const INTERVAL=15*60*1000;
 const FIVE=5*60*1000;
@@ -277,6 +277,55 @@ test('malformed future OHLC candles are rejected even when timestamps and number
   });
   assert.equal(result.status,'INVALID');
   assert.equal(result.reason,'INVALID_FUTURE_CANDLE');
+});
+
+
+test('label audit rejects missing horizon labels and any incorrect under-floor liquidity lane',()=>{
+  const at=1_800_000_000_000,volume=520_000;
+  const targets={},opportunity_targets={},drawdown_risks={};
+  for(const target of [5,10,15]){
+    const key='plus_'+target+'_pct';
+    targets[key]={
+      status:'RESOLVED',outcome:'FLAT',resolved_at:at+24*60*60*1000,
+      horizon_ms:24*60*60*1000,
+      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'
+    };
+  }
+  for(const hours of [24,48,72]){
+    const h=hours+'h',ms=hours*60*60*1000;
+    opportunity_targets[h]={};drawdown_risks[h]={};
+    for(const target of [5,10,15]){
+      const key='plus_'+target+'_pct';
+      opportunity_targets[h][key]={
+        status:'RESOLVED',outcome:'FLAT',resolved_at:at+ms,horizon_ms:ms,
+        outcome_source:'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1',
+        target_definition:'ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+hours+'H_15M_V1',
+        independent_of_adverse_barrier:true
+      };
+    }
+    for(const threshold of [2,5]){
+      const key='minus_'+threshold+'_pct';
+      drawdown_risks[h][key]={
+        status:'RESOLVED',outcome:'FLAT',resolved_at:at+ms,horizon_ms:ms,
+        outcome_source:'BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1',
+        target_definition:'ANY_DRAWDOWN_TOUCH_MINUS_'+threshold+'_PCT_WITHIN_'+hours+'H_15M_V1',
+        independent_of_upside_barrier:true
+      };
+    }
+  }
+  const sample={
+    id:'AUDITUSDT',symbol:'AUDITUSDT',at,quote_volume_24h:volume,
+    liquidity_lane:'MICRO_WATCH_ONLY_UNDER_750K',
+    targets,opportunity_targets,drawdown_risks
+  };
+  const clean=auditSampleLabelHorizons([sample]);
+  assert.equal(clean.total,0,JSON.stringify(clean));
+  delete sample.opportunity_targets['72h'].plus_10_pct;
+  sample.liquidity_lane='STANDARD_750K_PLUS';
+  const bad=auditSampleLabelHorizons([sample]);
+  assert.equal(bad.opportunity_horizon_violations,1);
+  assert.equal(bad.liquidity_lane_violations,1);
 });
 
 test('historical report keeps 72h upside events independent from drawdown and separates Micro Watch',()=>{
