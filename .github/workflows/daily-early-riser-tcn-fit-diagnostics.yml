@@ -5,9 +5,11 @@ on:
     branches:
       - research/daily-early-riser-tcn-fit-diagnostics-20261112
       - research/daily-early-riser-tcn-workspace-optimization-20261112
+      - research/daily-early-riser-tcn-window8192-20261112
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - '.github/workflows/daily-early-riser-tcn-fit-diagnostics.yml'
@@ -38,6 +40,7 @@ jobs:
         run: |
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tests/temporal-neural-brain.test.mjs
           node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
       - name: Run TCN training diagnostic and temporal regression tests

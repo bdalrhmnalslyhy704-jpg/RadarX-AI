@@ -10,6 +10,24 @@ export const DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION = 0.60;
 export const DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN = 0.00025;
 // Experimental MLP anchor update; coefficients stay inside a narrow trust region.
 export const DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION = 'TRUST_REGION_TETHERED_V1';
+export const DAILY_EARLY_RISER_TCN_DEFAULT_REGIME_TRAINING_SAMPLES = 4096;
+export const DAILY_EARLY_RISER_TCN_V10_EXTENDED_REGIME_TRAINING_SAMPLES = 8192;
+
+/**
+ * Isolated training-window ablation: only TCN-only V10 may expand its
+ * per-BTC-regime recent training block to 8,192 rows. Other profiles keep
+ * their 4,096-row budget unless explicitly configured within their cap.
+ */
+export function effectiveDailyTcnMultiscaleTrainingBudget(options={}) {
+  const tcnOnly=options?.tcnOnly===true;
+  const cap=tcnOnly
+    ?DAILY_EARLY_RISER_TCN_V10_EXTENDED_REGIME_TRAINING_SAMPLES
+    :DAILY_EARLY_RISER_TCN_DEFAULT_REGIME_TRAINING_SAMPLES;
+  const requested=Number(options?.temporalRegimeLocalTcnMultiscaleMaxTrainingSamples);
+  const budget=Number.isFinite(requested)&&requested>0
+    ?Math.trunc(requested):cap;
+  return Math.max(80,Math.min(cap,budget));
+}
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
@@ -152,8 +170,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     regimeLocalTcnPyramidEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6))),
     enableRegimeLocalTcnMultiscale:options.enableRegimeLocalTcnMultiscale!==false,
-    regimeLocalTcnMultiscaleMaxTrainingSamples:Math.max(80,Math.min(4096,
-      Math.trunc(options.temporalRegimeLocalTcnMultiscaleMaxTrainingSamples||4096))),
+    regimeLocalTcnMultiscaleMaxTrainingSamples:effectiveDailyTcnMultiscaleTrainingBudget(options),
     regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
     enableTemporalBoostedTree:options.enableTemporalBoostedTree!==false

@@ -20,6 +20,7 @@ export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
 export const TEMPORAL_BASELINE_FEATURE_CACHE='PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1';
 export const TEMPORAL_GRADIENT_BUFFER_SCOPE='TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1';
 export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES=4096;
+export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT=8192;
 export const TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY='INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 export const TEMPORAL_ORDERED_POOLING_MODE='ORDERED_FOUR_SEGMENT_MEAN_V1';
@@ -1505,7 +1506,7 @@ function fitRegimeLocalTemporalTcn({
   const allTraining=sortRows(trainingRows),selection=sortRows(memberSelectionRows);
   const calibration=sortRows(calibrationRows),validation=sortRows(validationRows);
   const holdout=sortRows(holdoutRows);
-  const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT,
     Math.trunc(Number(maxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES)));
   const training=allTraining.slice(-limit);
   const counts=rows=>({
@@ -2814,7 +2815,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     trainable_parameter_count:TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
     training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
-    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+    training_sample_budget:Math.max(80,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT,
       Math.trunc(Number(regimeLocalTcnMultiscaleMaxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES))),
     target_definition:targetDefinition,
     trained:regimeLocalTcnMultiscaleSupportedRegimes.length>0,
