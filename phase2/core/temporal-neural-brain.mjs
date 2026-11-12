@@ -683,14 +683,20 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
   };
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
   const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
-  const activationGradients=Array(dilations.length+1);
   const final=cache.activations.at(-1);
-  activationGradients[dilations.length]=final.map(()=>Array(channels).fill(0));
+  const activationGradients=workspace?.activationGradients||Array(dilations.length+1);
+  if(workspace){
+    if(activationGradients.length!==dilations.length+1)
+      throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_GRADIENT_DEPTH_MISMATCH');
+    for(const matrix of activationGradients)for(const row of matrix)row.fill(0);
+  }else{
+    activationGradients[dilations.length]=final.map(()=>Array(channels).fill(0));
+  }
   const probabilityError=cache.probability-target;
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
@@ -713,7 +719,7 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   for(let layer=dilations.length-1;layer>=0;layer--){
     const input=cache.activations[layer],output=cache.activations[layer+1];
     const depth=cache.depthCaches[layer],dilation=dilations[layer];
-    const inputGradient=input.map(()=>Array(channels).fill(0));
+    const inputGradient=workspace?activationGradients[layer]:input.map(()=>Array(channels).fill(0));
     const outputGradient=activationGradients[layer+1];
     for(let time=0;time<output.length;time++){
       for(let outputChannel=0;outputChannel<channels;outputChannel++){
@@ -904,13 +910,16 @@ function fitMember(rows, seed, {
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
+  const trainingWorkspace=createTemporalTrainingWorkspace(model);
   const epochHistory=[];
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     for (const row of rows) {
-      const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective,rowGradientScratch);
+      const cache = forwardWithWorkspace(row.sequence,model,1,
+        row._pooled_baseline_features,trainingWorkspace);
+      const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
+        trainingObjective,rowGradientScratch,trainingWorkspace);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
       weightedObjectiveLoss+=rowLoss*sampleWeight;
@@ -947,6 +956,7 @@ function fitMember(rows, seed, {
     diagnostic_only:true,
     loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
     epochs_completed:epochHistory.length,
+    training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
     training_sample_profile:model.training_sample_profile,
     objective:trainingObjective,
     epoch_history:epochHistory
