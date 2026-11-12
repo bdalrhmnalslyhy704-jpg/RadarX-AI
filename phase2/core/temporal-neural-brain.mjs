@@ -974,9 +974,11 @@ function fitEnsemble(rows, options = {}) {
     temporal_pooling:temporalPoolingMode,
     output_features:outputFeatureCount,
     trainable_parameter_count:trainableParameterCount,
-    training_strategy:temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-      ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
-      :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
+    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+        ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
+        :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
