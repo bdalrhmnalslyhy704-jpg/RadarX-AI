@@ -1,0 +1,107 @@
+name: Build 224 TCN-Only Frozen-Census Benchmark
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-tcn-only-20261112
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-tcn-only.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: build224-tcn-only-frozen-census
+  cancel-in-progress: true
+
+jobs:
+  tcn-only-frozen-census:
+    name: Verify and compare V8, V9 and V10 without unrelated model training
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out isolated TCN research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify daily labels, temporal contracts and TCN-only routing
+        run: |
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+      - name: Download immutable Binance census source
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-10
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: '42898061153'
+          path: artifacts
+      - name: Run TCN-only comparison on the same frozen census
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-tcn-only-benchmark.json \
+            --tcn-only
+      - name: Publish TCN-only target and regime metrics
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-tcn-only-benchmark.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              'TCN-only benchmark output missing; inspect the failed verification or training step.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const targets=Object.entries(report.target_results||{}).map(([target,result])=>({
+            target,
+            accepted_samples:result.samples?.accepted??0,
+            temporal_sequence_samples:result.temporal_tcn_sequence_samples??0,
+            shared_tcn:result.temporal_tcn?.status??null,
+            regime_local_tcn:result.temporal_regime_local_tcn_challenger?.status??null,
+            regime_local_tcn_regimes:result.temporal_regime_local_tcn_challenger?.regime_specialists??{},
+            v9:result.temporal_regime_local_tcn_pyramid_challenger??null,
+            v10:result.temporal_regime_local_tcn_multiscale_challenger??null
+          }));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify({
+              status:report.status,
+              research_mode:report.research_mode,
+              source_input_sha256:report.input_sha256,
+              temporal_sidecar_audit:report.temporal_sidecar_audit,
+              targets,
+              production_touched:false,
+              real_order_execution:false
+            },null,2)+'\\n');
+          NODE
+      - name: Upload TCN-only comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-tcn-only-frozen-census-${{ github.run_number }}
+          path: artifacts/daily-early-riser-tcn-only-benchmark.json
+          if-no-files-found: warn
+          retention-days: 14
