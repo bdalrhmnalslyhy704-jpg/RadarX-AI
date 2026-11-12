@@ -525,7 +525,14 @@ function createTemporalTrainingWorkspace(model) {
     Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
   const zeroLatents=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0));
   let poolSegments,poolRoutes,poolStart,poolCount,outputFeatures;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let attentionWeights=null,attentionScores=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    poolSegments=[{start:0,count:TEMPORAL_SEQUENCE_STEPS,feature_offset:0,segment_index:0}];
+    outputFeatures=TEMPORAL_LATENT_CHANNELS;
+    attentionWeights=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+    attentionScores=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     const pooled=poolMultiscaleTemporalSegments(zeroLatents);
     poolSegments=pooled.poolSegments;poolRoutes=pooled.featureRoutes;
     poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
@@ -541,7 +548,7 @@ function createTemporalTrainingWorkspace(model) {
     poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
     outputFeatures=channels;
   }
-  if(!poolRoutes){
+  if(!poolRoutes&&model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE){
     poolRoutes=Array.from({length:outputFeatures},(_,feature)=>{
       const segment=poolSegments[Math.floor(feature/channels)];
       return {channel:feature%channels,time_weights:Array.from(
@@ -555,7 +562,7 @@ function createTemporalTrainingWorkspace(model) {
     activationGradients:Array.from({length:dilations.length+1},()=>
       Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0))),
     pooled:Array(outputFeatures).fill(0),
-    poolSegments,poolRoutes,poolStart,poolCount
+    poolSegments,poolRoutes,poolStart,poolCount,attentionWeights,attentionScores
   };
 }
 
@@ -606,7 +613,32 @@ function forwardWithWorkspace(sequence,model,residualScale=1,
   }
   const final=workspace.activations.at(-1);
   const pooled=workspace.pooled;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let attentionWeights=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const scores=workspace.attentionScores,weights=workspace.attentionWeights;
+    const scale=1/Math.sqrt(channels);
+    let maximum=-Infinity;
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      let score=model.attentionPositionBiases[time];
+      for(let channel=0;channel<channels;channel++)
+        score+=final[time][channel]*model.attentionQuery[channel]*scale;
+      scores[time]=score;maximum=Math.max(maximum,score);
+    }
+    let denominator=0;
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      const value=Math.exp(clamp(scores[time]-maximum,-40,0));
+      weights[time]=value;denominator+=value;
+    }
+    if(!Number.isFinite(denominator)||denominator<=0)
+      throw new TypeError('TEMPORAL_ATTENTION_SOFTMAX_INVALID');
+    pooled.fill(0);
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      weights[time]/=denominator;
+      for(let channel=0;channel<channels;channel++)
+        pooled[channel]+=weights[time]*final[time][channel];
+    }
+    attentionWeights=weights;
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     for(let segment=0;segment<TEMPORAL_MULTISCALE_POOLING_SEGMENTS;segment++){
       const start=Math.floor(segment*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
       const end=Math.floor((segment+1)*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
@@ -661,7 +693,8 @@ function forwardWithWorkspace(sequence,model,residualScale=1,
     probability:logistic(logit),activations:workspace.activations,
     depthCaches:workspace.depthCaches,pooled,
     poolStart:workspace.poolStart,poolCount:workspace.poolCount,
-    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,baselineFeatures
+    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,
+    attention_weights:attentionWeights,baselineFeatures
   };
 }
 
