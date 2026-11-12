@@ -2707,8 +2707,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
+    member_training_diagnostics:sharedTcnFit?.member_training_diagnostics||[],
     member_training_profiles_by_regime:Object.fromEntries(regimes.map(regime=>
       [regime,sharedTcnFit?.member_training_profiles||[]])),
+    member_training_diagnostics_by_regime:Object.fromEntries(regimes.map(regime=>
+      [regime,sharedTcnFit?.member_training_diagnostics||[]])),
     member_validation_scores:Object.fromEntries(regimes.map(regime=>[
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),
