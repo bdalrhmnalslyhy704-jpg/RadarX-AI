@@ -12,6 +12,17 @@ on:
       - 'phase2/tests/daily-early-riser-census.test.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - '.github/workflows/init-aware-multihorizon-micro-research.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/init-aware-multihorizon-micro-research.yml'
 
 permissions:
   contents: read
