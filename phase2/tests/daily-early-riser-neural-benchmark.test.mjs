@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
@@ -74,6 +75,48 @@ test('TCN-only V10 training-window ablation is capped at 8,192 while standard pr
   assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({
     tcnOnly:false,temporalRegimeLocalTcnMultiscaleMaxTrainingSamples:8192
   }),4096);
+});
+
+test('eventual multi-horizon cognitive adapter learns late upside but retains separate drawdown risk and Micro cohort guard',()=>{
+  const input=sampleWith({targetPct:5});
+  input.liquidity_lane='MICRO';
+  input.extended_event_labels=true;
+  input.quote_volume_24h=520000;
+  input.eventual_targets={
+    plus_5_pct:{
+      '72h':{
+        status:'RESOLVED',outcome:'UP',
+        resolved_at:input.at+72*60*60*1000,
+        horizon_ms:72*60*60*1000,
+        outcome_source:DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE,
+        target_definition:'EVENTUAL_TOUCH_PLUS_5_PCT_WITHIN_72H_SEPARATE_ADVERSE_RISK_V1',
+        first_adverse_at:input.at+45*60*1000,
+        adverse_before_target:true,
+        target_touch_after_adverse_barrier:true,
+        target_and_adverse_same_15m_candle:false,
+        target_vs_adverse_order:'ADVERSE_FIRST',
+        max_adverse_excursion_pct:-8.1,
+        drawdown_before_target_pct:-6.4,
+        time_to_target_minutes:2160
+      }
+    }
+  };
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5,{eventualHorizonHours:72});
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.outcome,'UP');
+  assert.equal(prepared.row.horizon_ms,72*60*60*1000);
+  assert.equal(prepared.row.outcome_source,DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE);
+  assert.equal(prepared.row.eventual_risk.adverse_before_target,true);
+  assert.equal(prepared.row.eventual_risk.max_adverse_excursion_pct,-8.1);
+  const tcn=benchmarkDailyEarlyRiserTarget([input],5,{
+    tcnOnly:true,enableTemporalBoostedTree:false,eventualHorizonHours:72
+  });
+  assert.equal(tcn.horizon_ms,72*60*60*1000);
+  assert.equal(tcn.outcome_source,DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE);
+  assert.equal(tcn.outcome_semantics,'EVENTUAL_UPSIDE_TOUCH_WITH_SEPARATE_ADVERSE_DRAWDOWN_RISK');
+  const wrongLane={...input,liquidity_lane:'CORE'};
+  assert.equal(prepareDailyEarlyRiserCognitiveRow(wrongLane,5,{eventualHorizonHours:72}).reason,
+    'EVENTUAL_MODE_REQUIRES_ISOLATED_MICRO_COHORT');
 });
 
 test('TCN-only mode returns temporal challengers without running MLP, tabular GBDT or hybrid profiles',()=>{
