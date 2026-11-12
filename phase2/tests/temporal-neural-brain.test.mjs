@@ -12,6 +12,7 @@ import {
   isValidTemporalPooledBaselineFeatures,
   resetGradientBuffer,
   auditTemporalGradientNumerics,
+  auditTemporalTrainingWorkspace,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -96,6 +97,23 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
   assert.equal(report.passed,true);
   assert.equal(report.training_behavior_changed,false);
+});
+
+test('reused TCN training workspace is numerically equivalent to allocation-based forward and backward passes',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=auditTemporalTrainingWorkspace(sequence,1);
+  assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
+  assert.equal(report.result_cases,18);
+  assert.ok(report.results.every(row=>
+    row.output_values_compared>0&&row.gradient_values_compared>0));
+  assert.ok(report.maximum_output_absolute_error<=1e-12,
+    'forward outputs must remain numerically unchanged');
+  assert.ok(report.maximum_gradient_absolute_error<=1e-12,
+    'backpropagated gradients must remain numerically unchanged');
+  assert.equal(report.passed,true);
 });
 
 test('TCN gradient audit rejects malformed tensors and non-binary labels',()=>{
