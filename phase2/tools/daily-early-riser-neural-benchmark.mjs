@@ -433,8 +433,12 @@ async function main(){
           holdout_logistic:tree.holdout_logistic??null,
           holdout_comparison:tree.holdout_comparison??null
         },
-        selected_challenger:result.model_selection.validation_challenger,
-        holdout_passed:result.model_selection.holdout_comparison?.passed===true
+        selected_challenger:result.model_selection?.validation_challenger??null,
+        holdout_passed:result.model_selection?.holdout_comparison?.passed===true||
+          result.temporal_tcn?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_challenger?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_pyramid_challenger?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_multiscale_challenger?.holdout_comparison?.passed===true
       }));
       await writeJsonAtomic(output,report);
     }
