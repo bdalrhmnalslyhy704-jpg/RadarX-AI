@@ -109,18 +109,23 @@ function validSequence(sequence) {
 function cleanRows(samples, {
   targetDefinition = TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs = HORIZON_MS,
-  allowedOutcomeSources = null
+  allowedOutcomeSources = null,
+  outcomeContractKind = 'FIRST_PASSAGE'
 } = {}) {
   const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
   const allowedSources = Array.isArray(allowedOutcomeSources)
     ? new Set(allowedOutcomeSources.map(String)) : null;
   const seen = new Set();
+  const validOutcomeContract=row=>outcomeContractKind==='FIRST_PASSAGE'
+    ?row?.first_passage?.path_resolution==='15M'&&row.first_passage.outcome===row.outcome
+    :row?.outcome_contract?.kind===outcomeContractKind&&
+      row.outcome_contract.path_resolution==='15M'&&
+      row.outcome_contract.outcome===row.outcome;
   return (Array.isArray(samples) ? samples : []).filter(row => {
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
         row.target_definition !== targetDefinition ||
-        row.first_passage?.path_resolution !== '15M' ||
-        row.first_passage?.outcome !== row.outcome ||
+        !validOutcomeContract(row) ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
         !(allowedSources ? allowedSources.has(String(row.outcome_source || '')) :
           row.outcome_source === (row.historical_baseline === true
@@ -1740,6 +1745,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   targetDefinition=TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs=HORIZON_MS,
   allowedOutcomeSources=null,
+  outcomeContractKind='FIRST_PASSAGE',
   enableRegimeLocalTcn=false,
   regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnEpochs=6,
@@ -1752,7 +1758,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
-  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
+  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,outcomeContractKind});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
@@ -3019,6 +3025,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:targetDefinition,
+    outcome_contract_kind:outcomeContractKind,
     temporal_boosted_tree:temporalBoostedTreeProfile,
     regime_local_tcn_challenger:regimeLocalTcnProfile,
     regime_local_tcn_pyramid_challenger:regimeLocalTcnPyramidProfile,
