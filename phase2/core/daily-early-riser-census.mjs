@@ -477,10 +477,16 @@ export function buildDailyEarlyRiserHistoricalSamples({
     audit:{
       status:overlapViolations===0?'READY':'INVALID_OVERLAPPING_ANCHORS',
       symbol:cleanSymbol,observed_15m_candles:candles.length,
-      daily_anchor_stride_bars:sampleStrideBars,
+      daily_anchor_stride_bars:anchorStrideBars,
+      anchor_stride_bars:anchorStrideBars,
       daily_anchor_phase:phase,eligible_anchor_candidates:possible.length,
       emitted_samples:selected.length,maximum_samples_per_symbol:quota,
       non_overlapping_24h_labels:overlapViolations===0,
+      non_overlapping_max_opportunity_horizon_labels:overlapViolations===0,
+      opportunity_horizons_hours:opportunityHorizons,
+      max_opportunity_horizon_hours:maxOpportunityHorizonHours,
+      under_floor_micro_watch_samples:selected.filter(row=>
+        row.liquidity_lane==='MICRO_WATCH_ONLY_UNDER_750K').length,
       overlap_violations:overlapViolations,
       rejected_historical_gaps:rejectedHistoricalGaps,
       rejected_low_quote_volume:rejectedVolume,
