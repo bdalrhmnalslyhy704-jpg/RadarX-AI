@@ -381,6 +381,11 @@ function firstMicroCandidates(all,market,startMs,endMs){
           taker_buy_ratio:taker,relative_strength_5m_pct:relative,rvol_1m:Number(metrics.rvol_1m)||0,
           rvol_5m:rvol5,trade_rvol_5m:Number(metrics.trade_rvol_5m)||0,
           return_1m:Number(metrics.return_1m)||0,return_5m:return5,
+          return_15m:Number(metrics.return_15m)||0,
+          acceleration_1m_pct:Number(metrics.acceleration_1m_pct)||0,
+          acceleration_5m_pct:Number(metrics.acceleration_5m_pct)||0,
+          vwap_distance_pct:Number(metrics.vwap_distance_pct)||0,
+          price_change_24h_pct:Number(ticker.priceChange24h),
           risk_flags:fingerprint.risk_flags||[],reason_codes:fingerprint.reasons||[]
         };
         out.cooldown_watch_event_samples.push(event);
@@ -566,6 +571,16 @@ async function run(){
   md.push('Fast scan uses the eligible Binance Spot USDT ticker universe every cycle, compares each symbol against its own recent ticker state for short-horizon acceleration, then reserves deep-scan capacity for both fast accelerators and a quiet candidate set. It does not rank deep candidates primarily by 24h gain.');
   await writeFile('reports/initusdt-build224-forensic-2026-11-09-10.md',md.join('\n'));
   console.log(JSON.stringify(report.aggregate,null,2));
+  const savedWatchEvents=cases[0]?.micro_replay?.cooldown_watch_event_samples||[];
+  const missingCompositeFields=savedWatchEvents.filter(x=>!Number.isFinite(Number(x.return_15m))||
+    !Number.isFinite(Number(x.price_change_24h_pct))||!Number.isFinite(Number(x.vwap_distance_pct))).length;
+  const calculatedComposite=savedWatchEvents.filter(x=>Number(x.taker_buy_ratio)>=.54&&
+    Number(x.relative_strength_5m_pct)>=0&&Number(x.price_change_24h_pct)<12&&Number(x.return_15m)>0).length;
+  const recordedComposite=Number(cases[0]?.micro_replay?.cooldown_watch_event_filter_counts?.research_composite_taker_rs_15m_24h)||0;
+  if(missingCompositeFields>0||calculatedComposite!==recordedComposite){
+    console.error('COOLDOWN_FILTER_AUDIT_MISMATCH '+JSON.stringify({missingCompositeFields,calculatedComposite,recordedComposite}));
+    process.exitCode=1;
+  }
   const failedCases=cases.filter(c=>c.status==='NOT_VERIFIED'||c.anchor?.status!=='OK');
   if(failedCases.length){
     console.error('FORENSIC_REPLAY_INCOMPLETE: '+JSON.stringify(failedCases.map(c=>({symbol:c.symbol,status:c.status,reason:c.reason,error:c.error,anchor_status:c.anchor?.status}))));
