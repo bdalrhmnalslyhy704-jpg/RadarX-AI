@@ -150,7 +150,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     regimeLocalTcnPyramidMaxTrainingSamples:Math.max(80,Math.min(4096,
       Math.trunc(options.temporalRegimeLocalTcnPyramidMaxTrainingSamples||4096))),
     regimeLocalTcnPyramidEpochs:Math.max(1,Math.min(8,
-      Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6)))
+      Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6))),
+    enableRegimeLocalTcnMultiscale:options.enableRegimeLocalTcnMultiscale!==false,
+    regimeLocalTcnMultiscaleMaxTrainingSamples:Math.max(80,Math.min(4096,
+      Math.trunc(options.temporalRegimeLocalTcnMultiscaleMaxTrainingSamples||4096))),
+    regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6)))
   });
   const temporalTree=temporal.temporal_boosted_tree||{};
   const profile=buildCognitiveLearningProfile(rows,{
@@ -290,6 +295,35 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       holdout_logistic:temporal.regime_local_tcn_pyramid_challenger?.holdout_logistic??null,
       holdout_comparison:temporal.regime_local_tcn_pyramid_challenger?.holdout_comparison??null,
       regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{}
+    },
+    temporal_regime_local_tcn_multiscale_challenger:{
+      status:temporal.regime_local_tcn_multiscale_challenger?.status??'NOT_EVALUATED',
+      model_kind:temporal.regime_local_tcn_multiscale_challenger?.model_kind??'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
+      architecture:temporal.regime_local_tcn_multiscale_challenger?.architecture??null,
+      temporal_pooling:temporal.regime_local_tcn_multiscale_challenger?.temporal_pooling??null,
+      pooling_segments:temporal.regime_local_tcn_multiscale_challenger?.pooling_segments??0,
+      output_features:temporal.regime_local_tcn_multiscale_challenger?.output_features??0,
+      trainable_parameter_count:temporal.regime_local_tcn_multiscale_challenger?.trainable_parameter_count??0,
+      training_strategy:temporal.regime_local_tcn_multiscale_challenger?.training_strategy??null,
+      training_sample_budget:temporal.regime_local_tcn_multiscale_challenger?.training_sample_budget??0,
+      trained:temporal.regime_local_tcn_multiscale_challenger?.trained===true,
+      selected_for_research:temporal.regime_local_tcn_multiscale_challenger?.selected_for_research===true,
+      research_out_of_sample_validated:temporal.regime_local_tcn_multiscale_challenger?.research_out_of_sample_validated===true,
+      probability_ready:false,live_eligibility_ready:false,
+      supported_regimes:temporal.regime_local_tcn_multiscale_challenger?.supported_regimes??[],
+      validation_selected_regimes:temporal.regime_local_tcn_multiscale_challenger?.validation_selected_regimes??[],
+      selected_regimes:temporal.regime_local_tcn_multiscale_challenger?.selected_regimes??[],
+      training_samples:temporal.regime_local_tcn_multiscale_challenger?.training_samples??0,
+      selection_samples:temporal.regime_local_tcn_multiscale_challenger?.selection_samples??0,
+      calibration_samples:temporal.regime_local_tcn_multiscale_challenger?.calibration_samples??0,
+      validation_samples:temporal.regime_local_tcn_multiscale_challenger?.validation_samples??0,
+      validation:temporal.regime_local_tcn_multiscale_challenger?.validation??null,
+      validation_logistic:temporal.regime_local_tcn_multiscale_challenger?.validation_logistic??null,
+      holdout_samples:temporal.regime_local_tcn_multiscale_challenger?.holdout_samples??0,
+      holdout:temporal.regime_local_tcn_multiscale_challenger?.holdout??null,
+      holdout_logistic:temporal.regime_local_tcn_multiscale_challenger?.holdout_logistic??null,
+      holdout_comparison:temporal.regime_local_tcn_multiscale_challenger?.holdout_comparison??null,
+      regime_specialists:temporal.regime_local_tcn_multiscale_challenger?.regime_specialists??{}
     },
     temporal_regime_local_tcn_challenger:{
       status:temporal.regime_local_tcn_challenger?.status??'NOT_EVALUATED',

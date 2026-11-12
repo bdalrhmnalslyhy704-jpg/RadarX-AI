@@ -22,7 +22,15 @@ import {
   TEMPORAL_ORDERED_POOLING_FEATURE_COUNT,
   TEMPORAL_ORDERED_POOLING_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+  TEMPORAL_MULTISCALE_POOLING_MODE,
+  TEMPORAL_MULTISCALE_POOLING_SEGMENTS,
+  TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT,
+  TEMPORAL_MULTISCALE_DILATIONS,
+  TEMPORAL_MULTISCALE_RECEPTIVE_FIELD,
+  TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
+  TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
   poolOrderedTemporalSegments,
+  poolMultiscaleTemporalSegments,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalProbability
@@ -59,6 +67,45 @@ test('ordered four-segment pooling preserves temporal order instead of collapsin
   }
   assert.equal(poolOrderedTemporalSegments(early.slice(1)),null,
     'incomplete latent windows must fail closed');
+});
+
+test('V10 full-window multiscale pooling preserves segment means, endpoints and slopes with exact gradient routes',()=>{
+  const linear=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_LATENT_CHANNELS},(_,channel)=>time+channel*0.25));
+  const pooled=poolMultiscaleTemporalSegments(linear);
+  assert.equal(TEMPORAL_MULTISCALE_POOLING_MODE,'ORDERED_SEGMENT_MEAN_ENDPOINT_SLOPE_V1');
+  assert.deepEqual(TEMPORAL_MULTISCALE_DILATIONS,[1,2,4,8]);
+  assert.equal(TEMPORAL_MULTISCALE_RECEPTIVE_FIELD,31,
+    'four dilated layers with two causal taps each must cover more than the 24-step input');
+  assert.equal(TEMPORAL_MULTISCALE_POOLING_SEGMENTS,4);
+  assert.equal(TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT,192);
+  assert.equal(TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,1888);
+  assert.equal(TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+    'TCN_24x29_TO16_LATENT_FOUR_LAYER_DILATED_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V10');
+  assert.equal(pooled.features.length,192);
+  assert.equal(pooled.featureRoutes.length,192);
+  assert.deepEqual(pooled.poolSegments.map(row=>row.count),[6,6,6,6]);
+  assert.deepEqual(pooled.poolSegments.map(row=>row.feature_count),[48,48,48,48]);
+  assert.equal(pooled.features[0],2.5,'first-segment mean');
+  assert.equal(pooled.features[16],5,'first-segment endpoint');
+  assert.equal(pooled.features[32],1,'first-segment per-step slope');
+  assert.deepEqual(pooled.featureRoutes[0].time_weights,
+    Array.from({length:6},(_,time)=>({time,weight:1/6})));
+  assert.deepEqual(pooled.featureRoutes[16].time_weights,[{time:5,weight:1}]);
+  assert.deepEqual(pooled.featureRoutes[32].time_weights,
+    [{time:0,weight:-0.2},{time:5,weight:0.2}]);
+  const early=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_LATENT_CHANNELS},()=>time<6?1:0));
+  const late=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_LATENT_CHANNELS},()=>time>=18?1:0));
+  assert.notDeepEqual(poolMultiscaleTemporalSegments(early).features,
+    poolMultiscaleTemporalSegments(late).features,
+    'same global mean but different timing must remain distinguishable');
+  const invalid=linear.map(row=>row.slice());invalid[0][0]=null;
+  assert.equal(poolMultiscaleTemporalSegments(invalid),null,
+    'non-numeric latent values must fail closed');
+  assert.equal(poolMultiscaleTemporalSegments(linear.slice(1)),null,
+    'incomplete windows must fail closed');
 });
 
 test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
@@ -579,7 +626,10 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     regimeLocalTcnEpochs:1,
     enableRegimeLocalTcnPyramid:true,
     regimeLocalTcnPyramidMaxTrainingSamples:80,
-    regimeLocalTcnPyramidEpochs:1
+    regimeLocalTcnPyramidEpochs:1,
+    enableRegimeLocalTcnMultiscale:true,
+    regimeLocalTcnMultiscaleMaxTrainingSamples:80,
+    regimeLocalTcnMultiscaleEpochs:1
   });
   const local=profile.regime_local_tcn_challenger;
   assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
@@ -650,6 +700,30 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     assert.equal(expert.chronology_valid,true);
     if(!expert.validation_passed)assert.equal(expert.holdout.evaluated,false);
     assert.equal(expert.probability_ready,false);
+  }
+  const multiscale=profile.regime_local_tcn_multiscale_challenger;
+  assert.equal(multiscale.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1');
+  assert.equal(multiscale.temporal_pooling,TEMPORAL_MULTISCALE_POOLING_MODE);
+  assert.equal(multiscale.pooling_segments,4);
+  assert.equal(multiscale.output_features,192);
+  assert.equal(multiscale.trainable_parameter_count,1888);
+  assert.equal(multiscale.probability_ready,false,
+    'V10 must remain research-only regardless of training success');
+  assert.deepEqual(multiscale.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  for(const [regime,expert] of Object.entries(multiscale.regime_specialists)){
+    assert.equal(expert.trained,true,regime+' V10 TCN must train independently');
+    assert.equal(expert.temporal_pooling,TEMPORAL_MULTISCALE_POOLING_MODE);
+    assert.equal(expert.output_features,192);
+    assert.equal(expert.trainable_parameter_count,1888);
+    assert.equal(expert.model_architecture,TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE);
+    assert.equal(expert.model_training_strategy,
+      'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1');
+    assert.ok(expert.member_training_profiles.every(row=>
+      row.temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE&&
+      row.trainableParameters===1888));
+    assert.equal(expert.chronology_valid,true);
+    assert.equal(expert.probability_ready,false);
+    if(!expert.validation_passed)assert.equal(expert.holdout.evaluated,false);
   }
   assert.equal(profile.architecture,TEMPORAL_MODEL_ARCHITECTURE,
     'the established shared TCN V8 control must remain unchanged');

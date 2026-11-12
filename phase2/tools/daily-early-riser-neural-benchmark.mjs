@@ -140,6 +140,7 @@ function compactTarget(result){
     temporal_tree_challenger:result.temporal_tree_challenger,
     temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger,
     temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
+    temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -250,6 +251,7 @@ async function main(){
       const tree=result.temporal_tree_challenger||{};
       const localTcn=result.temporal_regime_local_tcn_challenger||{};
       const localTcnPyramid=result.temporal_regime_local_tcn_pyramid_challenger||{};
+      const localTcnMultiscale=result.temporal_regime_local_tcn_multiscale_challenger||{};
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -383,6 +385,27 @@ async function main(){
           holdout_logistic:localTcnPyramid.holdout_logistic??null,
           holdout_comparison:localTcnPyramid.holdout_comparison??null,
           regimes:localTcnPyramid.regime_specialists??{}
+        },
+        regime_local_tcn_multiscale:{
+          status:localTcnMultiscale.status??null,
+          model_kind:localTcnMultiscale.model_kind??null,
+          architecture:localTcnMultiscale.architecture??null,
+          temporal_pooling:localTcnMultiscale.temporal_pooling??null,
+          pooling_segments:localTcnMultiscale.pooling_segments??0,
+          output_features:localTcnMultiscale.output_features??0,
+          trainable_parameter_count:localTcnMultiscale.trainable_parameter_count??0,
+          training_sample_budget:localTcnMultiscale.training_sample_budget??0,
+          trained:localTcnMultiscale.trained===true,
+          training_samples:localTcnMultiscale.training_samples??0,
+          supported_regimes:localTcnMultiscale.supported_regimes??[],
+          validation_selected_regimes:localTcnMultiscale.validation_selected_regimes??[],
+          selected_regimes:localTcnMultiscale.selected_regimes??[],
+          validation:localTcnMultiscale.validation??null,
+          validation_logistic:localTcnMultiscale.validation_logistic??null,
+          holdout:localTcnMultiscale.holdout??null,
+          holdout_logistic:localTcnMultiscale.holdout_logistic??null,
+          holdout_comparison:localTcnMultiscale.holdout_comparison??null,
+          regimes:localTcnMultiscale.regime_specialists??{}
         },
         temporal_tree:{
           status:tree.status??null,trained:tree.trained===true,

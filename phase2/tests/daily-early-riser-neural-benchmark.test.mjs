@@ -398,4 +398,6 @@ test('persisted benchmark report retains the independent regime-local TCN challe
     'compactTarget must serialize the independent TCN challenger instead of dropping it');
   assert.ok(source.includes('temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger'),
     'compactTarget must serialize the ordered-pooling TCN challenger instead of dropping it');
+  assert.ok(source.includes('temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger'),
+    'compactTarget must serialize the full-receptive-field V10 challenger instead of dropping it');
 });
