@@ -358,8 +358,13 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.ok(profile.validation_start_at<profile.holdout_start_at);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'the model comparison must report the exact number of holdout rows it actually scored');
-  assert.ok(profile.holdout.sample_count>=40,
-    'the holdout block must retain the full research sample count for diagnostics');
+  if(profile.selected){
+    assert.ok(profile.holdout.sample_count>=40,
+      'a selected and validation-passed model may be evaluated on the untouched research holdout');
+  }else{
+    assert.equal(profile.holdout.sample_count,0,
+      'the untouched holdout must remain unscored until a regime passes outer validation');
+  }
   assert.ok(profile.holdout_comparison.sample_count===profile.holdout.sample_count,
     'the comparison count must equal the number of rows actually scored');
   assert.equal(profile.live_eligibility_ready,false,
@@ -483,9 +488,9 @@ test('one shared TCN gates outer validation and untouched holdout independently 
   if(innerGatePassed)assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
     'member ranking and probability calibration must not reuse the same rows');
   assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
-  assert.equal(expert.logistic_probability_calibration.fitted,true);
+  assert.equal(expert.logistic_probability_calibration.fitted,innerGatePassed);
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
-    'the logistic challenger must be calibrated on the exact same regime-local later block');
+    'the logistic challenger is calibrated on the later block only after TCN selection');
   if(innerGatePassed)assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
   else assert.equal(profile.validation.pooled_logistic_brier_score,null);
   if(expert.selected)assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
@@ -601,7 +606,9 @@ test('shared TCN learns pooled selection/calibration but keeps the outer regime 
     'the specialist remains unavailable because its own later validation block lacks positive outcomes');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false);
-  assert.equal(expert.probability_calibration?.fitted,true);
+  const innerSelectionPassed=expert.selected_member_index>=0&&expert.neural_residual_contributes;
+  assert.equal(expert.probability_calibration?.fitted,innerSelectionPassed,
+    'a diagnostic-only pooled TCN must not consume the later calibration block');
   assert.equal(expert.selected,false);
   assert.equal(expert.probability_ready,false,
     'a regime with unsupported validation outcomes must not publish a temporal probability');
@@ -645,8 +652,10 @@ test('TCN fits, selects and calibrates each specialist only on its own BTC regim
     assert.ok(expert.calibration_targets.positive>=5);
     assert.ok(expert.calibration_targets.negative>=20);
     assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
-    assert.equal(expert.probability_calibration.fitted,true);
-    assert.equal(expert.logistic_probability_calibration.fitted,true);
+    assert.equal(expert.probability_calibration.fitted,profile.shared_model_selection_passed,
+      'shared TCN calibration is fitted only when pooled inner selection passes');
+    assert.equal(expert.logistic_probability_calibration.fitted,profile.shared_model_selection_passed,
+      'matched logistic calibration is withheld when the TCN fails inner selection');
     assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
     assert.ok(expert.selection_start_at<expert.calibration_start_at);
     assert.ok(expert.calibration_start_at<expert.validation_start_at);
