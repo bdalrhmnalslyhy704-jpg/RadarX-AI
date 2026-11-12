@@ -227,6 +227,11 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6))),
     enableRegimeLocalTcnMultiscale:options.enableRegimeLocalTcnMultiscale!==false,
     regimeLocalTcnMultiscaleMaxTrainingSamples:effectiveDailyTcnMultiscaleTrainingBudget(options),
+    enableRegimeLocalTcnAttention:options.enableRegimeLocalTcnAttention!==false,
+    regimeLocalTcnAttentionMaxTrainingSamples:Math.max(80,Math.min(4096,
+      Math.trunc(options.temporalRegimeLocalTcnAttentionMaxTrainingSamples||4096))),
+    regimeLocalTcnAttentionEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnAttentionEpochs||6))),
     regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
     enableTemporalBoostedTree:options.enableTemporalBoostedTree!==false
@@ -257,6 +262,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       temporal_regime_local_tcn_challenger:temporal.regime_local_tcn_challenger??null,
       temporal_regime_local_tcn_pyramid_challenger:temporal.regime_local_tcn_pyramid_challenger??null,
       temporal_regime_local_tcn_multiscale_challenger:temporal.regime_local_tcn_multiscale_challenger??null,
+      temporal_regime_local_tcn_attention_challenger:temporal.regime_local_tcn_attention_challenger??null,
       samples:{
         accepted:rows.length,
         rejected:Object.values(rejected).reduce((sum,value)=>sum+value,0),
@@ -428,6 +434,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{},
       member_training_diagnostics:temporal.regime_local_tcn_pyramid_challenger?.member_training_diagnostics??[]
     },
+    temporal_regime_local_tcn_attention_challenger:temporal.regime_local_tcn_attention_challenger??null,
     temporal_regime_local_tcn_multiscale_challenger:{
       status:temporal.regime_local_tcn_multiscale_challenger?.status??'NOT_EVALUATED',
       model_kind:temporal.regime_local_tcn_multiscale_challenger?.model_kind??'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
