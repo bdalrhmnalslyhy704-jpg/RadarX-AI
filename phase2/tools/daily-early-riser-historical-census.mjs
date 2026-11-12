@@ -495,7 +495,10 @@ async function main(){
           row.feature_information_cutoff_at!==row.at).length;
         const horizonViolations=census.samples.filter(row=>
           Object.values(row.targets||{}).some(label=>
-            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)||
+          (extendedEventLabels&&Object.values(row.eventual_targets||{})
+            .flatMap(targets=>Object.values(targets||{})).some(label=>
+              Number(label?.resolved_at)-Number(row.at)!==Number(label?.horizon_ms)))).length;
         result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           coverage_15m:{first_available_month:btc15.first_available_month,
@@ -540,7 +543,10 @@ async function main(){
               row.feature_information_cutoff_at!==row.at).length;
             const horizonViolations=census.samples.filter(row=>
               Object.values(row.targets||{}).some(label=>
-                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)||
+              (extendedEventLabels&&Object.values(row.eventual_targets||{})
+                .flatMap(targets=>Object.values(targets||{})).some(label=>
+                  Number(label?.resolved_at)-Number(row.at)!==Number(label?.horizon_ms)))).length;
             result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
