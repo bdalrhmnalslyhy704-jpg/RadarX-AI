@@ -1,14 +1,15 @@
-Build 224 risk-aware safe-entry research validation at the latest audited code revision.
+Build 224 final risk-aware safe-entry experiment at current isolated research revision.
 
-Replay checksum-verified official Binance Spot monthly archives plus complete daily archives through 2026-11-11 UTC. Use closed 15m and 5m candles only, feature cutoff exactly at the baseline candle close, and non-overlapping 72h anchors.
+Replay checksum-verified official Binance Spot monthly archives and complete current-month daily archives through 2026-11-11 UTC. Use only verified closed 15m/5m candles, with features cut off exactly at each baseline close and non-overlapping 72h anchors.
 
-Preserve the 24h first-passage labels. Separately calculate:
-- upside opportunity touch labels for +5%, +10%, +15% at 24h/48h/72h, independent of drawdown;
-- independent -2%/-5% drawdown labels at 24h/48h/72h;
-- safe first-touch labels: +5%/+10%/+15% must be touched before -2% within the same 24h/48h/72h horizon; same-15m-candle ordering is AMBIGUOUS and excluded from supervised fit.
+For each eligible historical anchor preserve independent labels:
+1. Existing 24h target-first-passage results.
+2. +5/+10/+15 upside touch events at 24h, 48h, and 72h independent of drawdown.
+3. -2%/-5% drawdown risk at 24h, 48h, and 72h.
+4. Tradable safe-first-touch events: +5/+10/+15 must be touched before the -2% adverse barrier in the same horizon. If both touch within the same 15m candle, mark AMBIGUOUS and exclude it from supervised fitting.
 
-Strictly audit exact presence, outcomes, sources, definitions, horizons, maturity, OHLC continuity, 24x29 temporal sidecar identity/SHA-256, and liquidity lane for all labels. Preserve the 750,000 USDT normal liquidity threshold. Any sample below 750,000 USDT remains MICRO_WATCH_ONLY_UNDER_750K and must never become standard-entry eligible.
+Audit all expected labels, outcomes, exact source/definition/horizon, maturity, valid OHLC continuity, feature cutoff, 24x29 temporal sidecar identity/SHA-256, and the volume-to-lane mapping. Retain all under-floor observations only for Micro Watch diagnostics. The standard-entry MLP/GBDT/hybrid benchmark and its 24x29 TCN benchmark must each fit STANDARD_750K_PLUS samples only; any MICRO_WATCH_ONLY_UNDER_750K row must be rejected by the standard training filter and cannot gain standard eligibility.
 
-Train +5% / 72h safe-first-touch MLP, GBDT, and hybrid challengers in an isolated tabular run; train the 24x29 TCN separately on the exact same safe target. Compare each neural/hybrid challenger against a chronological, same-window Logistic baseline with the unchanged >0.003 Brier improvement requirement on validation and untouched holdout, purged horizon boundaries, disjoint calibration/selection blocks, and no peeking.
+Run isolated tabular MLP, GBDT and hybrid safe-first-touch +5%/72h challengers separately from the isolated 24x29 TCN on the same target and liquidity cohort. Compare each challenger to a chronological same-window Logistic baseline under the unchanged >0.003 Brier improvement rule on validation and untouched holdout. Preserve purge gaps, disjoint selection/calibration blocks, sidecar checksum, and no peeking.
 
-This is research-only. Paper trading remains true; real order execution false. Do not touch production, merge, deploy, relax liquidity, or place exchange orders.
+Research-only: no production changes, no merge, no deployment, no real orders. Paper trading remains true and real_order_execution remains false. Do not reduce the 750,000 USDT threshold.
