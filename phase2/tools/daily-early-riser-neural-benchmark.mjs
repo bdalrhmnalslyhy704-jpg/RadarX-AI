@@ -163,6 +163,9 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const labelMode=String(args['label-mode']||'first_passage');
+  const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
   const horizonHours=Number(args['horizon-hours']||24);
   if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode)||
     ![24,48,72].includes(horizonHours)||
@@ -186,6 +189,7 @@ async function main(){
         ?'FULL_TABULAR_NEURAL_BENCHMARK_WITH_TCN_ISOLATED'
         :'FULL_DAILY_NEURAL_BENCHMARK',
     temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
+    required_liquidity_lane:requiredLiquidityLane||null,
     requested_targets:targetsToRun,
     label_mode:labelMode,
     horizon_hours:horizonHours,
@@ -269,7 +273,8 @@ async function main(){
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
       const skipTemporal=String(args['skip-temporal']||'false')==='true';
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
-        tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
+        requiredLiquidityLane
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
         ...compactTarget(result),
