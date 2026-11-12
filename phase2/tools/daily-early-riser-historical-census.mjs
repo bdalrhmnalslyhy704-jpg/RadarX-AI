@@ -19,6 +19,8 @@ import {
   DAILY_EARLY_RISER_TARGETS_PCT,
   DAILY_EARLY_RISER_HORIZON_BARS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_MULTIHORIZON_HOURS,
+  DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
 
@@ -309,6 +311,26 @@ function summarizeTarget(rows,targetPct){
     successful_event_tier_counts:tierCountsFor(tradeableWinners)
   };
 }
+function countMultiHorizonLabelViolations(samples,enabled){
+  if(!enabled)return 0;
+  let violations=0;
+  for(const sample of Array.isArray(samples)?samples:[]){
+    for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
+      const key='plus_'+String(target).replace('.','_')+'_pct';
+      const labels=sample.multi_horizon_targets?.[key];
+      for(const hours of DAILY_EARLY_RISER_MULTIHORIZON_HOURS){
+        const row=labels?.[String(hours)+'H'];
+        if(!row||row.horizon_hours!==hours||row.horizon_bars!==hours*4||
+          row.horizon_ms!==hours*60*60*1000||
+          Number(row.horizon_end_at)-Number(sample.at)!==hours*60*60*1000||
+          !['UP','FLAT'].includes(row.movement_event?.outcome)||
+          !['UP','DOWN','FLAT','AMBIGUOUS'].includes(row.first_passage?.outcome)||
+          typeof row.risk_event?.adverse_reached!=='boolean')violations++;
+      }
+    }
+  }
+  return violations;
+}
 function compactSample(row){
   const {temporal_sequence,...small}=row;
   return {...small,temporal_sequence_omitted:true,
@@ -362,6 +384,8 @@ async function main(){
   const maxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
   const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
   const maxSamples=Math.max(1,Math.min(2000,Math.trunc(Number(args['max-samples-per-symbol'])||500)));
+  const multiHorizonEnabled=String(args['multi-horizon-targets']||'false')==='true';
+  const anchorStrideBars=multiHorizonEnabled?288:DAILY_EARLY_RISER_HORIZON_BARS;
   const output=resolve(args.output||OUTPUT_PATH),samplesOutput=resolve(args['samples-output']||SAMPLES_PATH);
   const temporalSamplesOutput=resolve(args['temporal-samples-output']||
     process.env.RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES||
@@ -387,7 +411,14 @@ async function main(){
     adverse_pct:DEFAULT_ADVERSE_PCT,
     horizon_bars:DAILY_EARLY_RISER_HORIZON_BARS,
     horizon_hours:24,
-    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
+    multi_horizon_targets_enabled:multiHorizonEnabled,
+    multi_horizon_hours:multiHorizonEnabled?[...DAILY_EARLY_RISER_MULTIHORIZON_HOURS]:[],
+    multi_horizon_label_bars:multiHorizonEnabled?288:null,
+    multi_horizon_outcome_source:multiHorizonEnabled?DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE:null,
+    anchor_stride_bars:anchorStrideBars,
+    anchor_cadence:multiHorizonEnabled
+      ?'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_72H'
+      :'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
     volume_floor_usdt:minVolume,
     closed_candles_only:true,
     baseline_features_have_future_data:false,
@@ -472,14 +503,18 @@ async function main(){
         const census=buildDailyEarlyRiserHistoricalSamples({
           symbol,klines:btcKlines,
           fastKlines:{data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+          sampleStrideBars:anchorStrideBars,multiHorizonTargetsEnabled:multiHorizonEnabled
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
         const horizonViolations=census.samples.filter(row=>
           Object.values(row.targets||{}).some(label=>
             Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
-        result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
+        const multiHorizonViolations=countMultiHorizonLabelViolations(
+          census.samples,multiHorizonEnabled);
+        result={symbol,status:featureCutoffViolations||horizonViolations||multiHorizonViolations
+          ?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           coverage_15m:{first_available_month:btc15.first_available_month,
             expected_months_after_first_available:btc15.expected_months_after_first_available,
@@ -491,6 +526,7 @@ async function main(){
             complete_from_first_available:btc5.complete_from_first_available},
           samples:census.samples.length,audit:census.audit,
           feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
+          multi_horizon_violations:multiHorizonViolations,
           output:census.samples};
       }else{
         try{
@@ -511,19 +547,24 @@ async function main(){
               coverage_5m:{expected_months_after_first_available:asset5.expected_months_after_first_available,
                 verified_months_after_first_available:asset5.verified_months_after_first_available,
                 complete_from_first_available:asset5.complete_from_first_available},
-              samples:0,audit:null,feature_cutoff_violations:0,horizon_violations:0,output:[]};
+              samples:0,audit:null,feature_cutoff_violations:0,horizon_violations:0,
+              multi_horizon_violations:0,output:[]};
           }else{
             const census=buildDailyEarlyRiserHistoricalSamples({
               symbol,klines:{data:asset15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               fastKlines:{data:asset5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+              sampleStrideBars:anchorStrideBars,multiHorizonTargetsEnabled:multiHorizonEnabled
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
             const horizonViolations=census.samples.filter(row=>
               Object.values(row.targets||{}).some(label=>
                 Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
-            result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
+            const multiHorizonViolations=countMultiHorizonLabelViolations(
+              census.samples,multiHorizonEnabled);
+            result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&
+              !horizonViolations&&!multiHorizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
               verified_months_15m:asset15.verified_months,verified_months_5m:asset5.verified_months,
@@ -537,6 +578,7 @@ async function main(){
                 complete_from_first_available:asset5.complete_from_first_available},
               samples:census.samples.length,audit:census.audit,
               feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
+              multi_horizon_violations:multiHorizonViolations,
               output:census.samples};
           }
         }catch(error){
@@ -589,9 +631,11 @@ async function main(){
       sum+(row.horizon_violations||0),0);
     const allAuditsReady=report.symbol_results.every(row=>
       row.status==='PROCESSED'&&row.audit?.status==='READY'&&row.audit?.overlap_violations===0);
+    const multiHorizonViolations=report.symbol_results.reduce((sum,row)=>
+      sum+(row.multi_horizon_violations||0),0);
     report.data_quality={
       status:failed===0&&symbolFailures.length===0&&allAuditsReady&&
-        featureCutoffViolations===0&&horizonViolations===0
+        featureCutoffViolations===0&&horizonViolations===0&&multiHorizonViolations===0
         ?'AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT':'INCOMPLETE',
       expected_archive_files:archiveFilesExpected,
       observed_archive_files:manifest.length,
@@ -609,7 +653,10 @@ async function main(){
       no_overlapping_daily_labels:report.symbol_results.every(row=>
         row.audit===null||row.audit?.overlap_violations===0),
       feature_cutoff_violations:featureCutoffViolations,
-      horizon_violations:horizonViolations
+      horizon_violations:horizonViolations,
+      multi_horizon_enabled:multiHorizonEnabled,
+      multi_horizon_label_violations:multiHorizonViolations,
+      multi_horizon_anchor_stride_bars:anchorStrideBars
     };
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
