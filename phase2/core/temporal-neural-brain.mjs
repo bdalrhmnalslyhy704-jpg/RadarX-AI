@@ -692,12 +692,13 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
 // A repeatable throughput diagnostic for allocation-based versus reusable
 // forward/backward workspaces. Timing is reported, never used to alter training.
 export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
-  iterations=60,warmupIterations=8,baseRate=0.41
+  iterations=40,warmupIterations=6,measurementRounds=3,baseRate=0.41
 }={}) {
   if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
   if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
-  const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||60)));
-  const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||8)));
+  const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||40)));
+  const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||6)));
+  const rounds=Math.max(2,Math.min(7,Math.trunc(Number(measurementRounds)||3)));
   const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
@@ -706,6 +707,10 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   ];
   const baselineFeatures=pooledSequence(sequence);
   const results=[];
+  const median=values=>{
+    const ordered=[...values].sort((a,b)=>a-b);
+    return ordered[Math.floor(ordered.length/2)]??0;
+  };
   for(const mode of modes){
     const model=initializeModel(71,baseRate,null,mode);
     const workspace=createTemporalTrainingWorkspace(model);
@@ -722,21 +727,35 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
         gradientsFor(sequence,target,model,cache,objective,workspaceGradients,workspace);
         return cache.probability;
       };
-      // Symmetric warmup and alternated measurement reduce order/cache bias.
-      for(let index=0;index<warmup;index++){
-        runReference();runWorkspace();
-      }
+      for(let index=0;index<warmup;index++){runReference();runWorkspace();}
+      const referenceTimes=[],workspaceTimes=[];
       let referenceChecksum=0,workspaceChecksum=0;
-      const referenceStart=performance.now();
-      for(let index=0;index<count;index++)referenceChecksum+=runReference();
-      const referenceMs=performance.now()-referenceStart;
-      const workspaceStart=performance.now();
-      for(let index=0;index<count;index++)workspaceChecksum+=runWorkspace();
-      const workspaceMs=performance.now()-workspaceStart;
+      for(let round=0;round<rounds;round++){
+        const measure=(fn,checksumKey)=>{
+          let checksum=0;
+          const started=performance.now();
+          for(let index=0;index<count;index++)checksum+=fn();
+          return {elapsed:performance.now()-started,checksum};
+        };
+        if(round%2===0){
+          const reference=measure(runReference,'reference');
+          const reused=measure(runWorkspace,'workspace');
+          referenceTimes.push(reference.elapsed);workspaceTimes.push(reused.elapsed);
+          referenceChecksum+=reference.checksum;workspaceChecksum+=reused.checksum;
+        }else{
+          const reused=measure(runWorkspace,'workspace');
+          const reference=measure(runReference,'reference');
+          referenceTimes.push(reference.elapsed);workspaceTimes.push(reused.elapsed);
+          referenceChecksum+=reference.checksum;workspaceChecksum+=reused.checksum;
+        }
+      }
+      const referenceMs=median(referenceTimes),workspaceMs=median(workspaceTimes);
       results.push({
-        pooling_mode:mode,objective,iterations:count,
-        reference_ms:Number(referenceMs.toFixed(3)),
-        workspace_ms:Number(workspaceMs.toFixed(3)),
+        pooling_mode:mode,objective,iterations:count,measurement_rounds:rounds,
+        reference_median_ms:Number(referenceMs.toFixed(3)),
+        workspace_median_ms:Number(workspaceMs.toFixed(3)),
+        reference_rounds_ms:referenceTimes.map(value=>Number(value.toFixed(3))),
+        workspace_rounds_ms:workspaceTimes.map(value=>Number(value.toFixed(3))),
         speedup:Number((referenceMs/Math.max(workspaceMs,1e-9)).toFixed(4)),
         reference_ops_per_second:Number((count*1000/Math.max(referenceMs,1e-9)).toFixed(3)),
         workspace_ops_per_second:Number((count*1000/Math.max(workspaceMs,1e-9)).toFixed(3)),
@@ -747,13 +766,11 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   const meanSpeedup=results.reduce((sum,row)=>sum+row.speedup,0)/results.length;
   return {
     schema:'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1',
-    diagnostic_only:true,
-    changes_training_math:false,
-    iterations_per_case:count,
-    warmup_iterations:warmup,
+    diagnostic_only:true,changes_training_math:false,
+    iterations_per_case:count,warmup_iterations:warmup,measurement_rounds:rounds,
     measured_cases:results.length,
     mean_speedup:Number(meanSpeedup.toFixed(4)),
-    median_speedup:Number([...results].sort((a,b)=>a.speedup-b.speedup)[Math.floor(results.length/2)].speedup.toFixed(4)),
+    median_speedup:Number(median(results.map(row=>row.speedup)).toFixed(4)),
     all_checksums_finite:results.every(row=>Number.isFinite(row.checksum_difference)),
     results
   };
