@@ -282,13 +282,17 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
   assert.equal(attention.trainable_parameter_count,TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT);
   assert.ok(attention.trained,'both BTC regimes have enough chronological samples to fit the attention challenger');
   assert.ok(attention.training_samples>=160);
-  assert.ok(attention.validation.samples>0||attention.validation.sample_count>0);
-  assert.equal(attention.validation.ranking_metrics.method,'WITHIN_TIMESTAMP_TOP_K_MACRO_V1');
-  assert.equal(attention.validation_logistic.ranking_metrics.method,'WITHIN_TIMESTAMP_TOP_K_MACRO_V1');
-  assert.ok(attention.validation.ranking_metrics.top_10_pct.groups>0);
-  assert.ok(attention.validation_logistic.ranking_metrics.top_10_pct.groups>0);
-  assert.ok(Number.isFinite(attention.validation.ranking_metrics.average_precision));
-  assert.ok(Number.isFinite(attention.validation_logistic.ranking_metrics.average_precision));
+  const regimeResults=Object.values(attention.regime_specialists||{});
+  assert.equal(regimeResults.length,2);
+  assert.ok(regimeResults.every(result=>result.validation_samples>0&&result.holdout_samples>0),
+    'both trained BTC regimes must have disjoint validation and holdout blocks');
+  assert.ok(regimeResults.every(result=>
+    result.member_selection_logistic_ranking_metrics?.method==='WITHIN_TIMESTAMP_TOP_K_MACRO_V1'));
+  assert.ok(regimeResults.every(result=>
+    result.selection_best_candidate?.ranking_metrics?.method==='WITHIN_TIMESTAMP_TOP_K_MACRO_V1'));
+  assert.ok(regimeResults.every(result=>
+    result.member_selection_scores.length>0&&
+    result.member_selection_scores.every(candidate=>candidate.ranking_metrics?.top_10_pct?.groups>0)));
   assert.equal(attention.probability_ready,false,
     'research challenger cannot publish a live probability from a synthetic unit fixture');
   assert.equal(attention.live_eligibility_ready,false);
