@@ -205,6 +205,7 @@ function fastDeltaProxy(oneRows,ts){
     replay_proxy:'LAST_CLOSED_1M_BAR_VS_PREVIOUS_15_ONE_MINUTE_BARS_NOT_THE_LIVE_20S_TICKER_DELTA'
   };
 }
+const hasFiniteNumber=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value));
 function underfloorDeepWatchGate(row,fp,cfg=EARLY_EXPANSION_RADAR_DEFAULTS){
   const m=fp?.metrics||{},c=fp?.category_scores||{};
   if(row?._low_liquidity_burst_bypass!==true||fp?.closed_candles_only!==true||
@@ -495,6 +496,11 @@ async function run(){
   md.push('Fast scan uses the eligible Binance Spot USDT ticker universe every cycle, compares each symbol against its own recent ticker state for short-horizon acceleration, then reserves deep-scan capacity for both fast accelerators and a quiet candidate set. It does not rank deep candidates primarily by 24h gain.');
   await writeFile('reports/initusdt-build224-forensic-2026-11-09-10.md',md.join('\n'));
   console.log(JSON.stringify(report.aggregate,null,2));
+  const failedCases=cases.filter(c=>c.status==='NOT_VERIFIED'||c.anchor?.status!=='OK');
+  if(failedCases.length){
+    console.error('FORENSIC_REPLAY_INCOMPLETE: '+JSON.stringify(failedCases.map(c=>({symbol:c.symbol,status:c.status,reason:c.reason,error:c.error,anchor_status:c.anchor?.status}))));
+    process.exitCode=1;
+  }
 }
 function fmt(v){return Number.isFinite(Number(v))?Number(v).toFixed(3):'—';}
 run().catch(e=>{console.error(e?.stack||e);process.exitCode=1;});
