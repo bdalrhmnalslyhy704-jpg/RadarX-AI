@@ -154,12 +154,21 @@ async function main(){
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
-  const output=resolve(args.output||(tcnOnly?'artifacts/daily-early-riser-tcn-only-benchmark.json':DEFAULT_OUTPUT));
+  const requestedTarget=args.target===undefined?null:Number(args.target);
+  if(requestedTarget!==null&&!DAILY_EARLY_RISER_TARGETS_PCT.includes(requestedTarget))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET_ARGUMENT');
+  const targetsToRun=requestedTarget===null?DAILY_EARLY_RISER_TARGETS_PCT:[requestedTarget];
+  const defaultOutput=tcnOnly
+    ?(requestedTarget===null?'artifacts/daily-early-riser-tcn-only-benchmark.json':
+      'artifacts/daily-early-riser-tcn-only-'+requestedTarget+'.json')
+    :DEFAULT_OUTPUT;
+  const output=resolve(args.output||defaultOutput);
   const started=Date.now();
   const report={
     schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
     research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    requested_targets:targetsToRun,
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
@@ -225,7 +234,7 @@ async function main(){
       coverage_pct:Number((temporalSidecar.rows/Number(expectedSamples.rows)*100).toFixed(3)),
       sequence_steps:24,sequence_channels:29,verified_against_census_report:true
     };
-    for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
+    for(const target of targetsToRun){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
       if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.samples.length!==Number(expectedSamples.rows)||
         loaded.malformed_lines!==0||loaded.missing_target_rows!==0)
