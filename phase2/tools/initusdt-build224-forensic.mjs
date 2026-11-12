@@ -7,7 +7,6 @@ const SYMBOLS=[['INITUSDT',107.41]];
 const EVENT_START=Date.parse('2026-11-09T00:00:00Z');
 const THROUGH='2026-11-11T00:00:00Z';
 const CHECKPOINTS=[24,12,6,3,1,.25,(5/60)];
-const THROUGH=process.env.RADAR8_FORENSIC_THROUGH||'2026-10-06T14:45:00Z';
 const throughMs=Date.parse(THROUGH);
 if(!Number.isFinite(throughMs))throw new Error('INVALID_FORENSIC_THROUGH');
 const targetStart=EVENT_START;
@@ -138,11 +137,11 @@ function checkpointRows(all,anchorMs,expected,market){
 function firstPartialEvidence(all,anchorMs,market){
   const start=anchorMs-24*3600000;let first=null,best=null;
   for(let ts=start;ts<anchorMs;ts+=5*60000){
-    const s=snapshotSeries(all,ts),ticker=historicalTicker(all['1m'],ts);if(!ticker)continue;ticker.symbol='UNKNOWN';
+    const s=snapshotSeries(all,ts),ticker=historicalTicker(all['1m'],ts);if(!ticker)continue;ticker.symbol='INITUSDT';
     const e=buildEarlyExpansionEvidence({series:s,ticker,depth:null,marketContext:market,fastContext:fastContext(all['1m'],ts),now:ts,historicalReplay:true});
     if(e.decision_band==='DATA_INSUFFICIENT')continue;
     if(!best||e.forensic_evidence_score>best.forensic_evidence_score)best={ts,e};
-    if(!first&&e.forensic_evidence_score>=72&&Number(ticker.priceChange24h)<=12){first={ts,e};break;}
+    if(!first&&e.forensic_evidence_score>=58&&Number(ticker.priceChange24h)<=12&&Number(ticker.quoteVolume24h)>=750000){first={ts,e};break;}
   }
   if(!first)return {status:'UNKNOWN',estimated_lead_time:'UNKNOWN',best_partial_evidence:best?{time:new Date(best.ts).toISOString(),score:best.e.forensic_evidence_score}:null};
   return {status:'PARTIAL_EVIDENCE_ONLY',first_time:new Date(first.ts).toISOString(),estimated_lead_time_minutes:Math.round((anchorMs-first.ts)/60000),score:first.e.forensic_evidence_score,decision_band:first.e.decision_band,reason_codes:first.e.reason_codes};
@@ -201,16 +200,24 @@ async function fetchSymbol(symbol){
 }
 function staticRadarAudit(){
   return {
-    radar1:{expected:'EARLY_MOVE_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Legacy market-universe ranking can preselect by 24h volume/trades/24h move before deep analysis.'},
-    radar2:{expected:'STRONG_MOVE_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Designed around an already-developing momentum burst, so it is not a clean pre-move detector.'},
-    radar3:{expected:'ROTATION_LAG_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Small rotating deep batch/top-lagger selection means full-market pre-move coverage is not guaranteed.'},
-    radar4:{expected:'LIQUIDITY_ABSORPTION_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Historical Binance REST klines do not provide the historical order-book snapshots required to replay its core depth signal.'},
-    radar5:{expected:'KAHIR_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Deep selection still includes positive 24h move in its activity score and only a limited number of deep candidates.'},
-    radar6:{expected:'DOOMSDAY_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Discovery includes major/24h movement components and deep-candidate cap; strong early thresholds can delay admission to deep scan.'},
-    radar7:{expected:'PROFESSOR_RADAR',actual_status:'NOT_RECONSTRUCTABLE_WITHOUT_HISTORICAL_ALERT_LOG',structural_risk:'Not a universal microstructure scanner; candidate discovery depends on external public/news intelligence and a small deep set.'}
+    scanner_scope:'BINANCE_SPOT_USDT',
+    closed_candles_only:true,
+    fast_scan:'ALL_ELIGIBLE_TICKERS_EVERY_CYCLE',
+    min_quote_volume_24h_usdt:750000,
+    quiet_base_max_24h_move_pct:8,
+    early_window_max_24h_move_pct:12,
+    hard_extended_24h_move_pct:18,
+    hard_extended_1h_move_pct:8,
+    hard_extended_15m_move_pct:6,
+    watch_early_score:58,
+    pre_expansion_score:70,
+    breakout_developing_score:80,
+    min_alert_score:82,
+    historical_orderbook_replay:'UNAVAILABLE',
+    actual_notification_reconstruction:'NOT_VERIFIABLE_WITHOUT_HISTORICAL_ORDERBOOK_AND_RUNTIME_ALERT_LOGS',
+    note:'This replay evaluates closed-candle evidence only. It does not fabricate historical bid/ask depth, spread, or actual notification delivery.'
   };
 }
-
 async function run(){
   await mkdir('reports',{recursive:true});
   const market5=(await fetchRange('BTCUSDT','5m',fetchStart,throughMs)).candles;
