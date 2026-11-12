@@ -277,6 +277,8 @@ export function classifyDailyEarlyRiserMultiHorizonOutcomes({
       horizonResults[targetKey][String(horizonHours)+'H']={
         horizon_hours:horizonHours,
         horizon_bars:horizonBars,
+        horizon_ms:horizonHours*60*60*1000,
+        horizon_end_at:window.at(-1).closeTime,
         movement_event:{
           outcome:targetReached?'UP':'FLAT',
           target_reached:targetReached,
