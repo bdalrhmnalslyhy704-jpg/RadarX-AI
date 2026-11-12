@@ -1159,7 +1159,10 @@ function fitRegimeLocalTemporalTcn({
     ?evaluate(validation,predictCandidate,baseRate)
     :{evaluated:false,sample_count:validation.length,model_brier_score:null,
       base_rate_brier_score:null,beat_base_rate:false,reason:'REGIME_LOCAL_TCN_SELECTION_OR_CALIBRATION_NOT_PASSED'};
-  const validationLogistic=evaluate(validation,predictBaseline,baseRate);
+  const validationLogistic=selected&&calibrator.fitted&&logisticCalibrator.fitted
+    ?evaluate(validation,predictBaseline,baseRate)
+    :{evaluated:false,sample_count:validation.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'REGIME_LOCAL_TCN_SELECTION_OR_CALIBRATION_NOT_PASSED'};
   const validationPassed=Boolean(selected&&calibrator.fitted&&logisticCalibrator.fitted&&
     validationModel.evaluated&&validationLogistic.evaluated&&
     validationModel.beat_base_rate===true&&
@@ -1616,7 +1619,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   const sharedTcnDiagnosticScale=sharedTcnDiagnosticCandidate?.residual_scale??0;
   const sharedTcnSelectedIndex=sharedTcnSelectedCandidate?.index??-1;
   const sharedTcnSelectedScale=sharedTcnSelectedCandidate?.residual_scale??0;
-  const sharedTcnCalibrationCandidate=sharedTcnSelectedCandidate||sharedTcnDiagnosticCandidate;
+  // Only a candidate that cleared inner selection may enter the later calibration block.
+  // A diagnostic-only member never consumes calibration, outer validation or holdout rows.
+  const sharedTcnCalibrationCandidate=sharedTcnSelectedCandidate;
   const sharedTcnCalibrationIndex=sharedTcnCalibrationCandidate?.index??-1;
   const sharedTcnCalibrationScale=sharedTcnCalibrationCandidate?.residual_scale??0;
   const sharedTcnCalibrator=sharedTcnFit&&sharedTcnCalibrationCandidate&&sharedTcnCalibrationSupported
@@ -1630,9 +1635,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       fit_on:'SHARED_POOLED_CALIBRATION_BLOCK_TCN',
       sample_count:0,positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
       reason:!sharedTcnFit?'SHARED_TCN_TRAINING_SUPPORT_BELOW_MINIMUM':
-        !sharedTcnCalibrationCandidate?'NO_SHARED_TCN_SELECTION_CANDIDATE':
+        !sharedTcnCalibrationCandidate?'SHARED_TCN_DID_NOT_PASS_SELECTION_LOGISTIC':
         'SHARED_TCN_CALIBRATION_CLASS_SUPPORT_BELOW_MINIMUM'};
-  const sharedLogisticCalibrator=sharedTcnCalibrationSupported
+  const sharedLogisticCalibrator=sharedTcnSelectedCandidate&&sharedTcnCalibrationSupported
     ?fitSelectionProbabilityCalibrator(sharedCalibrationRows,
       sequence=>predictLogistic(sequence,pooledBaseline),
       {minimumSamples:30,minimumPositive:5,minimumNegative:20,
@@ -1641,7 +1646,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
       fit_on:'SHARED_POOLED_CALIBRATION_BLOCK_LOGISTIC',
       sample_count:0,positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
-      reason:'SHARED_LOGISTIC_CALIBRATION_CLASS_SUPPORT_BELOW_MINIMUM'};
+      reason:!sharedTcnSelectedCandidate?'SHARED_TCN_DID_NOT_PASS_SELECTION_LOGISTIC':
+        'SHARED_LOGISTIC_CALIBRATION_CLASS_SUPPORT_BELOW_MINIMUM'};
 
   // Shared chronological cutoffs prevent look-ahead; all data use is local.
   for(const regime of regimes){
@@ -1923,48 +1929,72 @@ export function buildTemporalNeuralProfile(samples = [], {
     const predictCalibratedLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,pooledBaseline),logisticProbabilityCalibrator);
     const neuralResidualContributes=selectedResidualScale>0;
-    const diagnosticPrediction=sequence=>diagnosticMemberIndex>=0
-      ?calibratedProbability(forward(sequence,regimeFit.members[diagnosticMemberIndex],diagnosticResidualScale).probability,selectionCalibrator)
-      :null;
-    const validationModel=selectedMemberIndex>=0
+    // Strict nested gates: an unselected diagnostic member is never scored on
+    // outer validation, and the untouched holdout is never opened before validation passes.
+    const candidateReady=selectedMemberIndex>=0&&neuralResidualContributes&&
+      selectionCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true;
+    const validationModel=candidateReady
       ?evaluate(regimeValidation,sequence=>predict(sequence,fitted),regimePrior)
-      :evaluate(regimeValidation,diagnosticPrediction,regimePrior);
-    const validationLogistic=evaluate(regimeValidation,
-      predictCalibratedLogistic,regimeBaseline.base_rate);
-    const validationPassed=neuralResidualContributes&&
-      selectionCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
-      validationModel.evaluated&&validationLogistic.evaluated&&
+      :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'SHARED_TCN_SELECTION_OR_CALIBRATION_NOT_PASSED'};
+    const validationLogistic=candidateReady
+      ?evaluate(regimeValidation,predictCalibratedLogistic,regimeBaseline.base_rate)
+      :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'SHARED_TCN_SELECTION_OR_CALIBRATION_NOT_PASSED'};
+    const validationPassed=candidateReady&&validationModel.evaluated&&validationLogistic.evaluated&&
       validationModel.beat_base_rate===true&&
       validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score;
-    const holdoutModel=selectedMemberIndex>=0
+    const holdoutModel=validationPassed
       ?evaluate(regimeHoldout,sequence=>predict(sequence,fitted),regimePrior)
-      :evaluate(regimeHoldout,diagnosticPrediction,regimePrior);
-    const holdoutLogistic=evaluate(regimeHoldout,
-      predictCalibratedLogistic,regimeBaseline.base_rate);
+      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'SHARED_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
+    const holdoutLogistic=validationPassed
+      ?evaluate(regimeHoldout,predictCalibratedLogistic,regimeBaseline.base_rate)
+      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'SHARED_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
     const predictCalibratedTemporalTree=sequence=>calibratedProbability(
       temporalTreeFit&&temporalTreeWinner
         ?predictTemporalResidualTrees(sequence,temporalTreeFit,
           temporalTreeWinner.residual_scale,temporalTreeWinner.tree_count)
         :null,temporalTreeCalibrator);
-    const treeLogisticCalibrator=fitSelectionProbabilityCalibrator(regimeCalibration,
-      sequence=>predictLogistic(sequence,regimeBaseline),
-      {minimumSamples:30,minimumPositive:5,minimumNegative:20,
-       iterations:300,learningRate:0.03,regularization:0.45,
-       fitOn:'REGIME_CALIBRATION_BLOCK_TEMPORAL_GBDT_LOGISTIC'});
+    const treeLogisticCalibrator=temporalTreeSelectionPassed
+      ?fitSelectionProbabilityCalibrator(regimeCalibration,
+        sequence=>predictLogistic(sequence,regimeBaseline),
+        {minimumSamples:30,minimumPositive:5,minimumNegative:20,
+         iterations:300,learningRate:0.03,regularization:0.45,
+         fitOn:'REGIME_CALIBRATION_BLOCK_TEMPORAL_GBDT_LOGISTIC'})
+      :{method:'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2',
+        fit_on:'REGIME_CALIBRATION_BLOCK_TEMPORAL_GBDT_LOGISTIC',
+        sample_count:0,positive_count:0,negative_count:0,slope:1,intercept:0,fitted:false,
+        reason:'TEMPORAL_TREE_DID_NOT_BEAT_SELECTION_LOGISTIC'};
     const predictCalibratedTreeLogistic=sequence=>calibratedProbability(
       predictLogistic(sequence,regimeBaseline),treeLogisticCalibrator);
-    const temporalTreeValidationLogistic=evaluate(regimeValidation,predictCalibratedTreeLogistic,regimePrior);
-    const temporalTreeHoldoutLogistic=evaluate(regimeHoldout,predictCalibratedTreeLogistic,regimePrior);
-    const temporalTreeValidation=temporalTreeFit&&temporalTreeWinner
+    const treeValidationReady=temporalTreeSelectionPassed&&
+      temporalTreeCalibrator.fitted===true&&treeLogisticCalibrator.fitted===true;
+    const temporalTreeValidationLogistic=treeValidationReady
+      ?evaluate(regimeValidation,predictCalibratedTreeLogistic,regimePrior)
+      :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'TEMPORAL_TREE_SELECTION_OR_CALIBRATION_NOT_PASSED'};
+    const temporalTreeValidation=treeValidationReady
       ?evaluate(regimeValidation,predictCalibratedTemporalTree,regimePrior)
       :{evaluated:false,sample_count:regimeValidation.length,model_brier_score:null,
-        base_rate_brier_score:null,beat_base_rate:false,reason:'TEMPORAL_TREE_NOT_SELECTED'};
-    const temporalTreeValidationPassed=temporalTreeSelectionPassed&&
-      temporalTreeCalibrator.fitted===true&&logisticProbabilityCalibrator.fitted===true&&
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'TEMPORAL_TREE_SELECTION_OR_CALIBRATION_NOT_PASSED'};
+    const temporalTreeValidationPassed=treeValidationReady&&
       temporalTreeValidation.evaluated===true&&temporalTreeValidationLogistic.evaluated===true&&
       temporalTreeValidation.beat_base_rate===true&&
       temporalTreeValidation.model_brier_score+comparisonMargin<
         temporalTreeValidationLogistic.model_brier_score;
+    const temporalTreeHoldoutLogistic=temporalTreeValidationPassed
+      ?evaluate(regimeHoldout,predictCalibratedTreeLogistic,regimePrior)
+      :{evaluated:false,sample_count:regimeHoldout.length,model_brier_score:null,
+        base_rate_brier_score:null,beat_base_rate:false,
+        reason:'TEMPORAL_TREE_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
     // Do not even score the untouched holdout for a tree that failed the
     // earlier validation gate. This keeps the final block out of model review.
     const temporalTreeHoldout=temporalTreeValidationPassed
@@ -2380,16 +2410,20 @@ export function buildTemporalNeuralProfile(samples = [], {
   const hasDiagnosticRegimes=diagnosticRegimes.length>0;
   const validationModel=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_model))
-    :evaluate(validation,sequence=>predict(sequence,fitted),baseRate);
+    :{evaluated:false,sample_count:validation.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'NO_SUPPORTED_SELECTED_REGIME_FOR_VALIDATION'};
   const validationLogistic=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.validation_logistic))
-    :evaluate(validation,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+    :{evaluated:false,sample_count:validation.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'NO_SUPPORTED_SELECTED_REGIME_FOR_VALIDATION'};
   const holdoutModel=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_model))
-    :evaluate(holdout,sequence=>predict(sequence,fitted),baseRate);
+    :{evaluated:false,sample_count:holdout.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'NO_VALIDATED_REGIME_FOR_UNTOUCHED_HOLDOUT'};
   const holdoutLogistic=hasDiagnosticRegimes
     ?aggregateEvaluations(diagnosticRegimes.map(regime=>regimeResults[regime]?.holdout_logistic))
-    :evaluate(holdout,sequence=>predictLogistic(sequence,pooledBaseline),pooledBaseline.base_rate);
+    :{evaluated:false,sample_count:holdout.length,model_brier_score:null,
+      base_rate_brier_score:null,beat_base_rate:false,reason:'NO_VALIDATED_REGIME_FOR_UNTOUCHED_HOLDOUT'};
   // Each BTC regime has already been compared with its own training-only
   // logistic anchor on disjoint chronological validation and untouched holdout
   // rows. The deployable predictor is conditional: it must return null in any

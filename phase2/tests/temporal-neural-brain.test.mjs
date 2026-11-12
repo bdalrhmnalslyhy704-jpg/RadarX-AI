@@ -373,7 +373,44 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   }
 });
 
-test('one shared TCN passes independent outer gates in each supported BTC regime',()=>{
+test('shared TCN and temporal tree do not inspect outer validation or holdout before prior gates pass',()=>{
+  const rows=[];
+  for(let group=0;group<32;group++){
+    for(let index=0;index<36;index++){
+      const row=sample(group,index,{up:index<8});
+      row.temporal_sequence=row.temporal_sequence.map(step=>{
+        const copy=step.slice();copy[19]=1.35;return copy;
+      });
+      rows.push(row);
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{epochs:2,comparisonMargin:1});
+  assert.equal(profile.shared_model_selection_passed,false,
+    'a deliberately unattainable test-only margin forces selection rejection');
+  assert.equal(profile.validation.evaluated,false);
+  assert.equal(profile.validation.pooled_logistic_brier_score,null);
+  assert.equal(profile.holdout.evaluated,false);
+  assert.equal(profile.holdout.pooled_logistic_brier_score,null);
+  const shared=profile.regime_specialists.BTC_RISK_ON;
+  assert.equal(shared.selected_member_index,-1);
+  assert.equal(shared.probability_calibration.fitted,false);
+  assert.equal(shared.logistic_probability_calibration.fitted,false);
+  assert.equal(shared.validation_brier,null);
+  assert.equal(shared.validation_pooled_logistic_brier,null);
+  assert.equal(shared.holdout_brier,null);
+  assert.equal(shared.holdout_pooled_logistic_brier,null);
+  assert.equal(shared.validation_diagnostic_only,false);
+  assert.equal(shared.holdout_diagnostic_only,false);
+  const tree=profile.temporal_boosted_tree.regime_specialists.BTC_RISK_ON;
+  assert.equal(tree.selection_passed,false);
+  assert.equal(tree.calibration.fitted,false);
+  assert.equal(tree.validation.evaluated,false);
+  assert.equal(tree.validation_logistic.evaluated,false);
+  assert.equal(tree.holdout.evaluated,false);
+  assert.equal(tree.holdout_logistic.evaluated,false);
+});
+
+test('one shared TCN gates outer validation and untouched holdout independently by BTC regime',()=>{
   const rows=[];
   for(let group=0;group<32;group++){
     for(let index=0;index<36;index++){
@@ -389,10 +426,27 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   const profile=buildTemporalNeuralProfile(rows,{epochs:2});
   assert.equal(profile.trained,true);
   assert.equal(profile.regime_split_method,'SHARED_GLOBAL_TIME_SPLIT_WITH_REGIME_LOCAL_AUXILIARY_TREE_SPLITS_V1');
-  assert.equal(profile.validation.evaluated,true);
-  assert.equal(profile.holdout.evaluated,true);
   assert.deepEqual(profile.supported_regimes,['BTC_RISK_ON']);
   const expert=profile.regime_specialists.BTC_RISK_ON;
+  const innerGatePassed=expert.selected_member_index>=0&&expert.neural_residual_contributes&&
+    expert.probability_calibration?.fitted===true&&
+    expert.logistic_probability_calibration?.fitted===true;
+  assert.equal(profile.validation.evaluated,innerGatePassed,
+    'outer validation is scored only after a neural member clears selection and calibration');
+  assert.equal(profile.holdout.evaluated,expert.selected===true,
+    'untouched holdout is scored only after the outer validation gate passes');
+  if(!innerGatePassed){
+    assert.equal(expert.validation_brier,null);
+    assert.equal(expert.validation_pooled_logistic_brier,null);
+    assert.equal(expert.validation_diagnostic_only,false);
+    assert.equal(expert.selection_calibration_samples,0);
+    assert.equal(expert.logistic_calibration_samples,0);
+  }
+  if(!expert.selected){
+    assert.equal(expert.holdout_brier,null);
+    assert.equal(expert.holdout_pooled_logistic_brier,null);
+    assert.equal(expert.holdout_diagnostic_only,false);
+  }
   assert.equal(expert.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES');
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
@@ -419,20 +473,23 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(expert.member_selection_source,'SHARED_POOLED_MEMBER_SELECTION_BLOCK');
   assert.equal(expert.calibration_source,'SHARED_POOLED_CALIBRATION_BLOCK');
   assert.equal(expert.neural_residual_contributes,expert.selected_residual_scale>0);
-  assert.equal(expert.logistic_probability_calibration.fitted,true);
+  assert.equal(expert.logistic_probability_calibration.fitted,innerGatePassed);
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples);
   assert.equal(expert.probability_calibration.sample_count,expert.selection_calibration_samples,
     'probability calibration may use only the disjoint later calibration block');
   assert.ok(expert.member_selection_samples>0);
-  assert.ok(expert.selection_calibration_samples>0);
-  assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
+  if(innerGatePassed)assert.ok(expert.selection_calibration_samples>0);
+  else assert.equal(expert.selection_calibration_samples,0);
+  if(innerGatePassed)assert.notEqual(expert.member_selection_samples,expert.selection_calibration_samples,
     'member ranking and probability calibration must not reuse the same rows');
   assert.equal(expert.probability_calibration.fit_on,'SHARED_POOLED_CALIBRATION_BLOCK_TCN');
   assert.equal(expert.logistic_probability_calibration.fitted,true);
   assert.equal(expert.logistic_probability_calibration.sample_count,expert.selection_calibration_samples,
     'the logistic challenger must be calibrated on the exact same regime-local later block');
-  assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
-  assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
+  if(innerGatePassed)assert.ok(Number.isFinite(profile.validation.pooled_logistic_brier_score));
+  else assert.equal(profile.validation.pooled_logistic_brier_score,null);
+  if(expert.selected)assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
+  else assert.equal(profile.holdout.pooled_logistic_brier_score,null);
   assert.equal(profile.calibration_fit_scope,'SHARED_POOLED_CALIBRATION_BLOCK_ONLY');
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
@@ -447,7 +504,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
     'final holdout must remain strictly later than all fitting and selection data');
   assert.equal(profile.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_SPECIALIST_SAMPLE_COVERAGE');
   assert.ok(profile.regime_specialists.BTC_RISK_OFF.support_gaps.includes('HOLDOUT_SAMPLE_COUNT'));
-  assert.ok(profile.holdout_comparison.sample_count>=40);
+  assert.equal(profile.holdout_comparison.sample_count,expert.selected?profile.holdout.sample_count:0);
   assert.equal(profile.holdout_comparison.sample_count,profile.holdout.sample_count,
     'comparison sample count must describe rows actually evaluated');
   for(const regime of profile.supported_regimes){
