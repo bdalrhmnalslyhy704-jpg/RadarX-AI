@@ -42,11 +42,12 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=320
 
       - name: Upload complete INITUSDT forensic report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: initusdt-build224-forensic-2026-11-09-10
           path: |
             reports/initusdt-build224-forensic-2026-11-09-10.json
             reports/initusdt-build224-forensic-2026-11-09-10.md
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
