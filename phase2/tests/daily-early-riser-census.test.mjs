@@ -181,7 +181,7 @@ test('eventual multi-horizon label preserves a later INIT-like rise while keepin
   const future=Array.from({length:288},(_,index)=>{
     const row=candle(baseline.closeTime+1+index*INTERVAL);
     if(index===2)return {...row,high:100.3,low:97.7,close:98.1};
-    if(index===150)return {...row,high:111,low:101,close:109.5};
+    if(index===150)return {...row,open:104,high:111,low:101,close:109.5};
     return row;
   });
   const events=classifyDailyEarlyRiserEventualTargetSet({
