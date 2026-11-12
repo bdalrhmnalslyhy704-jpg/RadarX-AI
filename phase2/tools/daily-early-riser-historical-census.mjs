@@ -335,6 +335,62 @@ function rankingMetric(rows,targetKey,fraction,includeFlat=false,labelField='tra
     positive_prevalence_pct:ranked.length?Number((up/ranked.length*100).toFixed(3)):null
   };
 }
+function summarizeBinaryOpportunity(rows,horizonKey,targetKey){
+  const eligible=rows.filter(row=>{
+    const label=row.opportunity_targets?.[horizonKey]?.[targetKey];
+    return label?.status==='RESOLVED'&&['UP','FLAT'].includes(label.outcome);
+  });
+  const ranked=eligible.map((row,index)=>({
+    index,row,label:row.opportunity_targets[horizonKey][targetKey],
+    score:finite(row.base_score)??Number.NEGATIVE_INFINITY
+  })).sort((a,b)=>b.score-a.score||a.index-b.index);
+  const positives=ranked.filter(item=>item.label.outcome==='UP').length;
+  const negatives=ranked.length-positives;
+  const top=fraction=>{
+    const count=ranked.length?Math.max(1,Math.ceil(ranked.length*fraction)):0;
+    const chosen=ranked.slice(0,count);
+    const up=chosen.filter(item=>item.label.outcome==='UP').length;
+    return {
+      selected_count:chosen.length,selected_up:up,
+      precision_pct:chosen.length?Number((up/chosen.length*100).toFixed(3)):null,
+      recall_pct:positives?Number((up/positives*100).toFixed(3)):null
+    };
+  };
+  const upRows=ranked.filter(item=>item.label.outcome==='UP');
+  const micro=eligible.filter(row=>row.liquidity_lane==='MICRO_WATCH_ONLY_UNDER_750K');
+  const standard=eligible.filter(row=>row.liquidity_lane==='STANDARD_750K_PLUS');
+  const describe=cohort=>{
+    const wins=cohort.filter(row=>row.opportunity_targets?.[horizonKey]?.[targetKey]?.outcome==='UP');
+    return {
+      samples:cohort.length,upside_events:wins.length,
+      upside_rate_pct:cohort.length?Number((wins.length/cohort.length*100).toFixed(3)):null
+    };
+  };
+  const values=field=>upRows.map(item=>finite(item.label[field])).filter(value=>value!==null);
+  return {
+    eligible_samples:eligible.length,upside_events:positives,no_touch_events:negatives,
+    upside_prevalence_pct:eligible.length?Number((positives/eligible.length*100).toFixed(3)):null,
+    top_10_pct:top(0.10),top_20_pct:top(0.20),
+    median_time_to_target_minutes:median(values('time_to_target_minutes')),
+    median_max_favorable_excursion_pct:median(values('max_favorable_excursion_pct')),
+    median_max_adverse_excursion_pct:median(values('max_adverse_excursion_pct')),
+    micro_watch_only:describe(micro),standard_750k_plus:describe(standard)
+  };
+}
+function summarizeIndependentDrawdown(rows,horizonKey,riskKey){
+  const eligible=rows.map(row=>row.drawdown_risks?.[horizonKey]?.[riskKey])
+    .filter(label=>label?.status==='RESOLVED'&&['DOWN','FLAT'].includes(label.outcome));
+  const touched=eligible.filter(label=>label.outcome==='DOWN');
+  const values=field=>touched.map(label=>finite(label[field])).filter(value=>value!==null);
+  return {
+    eligible_samples:eligible.length,drawdown_events:touched.length,
+    no_drawdown_events:eligible.length-touched.length,
+    drawdown_rate_pct:eligible.length?Number((touched.length/eligible.length*100).toFixed(3)):null,
+    median_time_to_drawdown_minutes:median(values('time_to_drawdown_minutes')),
+    median_max_adverse_excursion_pct:median(values('max_adverse_excursion_pct')),
+    median_max_favorable_excursion_pct:median(values('max_favorable_excursion_pct'))
+  };
+}
 function summarizeTarget(rows,targetPct){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   // Tradeability: target must be reached before the -2% adverse barrier.
@@ -369,8 +425,23 @@ function summarizeTarget(rows,targetPct){
     }
     return counts;
   };
+  const opportunityDiagnostics=Object.fromEntries([24,48,72].map(hours=>{
+    const horizonKey=String(hours)+'h';
+    const sample=rows.find(row=>row.opportunity_targets?.[horizonKey]);
+    if(!sample)return [horizonKey,{status:'NOT_COLLECTED'}];
+    const opportunity=Object.fromEntries([5,10,15].map(target=>{
+      const targetKey='plus_'+String(target).replace('.','_')+'_pct';
+      return [targetKey,summarizeBinaryOpportunity(rows,horizonKey,targetKey)];
+    }));
+    const drawdown=Object.fromEntries([2,5].map(threshold=>{
+      const riskKey='minus_'+String(threshold).replace('.','_')+'_pct';
+      return [riskKey,summarizeIndependentDrawdown(rows,horizonKey,riskKey)];
+    }));
+    return [horizonKey,{status:'RESOLVED_LABELS',opportunity,independent_drawdown_risk:drawdown}];
+  }));
   return {
     target_pct:targetPct,adverse_pct:DEFAULT_ADVERSE_PCT,horizon_hours:24,
+    independent_opportunity_and_drawdown_diagnostics:opportunityDiagnostics,
     market_move_event:{
       outcomes:marketMoveOutcomes,successful_event_count:marketMovers.length,
       target_hit_after_adverse_barrier_count:marketMoversAfterAdverse,
