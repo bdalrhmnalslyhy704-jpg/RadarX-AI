@@ -1506,7 +1506,7 @@ function fitRegimeLocalTemporalTcn({
   const allTraining=sortRows(trainingRows),selection=sortRows(memberSelectionRows);
   const calibration=sortRows(calibrationRows),validation=sortRows(validationRows);
   const holdout=sortRows(holdoutRows);
-  const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT,
     Math.trunc(Number(maxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES)));
   const training=allTraining.slice(-limit);
   const counts=rows=>({
