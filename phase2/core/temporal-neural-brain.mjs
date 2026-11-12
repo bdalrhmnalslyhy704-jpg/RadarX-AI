@@ -613,6 +613,10 @@ function forwardWithWorkspace(sequence,model,residualScale=1,
 function maxTreeDifference(left,right,state={maximum:0,count:0}) {
   if(Array.isArray(left)&&Array.isArray(right)&&left.length===right.length){
     for(let index=0;index<left.length;index++)maxTreeDifference(left[index],right[index],state);
+  }else if(left&&right&&typeof left==='object'&&typeof right==='object'&&
+    Object.keys(left).length===Object.keys(right).length&&
+    Object.keys(left).every(key=>Object.hasOwn(right,key))){
+    for(const key of Object.keys(left))maxTreeDifference(left[key],right[key],state);
   }else if(typeof left==='number'&&typeof right==='number'&&
     Number.isFinite(left)&&Number.isFinite(right)){
     state.maximum=Math.max(state.maximum,Math.abs(left-right));state.count++;
