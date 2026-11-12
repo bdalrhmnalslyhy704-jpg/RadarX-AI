@@ -464,7 +464,7 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
   const activationGradients=Array(dilations.length+1);
   const final=cache.activations.at(-1);
-  activationGradients[DILATIONS.length]=final.map(()=>Array(channels).fill(0));
+  activationGradients[dilations.length]=final.map(()=>Array(channels).fill(0));
   const probabilityError=cache.probability-target;
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
