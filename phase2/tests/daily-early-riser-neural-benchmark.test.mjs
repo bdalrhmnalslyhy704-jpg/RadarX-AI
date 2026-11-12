@@ -13,7 +13,9 @@ import {
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
-  benchmarkDailyEarlyRiserTarget
+  prepareDailyEarlyRiserMultiHorizonRow,
+  benchmarkDailyEarlyRiserTarget,
+  benchmarkDailyEarlyRiserMultiHorizonTarget
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
   buildCognitiveLearningProfile,
@@ -436,3 +438,77 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   assert.ok(source.includes('temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger'),
     'compactTarget must serialize the full-receptive-field V10 challenger instead of dropping it');
 });
+const MULTI_SOURCE='BINANCE_OFFICIAL_CLOSED_15M_MULTI_HORIZON_MOVEMENT_AND_RISK_V1';
+const MULTI_VERSION='MULTI_HORIZON_MOVEMENT_AND_FIRST_PASSAGE_24_48_72H_V1';
+const HOURS_48=48*60*60*1000;
+function multiSampleWith({at=1_800_000_000_000,movement='UP',risk='DOWN',hours=48}={}){
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,index)=>{
+    const step=Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0);
+    step[0]=index/40;step[1]=0.2;step[19]=0.1;
+    return step;
+  });
+  const event={
+    horizon_hours:hours,horizon_bars:hours*4,horizon_ms:hours*60*60*1000,
+    horizon_end_at:at+hours*60*60*1000,
+    movement_event:{outcome:movement,target_reached:movement==='UP',target_after_adverse_barrier:risk==='DOWN'},
+    first_passage:{outcome:risk},
+    risk_event:{adverse_reached:risk==='DOWN'}
+  };
+  return {
+    id:'MULTI:AAAUSDT:'+at,symbol:'AAAUSDT',at,
+    feature_information_cutoff_at:at,
+    observation_source:'BINANCE_OFFICIAL_CLOSED_15M_BASELINE',
+    multi_horizon_outcome_source:MULTI_SOURCE,
+    multi_horizon_target_definition_version:MULTI_VERSION,
+    multi_horizon_targets:{plus_5_pct:{[hours+'H']:event}},
+    temporal_sequence:sequence
+  };
+}
+
+test('multi-horizon task adapter preserves delayed movement UP separately from risk DOWN',()=>{
+  const sample=multiSampleWith();
+  const movement=prepareDailyEarlyRiserMultiHorizonRow(sample,5,48,'movement');
+  const risk=prepareDailyEarlyRiserMultiHorizonRow(sample,5,48,'risk');
+  assert.equal(movement.reason,null);
+  assert.equal(movement.row.outcome,'UP');
+  assert.equal(movement.row.label_contract.outcome,'UP');
+  assert.equal(movement.row.horizon_ms,HOURS_48);
+  assert.match(movement.row.target_definition,/REGARDLESS_OF_ADVERSE/);
+  assert.equal(risk.reason,null);
+  assert.equal(risk.row.outcome,'DOWN');
+  assert.equal(risk.row.label_contract.outcome,'DOWN');
+  assert.match(risk.row.target_definition,/FIRST_PASSAGE/);
+});
+
+test('multi-horizon task adapter rejects ambiguous risk, wrong cutoff and missing horizon labels',()=>{
+  const ambiguous=prepareDailyEarlyRiserMultiHorizonRow(
+    multiSampleWith({risk:'AMBIGUOUS'}),5,48,'risk');
+  assert.equal(ambiguous.row,null);
+  assert.equal(ambiguous.reason,'AMBIGUOUS_RISK_OUTCOME');
+  const cutoff=prepareDailyEarlyRiserMultiHorizonRow(
+    {...multiSampleWith(),feature_information_cutoff_at:1_800_000_000_001},5,48,'movement');
+  assert.equal(cutoff.row,null);
+  assert.equal(cutoff.reason,'FEATURE_CUTOFF_NOT_AT_BASELINE');
+  const missing=prepareDailyEarlyRiserMultiHorizonRow(
+    multiSampleWith(),5,72,'movement');
+  assert.equal(missing.row,null);
+  assert.equal(missing.reason,'MULTI_HORIZON_LABEL_MISSING_OR_INVALID');
+});
+
+test('multi-horizon TCN benchmark passes its separate label contract into the temporal learner',()=>{
+  const samples=[
+    multiSampleWith({at:1_800_000_000_000,movement:'UP',risk:'DOWN'}),
+    multiSampleWith({at:1_800_000_000_000+72*60*60*1000,movement:'FLAT',risk:'DOWN'}),
+    multiSampleWith({at:1_800_000_000_000+144*60*60*1000,movement:'UP',risk:'UP'})
+  ];
+  const result=benchmarkDailyEarlyRiserMultiHorizonTarget(samples,5,48,'movement',{
+    temporalMinTrainingSamples:160,temporalMinValidationSamples:24,temporalMinHoldoutSamples:40
+  });
+  assert.equal(result.samples.accepted,3);
+  assert.equal(result.samples.outcomes.UP,2);
+  assert.equal(result.samples.outcomes.FLAT,1);
+  assert.equal(result.target_definition,'MOVEMENT_TOUCH_PLUS_5_PCT_WITHIN_48H_REGARDLESS_OF_ADVERSE_V1');
+  assert.equal(result.temporal_model.probability_ready,false);
+  assert.equal(result.approval.status,'RESEARCH_ONLY_NOT_APPROVED_FOR_LIVE_USE');
+});
+
