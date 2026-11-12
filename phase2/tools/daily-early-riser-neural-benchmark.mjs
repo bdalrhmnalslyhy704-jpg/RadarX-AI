@@ -70,7 +70,7 @@ async function loadTemporalSequences(path,expectedSha256,expectedRows){
   return {by_id:byId,sha256:actualSha256,rows:byId.size,bytes:sourceStat.size,
     sequence_steps:24,sequence_channels:29};
 }
-async function loadTargetSamples(path,targetPct,temporalById){
+async function loadTargetSamples(path,targetPct,temporalById,eventualHorizonHours=null){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   const input=createReadStream(path,{encoding:'utf8'});
   const lines=readline.createInterface({input,crlfDelay:Infinity});
@@ -83,7 +83,9 @@ async function loadTargetSamples(path,targetPct,temporalById){
     let sample;
     try{sample=JSON.parse(line);}
     catch{malformed++;continue;}
-    const label=sample?.targets?.[key];
+    const label=eventualHorizonHours===null
+      ?sample?.targets?.[key]
+      :sample?.eventual_targets?.[key]?.[String(eventualHorizonHours)+'h'];
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
     const temporalRow=temporalById.get(String(sample.id||''))||null;
@@ -104,8 +106,13 @@ async function loadTargetSamples(path,targetPct,temporalById){
       feature_information_cutoff_at:sample.feature_information_cutoff_at,
       observation_source:sample.observation_source,
       features:sample.features,
+      liquidity_lane:sample.liquidity_lane??null,
+      extended_event_labels:sample.extended_event_labels===true,
       temporal_sequence,
-      targets:{[key]:label}
+      targets:{[key]:label},
+      ...(eventualHorizonHours===null?{}:{
+        eventual_targets:{[key]:{[String(eventualHorizonHours)+'h']:label}}
+      })
     });
   }
   return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
@@ -154,6 +161,10 @@ async function main(){
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
+  const eventualHorizonHours=args['eventual-horizon-hours']===undefined
+    ?null:Number(args['eventual-horizon-hours']);
+  if(eventualHorizonHours!==null&&![24,48,72].includes(eventualHorizonHours))
+    throw new Error('UNSUPPORTED_EVENTUAL_HORIZON_ARGUMENT');
   const requestedTarget=args.target===undefined?null:Number(args.target);
   if(requestedTarget!==null&&!DAILY_EARLY_RISER_TARGETS_PCT.includes(requestedTarget))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET_ARGUMENT');
@@ -167,7 +178,10 @@ async function main(){
   const report={
     schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
-    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    research_mode:eventualHorizonHours!==null?
+      'INIT_AWARE_MICRO_EVENTUAL_UPSIDE_BENCHMARK':
+      tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    eventual_horizon_hours:eventualHorizonHours,
     requested_targets:targetsToRun,
     status:'RUNNING',
     created_at:new Date().toISOString(),
@@ -178,7 +192,9 @@ async function main(){
     main_sample_file_audit:null,
     target_results:{},
     methodology:{
-      labels:'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
+      labels:eventualHorizonHours!==null?
+        'Eventual +5%, +10% and +15% upside touch within the selected 24/48/72h horizon; earlier -2% drawdown is a separate risk label':
+        'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
@@ -235,7 +251,7 @@ async function main(){
       sequence_steps:24,sequence_channels:29,verified_against_census_report:true
     };
     for(const target of targetsToRun){
-      const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
+      const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id,eventualHorizonHours);
       if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.samples.length!==Number(expectedSamples.rows)||
         loaded.malformed_lines!==0||loaded.missing_target_rows!==0)
         throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_PARSE_OR_TARGET_MISMATCH:'+target);
@@ -244,9 +260,11 @@ async function main(){
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
-        tcnOnly,enableTemporalBoostedTree:!tcnOnly
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly,eventualHorizonHours
       });
-      report.target_results[String(target)+'_PCT']={
+      const targetReportKey=String(target)+'_PCT'+
+        (eventualHorizonHours===null?'':'_'+String(eventualHorizonHours)+'H_EVENTUAL');
+      report.target_results[targetReportKey]={
         ...compactTarget(result),
         source_rows:{
           lines_read:loaded.lines_read,
