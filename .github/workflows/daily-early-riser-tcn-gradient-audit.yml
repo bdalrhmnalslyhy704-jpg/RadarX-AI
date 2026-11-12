@@ -1,0 +1,39 @@
+name: Build 224 TCN Gradient Numerical Audit
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-tcn-gradient-audit-20261112
+    paths:
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - '.github/workflows/daily-early-riser-tcn-gradient-audit.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-gradient-audit
+  cancel-in-progress: true
+
+jobs:
+  temporal-gradient-audit:
+    name: Analytical versus numerical derivatives for V8 V9 V10
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated gradient-audit branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax validation
+        run: |
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tests/temporal-neural-brain.test.mjs
+      - name: Run temporal gradient numerical audit and regression tests
+        run: node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs

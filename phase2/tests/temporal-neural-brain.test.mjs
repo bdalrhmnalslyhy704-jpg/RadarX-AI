@@ -11,6 +11,9 @@ import {
   TEMPORAL_POOLED_BASELINE_FEATURE_COUNT,
   isValidTemporalPooledBaselineFeatures,
   resetGradientBuffer,
+  auditTemporalGradientNumerics,
+  auditTemporalTrainingWorkspace,
+  benchmarkTemporalTrainingWorkspace,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -67,6 +70,97 @@ test('ordered four-segment pooling preserves temporal order instead of collapsin
   }
   assert.equal(poolOrderedTemporalSegments(early.slice(1)),null,
     'incomplete latent windows must fail closed');
+});
+
+test('V8, V9 and V10 analytical gradients match central finite differences for all proper-score objectives',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=auditTemporalGradientNumerics(sequence,1);
+  console.log('[TCN_GRADIENT_AUDIT_SUMMARY]',JSON.stringify({
+    checked_parameter_derivatives:report.checked_parameter_derivatives,
+    failed_parameter_derivatives:report.failed_parameter_derivatives,
+    maximum_absolute_error:report.maximum_absolute_error,
+    passed:report.passed,
+    objectives:report.results.map(row=>({pooling_mode:row.pooling_mode,objective:row.objective,
+      checked:row.checked_parameters,maximum_absolute_error:row.maximum_absolute_error,
+      failed:row.failed_parameters}))
+  }));
+  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
+  assert.equal(report.input_shape[0],24);
+  assert.equal(report.input_shape[1],29);
+  assert.equal(report.pooling_modes.length,3);
+  assert.equal(report.objectives.length,3);
+  assert.equal(report.results.length,9);
+  assert.ok(report.checked_parameter_derivatives>=100);
+  assert.equal(report.failed_parameter_derivatives,0,
+    JSON.stringify(report.results.filter(row=>!row.passed),null,2));
+  assert.equal(report.passed,true);
+  assert.equal(report.training_behavior_changed,false);
+});
+
+test('reused TCN training workspace is numerically equivalent to allocation-based forward and backward passes',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=auditTemporalTrainingWorkspace(sequence,1);
+  console.log('[TCN_WORKSPACE_EQUIVALENCE_SUMMARY]',JSON.stringify({
+    result_cases:report.result_cases,
+    maximum_output_absolute_error:report.maximum_output_absolute_error,
+    maximum_gradient_absolute_error:report.maximum_gradient_absolute_error,
+    passed:report.passed
+  }));
+  assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
+  assert.equal(report.result_cases,18);
+  assert.ok(report.results.every(row=>
+    row.output_values_compared>0&&row.gradient_values_compared>0));
+  assert.ok(report.maximum_output_absolute_error<=1e-12,
+    'forward outputs must remain numerically unchanged');
+  assert.ok(report.maximum_gradient_absolute_error<=1e-12,
+    'backpropagated gradients must remain numerically unchanged');
+  assert.equal(report.passed,true);
+});
+
+test('reusable TCN workspace throughput is measured against the allocation-based reference',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      Math.sin((time+1)*(channel+2)*0.017)*0.8+
+      Math.cos((time+3)*(channel+1)*0.011)*0.2));
+  const report=benchmarkTemporalTrainingWorkspace(sequence,1,{
+    iterations:40,warmupIterations:6,measurementRounds:3
+  });
+  console.log('[TCN_WORKSPACE_THROUGHPUT_SUMMARY]',JSON.stringify({
+    measured_cases:report.measured_cases,
+    mean_speedup:report.mean_speedup,
+    median_speedup:report.median_speedup,
+    results:report.results.map(row=>({
+      mode:row.pooling_mode,objective:row.objective,speedup:row.speedup,
+      reference_median_ms:row.reference_median_ms,
+      workspace_median_ms:row.workspace_median_ms,
+      checksum_difference:row.checksum_difference
+    }))
+  }));
+  assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
+  assert.equal(report.measured_cases,9);
+  assert.equal(report.measurement_rounds,3);
+  assert.equal(report.changes_training_math,false);
+  assert.equal(report.all_checksums_finite,true);
+  assert.ok(report.results.every(row=>
+    Number.isFinite(row.speedup)&&row.speedup>0&&
+    row.reference_median_ms>0&&row.workspace_median_ms>0&&
+    row.checksum_difference===0));
+});
+
+test('TCN gradient audit rejects malformed tensors and non-binary labels',()=>{
+  assert.throws(()=>auditTemporalGradientNumerics([],1),
+    /TEMPORAL_GRADIENT_AUDIT_SEQUENCE_INVALID/);
+  const valid=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  assert.throws(()=>auditTemporalGradientNumerics(valid,0.5),
+    /TEMPORAL_GRADIENT_AUDIT_TARGET_INVALID/);
+  assert.throws(()=>auditTemporalGradientNumerics(valid,1,{epsilon:0}),
+    /TEMPORAL_GRADIENT_AUDIT_NUMERIC_OPTIONS_INVALID/);
 });
 
 test('V10 full-window multiscale pooling preserves segment means, endpoints and slopes with exact gradient routes',()=>{
@@ -398,6 +492,23 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
+  assert.equal(profile.member_training_diagnostics.length,3);
+  assert.equal(profile.member_training_diagnostics_by_regime.BTC_RISK_ON.length,3);
+  for(let index=0;index<profile.member_training_diagnostics.length;index++){
+    const diagnostic=profile.member_training_diagnostics[index];
+    assert.equal(diagnostic.schema,'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1');
+    assert.equal(diagnostic.diagnostic_only,true);
+    assert.equal(diagnostic.loss_measurement,'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH');
+    assert.equal(diagnostic.epochs_completed,profile.member_training_profiles[index].epochs);
+    assert.equal(diagnostic.epoch_history.length,diagnostic.epochs_completed);
+    assert.ok(diagnostic.epoch_history.every(epoch=>
+      Number.isFinite(epoch.mean_weighted_training_objective_loss)&&
+      Number.isFinite(epoch.averaged_gradient_l2_norm)&&
+      Number.isFinite(epoch.maximum_absolute_averaged_gradient)&&
+      Number.isFinite(epoch.residual_readout_l2_norm)&&
+      epoch.mean_weighted_training_objective_loss>=0&&
+      epoch.averaged_gradient_l2_norm>=0));
+  }
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
   const regimeMembers=profile.member_training_profiles_by_regime.BTC_RISK_ON;
   assert.equal(regimeMembers[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
