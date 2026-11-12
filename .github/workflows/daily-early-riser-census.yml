@@ -18,7 +18,7 @@ on:
       end_exclusive:
         description: Exclusive UTC end date (YYYY-MM-DD)
         required: false
-        default: '2026-11-01'
+        default: '2026-11-12'
         type: string
       max_symbols:
         description: 0 means all currently trading directional Spot USDT symbols
@@ -60,6 +60,7 @@ jobs:
       OPPORTUNITY_HORIZONS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '24,48,72' || '24' }}
       ANCHOR_STRIDE_HOURS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '72' || '24' }}
       CENSUS_MIN_VOLUME: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '0' || github.event.inputs.min_quote_volume || '750000' }}
+      CENSUS_END_EXCLUSIVE: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '2026-11-12' || github.event.inputs.end_exclusive || '2026-11-01' }}
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4
@@ -86,7 +87,7 @@ jobs:
         run: |
           node phase2/tools/daily-early-riser-historical-census.mjs \
             --start '${{ github.event.inputs.start || '2025-11-01' }}' \
-            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --end-exclusive "$CENSUS_END_EXCLUSIVE" \
             --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
             --min-quote-volume "$CENSUS_MIN_VOLUME" \
             --opportunity-horizons "$OPPORTUNITY_HORIZONS" \
