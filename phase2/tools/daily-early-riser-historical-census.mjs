@@ -26,6 +26,7 @@ import {
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
 const ARCHIVE_ROOT='https://data.binance.vision/data/spot/monthly/klines';
+const DAILY_ARCHIVE_ROOT='https://data.binance.vision/data/spot/daily/klines';
 const FIFTEEN_MS=15*60*1000;
 const FIVE_MS=5*60*1000;
 const MAX_ARCHIVE_BYTES=64*1024*1024;
@@ -154,6 +155,9 @@ async function getJson(url){
 function archiveUrl(symbol,interval,month){
   return ARCHIVE_ROOT+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+month+'.zip';
 }
+function dailyArchiveUrl(symbol,interval,date){
+  return DAILY_ARCHIVE_ROOT+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+date+'.zip';
+}
 async function loadVerifiedMonth({symbol,interval,month,tempDir}){
   const url=archiveUrl(symbol,interval,month);
   const checksum=await fetchResponse(url+'.CHECKSUM',{timeoutMs:30000});
@@ -190,7 +194,46 @@ async function loadVerifiedMonth({symbol,interval,month,tempDir}){
     rows:parsed.rows
   };
 }
-async function loadSymbolInterval({symbol,interval,months,tempDir}){
+async function loadVerifiedDay({symbol,interval,date,tempDir}){
+  const url=dailyArchiveUrl(symbol,interval,date);
+  const checksum=await fetchResponse(url+'.CHECKSUM',{timeoutMs:30000});
+  if(checksum.status===404)return {status:'MISSING',reason:'DAILY_CHECKSUM_404',symbol,interval,
+    month:date.slice(0,7),date,archive_type:'DAILY',url};
+  if(!checksum.ok)throw new Error('DAILY_CHECKSUM_HTTP_'+checksum.status+':'+symbol+':'+interval+':'+date);
+  const checksumText=await checksum.text();
+  const expected=checksumText.match(/[a-f0-9]{64}/i)?.[0]?.toLowerCase();
+  if(!expected)throw new Error('OFFICIAL_DAILY_CHECKSUM_INVALID:'+symbol+':'+interval+':'+date);
+  const response=await fetchResponse(url,{timeoutMs:120000});
+  if(response.status===404)return {status:'MISSING',reason:'DAILY_ARCHIVE_404',symbol,interval,
+    month:date.slice(0,7),date,archive_type:'DAILY',url};
+  if(!response.ok)throw new Error('DAILY_ARCHIVE_HTTP_'+response.status+':'+symbol+':'+interval+':'+date);
+  const announced=Number(response.headers.get('content-length'));
+  if(Number.isFinite(announced)&&announced>MAX_ARCHIVE_BYTES)
+    throw new Error('DAILY_ARCHIVE_SIZE_LIMIT:'+symbol+':'+interval+':'+date);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(!bytes.length||bytes.length>MAX_ARCHIVE_BYTES)
+    throw new Error('DAILY_ARCHIVE_SIZE_INVALID:'+symbol+':'+interval+':'+date);
+  const actual=execHash(bytes);
+  if(actual!==expected)throw new Error('DAILY_ARCHIVE_SHA256_MISMATCH:'+symbol+':'+interval+':'+date);
+  const zipPath=join(tempDir,symbol+'-'+interval+'-'+date+'-daily.zip');
+  await writeFile(zipPath,bytes,{flag:'wx'});
+  let csv='';
+  try{
+    const unzipped=await execFile('unzip',['-p',zipPath],{
+      encoding:'utf8',maxBuffer:MAX_UNZIPPED_BYTES,timeout:120000
+    });
+    csv=unzipped.stdout;
+  }finally{await rm(zipPath,{force:true}).catch(()=>{});}
+  const intervalMs=interval==='15m'?FIFTEEN_MS:FIVE_MS;
+  const parsed=parseBinanceSpotKlineArchiveCsv(csv,{intervalMs});
+  return {
+    status:'VERIFIED',symbol,interval,month:date.slice(0,7),date,archive_type:'DAILY',
+    url,sha256:actual,compressed_bytes:bytes.length,row_count:parsed.rows.length,
+    rejected:parsed.rejected,continuity_ratio:parsed.continuity_ratio,rows:parsed.rows
+  };
+}
+
+async function loadSymbolInterval({symbol,interval,months,dailyDates=[],tempDir}){
   const byOpen=new Map(),files=[];
   const rejected={malformed:0,invalid_timestamp:0,invalid_price_or_volume:0,
     invalid_close_boundary:0,duplicate_open_time:0};
@@ -203,6 +246,19 @@ async function loadSymbolInterval({symbol,interval,months,tempDir}){
     files.push(manifest);
     if(archive.status!=='VERIFIED')continue;
     for(const [key,value] of Object.entries(archive.rejected||{}))rejected[key]=(rejected[key]||0)+Number(value||0);
+    for(const row of rows)byOpen.set(Number(row[0]),row);
+  }
+  for(const date of dailyDates){
+    let archive;
+    try{archive=await loadVerifiedDay({symbol,interval,date,tempDir});}
+    catch(error){archive={status:'FAILED',symbol,interval,month:date.slice(0,7),date,
+      archive_type:'DAILY',url:dailyArchiveUrl(symbol,interval,date),
+      reason:String(error?.message||error).slice(0,240)};}
+    const {rows,...manifest}=archive;
+    files.push(manifest);
+    if(archive.status!=='VERIFIED')continue;
+    for(const [key,value] of Object.entries(archive.rejected||{}))
+      rejected[key]=(rejected[key]||0)+Number(value||0);
     for(const row of rows)byOpen.set(Number(row[0]),row);
   }
   const rows=[...byOpen.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
@@ -396,7 +452,21 @@ async function main(){
   const startText=args.start||DEFAULT_START,endText=args['end-exclusive']||DEFAULT_END;
   const start=parseUtc(startText,'START'),end=parseUtc(endText,'END_EXCLUSIVE');
   if(end<=start)throw new Error('END_MUST_BE_AFTER_START');
-  const months=listBinanceSpotArchiveMonths(start,end);
+  const allMonths=listBinanceSpotArchiveMonths(start,end);
+  const endDate=new Date(end);
+  const endIsUtcMonthBoundary=endDate.getUTCDate()===1&&endDate.getUTCHours()===0&&
+    endDate.getUTCMinutes()===0&&endDate.getUTCSeconds()===0&&endDate.getUTCMilliseconds()===0;
+  const partialMonth=endIsUtcMonthBoundary?null:
+    endDate.getUTCFullYear()+'-'+String(endDate.getUTCMonth()+1).padStart(2,'0');
+  const months=partialMonth?allMonths.filter(month=>month!==partialMonth):allMonths;
+  const dailyDates=[];
+  if(partialMonth){
+    const [year,month]=partialMonth.split('-').map(Number);
+    const monthStart=Date.UTC(year,month-1,1);
+    const lastFullDayStart=Math.floor(end/86400000)*86400000;
+    for(let day=monthStart;day<lastFullDayStart;day+=86400000)
+      dailyDates.push(new Date(day).toISOString().slice(0,10));
+  }
   const concurrency=Math.max(1,Math.min(8,Math.trunc(Number(args.concurrency)||4)));
   const maxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
   const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
@@ -431,7 +501,9 @@ async function main(){
   const methods={
     market:'BINANCE_SPOT_USDT_ONLY',
     universe:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY',
-    data_source:'BINANCE_OFFICIAL_MONTHLY_KLINE_ARCHIVES',
+    data_source:'BINANCE_OFFICIAL_MONTHLY_AND_DAILY_KLINE_ARCHIVES',
+    current_partial_month:partialMonth,
+    daily_archive_dates:dailyDates,
     intervals:['15m','5m'],
     targets_pct:[...DAILY_EARLY_RISER_TARGETS_PCT],
     adverse_pct:DEFAULT_ADVERSE_PCT,
@@ -549,8 +621,8 @@ async function main(){
       }else{
         try{
           const [asset15,asset5]=await Promise.all([
-            loadSymbolInterval({symbol,interval:'15m',months,tempDir}),
-            loadSymbolInterval({symbol,interval:'5m',months,tempDir})
+            loadSymbolInterval({symbol,interval:'15m',months,dailyDates,tempDir}),
+            loadSymbolInterval({symbol,interval:'5m',months,dailyDates,tempDir})
           ]);
           manifest.push(...asset15.files,...asset5.files);
           if(!asset15.complete_from_first_available||!asset5.complete_from_first_available){
@@ -627,7 +699,7 @@ async function main(){
     const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
       [String(target)+'_PCT',summarizeTarget(allMetricRows,target)]));
-    const archiveFilesExpected=symbols.length*months.length*2;
+    const archiveFilesExpected=symbols.length*(months.length+dailyDates.length)*2;
     const verified=manifest.filter(row=>row.status==='VERIFIED').length;
     const missing=manifest.filter(row=>row.status==='MISSING').length;
     const failed=manifest.filter(row=>row.status==='FAILED').length;
