@@ -6,7 +6,9 @@ on:
       - research/daily-early-riser-tcn-fit-diagnostics-20261112
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - '.github/workflows/daily-early-riser-tcn-fit-diagnostics.yml'
 
 permissions:
@@ -34,6 +36,10 @@ jobs:
       - name: Syntax validation
         run: |
           node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tests/temporal-neural-brain.test.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
       - name: Run TCN training diagnostic and temporal regression tests
-        run: node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+        run: |
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
