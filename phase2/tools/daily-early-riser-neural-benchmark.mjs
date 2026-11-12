@@ -149,6 +149,7 @@ function compactTarget(result){
     temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger,
     temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
     temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger,
+    temporal_regime_local_tcn_attention_challenger:result.temporal_regime_local_tcn_attention_challenger,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -213,7 +214,7 @@ async function main(){
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
       models:tcnOnly?
         ['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','Regime-local training-only Logistic anchors']:
-        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
+        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
@@ -298,6 +299,7 @@ async function main(){
       const localTcn=result.temporal_regime_local_tcn_challenger||{};
       const localTcnPyramid=result.temporal_regime_local_tcn_pyramid_challenger||{};
       const localTcnMultiscale=result.temporal_regime_local_tcn_multiscale_challenger||{};
+      const localTcnAttention=result.temporal_regime_local_tcn_attention_challenger||{};
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -434,6 +436,51 @@ async function main(){
           holdout_comparison:localTcnPyramid.holdout_comparison??null,
           regimes:localTcnPyramid.regime_specialists??{}
         },
+
+        regime_local_tcn_attention:{
+
+          status:localTcnAttention.status??null,
+
+          model_kind:localTcnAttention.model_kind??null,
+
+          architecture:localTcnAttention.architecture??null,
+
+          temporal_pooling:localTcnAttention.temporal_pooling??null,
+
+          attention_dimension:localTcnAttention.attention_dimension??0,
+
+          relative_position_bias_count:localTcnAttention.relative_position_bias_count??0,
+
+          output_features:localTcnAttention.output_features??0,
+
+          trainable_parameter_count:localTcnAttention.trainable_parameter_count??0,
+
+          training_sample_budget:localTcnAttention.training_sample_budget??0,
+
+          trained:localTcnAttention.trained===true,
+
+          training_samples:localTcnAttention.training_samples??0,
+
+          supported_regimes:localTcnAttention.supported_regimes??[],
+
+          validation_selected_regimes:localTcnAttention.validation_selected_regimes??[],
+
+          selected_regimes:localTcnAttention.selected_regimes??[],
+
+          validation:localTcnAttention.validation??null,
+
+          validation_logistic:localTcnAttention.validation_logistic??null,
+
+          holdout:localTcnAttention.holdout??null,
+
+          holdout_logistic:localTcnAttention.holdout_logistic??null,
+
+          holdout_comparison:localTcnAttention.holdout_comparison??null,
+
+          regimes:localTcnAttention.regime_specialists??{}
+
+        },
+
         regime_local_tcn_multiscale:{
           status:localTcnMultiscale.status??null,
           model_kind:localTcnMultiscale.model_kind??null,
