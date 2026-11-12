@@ -437,6 +437,23 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
+  assert.equal(profile.member_training_diagnostics.length,3);
+  assert.equal(profile.member_training_diagnostics_by_regime.BTC_RISK_ON.length,3);
+  for(let index=0;index<profile.member_training_diagnostics.length;index++){
+    const diagnostic=profile.member_training_diagnostics[index];
+    assert.equal(diagnostic.schema,'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1');
+    assert.equal(diagnostic.diagnostic_only,true);
+    assert.equal(diagnostic.loss_measurement,'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH');
+    assert.equal(diagnostic.epochs_completed,profile.member_training_profiles[index].epochs);
+    assert.equal(diagnostic.epoch_history.length,diagnostic.epochs_completed);
+    assert.ok(diagnostic.epoch_history.every(epoch=>
+      Number.isFinite(epoch.mean_weighted_training_objective_loss)&&
+      Number.isFinite(epoch.averaged_gradient_l2_norm)&&
+      Number.isFinite(epoch.maximum_absolute_averaged_gradient)&&
+      Number.isFinite(epoch.residual_readout_l2_norm)&&
+      epoch.mean_weighted_training_objective_loss>=0&&
+      epoch.averaged_gradient_l2_norm>=0));
+  }
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
   const regimeMembers=profile.member_training_profiles_by_regime.BTC_RISK_ON;
   assert.equal(regimeMembers[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
