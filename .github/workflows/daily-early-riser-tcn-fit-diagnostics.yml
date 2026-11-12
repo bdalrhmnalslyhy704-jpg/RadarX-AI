@@ -1,0 +1,46 @@
+name: Build 224 TCN Training Signal Diagnostics
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-tcn-fit-diagnostics-20261112
+      - research/daily-early-riser-tcn-workspace-optimization-20261112
+    paths:
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-tcn-fit-diagnostics.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-fit-diagnostics
+  cancel-in-progress: true
+
+jobs:
+  fit-diagnostics:
+    name: Verify per-epoch loss and gradient signal reporting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated training-diagnostics branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax validation
+        run: |
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tests/temporal-neural-brain.test.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+      - name: Run TCN training diagnostic and temporal regression tests
+        run: |
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs

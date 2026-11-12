@@ -19,8 +19,8 @@ export const TEMPORAL_TRAINABLE_PARAMETER_COUNT=1408;
 export const TEMPORAL_GRADIENT_ACCUMULATION='IN_PLACE_WEIGHTED_SUM_V1';
 export const TEMPORAL_BASELINE_FEATURE_CACHE='PER_ROW_POOLED_FEATURES_REUSED_ACROSS_EPOCHS_AND_MEMBERS_V1';
 export const TEMPORAL_GRADIENT_BUFFER_SCOPE='TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1';
-export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES=4096;
-export const TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY='INDEPENDENT_BTC_REGIME_TCN_RECENT_4096_TRAIN_ONLY_V1';
+export const TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES=8192;
+export const TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY='INDEPENDENT_BTC_REGIME_TCN_RECENT_8192_TRAIN_ONLY_V1';
 export const TEMPORAL_MODEL_ARCHITECTURE='TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_BTC_CONTEXT_V8';
 export const TEMPORAL_ORDERED_POOLING_MODE='ORDERED_FOUR_SEGMENT_MEAN_V1';
 export const TEMPORAL_ORDERED_POOLING_SEGMENTS=4;
@@ -56,6 +56,7 @@ const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
+import {performance} from 'node:perf_hooks';
 
 function sampleIdentityFingerprint(rows){
   const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
@@ -457,14 +458,338 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,poolRoutes,baselineFeatures};
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
+
+// Allocate reusable forward/backward tensors once per ensemble member. V10's
+// pooling routes depend only on fixed dimensions, so route objects are shared
+// across every training row instead of being rebuilt for every forward pass.
+function createTemporalTrainingWorkspace(model) {
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
+  const activations=Array.from({length:dilations.length+1},()=>
+    Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
+  const depthCaches=Array.from({length:dilations.length},()=>
+    Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
+  const zeroLatents=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0));
+  let poolSegments,poolRoutes,poolStart,poolCount,outputFeatures;
+  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+    const pooled=poolMultiscaleTemporalSegments(zeroLatents);
+    poolSegments=pooled.poolSegments;poolRoutes=pooled.featureRoutes;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    outputFeatures=TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT;
+  }else if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+    const pooled=poolOrderedTemporalSegments(zeroLatents);
+    poolSegments=pooled.poolSegments;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    outputFeatures=TEMPORAL_ORDERED_POOLING_FEATURE_COUNT;
+  }else{
+    poolStart=Math.max(0,TEMPORAL_SEQUENCE_STEPS-12);
+    poolCount=TEMPORAL_SEQUENCE_STEPS-poolStart;
+    poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
+    outputFeatures=channels;
+  }
+  if(!poolRoutes){
+    poolRoutes=Array.from({length:outputFeatures},(_,feature)=>{
+      const segment=poolSegments[Math.floor(feature/channels)];
+      return {channel:feature%channels,time_weights:Array.from(
+        {length:segment.count},(_,index)=>({time:segment.start+index,weight:1/segment.count}))};
+    });
+  }
+  return {
+    temporal_pooling:model.temporal_pooling,
+    dilations:[...dilations],
+    activations,depthCaches,
+    activationGradients:Array.from({length:dilations.length+1},()=>
+      Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0))),
+    pooled:Array(outputFeatures).fill(0),
+    poolSegments,poolRoutes,poolStart,poolCount
+  };
+}
+
+// Training-only forward path. All arithmetic and loop ordering mirror
+// forward(); only temporary arrays and invariant pooling routes are reused.
+function forwardWithWorkspace(sequence,model,residualScale=1,
+  precomputedBaselineFeatures=null,workspace) {
+  if(!workspace||workspace.temporal_pooling!==model.temporal_pooling)
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_MODEL_MISMATCH');
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
+  if(workspace.dilations.length!==dilations.length||
+    workspace.activations.length!==dilations.length+1)
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_DEPTH_MISMATCH');
+  const projected=workspace.activations[0];
+  for(let time=0;time<sequence.length;time++){
+    const row=sequence[time];
+    for(let outputChannel=0;outputChannel<channels;outputChannel++){
+      let value=model.projectionBiases[outputChannel];
+      for(let inputChannel=0;inputChannel<TEMPORAL_SEQUENCE_CHANNELS;inputChannel++){
+        value+=row[inputChannel]*model.projectionWeights[inputChannel][outputChannel];
+      }
+      projected[time][outputChannel]=Math.tanh(value);
+    }
+  }
+  for(let layer=0;layer<dilations.length;layer++){
+    const input=workspace.activations[layer],depth=workspace.depthCaches[layer];
+    const output=workspace.activations[layer+1],dilation=dilations[layer];
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      for(let channel=0;channel<channels;channel++){
+        let value=input[time][channel];
+        for(let tap=1;tap<=KERNEL_TAPS;tap++){
+          const previous=time-tap*dilation;
+          if(previous>=0)value+=model.depthWeights[layer][tap-1][channel]*input[previous][channel];
+        }
+        depth[time][channel]=value;
+      }
+    }
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      for(let outputChannel=0;outputChannel<channels;outputChannel++){
+        let value=input[time][outputChannel]+model.biases[layer][outputChannel];
+        for(let inputChannel=0;inputChannel<channels;inputChannel++){
+          value+=depth[time][inputChannel]*model.pointWeights[layer][inputChannel][outputChannel];
+        }
+        output[time][outputChannel]=Math.tanh(value);
+      }
+    }
+  }
+  const final=workspace.activations.at(-1);
+  const pooled=workspace.pooled;
+  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+    for(let segment=0;segment<TEMPORAL_MULTISCALE_POOLING_SEGMENTS;segment++){
+      const start=Math.floor(segment*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+      const end=Math.floor((segment+1)*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+      const count=end-start,offset=workspace.poolSegments[segment].feature_offset;
+      for(let statistic=0;statistic<3;statistic++){
+        for(let channel=0;channel<channels;channel++){
+          let value=0;
+          if(statistic===0){
+            for(let time=start;time<end;time++)value+=final[time][channel]/count;
+          }else if(statistic===1){
+            value=final[end-1][channel];
+          }else{
+            value=(final[end-1][channel]-final[start][channel])/
+              Math.max(1,count-1);
+          }
+          pooled[offset+statistic*channels+channel]=value;
+        }
+      }
+    }
+  }else if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+    for(const segment of workspace.poolSegments){
+      for(let channel=0;channel<channels;channel++){
+        let value=0;
+        for(let time=segment.start;time<segment.start+segment.count;time++){
+          value+=final[time][channel];
+        }
+        pooled[segment.feature_offset+channel]=value/Math.max(1,segment.count);
+      }
+    }
+  }else{
+    pooled.fill(0);
+    for(let time=workspace.poolStart;time<final.length;time++){
+      for(let channel=0;channel<channels;channel++){
+        pooled[channel]+=final[time][channel]/workspace.poolCount;
+      }
+    }
+  }
+  const baselineFeatures=isValidTemporalPooledBaselineFeatures(precomputedBaselineFeatures)
+    ?precomputedBaselineFeatures:pooledSequence(sequence);
+  const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
+  const baselineWeights=Array.isArray(regimeBaseline?.weights)?regimeBaseline.weights:model.skipWeights;
+  const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))?Number(regimeBaseline.bias):model.outputBias;
+  let logit=baselineBias;
+  for(let feature=0;feature<baselineFeatures.length;feature++){
+    logit+=baselineFeatures[feature]*(Number(baselineWeights?.[feature])||0);
+  }
+  const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
+  for(let feature=0;feature<pooled.length;feature++){
+    logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
+  }
+  return {
+    probability:logistic(logit),activations:workspace.activations,
+    depthCaches:workspace.depthCaches,pooled,
+    poolStart:workspace.poolStart,poolCount:workspace.poolCount,
+    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,baselineFeatures
+  };
+}
+
+function maxTreeDifference(left,right,state={maximum:0,count:0}) {
+  if(Array.isArray(left)&&Array.isArray(right)&&left.length===right.length){
+    for(let index=0;index<left.length;index++)maxTreeDifference(left[index],right[index],state);
+  }else if(left&&right&&typeof left==='object'&&typeof right==='object'&&
+    Object.keys(left).length===Object.keys(right).length&&
+    Object.keys(left).every(key=>Object.hasOwn(right,key))){
+    for(const key of Object.keys(left))maxTreeDifference(left[key],right[key],state);
+  }else if(typeof left==='number'&&typeof right==='number'&&
+    Number.isFinite(left)&&Number.isFinite(right)){
+    state.maximum=Math.max(state.maximum,Math.abs(left-right));state.count++;
+  }else if(left!==right){
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SHAPE_MISMATCH');
+  }
+  return state;
+}
+
+// Compare the reused training workspace against the allocation-based reference
+// implementation over repeated rows. This proves both numerical equivalence
+// and that stale scratch values cannot leak between consecutive samples.
+export function auditTemporalTrainingWorkspace(sequence,target=1) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const secondSequence=sequence.map((row,time)=>row.map((value,channel)=>
+    value*0.71+Math.sin((time+1)*(channel+1)*0.013)*0.09));
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(61,0.41,null,mode);
+    const workspace=createTemporalTrainingWorkspace(model);
+    for(const objective of objectives){
+      for(const currentSequence of [sequence,secondSequence]){
+        const baselineFeatures=pooledSequence(currentSequence);
+        const reference=forward(currentSequence,model,1,baselineFeatures);
+        const reused=forwardWithWorkspace(currentSequence,model,1,baselineFeatures,workspace);
+        const outputDifference=maxTreeDifference(
+          [reference.probability,reference.activations,reference.depthCaches,
+            reference.pooled,reference.poolStart,reference.poolCount],
+          [reused.probability,reused.activations,reused.depthCaches,
+            reused.pooled,reused.poolStart,reused.poolCount]
+        );
+        const referenceGradients=gradientsFor(currentSequence,target,model,reference,objective);
+        const reusedGradients=gradientsFor(currentSequence,target,model,reused,objective,
+          zeroTrainableGradients(model),workspace);
+        const gradientDifference=maxTreeDifference(
+          referenceGradients,reusedGradients
+        );
+        results.push({
+          pooling_mode:mode,objective,
+          sequence_index:currentSequence===sequence?0:1,
+          output_values_compared:outputDifference.count,
+          gradient_values_compared:gradientDifference.count,
+          maximum_output_absolute_error:outputDifference.maximum,
+          maximum_gradient_absolute_error:gradientDifference.maximum
+        });
+      }
+    }
+  }
+  const maximumOutputError=Math.max(...results.map(row=>row.maximum_output_absolute_error));
+  const maximumGradientError=Math.max(...results.map(row=>row.maximum_gradient_absolute_error));
+  return {
+    schema:'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1',
+    diagnostic_only:true,
+    training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
+    pooling_modes:modes,objectives,
+    result_cases:results.length,
+    maximum_output_absolute_error:maximumOutputError,
+    maximum_gradient_absolute_error:maximumGradientError,
+    passed:maximumOutputError<=1e-12&&maximumGradientError<=1e-12,
+    results
+  };
+}
+
+
+// A repeatable throughput diagnostic for allocation-based versus reusable
+// forward/backward workspaces. Timing is reported, never used to alter training.
+export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
+  iterations=40,warmupIterations=6,measurementRounds=3,baseRate=0.41
+}={}) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
+  const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||40)));
+  const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||6)));
+  const rounds=Math.max(2,Math.min(7,Math.trunc(Number(measurementRounds)||3)));
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const baselineFeatures=pooledSequence(sequence);
+  const results=[];
+  const median=values=>{
+    const ordered=[...values].sort((a,b)=>a-b);
+    return ordered[Math.floor(ordered.length/2)]??0;
+  };
+  for(const mode of modes){
+    const model=initializeModel(71,baseRate,null,mode);
+    const workspace=createTemporalTrainingWorkspace(model);
+    const referenceGradients=zeroTrainableGradients(model);
+    const workspaceGradients=zeroTrainableGradients(model);
+    for(const objective of objectives){
+      const runReference=()=>{
+        const cache=forward(sequence,model,1,baselineFeatures);
+        gradientsFor(sequence,target,model,cache,objective,referenceGradients);
+        return cache.probability;
+      };
+      const runWorkspace=()=>{
+        const cache=forwardWithWorkspace(sequence,model,1,baselineFeatures,workspace);
+        gradientsFor(sequence,target,model,cache,objective,workspaceGradients,workspace);
+        return cache.probability;
+      };
+      for(let index=0;index<warmup;index++){runReference();runWorkspace();}
+      const referenceTimes=[],workspaceTimes=[];
+      let referenceChecksum=0,workspaceChecksum=0;
+      for(let round=0;round<rounds;round++){
+        const measure=(fn,checksumKey)=>{
+          let checksum=0;
+          const started=performance.now();
+          for(let index=0;index<count;index++)checksum+=fn();
+          return {elapsed:performance.now()-started,checksum};
+        };
+        if(round%2===0){
+          const reference=measure(runReference,'reference');
+          const reused=measure(runWorkspace,'workspace');
+          referenceTimes.push(reference.elapsed);workspaceTimes.push(reused.elapsed);
+          referenceChecksum+=reference.checksum;workspaceChecksum+=reused.checksum;
+        }else{
+          const reused=measure(runWorkspace,'workspace');
+          const reference=measure(runReference,'reference');
+          referenceTimes.push(reference.elapsed);workspaceTimes.push(reused.elapsed);
+          referenceChecksum+=reference.checksum;workspaceChecksum+=reused.checksum;
+        }
+      }
+      const referenceMs=median(referenceTimes),workspaceMs=median(workspaceTimes);
+      results.push({
+        pooling_mode:mode,objective,iterations:count,measurement_rounds:rounds,
+        reference_median_ms:Number(referenceMs.toFixed(3)),
+        workspace_median_ms:Number(workspaceMs.toFixed(3)),
+        reference_rounds_ms:referenceTimes.map(value=>Number(value.toFixed(3))),
+        workspace_rounds_ms:workspaceTimes.map(value=>Number(value.toFixed(3))),
+        speedup:Number((referenceMs/Math.max(workspaceMs,1e-9)).toFixed(4)),
+        reference_ops_per_second:Number((count*1000/Math.max(referenceMs,1e-9)).toFixed(3)),
+        workspace_ops_per_second:Number((count*1000/Math.max(workspaceMs,1e-9)).toFixed(3)),
+        checksum_difference:Number(Math.abs(referenceChecksum-workspaceChecksum).toExponential(6))
+      });
+    }
+  }
+  const meanSpeedup=results.reduce((sum,row)=>sum+row.speedup,0)/results.length;
+  return {
+    schema:'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1',
+    diagnostic_only:true,changes_training_math:false,
+    iterations_per_case:count,warmup_iterations:warmup,measurement_rounds:rounds,
+    measured_cases:results.length,
+    mean_speedup:Number(meanSpeedup.toFixed(4)),
+    median_speedup:Number(median(results.map(row=>row.speedup)).toFixed(4)),
+    all_checksums_finite:results.every(row=>Number.isFinite(row.checksum_difference)),
+    results
+  };
+}
+
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
   const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
-  const activationGradients=Array(dilations.length+1);
   const final=cache.activations.at(-1);
-  activationGradients[dilations.length]=final.map(()=>Array(channels).fill(0));
+  const activationGradients=workspace?.activationGradients||Array(dilations.length+1);
+  if(workspace){
+    if(activationGradients.length!==dilations.length+1)
+      throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_GRADIENT_DEPTH_MISMATCH');
+    for(const matrix of activationGradients)for(const row of matrix)row.fill(0);
+  }else{
+    activationGradients[dilations.length]=final.map(()=>Array(channels).fill(0));
+  }
   const probabilityError=cache.probability-target;
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
@@ -487,7 +812,7 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   for(let layer=dilations.length-1;layer>=0;layer--){
     const input=cache.activations[layer],output=cache.activations[layer+1];
     const depth=cache.depthCaches[layer],dilation=dilations[layer];
-    const inputGradient=input.map(()=>Array(channels).fill(0));
+    const inputGradient=workspace?activationGradients[layer]:input.map(()=>Array(channels).fill(0));
     const outputGradient=activationGradients[layer+1];
     for(let time=0;time<output.length;time++){
       for(let outputChannel=0;outputChannel<channels;outputChannel++){
@@ -526,6 +851,131 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   return targetGradients;
 }
 
+
+// Deterministic central-difference audit of the analytical backpropagation.
+// This is a diagnostic utility for tests/research only; it does not alter
+// training behavior, model weights, acceptance thresholds or production state.
+export function auditTemporalGradientNumerics(
+  sequence,
+  target=1,
+  {epsilon=1e-5,tolerance=2e-7,baseRate=0.37}={}
+) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_GRADIENT_AUDIT_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_GRADIENT_AUDIT_TARGET_INVALID');
+  const step=Number(epsilon),allowed=Number(tolerance);
+  if(!Number.isFinite(step)||step<=0||step>1e-2||
+    !Number.isFinite(allowed)||allowed<=0||allowed>1e-2)
+    throw new TypeError('TEMPORAL_GRADIENT_AUDIT_NUMERIC_OPTIONS_INVALID');
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const modes=[
+    'LAST_12_MEAN_V1',
+    TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE
+  ];
+  const baselineFeatures=pooledSequence(sequence);
+  const lossFor=(model,objective)=>{
+    const probability=clamp(forward(sequence,model,1,baselineFeatures).probability,1e-12,1-1e-12);
+    const brier=(probability-target)**2;
+    const logLoss=-(target*Math.log(probability)+(1-target)*Math.log(1-probability));
+    return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+      objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+        ?0.5*brier+0.5*logLoss:brier;
+  };
+  const paths=[
+    ['projectionWeights',[0,0]],
+    ['projectionBiases',[0]],
+    ['depthWeights',[0,0,0]],
+    ['pointWeights',[0,0,0]],
+    ['biases',[0,0]]
+  ];
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(53,baseRate,null,mode);
+    const outputIndices=mode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?Array.from({length:TEMPORAL_MULTISCALE_POOLING_SEGMENTS},(_,segment)=>
+        [segment*48,segment*48+16,segment*48+32]).flat()
+      :mode===TEMPORAL_ORDERED_POOLING_MODE?[0,16,32,48]:[0];
+    for(const index of outputIndices)paths.push(['outputWeights',[index]]);
+    for(const objective of objectives){
+      const cache=forward(sequence,model,1,baselineFeatures);
+      const analytical=gradientsFor(sequence,target,model,cache,objective);
+      let maximumAbsoluteError=0,maximumRelativeError=0;
+      let checked=0,failed=0;
+      const details=[];
+      for(const [key,path] of paths){
+        let parameter=model[key];
+        for(const index of path.slice(0,-1))parameter=parameter[index];
+        const index=path.at(-1);
+        const original=parameter[index];
+        parameter[index]=original+step;
+        const upper=lossFor(model,objective);
+        parameter[index]=original-step;
+        const lower=lossFor(model,objective);
+        parameter[index]=original;
+        const numerical=(upper-lower)/(2*step);
+        let analyticalValue=analytical[key];
+        for(const part of path)analyticalValue=analyticalValue[part];
+        const absoluteError=Math.abs(numerical-analyticalValue);
+        const relativeError=absoluteError/Math.max(1e-10,
+          Math.abs(numerical),Math.abs(analyticalValue));
+        const threshold=allowed+2e-4*Math.max(Math.abs(numerical),Math.abs(analyticalValue));
+        const passed=Number.isFinite(numerical)&&Number.isFinite(analyticalValue)&&
+          absoluteError<=threshold;
+        checked++;if(!passed)failed++;
+        maximumAbsoluteError=Math.max(maximumAbsoluteError,absoluteError);
+        maximumRelativeError=Math.max(maximumRelativeError,relativeError);
+        details.push({parameter:key,path,numerical:Number(numerical.toExponential(6)),
+          analytical:Number(analyticalValue.toExponential(6)),
+          absolute_error:Number(absoluteError.toExponential(6)),
+          relative_error:Number(relativeError.toExponential(6)),passed});
+      }
+      results.push({
+        pooling_mode:mode,objective,checked_parameters:checked,
+        failed_parameters:failed,maximum_absolute_error:maximumAbsoluteError,
+        maximum_relative_error:maximumRelativeError,passed:failed===0,details
+      });
+    }
+  }
+  return {
+    schema:'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1',
+    diagnostic_only:true,training_behavior_changed:false,
+    input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+    pooling_modes:modes,objectives,
+    checked_parameter_derivatives:results.reduce((sum,row)=>sum+row.checked_parameters,0),
+    failed_parameter_derivatives:results.reduce((sum,row)=>sum+row.failed_parameters,0),
+    maximum_absolute_error:Math.max(...results.map(row=>row.maximum_absolute_error)),
+    passed:results.every(row=>row.passed),results
+  };
+}
+
+function summarizeNumericTree(value,state={sumSquares:0,maxAbsolute:0,count:0}) {
+  if(Array.isArray(value)){
+    for(const child of value)summarizeNumericTree(child,state);
+  }else if(value&&typeof value==='object'){
+    for(const child of Object.values(value))summarizeNumericTree(child,state);
+  }else if(typeof value==='number'&&Number.isFinite(value)){
+    state.sumSquares+=value*value;
+    state.maxAbsolute=Math.max(state.maxAbsolute,Math.abs(value));
+    state.count++;
+  }
+  return state;
+}
+function vectorL2Norm(values){
+  return Math.sqrt((Array.isArray(values)?values:[]).reduce((sum,value)=>
+    sum+(Number(value)||0)**2,0));
+}
+function trainingObjectiveLoss(probability,target,objective) {
+  const p=clamp(probability,1e-12,1-1e-12);
+  const brier=(p-target)**2;
+  const logLoss=-(target*Math.log(p)+(1-target)*Math.log(1-p));
+  return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+    objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      ?0.5*brier+0.5*logLoss:brier;
+}
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
@@ -553,23 +1003,57 @@ function fitMember(rows, seed, {
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
+  const trainingWorkspace=createTemporalTrainingWorkspace(model);
+  const epochHistory=[];
   for (let epoch = 1; epoch <= epochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
+    let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     for (const row of rows) {
-      const cache = forward(row.sequence, model, 1, row._pooled_baseline_features);
-      const itemGradient = gradientsFor(row.sequence, row.target, model, cache,trainingObjective,rowGradientScratch);
+      const cache = forwardWithWorkspace(row.sequence,model,1,
+        row._pooled_baseline_features,trainingWorkspace);
+      const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
+        trainingObjective,rowGradientScratch,trainingWorkspace);
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
+      const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
+      weightedObjectiveLoss+=rowLoss*sampleWeight;
+      if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
+      else negativeObjectiveLoss+=rowLoss;
       for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
+    const gradientStats=summarizeNumericTree(averaged);
     const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
     optimizer = step.state;
+    epochHistory.push({
+      epoch,
+      // Loss is measured on training rows immediately before this epoch's update.
+      // It is diagnostic only and is never used for selection or early stopping.
+      mean_weighted_training_objective_loss:Number((weightedObjectiveLoss/
+        Math.max(1,totalSampleWeight)).toFixed(8)),
+      mean_positive_training_objective_loss:positiveSamples
+        ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
+      mean_negative_training_objective_loss:negativeSamples
+        ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
+      averaged_gradient_l2_norm:Number(Math.sqrt(gradientStats.sumSquares).toFixed(8)),
+      maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
+      residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
+    });
   }
+  model.training_diagnostics={
+    schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
+    diagnostic_only:true,
+    loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
+    epochs_completed:epochHistory.length,
+    training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
+    training_sample_profile:model.training_sample_profile,
+    objective:trainingObjective,
+    epoch_history:epochHistory
+  };
   return model;
 }
 
@@ -981,6 +1465,11 @@ function fitEnsemble(rows, options = {}) {
         :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
+    member_training_diagnostics:members.map((member,index)=>({
+      member_index:index,
+      seed:SEEDS[index],
+      ...(member.training_diagnostics||{})
+    })),
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
     training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
@@ -1198,6 +1687,7 @@ function fitRegimeLocalTemporalTcn({
     neural_residual_contributes:Boolean(selected&&selected.residual_scale>0),
     ensemble_members:fitted.members.length,
     member_training_profiles:fitted.member_training_profiles,
+    member_training_diagnostics:fitted.member_training_diagnostics,
     baseline_anchor_source:'REGIME_LOCAL_TRAINING_ONLY',
     baseline_anchor_training_samples:training.length,
     baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
@@ -2546,8 +3036,11 @@ export function buildTemporalNeuralProfile(samples = [], {
     baseline_anchor:fitted.baseline_anchor,
     training_objective:fitted.training_objective,
     member_training_profiles:sharedTcnFit?.member_training_profiles||[],
+    member_training_diagnostics:sharedTcnFit?.member_training_diagnostics||[],
     member_training_profiles_by_regime:Object.fromEntries(regimes.map(regime=>
       [regime,sharedTcnFit?.member_training_profiles||[]])),
+    member_training_diagnostics_by_regime:Object.fromEntries(regimes.map(regime=>
+      [regime,sharedTcnFit?.member_training_diagnostics||[]])),
     member_validation_scores:Object.fromEntries(regimes.map(regime=>[
       regime,regimeResults[regime]?.member_selection_scores||[]
     ])),
