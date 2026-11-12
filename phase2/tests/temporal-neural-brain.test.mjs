@@ -249,7 +249,7 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
         symbol:'SAFEPAIR'+String(index).padStart(3,'0')+'USDT',
         at,resolved_at:at+horizonMs,horizon_ms:horizonMs,
         training_eligible:true,historical_baseline:true,closed_candle_baseline:true,
-        target_definition,outcome_source:outcomeSource,outcome,
+        target_definition:targetDefinition,outcome_source:outcomeSource,outcome,
         outcome_contract:{
           kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome,
           horizon_hours:72,adverse_pct:2
