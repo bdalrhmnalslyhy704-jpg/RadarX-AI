@@ -230,6 +230,65 @@ test('V11 learned temporal query attention focuses probability mass on informati
   assert.equal(poolLearnedTemporalAttention(latent,query,biases.slice(1)),null);
 });
 
+test('safe-opportunity temporal profile trains the isolated V11 attention readout under the same purged Logistic gate',()=>{
+  const horizonMs=72*60*60*1000;
+  const targetDefinition='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1';
+  const outcomeSource='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_V1';
+  const rows=[];
+  const groups=70,perGroup=20;
+  for(let group=0;group<groups;group++){
+    for(let index=0;index<perGroup;index++){
+      const at=BASE_TIME+group*96*60*60*1000;
+      const outcome=(group+index)%2===0?'UP':'DOWN';
+      const riskOn=index<10;
+      const sequence=sequenceFor(outcome==='UP',group+index).map(step=>{
+        const copy=[...step];copy[19]=riskOn?0.55:-0.55;return copy;
+      });
+      rows.push({
+        id:'SAFE72-ATTN-'+group+'-'+index,
+        symbol:'SAFEPAIR'+String(index).padStart(3,'0')+'USDT',
+        at,resolved_at:at+horizonMs,horizon_ms:horizonMs,
+        training_eligible:true,historical_baseline:true,closed_candle_baseline:true,
+        target_definition,outcome_source:outcomeSource,outcome,
+        outcome_contract:{
+          kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome,
+          horizon_hours:72,adverse_pct:2
+        },
+        temporal_sequence:sequence
+      });
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{
+    minTrainingSamples:160,maxTrainingSamples:2000,
+    minimumValidationSamples:24,minimumHoldoutSamples:40,liveHoldoutSamples:100,
+    epochs:1,learningRate:0.006,l2:0.012,comparisonMargin:0.003,
+    targetDefinition,outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[outcomeSource],outcomeContractKind:'SAFE_FIRST_PASSAGE',
+    enableRegimeLocalTcn:false,
+    enableRegimeLocalTcnPyramid:false,
+    enableRegimeLocalTcnMultiscale:false,
+    enableRegimeLocalTcnAttention:true,
+    regimeLocalTcnAttentionEpochs:1,
+    regimeLocalTcnAttentionMaxTrainingSamples:1024,
+    enableTemporalBoostedTree:false
+  });
+  const attention=profile.regime_local_tcn_attention_challenger;
+  assert.ok(attention,'attention challenger must be present in the benchmark result');
+  assert.equal(profile.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
+  assert.equal(attention.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1');
+  assert.equal(attention.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
+  assert.equal(attention.attention_dimension,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(attention.relative_position_bias_count,TEMPORAL_SEQUENCE_STEPS);
+  assert.equal(attention.trainable_parameter_count,TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT);
+  assert.ok(attention.trained,'both BTC regimes have enough chronological samples to fit the attention challenger');
+  assert.ok(attention.training_samples>=160);
+  assert.ok(attention.validation.samples>0||attention.validation.sample_count>0);
+  assert.equal(attention.probability_ready,false,
+    'research challenger cannot publish a live probability from a synthetic unit fixture');
+  assert.equal(attention.live_eligibility_ready,false);
+  assert.equal(profile.live_eligibility_ready,false);
+});
+
 test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
   const scratch={
     projectionWeights:[[1.25,-0.5],[3,4]],
