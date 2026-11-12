@@ -526,6 +526,107 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   return targetGradients;
 }
 
+
+// Deterministic central-difference audit of the analytical backpropagation.
+// This is a diagnostic utility for tests/research only; it does not alter
+// training behavior, model weights, acceptance thresholds or production state.
+export function auditTemporalGradientNumerics(
+  sequence,
+  target=1,
+  {epsilon=1e-5,tolerance=2e-7,baseRate=0.37}={}
+) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_GRADIENT_AUDIT_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_GRADIENT_AUDIT_TARGET_INVALID');
+  const step=Number(epsilon),allowed=Number(tolerance);
+  if(!Number.isFinite(step)||step<=0||step>1e-2||
+    !Number.isFinite(allowed)||allowed<=0||allowed>1e-2)
+    throw new TypeError('TEMPORAL_GRADIENT_AUDIT_NUMERIC_OPTIONS_INVALID');
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const modes=[
+    'LAST_12_MEAN_V1',
+    TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE
+  ];
+  const baselineFeatures=pooledSequence(sequence);
+  const lossFor=(model,objective)=>{
+    const probability=clamp(forward(sequence,model,1,baselineFeatures).probability,1e-12,1-1e-12);
+    const brier=(probability-target)**2;
+    const logLoss=-(target*Math.log(probability)+(1-target)*Math.log(1-probability));
+    return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
+      objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+        ?0.5*brier+0.5*logLoss:brier;
+  };
+  const paths=[
+    ['projectionWeights',[0,0]],
+    ['projectionBiases',[0]],
+    ['depthWeights',[0,0,0]],
+    ['pointWeights',[0,0,0]],
+    ['biases',[0,0]]
+  ];
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(53,baseRate,null,mode);
+    const outputIndices=mode===TEMPORAL_MULTISCALE_POOLING_MODE
+      ?Array.from({length:TEMPORAL_MULTISCALE_POOLING_SEGMENTS},(_,segment)=>
+        [segment*48,segment*48+16,segment*48+32]).flat()
+      :mode===TEMPORAL_ORDERED_POOLING_MODE?[0,16,32,48]:[0];
+    for(const index of outputIndices)paths.push(['outputWeights',[index]]);
+    for(const objective of objectives){
+      const cache=forward(sequence,model,1,baselineFeatures);
+      const analytical=gradientsFor(sequence,target,model,cache,objective);
+      let maximumAbsoluteError=0,maximumRelativeError=0;
+      let checked=0,failed=0;
+      const details=[];
+      for(const [key,path] of paths){
+        let parameter=model[key];
+        for(const index of path.slice(0,-1))parameter=parameter[index];
+        const index=path.at(-1);
+        const original=parameter[index];
+        parameter[index]=original+step;
+        const upper=lossFor(model,objective);
+        parameter[index]=original-step;
+        const lower=lossFor(model,objective);
+        parameter[index]=original;
+        const numerical=(upper-lower)/(2*step);
+        let analyticalValue=analytical[key];
+        for(const part of path)analyticalValue=analyticalValue[part];
+        const absoluteError=Math.abs(numerical-analyticalValue);
+        const relativeError=absoluteError/Math.max(1e-10,
+          Math.abs(numerical),Math.abs(analyticalValue));
+        const threshold=allowed+2e-4*Math.max(Math.abs(numerical),Math.abs(analyticalValue));
+        const passed=Number.isFinite(numerical)&&Number.isFinite(analyticalValue)&&
+          absoluteError<=threshold;
+        checked++;if(!passed)failed++;
+        maximumAbsoluteError=Math.max(maximumAbsoluteError,absoluteError);
+        maximumRelativeError=Math.max(maximumRelativeError,relativeError);
+        details.push({parameter:key,path,numerical:Number(numerical.toExponential(6)),
+          analytical:Number(analyticalValue.toExponential(6)),
+          absolute_error:Number(absoluteError.toExponential(6)),
+          relative_error:Number(relativeError.toExponential(6)),passed});
+      }
+      results.push({
+        pooling_mode:mode,objective,checked_parameters:checked,
+        failed_parameters:failed,maximum_absolute_error:maximumAbsoluteError,
+        maximum_relative_error:maximumRelativeError,passed:failed===0,details
+      });
+    }
+  }
+  return {
+    schema:'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1',
+    diagnostic_only:true,training_behavior_changed:false,
+    input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+    pooling_modes:modes,objectives,
+    checked_parameter_derivatives:results.reduce((sum,row)=>sum+row.checked_parameters,0),
+    failed_parameter_derivatives:results.reduce((sum,row)=>sum+row.failed_parameters,0),
+    maximum_absolute_error:Math.max(...results.map(row=>row.maximum_absolute_error)),
+    passed:results.every(row=>row.passed),results
+  };
+}
+
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
