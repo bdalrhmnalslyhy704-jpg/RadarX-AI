@@ -153,10 +153,13 @@ async function main(){
   const input=resolve(args.input||DEFAULT_INPUT);
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
-  const output=resolve(args.output||DEFAULT_OUTPUT);
+  const tcnOnly=String(args['tcn-only']||'false')==='true';
+  const output=resolve(args.output||(tcnOnly?'artifacts/daily-early-riser-tcn-only-benchmark.json':DEFAULT_OUTPUT));
   const started=Date.now();
   const report={
-    schema:'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
+    schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
+      'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
+    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
@@ -171,7 +174,9 @@ async function main(){
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
-      models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
+      models:tcnOnly?
+        ['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','Regime-local training-only Logistic anchors']:
+        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
@@ -229,7 +234,9 @@ async function main(){
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
-      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
+      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly
+      });
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
         source_rows:{
