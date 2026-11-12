@@ -5,7 +5,6 @@ import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
-  DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
@@ -17,6 +16,7 @@ import {
   prepareDailyEarlyRiserCognitiveRow,
   benchmarkDailyEarlyRiserTarget
 } from '../core/daily-early-riser-neural-benchmark.mjs';
+import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from '../core/daily-early-riser-census.mjs';
 import {
   buildCognitiveLearningProfile,
   buildCognitiveFeatureVector,
