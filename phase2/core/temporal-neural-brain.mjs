@@ -3029,6 +3029,65 @@ export function buildTemporalNeuralProfile(samples = [], {
     },
     regime_specialists:regimeLocalTcnMultiscaleResults
   };
+  const attentionSupportedRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.trained===true);
+  const attentionValidationRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation_passed===true);
+  const attentionSelectedRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout_passed===true);
+  const attentionValidation=aggregateEvaluations(attentionSupportedRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation));
+  const attentionValidationLogistic=aggregateEvaluations(attentionSupportedRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation_logistic));
+  const attentionHoldout=aggregateEvaluations(attentionSelectedRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout));
+  const attentionHoldoutLogistic=aggregateEvaluations(attentionSelectedRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout_logistic));
+  const regimeLocalTcnAttentionProfile={
+    status:!attentionSupportedRegimes.length?'WAITING_FOR_ATTENTION_TCN_SUPPORT':
+      !attentionValidationRegimes.length?'ATTENTION_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !attentionSelectedRegimes.length?'ATTENTION_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'ATTENTION_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    attention_dimension:TEMPORAL_LATENT_CHANNELS,
+    relative_position_bias_count:TEMPORAL_SEQUENCE_STEPS,
+    output_features:TEMPORAL_LATENT_CHANNELS,
+    trainable_parameter_count:TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1',
+    training_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.training_samples||0),0),
+    selection_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.selection_samples||0),0),
+    calibration_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.calibration_samples||0),0),
+    validation_samples:attentionValidation.sample_count||0,
+    validation:attentionValidation,
+    validation_logistic:attentionValidationLogistic,
+    holdout_samples:attentionHoldout.sample_count||0,
+    holdout:attentionHoldout,
+    holdout_logistic:attentionHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:attentionHoldout.model_brier_score??null,
+      logistic_brier_score:attentionHoldoutLogistic.model_brier_score??null,
+      beats_logistic:attentionHoldout.evaluated===true&&attentionHoldoutLogistic.evaluated===true&&
+        attentionHoldout.model_brier_score+comparisonMargin<attentionHoldoutLogistic.model_brier_score,
+      passed:attentionSelectedRegimes.length>0,
+      selected_regimes:attentionSelectedRegimes,
+      validation_selected_regimes:attentionValidationRegimes
+    },
+    supported_regimes:attentionSupportedRegimes,
+    validation_selected_regimes:attentionValidationRegimes,
+    selected_regimes:attentionSelectedRegimes,
+    trained:attentionSupportedRegimes.length>0,
+    selected_for_research:attentionValidationRegimes.length>0,
+    research_out_of_sample_validated:attentionSelectedRegimes.length>0,
+    probability_ready:false,live_eligibility_ready:false,
+    regime_specialists:regimeLocalTcnAttentionResults
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
@@ -3194,6 +3253,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     regime_local_tcn_challenger:regimeLocalTcnProfile,
     regime_local_tcn_pyramid_challenger:regimeLocalTcnPyramidProfile,
     regime_local_tcn_multiscale_challenger:regimeLocalTcnMultiscaleProfile,
+    regime_local_tcn_attention_challenger:regimeLocalTcnAttentionProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',
