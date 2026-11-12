@@ -725,7 +725,8 @@ function maxTreeDifference(left,right,state={maximum:0,count:0}) {
 export function auditTemporalTrainingWorkspace(sequence,target=1) {
   if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
   if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
-  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_ATTENTION_POOLING_MODE];
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
@@ -744,9 +745,9 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
         const reused=forwardWithWorkspace(currentSequence,model,1,baselineFeatures,workspace);
         const outputDifference=maxTreeDifference(
           [reference.probability,reference.activations,reference.depthCaches,
-            reference.pooled,reference.poolStart,reference.poolCount],
+            reference.pooled,reference.poolStart,reference.poolCount,reference.attention_weights],
           [reused.probability,reused.activations,reused.depthCaches,
-            reused.pooled,reused.poolStart,reused.poolCount]
+            reused.pooled,reused.poolStart,reused.poolCount,reused.attention_weights]
         );
         const referenceGradients=gradientsFor(currentSequence,target,model,reference,objective);
         const reusedGradients=gradientsFor(currentSequence,target,model,reused,objective,
@@ -791,7 +792,8 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||40)));
   const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||6)));
   const rounds=Math.max(2,Math.min(7,Math.trunc(Number(measurementRounds)||3)));
-  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_ATTENTION_POOLING_MODE];
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
@@ -993,7 +995,8 @@ export function auditTemporalGradientNumerics(
   const modes=[
     'LAST_12_MEAN_V1',
     TEMPORAL_ORDERED_POOLING_MODE,
-    TEMPORAL_MULTISCALE_POOLING_MODE
+    TEMPORAL_MULTISCALE_POOLING_MODE,
+    TEMPORAL_ATTENTION_POOLING_MODE
   ];
   const baselineFeatures=pooledSequence(sequence);
   const lossFor=(model,objective)=>{
@@ -1018,14 +1021,19 @@ export function auditTemporalGradientNumerics(
       ?Array.from({length:TEMPORAL_MULTISCALE_POOLING_SEGMENTS},(_,segment)=>
         [segment*48,segment*48+16,segment*48+32]).flat()
       :mode===TEMPORAL_ORDERED_POOLING_MODE?[0,16,32,48]:[0];
-    for(const index of outputIndices)paths.push(['outputWeights',[index]]);
+    const activePaths=[...paths];
+    for(const index of outputIndices)activePaths.push(['outputWeights',[index]]);
+    if(mode===TEMPORAL_ATTENTION_POOLING_MODE){
+      activePaths.push(['attentionQuery',[0]],['attentionPositionBiases',[0]],
+        ['attentionPositionBiases',[TEMPORAL_SEQUENCE_STEPS-1]]);
+    }
     for(const objective of objectives){
       const cache=forward(sequence,model,1,baselineFeatures);
       const analytical=gradientsFor(sequence,target,model,cache,objective);
       let maximumAbsoluteError=0,maximumRelativeError=0;
       let checked=0,failed=0;
       const details=[];
-      for(const [key,path] of paths){
+      for(const [key,path] of activePaths){
         let parameter=model[key];
         for(const index of path.slice(0,-1))parameter=parameter[index];
         const index=path.at(-1);
