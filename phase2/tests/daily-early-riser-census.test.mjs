@@ -5,6 +5,8 @@ import {
   DAILY_EARLY_RISER_HORIZON_BARS,
   classifyDailyEarlyRiserFirstPassage,
   classifyDailyEarlyRiserTargetSet,
+  classifyDailyEarlyRiserMultiHorizonOutcomes,
+  DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
 
@@ -183,3 +185,76 @@ test('malformed future OHLC candles are rejected even when timestamps and number
   assert.equal(result.status,'INVALID');
   assert.equal(result.reason,'INVALID_FUTURE_CANDLE');
 });
+
+function pathAfter72h(baseline,mutate=()=>{}){
+  return Array.from({length:288},(_,index)=>{
+    const openTime=baseline.closeTime+1+index*INTERVAL;
+    const row=candle(openTime);
+    return mutate(row,index)||row;
+  });
+}
+
+test('multi-horizon movement labels preserve a delayed rebound while risk first-passage stays DOWN',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfter72h(baseline,(row,index)=>{
+    if(index===5)return {...row,high:100.5,low:97.8,close:98.2};
+    if(index===150)return {...row,high:106,low:99,close:105.2};
+    return row;
+  });
+  const result=classifyDailyEarlyRiserMultiHorizonOutcomes({
+    baseline,future15m:future,targetsPct:[5],adversePct:2
+  });
+  assert.equal(result.status,'RESOLVED');
+  assert.equal(result.outcome_source,DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE);
+  assert.equal(result.labels_are_not_trade_signals,true);
+  const target=result.targets.plus_5_pct;
+  assert.equal(target['24H'].movement_event.outcome,'FLAT');
+  assert.equal(target['24H'].risk_event.adverse_reached,true);
+  assert.equal(target['24H'].first_passage.outcome,'DOWN');
+  assert.equal(target['48H'].movement_event.outcome,'UP');
+  assert.equal(target['48H'].movement_event.target_after_adverse_barrier,true);
+  assert.equal(target['48H'].first_passage.outcome,'DOWN');
+  assert.equal(target['72H'].movement_event.outcome,'UP');
+  assert.equal(target['72H'].movement_event.target_touch_index,150);
+  assert.equal(target['72H'].first_passage.outcome,'DOWN');
+});
+
+test('multi-horizon classifier keeps same-candle barrier collisions ambiguous for risk',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfter72h(baseline,(row,index)=>index===21
+    ?{...row,high:105.5,low:97.5,close:101}:row);
+  const result=classifyDailyEarlyRiserMultiHorizonOutcomes({
+    baseline,future15m:future,targetsPct:[5],adversePct:2
+  });
+  assert.equal(result.targets.plus_5_pct['24H'].movement_event.outcome,'UP');
+  assert.equal(result.targets.plus_5_pct['24H'].movement_event.target_and_adverse_touched_same_15m_candle,true);
+  assert.equal(result.targets.plus_5_pct['24H'].first_passage.outcome,'AMBIGUOUS');
+});
+
+test('multi-horizon classifier rejects missing candles and timeline gaps instead of manufacturing delayed labels',()=>{
+  const baseline=baselineCandle();
+  const complete=pathAfter72h(baseline);
+  const incomplete=classifyDailyEarlyRiserMultiHorizonOutcomes({
+    baseline,future15m:complete.slice(0,287),targetsPct:[5]
+  });
+  assert.equal(incomplete.status,'INVALID');
+  assert.equal(incomplete.reason,'INCOMPLETE_72H_PATH');
+  const gap=complete.map((row,index)=>index===100
+    ?{...row,openTime:row.openTime+INTERVAL,closeTime:row.closeTime+INTERVAL}:row);
+  const invalid=classifyDailyEarlyRiserMultiHorizonOutcomes({
+    baseline,future15m:gap,targetsPct:[5]
+  });
+  assert.equal(invalid.status,'INVALID');
+  assert.equal(invalid.reason,'FUTURE_CANDLE_GAP_OR_BAD_CLOSE_TIME');
+  assert.equal(invalid.index,100);
+});
+
+test('multi-horizon historical sampling requires 72h-spaced anchors to prevent overlapping future labels',()=>{
+  const result=buildDailyEarlyRiserHistoricalSamples({
+    symbol:'CENSUSUSDT',klines:[],now:1_800_000_000_000,
+    multiHorizonTargetsEnabled:true,sampleStrideBars:96
+  });
+  assert.equal(result.audit.status,'INVALID_POLICY');
+  assert.equal(result.audit.reason,'MULTI_HORIZON_ANCHORS_MUST_NOT_OVERLAP_72H_LABELS');
+});
+
