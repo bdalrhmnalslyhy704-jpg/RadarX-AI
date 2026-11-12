@@ -10,12 +10,15 @@ on:
       - research/daily-early-riser-mlp-recency-v2-20261111
       - research/daily-early-riser-tcn-grad-accum-20261111
       - research/daily-early-riser-tcn-v10-multiscale-20261112
+      - research/daily-early-riser-multihorizon-targets-20261113
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/daily-early-riser-census.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/adaptive-trader-engine.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
@@ -26,10 +29,12 @@ on:
       - research/daily-early-riser-census-20261109
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/daily-early-riser-census.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/adaptive-trader-engine.test.mjs'
       - '.github/workflows/daily-early-riser-neural-unit.yml'
@@ -59,6 +64,7 @@ jobs:
       - name: Syntax-check daily neural modules and benchmark runner
         run: |
           node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/core/daily-early-riser-census.mjs
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
