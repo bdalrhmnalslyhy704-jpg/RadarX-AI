@@ -30,6 +30,8 @@ export function effectiveDailyTcnMultiscaleTrainingBudget(options={}) {
 }
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
+export const DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE =
+  'BINANCE_OFFICIAL_CLOSED_15M_EVENTUAL_TOUCH_MULTI_HORIZON_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
 
 const finite=value=>{
@@ -61,26 +63,42 @@ function validTemporalSequence(sequence){
       step.every(value=>finite(value)!==null&&Math.abs(Number(value))<=4));
 }
 
-export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
+export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}) {
   const target=finite(targetPct);
   if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
     return {row:null,reason:'UNSUPPORTED_TARGET'};
   if(!sample||typeof sample!=='object')
     return {row:null,reason:'SAMPLE_INVALID'};
-  const label=sample.targets?.[targetKey(target)];
-  if(!label||label.status!=='RESOLVED'||!['UP','DOWN','FLAT'].includes(label.outcome))
+  const eventualHours=finite(options?.eventualHorizonHours);
+  const eventualMode=eventualHours!==null;
+  if(eventualMode&&!([24,48,72].includes(eventualHours)))
+    return {row:null,reason:'UNSUPPORTED_EVENTUAL_HORIZON'};
+  if(eventualMode&&(sample.extended_event_labels!==true||
+      String(sample.liquidity_lane||'').toUpperCase()!=='MICRO'))
+    return {row:null,reason:'EVENTUAL_MODE_REQUIRES_ISOLATED_MICRO_COHORT'});
+  const key=targetKey(target);
+  const label=eventualMode
+    ?sample.eventual_targets?.[key]?.[String(eventualHours)+'h']
+    :sample.targets?.[key];
+  const allowedOutcomes=eventualMode?['UP','FLAT']:['UP','DOWN','FLAT'];
+  if(!label||label.status!=='RESOLVED'||!allowedOutcomes.includes(label.outcome))
     return {row:null,reason:'LABEL_NOT_RESOLVED'};
+  const expectedHorizonMs=eventualMode?eventualHours*60*60*1000:DAILY_EARLY_RISER_HORIZON_MS;
   const at=finite(sample.at);
   const resolvedAt=finite(label.resolved_at);
   const horizon=finite(label.horizon_ms);
-  if(at===null||resolvedAt===null||resolvedAt-at!==DAILY_EARLY_RISER_HORIZON_MS||
-    horizon!==DAILY_EARLY_RISER_HORIZON_MS)
+  if(at===null||resolvedAt===null||resolvedAt-at!==expectedHorizonMs||
+    horizon!==expectedHorizonMs)
     return {row:null,reason:'LABEL_HORIZON_MISMATCH'};
   if(finite(sample.feature_information_cutoff_at)!==at||
     sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
     return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
-  if(label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
-    label.target_definition!==targetDefinition(target))
+  const expectedSource=eventualMode?DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE:
+    DAILY_EARLY_RISER_OUTCOME_SOURCE;
+  if(label.outcome_source!==expectedSource||typeof label.target_definition!=='string'||
+    !label.target_definition.startsWith(eventualMode?
+      'EVENTUAL_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+eventualHours+'H_':
+      targetDefinition(target)))
     return {row:null,reason:'OUTCOME_SOURCE_OR_DEFINITION_MISMATCH'};
   const symbol=String(sample.symbol||'').trim().toUpperCase();
   const id=String(sample.id||'').trim();
@@ -88,27 +106,31 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
     Array.isArray(sample.features))
     return {row:null,reason:'IDENTITY_OR_FEATURES_INVALID'};
   const baselineFeatures={...sample.features};
-  // These values are independently calculated from the 96 closed 15m
-  // candles ending exactly at the observation baseline.
   for(const key of ['quote_volume_24h','daily_change_pct','relative_strength_vs_btc_24h_pct']){
     const value=finite(sample[key]);
     if(value!==null)baselineFeatures[key]=value;
   }
   return {
     row:{
-      id:id+':TRADEABLE_FIRST_PASSAGE_PLUS_'+target+'_PCT',
-      symbol,
-      at,
-      resolved_at:resolvedAt,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
-      outcome:label.outcome,
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      id:id+(eventualMode?
+        ':EVENTUAL_TOUCH_PLUS_'+target+'_PCT_'+eventualHours+'H':
+        ':TRADEABLE_FIRST_PASSAGE_PLUS_'+target+'_PCT'),
+      symbol,at,resolved_at:resolvedAt,horizon_ms:expectedHorizonMs,
+      outcome:label.outcome,outcome_source:expectedSource,
       target_definition:label.target_definition,
       first_passage:{path_resolution:'15M',outcome:label.outcome},
+      eventual_risk:eventualMode?{
+        first_adverse_at:label.first_adverse_at??null,
+        adverse_before_target:label.adverse_before_target===true,
+        target_touch_after_adverse_barrier:label.target_touch_after_adverse_barrier===true,
+        target_and_adverse_same_15m_candle:label.target_and_adverse_same_15m_candle===true,
+        target_vs_adverse_order:label.target_vs_adverse_order??'UNKNOWN',
+        max_adverse_excursion_pct:finite(label.max_adverse_excursion_pct),
+        drawdown_before_target_pct:finite(label.drawdown_before_target_pct),
+        time_to_target_minutes:finite(label.time_to_target_minutes)
+      }:null,
       temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
-      historical_baseline:true,
-      closed_candle_baseline:true,
-      training_eligible:true,
+      historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
       features:baselineFeatures
     },
     reason:null
@@ -129,7 +151,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const rejected={};
   const seen=new Set();
   for(const sample of Array.isArray(samples)?samples:[]){
-    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target);
+    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target,options);
     if(!prepared.row){
       const reason=prepared.reason||'UNKNOWN_REJECTION';
       rejected[reason]=(rejected[reason]||0)+1;
@@ -146,7 +168,14 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
   const outcomeCounts=countOutcomes(rows);
   const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
-  const targetContract=targetDefinition(target);
+  const eventualHours=finite(options?.eventualHorizonHours);
+  const eventualMode=eventualHours!==null;
+  const effectiveHorizonMs=eventualMode?eventualHours*60*60*1000:DAILY_EARLY_RISER_HORIZON_MS;
+  const effectiveOutcomeSource=eventualMode?DAILY_EARLY_RISER_EVENT_OUTCOME_SOURCE:
+    DAILY_EARLY_RISER_OUTCOME_SOURCE;
+  const targetContract=eventualMode?
+    'EVENTUAL_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+eventualHours+'H_SEPARATE_ADVERSE_RISK_V1':
+    targetDefinition(target);
   const temporal=buildTemporalNeuralProfile(temporalRows,{
     minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
     maxTrainingSamples:Math.max(160,Math.min(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
@@ -156,8 +185,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
     epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
     targetDefinition:targetContract,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    outcomeHorizonMs:effectiveHorizonMs,
+    allowedOutcomeSources:[effectiveOutcomeSource],
     comparisonMargin:0.003,
     enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
     regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
@@ -179,10 +208,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   if(options.tcnOnly===true){
     return {
       target_pct:target,
-      outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      outcome_semantics:eventualMode?
+        'EVENTUAL_UPSIDE_TOUCH_WITH_SEPARATE_ADVERSE_DRAWDOWN_RISK':
+        'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+      outcome_source:effectiveOutcomeSource,
       target_definition:targetContract,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      horizon_ms:effectiveHorizonMs,
       feature_schema:'TCN_ONLY_24X29_CLOSED_CANDLE_SEQUENCE',
       feature_names:[],
       research_mode:'TCN_ONLY_ISOLATED_COMPUTE',
@@ -234,8 +265,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     recentWindowFraction:0.60,
     recentSelectionMargin:0.005,
     l2:0.08,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    outcomeHorizonMs:effectiveHorizonMs,
+    allowedOutcomeSources:[effectiveOutcomeSource],
     iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
     learningRate:0.10,
     minNeuralTrainingSamples:240,
@@ -266,10 +297,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const selected=profile.model_selection||{};
   return {
     target_pct:target,
-    outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-    outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
-    target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
-    horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+    outcome_semantics:eventualMode?
+      'EVENTUAL_UPSIDE_TOUCH_WITH_SEPARATE_ADVERSE_DRAWDOWN_RISK':
+      'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+    outcome_source:effectiveOutcomeSource,
+    target_definition:targetContract,
+    horizon_ms:effectiveHorizonMs,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_names:profile.feature_names??[],
     feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema. Daily MLP research also compares a frozen logistic anchor with a trust-region-tethered anchor (max coefficient delta 0.12, bias delta 0.15); the outer validation and untouched holdout still require 0.003 Brier improvement. TCN remains the separate 24x29 temporal model.',
