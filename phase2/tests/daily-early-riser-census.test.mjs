@@ -308,6 +308,8 @@ test('historical report keeps 72h upside events independent from drawdown and se
   assert.equal(event.eligible_samples,4);
   assert.equal(event.upside_events,2);
   assert.equal(event.no_touch_events,2);
+  assert.equal(event.top_10_pct.precision_pct,100);
+  assert.equal(event.top_10_pct.recall_pct,50);
   assert.equal(event.micro_watch_only.samples,2);
   assert.equal(event.micro_watch_only.upside_events,1);
   assert.equal(event.standard_750k_plus.samples,2);
@@ -316,6 +318,7 @@ test('historical report keeps 72h upside events independent from drawdown and se
     .independent_drawdown_risk.minus_2_pct;
   assert.equal(risk.eligible_samples,4);
   assert.equal(risk.drawdown_events,2);
+  assert.equal(risk.drawdown_rate_pct,50);
   assert.equal(summary.tradeable_first_passage.successful_event_count,0);
   assert.equal(summary.market_move_event.successful_event_count,4);
 });
