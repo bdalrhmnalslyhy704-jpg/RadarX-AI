@@ -402,6 +402,34 @@ export function poolMultiscaleTemporalSegments(latentRows){
   return {features,featureRoutes,poolSegments};
 }
 
+/**
+ * Single-head temporal query attention over all 24 latent steps.
+ * score_t = (q · h_t) / sqrt(C) + b_t
+ * alpha = softmax(score), pooled = sum_t alpha_t * h_t
+ * Query and relative-position biases are fitted on the training partition only.
+ */
+export function poolLearnedTemporalAttention(latentRows,query,positionBiases){
+  if(!Array.isArray(latentRows)||latentRows.length!==TEMPORAL_SEQUENCE_STEPS||
+    latentRows.some(row=>!Array.isArray(row)||row.length!==TEMPORAL_LATENT_CHANNELS||
+      row.some(value=>typeof value!=='number'||!Number.isFinite(value)))||
+    !Array.isArray(query)||query.length!==TEMPORAL_LATENT_CHANNELS||
+    query.some(value=>typeof value!=='number'||!Number.isFinite(value))||
+    !Array.isArray(positionBiases)||positionBiases.length!==TEMPORAL_SEQUENCE_STEPS||
+    positionBiases.some(value=>typeof value!=='number'||!Number.isFinite(value)))return null;
+  const scale=1/Math.sqrt(TEMPORAL_LATENT_CHANNELS);
+  const scores=latentRows.map((row,time)=>positionBiases[time]+
+    row.reduce((sum,value,channel)=>sum+value*query[channel],0)*scale);
+  const maximum=Math.max(...scores);
+  const exponents=scores.map(score=>Math.exp(clamp(score-maximum,-40,0)));
+  const denominator=exponents.reduce((sum,value)=>sum+value,0);
+  if(!Number.isFinite(denominator)||denominator<=0)return null;
+  const weights=exponents.map(value=>value/denominator);
+  const features=Array(TEMPORAL_LATENT_CHANNELS).fill(0);
+  for(let time=0;time<latentRows.length;time++)for(let channel=0;channel<features.length;channel++)
+    features[channel]+=weights[time]*latentRows[time][channel];
+  return {features,weights,scores};
+}
+
 function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=null) {
   const channels=TEMPORAL_LATENT_CHANNELS;
   const projected=sequence.map(row=>Array.from({length:channels},(_,outputChannel)=>{
@@ -433,8 +461,15 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     depthCaches.push(depth);activations.push(output);
   }
   const final=activations.at(-1);
-  let pooled,poolSegments,poolStart,poolCount,poolRoutes;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let pooled,poolSegments,poolStart,poolCount,poolRoutes,attentionWeights=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const attention=poolLearnedTemporalAttention(final,model.attentionQuery,
+      model.attentionPositionBiases);
+    if(!attention)throw new TypeError('TEMPORAL_ATTENTION_POOLING_INPUT_INVALID');
+    pooled=attention.features;attentionWeights=attention.weights;
+    poolSegments=[{start:0,count:TEMPORAL_SEQUENCE_STEPS,feature_offset:0,segment_index:0}];
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     const multi=poolMultiscaleTemporalSegments(final);
     if(!multi)throw new TypeError('TEMPORAL_MULTISCALE_POOLING_INPUT_INVALID');
     pooled=multi.features;poolSegments=multi.poolSegments;poolRoutes=multi.featureRoutes;
@@ -453,7 +488,7 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     }
     poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
   }
-  if(!poolRoutes){
+  if(!poolRoutes&&model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE){
     poolRoutes=pooled.map((_,feature)=>{
       const segment=poolSegments[Math.floor(feature/channels)];
       return {channel:feature%channels,time_weights:Array.from(
@@ -473,7 +508,8 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   for(let feature=0;feature<pooled.length;feature++){
     logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
   }
-  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,poolRoutes,baselineFeatures};
+  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,
+    poolSegments,poolRoutes,attention_weights:attentionWeights,baselineFeatures};
 }
 
 
