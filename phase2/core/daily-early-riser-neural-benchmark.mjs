@@ -75,7 +75,7 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}) 
     return {row:null,reason:'UNSUPPORTED_EVENTUAL_HORIZON'};
   if(eventualMode&&(sample.extended_event_labels!==true||
       String(sample.liquidity_lane||'').toUpperCase()!=='MICRO'))
-    return {row:null,reason:'EVENTUAL_MODE_REQUIRES_ISOLATED_MICRO_COHORT'});
+    return {row:null,reason:'EVENTUAL_MODE_REQUIRES_ISOLATED_MICRO_COHORT'};
   const key=targetKey(target);
   const label=eventualMode
     ?sample.eventual_targets?.[key]?.[String(eventualHours)+'h']
