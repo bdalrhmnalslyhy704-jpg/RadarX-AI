@@ -457,6 +457,232 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,poolRoutes,baselineFeatures};
 }
 
+
+// Allocate reusable forward/backward tensors once per ensemble member. V10's
+// pooling routes depend only on fixed dimensions, so route objects are shared
+// across every training row instead of being rebuilt for every forward pass.
+function createTemporalTrainingWorkspace(model) {
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
+  const activations=Array.from({length:dilations.length+1},()=>
+    Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
+  const depthCaches=Array.from({length:dilations.length},()=>
+    Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
+  const zeroLatents=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0));
+  let poolSegments,poolRoutes,poolStart,poolCount,outputFeatures;
+  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+    const pooled=poolMultiscaleTemporalSegments(zeroLatents);
+    poolSegments=pooled.poolSegments;poolRoutes=pooled.featureRoutes;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    outputFeatures=TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT;
+  }else if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+    const pooled=poolOrderedTemporalSegments(zeroLatents);
+    poolSegments=pooled.poolSegments;
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    outputFeatures=TEMPORAL_ORDERED_POOLING_FEATURE_COUNT;
+  }else{
+    poolStart=Math.max(0,TEMPORAL_SEQUENCE_STEPS-12);
+    poolCount=TEMPORAL_SEQUENCE_STEPS-poolStart;
+    poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
+    outputFeatures=channels;
+  }
+  if(!poolRoutes){
+    poolRoutes=Array.from({length:outputFeatures},(_,feature)=>{
+      const segment=poolSegments[Math.floor(feature/channels)];
+      return {channel:feature%channels,time_weights:Array.from(
+        {length:segment.count},(_,index)=>({time:segment.start+index,weight:1/segment.count}))};
+    });
+  }
+  return {
+    temporal_pooling:model.temporal_pooling,
+    dilations:[...dilations],
+    activations,depthCaches,
+    activationGradients:Array.from({length:dilations.length+1},()=>
+      Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0))),
+    pooled:Array(outputFeatures).fill(0),
+    poolSegments,poolRoutes,poolStart,poolCount
+  };
+}
+
+// Training-only forward path. All arithmetic and loop ordering mirror
+// forward(); only temporary arrays and invariant pooling routes are reused.
+function forwardWithWorkspace(sequence,model,residualScale=1,
+  precomputedBaselineFeatures=null,workspace) {
+  if(!workspace||workspace.temporal_pooling!==model.temporal_pooling)
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_MODEL_MISMATCH');
+  const channels=TEMPORAL_LATENT_CHANNELS;
+  const dilations=Array.isArray(model.dilations)?model.dilations:DILATIONS;
+  if(workspace.dilations.length!==dilations.length||
+    workspace.activations.length!==dilations.length+1)
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_DEPTH_MISMATCH');
+  const projected=workspace.activations[0];
+  for(let time=0;time<sequence.length;time++){
+    const row=sequence[time];
+    for(let outputChannel=0;outputChannel<channels;outputChannel++){
+      let value=model.projectionBiases[outputChannel];
+      for(let inputChannel=0;inputChannel<TEMPORAL_SEQUENCE_CHANNELS;inputChannel++){
+        value+=row[inputChannel]*model.projectionWeights[inputChannel][outputChannel];
+      }
+      projected[time][outputChannel]=Math.tanh(value);
+    }
+  }
+  for(let layer=0;layer<dilations.length;layer++){
+    const input=workspace.activations[layer],depth=workspace.depthCaches[layer];
+    const output=workspace.activations[layer+1],dilation=dilations[layer];
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      for(let channel=0;channel<channels;channel++){
+        let value=input[time][channel];
+        for(let tap=1;tap<=KERNEL_TAPS;tap++){
+          const previous=time-tap*dilation;
+          if(previous>=0)value+=model.depthWeights[layer][tap-1][channel]*input[previous][channel];
+        }
+        depth[time][channel]=value;
+      }
+    }
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      for(let outputChannel=0;outputChannel<channels;outputChannel++){
+        let value=input[time][outputChannel]+model.biases[layer][outputChannel];
+        for(let inputChannel=0;inputChannel<channels;inputChannel++){
+          value+=depth[time][inputChannel]*model.pointWeights[layer][inputChannel][outputChannel];
+        }
+        output[time][outputChannel]=Math.tanh(value);
+      }
+    }
+  }
+  const final=workspace.activations.at(-1);
+  const pooled=workspace.pooled;
+  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+    for(let segment=0;segment<TEMPORAL_MULTISCALE_POOLING_SEGMENTS;segment++){
+      const start=Math.floor(segment*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+      const end=Math.floor((segment+1)*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
+      const count=end-start,offset=workspace.poolSegments[segment].feature_offset;
+      for(let statistic=0;statistic<3;statistic++){
+        for(let channel=0;channel<channels;channel++){
+          let value=0;
+          if(statistic===0){
+            for(let time=start;time<end;time++)value+=final[time][channel]/count;
+          }else if(statistic===1){
+            value=final[end-1][channel];
+          }else{
+            value=(final[end-1][channel]-final[start][channel])/
+              Math.max(1,count-1);
+          }
+          pooled[offset+statistic*channels+channel]=value;
+        }
+      }
+    }
+  }else if(model.temporal_pooling===TEMPORAL_ORDERED_POOLING_MODE){
+    for(const segment of workspace.poolSegments){
+      for(let channel=0;channel<channels;channel++){
+        let value=0;
+        for(let time=segment.start;time<segment.start+segment.count;time++){
+          value+=final[time][channel];
+        }
+        pooled[segment.feature_offset+channel]=value/Math.max(1,segment.count);
+      }
+    }
+  }else{
+    pooled.fill(0);
+    for(let time=workspace.poolStart;time<final.length;time++){
+      for(let channel=0;channel<channels;channel++){
+        pooled[channel]+=final[time][channel]/workspace.poolCount;
+      }
+    }
+  }
+  const baselineFeatures=isValidTemporalPooledBaselineFeatures(precomputedBaselineFeatures)
+    ?precomputedBaselineFeatures:pooledSequence(sequence);
+  const regimeBaseline=model.baseline_by_regime?.[regimeOfSequence(sequence)]||null;
+  const baselineWeights=Array.isArray(regimeBaseline?.weights)?regimeBaseline.weights:model.skipWeights;
+  const baselineBias=Number.isFinite(Number(regimeBaseline?.bias))?Number(regimeBaseline.bias):model.outputBias;
+  let logit=baselineBias;
+  for(let feature=0;feature<baselineFeatures.length;feature++){
+    logit+=baselineFeatures[feature]*(Number(baselineWeights?.[feature])||0);
+  }
+  const boundedResidualScale=clamp(Number(residualScale)||0,0,1);
+  for(let feature=0;feature<pooled.length;feature++){
+    logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
+  }
+  return {
+    probability:logistic(logit),activations:workspace.activations,
+    depthCaches:workspace.depthCaches,pooled,
+    poolStart:workspace.poolStart,poolCount:workspace.poolCount,
+    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,baselineFeatures
+  };
+}
+
+function maxTreeDifference(left,right,state={maximum:0,count:0}) {
+  if(Array.isArray(left)&&Array.isArray(right)&&left.length===right.length){
+    for(let index=0;index<left.length;index++)maxTreeDifference(left[index],right[index],state);
+  }else if(typeof left==='number'&&typeof right==='number'&&
+    Number.isFinite(left)&&Number.isFinite(right)){
+    state.maximum=Math.max(state.maximum,Math.abs(left-right));state.count++;
+  }else if(left!==right){
+    throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SHAPE_MISMATCH');
+  }
+  return state;
+}
+
+// Compare the reused training workspace against the allocation-based reference
+// implementation over repeated rows. This proves both numerical equivalence
+// and that stale scratch values cannot leak between consecutive samples.
+export function auditTemporalTrainingWorkspace(sequence,target=1) {
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
+  if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const objectives=[
+    'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+    'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+  ];
+  const secondSequence=sequence.map((row,time)=>row.map((value,channel)=>
+    value*0.71+Math.sin((time+1)*(channel+1)*0.013)*0.09));
+  const results=[];
+  for(const mode of modes){
+    const model=initializeModel(61,0.41,null,mode);
+    const workspace=createTemporalTrainingWorkspace(model);
+    for(const objective of objectives){
+      for(const currentSequence of [sequence,secondSequence]){
+        const baselineFeatures=pooledSequence(currentSequence);
+        const reference=forward(currentSequence,model,1,baselineFeatures);
+        const reused=forwardWithWorkspace(currentSequence,model,1,baselineFeatures,workspace);
+        const outputDifference=maxTreeDifference(
+          [reference.probability,reference.activations,reference.depthCaches,
+            reference.pooled,reference.poolStart,reference.poolCount],
+          [reused.probability,reused.activations,reused.depthCaches,
+            reused.pooled,reused.poolStart,reused.poolCount]
+        );
+        const referenceGradients=gradientsFor(currentSequence,target,model,reference,objective);
+        const reusedGradients=gradientsFor(currentSequence,target,model,reused,objective,
+          zeroTrainableGradients(model),workspace);
+        const gradientDifference=maxTreeDifference(
+          referenceGradients,reusedGradients
+        );
+        results.push({
+          pooling_mode:mode,objective,
+          sequence_index:currentSequence===sequence?0:1,
+          output_values_compared:outputDifference.count,
+          gradient_values_compared:gradientDifference.count,
+          maximum_output_absolute_error:outputDifference.maximum,
+          maximum_gradient_absolute_error:gradientDifference.maximum
+        });
+      }
+    }
+  }
+  const maximumOutputError=Math.max(...results.map(row=>row.maximum_output_absolute_error));
+  const maximumGradientError=Math.max(...results.map(row=>row.maximum_gradient_absolute_error));
+  return {
+    schema:'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1',
+    diagnostic_only:true,
+    training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
+    pooling_modes:modes,objectives,
+    result_cases:results.length,
+    maximum_output_absolute_error:maximumOutputError,
+    maximum_gradient_absolute_error:maximumGradientError,
+    passed:maximumOutputError<=1e-12&&maximumGradientError<=1e-12,
+    results
+  };
+}
+
 function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
