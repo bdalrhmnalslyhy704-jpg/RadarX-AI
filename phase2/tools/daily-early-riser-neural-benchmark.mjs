@@ -153,10 +153,22 @@ async function main(){
   const input=resolve(args.input||DEFAULT_INPUT);
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
-  const output=resolve(args.output||DEFAULT_OUTPUT);
+  const tcnOnly=String(args['tcn-only']||'false')==='true';
+  const requestedTarget=args.target===undefined?null:Number(args.target);
+  if(requestedTarget!==null&&!DAILY_EARLY_RISER_TARGETS_PCT.includes(requestedTarget))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET_ARGUMENT');
+  const targetsToRun=requestedTarget===null?DAILY_EARLY_RISER_TARGETS_PCT:[requestedTarget];
+  const defaultOutput=tcnOnly
+    ?(requestedTarget===null?'artifacts/daily-early-riser-tcn-only-benchmark.json':
+      'artifacts/daily-early-riser-tcn-only-'+requestedTarget+'.json')
+    :DEFAULT_OUTPUT;
+  const output=resolve(args.output||defaultOutput);
   const started=Date.now();
   const report={
-    schema:'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
+    schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
+      'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
+    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    requested_targets:targetsToRun,
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
@@ -171,7 +183,9 @@ async function main(){
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
-      models:['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
+      models:tcnOnly?
+        ['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','Regime-local training-only Logistic anchors']:
+        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
@@ -220,7 +234,7 @@ async function main(){
       coverage_pct:Number((temporalSidecar.rows/Number(expectedSamples.rows)*100).toFixed(3)),
       sequence_steps:24,sequence_channels:29,verified_against_census_report:true
     };
-    for(const target of DAILY_EARLY_RISER_TARGETS_PCT){
+    for(const target of targetsToRun){
       const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
       if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.samples.length!==Number(expectedSamples.rows)||
         loaded.malformed_lines!==0||loaded.missing_target_rows!==0)
@@ -229,7 +243,9 @@ async function main(){
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
-      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target);
+      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly
+      });
       report.target_results[String(target)+'_PCT']={
         ...compactTarget(result),
         source_rows:{
@@ -417,8 +433,12 @@ async function main(){
           holdout_logistic:tree.holdout_logistic??null,
           holdout_comparison:tree.holdout_comparison??null
         },
-        selected_challenger:result.model_selection.validation_challenger,
-        holdout_passed:result.model_selection.holdout_comparison?.passed===true
+        selected_challenger:result.model_selection?.validation_challenger??null,
+        holdout_passed:result.model_selection?.holdout_comparison?.passed===true||
+          result.temporal_tcn?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_challenger?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_pyramid_challenger?.holdout_comparison?.passed===true||
+          result.temporal_regime_local_tcn_multiscale_challenger?.holdout_comparison?.passed===true
       }));
       await writeJsonAtomic(output,report);
     }

@@ -11,7 +11,8 @@ import {
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
-  prepareDailyEarlyRiserCognitiveRow
+  prepareDailyEarlyRiserCognitiveRow,
+  benchmarkDailyEarlyRiserTarget
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {
   buildCognitiveLearningProfile,
@@ -62,6 +63,28 @@ function sampleWith({
     }
   };
 }
+
+test('TCN-only mode returns temporal challengers without running MLP, tabular GBDT or hybrid profiles',()=>{
+  const samples=Array.from({length:4},(_,index)=>sampleWith({
+    at:1_800_000_000_000+index*15*60*1000,targetPct:5,
+    outcome:index===0?'UP':'DOWN'
+  }));
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    tcnOnly:true,enableTemporalBoostedTree:false
+  });
+  assert.equal(result.research_mode,'TCN_ONLY_ISOLATED_COMPUTE');
+  assert.equal(result.target_pct,5);
+  assert.equal(result.temporal_tcn_sequence_samples,0,
+    'no sequence tensor means no temporal model fit; this fixture tests only routing');
+  assert.equal(result.temporal_tree_training_performed,false);
+  assert.equal(result.neural_network,undefined);
+  assert.equal(result.boosted_tree_model,undefined);
+  assert.equal(result.hybrid_model,undefined);
+  assert.equal(result.temporal_tcn.status,'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES');
+  assert.equal(result.approval.probability_ready,false);
+  assert.equal(result.approval.live_eligibility_ready,false);
+  assert.equal(result.approval.real_order_execution,false);
+});
 
 test('daily cognitive row preserves the 24h first-passage label and baseline-only feature cutoff',()=>{
   const input=sampleWith({targetPct:5,outcome:'UP'});

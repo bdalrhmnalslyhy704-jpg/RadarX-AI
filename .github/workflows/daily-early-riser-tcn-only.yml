@@ -1,0 +1,180 @@
+name: Build 224 TCN-Only Frozen-Census Benchmark
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-tcn-only-20261112
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-tcn-only.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: build224-tcn-only-frozen-census-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-contracts:
+    name: Verify daily labels and temporal neural contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out isolated TCN research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify syntax and focused test suites
+        run: |
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+
+  tcn-only-target:
+    name: TCN-only target +${{ matrix.target }}%
+    needs: verify-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: [5, 10, 15]
+    steps:
+      - name: Check out isolated TCN research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Download immutable Binance census source
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-10
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: '42898061153'
+          path: artifacts
+      - name: Verify source files and run this target only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-tcn-only-${{ matrix.target }}.json \
+            --target ${{ matrix.target }} \
+            --tcn-only
+      - name: Publish this target and regime metrics
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-tcn-only-${{ matrix.target }}.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              'TCN-only target output missing; inspect the failed run step.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const rows=Object.entries(report.target_results||{}).map(([target,result])=>({
+            target,
+            accepted_samples:result.samples?.accepted??0,
+            temporal_sequence_samples:result.temporal_tcn_sequence_samples??0,
+            shared_tcn:result.temporal_tcn?.status??null,
+            regime_local_tcn:result.temporal_regime_local_tcn_challenger??null,
+            v9:result.temporal_regime_local_tcn_pyramid_challenger??null,
+            v10:result.temporal_regime_local_tcn_multiscale_challenger??null
+          }));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify({
+              research_mode:report.research_mode,
+              source_input_sha256:report.input_sha256,
+              temporal_sidecar_audit:report.temporal_sidecar_audit,
+              targets:rows,
+              production_touched:false,
+              real_order_execution:false
+            },null,2)+'\\n');
+          NODE
+      - name: Upload this target comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-tcn-only-target-${{ matrix.target }}
+          path: artifacts/daily-early-riser-tcn-only-${{ matrix.target }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  combine-target-reports:
+    name: Combine +5%, +10% and +15% TCN diagnostics
+    needs: tcn-only-target
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download target reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: radarx-build224-tcn-only-target-*
+          merge-multiple: true
+          path: reports
+      - name: Build combined diagnostic report
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const files=fs.readdirSync('reports').filter(name=>name.endsWith('.json')).sort();
+          const combined={
+            schema:'RADARX_BUILD224_TCN_ONLY_COMBINED_REPORT_V1',
+            status:files.length===3?'ALL_THREE_TARGET_REPORTS_AVAILABLE':'PARTIAL_TARGET_REPORTS',
+            target_results:{},
+            source_hashes:[],
+            production_touched:false,
+            real_order_execution:false
+          };
+          for(const file of files){
+            const report=JSON.parse(fs.readFileSync(path.join('reports',file),'utf8'));
+            combined.source_hashes.push({
+              input_sha256:report.input_sha256,
+              temporal_sha256:report.temporal_sidecar_audit?.sha256??null
+            });
+            Object.assign(combined.target_results,report.target_results||{});
+          }
+          fs.mkdirSync('artifacts',{recursive:true});
+          fs.writeFileSync('artifacts/daily-early-riser-tcn-only-combined.json',
+            JSON.stringify(combined,null,2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify({
+              status:combined.status,
+              available_targets:Object.keys(combined.target_results),
+              source_hashes:combined.source_hashes
+            },null,2)+'\\n');
+          NODE
+      - name: Upload combined TCN diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-tcn-only-combined
+          path: artifacts/daily-early-riser-tcn-only-combined.json
+          if-no-files-found: warn
+          retention-days: 14

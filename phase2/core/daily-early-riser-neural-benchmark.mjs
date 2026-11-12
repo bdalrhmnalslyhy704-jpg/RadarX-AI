@@ -155,9 +155,58 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     regimeLocalTcnMultiscaleMaxTrainingSamples:Math.max(80,Math.min(4096,
       Math.trunc(options.temporalRegimeLocalTcnMultiscaleMaxTrainingSamples||4096))),
     regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
-      Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6)))
+      Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
+    enableTemporalBoostedTree:options.enableTemporalBoostedTree!==false
   });
   const temporalTree=temporal.temporal_boosted_tree||{};
+  if(options.tcnOnly===true){
+    return {
+      target_pct:target,
+      outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      target_definition:targetContract,
+      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      feature_schema:'TCN_ONLY_24X29_CLOSED_CANDLE_SEQUENCE',
+      feature_names:[],
+      research_mode:'TCN_ONLY_ISOLATED_COMPUTE',
+      temporal_tcn_training_performed:temporal.trained===true,
+      temporal_tcn_evaluation_performed:temporalRows.length>0,
+      temporal_tcn_sequence_samples:temporalRows.length,
+      temporal_tcn_reason:temporal.trained===true?null:
+        (temporal.status||'TEMPORAL_TCN_TRAINING_NOT_COMPLETED'),
+      temporal_tcn:temporal,
+      temporal_tree_training_performed:false,
+      temporal_tree_challenger:temporalTree,
+      temporal_regime_local_tcn_challenger:temporal.regime_local_tcn_challenger??null,
+      temporal_regime_local_tcn_pyramid_challenger:temporal.regime_local_tcn_pyramid_challenger??null,
+      temporal_regime_local_tcn_multiscale_challenger:temporal.regime_local_tcn_multiscale_challenger??null,
+      samples:{
+        accepted:rows.length,
+        rejected:Object.values(rejected).reduce((sum,value)=>sum+value,0),
+        rejection_reasons:rejected,
+        outcomes:outcomeCounts,
+        positive_rate_pct:rows.length?Number((outcomeCounts.UP/rows.length*100).toFixed(4)):0
+      },
+      chronology:{
+        first_at:rows[0]?.at??null,
+        last_at:rows.at(-1)?.at??null,
+        validation_start_at:temporal.validation_start_at??null,
+        holdout_start_at:temporal.holdout_start_at??null,
+        training_samples:temporal.training_samples??0,
+        validation_samples:temporal.validation_samples??0,
+        holdout_samples:temporal.holdout_samples??0,
+        maximum_training_outcome_resolved_at:temporal.max_training_outcome_resolved_at??null,
+        label_horizon_purged_at_both_outer_boundaries:true
+      },
+      approval:{
+        status:'RESEARCH_ONLY_NOT_APPROVED_FOR_LIVE_USE',
+        probability_ready:false,
+        live_eligibility_ready:false,
+        production_touched:false,
+        real_order_execution:false
+      }
+    };
+  }
   const profile=buildCognitiveLearningProfile(rows,{
     minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
     minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
