@@ -58,6 +58,44 @@ const finite=value=>{
 };
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 
+
+function auditSampleLabelHorizons(samples){
+  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0;
+  for(const sample of Array.isArray(samples)?samples:[]){
+    const at=finite(sample?.at);
+    if(at===null){firstPassageViolations++;opportunityViolations++;drawdownViolations++;continue;}
+    for(const label of Object.values(sample.targets||{})){
+      const expected=24*60*60*1000;
+      if(finite(label?.resolved_at)-at!==expected||finite(label?.horizon_ms)!==expected)
+        firstPassageViolations++;
+    }
+    for(const horizon of Object.values(sample.opportunity_targets||{})){
+      for(const label of Object.values(horizon||{})){
+        const hours=finite(label?.horizon_hours);
+        const expected=hours===null?null:hours*60*60*1000;
+        if(expected===null||finite(label?.resolved_at)-at!==expected||
+          finite(label?.horizon_ms)!==expected||label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1')
+          opportunityViolations++;
+      }
+    }
+    for(const horizon of Object.values(sample.drawdown_risks||{})){
+      for(const label of Object.values(horizon||{})){
+        const hours=finite(label?.horizon_hours);
+        const expected=hours===null?null:hours*60*60*1000;
+        if(expected===null||finite(label?.resolved_at)-at!==expected||
+          finite(label?.horizon_ms)!==expected||label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1')
+          drawdownViolations++;
+      }
+    }
+  }
+  return {
+    first_passage_horizon_violations:firstPassageViolations,
+    opportunity_horizon_violations:opportunityViolations,
+    drawdown_horizon_violations:drawdownViolations,
+    total:firstPassageViolations+opportunityViolations+drawdownViolations
+  };
+}
+
 function parseArgs(argv){
   const values={};
   for(let i=0;i<argv.length;i++){
@@ -493,9 +531,8 @@ async function main(){
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
-        const horizonViolations=census.samples.filter(row=>
-          Object.values(row.targets||{}).some(label=>
-            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+        const horizonAudit=auditSampleLabelHorizons(census.samples);
+        const horizonViolations=horizonAudit.total;
         result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           coverage_15m:{first_available_month:btc15.first_available_month,
@@ -508,7 +545,7 @@ async function main(){
             complete_from_first_available:btc5.complete_from_first_available},
           samples:census.samples.length,audit:census.audit,
           feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
-          output:census.samples};
+          ...horizonAudit,output:census.samples};
       }else{
         try{
           const [asset15,asset5]=await Promise.all([
@@ -538,9 +575,8 @@ async function main(){
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
-            const horizonViolations=census.samples.filter(row=>
-              Object.values(row.targets||{}).some(label=>
-                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+            const horizonAudit=auditSampleLabelHorizons(census.samples);
+            const horizonViolations=horizonAudit.total;
             result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
@@ -555,7 +591,7 @@ async function main(){
                 complete_from_first_available:asset5.complete_from_first_available},
               samples:census.samples.length,audit:census.audit,
               feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
-              output:census.samples};
+              ...horizonAudit,output:census.samples};
           }
         }catch(error){
           const reason=String(error?.message||error).slice(0,240);
