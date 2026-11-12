@@ -1,4 +1,8 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA} from './cognitive-brain.mjs';
+import {
+  DAILY_EARLY_RISER_MULTIHORIZON_HOURS,
+  DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE
+} from './daily-early-riser-census.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -112,6 +116,176 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
       features:baselineFeatures
     },
     reason:null
+  };
+}
+
+
+const multiHorizonTargetDefinition=(labelKind,target,hours)=>labelKind==='movement'
+  ?'MOVEMENT_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+hours+'H_REGARDLESS_OF_ADVERSE_V1'
+  :'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_'+hours+'H_V1';
+
+export function prepareDailyEarlyRiserMultiHorizonRow(sample,targetPct,horizonHours,labelKind='movement'){
+  const target=finite(targetPct),hours=finite(horizonHours);
+  if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
+    return {row:null,reason:'UNSUPPORTED_TARGET'};
+  if(hours===null||!DAILY_EARLY_RISER_MULTIHORIZON_HOURS.includes(hours))
+    return {row:null,reason:'UNSUPPORTED_MULTI_HORIZON'};
+  if(!['movement','risk'].includes(labelKind))
+    return {row:null,reason:'UNSUPPORTED_MULTI_HORIZON_LABEL_KIND'};
+  if(!sample||typeof sample!=='object')
+    return {row:null,reason:'SAMPLE_INVALID'};
+  if(sample.multi_horizon_outcome_source!==DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE||
+    sample.multi_horizon_target_definition_version!=='MULTI_HORIZON_MOVEMENT_AND_FIRST_PASSAGE_24_48_72H_V1')
+    return {row:null,reason:'MULTI_HORIZON_SOURCE_OR_VERSION_MISMATCH'};
+  const key=targetKey(target),horizonLabel=sample.multi_horizon_targets?.[key]?.[String(hours)+'H'];
+  if(!horizonLabel||horizonLabel.horizon_hours!==hours||
+    horizonLabel.horizon_bars!==hours*4||
+    horizonLabel.horizon_ms!==hours*60*60*1000)
+    return {row:null,reason:'MULTI_HORIZON_LABEL_MISSING_OR_INVALID'};
+  const at=finite(sample.at),resolvedAt=finite(horizonLabel.horizon_end_at);
+  const horizonMs=hours*60*60*1000;
+  if(at===null||resolvedAt===null||resolvedAt-at!==horizonMs)
+    return {row:null,reason:'MULTI_HORIZON_CUTOFF_OR_END_TIME_MISMATCH'};
+  if(finite(sample.feature_information_cutoff_at)!==at||
+    sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
+    return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
+  const outcome=labelKind==='movement'
+    ?horizonLabel.movement_event?.outcome
+    :horizonLabel.first_passage?.outcome;
+  if(!['UP','DOWN','FLAT'].includes(outcome))
+    return {row:null,reason:outcome==='AMBIGUOUS'?'AMBIGUOUS_RISK_OUTCOME':'MULTI_HORIZON_OUTCOME_INVALID'};
+  const symbol=String(sample.symbol||'').trim().toUpperCase();
+  const id=String(sample.id||'').trim();
+  if(!symbol||!id)
+    return {row:null,reason:'IDENTITY_INVALID'};
+  if(!validTemporalSequence(sample.temporal_sequence))
+    return {row:null,reason:'TEMPORAL_SEQUENCE_INVALID'};
+  const definition=multiHorizonTargetDefinition(labelKind,target,hours);
+  return {
+    row:{
+      id:id+':'+labelKind.toUpperCase()+'_PLUS_'+target+'_PCT_'+hours+'H',
+      symbol,at,resolved_at:resolvedAt,horizon_ms:horizonMs,
+      outcome,outcome_source:DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE,
+      target_definition:definition,
+      label_contract:{path_resolution:'15M',outcome},
+      temporal_sequence:sample.temporal_sequence,
+      historical_baseline:true,closed_candle_baseline:true,training_eligible:true
+    },
+    reason:null
+  };
+}
+
+export function benchmarkDailyEarlyRiserMultiHorizonTarget(
+  samples,targetPct,horizonHours,labelKind='movement',options={}
+){
+  const target=finite(targetPct),hours=finite(horizonHours);
+  const rows=[],rejected={},seen=new Set();
+  for(const sample of Array.isArray(samples)?samples:[]){
+    const prepared=prepareDailyEarlyRiserMultiHorizonRow(sample,target,hours,labelKind);
+    if(!prepared.row){
+      const reason=prepared.reason||'UNKNOWN_REJECTION';
+      rejected[reason]=(rejected[reason]||0)+1;
+      continue;
+    }
+    const identity=prepared.row.symbol+':'+prepared.row.at;
+    if(seen.has(identity)){
+      rejected.DUPLICATE_SYMBOL_BASELINE=(rejected.DUPLICATE_SYMBOL_BASELINE||0)+1;
+      continue;
+    }
+    seen.add(identity);rows.push(prepared.row);
+  }
+  rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const outcomes={UP:0,DOWN:0,FLAT:0};
+  for(const row of rows)outcomes[row.outcome]++;
+  const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
+  const definition=multiHorizonTargetDefinition(labelKind,target,hours);
+  const horizonMs=hours*60*60*1000;
+  const temporal=buildTemporalNeuralProfile(temporalRows,{
+    minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
+    maxTrainingSamples:Math.max(160,Math.min(32768,
+      Math.trunc(options.temporalMaxTrainingSamples||32768))),
+    minimumValidationSamples:Math.max(24,Math.trunc(options.temporalMinValidationSamples||24)),
+    minimumHoldoutSamples:Math.max(40,Math.trunc(options.temporalMinHoldoutSamples||40)),
+    liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
+    epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
+    targetDefinition:definition,outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE],
+    comparisonMargin:0.003,
+    enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
+    regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(8192,
+      Math.trunc(options.temporalRegimeLocalTcnMaxTrainingSamples||8192))),
+    regimeLocalTcnEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnEpochs||6))),
+    enableRegimeLocalTcnPyramid:options.enableRegimeLocalTcnPyramid!==false,
+    regimeLocalTcnPyramidMaxTrainingSamples:Math.max(80,Math.min(8192,
+      Math.trunc(options.temporalRegimeLocalTcnPyramidMaxTrainingSamples||8192))),
+    regimeLocalTcnPyramidEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6))),
+    enableRegimeLocalTcnMultiscale:options.enableRegimeLocalTcnMultiscale!==false,
+    regimeLocalTcnMultiscaleMaxTrainingSamples:Math.max(80,Math.min(8192,
+      Math.trunc(options.temporalRegimeLocalTcnMultiscaleMaxTrainingSamples||8192))),
+    regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
+    enableTemporalBoostedTree:options.enableTemporalBoostedTree===true
+  });
+  const challenger=temporal.regime_local_tcn_multiscale_challenger||{};
+  return {
+    target_pct:target,horizon_hours:hours,label_kind:labelKind,
+    target_definition:definition,
+    outcome_semantics:labelKind==='movement'
+      ?'TARGET_TOUCH_WITHIN_HORIZON_REGARDLESS_OF_PRIOR_ADVERSE_TOUCH'
+      :'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_HORIZON',
+    outcome_source:DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE,
+    comparison_margin_brier:0.003,
+    samples:{
+      accepted:rows.length,rejected:Object.values(rejected).reduce((a,b)=>a+b,0),
+      rejection_reasons:rejected,outcomes,
+      positive_rate_pct:rows.length?Number((outcomes.UP/rows.length*100).toFixed(4)):0,
+      temporal_sequence_rows:temporalRows.length
+    },
+    chronology:{
+      first_at:rows[0]?.at??null,last_at:rows.at(-1)?.at??null,
+      training_samples:temporal.training_samples??0,
+      validation_samples:temporal.validation_samples??0,
+      holdout_samples:temporal.holdout_samples??0,
+      validation_start_at:temporal.validation_start_at??null,
+      holdout_start_at:temporal.holdout_start_at??null,
+      max_training_outcome_resolved_at:temporal.max_training_outcome_resolved_at??null,
+      outcome_horizon_purged:true
+    },
+    temporal_model:{
+      status:temporal.status??'NOT_EVALUATED',
+      architecture:temporal.architecture??null,
+      trained:temporal.trained===true,selected:temporal.selected===true,
+      probability_ready:temporal.probability_ready===true,
+      validation:temporal.validation??null,holdout:temporal.holdout??null,
+      holdout_comparison:temporal.holdout_comparison??null
+    },
+    multiscale_tcn:{
+      status:challenger.status??'NOT_EVALUATED',
+      architecture:challenger.architecture??null,
+      model_kind:challenger.model_kind??null,
+      trainable_parameter_count:challenger.trainable_parameter_count??0,
+      training_sample_budget:challenger.training_sample_budget??0,
+      trained:challenger.trained===true,
+      selected_for_research:challenger.selected_for_research===true,
+      research_out_of_sample_validated:challenger.research_out_of_sample_validated===true,
+      selected_regimes:challenger.selected_regimes??[],
+      supported_regimes:challenger.supported_regimes??[],
+      regime_specialists:challenger.regime_specialists??{},
+      validation:challenger.validation??null,
+      validation_logistic:challenger.validation_logistic??null,
+      holdout:challenger.holdout??null,
+      holdout_logistic:challenger.holdout_logistic??null,
+      holdout_comparison:challenger.holdout_comparison??null
+    },
+    approval:{
+      status:'RESEARCH_ONLY_NOT_APPROVED_FOR_LIVE_USE',
+      predictive_superiority_verified:false,
+      profitability_verified:false,
+      probability_ready:false,live_eligibility_ready:false,
+      production_touched:false,real_order_execution:false
+    }
   };
 }
 
