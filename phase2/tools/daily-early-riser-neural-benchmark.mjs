@@ -84,7 +84,9 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
     try{sample=JSON.parse(line);}
     catch{malformed++;continue;}
     const label=labelMode==='first_passage'?sample?.targets?.[key]:
-      sample?.opportunity_targets?.[String(horizonHours)+'h']?.[key];
+      labelMode==='safe_opportunity'
+        ?sample?.safe_opportunity_targets?.[String(horizonHours)+'h']?.[key]
+        :sample?.opportunity_targets?.[String(horizonHours)+'h']?.[key];
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
     const temporalRow=temporalById.get(String(sample.id||''))||null;
@@ -107,8 +109,11 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
       features:sample.features,
       temporal_sequence,
       ...(labelMode==='first_passage'?{targets:{[key]:label}}:
-        {opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
-          liquidity_lane:sample.liquidity_lane,quote_volume_24h:sample.quote_volume_24h})
+        labelMode==='safe_opportunity'
+          ?{safe_opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
+            liquidity_lane:sample.liquidity_lane,quote_volume_24h:sample.quote_volume_24h}
+          :{opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
+            liquidity_lane:sample.liquidity_lane,quote_volume_24h:sample.quote_volume_24h})
     });
   }
   return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
@@ -159,7 +164,7 @@ async function main(){
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const labelMode=String(args['label-mode']||'first_passage');
   const horizonHours=Number(args['horizon-hours']||24);
-  if(!['first_passage','upside_opportunity'].includes(labelMode)||
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode)||
     ![24,48,72].includes(horizonHours)||
     (labelMode==='first_passage'&&horizonHours!==24))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE_OR_HORIZON');
@@ -176,7 +181,11 @@ async function main(){
   const report={
     schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
-    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':
+      String(args['skip-temporal']||'false')==='true'
+        ?'FULL_TABULAR_NEURAL_BENCHMARK_WITH_TCN_ISOLATED'
+        :'FULL_DAILY_NEURAL_BENCHMARK',
+    temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
     requested_targets:targetsToRun,
     label_mode:labelMode,
     horizon_hours:horizonHours,
@@ -189,7 +198,11 @@ async function main(){
     main_sample_file_audit:null,
     target_results:{},
     methodology:{
-      labels:labelMode==='upside_opportunity'?'Independent upside-touch event within the requested 24h/48h/72h horizon; earlier drawdown is labelled separately and does not erase the event':'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
+      labels:labelMode==='upside_opportunity'
+        ?'Independent upside-touch event within the requested 24h/48h/72h horizon; earlier drawdown is labelled separately and does not erase the event'
+        :labelMode==='safe_opportunity'
+          ?'First touch of +5%, +10% or +15% must precede the -2% adverse barrier in the requested 24h/48h/72h horizon; same-candle ordering is ambiguous'
+          :'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
@@ -254,8 +267,9 @@ async function main(){
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
+      const skipTemporal=String(args['skip-temporal']||'false')==='true';
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
-        tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
         ...compactTarget(result),
