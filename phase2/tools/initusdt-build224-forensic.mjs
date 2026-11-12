@@ -1,10 +1,10 @@
 import {mkdir,writeFile} from 'node:fs/promises';
 import {RestClient} from '../market/binance-rest.mjs';
 import {buildSpotUniverse,normalizeTickerRow} from '../market/universe-scanner.mjs';
-import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS} from '../core/early-expansion-radar.mjs';
+import {buildEarlyExpansionEvidence,EARLY_EXPANSION_RADAR_DEFAULTS,buildMicroFingerprint,buildMicroEarlyFlowWatchCandidate} from '../core/early-expansion-radar.mjs';
 
 const SYMBOLS=[['INITUSDT',107.41]];
-const EVENT_START=Date.parse(process.env.INITUSDT_EVENT_START||'2026-11-09T00:00:00Z');
+const EVENT_START=Date.parse(process.env.INITUSDT_EVENT_START||'2026-11-08T00:00:00Z');
 const THROUGH=process.env.INITUSDT_THROUGH||'2026-11-11T00:00:00Z';
 const CHECKPOINTS=[24,12,6,3,1,.25,(5/60)];
 const throughMs=Date.parse(THROUGH);
@@ -185,6 +185,56 @@ function fullTimeline(all,startMs,endMs,market){
   }
   return out;
 }
+function fastDeltaProxy(oneRows,ts){
+  const p=at(oneRows,ts);
+  if(p.length<21)return {warmed_up:false};
+  const cur=p.at(-1),prev=p.at(-2),prev2=p.at(-3);
+  const pct=(a,b)=>Number(b?.close)>0?(Number(a?.close)/Number(b.close)-1)*100:null;
+  const change=pct(cur,prev),previous=pct(prev,prev2);
+  const qDelta=Math.max(0,Number(cur?.quoteVolume)||0),tradeDelta=Math.max(0,Number(cur?.tradeCount)||0);
+  const qBase=median(p.slice(-16,-1).map(x=>Number(x.quoteVolume)||0).filter(x=>x>0));
+  const tBase=median(p.slice(-16,-1).map(x=>Number(x.tradeCount)||0).filter(x=>x>0));
+  return {
+    price_change_pct:Number.isFinite(change)?change:0,
+    price_acceleration_pct:Number.isFinite(change)&&Number.isFinite(previous)?change-previous:0,
+    volume_delta_quote:qDelta,trade_delta:tradeDelta,
+    volume_accel_ratio:qBase>0?qDelta/qBase:0,trade_accel_ratio:tBase>0?tradeDelta/tBase:0,
+    at:ts,warmed_up:true,
+    replay_proxy:'LAST_CLOSED_1M_BAR_VS_PREVIOUS_15_ONE_MINUTE_BARS_NOT_THE_LIVE_20S_TICKER_DELTA'
+  };
+}
+function firstMicroCandidates(all,market,startMs,endMs){
+  const out={first_micro_watch_candidate:null,first_micro_score_58:null,first_micro_eligible_deep:null,
+    proxy_method:'Exact Build224 Micro fingerprint on historical closed 1m/5m/BTC 5m candles; fast ticker deltas approximated from 1m bars; market-wide ranking and historical book/depth are unavailable'};
+  for(const candle of all['1m'].filter(x=>Number(x.closeTime)>=startMs&&Number(x.closeTime)<=endMs)){
+    const ts=Number(candle.closeTime),ticker=historicalTicker(all['1m'],ts);
+    if(!ticker)continue;
+    ticker.symbol='INITUSDT';
+    const one=at(all['1m'],ts).slice(-120),five=at(all['5m'],ts).slice(-60);
+    const btc=at(market.fiveMinute||[],ts).slice(-120);
+    const fingerprint=buildMicroFingerprint({oneMinute:one,fiveMinute:five,btcFiveMinute:btc,ticker,now:ts,config:EARLY_EXPANSION_RADAR_DEFAULTS});
+    const fast=fastDeltaProxy(all['1m'],ts);
+    const micro={row:ticker,fast,oneMinute:one,fiveMinute:five,micro_fingerprint:fingerprint,source:['BINANCE_PUBLIC_REST']};
+    const result={
+      time:new Date(ts).toISOString(),price:Number(ticker.lastPrice),
+      price_change_24h_pct:Number(ticker.priceChange24h),quote_volume_24h_usdt:Number(ticker.quoteVolume24h),
+      trade_count_24h:Number(ticker.tradeCount24h),score:fingerprint.score,
+      confirmation_count:fingerprint.confirmation_count,stage:fingerprint.stage,mode:fingerprint.mode,
+      eligible:fingerprint.eligible,category_scores:fingerprint.category_scores,metrics:fingerprint.metrics,
+      reasons:fingerprint.reasons,risk_flags:fingerprint.risk_flags,fast_proxy:fast
+    };
+    if(!out.first_micro_score_58&&Number(fingerprint.score)>=58&&Number(fingerprint.confirmation_count)>=3&&
+      Math.abs(Number(ticker.priceChange24h))<18&&Math.abs(Number(fingerprint.metrics?.return_15m))<6)
+      out.first_micro_score_58=result;
+    if(!out.first_micro_eligible_deep&&fingerprint.eligible===true)out.first_micro_eligible_deep=result;
+    if(!out.first_micro_watch_candidate){
+      const watch=buildMicroEarlyFlowWatchCandidate(micro,ts,EARLY_EXPANSION_RADAR_DEFAULTS);
+      if(watch)out.first_micro_watch_candidate={...result,watch_candidate:watch};
+    }
+    if(out.first_micro_watch_candidate&&out.first_micro_score_58&&out.first_micro_eligible_deep)break;
+  }
+  return out;
+}
 function firstScoreRow(rows,threshold){
   const row=rows.find(x=>Number(x.forensic_evidence_score)>=threshold&&
     Number(x.price_change_24h_pct)<=12&&Number(x.quote_volume_24h_usdt)>=750000&&
@@ -234,8 +284,9 @@ async function run(){
       const got=await fetchSymbol(symbol);
       const anchor=deriveAnchor(got.series['1m'],expected);
       const timeline=fullTimeline(got.series,targetStart,throughMs,market);
+      const microCandidates=firstMicroCandidates(got.series,market,targetStart,throughMs);
       const rawCandleHistory=Object.fromEntries(Object.entries(got.series).map(([tf,rows])=>[tf,rows.filter(x=>Number(x.closeTime)>=targetStart&&Number(x.closeTime)<=throughMs).map(x=>({open_time:new Date(Number(x.openTime)).toISOString(),close_time:new Date(Number(x.closeTime)).toISOString(),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close),base_volume:Number(x.volume),quote_volume_usdt:Number(x.quoteVolume),trade_count:Number(x.tradeCount),taker_buy_base_volume:Number(x.takerBuyBaseVolume),taker_buy_quote_volume_usdt:Number(x.takerBuyQuoteVolume)}))]));
-      const row={symbol,expected_move_pct:expected,anchor,sources:got.sources,event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},raw_candle_history:rawCandleHistory,full_15m_timeline:timeline,first_klines_only_thresholds:{watch_58:firstScoreRow(timeline,58),pre_expansion_70:firstScoreRow(timeline,70),alert_score_82:firstScoreRow(timeline,82)}};
+      const row={symbol,expected_move_pct:expected,anchor,sources:got.sources,micro_replay:microCandidates,event_window:{start:new Date(targetStart).toISOString(),end:new Date(throughMs).toISOString()},raw_candle_history:rawCandleHistory,full_15m_timeline:timeline,first_klines_only_thresholds:{watch_58:firstScoreRow(timeline,58),pre_expansion_70:firstScoreRow(timeline,70),alert_score_82:firstScoreRow(timeline,82)}};
       if(anchor.status==='OK'){
         row.checkpoints=checkpointRows(got.series,anchor.anchor_time,expected,market);
         row.first_partial_evidence=firstPartialEvidence(got.series,anchor.anchor_time,market);
@@ -285,6 +336,12 @@ async function run(){
   md.push('');
   md.push('## Data integrity policy');
   md.push('Only closed Binance Spot candles are used as feature inputs. Historical order-book, historical spread, and historical external-news snapshots are not fabricated; where unavailable the report says INSUFFICIENT_HISTORICAL_EVIDENCE / UNAVAILABLE.');
+  md.push('');
+  md.push('## Build 224 Micro stage (1m/5m candle replay; approximate fast ticker deltas)');
+  md.push(`First Micro score >=58 / >=3 confirmations: ${cases[0]?.micro_replay?.first_micro_score_58?.time||'NONE'}`);
+  md.push(`First eligible Deep Micro fingerprint: ${cases[0]?.micro_replay?.first_micro_eligible_deep?.time||'NONE'}`);
+  md.push(`First Micro early-flow watch candidate: ${cases[0]?.micro_replay?.first_micro_watch_candidate?.time||'NONE'}`);
+  md.push('Micro OHLCV signals use exact Build 224 scoring on closed candles, but the live 20-second ticker delta is approximated from 1-minute bars; this does not reconstruct the historical 18-symbol selection rank, market-wide candidate pool, or book liquidity.');
   md.push('');
   md.push('## Threshold crossings (forensic candle-score proxy; not a guaranteed historical push)');
   md.push(`15m rows evaluated: ${timeline.length}`);
