@@ -1358,6 +1358,7 @@ function fitRegimeLocalTemporalTcn({
     neural_residual_contributes:Boolean(selected&&selected.residual_scale>0),
     ensemble_members:fitted.members.length,
     member_training_profiles:fitted.member_training_profiles,
+    member_training_diagnostics:fitted.member_training_diagnostics,
     baseline_anchor_source:'REGIME_LOCAL_TRAINING_ONLY',
     baseline_anchor_training_samples:training.length,
     baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
