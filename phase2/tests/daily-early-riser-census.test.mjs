@@ -4,6 +4,8 @@ import {
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_HORIZON_BARS,
   classifyDailyEarlyRiserFirstPassage,
+  classifyDailyEarlyRiserUpsideOpportunity,
+  classifyDailyEarlyRiserDrawdownRisk,
   classifyDailyEarlyRiserTargetSet,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
@@ -173,6 +175,98 @@ test('historical daily census uses closed baseline features, one non-overlapping
     'complete official 5m history should support the 24x29 temporal tensor');
 });
 
+
+
+function pathAfterBars(baseline,bars,mutate=()=>{}){
+  return Array.from({length:bars},(_,index)=>{
+    const openTime=baseline.closeTime+1+index*INTERVAL;
+    const row=candle(openTime);
+    return mutate(row,index)||row;
+  });
+}
+
+test('72h upside opportunity remains positive after an earlier drawdown; risk is a separate label',()=>{
+  const baseline=baselineCandle();
+  const future=pathAfterBars(baseline,288,(row,index)=>{
+    if(index===5)return {...row,low:97.5,high:100.4,close:98.1};
+    if(index===210)return {...row,low:101,high:106.4,close:105.8};
+    return row;
+  });
+  const upside=classifyDailyEarlyRiserUpsideOpportunity({
+    baseline,future15m:future,targetPct:5,horizonHours:72
+  });
+  const risk=classifyDailyEarlyRiserDrawdownRisk({
+    baseline,future15m:future,adversePct:2,horizonHours:72
+  });
+  assert.equal(upside.status,'RESOLVED');
+  assert.equal(upside.outcome,'UP');
+  assert.equal(upside.first_target_index,210);
+  assert.equal(upside.independent_of_adverse_barrier,true);
+  assert.equal(upside.horizon_hours,72);
+  assert.equal(risk.status,'RESOLVED');
+  assert.equal(risk.outcome,'DOWN');
+  assert.equal(risk.first_drawdown_index,5);
+  assert.equal(risk.horizon_hours,72);
+  assert.equal(upside.resolved_at,baseline.closeTime+288*INTERVAL);
+  assert.equal(risk.resolved_at,upside.resolved_at);
+});
+
+test('opportunity and drawdown labels reject incomplete long-horizon paths',()=>{
+  const baseline=baselineCandle();
+  const short=pathAfterBars(baseline,287);
+  assert.equal(classifyDailyEarlyRiserUpsideOpportunity({
+    baseline,future15m:short,targetPct:5,horizonHours:72
+  }).reason,'INCOMPLETE_72H_PATH');
+  assert.equal(classifyDailyEarlyRiserDrawdownRisk({
+    baseline,future15m:short,adversePct:2,horizonHours:72
+  }).reason,'INCOMPLETE_72H_PATH');
+});
+
+test('extended census can retain under-750k events for Micro Watch research without upgrading liquidity eligibility',()=>{
+  const count=1500;
+  const base=Math.floor(1_700_000_000_000/INTERVAL)*INTERVAL;
+  const fifteen=Array.from({length:count},(_,index)=>{
+    const price=100+index*0.001;
+    return candle(base+index*INTERVAL,{
+      open:price,high:price+0.1,low:price-0.1,close:price,
+      quoteVolume:4_000,trades:40,buyShare:0.57
+    });
+  });
+  const fast=Array.from({length:count*3},(_,index)=>candle(base+index*FIVE,{
+    interval:FIVE,quoteVolume:1_000,trades:12,high:100.1,low:99.9
+  }));
+  const btc=Array.from({length:count},(_,index)=>candle(base+index*INTERVAL,{
+    quoteVolume:2_000_000,trades:12_000
+  }));
+  const result=buildDailyEarlyRiserHistoricalSamples({
+    symbol:'MICROUSDT',
+    klines:{data:fifteen,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    fastKlines:{data:fast,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    btcKlines:{data:btc,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    now:base+count*INTERVAL+60_000,
+    minQuoteVolume24h:0,
+    opportunityHorizonsHours:[24,48,72],
+    drawdownAdversePcts:[2,5],
+    sampleStrideBars:288,
+    maxSamplesPerSymbol:100
+  });
+  assert.equal(result.audit.status,'READY');
+  assert.equal(result.audit.non_overlapping_max_opportunity_horizon_labels,true);
+  assert.equal(result.audit.max_opportunity_horizon_hours,72);
+  assert.equal(result.audit.anchor_stride_bars,288);
+  assert.ok(result.samples.length>=3);
+  assert.ok(result.samples.every(row=>row.quote_volume_24h<750_000));
+  assert.ok(result.samples.every(row=>row.liquidity_lane==='MICRO_WATCH_ONLY_UNDER_750K'));
+  for(const sample of result.samples){
+    for(const hours of [24,48,72]){
+      const key=hours+'h';
+      assert.equal(sample.opportunity_targets[key].plus_5_pct.horizon_hours,hours);
+      assert.equal(sample.drawdown_risks[key].minus_2_pct.horizon_hours,hours);
+      assert.equal(sample.opportunity_targets[key].plus_5_pct.status,'RESOLVED');
+      assert.equal(sample.drawdown_risks[key].minus_2_pct.status,'RESOLVED');
+    }
+  }
+});
 
 test('malformed future OHLC candles are rejected even when timestamps and numbers are finite',()=>{
   const baseline=baselineCandle();
