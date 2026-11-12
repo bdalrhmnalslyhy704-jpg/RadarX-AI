@@ -257,4 +257,47 @@ test('multi-horizon historical sampling requires 72h-spaced anchors to prevent o
   assert.equal(result.audit.status,'INVALID_POLICY');
   assert.equal(result.audit.reason,'MULTI_HORIZON_ANCHORS_MUST_NOT_OVERLAP_72H_LABELS');
 });
+test('72h census builder attaches all movement/risk horizons and uses non-overlapping 72h anchors',()=>{
+  const count=1800;
+  const base=Math.floor(1_700_000_000_000/INTERVAL)*INTERVAL;
+  const fifteen=Array.from({length:count},(_,index)=>{
+    const price=100+index*0.01;
+    return candle(base+index*INTERVAL,{open:price,high:price+0.2,low:price-0.2,close:price});
+  });
+  const fast=Array.from({length:count*3},(_,index)=>candle(base+index*FIVE,{
+    interval:FIVE,quoteVolume:100_000,trades:600,high:100.1,low:99.9
+  }));
+  const btc=Array.from({length:count},(_,index)=>candle(base+index*INTERVAL,{
+    quoteVolume:2_000_000,trades:12_000
+  }));
+  const now=base+count*INTERVAL+60_000;
+  const result=buildDailyEarlyRiserHistoricalSamples({
+    symbol:'CENSUSUSDT',
+    klines:{data:fifteen,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    fastKlines:{data:fast,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    btcKlines:{data:btc,source:'BINANCE_OFFICIAL_ARCHIVE'},
+    now,minQuoteVolume24h:750_000,maxSamplesPerSymbol:40,
+    sampleStrideBars:288,multiHorizonTargetsEnabled:true
+  });
+  assert.equal(result.audit.status,'READY',JSON.stringify(result.audit));
+  assert.ok(result.samples.length>=3,JSON.stringify(result.audit));
+  assert.equal(result.audit.multi_horizon_targets_enabled,true);
+  assert.equal(result.audit.label_horizon_hours,72);
+  assert.equal(result.audit.non_overlapping_multi_horizon_labels,true);
+  assert.equal(result.audit.overlap_violations,0);
+  for(const sample of result.samples){
+    assert.equal(sample.multi_horizon_outcome_source,DAILY_EARLY_RISER_MULTIHORIZON_OUTCOME_SOURCE);
+    const plus5=sample.multi_horizon_targets.plus_5_pct;
+    for(const hours of [24,48,72]){
+      const label=plus5[String(hours)+'H'];
+      assert.equal(label.horizon_hours,hours);
+      assert.equal(label.horizon_end_at-sample.at,hours*60*60*1000);
+      assert.ok(['UP','FLAT'].includes(label.movement_event.outcome));
+      assert.ok(['UP','DOWN','FLAT','AMBIGUOUS'].includes(label.first_passage.outcome));
+    }
+    assert.equal(sample.feature_information_cutoff_at,sample.at);
+    assert.equal(sample.targets.plus_5_pct.resolved_at-sample.at,24*60*60*1000,
+      'the old 24h first-passage risk label remains unchanged');
+  }
+});
 
