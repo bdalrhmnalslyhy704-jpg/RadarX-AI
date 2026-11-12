@@ -1924,15 +1924,18 @@ function fitRegimeLocalTemporalTcn({
     baseline_anchor_training_samples:training.length,
     baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
     member_selection_logistic_brier:selectionLogistic.model_brier_score??null,
+    member_selection_logistic_ranking_metrics:selectionLogistic.ranking_metrics??null,
     selection_best_candidate:diagnostic?{
       member_index:diagnostic.index,residual_scale:diagnostic.residual_scale,
       brier_score:diagnostic.metrics.model_brier_score,
-      base_rate_brier_score:diagnostic.metrics.base_rate_brier_score
+      base_rate_brier_score:diagnostic.metrics.base_rate_brier_score,
+      ranking_metrics:diagnostic.metrics.ranking_metrics??null
     }:null,
     member_selection_scores:candidates.map(row=>({
       index:row.index,residual_scale:row.residual_scale,
       brier_score:row.metrics.model_brier_score,
       base_rate_brier_score:row.metrics.base_rate_brier_score,
+      ranking_metrics:row.metrics.ranking_metrics??null,
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:selectionLogistic.model_brier_score??null,
       beats_same_window_logistic:selectionLogistic.evaluated===true&&
@@ -3172,6 +3175,15 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_selected_regimes:attentionValidationRegimes
     },
     supported_regimes:attentionSupportedRegimes,
+    member_selection_logistic_ranking_metrics_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.member_selection_logistic_ranking_metrics??null
+    ])),
+    selection_best_candidate_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.selection_best_candidate??null
+    ])),
+    member_selection_scores_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.member_selection_scores??[]
+    ])),
     validation_selected_regimes:attentionValidationRegimes,
     selected_regimes:attentionSelectedRegimes,
     trained:attentionSupportedRegimes.length>0,
