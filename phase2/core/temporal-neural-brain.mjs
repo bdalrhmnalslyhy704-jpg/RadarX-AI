@@ -1257,7 +1257,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   regimeLocalTcnPyramidEpochs=6,
   enableRegimeLocalTcnMultiscale=false,
   regimeLocalTcnMultiscaleMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
-  regimeLocalTcnMultiscaleEpochs=6
+  regimeLocalTcnMultiscaleEpochs=6,
+  enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
@@ -1845,9 +1846,10 @@ export function buildTemporalNeuralProfile(samples = [], {
     const regimeFit=sharedTcnFit;
     // Same first-passage target, same regime-local training/selection/calibration
     // blocks, and the exact same frozen logistic anchor used by the TCN.
-    const temporalTreeFit=fitTemporalResidualTrees(regimeTraining,regimeBaseline,{
-      maxTrees:24,maxDepth:2,learningRate:0.04,l2:10,minimumLeafFraction:0.05
-    });
+    const temporalTreeFit=enableTemporalBoostedTree===false?null:
+      fitTemporalResidualTrees(regimeTraining,regimeBaseline,{
+        maxTrees:24,maxDepth:2,learningRate:0.04,l2:10,minimumLeafFraction:0.05
+      });
     const temporalTreeCandidates=temporalTreeFit
       ?[6,12,18,24].filter(count=>count<=temporalTreeFit.trees.length)
         .flatMap(treeCount=>[0.25,0.5,0.75,1].map(residualScale=>({
