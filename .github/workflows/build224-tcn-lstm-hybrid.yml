@@ -50,7 +50,11 @@ jobs:
           node --check phase2/core/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --check phase2/tools/neural-hybrid-oos-matrix.mjs
+          node --check phase2/tests/neural-hybrid-oos-matrix.test.mjs
       - name: Run recurrent BPTT finite differences, training, purged selection and stress tests
         run: node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
       - name: Verify same-cohort daily 24h TCN-LSTM integration
         run: node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+      - name: Verify recurrent family Brier matrix and locked holdout semantics
+        run: node --test --test-timeout=180000 phase2/tests/neural-hybrid-oos-matrix.test.mjs
