@@ -158,6 +158,8 @@ function compactTarget(result){
     model_selection:result.model_selection,
     temporal_tcn_training_performed:result.temporal_tcn_training_performed,
     temporal_tcn_evaluation_performed:result.temporal_tcn_evaluation_performed,
+    temporal_tcn_lstm_hybrid_training_performed:result.temporal_tcn_lstm_hybrid_training_performed,
+    temporal_tcn_lstm_hybrid_challenger:result.temporal_tcn_lstm_hybrid_challenger,
     temporal_tcn_sequence_samples:result.temporal_tcn_sequence_samples,
     temporal_tree_training_performed:result.temporal_tree_training_performed,
     temporal_tree_challenger:result.temporal_tree_challenger,
@@ -180,6 +182,12 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
+  const enableTcnLstmHybrid=String(args['enable-tcn-lstm-hybrid']||'false')==='true';
+  const tcnLstmEpochs=Math.max(1,Math.min(8,Math.trunc(Number(args['tcn-lstm-epochs']||4))));
+  const tcnLstmMaxTrainingSamples=Math.max(80,Math.min(1024,
+    Math.trunc(Number(args['tcn-lstm-max-training-samples']||512))));
+  const tcnLstmBootstrapIterations=Math.max(200,Math.min(2000,
+    Math.trunc(Number(args['tcn-lstm-bootstrap-iterations']||400))));
   const enableAsymmetricDirectionalRankingLoss=String(
     args['asymmetric-directional-ranking-loss']??'true')==='true';
   const directionalRankingLossConfig={
@@ -243,6 +251,10 @@ async function main(){
     temporal_training_isolated:regimeLocalMlpOnly||String(args['skip-temporal']||'false')==='true',
     regime_local_mlp_only:regimeLocalMlpOnly,
     temporal_attention_only:attentionOnly,
+    enable_tcn_lstm_hybrid:enableTcnLstmHybrid,
+    tcn_lstm_epochs:tcnLstmEpochs,
+    tcn_lstm_max_training_samples:tcnLstmMaxTrainingSamples,
+    tcn_lstm_bootstrap_iterations:tcnLstmBootstrapIterations,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
     asymmetric_directional_ranking_loss_enabled:enableAsymmetricDirectionalRankingLoss,
     directional_ranking_loss_config:directionalRankingLossConfig,
@@ -282,13 +294,19 @@ async function main(){
         :'Disabled; proper-scoring objectives remain active.',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest '+String(Math.round(neuralTrainingHistoryFraction*100))+'% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
-      models:tcnOnly
-        ?attentionOnly
-          ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
-          :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
-        :['Residual Deep MLP V5 ensemble',...(enableFactorizationMachine?['Low-rank Factorization-Machine pairwise residual']:[]),'Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
+      models:[
+        ...(tcnOnly
+          ?attentionOnly
+            ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
+            :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
+          :['Residual Deep MLP V5 ensemble',...(enableFactorizationMachine?['Low-rank Factorization-Machine pairwise residual']:[]),'Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11']),
+        ...(enableTcnLstmHybrid?['Causal dilated TCN→LSTM BPTT→locked input dropout→temporal attention challenger']:[])
+      ],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
+      tcn_lstm:enableTcnLstmHybrid
+        ?'The independent TCN-LSTM challenger shares the same closed 24x29 sidecar, binary target and exact chronological cohort; LR/L2/locked-dropout are chosen on inner selection, Platt calibration uses a later calibration block, and holdout remains locked unless external validation passes. This implementation is restricted to 24h labels.'
+        :'Disabled unless --enable-tcn-lstm-hybrid true is explicitly supplied.',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
     },
     production_touched:false,
@@ -359,6 +377,9 @@ async function main(){
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
+        enableTcnLstmHybrid,temporalTcnLstmEpochs:tcnLstmEpochs,
+        temporalTcnLstmMaxTrainingSamples:tcnLstmMaxTrainingSamples,
+        temporalTcnLstmBootstrapIterations:tcnLstmBootstrapIterations,
         neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
         enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         dailyFeatureSchema,
