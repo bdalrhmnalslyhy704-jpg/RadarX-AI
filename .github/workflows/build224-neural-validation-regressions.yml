@@ -1,0 +1,55 @@
+name: Build 224 Census Streaming and Hybrid Regression Verification
+
+on:
+  push:
+    branches:
+      - research/build224-neural-validation-stream-fix-20261113
+    paths:
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - 'phase2/tests/daily-early-riser-census-artifact-validation.test.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
+      - '.github/workflows/build224-neural-validation-regressions.yml'
+  pull_request:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - 'phase2/tests/daily-early-riser-census-artifact-validation.test.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
+      - '.github/workflows/build224-neural-validation-regressions.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-census-streaming-hybrid-regressions
+  cancel-in-progress: false
+
+jobs:
+  streaming-and-hybrid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check streaming verifier and hybrid model
+        run: |
+          node --check phase2/tools/verify-daily-early-riser-census-artifact.mjs
+          node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/tests/daily-early-riser-census-artifact-validation.test.mjs
+          node --check phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
+      - name: Verify streaming census SHA and TCN sidecar identity contracts
+        run: node --test --test-timeout=60000 phase2/tests/daily-early-riser-census-artifact-validation.test.mjs
+      - name: Run closed-candle barriers, TCN Attention gradients, and fixed-SHA hybrid regressions
+        run: node --test --test-timeout=180000 phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
+      - name: Run daily target maturity and closed-candle census regressions
+        run: node --test --test-timeout=180000 phase2/tests/daily-early-riser-census.test.mjs
