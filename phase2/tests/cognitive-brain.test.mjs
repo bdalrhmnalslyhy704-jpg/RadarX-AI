@@ -431,9 +431,14 @@ test('MLP numerical training audit drives an exactly balanced 32-row batch to ne
       vector:buildCognitiveFeatureVector(features)
     };
   });
-  const report=auditNeuralOneBatchOverfit(rows,{iterations:120,seed:17});
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:48,seed:17});
   console.log('[COGNITIVE_MLP_32_ROW_OVERFIT]',JSON.stringify(report));
   assert.equal(report.sample_count,32);
+  assert.equal(report.epochs_completed,48,
+    'the diagnostic must prove one-batch fit within a few dozen epochs');
+  assert.equal(report.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(report.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(report.gradient_clip_norm,1);
   assert.equal(report.feature_count,18);
   assert.equal(report.finite_predictions,true);
   assert.equal(report.all_gradients_finite,true);
