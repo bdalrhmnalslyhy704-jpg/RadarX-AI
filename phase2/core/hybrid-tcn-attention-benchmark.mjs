@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
   'log_return_1',
@@ -34,6 +35,8 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
 
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
+export const HYBRID_CANDLE_INTERVAL_MS = 15 * 60 * 1000;
+export const HYBRID_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
   'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_CUMULATIVE_SHARPE_V4';
@@ -360,6 +363,21 @@ export function buildHybridSequence({
     .filter(row => validClosedCandle(row, cutoff))
     .sort((a, b) => candleTime(a) - candleTime(b));
   const selected = clean.slice(-steps);
+  const sequenceTimestamps = selected.map(candleTime);
+  if (sequenceTimestamps.some(value=>!Number.isFinite(value))) return {
+    ready:false,reason:'TEMPORAL_SEQUENCE_TIMESTAMP_NON_FINITE',
+    required_candles:steps,available_candles:selected.length,sequence:null,sequence_timestamps:null
+  };
+  if (sequenceTimestamps.at(-1)!==cutoff) return {
+    ready:false,reason:'TEMPORAL_SEQUENCE_LAST_CLOSE_DIFFERS_FROM_DECISION',
+    expected_decision_at:cutoff,observed_last_close_at:sequenceTimestamps.at(-1),
+    sequence:null,sequence_timestamps:sequenceTimestamps
+  };
+  for(let index=1;index<sequenceTimestamps.length;index++){
+    if(sequenceTimestamps[index]-sequenceTimestamps[index-1]!==HYBRID_CANDLE_INTERVAL_MS)
+      return {ready:false,reason:'TEMPORAL_SEQUENCE_CADENCE_GAP_OR_REORDER',
+        invalid_step:index,sequence:null,sequence_timestamps:sequenceTimestamps};
+  }
   const sequence = [];
   let latestKamaEfficiencyRatio = null;
   let latestVolatilityZScore = null;
@@ -436,7 +454,7 @@ export function buildHybridSequence({
     const valueAreaPosition = volumeProfile.available && vaRange > 0
       ? clamp(((close - volumeProfile.value_area_low) / vaRange) * 2 - 1, -2, 2)
       : 0;
-    const features = [
+    const rawFeatures = [
       logReturn(close, candleNumber(prior.at(-2), 'close')) * 100,
       logReturn(close, candleNumber(prior.at(-4), 'close')) * 100,
       logReturn(close, candleNumber(prior.at(-13), 'close')) * 100,
@@ -466,7 +484,13 @@ export function buildHybridSequence({
       ((low - previousRangeLow) / close) * 100,
       ((close - previousRangeHigh) / close) * 100,
       kamaEfficiencyRatio ?? 0
-    ].map(value => round(clamp(Number.isFinite(value) ? value : 0, -4, 4), 6));
+    ];
+    if(!rawFeatures.every(Number.isFinite))return {
+      ready:false,reason:'HYBRID_TEMPORAL_FEATURE_NON_FINITE',
+      failed_at:closeTime,failed_feature_indices:rawFeatures.flatMap((value,index)=>
+        Number.isFinite(value)?[]:[index]),sequence:null,sequence_timestamps:sequenceTimestamps
+    };
+    const features=rawFeatures.map(value=>round(clamp(value,-4,4),6));
     latestKamaEfficiencyRatio = kamaEfficiencyRatio;
     latestVolatilityZScore = volatilityZScore;
     latestBtcTrendReturnPct = btcTrendReturnPct;
@@ -474,13 +498,16 @@ export function buildHybridSequence({
   }
   const latestInputAt = candleTime(selected.at(-1));
   return {
-    ready: sequence.length === steps && latestInputAt <= cutoff &&
+    ready: sequence.length === steps && latestInputAt === cutoff &&
       latestKamaEfficiencyRatio !== null && latestVolatilityZScore !== null && latestBtcTrendReturnPct !== null &&
       sequence.every(row => row.length === HYBRID_SEQUENCE_CHANNELS && row.every(Number.isFinite)),
     reason: null,
     sequence_steps: steps,
     sequence_channels: HYBRID_SEQUENCE_CHANNELS,
     latest_input_at: latestInputAt,
+    sequence_timestamps:sequenceTimestamps,
+    interval_ms:HYBRID_CANDLE_INTERVAL_MS,
+    feature_information_cutoff_at:cutoff,
     as_of: cutoff,
     feature_names: [...HYBRID_FEATURE_NAMES],
     kama_efficiency_ratio: latestKamaEfficiencyRatio,
@@ -629,6 +656,8 @@ export function prepareHybridBenchmarkEvent({
       at,
       latest_input_at: features.latest_input_at,
       resolved_at: outcome.exit_at,
+      maturity_ms:outcome.exit_at-at,
+      outcome_horizon_ms:HYBRID_OUTCOME_HORIZON_MS,
       gross_return_pct: outcome.gross_return_pct,
       max_adverse_excursion_pct: outcome.max_adverse_excursion_pct,
       max_adverse_excursion_at: outcome.max_adverse_excursion_at,
@@ -640,6 +669,8 @@ export function prepareHybridBenchmarkEvent({
       btc_trend_return_pct: features.btc_trend_return_pct,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
       sequence: features.sequence,
+      sequence_timestamps:features.sequence_timestamps,
+      feature_information_cutoff_at:features.feature_information_cutoff_at,
       feature_snapshot_sha: typeof featureSnapshotSha === 'string' ? featureSnapshotSha : null,
       outcome_exit_reason: outcome.exit_reason
     }
