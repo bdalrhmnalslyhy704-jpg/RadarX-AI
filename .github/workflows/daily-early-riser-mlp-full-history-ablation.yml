@@ -50,14 +50,23 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import {createHash} from 'node:crypto';
+          import {createReadStream} from 'node:fs';
           const report=JSON.parse(fs.readFileSync('research-input/daily-early-riser-census.json','utf8'));
-          const data=fs.readFileSync('research-input/daily-early-riser-samples.jsonl');
-          const sha=createHash('sha256').update(data).digest('hex');
+          const hash=createHash('sha256');
+          let lineFeeds=0,lastByte=null,totalBytes=0;
+          for await(const chunk of createReadStream('research-input/daily-early-riser-samples.jsonl')){
+            hash.update(chunk);totalBytes+=chunk.length;
+            let offset=-1;
+            while((offset=chunk.indexOf(10,offset+1))!==-1)lineFeeds++;
+            if(chunk.length)lastByte=chunk[chunk.length-1];
+          }
+          const sha=hash.digest('hex');
+          const rows=lineFeeds+(lastByte===10?0:1);
           if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(report.status))throw Error('CENSUS_NOT_AUDITED');
           if(report.data_quality?.all_sample_audits_ready!==true)throw Error('SAMPLE_AUDIT_GATE_FAILED');
           if(sha!==report.sample_file?.sha256)throw Error('SAMPLE_SHA256_MISMATCH');
-          if(data.toString('utf8').trimEnd().split('\n').length!==report.sample_file.rows)throw Error('SAMPLE_ROW_COUNT_MISMATCH');
-          console.log(JSON.stringify({census_status:report.status,rows:report.sample_file.rows,sha256:sha,symbols:report.universe?.symbols??477}));
+          if(rows!==Number(report.sample_file.rows))throw Error('SAMPLE_ROW_COUNT_MISMATCH');
+          console.log(JSON.stringify({census_status:report.status,rows,bytes:totalBytes,sha256:sha,symbols:report.universe?.symbols??477}));
           NODE
 
       - name: Install locked dependencies
