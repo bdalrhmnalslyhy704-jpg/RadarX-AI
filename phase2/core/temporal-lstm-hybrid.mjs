@@ -1178,11 +1178,26 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     candidates,requiredInnerImprovement,requiredOuterImprovement,
     maxTrainingSamples,bootstrapIterations,seed
   });
+  const selectedFit=evaluation.selection?.selected_fit??null;
+  const inferenceLatency=selectedFit
+    ?{
+      evaluated:true,
+      ...benchmarkTcnLstmHybridInference(rows[0].sequence,selectedFit,{
+        warmup:20,iterations:200
+      })
+    }
+    :{
+      evaluated:false,
+      reason:'NO_SELECTED_FIT_AFTER_INNER_SELECTION_GATE',
+      production_latency_claim:false
+    };
   return {
     ...base,
     status:evaluation.status,
     evaluated:true,
-    trained:Boolean(evaluation.selection?.selected_fit),
+    inference_latency:inferenceLatency,
+    zero_latency_claim:false,
+    trained:Boolean(selectedFit),
     selected_for_research:evaluation.validated_for_research===true,
     inner_selection_diagnostics:evaluation.selection,
     calibration:evaluation.calibration,
