@@ -6,6 +6,8 @@ on:
       - research/daily-early-riser-opportunity-targets-20261113
     paths:
       - '.github/workflows/daily-early-riser-regime-local-mlp-ablation.yml'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
 
 permissions:
   actions: read
