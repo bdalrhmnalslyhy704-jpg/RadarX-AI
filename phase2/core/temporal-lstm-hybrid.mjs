@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * RadarX Build 224 — Research-only TCN → LSTM → temporal-attention challenger.
  *
@@ -72,6 +74,20 @@ function validateSequence(sequence) {
     }
   }
   return true;
+}
+
+function sampleIdentity(row) {
+  const id = String(row?.id ?? '').trim();
+  if (id) return id;
+  const symbol = String(row?.symbol ?? '').trim().toUpperCase();
+  if (symbol && finite(row?.at)) return symbol + ':' + row.at;
+  throw new TypeError('TCN_LSTM_SAMPLE_IDENTITY_MISSING');
+}
+function trainingFingerprint(rows) {
+  const identities = rows.map(sampleIdentity).sort();
+  if (new Set(identities).size !== identities.length)
+    throw new TypeError('TCN_LSTM_DUPLICATE_TRAINING_IDENTITY');
+  return createHash('sha256').update(identities.join('\n'), 'utf8').digest('hex');
 }
 
 function validateRow(row, index, requireTarget = true) {
@@ -158,6 +174,7 @@ export function fitTcnLstmLogisticAnchor(rows, {
     kind: 'TCN_LSTM_FROZEN_POOLED_LOGISTIC_ANCHOR_V1',
     weights, bias, base_rate: baseRate,
     training_rows: rows.length,
+    training_fingerprint: trainingFingerprint(rows),
     positive_rows: positive,
     negative_rows: negative,
     feature_count: BASELINE_FEATURES,
@@ -276,24 +293,21 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
     const inputGate = Array(hidden), forgetGate = Array(hidden);
     const outputGate = Array(hidden), candidateGate = Array(hidden);
     const cell = Array(hidden), cellTanh = Array(hidden), state = Array(hidden);
-    for (let unit = 0; unit < hidden; unit++) {
-      const preactivation = Array(hidden * 4).fill(0);
-      for (let gate = 0; gate < hidden * 4; gate++) {
-        let value = model.lstmBiases[gate];
-        for (let channel = 0; channel < hidden; channel++) {
-          value += input[channel] * model.lstmInputWeights[channel][gate];
-          value += previousHidden[channel] * model.lstmRecurrentWeights[channel][gate];
-        }
-        preactivation[gate] = value;
+    const preactivation = Array(hidden * 4).fill(0);
+    for (let gate = 0; gate < hidden * 4; gate++) {
+      let value = model.lstmBiases[gate];
+      for (let channel = 0; channel < hidden; channel++) {
+        value += input[channel] * model.lstmInputWeights[channel][gate];
+        value += previousHidden[channel] * model.lstmRecurrentWeights[channel][gate];
       }
-      // Gate order: [i_0..i_H, f_0..f_H, o_0..o_H, g_0..g_H].
-      for (let index = 0; index < hidden; index++) {
-        inputGate[index] = sigmoid(preactivation[index]);
-        forgetGate[index] = sigmoid(preactivation[hidden + index]);
-        outputGate[index] = sigmoid(preactivation[2 * hidden + index]);
-        candidateGate[index] = tanh(preactivation[3 * hidden + index]);
-      }
-      break;
+      preactivation[gate] = value;
+    }
+    // Gate order: [i_0..i_H, f_0..f_H, o_0..o_H, g_0..g_H].
+    for (let index = 0; index < hidden; index++) {
+      inputGate[index] = sigmoid(preactivation[index]);
+      forgetGate[index] = sigmoid(preactivation[hidden + index]);
+      outputGate[index] = sigmoid(preactivation[2 * hidden + index]);
+      candidateGate[index] = tanh(preactivation[3 * hidden + index]);
     }
     for (let unit = 0; unit < hidden; unit++) {
       cell[unit] = forgetGate[unit] * previousCell[unit] +
@@ -665,8 +679,10 @@ export function trainTcnLstmHybrid(trainingRows, {
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
-      anchor.weights.some(value => !finite(value)) || !finite(anchor.bias))
-    throw new TypeError('TCN_LSTM_TRAINING_ANCHOR_INVALID');
+      anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
+      anchor.training_rows !== rows.length ||
+      anchor.training_fingerprint !== trainingFingerprint(rows))
+    throw new TypeError('TCN_LSTM_TRAINING_ANCHOR_INVALID_OR_TRAINING_ROWS_MISMATCH');
 
   const model = initializeModel(seed);
   let optimizer = {
@@ -697,8 +713,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     for (let start = 0; start < order.length; start += batchSize) {
       const indexes = order.slice(start, Math.min(order.length, start + batchSize));
       let accumulated = zeroGradients(model);
-      for (const index of indexes) {
-        const row = rows[order[index]];
+      for (const rowIndex of indexes) {
+        const row = rows[rowIndex];
         const baselineLogit = predictTcnLstmLogisticLogit(row.sequence, anchor);
         const item = lossAndGradientsTcnLstmHybrid(
           row.sequence, row.target, model, baselineLogit
@@ -768,6 +784,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       rows: rows.length,
       positives: support.positive,
       negatives: support.negative,
+      training_fingerprint: trainingFingerprint(rows),
+      anchor_training_fingerprint: anchor.training_fingerprint,
       fit_boundary: 'TRAINING_PARTITION_ONLY',
       optimizer: 'ADAMW_DECOUPLED_WEIGHT_DECAY',
       scheduler: 'COSINE_DECAY_10_PERCENT_FLOOR',
@@ -833,7 +851,22 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     throw new TypeError('TCN_LSTM_HYPERPARAMETER_GRID_INVALID');
   if (!finite(requiredImprovement) || requiredImprovement < 0)
     throw new TypeError('TCN_LSTM_SELECTION_MARGIN_INVALID');
-  const anchor = fitTcnLstmLogisticAnchor(trainingRows);
+  const effectiveTrainingRows = [...trainingRows].sort((a, b) => a.at - b.at)
+    .slice(-Math.min(maxTrainingSamples, trainingRows.length));
+  const trainAt = effectiveTrainingRows.map(row => row.at);
+  const trainResolved = effectiveTrainingRows.map(row => row.resolved_at);
+  const selectionAt = selectionRows.map(row => row.at);
+  if (trainAt.some(value => !finite(value)) ||
+      trainResolved.some(value => !finite(value) || value <= 0) ||
+      selectionAt.some(value => !finite(value)) ||
+      selectionRows.some(row => !finite(row.resolved_at) || row.resolved_at <= row.at))
+    throw new TypeError('TCN_LSTM_SELECTION_REQUIRES_MATURED_CHRONOLOGICAL_TIMESTAMPS');
+  if (!(Math.max(...trainResolved) < Math.min(...selectionAt)))
+    throw new TypeError('TCN_LSTM_TRAIN_SELECTION_PURGE_VIOLATION');
+  const trainingIds = new Set(effectiveTrainingRows.map(sampleIdentity));
+  if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
+    throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
+  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRows);
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
@@ -845,12 +878,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30 ||
         config.dropout !== undefined && config.dropout !== 0)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
-    const fit = trainTcnLstmHybrid(trainingRows, {
+    const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
       epochs: config.epochs,
       learningRate: config.learningRate,
       l2: config.l2,
       seed: seed + index * 101,
-      maxTrainingSamples,
+      maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor
     });
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
