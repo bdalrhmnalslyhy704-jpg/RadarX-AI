@@ -93,6 +93,39 @@ function innerGate(model){
       passed:Number(best.selection_logistic_brier_score)-Number(best.selection_brier_score)>INNER_MARGIN,
       candidate:best.name||null};
   }
+  if(finite(model?.shared_model_selection_logistic_brier)){
+    const candidate=firstFinite(model.shared_model_selection_candidate_brier);
+    const logistic=Number(model.shared_model_selection_logistic_brier);
+    return {evaluated:candidate!==null,model_brier:candidate,logistic_brier:logistic,
+      improvement:candidate!==null?logistic-candidate:null,required_margin:INNER_MARGIN,
+      passed:model.shared_model_selection_passed===true&&candidate!==null&&
+        logistic-candidate>INNER_MARGIN};
+  }
+  if(model?.regime_specialists&&typeof model.regime_specialists==='object'){
+    const regimes=Object.values(model.regime_specialists);
+    const audits=regimes.map(regime=>{
+      const candidates=Array.isArray(regime?.member_selection_scores)
+        ?regime.member_selection_scores:[];
+      const chosen=candidates.find(item=>item.selected===true)||
+        candidates.filter(item=>item.beats_same_window_logistic===true&&
+          finite(item.brier_score)).sort((a,b)=>a.brier_score-b.brier_score)[0]||null;
+      const logistic=firstFinite(regime?.member_selection_logistic_brier);
+      const modelScore=firstFinite(chosen?.brier_score);
+      return {model_brier:modelScore,logistic_brier:logistic,
+        passed:chosen!==null&&logistic!==null&&
+          (chosen.beats_same_window_logistic===true||logistic-modelScore>INNER_MARGIN)};
+    });
+    const complete=audits.length>0&&audits.every(item=>
+      item.model_brier!==null&&item.logistic_brier!==null);
+    if(complete){
+      const modelScore=audits.reduce((sum,item)=>sum+item.model_brier,0)/audits.length;
+      const logistic=audits.reduce((sum,item)=>sum+item.logistic_brier,0)/audits.length;
+      return {evaluated:true,model_brier:modelScore,logistic_brier:logistic,
+        improvement:logistic-modelScore,required_margin:INNER_MARGIN,
+        passed:audits.every(item=>item.passed)&&logistic-modelScore>INNER_MARGIN,
+        regimes:audits};
+    }
+  }
   const selection=model?.selection||model?.member_selection||{};
   const modelBrier=firstFinite(selection.model_brier_score,selection.candidate_brier);
   const logisticBrier=firstFinite(selection.logistic_brier_score,selection.same_window_logistic_brier);
