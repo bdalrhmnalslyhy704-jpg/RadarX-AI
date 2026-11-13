@@ -1485,25 +1485,40 @@ function predictTemporalResidualTrees(sequence,fit,residualScale=1,treeCount=nul
   return logistic(clamp(value,-12,12));
 }
 
-function timeGroupedRankingMetrics(rows,predictions,targets){
-  const groups=new Map();
+export const TEMPORAL_RANKING_BUCKET_MS=15*60*1000;
+
+/**
+ * Evaluate coin selection only among symbols observable at the same closed
+ * 15m candle boundary. Timestamp values are bucketed because exchange archive
+ * close timestamps can differ by a few milliseconds across symbol files.
+ * Singleton buckets are reported but excluded: they cannot test ranking skill.
+ */
+export function timeGroupedRankingMetrics(rows,predictions,targets){
+  const buckets=new Map();
   for(let index=0;index<rows.length;index++){
     const at=Number(rows[index]?.at);
-    const key=Number.isFinite(at)?String(at):'UNKNOWN_TIME';
-    if(!groups.has(key))groups.set(key,[]);
-    groups.get(key).push({
+    if(!Number.isFinite(at)||at<=0)continue;
+    const bucket=Math.floor(at/TEMPORAL_RANKING_BUCKET_MS);
+    if(!buckets.has(bucket))buckets.set(bucket,[]);
+    buckets.get(bucket).push({
       score:Number(predictions[index]),target:Number(targets[index]),
       symbol:String(rows[index]?.symbol||''),index
     });
   }
+  const allGroups=[...buckets.values()];
+  const singletonGroups=allGroups.filter(items=>items.length<2).length;
+  const groups=allGroups.filter(items=>items.length>=2);
   const fractions=[5,10,20],stats=new Map(fractions.map(key=>
     [key,{precision:[],recall:[],lift:[],selected:[]}]));
   let averagePrecisionSum=0,averagePrecisionGroups=0,totalPositives=0;
-  for(const items of groups.values()){
+  let multiSymbolRows=0,maximumGroupSize=0;
+  for(const items of groups){
     const ordered=[...items].sort((a,b)=>b.score-a.score||
       a.symbol.localeCompare(b.symbol)||a.index-b.index);
     const positives=ordered.reduce((sum,row)=>sum+(row.target===1?1:0),0);
     totalPositives+=positives;
+    multiSymbolRows+=ordered.length;
+    maximumGroupSize=Math.max(maximumGroupSize,ordered.length);
     if(positives>0){
       let hits=0,precisionSum=0;
       for(let rank=0;rank<ordered.length;rank++)if(ordered[rank].target===1){
@@ -1523,10 +1538,21 @@ function timeGroupedRankingMetrics(rows,predictions,targets){
     }
   }
   const average=values=>values.length?values.reduce((sum,value)=>sum+value,0)/values.length:null;
-  const result={method:'WITHIN_TIMESTAMP_TOP_K_MACRO_V1',groups:groups.size,
-    groups_with_positive:averagePrecisionGroups,positive_events:totalPositives,
+  const result={
+    method:'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2',
+    bucket_ms:TEMPORAL_RANKING_BUCKET_MS,
+    total_time_buckets:allGroups.length,
+    groups:groups.length,
+    singleton_buckets_excluded:singletonGroups,
+    multi_symbol_rows:multiSymbolRows,
+    mean_symbols_per_ranking_bucket:groups.length
+      ?Number((multiSymbolRows/groups.length).toFixed(3)):null,
+    maximum_symbols_per_ranking_bucket:maximumGroupSize,
+    groups_with_positive:averagePrecisionGroups,
+    positive_events:totalPositives,
     average_precision:averagePrecisionGroups
-      ?Number((averagePrecisionSum/averagePrecisionGroups).toFixed(5)):null};
+      ?Number((averagePrecisionSum/averagePrecisionGroups).toFixed(5)):null
+  };
   for(const pct of fractions){
     const metric=stats.get(pct);
     result['top_'+pct+'_pct']={
@@ -1555,7 +1581,7 @@ function aggregateRankingMetrics(entries){
     return count?usable.reduce((sum,item)=>sum+Number(item.value)*item.weight,0)/count:null;
   };
   const result={
-    method:'WITHIN_TIMESTAMP_TOP_K_MACRO_V1',
+    method:'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2',
     groups:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups||0),0),
     groups_with_positive:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups_with_positive||0),0),
     positive_events:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.positive_events||0),0),
