@@ -1118,7 +1118,8 @@ function fitMember(rows, seed, {
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting='NONE',
-  temporalPoolingMode='LAST_12_MEAN_V1'
+  temporalPoolingMode='LAST_12_MEAN_V1',
+  attentionPositionBiasL2Multiplier=1
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit,temporalPoolingMode);
   const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
@@ -1165,7 +1166,8 @@ function fitMember(rows, seed, {
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
     const gradientStats=summarizeNumericTree(averaged);
-    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
+    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2,
+      attentionPositionBiasL2Multiplier);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
@@ -1655,6 +1657,8 @@ function fitEnsemble(rows, options = {}) {
   const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const temporalPoolingMode=String(options.temporalPoolingMode||'LAST_12_MEAN_V1');
+  const attentionPositionBiasL2Multiplier=Math.max(0,Math.min(64,
+    finite(options.attentionPositionBiasL2Multiplier)??1));
   const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
   const attentionPooling=temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE;
@@ -1671,14 +1675,17 @@ function fitEnsemble(rows, options = {}) {
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode}
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier}
   ];
   // These features depend only on the immutable 24x29 input, not on model
   // weights. Prepare them once and reuse across all epochs and ensemble members.
@@ -1703,6 +1710,7 @@ function fitEnsemble(rows, options = {}) {
           :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
+    attention_position_bias_l2_multiplier:attentionPositionBiasL2Multiplier,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,
       seed:SEEDS[index],
