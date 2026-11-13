@@ -69,11 +69,8 @@ export function validateAndPrepareDense24hRows(samples, censusReport, rawSampleS
     }
     const label = sample.safe_opportunity_targets?.['24h']?.plus_5_pct;
     if (!label) throw new Error('DENSE24_SAFE_LABEL_MISSING:' + index);
-    if (label.status === 'AMBIGUOUS' && label.outcome === 'AMBIGUOUS') {
-      ambiguous++;
-      continue; // Audited but never converted to a supervised class.
-    }
-    if (label.status !== 'RESOLVED' || !['UP','DOWN','FLAT'].includes(label.outcome)) {
+    const isAmbiguous = label.status === 'AMBIGUOUS' && label.outcome === 'AMBIGUOUS';
+    if (!isAmbiguous && (label.status !== 'RESOLVED' || !['UP','DOWN','FLAT'].includes(label.outcome))) {
       const reason = 'UNRESOLVED_OR_INVALID_LABEL';
       rejectionReasons[reason] = (rejectionReasons[reason] || 0) + 1;
       throw new Error('DENSE24_LABEL_NOT_TRAINABLE:' + index);
@@ -86,6 +83,10 @@ export function validateAndPrepareDense24hRows(samples, censusReport, rawSampleS
     if (Number(sample.feature_information_cutoff_at) !== Number(sample.at) ||
         sample.observation_source !== 'BINANCE_OFFICIAL_CLOSED_15M_BASELINE') {
       throw new Error('DENSE24_FEATURE_CUTOFF_MISMATCH:' + index);
+    }
+    if (isAmbiguous) {
+      ambiguous++;
+      continue; // Audited with the same contract, but never converted to a supervised class.
     }
     const prepared = prepareDailyEarlyRiserCognitiveRow(sample, 5, {
       labelMode: 'safe_opportunity', horizonHours: 24
