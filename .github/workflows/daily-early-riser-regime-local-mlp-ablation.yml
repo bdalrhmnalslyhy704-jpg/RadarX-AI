@@ -1,0 +1,142 @@
+name: Build 224 BTC-Regime Local MLP Specialist Ablation
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-opportunity-targets-20261113
+    paths:
+      - '.github/workflows/daily-early-riser-regime-local-mlp-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-regime-local-mlp-ablation
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Train Risk-On and Risk-Off MLP specialists against same-regime Logistic
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the isolated Build 224 research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/daily-early-riser-opportunity-targets-20261113
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Restore the exact audited Binance census
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-20
+          run-id: 43336370744
+          github-token: ${{ github.token }}
+          path: research-input
+
+      - name: Verify immutable sample and temporal sidecar inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s research-input/daily-early-riser-census.json
+          test -s research-input/daily-early-riser-samples.jsonl
+          test -s research-input/daily-early-riser-temporal-sequences.jsonl
+          node -e "const r=require('./research-input/daily-early-riser-census.json'); if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(r.status)) process.exit(1); if(r.data_quality?.all_sample_audits_ready!==true) process.exit(1); console.log(JSON.stringify({status:r.status,samples:r.sample_file?.rows,temporal_rows:r.temporal_sample_file?.rows,data_quality:r.data_quality?.status}));"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Train separate BTC regime-local MLP experts
+        run: |
+          mkdir -p artifacts
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input research-input/daily-early-riser-samples.jsonl \
+            --temporal-input research-input/daily-early-riser-temporal-sequences.jsonl \
+            --census-report research-input/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --regime-local-mlp-only true \
+            --neural-training-history-fraction 1 \
+            --output artifacts/daily-early-riser-safe-72h-5pct-regime-local-mlp.json
+
+      - name: Publish Risk-On and Risk-Off paired results
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-safe-72h-5pct-regime-local-mlp.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Regime-local MLP report missing; inspect training logs.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const model=target.regime_local_mlp_challenger||{};
+          const regimes=Object.entries(model.regime_specialists||{}).map(([name,row])=>({
+            regime:name,status:row.status,architecture:row.architecture,
+            samples:row.sample_count,training_samples:row.training_samples,
+            fitted_training_samples:row.fitted_training_samples,
+            selection_samples:row.selection_samples,
+            validation_samples:row.validation_samples,holdout_samples:row.holdout_samples,
+            inner_selection:{
+              passed:row.inner_selection?.passed??false,
+              failure_reason:row.inner_selection?.failure_reason??null,
+              logistic_brier:row.inner_selection?.logistic_baseline_brier_score??null,
+              best_mlp_brier:row.inner_selection?.best_candidate?.brier_score??null,
+              required_margin:row.inner_selection?.required_brier_margin??null
+            },
+            validation:{
+              evaluated:row.validation?.evaluated??false,
+              mlp_brier:row.validation?.model_brier_score??null,
+              logistic_brier:row.validation_comparison?.same_window_logistic_brier_score??null,
+              beats_same_window_logistic:row.validation_comparison?.beats_same_window_logistic??false,
+              beats_global_logistic:row.validation_comparison?.beats_global_logistic??false,
+              beats_recent_logistic:row.validation_comparison?.beats_recent_logistic??false
+            },
+            holdout:{
+              evaluated:row.holdout?.evaluated??false,
+              mlp_brier:row.holdout?.model_brier_score??null,
+              logistic_brier:row.holdout_comparison?.same_window_logistic_brier_score??null,
+              passed:row.holdout_comparison?.passed??false
+            },
+            selection_passed:row.selection_passed,
+            validation_passed:row.validation_passed,
+            holdout_passed:row.holdout_passed
+          }));
+          const summary={
+            status:report.status,run_dataset_sha256:report.input_sha256,
+            target_pct:report.requested_targets?.[0]??5,
+            label_mode:report.label_mode,horizon_hours:report.horizon_hours,
+            liquidity_lane:report.required_liquidity_lane,
+            neural_training_history_fraction:report.neural_training_history_fraction,
+            model_status:model.status,trained:model.trained,selected_for_research:model.selected_for_research,
+            validation_passed:model.validation_passed,
+            research_out_of_sample_validated:model.research_out_of_sample_validated,
+            sample_count:model.sample_count,regime_sample_counts:model.regime_sample_counts,
+            unassigned_or_rejected_samples:model.unassigned_or_rejected_samples,
+            rejection_counts:model.rejection_counts,
+            specialists:regimes,
+            probability_ready:model.probability_ready,
+            live_eligibility_ready:model.live_eligibility_ready,
+            production_touched:false,real_order_execution:false
+          };
+          console.log('[DAILY_REGIME_LOCAL_MLP_ABLATION] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'## BTC-regime local MLP ablation\\n\\n```json\\n'+JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+
+      - name: Upload regime-local MLP benchmark report
+        if: always() && hashFiles('artifacts/daily-early-riser-safe-72h-5pct-regime-local-mlp.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-regime-local-mlp-ablation
+          path: artifacts/daily-early-riser-safe-72h-5pct-regime-local-mlp.json
+          retention-days: 30
