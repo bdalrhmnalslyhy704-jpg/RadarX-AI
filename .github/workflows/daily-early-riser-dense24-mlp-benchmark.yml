@@ -31,8 +31,10 @@ jobs:
           CENSUS_COMMIT: db307f95baf0edaa85b4fac961201390853a86ee
         run: |
           node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const branch=encodeURIComponent('research/daily-early-riser-mlp-budget-20261113');
           const url='https://api.github.com/repos/'+process.env.REPOSITORY+
-            '/actions/runs?branch=research/daily-early-riser-mlp-budget-20261113&event=push&per_page=100';
+            '/actions/runs?branch='+branch+'&event=push&per_page=100';
           const response=await fetch(url,{headers:{
             accept:'application/vnd.github+json',
             authorization:'Bearer '+process.env.GH_TOKEN,
@@ -48,14 +50,8 @@ jobs:
           if(matches.length!==1)throw new Error('EXPECTED_EXACTLY_ONE_SUCCESSFUL_DENSE_CENSUS_RUN_FOUND_'+matches.length);
           const run=matches[0];
           console.log(JSON.stringify({run_id:run.id,run_number:run.run_number,head_sha:run.head_sha,created_at:run.created_at}));
-          for(const [key,value] of Object.entries({run_id:run.id,run_number:run.run_number}))
-            fsAppendOutput(key,value);
-          function fsAppendOutput(key,value){
-            process.stdout.write('::notice title='+key+'::'+value+'\n');
-            // GitHub Actions exposes the output file through this environment path.
-            requireNotAvailable();
-          }
-          function requireNotAvailable(){}
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'run_id='+run.id+'\\nrun_number='+run.run_number+'\\n');
           NODE
         shell: bash
 
@@ -100,31 +96,44 @@ jobs:
             throw new Error('DENSE_24H_SAMPLE_SHA256_MISMATCH');
           const rows=bytes.toString('utf8').split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
           if(rows.length<10000)throw new Error('DENSE_24H_SAMPLE_COUNT_TOO_LOW:'+rows.length);
-          let badLane=0,missingLabel=0,overlap=0,previous=new Map();
-          let positives=0,negatives=0,flats=0;
+          let badLane=0,missingLabel=0,overlap=0,badCutoff=0,badSource=0;
+          const timesBySymbol=new Map();
+          let positives=0,negatives=0,flats=0,ambiguous=0;
           for(const row of rows){
-            if(row.liquidity_lane!=='STANDARD_750K_PLUS')badLane++;
+            const quoteVolume=Number(row.quote_volume_24h);
+            if(row.liquidity_lane!=='STANDARD_750K_PLUS'||!Number.isFinite(quoteVolume)||quoteVolume<750000)badLane++;
             const label=row.safe_opportunity_targets?.['24h']?.plus_5_pct;
-            if(!label||label.status!=='RESOLVED'||!['UP','DOWN','FLAT'].includes(label.outcome)||
-               label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1'||
+            const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+            const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+            if(!label||(!validResolved&&!validAmbiguous)||
                label.horizon_ms!==86400000||
                label.target_definition!=='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_24H_15M_V1')
               missingLabel++;
+            if(label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1')badSource++;
+            if(row.feature_information_cutoff_at!==row.at||
+               row.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')badCutoff++;
             if(label?.outcome==='UP')positives++;
             else if(label?.outcome==='DOWN')negatives++;
             else if(label?.outcome==='FLAT')flats++;
+            else if(label?.outcome==='AMBIGUOUS')ambiguous++;
             const at=Number(row.at),symbol=String(row.symbol||'');
-            const last=previous.get(symbol);
-            if(last!==undefined&&at-last<86400000)overlap++;
-            previous.set(symbol,at);
+            if(!timesBySymbol.has(symbol))timesBySymbol.set(symbol,[]);
+            timesBySymbol.get(symbol).push(at);
           }
-          if(badLane||missingLabel||overlap)throw new Error(JSON.stringify({badLane,missingLabel,overlap}));
+          for(const times of timesBySymbol.values()){
+            times.sort((a,b)=>a-b);
+            for(let index=1;index<times.length;index++)
+              if(times[index]-times[index-1]<86400000)overlap++;
+          }
+          if(badLane||missingLabel||overlap||badCutoff||badSource)
+            throw new Error(JSON.stringify({badLane,missingLabel,overlap,badCutoff,badSource}));
           console.log(JSON.stringify({
             census_status:report.status,rows:rows.length,sample_sha256:sha,
             accepted:report.sample_file.rows,standard_lane_only:true,
             horizon_hours:24,per_symbol_anchor_gap_minimum_ms:86400000,
-            outcomes:{UP:positives,DOWN:negatives,FLAT:flats},
-            underfloor_rows:badLane,invalid_or_missing_labels:missingLabel,overlap_violations:overlap
+            outcomes:{UP:positives,DOWN:negatives,FLAT:flats,AMBIGUOUS:ambiguous},
+            underfloor_rows:badLane,invalid_or_missing_labels:missingLabel,
+            bad_outcome_source:badSource,bad_feature_cutoff:badCutoff,overlap_violations:overlap
           }));
           NODE
       - name: Install locked dependencies
