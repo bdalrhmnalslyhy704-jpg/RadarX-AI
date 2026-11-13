@@ -803,7 +803,21 @@ async function main(){
       report.archive_manifest=manifest;
       console.log('[DAILY_CENSUS_PROGRESS] '+JSON.stringify({
         completed,total:symbols.length,symbol,status:result.status,samples:result.samples,
-        total_samples:totalSamples,archives:manifest.length
+        total_samples:totalSamples,archives:manifest.length,
+        audit_status:result.audit?.status??null,
+        audit_reason:result.audit?.reason??null,
+        overlap_violations:result.audit?.overlap_violations??null,
+        rejected_feature_reason_counts:result.audit?.rejected_feature_reason_counts??{},
+        rejected_invalid_feature_rows:result.audit?.rejected_invalid_feature_rows??0,
+        feature_cutoff_violations:result.feature_cutoff_violations??0,
+        horizon_violations:result.horizon_violations??0,
+        first_passage_horizon_violations:result.first_passage_horizon_violations??0,
+        opportunity_horizon_violations:result.opportunity_horizon_violations??0,
+        drawdown_horizon_violations:result.drawdown_horizon_violations??0,
+        safe_first_touch_horizon_violations:result.safe_first_touch_horizon_violations??0,
+        liquidity_lane_violations:result.liquidity_lane_violations??0,
+        archive_coverage_15m:result.coverage_15m?.complete_from_first_available??null,
+        archive_coverage_5m:result.coverage_5m?.complete_from_first_available??null
       }));
       await Promise.all([writeQueue,temporalWriteQueue]);
       await persistReport();
@@ -830,6 +844,33 @@ async function main(){
       sum+(row.horizon_violations||0),0);
     const allAuditsReady=report.symbol_results.every(row=>
       row.status==='PROCESSED'&&row.audit?.status==='READY'&&row.audit?.overlap_violations===0);
+    const sampleAuditFailedRows=report.symbol_results.filter(row=>row.status==='SAMPLE_AUDIT_FAILED');
+    const sampleAuditFailureReasons={};
+    for(const row of sampleAuditFailedRows){
+      const add=(key,count=1)=>{if(Number(count)>0)
+        sampleAuditFailureReasons[key]=(sampleAuditFailureReasons[key]||0)+Number(count);};
+      if(row.audit?.status&&row.audit.status!=='READY')add('AUDIT_STATUS:'+row.audit.status);
+      if(row.audit?.reason)add('AUDIT_REASON:'+row.audit.reason);
+      add('OVERLAP_VIOLATIONS',row.audit?.overlap_violations||0);
+      add('FEATURE_CUTOFF_VIOLATIONS',row.feature_cutoff_violations||0);
+      add('FIRST_PASSAGE_HORIZON_VIOLATIONS',row.first_passage_horizon_violations||0);
+      add('OPPORTUNITY_HORIZON_VIOLATIONS',row.opportunity_horizon_violations||0);
+      add('DRAWDOWN_HORIZON_VIOLATIONS',row.drawdown_horizon_violations||0);
+      add('SAFE_FIRST_TOUCH_HORIZON_VIOLATIONS',row.safe_first_touch_horizon_violations||0);
+      add('LIQUIDITY_LANE_VIOLATIONS',row.liquidity_lane_violations||0);
+    }
+    const sampleAuditFailureDetails=sampleAuditFailedRows.map(row=>({
+      symbol:row.symbol,status:row.status,audit_status:row.audit?.status??null,
+      audit_reason:row.audit?.reason??null,overlap_violations:row.audit?.overlap_violations??0,
+      feature_cutoff_violations:row.feature_cutoff_violations??0,
+      horizon_violations:row.horizon_violations??0,
+      first_passage_horizon_violations:row.first_passage_horizon_violations??0,
+      opportunity_horizon_violations:row.opportunity_horizon_violations??0,
+      drawdown_horizon_violations:row.drawdown_horizon_violations??0,
+      safe_first_touch_horizon_violations:row.safe_first_touch_horizon_violations??0,
+      liquidity_lane_violations:row.liquidity_lane_violations??0,
+      rejected_feature_reason_counts:row.audit?.rejected_feature_reason_counts??{}
+    }));
     report.data_quality={
       status:failed===0&&symbolFailures.length===0&&allAuditsReady&&
         featureCutoffViolations===0&&horizonViolations===0
@@ -850,7 +891,10 @@ async function main(){
       no_overlapping_daily_labels:report.symbol_results.every(row=>
         row.audit===null||row.audit?.overlap_violations===0),
       feature_cutoff_violations:featureCutoffViolations,
-      horizon_violations:horizonViolations
+      horizon_violations:horizonViolations,
+      symbols_sample_audit_failed:sampleAuditFailedRows.length,
+      sample_audit_failure_reasons:sampleAuditFailureReasons,
+      sample_audit_failure_details:sampleAuditFailureDetails
     };
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
