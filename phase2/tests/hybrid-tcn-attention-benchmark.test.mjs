@@ -274,40 +274,39 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_favorable_excursion_at, at);
 });
 
-test('barrier resolver rejects a 15-minute data gap before a later target touch', () => {
+test('barrier resolver rejects a missing 15-minute candle before a later target touch', () => {
   const at = Date.UTC(2026, 1, 2);
   const trade = resolveBarrierTrade({
     entryPrice: 100,
     decisionAt: at,
-    candleIntervalMs: ONE_MINUTE,
     futureCandles: [
-      {closeTime:at+ONE_MINUTE,closed:true,open:100,high:101,low:99,close:100.5},
-      {closeTime:at+17*ONE_MINUTE,closed:true,open:100.5,high:104,low:100,close:103.5}
+      {closeTime:at+FIFTEEN_MINUTES,closed:true,open:100,high:101,low:99,close:100.5},
+      {closeTime:at+45*60*1000,closed:true,open:100.5,high:104,low:100,close:103.5}
     ]
   });
   assert.equal(trade.resolved, false);
   assert.equal(trade.reason, 'GAP_IN_FUTURE_CANDLES');
-  assert.equal(trade.expected_at, at + 2*ONE_MINUTE);
-  assert.equal(trade.observed_at, at + 17*ONE_MINUTE);
+  assert.equal(trade.expected_at, at + 2*FIFTEEN_MINUTES);
+  assert.equal(trade.observed_at, at + 3*FIFTEEN_MINUTES);
 });
 
-test('barrier resolver exits on the first touch and ignores missing candles after exit', () => {
+test('barrier resolver exits on the first touch and ignores malformed future candles after exit', () => {
   const at = Date.UTC(2026, 1, 3);
   const trade = resolveBarrierTrade({
     entryPrice: 100,
     decisionAt: at,
-    candleIntervalMs: ONE_MINUTE,
     futureCandles: [
-      {closeTime:at+ONE_MINUTE,closed:true,open:100,high:101,low:99,close:100.5},
-      {closeTime:at+2*ONE_MINUTE,closed:true,open:100.5,high:104,low:100,close:103.5},
-      // This later candle is both after an unobserved gap and not closed.
-      // It must not be needed to score an already-exited trade.
-      {closeTime:at+17*ONE_MINUTE,closed:false,open:103,high:104,low:102,close:103}
+      {closeTime:at+FIFTEEN_MINUTES,closed:true,open:100,high:101,low:99,close:100.5},
+      {closeTime:at+2*FIFTEEN_MINUTES,closed:true,open:100.5,high:104,low:100,close:103.5},
+      // These rows are after the already-confirmed exit. Their gap, closure
+      // state, and timestamps must not be required to resolve this trade.
+      {closeTime:at+17*FIFTEEN_MINUTES,closed:false,open:103,high:104,low:102,close:103},
+      {closed:false,open:103,high:104,low:102,close:103}
     ]
   });
   assert.equal(trade.resolved, true);
   assert.equal(trade.exit_reason, 'TAKE_PROFIT');
-  assert.equal(trade.exit_at, at + 2*ONE_MINUTE);
+  assert.equal(trade.exit_at, at + 2*FIFTEEN_MINUTES);
   assert.equal(trade.gross_return_pct, 3);
 });
 
