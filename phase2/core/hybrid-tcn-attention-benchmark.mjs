@@ -521,7 +521,8 @@ export function buildHybridSequence({
 /** Resolve a long-only Spot bracket conservatively from completed future candles. */
 export function resolveBarrierTrade({
   entryPrice, decisionAt, futureCandles = [], takeProfitPct = 3, stopLossPct = 2,
-  horizonMs = 4 * 60 * 60 * 1000,
+  horizonMs = HYBRID_OUTCOME_HORIZON_MS,
+  candleIntervalMs = HYBRID_CANDLE_INTERVAL_MS,
   feeBpsPerSide = 10, slippageBpsPerSide = 5
 } = {}) {
   const entry = finite(entryPrice);
@@ -529,13 +530,23 @@ export function resolveBarrierTrade({
   if (!(entry > 0) || at === null) throw new Error('INVALID_BARRIER_TRADE_ENTRY');
   const take = entry * (1 + Math.max(0.01, Number(takeProfitPct) || 3) / 100);
   const stop = entry * (1 - Math.max(0.01, Number(stopLossPct) || 2) / 100);
-  const horizonEnd = at + Math.max(1, Number(horizonMs) || 4 * 60 * 60 * 1000);
+  const horizon=Math.max(1,Math.trunc(Number(horizonMs)||HYBRID_OUTCOME_HORIZON_MS));
+  const interval=Math.max(1,Math.trunc(Number(candleIntervalMs)||HYBRID_CANDLE_INTERVAL_MS));
+  if(horizon%interval!==0)
+    throw new TypeError('HYBRID_OUTCOME_HORIZON_NOT_DIVISIBLE_BY_CANDLE_INTERVAL');
+  const horizonEnd = at + horizon;
   const path = (Array.isArray(futureCandles) ? futureCandles : [])
     .filter(row => validClosedCandle(row) && candleTime(row) > at && candleTime(row) <= horizonEnd)
     .sort((a, b) => candleTime(a) - candleTime(b));
   if (!path.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
   let exitPrice = null, exitAt = null, exitReason = null;
+  let expectedTimestamp=at+interval;
   for (const candle of path) {
+    const observedTimestamp=candleTime(candle);
+    if(observedTimestamp!==expectedTimestamp)
+      return {resolved:false,reason:'GAPPED_OR_MISALIGNED_FORWARD_HORIZON',
+        expected_timestamp:expectedTimestamp,observed_timestamp:observedTimestamp,
+        interval_ms:interval,horizon_end:horizonEnd};
     const open = candleNumber(candle, 'open');
     const high = candleNumber(candle, 'high');
     const low = candleNumber(candle, 'low');
@@ -560,6 +571,7 @@ export function resolveBarrierTrade({
       exitAt = candleTime(candle);
       break;
     }
+    expectedTimestamp+=interval;
   }
   if (exitPrice === null) {
     const last = path.at(-1);
