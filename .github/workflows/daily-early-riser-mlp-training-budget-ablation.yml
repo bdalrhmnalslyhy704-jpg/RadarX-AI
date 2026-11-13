@@ -96,7 +96,7 @@ jobs:
             sample_sha256:sampleSha,
             temporal_sha256:temporalSha,
             sample_rows:report.sample_file.rows,
-            temporal_rows:report.temporal_sequence_file.rows
+            temporal_sha256:temporalSha
           }));
           NODE
       - name: Install locked dependencies
