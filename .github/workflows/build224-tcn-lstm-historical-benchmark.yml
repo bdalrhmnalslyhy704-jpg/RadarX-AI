@@ -1,0 +1,141 @@
+name: Build 224 Isolated TCN-LSTM 24h Historical Benchmark
+
+on:
+  push:
+    branches:
+      - research/build224-tcn-lstm-attention-challenger-20261113
+    paths:
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - '.github/workflows/build224-tcn-lstm-historical-benchmark.yml'
+  pull_request:
+    branches:
+      - research/build224-neural-validation-stream-fix-20261113
+    paths:
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - '.github/workflows/build224-tcn-lstm-historical-benchmark.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-isolated-tcn-lstm-historical-benchmark
+  cancel-in-progress: false
+
+jobs:
+  same-cohort-historical:
+    name: Train TCN-LSTM against the frozen 24h Binance Spot cohort
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Download the immutable audited Census run 24 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-24
+          repository: ${{ github.repository }}
+          run-id: 43473391179
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Verify exact sample and 24x29 temporal sidecar provenance
+        env:
+          EXPECTED_SOURCE_COMMIT: cde938585d9a44cdf751db1ceb23c3f211fa32a1
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node phase2/tools/verify-daily-early-riser-census-artifact.mjs \
+            artifacts/daily-early-riser-census.json \
+            artifacts/daily-early-riser-samples.jsonl \
+            artifacts/daily-early-riser-temporal-sequences.jsonl
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax and focused recurrent regression checks
+        run: |
+          node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
+          node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+      - name: Fit the isolated TCN-LSTM challenger on the audited same 24h safe +5% cohort
+        env:
+          RADARX_CENSUS_SOURCE_RUN_ID: '43473391179'
+          RADARX_CENSUS_SOURCE_COMMIT: 'cde938585d9a44cdf751db1ceb23c3f211fa32a1'
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-tcn-lstm-only-24h-safe5.json \
+            --target 5 --label-mode safe_opportunity --horizon-hours 24 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --tcn-only true --skip-temporal true \
+            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 4 \
+            --tcn-lstm-max-training-samples 512 \
+            --tcn-lstm-bootstrap-iterations 400
+      - name: Publish TCN-LSTM versus same-window Logistic evidence
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-tcn-lstm-only-24h-safe5.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              'TCN-LSTM historical report missing; inspect the preceding step logs.\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const result=report.target_results?.['5_PCT_SAFE_OPPORTUNITY_24H']||{};
+          const model=result.temporal_tcn_lstm_hybrid_challenger||{};
+          const summary={
+            census_source_run_id:report.census_source_run_id,
+            census_source_commit:report.census_source_commit,
+            sample_sha256:report.input_sha256,
+            temporal_sidecar_audit:report.temporal_sidecar_audit,
+            accepted_samples:result.samples?.accepted,
+            outcomes:result.samples?.outcomes,
+            label_mode:result.label_mode,
+            target_definition:result.target_definition,
+            horizon_hours:result.horizon_hours,
+            liquidity_lane:result.required_liquidity_lane,
+            tcn_lstm_status:model.status,
+            trained:model.trained,
+            partition_support:model.partition_support,
+            inner_selection:model.inner_selection_diagnostics,
+            calibration:model.calibration,
+            validation:model.validation,
+            untouched_holdout:model.holdout,
+            inference_latency:model.inference_latency,
+            probability_ready:model.probability_ready,
+            live_eligibility_ready:model.live_eligibility_ready,
+            real_order_execution:model.real_order_execution
+          };
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## Isolated TCN-LSTM 24h historical evidence\n\n```json\n'+
+            JSON.stringify(summary,null,2)+'\n```\n');
+          NODE
+      - name: Upload same-cohort TCN-LSTM report and source provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-isolated-tcn-lstm-24h-safe5-${{ github.run_number }}
+          path: |
+            artifacts/daily-early-riser-census.json
+            artifacts/daily-early-riser-samples.jsonl
+            artifacts/daily-early-riser-temporal-sequences.jsonl
+            artifacts/daily-early-riser-tcn-lstm-only-24h-safe5.json
+          if-no-files-found: warn
+          retention-days: 30
