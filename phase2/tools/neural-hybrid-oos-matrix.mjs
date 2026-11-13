@@ -219,7 +219,7 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
             root.model_selection?.challenger_holdout_comparison?.same_window_logistic_brier_score},'holdout',['same'])
       },
       {
-        family:'TCN_V8',variant:'SHARED_POOLED_TCN',
+        family:'TCN_SHARED_CONTROL',variant:'SHARED_POOLED_TCN',
         model:tcn,selection:innerGate(tcn),
         validation:pairFor({validation:tcn.validation,
           same:tcn.validation?.pooled_logistic_brier_score},'validation',['same']),
