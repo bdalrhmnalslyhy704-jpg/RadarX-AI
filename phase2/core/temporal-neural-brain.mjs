@@ -3718,6 +3718,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_selection_targets:sharedSelectionTargets,
     shared_model_calibration_targets:sharedCalibrationTargets,
     shared_model_selection_logistic_brier:sharedSelectionLogistic.model_brier_score??null,
+    shared_model_selection_candidate_brier:sharedTcnSelectedCandidate?.metrics?.model_brier_score??null,
+    shared_model_selection_diagnostic_brier:sharedTcnDiagnosticCandidate?.metrics?.model_brier_score??null,
     shared_model_selection_passed:sharedTcnSelectionPassed,
     shared_model_selected_member_index:sharedTcnSelectedIndex,
     shared_model_selected_residual_scale:sharedTcnSelectedScale,
