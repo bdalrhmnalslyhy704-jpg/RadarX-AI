@@ -224,7 +224,9 @@ function initializeModel(seed = 29) {
     attentionQuery: Array.from({ length: hidden }, () => (random() - 0.5) * 0.06),
     attentionPositionBiases: Array(TCN_LSTM_STEPS).fill(0),
     outputWeights: Array.from({ length: hidden }, () => (random() - 0.5) * 0.04),
-    outputBias: 0
+    // Trainable scalars are one-element arrays so optimizer/finite-difference
+    // updates mutate the model object rather than a detached wrapper property.
+    outputBias: [0]
   };
 }
 
@@ -345,7 +347,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
     for (let channel = 0; channel < hidden; channel++)
       pooled[channel] += attentionWeights[time] * lstmCaches[time].state[channel];
   }
-  let residualLogit = model.outputBias;
+  let residualLogit = model.outputBias[0];
   for (let channel = 0; channel < hidden; channel++)
     residualLogit += model.outputWeights[channel] * pooled[channel];
   const logit = clamp(baselineLogit + residualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
@@ -431,7 +433,7 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   const error = forward.probability - target;
   const logitGradient = 2 * error * forward.probability * (1 - forward.probability);
   const cache = forward.cache;
-  gradients.outputBias = logitGradient;
+  gradients.outputBias[0] = logitGradient;
   const pooledGradient = Array(hidden).fill(0);
   for (let channel = 0; channel < hidden; channel++) {
     gradients.outputWeights[channel] = logitGradient * cache.pooled[channel];
