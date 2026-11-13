@@ -363,24 +363,20 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
   };
 }
 
+function isPlainTreeObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 function zerosLike(value) {
   if (Array.isArray(value)) return value.map(zerosLike);
+  if (isPlainTreeObject(value))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, zerosLike(item)]));
   return 0;
 }
 function cloneTree(value) {
   if (Array.isArray(value)) return value.map(cloneTree);
+  if (isPlainTreeObject(value))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneTree(item)]));
   return value;
-}
-function addTree(target, source) {
-  if (Array.isArray(target)) {
-    if (!Array.isArray(source) || target.length !== source.length)
-      throw new TypeError('TCN_LSTM_GRADIENT_TREE_SHAPE_MISMATCH');
-    for (let index = 0; index < target.length; index++) addTree(target[index], source[index]);
-  } else {
-    if (!finite(source)) throw new TypeError('TCN_LSTM_GRADIENT_NON_FINITE');
-    target += source;
-  }
-  return target;
 }
 function accumulateTree(target, source) {
   if (Array.isArray(target)) {
@@ -390,19 +386,34 @@ function accumulateTree(target, source) {
       target[index] = accumulateTree(target[index], source[index]);
     return target;
   }
+  if (isPlainTreeObject(target)) {
+    if (!isPlainTreeObject(source) ||
+        Object.keys(target).length !== Object.keys(source).length)
+      throw new TypeError('TCN_LSTM_GRADIENT_TREE_SHAPE_MISMATCH');
+    for (const key of Object.keys(target)) {
+      if (!(key in source)) throw new TypeError('TCN_LSTM_GRADIENT_TREE_KEY_MISMATCH:' + key);
+      target[key] = accumulateTree(target[key], source[key]);
+    }
+    return target;
+  }
   if (!finite(source)) throw new TypeError('TCN_LSTM_GRADIENT_NON_FINITE');
   return target + source;
 }
 function scaleTree(value, factor) {
   if (Array.isArray(value)) return value.map(item => scaleTree(item, factor));
+  if (isPlainTreeObject(value))
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scaleTree(item, factor)]));
   return value * factor;
 }
 function sumSquares(value) {
   if (Array.isArray(value)) return value.reduce((sum, item) => sum + sumSquares(item), 0);
+  if (isPlainTreeObject(value))
+    return Object.values(value).reduce((sum, item) => sum + sumSquares(item), 0);
   return value * value;
 }
 function treeFinite(value) {
   if (Array.isArray(value)) return value.every(treeFinite);
+  if (isPlainTreeObject(value)) return Object.values(value).every(treeFinite);
   return finite(value);
 }
 
@@ -555,6 +566,9 @@ function flattenPaths(value, prefix = [], output = []) {
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index++)
       flattenPaths(value[index], prefix.concat(index), output);
+  } else if (isPlainTreeObject(value)) {
+    for (const [key, item] of Object.entries(value))
+      flattenPaths(item, prefix.concat(key), output);
   } else output.push(prefix);
   return output;
 }
