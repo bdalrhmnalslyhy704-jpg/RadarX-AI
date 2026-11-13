@@ -1057,11 +1057,9 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   const day2=days[Math.floor(days.length*0.62)];
   const day3=days[Math.floor(days.length*0.74)];
   const day4=days[Math.floor(days.length*0.87)];
-  const train=rows.filter(row=>row.at<day1-DAY_MS&&row.resolved_at<day1-DAY_MS);
-  const selection=rows.filter(row=>row.at>=day1+DAY_MS&&row.at<day2-DAY_MS&&
-    row.resolved_at<day2-DAY_MS);
-  const calibration=rows.filter(row=>row.at>=day2+DAY_MS&&row.at<day3-DAY_MS&&
-    row.resolved_at<day3-DAY_MS);
+  const train=rows.filter(row=>row.at<day1-DAY_MS);
+  const selection=rows.filter(row=>row.at>=day1+DAY_MS&&row.at<day2-DAY_MS);
+  const calibration=rows.filter(row=>row.at>=day2+DAY_MS&&row.at<day3-DAY_MS);
   const validation=rows.filter(row=>row.at>=day3+DAY_MS&&row.at<day4-DAY_MS);
   const holdout=rows.filter(row=>row.at>=day4+DAY_MS);
   const partitions=[
