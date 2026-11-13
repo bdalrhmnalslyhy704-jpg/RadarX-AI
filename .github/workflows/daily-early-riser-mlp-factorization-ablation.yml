@@ -1,0 +1,170 @@
+name: Build 224 Daily MLP Factorization-Machine Ablation
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-mlp-factorization-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-daily-mlp-factorization-ablation
+  cancel-in-progress: false
+
+jobs:
+  verify-contracts:
+    name: Verify MLP and factorization contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax and focused research tests
+        run: |
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=120000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+
+  factorization-rank-ablation:
+    name: Safe 72h MLP +5% factorization rank ${{ matrix.rank }}
+    needs: verify-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        rank: [8, 16]
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Download exact frozen Binance Spot census
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-20
+          repository: ${{ github.repository }}
+          run-id: '43336370744'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts
+      - name: Verify exact frozen sample integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const report=JSON.parse(fs.readFileSync('artifacts/daily-early-riser-census.json','utf8'));
+          const hash=createHash('sha256').update(fs.readFileSync('artifacts/daily-early-riser-samples.jsonl')).digest('hex');
+          if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(report.status) ||
+             report.data_quality?.all_sample_audits_ready!==true)
+            throw new Error('FROZEN_CENSUS_NOT_AUDITED');
+          if(hash!==report.sample_file?.sha256 ||
+             hash!=='c945fdef1389f886b5b6a748b56adb4ba6b04c4b1807e3ef5e4d18f5670d5f9d')
+            throw new Error('FROZEN_SAMPLE_SHA256_MISMATCH');
+          console.log(JSON.stringify({sample_sha256:hash,rows:report.sample_file.rows}));
+          NODE
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Train 120-iteration MLP with low-rank factorization residual
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-safe-72h-5pct-mlp-factor-rank-${{ matrix.rank }}.json \
+            --target 5 \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --skip-temporal true \
+            --neural-training-history-fraction 1.0 \
+            --neural-iterations 120 \
+            --neural-output-initialization-scale 0.015 \
+            --daily-feature-schema DAILY_CONTEXT_35 \
+            --enable-factorization-machine true \
+            --factorization-rank ${{ matrix.rank }} \
+            --factorization-iterations 120 \
+            --factorization-learning-rate 0.008 \
+            --factorization-l2 0.06
+      - name: Publish factorization selection and holdout comparison
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const rank=Number('${{ matrix.rank }}');
+          const path='artifacts/daily-early-riser-safe-72h-5pct-mlp-factor-rank-'+rank+'.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Factorization rank report missing; inspect the training step.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const neural=target.neural_network||{};
+          const summary={
+            status:report.status,
+            feature_schema:target.feature_schema,
+            feature_count:target.feature_names?.length??null,
+            iterations:report.neural_iterations,
+            factorization_rank:report.factorization_rank,
+            factorization_iterations:report.factorization_iterations,
+            factorization_learning_rate:report.factorization_learning_rate,
+            factorization_l2:report.factorization_l2,
+            input_sha256:report.input_sha256,
+            accepted_samples:target.samples?.accepted??null,
+            training_samples:neural.training_samples??null,
+            selection_samples:neural.selection_samples??null,
+            factorization_member_enabled:neural.factorization_member_enabled===true,
+            factorization_member_index:neural.factorization_member_index??-1,
+            ensemble_members:neural.ensemble_members??0,
+            member_training_profiles:neural.member_training_profiles??[],
+            inner_selection:neural.inner_selection_diagnostics??null,
+            candidate_scores:neural.member_selection_brier_scores??[],
+            validation:neural.validation??null,
+            validation_comparison:neural.validation_comparison??null,
+            holdout:neural.holdout??null,
+            holdout_comparison:neural.holdout_comparison??null,
+            predictive_superiority_verified:report.predictive_superiority_verified===true,
+            profitability_verified:report.profitability_verified===true,
+            production_touched:report.production_touched===true,
+            deployed:report.deployed===true,merged:report.merged===true,
+            paper_trading:report.paper_trading===true,
+            real_order_execution:report.real_order_execution===true
+          };
+          console.log('[MLP_FACTORIZATION_RANK_ABLATION] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## Factorization rank '+rank+'\\n\\n```json\\n'+
+            JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+      - name: Upload isolated factorization benchmark report
+        if: always() && hashFiles('artifacts/daily-early-riser-safe-72h-5pct-mlp-factor-rank-${{ matrix.rank }}.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-mlp-factor-rank-${{ matrix.rank }}
+          path: artifacts/daily-early-riser-safe-72h-5pct-mlp-factor-rank-${{ matrix.rank }}.json
+          retention-days: 30
