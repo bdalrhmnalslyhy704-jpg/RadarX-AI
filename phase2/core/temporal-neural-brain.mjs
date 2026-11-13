@@ -63,6 +63,10 @@ const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
+import {
+  validateTemporalSequenceAlignment,
+  calculateAsymmetricDirectionalRankingLoss
+} from './neural-safety-contracts.mjs';
 
 function sampleIdentityFingerprint(rows){
   const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
@@ -122,7 +126,8 @@ function cleanRows(samples, {
   targetDefinition = TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs = HORIZON_MS,
   allowedOutcomeSources = null,
-  outcomeContractKind = 'FIRST_PASSAGE'
+  outcomeContractKind = 'FIRST_PASSAGE',
+  requireSequenceTimestamps = false
 } = {}) {
   const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
   const allowedSources = Array.isArray(allowedOutcomeSources)
@@ -151,6 +156,14 @@ function cleanRows(samples, {
     if (!id || !symbol || at === null || at <= 0 || resolvedAt === null ||
         resolvedAt - at !== horizonMs || horizon !== horizonMs ||
         seen.has(id) || seen.has(baseline)) return false;
+    const alignment=validateTemporalSequenceAlignment({
+      id,symbol,at,resolved_at:resolvedAt,horizon_ms:horizon,
+      temporal_sequence:row.temporal_sequence,
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps,
+      feature_information_cutoff_at:row.feature_information_cutoff_at??at,
+      requireSequenceTimestamps
+    });
+    if(!alignment.valid)return false;
     seen.add(id); seen.add(baseline);
     return true;
   }).map(row => ({
@@ -160,7 +173,9 @@ function cleanRows(samples, {
     resolved_at: Number(row.resolved_at),
     outcome: row.outcome,
     target: targetOf(row),
-    sequence: row.temporal_sequence.map(step => step.map(Number))
+    sequence: row.temporal_sequence.map(step => step.map(Number)),
+    temporal_sequence_timestamps:Array.isArray(row.temporal_sequence_timestamps)
+      ?row.temporal_sequence_timestamps.map(Number):null
   })).sort((a, b) => a.at - b.at || a.symbol.localeCompare(b.symbol));
 }
 
@@ -883,7 +898,7 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   };
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null) {
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null, gradientLogitOverride=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
@@ -900,11 +915,13 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   const probabilityError=cache.probability-target;
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
-  const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-    ?logLossGradient
-    :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-      ?0.5*brierGradient+0.5*logLossGradient
-      :brierGradient;
+  const error=gradientLogitOverride===null
+    ?trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+      ?logLossGradient
+      :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+        ?0.5*brierGradient+0.5*logLossGradient:brierGradient
+    :Number(gradientLogitOverride);
+  if(!Number.isFinite(error))throw new TypeError('TEMPORAL_GRADIENT_LOGIT_OVERRIDE_NON_FINITE');
   if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
     const weights=cache.attention_weights;
     if(!Array.isArray(weights)||weights.length!==TEMPORAL_SEQUENCE_STEPS||
@@ -1136,7 +1153,9 @@ function fitMember(rows, seed, {
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting='NONE',
   temporalPoolingMode='LAST_12_MEAN_V1',
-  attentionPositionBiasL2Multiplier=1
+  attentionPositionBiasL2Multiplier=1,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={}
 } = {}) {
   if(!Array.isArray(rows)||rows.length===0)
     throw new TypeError('TEMPORAL_TRAINING_ROWS_EMPTY');
@@ -1187,18 +1206,47 @@ function fitMember(rows, seed, {
   for (let epoch = 1; epoch <= effectiveEpochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
-    for (const row of rows) {
+    let directionalLoss=null;
+    if(enableAsymmetricDirectionalRankingLoss){
+      const currentLogits=rows.map(row=>{
+        const probability=forwardWithWorkspace(row.sequence,model,1,
+          row._pooled_baseline_features,trainingWorkspace).probability;
+        if(!Number.isFinite(probability))throw new TypeError('TEMPORAL_RANKING_FORWARD_NON_FINITE');
+        const p=clamp(probability,1e-12,1-1e-12);
+        return Math.log(p/(1-p));
+      });
+      const baselineLogits=rows.map(row=>{
+        const features=row._pooled_baseline_features;
+        if(!isValidTemporalPooledBaselineFeatures(features))
+          throw new TypeError('TEMPORAL_RANKING_BASELINE_FEATURES_INVALID');
+        let value=model.outputBias;
+        for(let feature=0;feature<features.length;feature++)
+          value+=Number(model.skipWeights[feature])*Number(features[feature]);
+        return value;
+      });
+      directionalLoss=calculateAsymmetricDirectionalRankingLoss({
+        logits:currentLogits,targets:rows.map(row=>row.target),
+        timestamps:rows.map(row=>row.at),symbols:rows.map(row=>row.symbol),
+        baselineLogits,sampleWeights:rows.map(row=>row.target>0.5?positiveSampleWeight:1),
+        config:directionalRankingLossConfig
+      });
+      weightedObjectiveLoss=directionalLoss.loss*totalSampleWeight;
+    }
+    for (let rowIndex=0;rowIndex<rows.length;rowIndex++) {
+      const row=rows[rowIndex];
       const cache = forwardWithWorkspace(row.sequence,model,1,
         row._pooled_baseline_features,trainingWorkspace);
       if(!Number.isFinite(cache.probability))
         throw new TypeError('TEMPORAL_FORWARD_NON_FINITE_PROBABILITY');
+      const gradientOverride=directionalLoss
+        ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight:null;
       const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
-        trainingObjective,rowGradientScratch,trainingWorkspace);
+        trainingObjective,rowGradientScratch,trainingWorkspace,gradientOverride);
       if(!isFiniteTemporalTree(itemGradient))
         throw new TypeError('TEMPORAL_BACKPROP_NON_FINITE_GRADIENT');
-      const sampleWeight=row.target>0.5?positiveSampleWeight:1;
+      const sampleWeight=directionalLoss?1:(row.target>0.5?positiveSampleWeight:1);
       const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
-      weightedObjectiveLoss+=rowLoss*sampleWeight;
+      if(!directionalLoss)weightedObjectiveLoss+=rowLoss*sampleWeight;
       if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
       else negativeObjectiveLoss+=rowLoss;
       for (const key of Object.keys(gradient)) {
@@ -1249,6 +1297,7 @@ function fitMember(rows, seed, {
         ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
       mean_negative_training_objective_loss:negativeSamples
         ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
+      directional_ranking_loss:directionalLoss?.metrics??null,
       averaged_gradient_l2_norm:Number(gradientL2Norm.toFixed(8)),
       gradient_clip_scale:Number(gradientClipScale.toFixed(8)),
       learning_rate:Number(epochLearningRate.toFixed(8)),
@@ -1856,17 +1905,20 @@ function fitEnsemble(rows, options = {}) {
   const architecture=attentionPooling?TEMPORAL_ATTENTION_MODEL_ARCHITECTURE:
     multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
     orderedPooling?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
+  const enabledDirectionalLoss=options.enableAsymmetricDirectionalRankingLoss===true;
+  const objectiveFor=objective=>enabledDirectionalLoss
+    ?'ASYMMETRIC_DIRECTIONAL_RANKING_V1':objective;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'),
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier}
@@ -2183,6 +2235,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   outcomeHorizonMs=HORIZON_MS,
   allowedOutcomeSources=null,
   outcomeContractKind='FIRST_PASSAGE',
+  requireSequenceTimestamps=false,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={},
   enableRegimeLocalTcn=false,
   regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnEpochs=6,
@@ -2199,7 +2254,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
-  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,outcomeContractKind});
+  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,
+    outcomeContractKind,requireSequenceTimestamps});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
