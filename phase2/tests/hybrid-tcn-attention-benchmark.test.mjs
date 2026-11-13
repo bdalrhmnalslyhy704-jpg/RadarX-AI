@@ -25,6 +25,7 @@ import {
 } from '../core/hybrid-tcn-attention-benchmark.mjs';
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const ONE_MINUTE = 60 * 1000;
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const SOURCE_SHA = '52d0ba535e4c983fa5113bbde8061277555f87a6';
 
@@ -267,6 +268,59 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_adverse_excursion_at, at + FIFTEEN_MINUTES);
   assert.equal(trade.max_favorable_excursion_pct, 0);
   assert.equal(trade.max_favorable_excursion_at, at);
+});
+
+test('barrier resolver rejects a 15-minute data gap before a later target touch', () => {
+  const at = Date.UTC(2026, 1, 2);
+  const trade = resolveBarrierTrade({
+    entryPrice: 100,
+    decisionAt: at,
+    candleIntervalMs: ONE_MINUTE,
+    futureCandles: [
+      {closeTime:at+ONE_MINUTE,closed:true,open:100,high:101,low:99,close:100.5},
+      {closeTime:at+17*ONE_MINUTE,closed:true,open:100.5,high:104,low:100,close:103.5}
+    ]
+  });
+  assert.equal(trade.resolved, false);
+  assert.equal(trade.reason, 'GAP_IN_FUTURE_CANDLES');
+  assert.equal(trade.expected_at, at + 2*ONE_MINUTE);
+  assert.equal(trade.observed_at, at + 17*ONE_MINUTE);
+});
+
+test('barrier resolver exits on the first touch and ignores missing candles after exit', () => {
+  const at = Date.UTC(2026, 1, 3);
+  const trade = resolveBarrierTrade({
+    entryPrice: 100,
+    decisionAt: at,
+    candleIntervalMs: ONE_MINUTE,
+    futureCandles: [
+      {closeTime:at+ONE_MINUTE,closed:true,open:100,high:101,low:99,close:100.5},
+      {closeTime:at+2*ONE_MINUTE,closed:true,open:100.5,high:104,low:100,close:103.5},
+      // This later candle is both after an unobserved gap and not closed.
+      // It must not be needed to score an already-exited trade.
+      {closeTime:at+17*ONE_MINUTE,closed:false,open:103,high:104,low:102,close:103}
+    ]
+  });
+  assert.equal(trade.resolved, true);
+  assert.equal(trade.exit_reason, 'TAKE_PROFIT');
+  assert.equal(trade.exit_at, at + 2*ONE_MINUTE);
+  assert.equal(trade.gross_return_pct, 3);
+});
+
+test('barrier resolver does not skip an invalid candle before a later touch', () => {
+  const at = Date.UTC(2026, 1, 4);
+  const trade = resolveBarrierTrade({
+    entryPrice: 100,
+    decisionAt: at,
+    candleIntervalMs: ONE_MINUTE,
+    futureCandles: [
+      {closeTime:at+ONE_MINUTE,closed:false,open:100,high:101,low:99,close:100.5},
+      {closeTime:at+2*ONE_MINUTE,closed:true,open:100.5,high:104,low:100,close:103.5}
+    ]
+  });
+  assert.equal(trade.resolved, false);
+  assert.equal(trade.reason, 'INVALID_FUTURE_CANDLE');
+  assert.equal(trade.observed_at, at + ONE_MINUTE);
 });
 
 test('adverse-excursion event buckets may be fewer than exit buckets without poisoning training loss', () => {
