@@ -164,6 +164,8 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
+  const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
+    Number(args['attention-position-bias-l2-multiplier']||1)));
   if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
   const labelMode=String(args['label-mode']||'first_passage');
   const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
@@ -285,6 +287,7 @@ async function main(){
         enableRegimeLocalTcnPyramid:!attentionOnly,
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
+        temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
         requiredLiquidityLane
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
@@ -454,6 +457,7 @@ async function main(){
           model_kind:localTcnAttention.model_kind??null,
 
           architecture:localTcnAttention.architecture??null,
+          position_bias_l2_multiplier:localTcnAttention.attention_position_bias_l2_multiplier??1,
 
           temporal_pooling:localTcnAttention.temporal_pooling??null,
 
