@@ -1,0 +1,208 @@
+name: Build 224 Unified 24h Neural and Hybrid OOS Brier Matrix
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'research/TRIGGER_NEURAL_HYBRID_OOS_BENCHMARK.txt'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-unified-neural-hybrid-brier-matrix
+  cancel-in-progress: false
+
+jobs:
+  resolve-census:
+    name: Resolve exact timestamp-audited Census SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    outputs:
+      run_id: ${{ steps.locate.outputs.run_id }}
+      run_number: ${{ steps.locate.outputs.run_number }}
+      source_commit: ${{ steps.locate.outputs.source_commit }}
+    steps:
+      - name: Wait for exact source Census run
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CENSUS_COMMIT: cde938585d9a44cdf751db1ceb23c3f211fa32a1
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const branch=encodeURIComponent('research/daily-early-riser-mlp-budget-20261113');
+          const url='https://api.github.com/repos/'+process.env.REPOSITORY+
+            '/actions/runs?branch='+branch+'&event=push&per_page=100';
+          const headers={accept:'application/vnd.github+json',
+            authorization:'Bearer '+process.env.GH_TOKEN,
+            'x-github-api-version':'2022-11-28'};
+          let selected=null;
+          for(let attempt=1;attempt<=360;attempt++){
+            const response=await fetch(url,{headers});
+            if(!response.ok)throw new Error('CENSUS_LOOKUP_HTTP_'+response.status);
+            const payload=await response.json();
+            const matches=(payload.workflow_runs||[]).filter(run=>
+              run.name==='Build 224 Daily Early-Riser Binance Spot Historical Census'&&
+              run.head_sha===process.env.CENSUS_COMMIT
+            ).sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at));
+            const completed=matches.find(run=>run.status==='completed');
+            if(completed){
+              if(completed.conclusion!=='success')
+                throw new Error('EXACT_CENSUS_FAILED:'+completed.id+':'+completed.conclusion);
+              selected=completed;break;
+            }
+            console.log(JSON.stringify({attempt,waiting:true,run_id:matches[0]?.id??null,
+              status:matches[0]?.status??'NOT_VISIBLE'}));
+            await new Promise(resolve=>setTimeout(resolve,60000));
+          }
+          if(!selected)throw new Error('EXACT_CENSUS_TIMEOUT');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'run_id='+selected.id+'\nrun_number='+selected.run_number+
+            '\nsource_commit='+selected.head_sha+'\n');
+          console.log(JSON.stringify({run_id:selected.id,run_number:selected.run_number,
+            head_sha:selected.head_sha,conclusion:selected.conclusion}));
+          NODE
+
+  unified-benchmark:
+    name: Fit the 24h neural and hybrid challengers on the same cohort
+    needs: resolve-census
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout current research model code
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Download exact completed Census artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-${{ needs.resolve-census.outputs.run_number }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-census.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Verify SHA, label, liquidity, chronology and TCN timestamp provenance
+        env:
+          EXPECTED_SOURCE_COMMIT: ${{ needs.resolve-census.outputs.source_commit }}
+          CENSUS_RUN_ID: ${{ needs.resolve-census.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const census=JSON.parse(fs.readFileSync('artifacts/daily-early-riser-census.json','utf8'));
+          const bytes=fs.readFileSync('artifacts/daily-early-riser-samples.jsonl');
+          const sha=createHash('sha256').update(bytes).digest('hex');
+          if(!['READY','AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'].includes(census.status)||
+             census.data_quality?.all_sample_audits_ready!==true||
+             census.data_quality?.no_overlapping_daily_labels!==true||
+             Number(census.data_quality?.feature_cutoff_violations)!==0||
+             Number(census.data_quality?.horizon_violations)!==0||
+             Number(census.data_quality?.symbols_failed)!==0||
+             Number(census.data_quality?.symbols_incomplete_archive)!==0||
+             Number(census.data_quality?.archive_coverage_after_first_available_pct)!==100)
+            throw new Error('CENSUS_NOT_READY_FOR_UNIFIED_BENCHMARK');
+          if(sha!==census.sample_file?.sha256)throw new Error('SAMPLE_SHA256_MISMATCH');
+          const rows=bytes.toString('utf8').split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
+          if(rows.length!==Number(census.sample_file.rows))throw new Error('SAMPLE_ROW_COUNT_MISMATCH');
+          if(rows.length<10000)throw new Error('SAMPLE_SUPPORT_TOO_SMALL:'+rows.length);
+          const timestamps=new Map();let badLane=0,badLabel=0,badCutoff=0;
+          for(const row of rows){
+            if(row.liquidity_lane!=='STANDARD_750K_PLUS'||
+               !Number.isFinite(Number(row.quote_volume_24h))||
+               Number(row.quote_volume_24h)<750000)badLane++;
+            const label=row.safe_opportunity_targets?.['24h']?.plus_5_pct;
+            if(!label||!['RESOLVED','AMBIGUOUS'].includes(label.status)||
+               !['UP','DOWN','FLAT','AMBIGUOUS'].includes(label.outcome)||
+               Number(label.horizon_ms)!==86400000||
+               label.target_definition!=='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_24H_15M_V1'||
+               label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1')badLabel++;
+            if(row.feature_information_cutoff_at!==row.at||
+               row.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')badCutoff++;
+            const symbol=String(row.symbol),at=Number(row.at);
+            if(!timestamps.has(symbol))timestamps.set(symbol,[]);
+            timestamps.get(symbol).push(at);
+          }
+          let overlap=0;
+          for(const values of timestamps.values()){
+            values.sort((a,b)=>a-b);
+            for(let i=1;i<values.length;i++)if(values[i]-values[i-1]<86400000)overlap++;
+          }
+          const temporal=census.temporal_sample_file;
+          if(!temporal||temporal.timestamps_verified!==true||
+             temporal.sequence_steps!==24||temporal.sequence_channels!==29||
+             temporal.interval_ms!==900000||Number(temporal.invalid_declared_sequences)!==0)
+            throw new Error('TIMESTAMPED_TCN_SIDECAR_METADATA_INVALID');
+          if(badLane||badLabel||badCutoff||overlap)
+            throw new Error(JSON.stringify({badLane,badLabel,badCutoff,overlap}));
+          console.log(JSON.stringify({source_commit:process.env.EXPECTED_SOURCE_COMMIT,
+            census_run_id:process.env.CENSUS_RUN_ID,status:census.status,
+            sample_rows:rows.length,sample_sha256:sha,
+            temporal_rows:temporal.rows,temporal_sha256:temporal.sha256,
+            temporal_timestamps_verified:temporal.timestamps_verified,
+            bad_lane:badLane,bad_label:badLabel,bad_cutoff:badCutoff,overlap}));
+          NODE
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax and regression checks
+        run: |
+          node --check phase2/core/neural-safety-contracts.mjs
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/neural-hybrid-oos-matrix.mjs
+          node --test --test-timeout=180000 phase2/tests/neural-safety-contracts.test.mjs
+          node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
+      - name: Train all tabular and temporal challengers on the same 24h safe +5% cohort
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-unified-24h-5pct-neural.json \
+            --target 5 --label-mode safe_opportunity --horizon-hours 24 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --neural-training-history-fraction 1.0 --neural-iterations 120 \
+            --enable-factorization-machine true --factorization-rank 16 \
+            --factorization-iterations 120 --factorization-learning-rate 0.008 \
+            --factorization-l2 0.06 --asymmetric-directional-ranking-loss true
+      - name: Build strict head-to-head Brier matrix
+        if: always()
+        run: |
+          if [ -s artifacts/daily-early-riser-unified-24h-5pct-neural.json ]; then
+            node phase2/tools/neural-hybrid-oos-matrix.mjs \
+              --daily-report artifacts/daily-early-riser-unified-24h-5pct-neural.json \
+              --output artifacts/neural-hybrid-oos-matrix.json \
+              --targets 5
+          else
+            echo 'Unified daily neural report missing; Brier matrix not generated.'
+            exit 1
+          fi
+      - name: Publish final head-to-head Brier table and gate status
+        if: always()
+        run: |
+          if [ -s artifacts/neural-hybrid-oos-matrix.json ]; then
+            cat artifacts/neural-hybrid-oos-matrix.json >> "$GITHUB_STEP_SUMMARY"
+          elif [ -s artifacts/daily-early-riser-unified-24h-5pct-neural.json ]; then
+            cat artifacts/daily-early-riser-unified-24h-5pct-neural.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload all same-cohort neural and hybrid reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-unified-neural-hybrid-oos-brier-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
