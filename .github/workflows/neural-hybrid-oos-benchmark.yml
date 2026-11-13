@@ -163,6 +163,7 @@ jobs:
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tools/neural-hybrid-oos-matrix.mjs
           node --test --test-timeout=180000 phase2/tests/neural-safety-contracts.test.mjs
+          node --test --test-timeout=180000 phase2/tests/neural-hybrid-oos-matrix.test.mjs
           node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
           node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
       - name: Train all tabular and temporal challengers on the same 24h safe +5% cohort
