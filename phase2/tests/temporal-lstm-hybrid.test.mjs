@@ -240,6 +240,13 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
+  assert.equal(result.inference_latency.evaluated,result.trained);
+  assert.equal(result.zero_latency_claim,false);
+  if(result.inference_latency.evaluated){
+    assert.ok(result.inference_latency.p50_ms>=0);
+    assert.ok(result.inference_latency.p95_ms>=result.inference_latency.p50_ms);
+    assert.equal(result.inference_latency.production_latency_claim,false);
+  }
 });
 
 test('full TCN-LSTM benchmark rejects datasets with overlapping label maturity across partitions',()=>{
