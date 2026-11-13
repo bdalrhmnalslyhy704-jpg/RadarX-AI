@@ -5,3 +5,7 @@ Consume only the checksum-verified dense 24h census emitted by the matching cens
 Train the 35-feature MLP and rank-16 factorization challenger on the same frozen cohort and chronological split. Compare against same-window Logistic with unchanged 0.00025 inner-selection margin and 0.003 outer-validation/holdout margin. Do not deploy, merge, change production, enable real execution, or lower the liquidity floor.
 
 The benchmark workflow waits for the exact checksum-audited census run to finish successfully before downloading its artifact. Never fall back to a prior census run.
+
+
+Census source correction pin: 87c8079d7e8bcfdb7db1484f014b2cd046cd819d.
+The dense benchmark must wait for that exact census run to finish successfully. Do not substitute another run or consume partial artifacts.
