@@ -1,0 +1,133 @@
+name: Build 224 Daily MLP Full-History Ablation
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-opportunity-targets-20261113
+    paths:
+      - '.github/workflows/daily-early-riser-mlp-full-history-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-daily-mlp-history-ablation
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Compare 60 percent and 100 percent chronological MLP fit windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout the isolated Build 224 research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/daily-early-riser-opportunity-targets-20261113
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Restore the exact audited Binance census and 24x29 sidecar
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-20
+          run-id: 43336370744
+          github-token: ${{ github.token }}
+          path: research-input
+
+      - name: Verify immutable inputs and census quality before training
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s research-input/daily-early-riser-census.json
+          test -s research-input/daily-early-riser-samples.jsonl
+          test -s research-input/daily-early-riser-temporal-sequences.jsonl
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const report=JSON.parse(fs.readFileSync('research-input/daily-early-riser-census.json','utf8'));
+          const data=fs.readFileSync('research-input/daily-early-riser-samples.jsonl');
+          const sha=createHash('sha256').update(data).digest('hex');
+          if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(report.status))throw Error('CENSUS_NOT_AUDITED');
+          if(report.data_quality?.all_sample_audits_ready!==true)throw Error('SAMPLE_AUDIT_GATE_FAILED');
+          if(sha!==report.sample_file?.sha256)throw Error('SAMPLE_SHA256_MISMATCH');
+          if(data.toString('utf8').trimEnd().split('\n').length!==report.sample_file.rows)throw Error('SAMPLE_ROW_COUNT_MISMATCH');
+          console.log(JSON.stringify({census_status:report.status,rows:report.sample_file.rows,sha256:sha,symbols:report.universe?.symbols??477}));
+          NODE
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Train full-history MLP plus same-window Logistic control on the standard liquidity lane
+        run: |
+          mkdir -p artifacts
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input research-input/daily-early-riser-samples.jsonl \
+            --temporal-input research-input/daily-early-riser-temporal-sequences.jsonl \
+            --census-report research-input/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --skip-temporal true \
+            --neural-training-history-fraction 1.0 \
+            --output artifacts/daily-early-riser-safe-72h-5pct-mlp-history100.json
+
+      - name: Publish MLP versus Logistic ablation summary
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-safe-72h-5pct-mlp-history100.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Full-history MLP output missing; inspect training logs.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const neural=target.neural_network||{};
+          const gbdt=target.boosted_tree_model||{};
+          const hybrid=target.hybrid_model||{};
+          const summary={
+            status:report.status,input_sha256:report.input_sha256,
+            label_mode:report.label_mode,horizon_hours:report.horizon_hours,
+            liquidity_lane:report.required_liquidity_lane,
+            neural_training_history_fraction:report.neural_training_history_fraction,
+            neural:{
+              status:neural.status,architecture:neural.architecture,
+              trained:neural.trained===true,preselection_training_samples:neural.preselection_training_samples,
+              fit_training_samples:neural.training_samples,selection_samples:neural.selection_samples,
+              training_history_fraction:neural.training_history_fraction,
+              inner_selection_diagnostics:neural.inner_selection_diagnostics,
+              member_selection_brier_scores:neural.member_selection_brier_scores,
+              validation:neural.validation,validation_comparison:neural.validation_comparison,
+              holdout:neural.holdout,holdout_comparison:neural.holdout_comparison
+            },
+            gbdt:{
+              status:gbdt.status,trained:gbdt.trained===true,
+              training_samples:gbdt.training_samples,selection_samples:gbdt.selection_samples,
+              validation:gbdt.validation,same_window_logistic_validation:gbdt.same_window_logistic_validation,
+              holdout:gbdt.holdout,same_window_logistic_holdout:gbdt.same_window_logistic_holdout
+            },
+            hybrid:{status:hybrid.status,trained:hybrid.trained===true,
+              selected:hybrid.selected===true,selected_candidate:hybrid.selected_candidate},
+            production_touched:report.production_touched===true,
+            real_order_execution:report.real_order_execution===true
+          };
+          console.log('[DAILY_MLP_HISTORY100_ABLATION] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'## Daily MLP full-history ablation\\n\\n```json\\n'+JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+
+      - name: Upload full-history MLP benchmark
+        if: always() && hashFiles('artifacts/daily-early-riser-safe-72h-5pct-mlp-history100.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-daily-mlp-history100-ablation
+          path: artifacts/daily-early-riser-safe-72h-5pct-mlp-history100.json
+          retention-days: 30
