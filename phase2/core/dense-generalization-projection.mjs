@@ -4,6 +4,7 @@ import {
   COGNITIVE_DAILY_FEATURE_NAMES
 } from './cognitive-brain.mjs';
 import {prepareDailyEarlyRiserCognitiveRow} from './daily-early-riser-neural-benchmark.mjs';
+import {createHash} from 'node:crypto';
 
 export const DENSE_GENERALIZATION_SCHEMA = 'RADARX_DENSE_24H_GENERALIZATION_V1';
 export const DENSE_GENERALIZATION_DAY_MS = 24 * 60 * 60 * 1000;
@@ -28,8 +29,6 @@ function hashRows(rows) {
   ]);
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
-
-import {createHash} from 'node:crypto';
 
 export function validateAndPrepareDense24hRows(samples, censusReport, rawSampleSha256) {
   if (!Array.isArray(samples) || !samples.length) throw new Error('DENSE24_SAMPLES_EMPTY');
@@ -157,13 +156,18 @@ export function splitDense24hChronologically(rows) {
   for (let i=0;i<partitions.length;i++) {
     const [name,part] = partitions[i];
     if (part.length < 100) throw new Error('DENSE24_SPLIT_SUPPORT_TOO_SMALL:' + name + ':' + part.length);
+    const positives=part.filter(row=>row.target===1).length;
+    const negatives=part.length-positives;
+    if (positives<20||negatives<20) throw new Error('DENSE24_SPLIT_CLASS_SUPPORT_TOO_SMALL:'+name+':'+positives+':'+negatives);
     if (part.some(row => !Number.isFinite(row.target) || !Number.isFinite(row.at))) {
       throw new Error('DENSE24_SPLIT_NON_FINITE:' + name);
     }
   }
   for (let i=1;i<partitions.length;i++) {
     const previous = partitions[i-1][1], current = partitions[i][1];
-    if (Math.max(...previous.map(row => row.resolved_at)) >= Math.min(...current.map(row => row.at))) {
+    const latestResolved = previous.reduce((latest,row)=>Math.max(latest,row.resolved_at),-Infinity);
+    const earliestNext = current.reduce((earliest,row)=>Math.min(earliest,row.at),Infinity);
+    if (latestResolved >= earliestNext) {
       throw new Error('DENSE24_LABEL_MATURITY_CROSSES_SPLIT:' + partitions[i][0]);
     }
   }
@@ -177,8 +181,8 @@ export function splitDense24hChronologically(rows) {
     },
     ranges: Object.fromEntries(partitions.map(([name,part]) => [name,{
       rows:part.length,
-      first_at:new Date(Math.min(...part.map(row=>row.at))).toISOString(),
-      last_at:new Date(Math.max(...part.map(row=>row.at))).toISOString(),
+      first_at:new Date(part.reduce((value,row)=>Math.min(value,row.at),Infinity)).toISOString(),
+      last_at:new Date(part.reduce((value,row)=>Math.max(value,row.at),-Infinity)).toISOString(),
       positives:part.filter(row=>row.target===1).length,
       negatives:part.filter(row=>row.target===0).length
     }]))
@@ -228,7 +232,7 @@ export function fitDenseLogisticAnchor(trainingRows, scaler, {
       for(let j=0;j<d;j++)z+=weights[j]*row.x[j];
       const p=sigmoid(z);
       const error=p-row.y;
-      loss+=-(row.y*Math.log(clamp(p,1e-9,1-1e-9))+(1-row.y)*Math.log(clamp(1-p,1e-9,1-1e-9)));
+      loss+=(p-row.y)**2;
       const g=2*error*p*(1-p);
       biasGradient+=g;
       for(let j=0;j<d;j++)gradients[j]+=g*row.x[j];
@@ -294,7 +298,7 @@ function forwardProjection(x,model,anchor,dropout=0,mask=null) {
   let residual=0;
   for(let k=0;k<dropped.length;k++)residual+=model.head[k]*dropped[k];
   for(let k=0;k<interactions.length;k++)residual+=model.cross[k]*interactions[k];
-  const logitValue=logisticLogit(x,anchor)+clamp(residual,-3,3);
+  const logitValue=logisticLogit(x,anchor)+residual;
   return {probability:sigmoid(logitValue),h,norm,dropped,sums,interactions,inv,logit:logitValue};
 }
 
