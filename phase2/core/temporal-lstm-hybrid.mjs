@@ -1111,14 +1111,13 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     ['training',train],['selection',selection],['calibration',calibration],
     ['validation',validation],['holdout',holdout]
   ];
+  // Structural partition checks must not inspect outcome labels. In particular,
+  // the untouched holdout's classes remain unread until external validation passes.
   const partitionSupport=Object.fromEntries(partitions.map(([name,part])=>[name,{
     rows:part.length,
-    positive:part.filter(row=>row.target===1).length,
-    negative:part.filter(row=>row.target===0).length,
     first_at:part[0]?.at??null,last_at:part.at(-1)?.at??null
   }]));
-  const unsupported=partitions.filter(([name,part])=>
-    part.length<20||partitionSupport[name].positive<2||partitionSupport[name].negative<2)
+  const unsupported=partitions.filter(([,part])=>part.length<20)
     .map(([name])=>name);
   const boundaryPairs=[
     ['training','selection'],['selection','calibration'],
@@ -1202,7 +1201,11 @@ function validateChronologicalPartitions(partitions) {
   const summary = {};
   for (let index = 0; index < names.length; index++) {
     const name = names[index], rows = partitions[index];
-    assertRows(rows, name.toUpperCase());
+    if (!Array.isArray(rows) || rows.length === 0)
+      throw new TypeError('TCN_LSTM_PARTITION_EMPTY:' + name);
+    // Validate input tensors and timestamps without reading binary labels.
+    // The holdout's target field is intentionally unopened at this stage.
+    rows.forEach((row,rowIndex)=>validateRow(row,rowIndex,false));
     const identities = rows.map(sampleIdentity);
     for (const identity of identities) {
       if (seen.has(identity))
@@ -1217,8 +1220,6 @@ function validateChronologicalPartitions(partitions) {
     const latestResolved = Math.max(...resolved);
     summary[name] = {
       rows: rows.length,
-      positives: rows.filter(row => row.target === 1).length,
-      negatives: rows.filter(row => row.target === 0).length,
       first_at: firstAt,
       last_at: lastAt,
       latest_resolved_at: latestResolved
@@ -1389,8 +1390,19 @@ function pairedFiveDayClusterBootstrap(rows, modelProbabilities, baselineProbabi
 }
 
 function evaluateCalibratedSplit(rows, selectedFit, modelCalibrator, baselineCalibrator, {
-  bootstrapSeed = 73, bootstrapIterations = 500, requiredImprovement = 0.003
+  bootstrapSeed = 73, bootstrapIterations = 500, requiredImprovement = 0.003,
+  minimumSamples = 30, minimumPositive = 8, minimumNegative = 8
 } = {}) {
+  // Called for holdout only after external validation passes. Class-support
+  // inspection therefore does not unseal the final partition early.
+  const positive = rows.filter(row => row.target === 1).length;
+  const negative = rows.length - positive;
+  if (rows.length < minimumSamples || positive < minimumPositive || negative < minimumNegative)
+    return {
+      evaluated:false,sample_count:rows.length,positive_samples:positive,negative_samples:negative,
+      passed:false,required_brier_improvement:requiredImprovement,
+      reason:'TCN_LSTM_OOS_CLASS_SUPPORT_BELOW_MINIMUM'
+    };
   const rawModel = rows.map(row => predictTcnLstmHybridProbability(row.sequence, selectedFit));
   const rawBaseline = rows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, selectedFit.baseline_fit)));
