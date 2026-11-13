@@ -177,6 +177,9 @@ async function main(){
     throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
   const neuralIterations=Math.max(30,Math.min(180,
     Math.trunc(Number(args['neural-iterations']||30))));
+  const neuralOutputInitializationScale=effectiveDailyMlpOutputInitializationScale(
+    args['neural-output-initialization-scale']??DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE
+  );
   const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
   const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
   const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
@@ -220,6 +223,7 @@ async function main(){
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
     neural_iterations:neuralIterations,
+    neural_output_initialization_scale:neuralOutputInitializationScale,
     enable_factorization_machine:enableFactorizationMachine,
     factorization_rank:factorizationRank,
     factorization_iterations:factorizationIterations,
@@ -313,7 +317,7 @@ async function main(){
       const result=regimeLocalMlpOnly
         ?benchmarkDailyEarlyRiserRegimeLocalMlp(loaded.samples,target,{
           labelMode,horizonHours,requiredLiquidityLane,
-          neuralTrainingHistoryFraction,neuralIterations,
+          neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
           minimumValidationSamples:1500,minimumHoldoutSamples:2000
         })
         :benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
@@ -323,7 +327,7 @@ async function main(){
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
-        neuralTrainingHistoryFraction,neuralIterations,
+        neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
         enableFactorizationMachine,factorizationRank,factorizationIterations,
         factorizationLearningRate,factorizationL2,
         requiredLiquidityLane
@@ -384,6 +388,7 @@ async function main(){
         holdout:result.chronology?.holdout_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.holdout_samples||0),0),
         neural:{
           status:neural.status??null,trained:neural.trained===true,
+          output_initialization_scale:neural.output_initialization_scale??null,
           training_strategy:neural.training_strategy??null,
           factorization_member_enabled:neural.factorization_member_enabled===true,
           factorization_member_index:neural.factorization_member_index??-1,

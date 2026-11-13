@@ -549,7 +549,8 @@ function fitNeuralNetworkModel(training, {
   baselineFit = null,
   trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting = 'NONE',
-  anchorAdaptation = 'FROZEN'
+  anchorAdaptation = 'FROZEN',
+  outputInitializationScale = 0.015
 } = {}) {
   const featureNames=training[0]?.feature_names||FEATURE_NAMES;
   const featureSchema=training[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
@@ -575,6 +576,7 @@ function fitNeuralNetworkModel(training, {
   const steps=Math.max(30,Math.min(180,Math.trunc(Number(iterations)||NEURAL_POLICY.iterations)));
   const rate=clamp(Number(learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
   const regularization=clamp(Number(l2)||NEURAL_POLICY.l2,0.001,0.5);
+  const outputHeadInitializationScale=clamp(Number(outputInitializationScale)||0.015,0.005,0.12);
   const baseRate=betaRate(rows.reduce((sum,row)=>sum+row.target,0),rows.length);
   const seedValue=Math.max(1,Math.min(997,Math.trunc(Number(seed)||1)));
   const seedOffset=seedValue*0.6180339887498949;
@@ -600,7 +602,7 @@ function fitNeuralNetworkModel(training, {
   // gradient. A small deterministic seed-shaped head starts end-to-end
   // backpropagation on epoch one while the frozen logistic skip path remains intact.
   const outputWeights=Array.from({length:units2},(_,j)=>
-    0.015*Math.sin((j+1)*4.73+seedOffset));
+    outputHeadInitializationScale*Math.sin((j+1)*4.73+seedOffset));
   const skipWeights=hasBaseline
     ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
     :Array(inputSize).fill(0);
@@ -756,6 +758,7 @@ function fitNeuralNetworkModel(training, {
     positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
+    output_initialization_scale:outputHeadInitializationScale,
     training_objective:trainingObjective,
     anchor_adaptation:anchorAdaptationMode,
     anchor_trust_radius:anchorAdaptationEnabled?anchorTrustRadius:0,
@@ -944,15 +947,19 @@ function fitNeuralEnsemble(training, options = {}) {
   const baseIterations=Math.max(30,Math.min(180,Math.trunc(Number(options.iterations)||NEURAL_POLICY.iterations)));
   const baseLearningRate=clamp(Number(options.learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
   const baseL2=clamp(Number(options.l2)||NEURAL_POLICY.l2,0.001,0.5);
+  const outputInitializationScale=clamp(Number(options.outputInitializationScale)||0.015,0.005,0.12);
   // Keep total optimization work equal to three base schedules while reducing
   // dependence on one epoch/regularization choice. Selection remains on the
   // chronological validation block; the untouched holdout is never consulted.
   const memberProfiles=[
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
+      outputInitializationScale,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
+      outputInitializationScale,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
+      outputInitializationScale,
       trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE'}
   ];
@@ -1000,6 +1007,7 @@ function fitNeuralEnsemble(training, options = {}) {
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
     base_rate:mean(members.map(member=>member.base_rate)),
+    output_initialization_scale:members[0].output_initialization_scale??outputInitializationScale,
     feature_names:[...members[0].feature_names],
     feature_schema:members[0].feature_schema,
     anchor_adaptation:members[0].anchor_adaptation,
@@ -1375,6 +1383,7 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralInnerSelectionMargin = null,
   neuralTrainingHistoryFraction = 1.0,
   neuralAnchorAdaptation = 'FROZEN',
+  neuralOutputInitializationScale = 0.015,
   enableFactorizationMachine=false,
   factorizationRank=8,
   factorizationIterations=null,
@@ -1488,6 +1497,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
         target_definition:modelTargetDefinition,
         target_semantics:modelTargetSemantics,
+        output_initialization_scale:clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
         anchor_adaptation:'FROZEN_LOGISTIC',
@@ -1648,6 +1658,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit,
       anchorAdaptation:neuralAnchorAdaptation,
+      outputInitializationScale:neuralOutputInitializationScale,
       enableFactorizationMachine,
       factorizationRank,factorizationIterations,factorizationLearningRate,factorizationL2
     }):null;
@@ -2159,6 +2170,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:modelTargetDefinition,
       target_semantics:modelTargetSemantics,
+      output_initialization_scale:neuralFit?.output_initialization_scale??clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
       selection_samples:neuralSelection.length,

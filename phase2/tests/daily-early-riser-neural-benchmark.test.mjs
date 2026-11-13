@@ -13,6 +13,10 @@ import {
   effectiveDailyTcnMultiscaleTrainingBudget,
   effectiveDailyMlpIterations,
   DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
+  effectiveDailyMlpOutputInitializationScale,
+  DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
@@ -801,4 +805,25 @@ test('72h safe-opportunity target definition is carried into the cognitive compa
   assert.equal(profile.comparison_contract.target_semantics,expectedSemantics);
   assert.equal(profile.neural_network.target_definition,expectedDefinition);
   assert.equal(profile.neural_network.target_semantics,expectedSemantics);
+});
+
+test('daily MLP output-head initialization scale is explicit and bounded for controlled ablations',()=>{
+  assert.equal(effectiveDailyMlpOutputInitializationScale(),
+    DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(0.06),0.06);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(0.10),0.10);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(-1),
+    DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(1),
+    DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale('invalid'),
+    DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE);
+});
+
+test('daily neural benchmark CLI forwards and records output-head initialization scale',async()=>{
+  const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes("args['neural-output-initialization-scale']"));
+  assert.ok(source.includes('neural_output_initialization_scale:neuralOutputInitializationScale'));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale'));
+  assert.ok(source.includes('output_initialization_scale:neural.output_initialization_scale'));
 });

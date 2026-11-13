@@ -46,6 +46,15 @@ export function effectiveDailyMlpIterations(value=20){
   return Math.max(30,Math.min(DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
     Math.trunc(requested??20)));
 }
+export const DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE=0.015;
+export const DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE=0.005;
+export const DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE=0.12;
+export function effectiveDailyMlpOutputInitializationScale(value=DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE){
+  const requested=finite(value);
+  const scale=requested??DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE;
+  return Math.max(DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE,
+    Math.min(DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE,scale));
+}
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
 const targetDefinition=(target,labelMode='first_passage',horizonHours=24)=>
   labelMode==='upside_opportunity'
@@ -182,6 +191,7 @@ function buildDailyCognitiveProfile(rows,options={}){
       DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
     temporalSamples:[],temporalOptions:{},
     neuralIterations:effectiveDailyMlpIterations(options.neuralIterations),
+    neuralOutputInitializationScale:effectiveDailyMlpOutputInitializationScale(options.neuralOutputInitializationScale),
     neuralLearningRate:0.012,neuralL2:0.04,neuralSelectionMargin:0.003,
     neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
       DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
@@ -558,6 +568,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       input_neurons:neural.input_neurons??null,
       hidden_neurons:neural.hidden_neurons??null,
       second_hidden_neurons:neural.second_hidden_neurons??null,
+      output_initialization_scale:neural.output_initialization_scale??null,
       training_samples:neural.training_samples??0,
       preselection_training_samples:neural.preselection_training_samples??0,
       samples_required:neural.samples_required??null,
