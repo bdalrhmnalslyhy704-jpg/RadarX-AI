@@ -41,6 +41,11 @@ function validTemporalSequence(sequence){
       step.every(value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&
         Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
 }
+function validTemporalSequenceTimestamps(timestamps,anchorAt){
+  return Array.isArray(timestamps)&&timestamps.length===24&&
+    timestamps.every(Number.isFinite)&&timestamps.at(-1)===Number(anchorAt)&&
+    timestamps.every((value,index)=>index===0||value-timestamps[index-1]===15*60*1000);
+}
 async function loadTemporalSequences(path,expectedSha256,expectedRows){
   const sourceStat=await stat(path);
   if(!sourceStat.isFile()||sourceStat.size<=0)throw new Error('TEMPORAL_SIDECAR_NOT_READABLE');
@@ -61,11 +66,12 @@ async function loadTemporalSequences(path,expectedSha256,expectedRows){
     const id=String(row?.id||'').trim();
     const symbol=String(row?.symbol||'').trim().toUpperCase();
     const at=Number(row?.at);
-    if(!id||!symbol||!Number.isFinite(at)||at<=0||!validTemporalSequence(row.temporal_sequence)){
+    if(!id||!symbol||!Number.isFinite(at)||at<=0||!validTemporalSequence(row.temporal_sequence)||
+       !validTemporalSequenceTimestamps(row.temporal_sequence_timestamps,at)){
       invalidShape++;continue;
     }
     if(byId.has(id)){duplicateIds++;continue;}
-    byId.set(id,{symbol,at,sequence:row.temporal_sequence});
+    byId.set(id,{symbol,at,sequence:row.temporal_sequence,timestamps:row.temporal_sequence_timestamps});
   }
   if(malformed||invalidShape||duplicateIds||byId.size!==Number(expectedRows))
     throw new Error('TEMPORAL_SIDECAR_ROW_AUDIT_FAILED:'+JSON.stringify({
@@ -100,6 +106,7 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
     const identityMatches=temporalRow&&temporalRow.symbol===String(sample.symbol||'').trim().toUpperCase()&&
       temporalRow.at===Number(sample.at);
     const temporal_sequence=identityMatches?temporalRow.sequence:null;
+    const temporal_sequence_timestamps=identityMatches?temporalRow.timestamps:null;
     if(declaredAvailable&&!temporal_sequence)temporalFlaggedMissing++;
     if(!declaredAvailable&&temporalRow)temporalUnexpected++;
     if(temporal_sequence)temporalAttached++;
@@ -115,6 +122,7 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
       daily_change_pct:sample.daily_change_pct,
       relative_strength_vs_btc_24h_pct:sample.relative_strength_vs_btc_24h_pct,
       temporal_sequence,
+      temporal_sequence_timestamps,
       ...(labelMode==='first_passage'?{targets:{[key]:label}}:
         labelMode==='safe_opportunity'
           ?{safe_opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
@@ -304,6 +312,7 @@ async function main(){
       Number(expectedTemporal.invalid_declared_sequences)!==0||
       Number(expectedTemporal.declared_sequence_count)!==Number(expectedTemporal.rows)+Number(expectedTemporal.invalid_declared_sequences)||
       expectedTemporal.sequence_steps!==24||expectedTemporal.sequence_channels!==29||
+      expectedTemporal.timestamps_verified!==true||expectedTemporal.interval_ms!==15*60*1000||
       typeof expectedTemporal.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedTemporal.sha256))
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
     const temporalSidecar=await loadTemporalSequences(temporalInput,
