@@ -12,7 +12,8 @@ import {
   COGNITIVE_FEATURE_NAMES,
   buildCognitiveFeatureVector,
   evaluateCognitiveDirectionalRanking,
-  hasSelectedNeuralResidual
+  hasSelectedNeuralResidual,
+  auditNeuralOneBatchOverfit
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
@@ -368,6 +369,39 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(highProbability.probability_status, 'OUT_OF_SAMPLE_VALIDATED');
     assert.ok(highProbability.counterfactual_evidence.length > 0);
   }
+});
+
+test('MLP numerical training audit drives an exactly balanced 32-row batch to near-zero Brier',()=>{
+  const rows=Array.from({length:32},(_,index)=>{
+    const positive=index<16;
+    const features=positive?{
+      volume_ratio:4,trade_ratio:3,taker_buy_ratio:0.78,
+      compression_ratio:0.35,relative_strength_vs_btc_pct:2,
+      recent_15m_return_pct:0.9,higher_low:true,trend_aligned:true,
+      micro_5m_available:true,micro_5m_taker_buy_ratio:0.76
+    }:{
+      volume_ratio:0.25,trade_ratio:0.3,taker_buy_ratio:0.22,
+      compression_ratio:1.25,relative_strength_vs_btc_pct:-2,
+      recent_15m_return_pct:-0.9,higher_low:false,trend_aligned:false,
+      micro_5m_available:true,micro_5m_taker_buy_ratio:0.24
+    };
+    return {
+      id:'MLP32:'+index,symbol:'MLP32USDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,features,
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:120,seed:17});
+  console.log('[COGNITIVE_MLP_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.equal(report.feature_count,18);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_gradients_finite,true);
+  assert.equal(report.all_parameters_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
 });
 
 test('the learner changes its conclusion when the same evidence leads to opposite matured outcomes', () => {

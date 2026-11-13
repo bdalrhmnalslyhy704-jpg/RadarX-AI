@@ -546,6 +546,34 @@ function predictResidualBoostedTrees(features, fit) {
   return clamp(logistic(value),0.02,0.98);
 }
 
+function assertNeuralFeatureBatch(training,featureNames,featureSchema){
+  const expected=featureNamesForSchema(featureSchema);
+  if(!Array.isArray(featureNames)||JSON.stringify(featureNames)!==JSON.stringify(expected))
+    throw new TypeError('NEURAL_FEATURE_SCHEMA_NAME_ORDER_MISMATCH');
+  if(!Array.isArray(training)||training.length===0)
+    throw new TypeError('NEURAL_TRAINING_ROWS_EMPTY');
+  for(let index=0;index<training.length;index++){
+    const row=training[index];
+    if(!row||typeof row!=='object')throw new TypeError('NEURAL_TRAINING_ROW_INVALID:'+index);
+    if(row.feature_schema!==undefined&&row.feature_schema!==featureSchema)
+      throw new TypeError('NEURAL_FEATURE_SCHEMA_MISMATCH:'+index);
+    if(row.feature_names!==undefined&&
+      (!Array.isArray(row.feature_names)||JSON.stringify(row.feature_names)!==JSON.stringify(featureNames)))
+      throw new TypeError('NEURAL_FEATURE_NAME_ORDER_MISMATCH:'+index);
+    if(Array.isArray(row.vector)){
+      if(row.vector.length!==featureNames.length)
+        throw new TypeError('NEURAL_FEATURE_VECTOR_SHAPE_MISMATCH:'+index);
+      if(row.vector.some(value=>typeof value!=='number'||!Number.isFinite(value)))
+        throw new TypeError('NEURAL_FEATURE_VECTOR_NON_FINITE_OR_NON_NUMERIC:'+index);
+    }else if(!row.features||typeof row.features!=='object'||Array.isArray(row.features)){
+      throw new TypeError('NEURAL_FEATURE_INPUT_MISSING:'+index);
+    }
+    const target=finite(row.target);
+    if(target===null&&!['UP','DOWN','FLAT'].includes(row.outcome))
+      throw new TypeError('NEURAL_TARGET_MISSING_OR_INVALID:'+index);
+  }
+}
+
 function fitNeuralNetworkModel(training, {
   hiddenUnits = NEURAL_POLICY.hiddenUnits,
   secondHiddenUnits = NEURAL_POLICY.secondHiddenUnits,
@@ -559,15 +587,15 @@ function fitNeuralNetworkModel(training, {
   anchorAdaptation = 'FROZEN',
   outputInitializationScale = 0.015
 } = {}) {
-  const featureNames=training[0]?.feature_names||FEATURE_NAMES;
-  const featureSchema=training[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
+  const sourceRows=Array.isArray(training)?training:[];
+  const featureNames=[...(sourceRows[0]?.feature_names||FEATURE_NAMES)];
+  const featureSchema=sourceRows[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
   const featureCount=featureNames.length;
-  const rawRows=(Array.isArray(training)?training:[]).map(row=>({
-    vector:Array.isArray(row?.vector)&&row.vector.length===featureCount
-      ?row.vector:normalizedFeatures(row?.features||{},featureSchema),
-    target:finite(row?.target)===null?targetOf(row):clamp(Number(row.target),0,1)
-  })).filter(row=>row.vector.length===featureCount&&
-    row.vector.every(value=>Number.isFinite(value))&&Number.isFinite(row.target));
+  assertNeuralFeatureBatch(sourceRows,featureNames,featureSchema);
+  const rawRows=sourceRows.map(row=>({
+    vector:Array.isArray(row.vector)?row.vector:normalizedFeatures(row.features,featureSchema),
+    target:finite(row.target)===null?targetOf(row):clamp(Number(row.target),0,1)
+  }));
   if(!rawRows.length)return null;
   const positiveSamples=rawRows.filter(row=>row.target>0.5).length;
   const negativeSamples=rawRows.length-positiveSamples;
@@ -632,25 +660,29 @@ function fitNeuralNetworkModel(training, {
   const mSkip=zerosLike(skipWeights),vSkip=zerosLike(skipWeights);
   let mOutputBias=0,vOutputBias=0;
 
-  const update=(value,gradient,moment,variance,step,bound=3,decay=true,learningRateScale=1)=>{
+  const update=(value,gradient,moment,variance,step,bound=3,decay=true,
+    learningRateScale=1,stepRate=rate)=>{
     const g=clamp(gradient,-3,3);
     const nextMoment=0.9*moment+0.1*g;
     const nextVariance=0.999*variance+0.001*g*g;
     const correctedMoment=nextMoment/(1-Math.pow(0.9,step));
     const correctedVariance=nextVariance/(1-Math.pow(0.999,step));
+    // Decoupled weight decay remains outside Adam's moment estimates.
     const regularized=decay?regularization*value:0;
     return {
-      value:clamp(value-rate*learningRateScale*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
+      value:clamp(value-stepRate*learningRateScale*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
       moment:nextMoment,variance:nextVariance
     };
   };
+  const maximumGradientNorm=1.0;
+  const epochHistory=[];
 
   for(let epoch=1;epoch<=steps;epoch++){
     const gradInput=zerosLike(inputWeights),gradHidden=zerosLike(hiddenWeights);
     const gradBias1=Array(units1).fill(0),gradBias2=Array(units2).fill(0);
     const gradOutput=Array(units2).fill(0);
     const gradSkip=anchorAdaptationEnabled?Array(inputSize).fill(0):null;
-    let gradOutputBias=0;
+    let gradOutputBias=0,weightedBrier=0;
 
     for(const row of rows){
       const hidden1=new Array(units1);
@@ -671,6 +703,8 @@ function fitNeuralNetworkModel(training, {
       // two nonlinear layers learn interactions between market conditions.
       for(let i=0;i<inputSize;i++)output+=skipWeights[i]*row.vector[i];
       const probability=logistic(output);
+      if(!Number.isFinite(probability))throw new TypeError('NEURAL_FORWARD_NON_FINITE');
+      weightedBrier+=(probability-row.target)**2*row.sample_weight;
       // Optimize the same unweighted Brier proper-scoring objective used by
       // chronological validation, model selection, and the untouched holdout.
       const brierGradient=2*(probability-row.target)*probability*(1-probability);
@@ -704,6 +738,19 @@ function fitNeuralNetworkModel(training, {
     }
 
     const n=Math.max(1,totalSampleWeight);
+    const gradientLeaves=[
+      ...gradInput.flat(),...gradHidden.flat(),...gradBias1,...gradBias2,...gradOutput,
+      ...(gradSkip||[]),gradOutputBias
+    ];
+    if(gradientLeaves.some(value=>!Number.isFinite(value)))
+      throw new TypeError('NEURAL_BACKPROP_NON_FINITE_GRADIENT');
+    const meanGradientNorm=Math.sqrt(gradientLeaves.reduce((sum,value)=>
+      sum+(value/n)**2,0));
+    const clipScale=meanGradientNorm>maximumGradientNorm
+      ?maximumGradientNorm/meanGradientNorm:1;
+    const epochRate=rate*(0.1+0.9*0.5*(1+Math.cos(
+      Math.PI*(epoch-1)/Math.max(1,steps-1)
+    )));
     if(anchorAdaptationEnabled){
       // This research mode updates the logistic skip path only inside a narrow
       // trust region around the training-only anchor. No validation/holdout
@@ -711,8 +758,8 @@ function fitNeuralNetworkModel(training, {
       for(let i=0;i<inputSize;i++){
         const gradient=gradSkip[i]/n+
           anchorTetherStrength*(skipWeights[i]-initialSkipWeights[i]);
-        const result=update(skipWeights[i],gradient,mSkip[i],vSkip[i],epoch,4,false,
-          anchorLearningRateScale);
+        const result=update(skipWeights[i],gradient*clipScale,mSkip[i],vSkip[i],epoch,4,false,
+          anchorLearningRateScale,epochRate);
         skipWeights[i]=clamp(result.value,
           initialSkipWeights[i]-anchorTrustRadius,
           initialSkipWeights[i]+anchorTrustRadius);
@@ -720,31 +767,44 @@ function fitNeuralNetworkModel(training, {
       }
       const biasGradient=gradOutputBias/n+
         anchorTetherStrength*(outputBias-initialOutputBias);
-      const biasResult=update(outputBias,biasGradient,mOutputBias,vOutputBias,epoch,12,false,
-        anchorLearningRateScale);
+      const biasResult=update(outputBias,biasGradient*clipScale,mOutputBias,vOutputBias,epoch,12,false,
+        anchorLearningRateScale,epochRate);
       outputBias=clamp(biasResult.value,
         initialOutputBias-anchorBiasTrustRadius,
         initialOutputBias+anchorBiasTrustRadius);
       mOutputBias=biasResult.moment;vOutputBias=biasResult.variance;
     }
     for(let i=0;i<inputSize;i++)for(let j=0;j<units1;j++){
-      const result=update(inputWeights[i][j],gradInput[i][j]/n,mInput[i][j],vInput[i][j],epoch);
+      const result=update(inputWeights[i][j],gradInput[i][j]/n*clipScale,mInput[i][j],vInput[i][j],epoch,3,true,1,epochRate);
       inputWeights[i][j]=result.value;mInput[i][j]=result.moment;vInput[i][j]=result.variance;
     }
     for(let i=0;i<units1;i++)for(let j=0;j<units2;j++){
-      const result=update(hiddenWeights[i][j],gradHidden[i][j]/n,mHidden[i][j],vHidden[i][j],epoch);
+      const result=update(hiddenWeights[i][j],gradHidden[i][j]/n*clipScale,mHidden[i][j],vHidden[i][j],epoch,3,true,1,epochRate);
       hiddenWeights[i][j]=result.value;mHidden[i][j]=result.moment;vHidden[i][j]=result.variance;
     }
     for(let j=0;j<units1;j++){
-      const result=update(hiddenBias1[j],gradBias1[j]/n,mBias1[j],vBias1[j],epoch,4,false);
+      const result=update(hiddenBias1[j],gradBias1[j]/n*clipScale,mBias1[j],vBias1[j],epoch,4,false,1,epochRate);
       hiddenBias1[j]=result.value;mBias1[j]=result.moment;vBias1[j]=result.variance;
     }
     for(let j=0;j<units2;j++){
-      const bias=update(hiddenBias2[j],gradBias2[j]/n,mBias2[j],vBias2[j],epoch,4,false);
+      const bias=update(hiddenBias2[j],gradBias2[j]/n*clipScale,mBias2[j],vBias2[j],epoch,4,false,1,epochRate);
       hiddenBias2[j]=bias.value;mBias2[j]=bias.moment;vBias2[j]=bias.variance;
-      const output=update(outputWeights[j],gradOutput[j]/n,mOutput[j],vOutput[j],epoch);
+      const output=update(outputWeights[j],gradOutput[j]/n*clipScale,mOutput[j],vOutput[j],epoch,3,true,1,epochRate);
       outputWeights[j]=output.value;mOutput[j]=output.moment;vOutput[j]=output.variance;
     }
+    const parameterLeaves=[
+      ...inputWeights.flat(),...hiddenWeights.flat(),...hiddenBias1,...hiddenBias2,
+      ...outputWeights,...skipWeights,outputBias
+    ];
+    if(parameterLeaves.some(value=>!Number.isFinite(value)))
+      throw new TypeError('NEURAL_UPDATE_NON_FINITE_PARAMETER');
+    epochHistory.push({
+      epoch,
+      pre_update_weighted_brier:Number((weightedBrier/n).toFixed(8)),
+      gradient_l2_norm:Number(meanGradientNorm.toFixed(8)),
+      clip_scale:Number(clipScale.toFixed(8)),
+      learning_rate:Number(epochRate.toFixed(8))
+    });
     // In the default mode, skipWeights and outputBias remain exactly frozen.
     // The opt-in trust-region experiment constrains all linear-anchor movement.
   }
@@ -765,6 +825,18 @@ function fitNeuralNetworkModel(training, {
     positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
+    optimizer:'BIAS_CORRECTED_ADAMW_STYLE',
+    scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
+    gradient_clip_norm:maximumGradientNorm,
+    training_diagnostics:{
+      schema:'COGNITIVE_MLP_NUMERICAL_TRAINING_AUDIT_V1',
+      epochs_completed:epochHistory.length,
+      all_gradients_finite:true,all_parameters_finite:true,
+      initial_pre_update_brier:epochHistory[0]?.pre_update_weighted_brier??null,
+      final_pre_update_brier:epochHistory.at(-1)?.pre_update_weighted_brier??null,
+      maximum_gradient_l2_norm:Number(Math.max(...epochHistory.map(row=>row.gradient_l2_norm)).toFixed(8)),
+      epoch_history:epochHistory
+    },
     output_initialization_scale:outputHeadInitializationScale,
     training_objective:trainingObjective,
     anchor_adaptation:anchorAdaptationMode,
@@ -780,6 +852,66 @@ function fitNeuralNetworkModel(training, {
   };
 }
 
+
+export function auditNeuralOneBatchOverfit(trainingRows,{
+  iterations=120,seed=17
+}={}){
+  if(!Array.isArray(trainingRows)||trainingRows.length!==32)
+    throw new TypeError('NEURAL_OVERFIT_AUDIT_REQUIRES_EXACTLY_32_ROWS');
+  const schema=trainingRows[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
+  const names=[...(trainingRows[0]?.feature_names||featureNamesForSchema(schema))];
+  if(trainingRows.some(row=>!row||!row.features||typeof row.features!=='object'||
+      !Number.isInteger(row.target)||![0,1].includes(row.target)))
+    throw new TypeError('NEURAL_OVERFIT_AUDIT_REQUIRES_BINARY_FEATURE_ROWS');
+  const prepared=trainingRows.map(row=>({
+    ...row,feature_schema:row.feature_schema??schema,
+    feature_names:row.feature_names??names,
+    vector:row.vector??normalizedFeatures(row.features,schema)
+  }));
+  assertNeuralFeatureBatch(prepared,names,schema);
+  const fit=fitNeuralNetworkModel(prepared,{
+    hiddenUnits:16,secondHiddenUnits:12,iterations,
+    learningRate:0.04,l2:0.001,seed,baselineFit:null,
+    trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    positiveClassWeighting:'NONE',outputInitializationScale:0.12
+  });
+  if(!fit)throw new Error('NEURAL_OVERFIT_AUDIT_FIT_FAILED');
+  const probabilities=prepared.map(row=>{
+    const h1=fit.hidden_bias_1.map((bias,j)=>{
+      let value=bias;
+      for(let i=0;i<row.vector.length;i++)value+=row.vector[i]*fit.input_weights[i][j];
+      return Math.tanh(value);
+    });
+    const h2=fit.hidden_bias_2.map((bias,j)=>{
+      let value=bias;
+      for(let i=0;i<h1.length;i++)value+=h1[i]*fit.hidden_weights[i][j];
+      return Math.tanh(value);
+    });
+    let value=fit.output_bias;
+    for(let j=0;j<h2.length;j++)value+=fit.output_weights[j]*h2[j];
+    return logistic(value);
+  });
+  const finitePredictions=probabilities.every(Number.isFinite);
+  const brier=finitePredictions?mean(probabilities.map((value,index)=>
+    (value-prepared[index].target)**2)):null;
+  const accuracy=finitePredictions?Number((probabilities.filter((value,index)=>
+    (value>=0.5)===Boolean(prepared[index].target)).length/32*100).toFixed(2)):null;
+  const diagnostics=fit.training_diagnostics||{};
+  return {
+    schema:'COGNITIVE_MLP_32_SAMPLE_OVERFIT_AUDIT_V1',
+    diagnostic_only:true,production_training_changed:false,
+    sample_count:32,feature_count:fit.input_size,feature_schema:fit.feature_schema,
+    architecture:fit.architecture,epochs_completed:fit.iterations,
+    finite_predictions:finitePredictions,
+    all_gradients_finite:diagnostics.all_gradients_finite===true,
+    all_parameters_finite:diagnostics.all_parameters_finite===true,
+    initial_brier:diagnostics.initial_pre_update_brier,
+    final_training_brier:diagnostics.final_pre_update_brier,
+    post_fit_brier:brier,post_fit_accuracy_pct:accuracy,
+    passed:finitePredictions&&diagnostics.all_gradients_finite===true&&
+      diagnostics.all_parameters_finite===true&&brier!==null&&brier<=0.01&&accuracy===100
+  };
+}
 
 export function factorizationMachineProjection(vector,factors){
   if(!Array.isArray(vector)||!vector.length||
