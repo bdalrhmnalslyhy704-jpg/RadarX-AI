@@ -763,7 +763,9 @@ async function main(){
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
-            const horizonAudit=auditSampleLabelHorizons(census.samples);
+            const horizonAudit=auditSampleLabelHorizons(census.samples,{
+              opportunityHorizonsHours,drawdownAdversePcts
+            });
             const horizonViolations=horizonAudit.total;
             result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
