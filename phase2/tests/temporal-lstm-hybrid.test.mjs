@@ -5,6 +5,7 @@ import {
   TCN_LSTM_PARAMETER_COUNT,
   TCN_LSTM_STEPS,
   TCN_LSTM_INPUT_CHANNELS,
+  TCN_LSTM_RECEPTIVE_FIELD,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -219,4 +220,62 @@ test('full TCN-LSTM benchmark fails closed for insufficient unique UTC days',()=
   const result=benchmarkTcnLstmHybridChronological(rows);
   assert.equal(result.status,'WAITING_FOR_UNIQUE_UTC_DAY_SUPPORT');
   assert.equal(result.probability_ready,false);
+});
+
+test('five-partition calibrated evaluation gates holdout behind external validation',()=>{
+  const training=makeRows(0,40,'train');
+  const selection=makeRows(41,20,'selection');
+  const calibration=makeRows(62,60,'calibration');
+  const validation=makeRows(123,60,'validation');
+  const holdout=makeRows(184,60,'holdout');
+  const result=evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:selection,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'LR_LOW',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'LR_MID',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],
+    requiredInnerImprovement:0,
+    maxTrainingSamples:40,bootstrapIterations:200,seed:19
+  });
+  assert.equal(result.partition_summary.training.rows,40);
+  assert.equal(result.partition_summary.calibration.rows,60);
+  assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+  assert.equal(result.validation.evaluated ?? true,true);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.holdout.evaluated,result.validation.passed);
+  if(!result.validation.passed)
+    assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+});
+
+test('five-partition evaluator rejects leakage, overlapping identities and unresolved label maturity',()=>{
+  const training=makeRows(0,40,'train');
+  const selection=makeRows(41,20,'selection');
+  const calibration=makeRows(62,60,'calibration');
+  const validation=makeRows(123,60,'validation');
+  const holdout=makeRows(184,60,'holdout');
+  const duplicated=selection.map(row=>({...row,id:training[0].id}));
+  assert.throws(()=>evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:duplicated,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'B',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],maxTrainingSamples:40
+  }),/TCN_LSTM_CROSS_PARTITION_IDENTITY_OVERLAP/);
+  const immature=selection.map((row,index)=>index===0?{...row,resolved_at:row.at}:row);
+  assert.throws(()=>evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:immature,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'B',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],maxTrainingSamples:40
+  }),/TCN_LSTM_PARTITION_EVENT_OR_MATURITY_TIME_INVALID/);
+});
+
+test('TCN receptive field covers all two-tap causal dilations',()=>{
+  assert.equal(TCN_LSTM_RECEPTIVE_FIELD,15);
 });
