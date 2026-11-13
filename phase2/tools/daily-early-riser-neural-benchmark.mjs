@@ -163,6 +163,8 @@ async function main(){
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
+  const attentionOnly=String(args['attention-only']||'false')==='true';
+  if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
   const labelMode=String(args['label-mode']||'first_passage');
   const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
   if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
@@ -185,11 +187,13 @@ async function main(){
   const report={
     schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
-    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':
-      String(args['skip-temporal']||'false')==='true'
+    research_mode:tcnOnly
+      ?attentionOnly?'V11_ATTENTION_ONLY_ISOLATED_COMPUTE':'TCN_ONLY_ISOLATED_COMPUTE'
+      :String(args['skip-temporal']||'false')==='true'
         ?'FULL_TABULAR_NEURAL_BENCHMARK_WITH_TCN_ISOLATED'
         :'FULL_DAILY_NEURAL_BENCHMARK',
     temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
+    temporal_attention_only:attentionOnly,
     required_liquidity_lane:requiredLiquidityLane||null,
     requested_targets:targetsToRun,
     label_mode:labelMode,
@@ -212,8 +216,10 @@ async function main(){
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
-      models:tcnOnly?
-        ['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','Regime-local training-only Logistic anchors']:
+      models:tcnOnly
+        ?attentionOnly
+          ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
+          :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
         ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
@@ -275,6 +281,10 @@ async function main(){
       const skipTemporal=String(args['skip-temporal']||'false')==='true';
       const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
         tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
+        enableRegimeLocalTcn:!attentionOnly,
+        enableRegimeLocalTcnPyramid:!attentionOnly,
+        enableRegimeLocalTcnMultiscale:!attentionOnly,
+        enableRegimeLocalTcnAttention:true,
         requiredLiquidityLane
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
