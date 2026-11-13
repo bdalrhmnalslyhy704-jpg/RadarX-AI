@@ -719,8 +719,8 @@ export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options
   const selected=trained&&regimes.every(item=>item.selection_passed);
   const validationPassed=selected&&regimes.every(item=>item.validation_passed);
   const holdoutPassed=validationPassed&&regimes.every(item=>item.holdout_passed);
-  const coverageComplete=Object.values(rejectionCounts).every(value=>
-    !['BTC_REGIME_SEQUENCE_MISSING','BTC_REGIME_FEATURE_INVALID'].includes(value));
+  const coverageComplete=Number(rejectionCounts.BTC_REGIME_SEQUENCE_MISSING||0)===0&&
+    Number(rejectionCounts.BTC_REGIME_FEATURE_INVALID||0)===0;
   return {
     schema:'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1',
     status:!coverageComplete?'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE':
