@@ -6,7 +6,8 @@ import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
   DAILY_EARLY_RISER_TARGETS_PCT,
-  benchmarkDailyEarlyRiserTarget
+  benchmarkDailyEarlyRiserTarget,
+  benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 
 const DEFAULT_INPUT='artifacts/daily-early-riser-samples.jsonl';
@@ -150,6 +151,7 @@ function compactTarget(result){
     temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
     temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger,
     temporal_regime_local_tcn_attention_challenger:result.temporal_regime_local_tcn_attention_challenger,
+    regime_local_mlp_challenger:result.schema==='RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1'?result:null,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -164,9 +166,11 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
+  const regimeLocalMlpOnly=String(args['regime-local-mlp-only']||'false')==='true';
   const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
     Number(args['attention-position-bias-l2-multiplier']||1)));
-  const neuralTrainingHistoryFraction=Number(args['neural-training-history-fraction']??0.60);
+  const neuralTrainingHistoryFraction=Number(args['neural-training-history-fraction']??
+    (regimeLocalMlpOnly?1:0.60));
   if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
     throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
   const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
@@ -175,6 +179,8 @@ async function main(){
   const factorizationLearningRate=Math.max(0.0005,Math.min(0.03,Number(args['factorization-learning-rate']||0.008)));
   const factorizationL2=Math.max(0.001,Math.min(0.5,Number(args['factorization-l2']||0.06)));
   if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
+  if(regimeLocalMlpOnly&&(tcnOnly||attentionOnly))
+    throw new Error('REGIME_LOCAL_MLP_ONLY_CANNOT_RUN_WITH_TCN_ONLY_FLAGS');
   const labelMode=String(args['label-mode']||'first_passage');
   const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
   if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
@@ -199,10 +205,12 @@ async function main(){
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
     research_mode:tcnOnly
       ?attentionOnly?'V11_ATTENTION_ONLY_ISOLATED_COMPUTE':'TCN_ONLY_ISOLATED_COMPUTE'
+      :regimeLocalMlpOnly?'REGIME_LOCAL_MLP_ONLY_ISOLATED_COMPUTE'
       :String(args['skip-temporal']||'false')==='true'
         ?'FULL_TABULAR_NEURAL_BENCHMARK_WITH_TCN_ISOLATED'
         :'FULL_DAILY_NEURAL_BENCHMARK',
-    temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
+    temporal_training_isolated:regimeLocalMlpOnly||String(args['skip-temporal']||'false')==='true',
+    regime_local_mlp_only:regimeLocalMlpOnly,
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
     enable_factorization_machine:enableFactorizationMachine,
@@ -294,8 +302,13 @@ async function main(){
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
-      const skipTemporal=String(args['skip-temporal']||'false')==='true';
-      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
+      const skipTemporal=regimeLocalMlpOnly||String(args['skip-temporal']||'false')==='true';
+      const result=regimeLocalMlpOnly
+        ?benchmarkDailyEarlyRiserRegimeLocalMlp(loaded.samples,target,{
+          labelMode,horizonHours,requiredLiquidityLane,
+          neuralTrainingHistoryFraction,minimumValidationSamples:1500,minimumHoldoutSamples:2000
+        })
+        :benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
         tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
         enableRegimeLocalTcn:!attentionOnly,
         enableRegimeLocalTcnPyramid:!attentionOnly,
@@ -330,6 +343,7 @@ async function main(){
       const localTcnPyramid=result.temporal_regime_local_tcn_pyramid_challenger||{};
       const localTcnMultiscale=result.temporal_regime_local_tcn_multiscale_challenger||{};
       const localTcnAttention=result.temporal_regime_local_tcn_attention_challenger||{};
+      const regimeLocalMlp=result.schema==='RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1'?result:null;
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -475,6 +489,16 @@ async function main(){
           regimes:localTcnPyramid.regime_specialists??{}
         },
 
+        regime_local_mlp:regimeLocalMlp?{
+          status:regimeLocalMlp.status,trained:regimeLocalMlp.trained,
+          selected_for_research:regimeLocalMlp.selected_for_research,
+          validation_passed:regimeLocalMlp.validation_passed,
+          research_out_of_sample_validated:regimeLocalMlp.research_out_of_sample_validated,
+          sample_count:regimeLocalMlp.sample_count,
+          regime_sample_counts:regimeLocalMlp.regime_sample_counts,
+          rejection_counts:regimeLocalMlp.rejection_counts,
+          regimes:regimeLocalMlp.regime_specialists
+        }:null,
         regime_local_tcn_attention:{
 
           status:localTcnAttention.status??null,
