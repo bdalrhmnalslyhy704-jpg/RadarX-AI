@@ -2149,9 +2149,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       scoring_base_rate:neuralFit?.base_rate??null,
       maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
-        ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
-        :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+      training_strategy:neuralFit?.training_strategy||
+        (neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
+          ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
+          :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6'),
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:TEMPORAL_TARGET_DEFINITION,
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -2175,7 +2176,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
       selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
-      ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
+      ensemble_members_required:neuralFit?.seeds?.length??NEURAL_POLICY.ensembleSeeds.length,
+      factorization_member_enabled:Number.isInteger(neuralFit?.factorization_member_index)&&
+        neuralFit.factorization_member_index>=0,
+      factorization_member_index:neuralFit?.factorization_member_index??-1,
       selected_member_index:neuralFit?.selected_member_index??null,
       anchor_adaptation:neuralFit?.anchor_adaptation??'FROZEN_LOGISTIC',
       anchor_trust_radius:neuralFit?.anchor_trust_radius??0,
