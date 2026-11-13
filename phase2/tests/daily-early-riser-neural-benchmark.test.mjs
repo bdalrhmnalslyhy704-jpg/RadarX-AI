@@ -688,6 +688,12 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
   assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,20,
     'the low-rank pairwise member must enter the same 4-member x 5-scale selection grid');
+  const fmBaselineBrier=fmNeural.inner_selection_diagnostics.logistic_baseline_brier_score;
+  const fmZeroScale=fmNeural.member_selection_brier_scores.find(item=>
+    item.index===fmNeural.factorization_member_index&&item.residual_scale===0);
+  assert.ok(fmZeroScale,'the factor-cross zero-residual candidate must be evaluated');
+  assert.ok(Math.abs(fmZeroScale.brier_score-fmBaselineBrier)<1e-10,
+    'zero factor-cross residual must reproduce the exact same-window logistic anchor score');
   assert.ok(fmNeural.max_training_outcome_resolved_at<fmNeural.selection_start_at,
     'factor-cross fit must remain strictly before the disjoint selection block');
 });

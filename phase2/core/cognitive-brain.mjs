@@ -1054,7 +1054,9 @@ function predictFromFit(features, fit, residualScale=1) {
     const vector=normalizedFeatures(features,fit.feature_schema||COGNITIVE_FEATURE_SCHEMA);
     if(vector.length!==Number(fit.input_size))return null;
     return applyAcceptedProbabilityCalibration(
-      predictFactorizationMachineProbability(vector,fit,residualScale),fit.probability_calibrator
+      predictFactorizationMachineProbability(
+        vector,fit,finite(fit.residual_scale)??finite(residualScale)??1
+      ),fit.probability_calibrator
     );
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
