@@ -169,6 +169,11 @@ async function main(){
   const neuralTrainingHistoryFraction=Number(args['neural-training-history-fraction']??0.60);
   if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
     throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
+  const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
+  const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
+  const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
+  const factorizationLearningRate=Math.max(0.0005,Math.min(0.03,Number(args['factorization-learning-rate']||0.008)));
+  const factorizationL2=Math.max(0.001,Math.min(0.5,Number(args['factorization-l2']||0.06)));
   if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
   const labelMode=String(args['label-mode']||'first_passage');
   const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
@@ -200,6 +205,11 @@ async function main(){
     temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
+    enable_factorization_machine:enableFactorizationMachine,
+    factorization_rank:factorizationRank,
+    factorization_iterations:factorizationIterations,
+    factorization_learning_rate:factorizationLearningRate,
+    factorization_l2:factorizationL2,
     required_liquidity_lane:requiredLiquidityLane||null,
     requested_targets:targetsToRun,
     label_mode:labelMode,
@@ -226,7 +236,7 @@ async function main(){
         ?attentionOnly
           ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
           :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
-        :['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
+        :['Residual Deep MLP V5 ensemble',...(enableFactorizationMachine?['Low-rank Factorization-Machine pairwise residual']:[]),'Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
@@ -293,6 +303,8 @@ async function main(){
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
         neuralTrainingHistoryFraction,
+        enableFactorizationMachine,factorizationRank,factorizationIterations,
+        factorizationLearningRate,factorizationL2,
         requiredLiquidityLane
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
