@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/daily-early-riser-opportunity-targets-20261113
+      - research/daily-btc-partial-month-reference-fix-20261113
     paths:
       - '.github/workflows/daily-early-riser-opportunity-unit-tests.yml'
       - 'phase2/core/daily-early-riser-census.mjs'
