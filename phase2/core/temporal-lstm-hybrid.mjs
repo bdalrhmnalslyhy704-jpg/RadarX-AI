@@ -26,6 +26,8 @@ export const TCN_LSTM_HIDDEN = 8;
 export const TCN_LSTM_LAYERS = 3;
 export const TCN_LSTM_DILATIONS = Object.freeze([1, 2, 4]);
 export const TCN_LSTM_KERNEL_TAPS = 2;
+export const TCN_LSTM_RECEPTIVE_FIELD = 1 +
+  TCN_LSTM_KERNEL_TAPS * TCN_LSTM_DILATIONS.reduce((sum, value) => sum + value, 0);
 export const TCN_LSTM_GATE_ORDER = 'INPUT_FORGET_OUTPUT_CANDIDATE';
 export const TCN_LSTM_DROPOUT = 0;
 export const TCN_LSTM_PARAMETER_COUNT =
@@ -800,8 +802,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     lstm_hidden_units: TCN_LSTM_HIDDEN,
     lstm_gate_order: TCN_LSTM_GATE_ORDER,
     dilations: [...TCN_LSTM_DILATIONS],
-    receptive_field: 1 + (TCN_LSTM_KERNEL_TAPS - 1) *
-      TCN_LSTM_DILATIONS.reduce((sum, value) => sum + value, 0),
+    receptive_field: TCN_LSTM_RECEPTIVE_FIELD,
     attention: 'SINGLE_HEAD_QUERY_SOFTMAX_OVER_LSTM_HIDDEN_STATES',
     trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
     dropout: TCN_LSTM_DROPOUT,
