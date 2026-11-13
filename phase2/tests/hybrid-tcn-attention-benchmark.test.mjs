@@ -425,6 +425,10 @@ test('walk-forward row thresholds are not compared to the number of distinct tim
     const at = Date.UTC(2026, 0, 1) + Math.floor(index / 3) * FIFTEEN_MINUTES;
     return {
       ...row, at, latest_input_at: at, resolved_at: at + FOUR_HOURS,
+      feature_information_cutoff_at:at,
+      maturity_ms:FOUR_HOURS,
+      sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
+        at-(HYBRID_SEQUENCE_STEPS-1-step)*FIFTEEN_MINUTES),
       max_adverse_excursion_at: at + FIFTEEN_MINUTES,
       max_favorable_excursion_at: at + 2 * FIFTEEN_MINUTES
     };
@@ -839,9 +843,13 @@ test('fixed-SHA benchmark rejects missing MAE timing and mixed outcome sources',
   assert.equal(incomplete.integrity.rejected_or_duplicate_rows_removed, 1);
   assert.equal(incomplete.integrity.adverse_excursion_coverage_pct, 100);
 
+  const replayAt=rows[0].at+1;
   const mixed = [...rows, {
-    ...rows[0], id: 'different-source', at: rows[0].at + 1,
-    latest_input_at: rows[0].at + 1, resolved_at: rows[0].resolved_at + 1,
+    ...rows[0], id: 'different-source', at: replayAt,
+    latest_input_at: replayAt, feature_information_cutoff_at:replayAt,
+    resolved_at: replayAt+FOUR_HOURS,maturity_ms:FOUR_HOURS,
+    sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
+      replayAt-(HYBRID_SEQUENCE_STEPS-1-step)*60_000),
     outcome_source: 'BINANCE_SPOT_CLOSED_1M_REPLAY'
   }];
   assert.throws(() => runFixedShaBenchmark(mixed, { sourceCommitSha: SOURCE_SHA }),
