@@ -54,6 +54,11 @@ function validTemporalSequence(sequence){
       step.every(value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&
         Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
 }
+function validTemporalSequenceTimestamps(timestamps,anchorAt){
+  return Array.isArray(timestamps)&&timestamps.length===24&&
+    timestamps.every(Number.isFinite)&&timestamps.at(-1)===Number(anchorAt)&&
+    timestamps.every((value,index)=>index===0||value-timestamps[index-1]===15*60*1000);
+}
 const finite=value=>{
   if(value===null||value===undefined||value==='')return null;
   const n=Number(value);
@@ -521,8 +526,8 @@ export function summarizeDailyTargetDiagnostics(rows,targetPct){
   };
 }
 function compactSample(row){
-  const {temporal_sequence,...small}=row;
-  return {...small,temporal_sequence_omitted:true,
+  const {temporal_sequence,temporal_sequence_timestamps,...small}=row;
+  return {...small,temporal_sequence_omitted:true,temporal_sequence_timestamps_omitted:true,
     temporal_sequence_steps:row.temporal_sequence?.length||0,
     temporal_sequence_channels:row.temporal_sequence?.[0]?.length||0};
 }
@@ -690,10 +695,12 @@ async function main(){
       const content=rows.map(row=>JSON.stringify(compactSample(row))).join('\n')+'\n';
       const temporalRows=[];
       for(const row of rows){
-        if(validTemporalSequence(row.temporal_sequence)){
+        if(validTemporalSequence(row.temporal_sequence)&&
+           validTemporalSequenceTimestamps(row.temporal_sequence_timestamps,row.at)){
           temporalRows.push(JSON.stringify({
             id:row.id,symbol:row.symbol,at:row.at,
-            temporal_sequence:row.temporal_sequence
+            temporal_sequence:row.temporal_sequence,
+            temporal_sequence_timestamps:row.temporal_sequence_timestamps
           }));
         }else{
           temporalSequenceRejected++;
@@ -909,6 +916,7 @@ async function main(){
       rejected_or_missing_sequences:temporalSequenceRejected,
       invalid_declared_sequences:temporalSequenceInvalidDeclared,
       sequence_steps:24,sequence_channels:29,
+      timestamps_verified:true,interval_ms:15*60*1000,
       sha256:await sha256File(temporalSamplesOutput)
     };
     report.status=report.data_quality.status;
