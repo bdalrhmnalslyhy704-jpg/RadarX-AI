@@ -256,7 +256,7 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
       addRow(rows,{target,family:'HYBRID_TCN_ATTENTION',variant:'TCN_ATTENTION_HYBRID',
         model:hybridTcn,selection:innerGate(hybridTcn),validation,holdout,
         sourceSha:hybridTcnReport.input_sha256||hybridTcnReport.source_sample_sha256||
-          hybridTcn.source_sample_sha256||sourceSha,
+          hybridTcn.source_sample_sha256||null,
         sourceRun:hybridTcn.source_run_id||hybridTcnReport.source_run_id||sourceRun});
     }else{
       addRow(rows,{target,family:'HYBRID_TCN_ATTENTION',variant:'LEGACY_PR410_REPLAY',
@@ -277,10 +277,13 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
         sourceSha:dense.source_sample_sha256||sourceSha,sourceRun});
     }
   }
-  const hashes=[...new Set(rows.map(row=>row.source_sha256).filter(Boolean))];
-  const sourceIntegrity={same_input_sha256:hashes.length<=1,
-    observed_sha256_count:hashes.length,sha256_values:hashes,
-    mixed_source_warning:hashes.length>1};
+  const scoredRows=rows.filter(row=>row.inner_selection.evaluated||
+    row.external_validation.evaluated||row.untouched_final_holdout.evaluated);
+  const hashes=[...new Set(scoredRows.map(row=>row.source_sha256).filter(Boolean))];
+  const missingSourceHashCount=scoredRows.filter(row=>!row.source_sha256).length;
+  const sourceIntegrity={same_input_sha256:hashes.length===1&&missingSourceHashCount===0,
+    observed_sha256_count:hashes.length,missing_source_hash_rows:missingSourceHashCount,
+    sha256_values:hashes,mixed_source_warning:hashes.length>1};
   const targetCoverage=requiredTargets.map(target=>({
     target_pct:target,present:targetEntries.some(row=>row.target===target)
   }));
