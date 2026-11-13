@@ -177,7 +177,7 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
   if(!dailyReport||typeof dailyReport!=='object'||!dailyReport.target_results)
     throw new TypeError('DAILY_NEURAL_REPORT_TARGET_RESULTS_REQUIRED');
   const targetEntries=Object.entries(dailyReport.target_results).map(([key,value])=>{
-    const match=String(key).match(/(5|10|15)_PCT/);
+    const match=String(key).match(/(?:^|_)(15|10|5)_PCT/);
     return {target:match?Number(match[1]):number(value?.target_pct),value};
   }).filter(row=>row.target!==null);
   const sourceSha=dailyReport.input_sha256||dailyReport.main_sample_file_audit?.sha256||null;
@@ -254,8 +254,10 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
           hybridTcn.untouched_final_holdout?.same_window_logistic_brier_score
       },'holdout',['same']);
       addRow(rows,{target,family:'HYBRID_TCN_ATTENTION',variant:'TCN_ATTENTION_HYBRID',
-        model:hybridTcn,selection:innerGate(hybridTcn),validation,holdout,sourceSha,
-        sourceRun:hybridTcn.source_run_id||sourceRun});
+        model:hybridTcn,selection:innerGate(hybridTcn),validation,holdout,
+        sourceSha:hybridTcnReport.input_sha256||hybridTcnReport.source_sample_sha256||
+          hybridTcn.source_sample_sha256||sourceSha,
+        sourceRun:hybridTcn.source_run_id||hybridTcnReport.source_run_id||sourceRun});
     }else{
       addRow(rows,{target,family:'HYBRID_TCN_ATTENTION',variant:'LEGACY_PR410_REPLAY',
         model:{selected:false},selection:{evaluated:false,passed:false,
@@ -288,8 +290,8 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
     const familyRows=rows.filter(row=>row.family===family);
     const allTargetsPresent=requiredTargets.every(target=>
       familyRows.some(row=>row.target_pct===target));
-    const allPassed=allTargetsPresent&&familyRows.length===requiredTargets.length&&
-      familyRows.every(row=>row.inner_selection.passed&&
+    const allPassed=allTargetsPresent&&familyRows.length>0&&
+      familyRows.every(row=>row.selected&&row.inner_selection.passed&&
         row.external_validation.passed&&row.untouched_final_holdout.passed);
     return {family,targets_present:familyRows.map(row=>row.target_pct),
       required_targets:requiredTargets,all_required_targets_present:allTargetsPresent,
