@@ -108,6 +108,8 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
       feature_information_cutoff_at:sample.feature_information_cutoff_at,
       observation_source:sample.observation_source,
       features:sample.features,
+      daily_change_pct:sample.daily_change_pct,
+      relative_strength_vs_btc_24h_pct:sample.relative_strength_vs_btc_24h_pct,
       temporal_sequence,
       ...(labelMode==='first_passage'?{targets:{[key]:label}}:
         labelMode==='safe_opportunity'
