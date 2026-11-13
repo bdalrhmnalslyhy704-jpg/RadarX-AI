@@ -194,7 +194,9 @@ async function main(){
   if(requestedTarget!==null&&!DAILY_EARLY_RISER_TARGETS_PCT.includes(requestedTarget))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET_ARGUMENT');
   const targetsToRun=requestedTarget===null?DAILY_EARLY_RISER_TARGETS_PCT:[requestedTarget];
-  const defaultOutput=tcnOnly
+  const defaultOutput=regimeLocalMlpOnly
+    ?'artifacts/daily-early-riser-regime-local-mlp-benchmark.json'
+    :tcnOnly
     ?(requestedTarget===null?'artifacts/daily-early-riser-tcn-only-benchmark.json':
       'artifacts/daily-early-riser-tcn-only-'+labelMode+'-'+horizonHours+'h-'+requestedTarget+'.json')
     :DEFAULT_OUTPUT;
