@@ -6,6 +6,8 @@ import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
   DAILY_EARLY_RISER_TARGETS_PCT,
+  DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
+  effectiveDailyMlpOutputInitializationScale,
   benchmarkDailyEarlyRiserTarget,
   benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
