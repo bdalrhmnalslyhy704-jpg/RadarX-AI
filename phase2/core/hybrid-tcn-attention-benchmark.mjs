@@ -692,6 +692,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
+    const maturityMs = finite(raw.maturity_ms);
+    const outcomeHorizonMs = finite(raw.outcome_horizon_ms);
     const gross = finite(raw.gross_return_pct);
     const adverse = finite(raw.max_adverse_excursion_pct);
     const adverseAt = finite(raw.max_adverse_excursion_at);
@@ -699,17 +701,28 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
+    const sequenceTimestamps=raw.sequence_timestamps;
+    const temporalAlignment=validateTemporalSequenceAlignment({
+      id,symbol,at,resolved_at:resolvedAt,horizon_ms:maturityMs,
+      temporal_sequence:sequence,temporal_sequence_timestamps:sequenceTimestamps,
+      feature_information_cutoff_at:latestInputAt,
+      expectedSteps:HYBRID_SEQUENCE_STEPS,expectedChannels:HYBRID_SEQUENCE_CHANNELS,
+      intervalMs:HYBRID_CANDLE_INTERVAL_MS,requireSequenceTimestamps:true,
+      binaryMaskChannels:[]
+    });
     const kamaEfficiencyRatio = finite(raw.kama_efficiency_ratio) ?? finite(sequence?.at(-1)?.[HYBRID_SEQUENCE_CHANNELS - 1]);
     const volatilityZScore = finite(raw.volatility_zscore);
     const btcTrendReturnPct = finite(raw.btc_trend_return_pct);
-    if (!id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
+    if (!temporalAlignment.valid ||
+        !id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
         !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
-        at === null || latestInputAt === null || latestInputAt > at ||
-        resolvedAt === null || resolvedAt <= at || gross === null ||
+        at === null || latestInputAt === null || latestInputAt !== at ||
+        resolvedAt === null || resolvedAt <= at || maturityMs !== resolvedAt-at ||
+        outcomeHorizonMs !== HYBRID_OUTCOME_HORIZON_MS || gross === null ||
         adverse === null || adverse < -100 ||
         adverseAt === null || adverseAt < at || adverseAt > resolvedAt ||
         favourable === null || favourable < 0 || favourable > 1000 ||
@@ -727,6 +740,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       id, symbol, market, outcome_source: outcomeSource,
       market_regime:marketRegime,historical_window_id:historicalWindowId,
       at, latest_input_at: latestInputAt, resolved_at: resolvedAt,
+      maturity_ms:maturityMs,outcome_horizon_ms:outcomeHorizonMs,
+      sequence_timestamps:sequenceTimestamps.map(Number),
       gross_return_pct: gross,
       max_adverse_excursion_pct:Math.min(0, adverse),
       max_adverse_excursion_at:adverseAt,
