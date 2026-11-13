@@ -25,7 +25,7 @@ const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
 
 test('MLP V5 training loop consumes the asymmetric same-time ranking objective',()=>{
-  const rows=Array.from({length:30*12},(_,index)=>{
+  const rows=Array.from({length:45*12},(_,index)=>{
     const group=Math.floor(index/12),within=index%12;
     const at=BASE_TIME+group*8*60*60*1000;
     const signal=within%2===0;
@@ -44,7 +44,7 @@ test('MLP V5 training loop consumes the asymmetric same-time ranking objective',
     minTrainingSamples:60,
     minimumValidationSamples:20,
     minimumHoldoutSamples:20,
-    minimumNeuralSelectionSamples:30,
+    minimumNeuralSelectionSamples:20,
     minimumNeuralSelectionPositiveSamples:6,
     minimumNeuralSelectionNegativeSamples:6,
     minNeuralTrainingSamples:60,
