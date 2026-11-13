@@ -38,6 +38,9 @@ export function validateTemporalSequenceAlignment({
       return fail('TEMPORAL_SEQUENCE_CHANNEL_COUNT_MISMATCH:' + step);
     if (row.some(value => !finite(value) || Math.abs(Number(value)) > 4))
       return fail('TEMPORAL_SEQUENCE_VALUE_NON_FINITE_OR_OUT_OF_RANGE:' + step);
+    // Channel 29 is the existing 5m-micro availability mask, never a guessed value.
+    if (Number(row[expectedChannels - 1]) !== 0 && Number(row[expectedChannels - 1]) !== 1)
+      return fail('TEMPORAL_MICRO_AVAILABILITY_MASK_INVALID:' + step);
   }
   if (!Array.isArray(temporal_sequence_timestamps)) {
     return requireSequenceTimestamps
