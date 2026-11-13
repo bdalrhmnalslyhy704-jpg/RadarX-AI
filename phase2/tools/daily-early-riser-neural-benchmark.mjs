@@ -166,6 +166,9 @@ async function main(){
   const attentionOnly=String(args['attention-only']||'false')==='true';
   const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
     Number(args['attention-position-bias-l2-multiplier']||1)));
+  const neuralTrainingHistoryFraction=Number(args['neural-training-history-fraction']??0.60);
+  if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
+    throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
   if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
   const labelMode=String(args['label-mode']||'first_passage');
   const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
@@ -196,6 +199,7 @@ async function main(){
         :'FULL_DAILY_NEURAL_BENCHMARK',
     temporal_training_isolated:String(args['skip-temporal']||'false')==='true',
     temporal_attention_only:attentionOnly,
+    neural_training_history_fraction:neuralTrainingHistoryFraction,
     required_liquidity_lane:requiredLiquidityLane||null,
     requested_targets:targetsToRun,
     label_mode:labelMode,
@@ -216,7 +220,7 @@ async function main(){
           :'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
-      mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
+      mlp_training_history:'The daily MLP gradient-fit window uses the newest '+String(Math.round(neuralTrainingHistoryFraction*100))+'% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
       models:tcnOnly
         ?attentionOnly
@@ -288,6 +292,7 @@ async function main(){
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
+        neuralTrainingHistoryFraction,
         requiredLiquidityLane
       });
       report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
