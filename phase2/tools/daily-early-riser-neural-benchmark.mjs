@@ -264,6 +264,8 @@ async function main(){
     input_file:input,
     temporal_input_file:temporalInput,
     census_report_file:censusReportPath,
+    census_source_run_id:process.env.RADARX_CENSUS_SOURCE_RUN_ID||null,
+    census_source_commit:process.env.RADARX_CENSUS_SOURCE_COMMIT||null,
     temporal_sidecar_audit:null,
     main_sample_file_audit:null,
     target_results:{},
