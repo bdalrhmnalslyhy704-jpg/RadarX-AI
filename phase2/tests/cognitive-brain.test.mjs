@@ -16,6 +16,7 @@ import {
   evaluateCognitiveDirectionalRanking,
   hasSelectedNeuralResidual,
   deriveBrierOptimalBlendWeight,
+  isMeaningfulHybridBlendWeight,
   auditNeuralOneBatchOverfit,
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
@@ -51,19 +52,28 @@ test('cognitive features separate early-flow divergence from momentum and missin
     'missing 5m evidence must not look like neutral buyer flow');
 });
 
-test('hybrid blend weight is the exact constrained Brier minimizer and fails on unidentifiable inputs',()=>{
-  const boosted=[0.8,0.2,0.7,0.3,0.9,0.1];
-  const neural=[0.4,0.6,0.5,0.5,0.4,0.6];
-  const targets=[1,0,1,0,1,0];
+test('hybrid blend uses a true two-component Brier optimum and rejects endpoint collapse',()=>{
+  const boosted=[0.9,0.4,0.1,0.6];
+  const neural=[0.4,0.9,0.6,0.1];
+  const targets=[1,1,0,0];
   const weight=deriveBrierOptimalBlendWeight(boosted,neural,targets);
-  assert.ok(Number.isFinite(weight)&&weight>=0&&weight<=1);
+  assert.ok(Math.abs(weight-0.5)<1e-12);
+  assert.equal(isMeaningfulHybridBlendWeight(weight),true);
   const brier=candidate=>boosted.reduce((sum,value,index)=>{
     const p=candidate*value+(1-candidate)*neural[index];
     return sum+(p-targets[index])**2;
   },0);
   const epsilon=1e-5;
-  assert.ok(brier(weight)<=brier(Math.max(0,weight-epsilon))+1e-10);
-  assert.ok(brier(weight)<=brier(Math.min(1,weight+epsilon))+1e-10);
+  assert.ok(brier(weight)<=brier(Math.max(0.05,weight-epsilon))+1e-10);
+  assert.ok(brier(weight)<=brier(Math.min(0.95,weight+epsilon))+1e-10);
+  const endpoint=deriveBrierOptimalBlendWeight(
+    [0.8,0.2,0.7,0.3,0.9,0.1],
+    [0.4,0.6,0.5,0.5,0.4,0.6],[1,0,1,0,1,0]);
+  assert.equal(endpoint,1);
+  assert.equal(isMeaningfulHybridBlendWeight(endpoint),false,
+    'a pure component cannot be published as a hybrid');
+  assert.equal(isMeaningfulHybridBlendWeight(0.04),false);
+  assert.equal(isMeaningfulHybridBlendWeight(0.96),false);
   assert.equal(deriveBrierOptimalBlendWeight([0.5,0.5],[0.5,0.5],[1,0]),null);
   assert.equal(deriveBrierOptimalBlendWeight([0.4,0.6],[0.5],[1,0]),null);
   assert.equal(deriveBrierOptimalBlendWeight([0.4,Number.NaN],[0.5,0.2],[1,0]),null);
@@ -353,7 +363,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       .includes(profile.boosted_tree_model.status));
     assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
       'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT',
-      'HYBRID_WEIGHT_NOT_IDENTIFIABLE','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
+      'HYBRID_WEIGHT_NOT_IDENTIFIABLE','HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT',
+      'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
@@ -1041,17 +1052,30 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
-  assert.equal(profile.hybrid_model.trained,true);
-  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
-    'one analytically derived convex weight is fitted before its disjoint selection block');
+  assert.equal(profile.hybrid_model.minimum_component_weight,0.05);
+  if(profile.hybrid_model.trained){
+    assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
+      'only a genuine two-component analytically weighted hybrid may be trained');
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,false);
+    const blendCandidate=profile.hybrid_model.candidate_selection_metrics[0];
+    assert.equal(blendCandidate.name,'HYBRID_GBDT_MLP_BRIER_OPTIMAL');
+    assert.ok(Number.isFinite(blendCandidate.boosted_weight)&&
+      blendCandidate.boosted_weight>=0.05&&blendCandidate.boosted_weight<=0.95);
+  }else{
+    assert.equal(profile.hybrid_model.candidate_selection_metrics.length,0);
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,true);
+    assert.equal(profile.hybrid_model.status,'HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT');
+  }
   const blendCandidate=profile.hybrid_model.candidate_selection_metrics[0];
-  assert.equal(blendCandidate.name,'HYBRID_GBDT_MLP_BRIER_OPTIMAL');
-  assert.ok(Number.isFinite(blendCandidate.boosted_weight)&&
-    blendCandidate.boosted_weight>=0&&blendCandidate.boosted_weight<=1);
-  assert.ok(blendCandidate.weight_fit_sample_count>=20);
-  assert.ok(blendCandidate.weight_fit_start_at<=blendCandidate.weight_fit_end_at);
-  assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
-    'blend-weight fitting labels must finish before its disjoint selection block begins');
+  if(profile.hybrid_model.trained){
+    assert.ok(blendCandidate.weight_fit_sample_count>=20);
+    assert.ok(blendCandidate.weight_fit_start_at<=blendCandidate.weight_fit_end_at);
+    assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
+      'blend-weight fitting labels must finish before its disjoint selection block begins');
+  }else{
+    assert.equal(profile.hybrid_model.raw_optimal_boosted_weight,0,
+      'fixture should demonstrate a pure-MLP optimum that is rejected as a hybrid');
+  }
   assert.ok(profile.hybrid_model.weight_fit_samples>=20);
   assert.ok(profile.hybrid_model.weight_fit_end_at<profile.hybrid_model.weight_fit_cut_at);
   assert.ok(profile.hybrid_model.selection_samples>=20);
@@ -1059,10 +1083,12 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the frozen blend weight must be tested on a later pre-validation block');
   assert.ok(profile.hybrid_model.selection_start_at<profile.validation_start_at,
     'blend-weight selection must finish before outer validation begins');
-  assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
-    row.selection_sample_count===profile.hybrid_model.selection_samples&&
-    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)&&
-    Number.isFinite(row.weight_fit_sample_count)&&row.weight_fit_sample_count===profile.hybrid_model.weight_fit_samples));
+  if(profile.hybrid_model.trained){
+    assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
+      row.selection_sample_count===profile.hybrid_model.selection_samples&&
+      Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)&&
+      Number.isFinite(row.weight_fit_sample_count)&&row.weight_fit_sample_count===profile.hybrid_model.weight_fit_samples));
+  }
   assert.ok(profile.hybrid_model.candidate_validation_metrics.length<=1,
     'only the inner-selected blend weight may reach outer validation');
   if(profile.hybrid_model.candidate_validation_metrics.length===1){

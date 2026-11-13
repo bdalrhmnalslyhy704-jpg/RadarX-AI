@@ -1389,6 +1389,12 @@ export function deriveBrierOptimalBlendWeight(
   return clamp(numerator/denominator,0,1);
 }
 
+export function isMeaningfulHybridBlendWeight(weight,minimumComponentWeight=0.05){
+  const value=finite(weight);
+  const minimum=clamp(Number(minimumComponentWeight)||0.05,0.01,0.25);
+  return value!==null&&value>=minimum&&value<=1-minimum;
+}
+
 export function hasSelectedNeuralResidual(fit){
   const index=fit?.selected_member_index;
   const scale=finite(fit?.selected_residual_scale);
@@ -2390,11 +2396,16 @@ export function buildCognitiveLearningProfile(samples = [], {
       neural:hybridWeightFitRows.map(row=>predictFromFit(row.features,neuralFit)),
       targets:hybridWeightFitRows.map(row=>row.target)
     }:null;
-  const hybridOptimalBoostedWeight=hybridWeightFitPredictions&&
+  const hybridRawOptimalBoostedWeight=hybridWeightFitPredictions&&
     hybridWeightFitPredictions.boosted.every(Number.isFinite)&&
     hybridWeightFitPredictions.neural.every(Number.isFinite)
     ?deriveBrierOptimalBlendWeight(hybridWeightFitPredictions.boosted,
       hybridWeightFitPredictions.neural,hybridWeightFitPredictions.targets):null;
+  // Reject a 0/100 or 100/0 blend: it is one component masquerading as a hybrid.
+  const hybridWeightCollapsedToSingleComponent=hybridRawOptimalBoostedWeight!==null&&
+    !isMeaningfulHybridBlendWeight(hybridRawOptimalBoostedWeight,0.05);
+  const hybridOptimalBoostedWeight=isMeaningfulHybridBlendWeight(hybridRawOptimalBoostedWeight,0.05)
+    ?hybridRawOptimalBoostedWeight:null;
   const hybridSelectionCandidates=boostedTreeFit&&hybridNeuralComponentReady&&
     hybridWeightFitSupported&&hybridOptimalBoostedWeight!==null
     ?[{
@@ -2434,7 +2445,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       reason:!boostedTreeFit?'HYBRID_GBDT_FIT_UNAVAILABLE':
         !hybridNeuralComponentReady?'HYBRID_NEURAL_MEMBER_NOT_SELECTED_ON_INNER_SELECTION':
         !hybridWeightFitSupported?'HYBRID_WEIGHT_FIT_SUPPORT_BELOW_MINIMUM':
-        hybridOptimalBoostedWeight===null?'HYBRID_OPTIMAL_WEIGHT_UNIDENTIFIABLE':
+        hybridWeightCollapsedToSingleComponent?'HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT':
+        hybridRawOptimalBoostedWeight===null?'HYBRID_OPTIMAL_WEIGHT_UNIDENTIFIABLE':
         !hybridSelectionSupported?'HYBRID_SELECTION_SUPPORT_BELOW_MINIMUM':
         'NO_ANALYTIC_BLEND_WEIGHT_BEAT_BASE_RATE_AND_SAME_WINDOW_LOGISTIC'};
   const challengerCandidates=[
@@ -2755,7 +2767,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         !hybridNeuralComponentReady?'NEURAL_COMPONENT_NOT_SELECTED':
         !hybridWeightFitSupported?'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT':
         !hybridSelectionSupported?'WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT':
-        hybridOptimalBoostedWeight===null?'HYBRID_WEIGHT_NOT_IDENTIFIABLE':
+        hybridWeightCollapsedToSingleComponent?'HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT':
+        hybridRawOptimalBoostedWeight===null?'HYBRID_WEIGHT_NOT_IDENTIFIABLE':
         !bestHybridCandidate?'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC':
         String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP')?'OUT_OF_SAMPLE_VALIDATED':
         String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP')?'VALIDATION_SELECTED_HOLDOUT_FAILED':
@@ -2777,7 +2790,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       weight_fit_end_at:hybridWeightFitRows.at(-1)?.at??null,
       weight_fit_cut_at:hybridWeightSelectionStartAt,
       weight_fit_supported:hybridWeightFitSupported,
-      analytic_weight_identifiable:hybridOptimalBoostedWeight!==null,
+      raw_optimal_boosted_weight:hybridRawOptimalBoostedWeight,
+      minimum_component_weight:0.05,
+      analytic_weight_identifiable:hybridRawOptimalBoostedWeight!==null,
+      meaningful_two_component_weight:hybridOptimalBoostedWeight!==null,
+      weight_collapsed_to_single_component:hybridWeightCollapsedToSingleComponent,
       selection_samples:hybridSelectionTargets.samples,
       selection_positive_samples:hybridSelectionTargets.positive,
       selection_negative_samples:hybridSelectionTargets.negative,
