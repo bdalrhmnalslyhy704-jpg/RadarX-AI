@@ -210,7 +210,7 @@ test('same-cohort TCN-LSTM calibration and external gates are included in the fa
   assert.ok(row,'TCN-LSTM must have its own matrix row');
   assert.equal(row.variant,'CAUSAL_TCN_LSTM_LOCKED_DROPOUT_QUERY_ATTENTION');
   assert.equal(row.inner_selection.passed,true);
-  assert.equal(row.inner_selection.improvement,0.0005);
+  assert.ok(Math.abs(row.inner_selection.improvement-0.0005)<1e-12);
   assert.equal(row.external_validation.passed,true);
   assert.equal(row.external_validation.model_brier,0.09);
   assert.equal(row.external_validation.logistic_brier,0.094);
