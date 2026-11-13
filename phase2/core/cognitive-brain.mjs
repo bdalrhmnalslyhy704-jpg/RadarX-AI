@@ -2548,6 +2548,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         !neuralFit?'WAITING_FOR_BOTH_CHALLENGERS':
         !hybridNeuralComponentReady?'NEURAL_COMPONENT_NOT_SELECTED':
         !hybridWeightFitSupported?'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT':
+        !hybridSelectionSupported?'WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT':
         hybridOptimalBoostedWeight===null?'HYBRID_WEIGHT_NOT_IDENTIFIABLE':
         !bestHybridCandidate?'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC':
         String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP')?'OUT_OF_SAMPLE_VALIDATED':

@@ -352,8 +352,8 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
     assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
-      'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','HYBRID_WEIGHT_NOT_IDENTIFIABLE',
-      'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
+      'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT',
+      'HYBRID_WEIGHT_NOT_IDENTIFIABLE','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
@@ -928,7 +928,7 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
 
 
 test('Newton boosted-tree challenger learns nonlinear conjunctions without using the final holdout for selection',()=>{
-  const rows=Array.from({length:720},(_,index)=>{
+  const rows=Array.from({length:1440},(_,index)=>{
     const volumeState=index%2===0;
     const compressionState=Math.floor(index/2)%2===0;
     const isPositive=volumeState&&compressionState;
@@ -983,20 +983,6 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
-  console.log('[HYBRID_WEIGHT_SPLIT_DEBUG]',JSON.stringify({
-    trained:profile.hybrid_model.trained,status:profile.hybrid_model.status,
-    neuralHybridSelectionSamples:profile.hybrid_model.weight_fit_samples+
-      profile.hybrid_model.selection_samples,
-    weightFitSamples:profile.hybrid_model.weight_fit_samples,
-    weightFitPositive:profile.hybrid_model.weight_fit_positive_samples,
-    weightFitNegative:profile.hybrid_model.weight_fit_negative_samples,
-    selectionSamples:profile.hybrid_model.selection_samples,
-    selectionPositive:profile.hybrid_model.selection_positive_samples,
-    selectionNegative:profile.hybrid_model.selection_negative_samples,
-    cutAt:profile.hybrid_model.weight_fit_cut_at,
-    fitStart:profile.hybrid_model.weight_fit_start_at,
-    fitEnd:profile.hybrid_model.weight_fit_end_at
-  }));
   assert.equal(profile.hybrid_model.trained,true);
   assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
     'one analytically derived convex weight is fitted before its disjoint selection block');
