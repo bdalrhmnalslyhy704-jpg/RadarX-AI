@@ -953,6 +953,201 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   };
 }
 
+
+function meanBrier(rows, profile) {
+  if (!rows.length) return null;
+  return rows.reduce((sum, row) =>
+    sum + (predictTcnLstmHybridProbability(row.sequence, profile) - row.target) ** 2, 0
+  ) / rows.length;
+}
+
+function pairedBlockBootstrap(rows, profile, iterations = 400, seed = 1771) {
+  const buckets = new Map();
+  for (const row of rows) {
+    const key = Math.floor(row.at / (5 * DAY_MS));
+    if (!buckets.has(key)) buckets.set(key, []);
+    const probability = predictTcnLstmHybridProbability(row.sequence, profile);
+    const baseline = sigmoid(predictTcnLstmLogisticLogit(row.sequence, profile.baseline_fit));
+    buckets.get(key).push({
+      model: (probability - row.target) ** 2,
+      baseline: (baseline - row.target) ** 2
+    });
+  }
+  const blocks = [...buckets.values()];
+  if (blocks.length < 10)
+    return { evaluated:false, reason:'FEWER_THAN_10_FIVE_DAY_BLOCKS', block_count:blocks.length };
+  const random = mulberry32(seed);
+  const improvements = [];
+  for (let sample = 0; sample < iterations; sample++) {
+    let modelLoss = 0, baselineLoss = 0, count = 0;
+    for (let block = 0; block < blocks.length; block++) {
+      const chosen = blocks[Math.floor(random() * blocks.length)];
+      for (const row of chosen) {
+        modelLoss += row.model;
+        baselineLoss += row.baseline;
+        count++;
+      }
+    }
+    if (count) improvements.push((baselineLoss - modelLoss) / count);
+  }
+  improvements.sort((a,b)=>a-b);
+  const quantile = fraction => improvements[Math.min(
+    improvements.length - 1, Math.floor((improvements.length - 1) * fraction)
+  )];
+  return {
+    evaluated:true,
+    block_count:blocks.length,
+    iterations:improvements.length,
+    block_length_days:5,
+    improvement_ci95_low:quantile(0.025),
+    improvement_ci95_high:quantile(0.975)
+  };
+}
+
+/**
+ * Same-cohort outer evaluation for the TCN-LSTM candidate. Time boundaries are
+ * based on unique UTC days, and every 24h label is purged before the next block.
+ * The selection block alone chooses the LR/L2 configuration. Validation and
+ * untouched holdout are used only once for evaluation; neither updates weights.
+ */
+export function benchmarkTcnLstmHybridChronological(inputRows, {
+  requiredInnerImprovement = 0.00025,
+  requiredOuterImprovement = 0.003,
+  maxTrainingSamples = 2048,
+  bootstrapIterations = 400,
+  seed = 29
+} = {}) {
+  if (!Array.isArray(inputRows) || inputRows.length < 120)
+    return {
+      schema:TCN_LSTM_HYBRID_SCHEMA,status:'WAITING_FOR_TEMPORAL_SEQUENCE_SUPPORT',
+      evaluated:false,reason:'TEMPORAL_SEQUENCE_SUPPORT_TOO_SMALL',
+      input_samples:Array.isArray(inputRows)?inputRows.length:0,
+      probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+    };
+  inputRows.forEach((row,index)=>validateRow(row,index));
+  const identities = inputRows.map(sampleIdentity);
+  if (new Set(identities).size !== identities.length)
+    throw new TypeError('TCN_LSTM_DUPLICATE_INPUT_IDENTITY');
+  const rows = [...inputRows].sort((a,b)=>a.at-b.at||
+    String(a.symbol||'').localeCompare(String(b.symbol||''))||
+    sampleIdentity(a).localeCompare(sampleIdentity(b)));
+  const days = [...new Set(rows.map(row=>Math.floor(row.at/DAY_MS)*DAY_MS))].sort((a,b)=>a-b);
+  if (days.length < 60)
+    return {
+      schema:TCN_LSTM_HYBRID_SCHEMA,status:'WAITING_FOR_UNIQUE_UTC_DAY_SUPPORT',
+      evaluated:false,reason:'FEWER_THAN_60_UNIQUE_UTC_DAYS',
+      input_samples:rows.length,unique_utc_days:days.length,
+      probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+    };
+  const day1=days[Math.floor(days.length*0.60)];
+  const day2=days[Math.floor(days.length*0.76)];
+  const day3=days[Math.floor(days.length*0.88)];
+  const train=rows.filter(row=>row.at<day1-DAY_MS&&row.resolved_at<day1-DAY_MS);
+  const selection=rows.filter(row=>row.at>=day1+DAY_MS&&row.at<day2-DAY_MS&&row.resolved_at<day2-DAY_MS);
+  const validation=rows.filter(row=>row.at>=day2+DAY_MS&&row.at<day3-DAY_MS);
+  const holdout=rows.filter(row=>row.at>=day3+DAY_MS);
+  const partitions=[['training',train],['selection',selection],['validation',validation],['holdout',holdout]];
+  const support=Object.fromEntries(partitions.map(([name,part])=>[name,{
+    rows:part.length,
+    positive:part.filter(row=>row.target===1).length,
+    negative:part.filter(row=>row.target===0).length,
+    first_at:part[0]?.at??null,
+    last_at:part.at(-1)?.at??null
+  }]));
+  const unsupported=partitions.filter(([name,part])=>
+    part.length<20||support[name].positive<2||support[name].negative<2).map(([name])=>name);
+  const boundaryPairs=[
+    ['training','selection'],['selection','validation'],['validation','holdout']
+  ];
+  const purgeViolations=boundaryPairs.filter(([left,right])=>{
+    const previous=partitions.find(([name])=>name===left)[1];
+    const next=partitions.find(([name])=>name===right)[1];
+    if(!previous.length||!next.length)return true;
+    const latestResolution=Math.max(...previous.map(row=>row.resolved_at));
+    const earliestNext=Math.min(...next.map(row=>row.at));
+    return latestResolution>=earliestNext;
+  });
+  const trainIds=new Set(train.map(sampleIdentity));
+  const selectionIds=new Set(selection.map(sampleIdentity));
+  const validationIds=new Set(validation.map(sampleIdentity));
+  const holdoutIds=new Set(holdout.map(sampleIdentity));
+  const overlap=(left,right)=>[...left].some(id=>right.has(id));
+  if(unsupported.length||purgeViolations.length||
+      overlap(trainIds,selectionIds)||overlap(trainIds,validationIds)||
+      overlap(trainIds,holdoutIds)||overlap(selectionIds,validationIds)||
+      overlap(selectionIds,holdoutIds)||overlap(validationIds,holdoutIds))
+    return {
+      schema:TCN_LSTM_HYBRID_SCHEMA,status:'CHRONOLOGY_OR_CLASS_SUPPORT_REJECTED',
+      evaluated:false,unsupported_partitions:unsupported,
+      purge_violations:purgeViolations,
+      partition_support:support,
+      probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+    };
+
+  const selectionReport=selectTcnLstmHybridHyperparameters(train,selection,{
+    requiredImprovement:requiredInnerImprovement,
+    seed,maxTrainingSamples
+  });
+  const base={
+    schema:TCN_LSTM_HYBRID_SCHEMA,
+    architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
+    input_samples:rows.length,
+    unique_utc_days:days.length,
+    split_boundaries:{
+      selection_after_utc:new Date(day1+DAY_MS).toISOString(),
+      validation_after_utc:new Date(day2+DAY_MS).toISOString(),
+      holdout_after_utc:new Date(day3+DAY_MS).toISOString()
+    },
+    partition_support:support,
+    purged_rows:rows.length-train.length-selection.length-validation.length-holdout.length,
+    same_window_comparator:'FROZEN_LOGISTIC_FIT_ON_IDENTICAL_TRAINING_ROWS',
+    inner_selection_diagnostics:selectionReport,
+    required_inner_improvement:requiredInnerImprovement,
+    required_outer_improvement:requiredOuterImprovement,
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+  if (!selectionReport.selected_fit)
+    return {
+      ...base,status:'ABSTAIN_TCN_LSTM_DID_NOT_BEAT_INNER_SELECTION_LOGISTIC',
+      validation:{evaluated:false,reason:'INNER_SELECTION_NOT_PASSED'},
+      holdout:{evaluated:false,reason:'INNER_SELECTION_NOT_PASSED'}
+    };
+
+  const profile=selectionReport.selected_fit;
+  const evaluate=(part,bootstrapSeed)=>{
+    const modelBrier=meanBrier(part,profile);
+    const logisticBrier=part.reduce((sum,row)=>
+      sum+(sigmoid(predictTcnLstmLogisticLogit(row.sequence,profile.baseline_fit))-row.target)**2,0
+    )/part.length;
+    const improvement=logisticBrier-modelBrier;
+    const bootstrap=pairedBlockBootstrap(part,profile,bootstrapIterations,bootstrapSeed);
+    return {
+      evaluated:true,sample_count:part.length,
+      positive_samples:part.filter(row=>row.target===1).length,
+      negative_samples:part.filter(row=>row.target===0).length,
+      model_brier_score:modelBrier,
+      logistic_brier_score:logisticBrier,
+      improvement,required_improvement:requiredOuterImprovement,
+      paired_five_day_block_bootstrap:bootstrap,
+      passed:improvement>requiredOuterImprovement&&bootstrap.evaluated===true&&
+        bootstrap.improvement_ci95_low>0
+    };
+  };
+  const validationResult=evaluate(validation,seed+7001);
+  const holdoutResult=evaluate(holdout,seed+9001);
+  const passed=validationResult.passed&&holdoutResult.passed;
+  return {
+    ...base,
+    status:passed?'VALIDATION_AND_UNTOUCHED_HOLDOUT_PASSED_RESEARCH_ONLY':
+      'INNER_SELECTION_PASSED_OUTER_GATES_NOT_PASSED',
+    trained:true,selected_for_research:selectionReport.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY',
+    validation:validationResult,
+    holdout:holdoutResult,
+    trained_model:profile,
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+}
+
 export function benchmarkTcnLstmHybridInference(sequence, profile, {
   warmup = 10, iterations = 100
 } = {}) {
