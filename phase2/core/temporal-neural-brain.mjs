@@ -1215,13 +1215,19 @@ function fitMember(rows, seed, {
         const p=clamp(probability,1e-12,1-1e-12);
         return Math.log(p/(1-p));
       });
+      if(!baselineFit||!Array.isArray(baselineFit.weights)||
+        !Number.isFinite(Number(baselineFit.bias)))
+        throw new TypeError('TEMPORAL_RANKING_SAME_WINDOW_LOGISTIC_ANCHOR_MISSING');
       const baselineLogits=rows.map(row=>{
         const features=row._pooled_baseline_features;
-        if(!isValidTemporalPooledBaselineFeatures(features))
+        if(!isValidTemporalPooledBaselineFeatures(features)||
+          baselineFit.weights.length!==features.length)
           throw new TypeError('TEMPORAL_RANKING_BASELINE_FEATURES_INVALID');
-        let value=model.outputBias;
+        let value=Number(baselineFit.bias);
         for(let feature=0;feature<features.length;feature++)
-          value+=Number(model.skipWeights[feature])*Number(features[feature]);
+          value+=Number(baselineFit.weights[feature])*Number(features[feature]);
+        if(!Number.isFinite(value))
+          throw new TypeError('TEMPORAL_RANKING_BASELINE_LOGIT_NON_FINITE');
         return value;
       });
       directionalLoss=calculateAsymmetricDirectionalRankingLoss({
