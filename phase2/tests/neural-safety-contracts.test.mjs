@@ -9,7 +9,7 @@ import {
 } from '../core/neural-safety-contracts.mjs';
 
 const STEPS=24,CHANNELS=29,INTERVAL=900000,AT=1_740_000_000_000;
-const seq=()=>Array.from({length:STEPS},()=>Array(CHANNELS).fill(0.1));
+const seq=()=>Array.from({length:STEPS},()=>{const row=Array(CHANNELS).fill(0.1);row[28]=1;return row;});
 const times=()=>Array.from({length:STEPS},(_,i)=>AT-(STEPS-1-i)*INTERVAL);
 
 test('temporal alignment requires exact shape, 15m cadence, baseline close and target maturity',()=>{
