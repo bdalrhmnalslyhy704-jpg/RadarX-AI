@@ -987,8 +987,14 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the GBDT component must expose its own later, disjoint probability calibration');
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
   assert.equal(profile.boosted_tree_model.search_grid_size,9);
-  assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,9,
-    'nine pre-declared GBDT schedules must be compared on a disjoint inner selection block');
+  assert.equal(profile.boosted_tree_model.candidate_fit_diagnostics.length,9,
+    'every pre-declared GBDT schedule must report whether a gainful root split exists');
+  assert.equal(profile.boosted_tree_model.candidate_attempt_count,9);
+  assert.ok(profile.boosted_tree_model.candidate_fit_diagnostics.every(row=>
+    row.root_gain?.evaluated===true&&Number.isFinite(row.root_gain.best_root_split_gain??0)));
+  assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,
+    profile.boosted_tree_model.candidate_tree_fit_count,
+    'only actual fitted GBDT trees may enter selection scoring');
   const treeCandidates=profile.boosted_tree_model.candidate_selection_metrics;
   assert.ok(treeCandidates.every(row=>
     row.training_samples===profile.boosted_tree_model.selection_training_samples&&

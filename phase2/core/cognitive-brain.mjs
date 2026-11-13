@@ -465,6 +465,40 @@ function accumulateResidualTreeImportance(node,gains,counts) {
   accumulateResidualTreeImportance(node.right,gains,counts);
 }
 
+function diagnoseResidualBoostedTreeRootGain(training,baselineFit,{
+  l2=12,minimumLeafFraction=0.035
+}={}){
+  const featureCount=baselineFit?.weights?.length||0;
+  const rows=(Array.isArray(training)?training:[]).filter(row=>
+    Array.isArray(row?.vector)&&row.vector.length===featureCount&&
+    row.vector.every(Number.isFinite)&&Number.isFinite(Number(row.target)));
+  if(rows.length<200||!featureCount||!baselineFit)
+    return {evaluated:false,reason:'GBDT_ROOT_DIAGNOSTIC_TRAINING_NOT_READY'};
+  const minimumLeaf=Math.max(12,Math.min(80,Math.floor(rows.length*minimumLeafFraction)));
+  const regularization=clamp(Number(l2)||12,2,30);
+  const logits=rows.map(row=>linearLogit(row.vector,baselineFit));
+  const gradients=new Array(rows.length),hessians=new Array(rows.length);
+  for(let index=0;index<rows.length;index++){
+    const probability=logistic(logits[index]);
+    gradients[index]=probability-Number(rows[index].target);
+    hessians[index]=Math.max(0.025,probability*(1-probability));
+  }
+  const split=bestResidualTreeSplit(rows.map((_,index)=>index),rows,gradients,hessians,{
+    minimumLeaf,l2:regularization,minGain:Number.NEGATIVE_INFINITY
+  });
+  return {
+    evaluated:true,training_samples:rows.length,feature_count:featureCount,
+    minimum_leaf_samples:minimumLeaf,l2:regularization,
+    best_root_split_gain:split?Number(split.gain.toFixed(10)):null,
+    best_root_split_feature:split?.feature??null,
+    best_root_split_threshold:split?.threshold??null,
+    best_root_gain_is_positive:split?split.gain>0:false,
+    configured_min_gain:0.002,
+    positive_gain_but_blocked_by_default_threshold:split
+      ?split.gain>0&&split.gain<=0.002:false
+  };
+}
+
 function fitResidualBoostedTrees(training, baselineFit, {
   maxTrees=36,maxDepth=3,learningRate=0.035,l2=12,
   minimumLeafFraction=0.035,residualScale=0.65
@@ -2216,17 +2250,33 @@ export function buildCognitiveLearningProfile(samples = [], {
   const boostedSelectionSupported=boostedSelectionTargets.samples>=neuralSelectionMinimum&&
     boostedSelectionTargets.positive>=Math.max(3,neuralSelectionPositiveMinimum)&&
     boostedSelectionTargets.negative>=Math.max(8,neuralSelectionNegativeMinimum);
-  const boostedTreeCandidates=boostedTrainingReady
+  const boostedTreeCandidateAttempts=boostedTrainingReady
     ?COGNITIVE_GBDT_VALIDATION_GRID.map(configuration=>{
       const fit=fitResidualBoostedTrees(boostedTrainingRows,boostedTrainingBaselineFit,configuration);
+      const rootGainDiagnostic=diagnoseResidualBoostedTreeRootGain(
+        boostedTrainingRows,boostedTrainingBaselineFit,configuration
+      );
       return {
-        configuration,fit,
+        configuration,fit,root_gain_diagnostic:rootGainDiagnostic,
         selection:fit?evaluateHoldout(boostedSelectionRows,fit,comparisonMargin):{
           evaluated:false,model_brier_score:null,reason:'NO_GAINFUL_TREE_SPLIT'
         }
       };
-    }).filter(candidate=>candidate.fit&&candidate.selection?.evaluated===true)
-    :[];
+    }):[];
+  const boostedTreeCandidates=boostedTreeCandidateAttempts.filter(candidate=>
+    candidate.fit&&candidate.selection?.evaluated===true);
+  const boostedTreeCandidateFitDiagnostics=boostedTreeCandidateAttempts.map(candidate=>({
+    configuration:candidate.configuration.name,
+    max_trees:candidate.configuration.maxTrees,
+    max_depth:candidate.configuration.maxDepth,
+    learning_rate:candidate.configuration.learningRate,
+    l2:candidate.configuration.l2,
+    minimum_leaf_fraction:candidate.configuration.minimumLeafFraction,
+    residual_scale:candidate.configuration.residualScale,
+    fitted_tree_count:candidate.fit?.tree_count??0,
+    failure_reason:candidate.fit?null:'NO_GAINFUL_TREE_SPLIT',
+    root_gain:candidate.root_gain_diagnostic
+  }));
   const bestBoostedTreeDiagnosticCandidate=[...boostedTreeCandidates].sort((a,b)=>
     a.selection.model_brier_score-b.selection.model_brier_score||
     a.configuration.name.localeCompare(b.configuration.name))[0]||null;
@@ -2278,6 +2328,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     l2:candidate.configuration.l2,
     minimum_leaf_fraction:candidate.configuration.minimumLeafFraction,
     residual_scale:candidate.configuration.residualScale,
+    minimum_gain:candidate.configuration.minGain??0.002,
     actual_tree_count:candidate.fit.tree_count,
     training_samples:candidate.fit.training_samples,
     selection_sample_count:candidate.selection.sample_count,
@@ -2670,6 +2721,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       selected_configuration:bestBoostedTreeCandidate?.configuration.name||null,
       candidate_selection_metrics:boostedTreeCandidateMetrics,
       candidate_validation_metrics:boostedTreeCandidateMetrics,
+      candidate_fit_diagnostics:boostedTreeCandidateFitDiagnostics,
+      configured_minimum_gain:0.002,
+      candidate_attempt_count:boostedTreeCandidateAttempts.length,
+      candidate_tree_fit_count:boostedTreeCandidates.length,
       same_window_logistic_validation:boostedSameWindowLogisticValidation,
       same_window_logistic_holdout:boostedSameWindowLogisticHoldout,
       training_support_ready:boostedTrainingReady,
