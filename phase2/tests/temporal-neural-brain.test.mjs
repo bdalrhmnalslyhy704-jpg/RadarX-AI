@@ -116,6 +116,30 @@ test('TCN passes a deterministic 32-sequence one-batch fit with finite gradients
   assert.equal(report.passed,true,JSON.stringify(report));
 });
 
+test('TCN early stopping restores best training-only checkpoint on a zero-signal plateau',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    return {
+      id:'TCN-PLATEAU:'+index,symbol:'TCNPLATEAUUSDT',
+      at:1_700_000_000_000+index*60_000,
+      resolved_at:1_700_000_060_000+index*60_000,
+      outcome:target?'UP':'DOWN',target,sequence
+    };
+  });
+  const report=auditTemporalOneBatchOverfit(rows,{epochs:180,seed:79});
+  console.log('[TEMPORAL_TCN_EARLY_STOPPING_PLATEAU]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.deepEqual(report.input_shape,[24,29]);
+  assert.ok(report.epochs_completed<report.requested_epochs,
+    'a training-only plateau must stop before the requested epoch budget');
+  assert.equal(report.early_stopping.stopped_early,true);
+  assert.equal(report.early_stopping.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch<=report.epochs_completed);
+});
+
 test('V8, V9 and V10 analytical gradients match central finite differences for all proper-score objectives',()=>{
   const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
     Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>

@@ -559,6 +559,31 @@ test('MLP numerical training audit drives an exactly balanced 32-row batch to ne
   assert.equal(report.passed,true,JSON.stringify(report));
 });
 
+test('MLP early stopping restores best training-only checkpoint on a zero-signal plateau',()=>{
+  const features={};
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    return {
+      id:'MLP-PLATEAU:'+index,symbol:'MLPPLATEAUUSDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:target?'UP':'DOWN',target,features,
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:180,seed:71});
+  console.log('[COGNITIVE_MLP_EARLY_STOPPING_PLATEAU]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.ok(report.epochs_completed<report.requested_epochs,
+    'a training-only plateau must stop before the requested epoch budget');
+  assert.equal(report.early_stopping.stopped_early,true);
+  assert.equal(report.early_stopping.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch<=report.epochs_completed);
+});
+
 test('the learner changes its conclusion when the same evidence leads to opposite matured outcomes', () => {
   const normal = buildCognitiveLearningProfile(behavioralSamples({ seed: 2, reverse: false }));
   const reversed = buildCognitiveLearningProfile(behavioralSamples({ seed: 2, reverse: true }));
