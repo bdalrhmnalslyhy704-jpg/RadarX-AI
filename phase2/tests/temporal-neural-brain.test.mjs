@@ -458,6 +458,42 @@ function sample(group,index,{up=null}={}){
   };
 }
 
+test('TCN training loop consumes the asymmetric same-time ranking objective',()=>{
+  const rows=Array.from({length:30*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    return sample(group,within,{up:within%2===0});
+  });
+  const profile=buildTemporalNeuralProfile(rows,{
+    minTrainingSamples:80,
+    minimumValidationSamples:30,
+    minimumHoldoutSamples:30,
+    liveHoldoutSamples:20,
+    epochs:1,
+    enableTemporalBoostedTree:false,
+    enableAsymmetricDirectionalRankingLoss:true,
+    directionalRankingLossConfig:{
+      brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,
+      baselineGapWeight:0.2,pairMargin:0.1,pairTemperature:0.5,
+      falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025
+    }
+  });
+  const members=profile.temporal_tcn?.member_training_diagnostics||[];
+  assert.ok(members.length>0,'shared TCN ensemble should reach the training loop');
+  assert.ok(members.every(member=>Array.isArray(member.epochs)),
+    'each trained member should retain epoch diagnostics');
+  const rankingDiagnostics=members.flatMap(member=>member.epochs)
+    .map(epoch=>epoch.directional_ranking_loss).filter(Boolean);
+  assert.ok(rankingDiagnostics.length>0,
+    'the asymmetric objective must be calculated inside the actual TCN optimizer loop');
+  assert.ok(rankingDiagnostics.some(metrics=>metrics.same_timestamp_pair_count>0),
+    'the model must build cross-sectional positive/negative pairs on shared timestamps');
+  assert.ok(rankingDiagnostics.every(metrics=>
+    Number.isFinite(metrics.candidate_brier)&&
+    Number.isFinite(metrics.baseline_brier)&&
+    Number.isFinite(metrics.pairwise_ranking_loss)),
+    'training objective diagnostics must remain finite');
+});
+
 test('temporal target encodes only an actual +3% first-passage as success',()=>{
   assert.equal(temporalBinaryTarget('UP'),1);
   assert.equal(temporalBinaryTarget('DOWN'),0);
