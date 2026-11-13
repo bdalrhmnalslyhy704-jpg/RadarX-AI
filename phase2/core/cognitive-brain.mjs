@@ -1013,6 +1013,13 @@ function predictFromFit(features, fit, residualScale=1) {
     const weight=clamp(Number(fit.boosted_weight)||0,0,1);
     return clamp(weight*boosted+(1-weight)*neural,0.02,0.98);
   }
+  if(fit?.kind==='RESIDUAL_FACTOR_CROSS_V1'){
+    const vector=normalizedFeatures(features,fit.feature_schema||COGNITIVE_FEATURE_SCHEMA);
+    if(vector.length!==Number(fit.input_size))return null;
+    return applyAcceptedProbabilityCalibration(
+      predictFactorizationMachineProbability(vector,fit,residualScale),fit.probability_calibrator
+    );
+  }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
     const selected=Number(fit.selected_member_index);
