@@ -232,6 +232,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       Math.trunc(options.temporalRegimeLocalTcnAttentionMaxTrainingSamples||4096))),
     regimeLocalTcnAttentionEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnAttentionEpochs||6))),
+    regimeLocalTcnAttentionPositionBiasL2Multiplier:Math.max(1,Math.min(64,
+      finite(options.temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier)??1)),
     regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
     enableTemporalBoostedTree:options.enableTemporalBoostedTree!==false
