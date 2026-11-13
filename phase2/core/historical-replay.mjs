@@ -486,7 +486,9 @@ export function runHistoricalReplay({
     const forwardRows = candles.slice(index + 1).filter(x => x.closeTime <= Math.min(horizonEndAt,observationEnd));
     const horizonObserved = isContiguousHorizonObserved(candles,index,at,horizon,observationEnd);
     const close = candle.close;
-    if(captureHybridSample&&horizonObserved){
+    // The barrier resolver decides its own maturity: early exits need no later candles,
+    // while gaps before the first exit and incomplete no-exit horizons fail closed.
+    if(captureHybridSample){
       const featureCandles=available1m.slice(-48).map(row=>({
         ...row,
         aggTrades:tradesByMinute.get(row.openTime)||[]
@@ -498,6 +500,7 @@ export function runHistoricalReplay({
       const bracket=resolveBarrierTrade({
         entryPrice:close,decisionAt:at,futureCandles:forwardRows,
         takeProfitPct:3,stopLossPct:2,horizonMs:4*HOUR_MS,
+        candleIntervalMs:MINUTE_MS,
         feeBpsPerSide:10,slippageBpsPerSide:5
       });
       const classicRaw=finite(raw?.score??raw?.alert?.opportunity_score??raw?.alert?.strong_move?.score);
