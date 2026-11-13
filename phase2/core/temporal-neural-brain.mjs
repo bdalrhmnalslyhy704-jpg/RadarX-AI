@@ -161,7 +161,8 @@ function cleanRows(samples, {
       temporal_sequence:row.temporal_sequence,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps,
       feature_information_cutoff_at:row.feature_information_cutoff_at??at,
-      requireSequenceTimestamps
+      requireSequenceTimestamps,
+      binaryMaskChannels:requireSequenceTimestamps?[28]:[]
     });
     if(!alignment.valid)return false;
     seen.add(id); seen.add(baseline);
