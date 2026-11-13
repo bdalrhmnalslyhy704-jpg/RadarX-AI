@@ -477,7 +477,7 @@ test('TCN training loop consumes the asymmetric same-time ranking objective',()=
       falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025
     }
   });
-  const members=profile.temporal_tcn?.member_training_diagnostics||[];
+  const members=profile.temporal_network?.member_training_diagnostics||[];
   assert.ok(members.length>0,'shared TCN ensemble should reach the training loop');
   assert.ok(members.every(member=>Array.isArray(member.epoch_history)),
     'each trained member should retain per-epoch diagnostics');
