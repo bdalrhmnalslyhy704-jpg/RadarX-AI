@@ -36,6 +36,8 @@ import {
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
   temporalParameterL2,
+  TEMPORAL_RANKING_BUCKET_MS,
+  timeGroupedRankingMetrics,
   poolOrderedTemporalSegments,
   poolMultiscaleTemporalSegments,
   poolLearnedTemporalAttention,
@@ -293,9 +295,9 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
   assert.ok(regimeResults.every(result=>result.validation_samples>0&&result.holdout_samples>0),
     'both trained BTC regimes must have disjoint validation and holdout blocks');
   assert.ok(regimeResults.every(result=>
-    result.member_selection_logistic_ranking_metrics?.method==='WITHIN_TIMESTAMP_TOP_K_MACRO_V1'));
+    result.member_selection_logistic_ranking_metrics?.method==='WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2'));
   assert.ok(regimeResults.every(result=>
-    result.selection_best_candidate?.ranking_metrics?.method==='WITHIN_TIMESTAMP_TOP_K_MACRO_V1'));
+    result.selection_best_candidate?.ranking_metrics?.method==='WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2'));
   assert.ok(regimeResults.every(result=>
     result.member_selection_scores.length>0&&
     result.member_selection_scores.every(candidate=>candidate.ranking_metrics?.top_10_pct?.groups>0)));
@@ -310,6 +312,32 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
     'research challenger cannot publish a live probability from a synthetic unit fixture');
   assert.equal(attention.live_eligibility_ready,false);
   assert.equal(profile.live_eligibility_ready,false);
+});
+
+test('early-riser ranking groups competing coins by the same 15m candle and excludes singleton buckets',()=>{
+  const bucket=Math.floor(BASE_TIME/TEMPORAL_RANKING_BUCKET_MS)*TEMPORAL_RANKING_BUCKET_MS;
+  const rows=[
+    {at:bucket+1,symbol:'AAAUSDT'},
+    {at:bucket+25,symbol:'BBBUSDT'},
+    {at:bucket+1000,symbol:'CCCUSDT'},
+    {at:bucket+TEMPORAL_RANKING_BUCKET_MS,symbol:'DDDUSDT'},
+    {at:bucket+TEMPORAL_RANKING_BUCKET_MS+2,symbol:'EEEUSDT'},
+    {at:bucket+2*TEMPORAL_RANKING_BUCKET_MS,symbol:'SINGLEUSDT'}
+  ];
+  const metrics=timeGroupedRankingMetrics(rows,
+    [0.95,0.10,0.50,0.90,0.20,0.99],
+    [1,0,1,0,1,1]);
+  assert.equal(TEMPORAL_RANKING_BUCKET_MS,900000);
+  assert.equal(metrics.method,'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2');
+  assert.equal(metrics.total_time_buckets,3);
+  assert.equal(metrics.groups,2);
+  assert.equal(metrics.singleton_buckets_excluded,1);
+  assert.equal(metrics.multi_symbol_rows,5);
+  assert.equal(metrics.mean_symbols_per_ranking_bucket,2.5);
+  assert.equal(metrics.maximum_symbols_per_ranking_bucket,3);
+  assert.equal(metrics.groups_with_positive,2);
+  assert.equal(metrics.top_20_pct.groups,2);
+  assert.ok(metrics.average_precision>0&&metrics.average_precision<=1);
 });
 
 test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{
