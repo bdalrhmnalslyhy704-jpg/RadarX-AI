@@ -1063,7 +1063,7 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   if (!Array.isArray(inputRows) || inputRows.length === 0)
     return waiting('WAITING_FOR_TEMPORAL_SEQUENCE_SUPPORT',
       'TEMPORAL_SEQUENCE_SUPPORT_TOO_SMALL', { input_samples:0 });
-  inputRows.forEach((row,index)=>validateRow(row,index));
+  inputRows.forEach((row,index)=>validateRow(row,index,false));
   const identities = inputRows.map(sampleIdentity);
   if (new Set(identities).size !== identities.length)
     throw new TypeError('TCN_LSTM_DUPLICATE_INPUT_IDENTITY');
