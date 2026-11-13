@@ -587,4 +587,12 @@ test('persisted benchmark report retains the independent regime-local TCN challe
     'compactTarget must serialize the ordered-pooling TCN challenger instead of dropping it');
   assert.ok(source.includes('temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger'),
     'compactTarget must serialize the full-receptive-field V10 challenger instead of dropping it');
+  assert.ok(source.includes("const attentionOnly=String(args['attention-only']||'false')==='true'"));
+  assert.ok(source.includes('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE'));
+  assert.ok(source.includes('research_mode:tcnOnly'));
+  assert.ok(source.includes('V11_ATTENTION_ONLY_ISOLATED_COMPUTE'));
+  assert.ok(source.includes('enableRegimeLocalTcn:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnPyramid:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnMultiscale:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnAttention:true'));
 });
