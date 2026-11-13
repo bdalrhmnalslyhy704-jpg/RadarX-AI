@@ -279,6 +279,8 @@ export function buildCognitiveFeatureVector(features={},featureSchema=COGNITIVE_
 
 function validResolvedSamples(samples, {
   outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  modelTargetDefinition = TEMPORAL_TARGET_DEFINITION,
+  modelTargetSemantics = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2',
   allowResolutionLag = false,
   allowedOutcomeSources = null,
   featureSchema = COGNITIVE_FEATURE_SCHEMA
@@ -1434,7 +1436,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       feature_schema:activeFeatureSchema,
       outcome_horizon_ms: horizonMs,
       comparison_contract:{
-        target_definition:TEMPORAL_TARGET_DEFINITION,
+        target_definition:modelTargetDefinition,
         target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
         shared_outer_split_applied:false,
         sample_identity_matches:sharedSampleIdentityMatches,
@@ -1484,7 +1486,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
         training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
         training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
-        target_definition:TEMPORAL_TARGET_DEFINITION,
+        target_definition:modelTargetDefinition,
+        target_semantics:modelTargetSemantics,
         residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
         candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
         anchor_adaptation:'FROZEN_LOGISTIC',
@@ -2081,7 +2084,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     feature_schema:activeFeatureSchema,
     outcome_horizon_ms: horizonMs,
     comparison_contract:{
-      target_definition:TEMPORAL_TARGET_DEFINITION,
+      target_definition:modelTargetDefinition,
       target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       shared_outer_split_applied:sharedOuterSplitApplied,
       sample_identity_matches:sharedSampleIdentityMatches,
@@ -2154,7 +2157,8 @@ export function buildCognitiveLearningProfile(samples = [], {
           ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
           :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6'),
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
-      target_definition:TEMPORAL_TARGET_DEFINITION,
+      target_definition:modelTargetDefinition,
+      target_semantics:modelTargetSemantics,
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
       selection_samples:neuralSelection.length,

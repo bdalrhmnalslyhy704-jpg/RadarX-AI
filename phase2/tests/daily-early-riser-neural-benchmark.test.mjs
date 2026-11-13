@@ -766,3 +766,39 @@ test('daily neural benchmark CLI forwards and records an explicit MLP iteration 
   assert.ok(source.includes('neural_iterations:neuralIterations'));
   assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,'));
 });
+
+test('72h safe-opportunity target definition is carried into the cognitive comparison contract',()=>{
+  const at=1_800_000_000_000;
+  const horizonMs=72*60*60*1000;
+  const expectedDefinition='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1';
+  const expectedSemantics='PLUS_TARGET_BEFORE_MINUS_2_PERCENT_WITHIN_HORIZON';
+  const sample=sampleWith({
+    at,targetPct:5,outcome:'UP',resolvedAt:at+horizonMs,horizonMs,
+    outcomeSource:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE
+  });
+  sample.safe_opportunity_targets={
+    '72h':{
+      plus_5_pct:{
+        status:'RESOLVED',outcome:'UP',resolved_at:at+horizonMs,horizon_ms:horizonMs,
+        outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+        target_definition:expectedDefinition
+      }
+    }
+  };
+  const prepared=prepareDailyEarlyRiserCognitiveRow(sample,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.ok(prepared.row,prepared.reason||'safe 72h sample should be valid');
+  const profile=buildCognitiveLearningProfile([prepared.row],{
+    outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    modelTargetDefinition:expectedDefinition,
+    modelTargetSemantics:expectedSemantics,
+    temporalSamples:[],temporalOptions:{}
+  });
+  assert.equal(profile.comparison_contract.target_definition,expectedDefinition);
+  assert.equal(profile.comparison_contract.target_semantics,expectedSemantics);
+  assert.equal(profile.neural_network.target_definition,expectedDefinition);
+  assert.equal(profile.neural_network.target_semantics,expectedSemantics);
+});

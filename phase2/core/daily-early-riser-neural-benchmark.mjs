@@ -57,6 +57,11 @@ const outcomeSourceFor=labelMode=>labelMode==='upside_opportunity'
   ?DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE
   :labelMode==='safe_opportunity'
     ?DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE:DAILY_EARLY_RISER_OUTCOME_SOURCE;
+const targetSemanticsFor=labelMode=>labelMode==='upside_opportunity'
+  ?'ANY_UPSIDE_TOUCH_WITHIN_HORIZON_INDEPENDENT_OF_DRAWDOWN'
+  :labelMode==='safe_opportunity'
+    ?'PLUS_TARGET_BEFORE_MINUS_2_PERCENT_WITHIN_HORIZON'
+    :'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H';
 
 export function summarizeDailyNeuralAnchorDiagnostics(
   neural={},requestedMode=DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION
@@ -111,6 +116,8 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
     sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
     return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
   const expectedSource=outcomeSourceFor(labelMode);
+  const modelTargetDefinition=targetDefinition(target,labelMode,horizonHours);
+  const modelTargetSemantics=targetSemanticsFor(labelMode);
   const expectedDefinition=targetDefinition(target,labelMode,horizonHours);
   if(label.outcome_source!==expectedSource||label.target_definition!==expectedDefinition)
     return {row:null,reason:'OUTCOME_SOURCE_OR_DEFINITION_MISMATCH'};
@@ -162,6 +169,8 @@ function buildDailyCognitiveProfile(rows,options={}){
     minimumHoldoutSamples:Math.max(1000,Math.trunc(options.minimumHoldoutSamples||5000)),
     validationFraction:0.20,holdoutFraction:0.20,recentWindowFraction:0.60,
     recentSelectionMargin:0.005,l2:0.08,outcomeHorizonMs:options.outcomeHorizonMs,
+    modelTargetDefinition:options.modelTargetDefinition,
+    modelTargetSemantics:options.modelTargetSemantics,
     allowedOutcomeSources:options.allowedOutcomeSources,
     iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
     learningRate:0.10,minNeuralTrainingSamples:240,
@@ -236,6 +245,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const outcomeCounts=countOutcomes(rows);
   const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
   const targetContract=targetDefinition(target,labelMode,horizonHours);
+  const modelTargetSemantics=targetSemanticsFor(labelMode);
   const temporal=options.skipTemporal===true?{
     status:'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT',trained:false,selected:false,
     probability_ready:false,live_eligibility_ready:false,
@@ -332,7 +342,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     };
   }
   const profile=buildDailyCognitiveProfile(rows,{
-    ...options,outcomeHorizonMs,allowedOutcomeSources:[selectedOutcomeSource]
+    ...options,outcomeHorizonMs,modelTargetDefinition:targetContract,
+    modelTargetSemantics,allowedOutcomeSources:[selectedOutcomeSource]
   });
   const neural=profile.neural_network||{};
   const neuralAnchorMode=options.neuralAnchorAdaptation ??
@@ -687,7 +698,8 @@ export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options
     const rows=groups[regime];
     const profile=rows.length>=Math.max(300,Math.trunc(options.minTrainingSamples||600))
       ?buildDailyCognitiveProfile(rows,{
-        ...options,outcomeHorizonMs,allowedOutcomeSources:[expectedSource],
+        ...options,outcomeHorizonMs,modelTargetDefinition,modelTargetSemantics,
+        allowedOutcomeSources:[expectedSource],
         minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
         minimumValidationSamples:minValidation,minimumHoldoutSamples:minHoldout,
         neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction??1,
