@@ -516,11 +516,19 @@ export function resolveBarrierTrade({
     .filter(item => item.at === null || (item.at > at && item.at <= horizonEnd));
   if (!candidates.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
 
+  // decisionAt can mean either the inclusive close timestamp of the last
+  // candle (next open is at+1) or the next candle's open boundary (at).
+  // Binance closeTime is inclusive, so infer the convention from openTime.
+  const firstTimestamped = candidates.find(item => item.at !== null);
+  const firstOpenAt = finite(firstTimestamped?.candle?.openTime) ??
+    finite(firstTimestamped?.candle?.open_time);
+  const closeBoundaryOffset = firstOpenAt === at ? -1 : 0;
+
   // Validate the forward path only as far as the first exit. A missing candle
   // before a barrier touch makes the outcome unknowable; candles after an exit
   // are deliberately not required or inspected.
   const path = [];
-  let expectedAt = at + interval;
+  let expectedAt = at + interval + closeBoundaryOffset;
   let previousAt = at;
   let exitPrice = null, exitAt = null, exitReason = null;
   for (const item of candidates) {
