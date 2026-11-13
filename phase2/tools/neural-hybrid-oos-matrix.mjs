@@ -203,15 +203,17 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
         family:'GBDT_CONTROL',variant:'RESIDUAL_GBDT',
         model:gbdt,selection:innerGate(gbdt),
         validation:pairFor({validation:gbdt.validation,
-          same:gbdt.same_window_logistic_validation?.model_brier_score},'validation',['same']),
+          same:gbdt.same_window_logistic_validation?.model_brier_score||
+            root.binary_up_event_contract?.boosted_tree_same_window_logistic_validation?.model_brier_score},'validation',['same']),
         holdout:pairFor({holdout:gbdt.holdout,
-          same:gbdt.same_window_logistic_holdout?.model_brier_score},'holdout',['same'])
+          same:gbdt.same_window_logistic_holdout?.model_brier_score||
+            root.binary_up_event_contract?.boosted_tree_same_window_logistic_holdout?.model_brier_score},'holdout',['same'])
       },
       {
         family:'HYBRID_MLP_GBDT',variant:'CALIBRATED_BRIER_BLEND',
         model:hybrid,selection:innerGate(hybrid),
         validation:pairFor({validation:hybrid.validation,
-          same:gbdt.same_window_logistic_validation?.model_brier_score},'validation',['same']),
+          same:hybrid.validation_logistic_brier_score},'validation',['same']),
         holdout:pairFor({holdout:hybrid.holdout,
           same:hybrid.holdout_comparison?.same_window_logistic_brier_score||
             root.model_selection?.challenger_holdout_comparison?.same_window_logistic_brier_score},'holdout',['same'])
