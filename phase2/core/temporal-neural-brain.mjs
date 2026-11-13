@@ -96,6 +96,13 @@ export function hasTemporalBrierSuperiority(candidateScore, baselineScore,
     baseline - candidate - required > 1e-12;
 }
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+export function temporalParameterL2(parameterName,baseL2,attentionPositionBiasL2Multiplier=1){
+  const base=finite(baseL2),multiplier=finite(attentionPositionBiasL2Multiplier);
+  if(base===null||base<0||multiplier===null||multiplier<0)return null;
+  return parameterName==='attentionPositionBiases'
+    ?base*multiplier:base;
+}
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 export function temporalBinaryTarget(outcome) {
@@ -253,12 +260,13 @@ function adamTree(parameters, gradients, moments, variances, step, rate, l2) {
     (correctedMoment / (Math.sqrt(correctedVariance) + EPSILON) + l2 * parameters), -2.5, 2.5);
   return { value, moment, variance };
 }
-function applyAdam(parameters, gradients, state, step, rate, l2) {
-  const walk = (parameter, gradient, moment, variance) => {
+function applyAdam(parameters, gradients, state, step, rate, l2,
+  attentionPositionBiasL2Multiplier=1) {
+  const walk = (parameter, gradient, moment, variance, path=[]) => {
     if (Array.isArray(parameter)) {
       const values = [], moments = [], variances = [];
       for (let index = 0; index < parameter.length; index++) {
-        const next = walk(parameter[index], gradient[index], moment[index], variance[index]);
+        const next = walk(parameter[index], gradient[index], moment[index], variance[index],path);
         values.push(next.value); moments.push(next.moment); variances.push(next.variance);
       }
       return { value: values, moment: moments, variance: variances };
@@ -266,7 +274,7 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
     if (parameter && typeof parameter === 'object') {
       const values = {}, moments = {}, variances = {};
       for (const key of Object.keys(parameter)) {
-        const next = walk(parameter[key], gradient[key], moment[key], variance[key]);
+        const next = walk(parameter[key], gradient[key], moment[key], variance[key],[...path,key]);
         values[key] = next.value; moments[key] = next.moment; variances[key] = next.variance;
       }
       return { value: values, moment: moments, variance: variances };
@@ -276,13 +284,15 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
     const nextVariance = 0.999 * variance + 0.001 * gradientValue * gradientValue;
     const mHat = nextMoment / (1 - Math.pow(0.9, step));
     const vHat = nextVariance / (1 - Math.pow(0.999, step));
+    const parameterL2=path.at(-1)==='attentionPositionBiases'
+      ?temporalParameterL2('attentionPositionBiases',l2,attentionPositionBiasL2Multiplier):l2;
     return {
-      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + l2 * parameter), -2.5, 2.5),
+      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + parameterL2 * parameter), -2.5, 2.5),
       moment: nextMoment,
       variance: nextVariance
     };
   };
-  const next = walk(parameters, gradients, state.m, state.v);
+  const next = walk(parameters, gradients, state.m, state.v,[]);
   return { parameters: next.value, state: { m: next.moment, v: next.variance } };
 }
 
