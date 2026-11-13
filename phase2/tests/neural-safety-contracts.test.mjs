@@ -161,3 +161,77 @@ test('non-finite predictions and timestamps fail closed before loss propagation'
     logits:[0,0],targets:[1,0],timestamps:[1,Infinity],baselineLogits:[0,0]
   }),/DIRECTIONAL_LOSS_TIMESTAMP_VECTOR_INVALID/);
 });
+
+test('temporal alignment rejects invalid shape configuration and whitespace numeric input',()=>{
+  const base={
+    id:'x',symbol:'BTCUSDT',at:AT,resolved_at:AT+86400000,horizon_ms:86400000,
+    temporal_sequence:seq(),temporal_sequence_timestamps:times(),
+    feature_information_cutoff_at:AT
+  };
+  assert.equal(validateTemporalSequenceAlignment({...base,expectedSteps:0}).reason,
+    'TEMPORAL_VALIDATION_CONFIGURATION_INVALID');
+  assert.equal(validateTemporalSequenceAlignment({...base,expectedChannels:0}).reason,
+    'TEMPORAL_VALIDATION_CONFIGURATION_INVALID');
+  assert.equal(validateTemporalSequenceAlignment({...base,intervalMs:0}).reason,
+    'TEMPORAL_VALIDATION_CONFIGURATION_INVALID');
+  assert.equal(validateTemporalSequenceAlignment({...base,at:'   '}).reason,
+    'TEMPORAL_EVENT_TIME_NON_FINITE');
+  assert.equal(validateTemporalSequenceAlignment({...base,binaryMaskChannels:[28,28]}).reason,
+    'TEMPORAL_BINARY_MASK_CHANNEL_CONTRACT_INVALID');
+  const extreme=seq();extreme[0][3]=4.000001;
+  assert.equal(validateTemporalSequenceAlignment({...base,temporal_sequence:extreme}).reason,
+    'TEMPORAL_SEQUENCE_VALUE_NON_FINITE_OR_OUT_OF_RANGE:0');
+});
+
+test('hybrid prequalification rejects invalid thresholds instead of silently weakening release gates',()=>{
+  const selection={samples:80,positive:20,negative:60,candidateBrier:0.14,logisticBrier:0.141};
+  const invalidMargin=prequalifyHybridComponent({
+    name:'MLP',fitValid:true,selection,requiredMargin:-0.01
+  });
+  assert.equal(invalidMargin.qualified,false);
+  assert.equal(invalidMargin.reason,'COMPONENT_PREQUALIFICATION_CONFIG_INVALID');
+  const invalidSupport=prequalifyHybridComponent({
+    name:'GBDT',fitValid:true,selection,minimumSamples:0
+  });
+  assert.equal(invalidSupport.qualified,false);
+  assert.equal(invalidSupport.reason,'COMPONENT_PREQUALIFICATION_CONFIG_INVALID');
+  const missingSelection=prequalifyHybridComponent({
+    name:'EMPTY',fitValid:true,selection:null
+  });
+  assert.equal(missingSelection.qualified,false);
+  assert.equal(missingSelection.reason,'COMPONENT_SELECTION_METRICS_MISSING_OR_NON_FINITE');
+  const invalidHybrid=prequalifyHybridComponents([], {minimumQualified:0});
+  assert.equal(invalidHybrid.qualified,false);
+  assert.equal(invalidHybrid.reason,'HYBRID_MINIMUM_QUALIFIED_CONFIGURATION_INVALID');
+});
+
+test('directional pair sampling is bounded for large same-timestamp candidate sets',()=>{
+  const positiveCount=500,negativeCount=500,total=positiveCount+negativeCount;
+  const logits=Array.from({length:total},(_,index)=>index<positiveCount?0.2:-0.2);
+  const targets=Array.from({length:total},(_,index)=>index<positiveCount?1:0);
+  const symbols=Array.from({length:total},(_,index)=>(index<positiveCount?'P':'N')+index);
+  const result=calculateAsymmetricDirectionalRankingLoss({
+    logits,targets,timestamps:Array(total).fill(AT),symbols,
+    baselineLogits:Array(total).fill(0),
+    config:{maxPairsPerTimestamp:64}
+  });
+  assert.equal(result.metrics.same_timestamp_pair_count,64);
+  assert.equal(result.metrics.timestamp_group_count,1);
+});
+
+test('directional loss rejects malformed vectors and unbounded pair configuration',()=>{
+  const args={
+    logits:[0.2,-0.2],targets:[1,0],timestamps:[1,1],
+    symbols:['A','B'],baselineLogits:[0,0]
+  };
+  assert.throws(()=>calculateAsymmetricDirectionalRankingLoss({...args,sampleWeights:null}),
+    /DIRECTIONAL_LOSS_SAMPLE_WEIGHTS_INVALID/);
+  assert.throws(()=>calculateAsymmetricDirectionalRankingLoss({...args,symbols:null}),
+    /DIRECTIONAL_LOSS_SYMBOL_VECTOR_INVALID/);
+  assert.throws(()=>calculateAsymmetricDirectionalRankingLoss({
+    ...args,config:{maxPairsPerTimestamp:1.5}
+  }),/DIRECTIONAL_LOSS_CONFIG_OUT_OF_RANGE/);
+  assert.throws(()=>calculateAsymmetricDirectionalRankingLoss({
+    ...args,config:{brierWeight:0}
+  }),/DIRECTIONAL_LOSS_CONFIG_OUT_OF_RANGE/);
+});

@@ -1,0 +1,40 @@
+name: Build 224 Neural Safety Edge Hardening
+
+on:
+  push:
+    branches:
+      - research/build224-neural-safety-edge-hardening-20261113
+    paths:
+      - 'phase2/core/neural-safety-contracts.mjs'
+      - 'phase2/tests/neural-safety-contracts.test.mjs'
+      - '.github/workflows/build224-neural-safety-hardening.yml'
+  pull_request:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/neural-safety-contracts.mjs'
+      - 'phase2/tests/neural-safety-contracts.test.mjs'
+      - '.github/workflows/build224-neural-safety-hardening.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-neural-safety-hardening
+  cancel-in-progress: false
+
+jobs:
+  safety-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax-check safety contract and regression suite
+        run: |
+          node --check phase2/core/neural-safety-contracts.mjs
+          node --check phase2/tests/neural-safety-contracts.test.mjs
+      - name: Run alignment, fill, qualification, loss-gradient and stress regressions
+        run: node --test --test-timeout=60000 phase2/tests/neural-safety-contracts.test.mjs
