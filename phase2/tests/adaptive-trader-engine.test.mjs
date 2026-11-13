@@ -143,6 +143,12 @@ test('historical learning examples use only baseline candles and label returns f
   assert.ok(samples.every(row=>row.features&&row.features.volume_ratio!==undefined));
   assert.ok(samples.every(row=>row.temporal_sequence?.length===24));
   assert.ok(samples.every(row=>row.temporal_sequence.every(step=>step.length===29)));
+  assert.ok(samples.every(row=>Array.isArray(row.temporal_sequence_timestamps)&&
+    row.temporal_sequence_timestamps.length===24&&
+    row.temporal_sequence_timestamps.at(-1)===row.at&&
+    row.temporal_sequence_timestamps.every((value,index)=>index===0||
+      value-row.temporal_sequence_timestamps[index-1]===15*60*1000)),
+    'historical sample keeps all 24 exact contiguous closed-candle timestamps ending at its label anchor');
   assert.ok(samples.every(row=>row.target_definition==='FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'));
   assert.ok(samples.every(row=>row.first_passage?.path_resolution==='15M'),
     'the TCN training target uses a uniform 5m first-passage path');
