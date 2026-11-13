@@ -13,6 +13,7 @@ import {
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
   selectTcnLstmHybridHyperparameters,
+  benchmarkTcnLstmHybridChronological,
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit
 } from '../core/temporal-lstm-hybrid.mjs';
@@ -172,4 +173,50 @@ test('inference latency is measured without asserting a hardware-specific promis
   assert.ok(result.p50_ms>=0);
   assert.ok(result.p95_ms>=result.p50_ms);
   assert.equal(result.production_latency_claim,false);
+});
+
+test('full TCN-LSTM benchmark uses purged time partitions and reports untouched outer Brier',()=>{
+  const rows=makeRows(0,100*4,'chronology');
+  const result=benchmarkTcnLstmHybridChronological(rows,{
+    maxTrainingSamples:80,bootstrapIterations:40,seed:17,
+    candidates:[
+      {name:'LOW',learningRate:0.0015,l2:0.0005,epochs:2},
+      {name:'MID',learningRate:0.0025,l2:0.0015,epochs:2}
+    ]
+  });
+  assert.equal(result.input_samples,rows.length);
+  assert.ok(result.partition_support.training.rows>=20);
+  assert.ok(result.partition_support.selection.rows>=20);
+  assert.ok(result.partition_support.validation.rows>=20);
+  assert.ok(result.partition_support.holdout.rows>=20);
+  assert.equal(result.inner_selection_diagnostics.validation_or_holdout_used_for_fit_or_selection,false);
+  assert.equal(result.validation.evaluated,true);
+  assert.equal(result.holdout.evaluated,true);
+  assert.equal(result.validation.sample_count,result.partition_support.validation.rows);
+  assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
+  assert.equal(result.validation.required_improvement,0.003);
+  assert.equal(result.holdout.required_improvement,0.003);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+});
+
+test('full TCN-LSTM benchmark rejects datasets with overlapping label maturity across partitions',()=>{
+  const rows=makeRows(0,100*4,'purge');
+  // Move a training outcome beyond the selection boundary while preserving its
+  // baseline identity and its temporal sequence cadence.
+  const changed=rows.map(row=>({...row}));
+  changed.find(row=>row.id==='purge-0').resolved_at=BASE+64*DAY;
+  const result=benchmarkTcnLstmHybridChronological(changed,{
+    maxTrainingSamples:80,bootstrapIterations:20
+  });
+  assert.equal(result.status,'CHRONOLOGY_OR_CLASS_SUPPORT_REJECTED');
+  assert.ok(result.purge_violations.length>0);
+});
+
+test('full TCN-LSTM benchmark fails closed for insufficient unique UTC days',()=>{
+  const rows=makeRows(0,40,'short-window');
+  const result=benchmarkTcnLstmHybridChronological(rows);
+  assert.equal(result.status,'WAITING_FOR_UNIQUE_UTC_DAY_SUPPORT');
+  assert.equal(result.probability_ready,false);
 });
