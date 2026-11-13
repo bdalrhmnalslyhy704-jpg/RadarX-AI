@@ -123,6 +123,7 @@ jobs:
             live_eligibility_ready:model.live_eligibility_ready,
             real_order_execution:model.real_order_execution
           };
+          console.log('RADARX_TCN_LSTM_HISTORICAL_RESULT='+JSON.stringify(summary));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
             '## Isolated TCN-LSTM 24h historical evidence\n\n```json\n'+
             JSON.stringify(summary,null,2)+'\n```\n');
