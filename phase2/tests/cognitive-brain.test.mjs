@@ -24,6 +24,58 @@ import {
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
 
+test('MLP V5 training loop consumes the asymmetric same-time ranking objective',()=>{
+  const rows=Array.from({length:30*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    const at=BASE_TIME+group*8*60*60*1000;
+    const signal=within%2===0;
+    return {
+      ...sample(index,signal?'UP':'DOWN'),
+      id:'MLP-RANK:'+group+':'+within,
+      symbol:'RANK'+String(within).padStart(3,'0')+'USDT',
+      at,resolved_at:at+FOUR_HOURS,
+      horizon_ms:FOUR_HOURS,
+      outcome:signal?'UP':'DOWN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2',
+      target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2'
+    };
+  });
+  const profile=buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:60,
+    minimumValidationSamples:20,
+    minimumHoldoutSamples:20,
+    minimumNeuralSelectionSamples:30,
+    minimumNeuralSelectionPositiveSamples:6,
+    minimumNeuralSelectionNegativeSamples:6,
+    minNeuralTrainingSamples:60,
+    maxNeuralTrainingSamples:400,
+    neuralIterations:30,
+    neuralTrainingHistoryFraction:1,
+    enableAsymmetricDirectionalRankingLoss:true,
+    directionalRankingLossConfig:{
+      brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,
+      baselineGapWeight:0.2,pairMargin:0.1,pairTemperature:0.5,
+      falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025,
+      maxPairsPerTimestamp:256
+    }
+  });
+  const diagnostics=profile.neural_network?.member_training_diagnostics||[];
+  assert.ok(diagnostics.length>0,
+    'MLP V5 ensemble should reach the gradient-fit loop');
+  assert.ok(diagnostics.every(member=>Array.isArray(member.epoch_history)),
+    'each MLP member should retain its actual epoch history');
+  const ranking=diagnostics.flatMap(member=>member.epoch_history)
+    .map(epoch=>epoch.directional_ranking_loss).filter(Boolean);
+  assert.ok(ranking.length>0,
+    'ranking objective must execute inside the MLP optimizer loop');
+  assert.ok(ranking.some(metrics=>metrics.same_timestamp_pair_count>0),
+    'MLP training should build same-time cross-sectional UP/DOWN pairs');
+  assert.ok(ranking.every(metrics=>Number.isFinite(metrics.candidate_brier)&&
+    Number.isFinite(metrics.baseline_brier)&&
+    Number.isFinite(metrics.pairwise_ranking_loss)),
+    'the MLP ranking objective diagnostics must remain finite');
+});
+
 test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
   assert.equal(COGNITIVE_FEATURE_SCHEMA,'CROSS_ASSET_EARLY_FLOW_FEATURES_V2');
   const index=Object.fromEntries(COGNITIVE_FEATURE_NAMES.map((name,i)=>[name,i]));
