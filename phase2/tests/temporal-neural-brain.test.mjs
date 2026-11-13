@@ -477,8 +477,8 @@ test('TCN training loop consumes the asymmetric same-time ranking objective',()=
       falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025
     }
   });
-  const members=profile.temporal_network?.member_training_diagnostics||[];
-  assert.ok(members.length>0,'shared TCN ensemble should reach the training loop: '+JSON.stringify({status:profile.temporal_network?.status,resolved_samples:profile.temporal_network?.resolved_samples,training_samples:profile.temporal_network?.training_samples,validation_samples:profile.temporal_network?.validation_samples,holdout_samples:profile.temporal_network?.holdout_samples,required_training_samples:profile.temporal_network?.required_training_samples,regime_training_counts:profile.temporal_network?.regime_training_counts,regimes:profile.temporal_network?.regime_specialists}));
+  const members=profile.member_training_diagnostics||[];
+  assert.ok(members.length>0,'shared TCN ensemble should reach the training loop: '+JSON.stringify({status:profile.status,resolved_samples:profile.resolved_samples,training_samples:profile.training_samples,validation_samples:profile.validation_samples,holdout_samples:profile.holdout_samples,required_training_samples:profile.required_training_samples,training_targets:profile.shared_model_training_targets,model_selection:profile.shared_model_selection_targets,split:profile.shared_model_split_boundaries}));
   assert.ok(members.every(member=>Array.isArray(member.epoch_history)),
     'each trained member should retain per-epoch diagnostics');
   const rankingDiagnostics=members.flatMap(member=>member.epoch_history)
