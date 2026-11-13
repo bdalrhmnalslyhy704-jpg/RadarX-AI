@@ -17,3 +17,7 @@ Run isolated tabular MLP, GBDT and hybrid safe-first-touch +5%/72h challengers s
 The census report MUST remain INCOMPLETE and training MUST be blocked if a source, path, archive, overlap, feature-cutoff, label-contract, or liquidity-lane audit genuinely fails. Only formally recognized same-candle ambiguity can pass as audited-nontrainable; no other audit failure may be ignored.
 
 Research-only: no production changes, no merge, no deployment, no real orders. Paper trading remains true and real_order_execution remains false. Do not reduce the 750,000 USDT threshold.
+
+DENSE 24H MLP RESEARCH BRANCH
+
+This branch intentionally builds a separate one-year census for the safe +5% first-touch target at 24h. Use only the 24h opportunity horizon, one anchor every 24h (96 closed 15m bars), and the unchanged STANDARD_750K_PLUS lane floor of 750,000 USDT. The maximum labeled horizon is therefore 24h and adjacent anchor outcome paths do not overlap. Keep feature information cut off exactly at each baseline close; use only official checksum-verified Binance Spot archives and closed candles. Preserve ambiguous same-candle outcomes as ambiguous and exclude them from supervised fitting. This dense 24h archive is a research-only challenger cohort; do not replace the 72h census or production configuration. No merge, deployment, order execution, or weakening of acceptance gates is authorized.
