@@ -309,6 +309,17 @@ async function loadSymbolInterval({symbol,interval,months,dailyDates=[],tempDir}
   const rows=[...byOpen.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
   return {rows,files,rejected,...summarizeBinanceSpotArchiveMonthCoverage(files)};
 }
+
+export async function loadBtcReferenceKlines({
+  months,dailyDates=[],tempDir,loadInterval=loadSymbolInterval
+}={}){
+  const [btc15,btc5]=await Promise.all([
+    loadInterval({symbol:'BTCUSDT',interval:'15m',months,dailyDates,tempDir}),
+    loadInterval({symbol:'BTCUSDT',interval:'5m',months,dailyDates,tempDir})
+  ]);
+  return {btc15,btc5};
+}
+
 async function mapLimit(items,limit,worker){
   const results=new Array(items.length);let next=0;
   const workers=Array.from({length:Math.max(1,Math.min(limit,items.length||1))},async()=>{
@@ -672,10 +683,7 @@ async function main(){
       current_symbol_list_sha256:execHash(Buffer.from(universe.join('\n')))
     };
     console.log('[DAILY_CENSUS_UNIVERSE] '+JSON.stringify({symbols:symbols.length,months:months.length,concurrency}));
-    const [btc15,btc5]=await Promise.all([
-      loadSymbolInterval({symbol:'BTCUSDT',interval:'15m',months,tempDir}),
-      loadSymbolInterval({symbol:'BTCUSDT',interval:'5m',months,tempDir})
-    ]);
+    const {btc15,btc5}=await loadBtcReferenceKlines({months,dailyDates,tempDir});
     manifest.push(...btc15.files,...btc5.files);
     if(!btc15.complete_from_first_available||!btc5.complete_from_first_available)
       throw new Error('BTC_ARCHIVE_COVERAGE_INCOMPLETE');
