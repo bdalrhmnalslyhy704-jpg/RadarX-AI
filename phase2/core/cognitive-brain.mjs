@@ -1040,6 +1040,17 @@ function applyAcceptedProbabilityCalibration(rawProbability,calibration){
   return clamp(logistic(slope*Math.log(raw/(1-raw))+intercept),0.02,0.98);
 }
 
+export function hasSelectedNeuralResidual(fit){
+  const index=fit?.selected_member_index;
+  const scale=finite(fit?.selected_residual_scale);
+  return fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'&&
+    Array.isArray(fit.members)&&Array.isArray(fit.seeds)&&
+    fit.members.length===fit.seeds.length&&
+    Number.isInteger(index)&&index>=0&&index<fit.members.length&&
+    scale!==null&&scale>0&&
+    ['RESIDUAL_DEEP_MLP_V2','RESIDUAL_FACTOR_CROSS_V1'].includes(fit.members[index]?.kind);
+}
+
 function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
     return applyAcceptedProbabilityCalibration(
@@ -1063,18 +1074,13 @@ function predictFromFit(features, fit, residualScale=1) {
     );
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
-    const expectedMembers=Array.isArray(fit.seeds)&&fit.seeds.length
-      ?fit.seeds.length:NEURAL_POLICY.ensembleSeeds.length;
-    if(!Array.isArray(fit.members)||fit.members.length!==expectedMembers)return null;
-    const selected=Number(fit.selected_member_index);
-    let rawPrediction;
-    if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length){
-      rawPrediction=predictFromFit(features,fit.members[selected],finite(fit.selected_residual_scale)??1);
-    }else{
-      const predictions=fit.members.map(member=>predictFromFit(features,member));
-      if(predictions.some(value=>!Number.isFinite(value)))return null;
-      rawPrediction=mean(predictions);
-    }
+    if(!hasSelectedNeuralResidual(fit))return null;
+    const expectedMembers=fit.seeds.length;
+    if(fit.members.length!==expectedMembers)return null;
+    const rawPrediction=predictFromFit(
+      features,fit.members[fit.selected_member_index],fit.selected_residual_scale
+    );
+    if(!Number.isFinite(rawPrediction))return null;
     return applyAcceptedProbabilityCalibration(rawPrediction,fit.probability_calibrator);
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
@@ -1971,7 +1977,8 @@ export function buildCognitiveLearningProfile(samples = [], {
     ?evaluateHoldout(neuralHybridSelection,boostedTreeRefitBaselineFit,comparisonMargin)
     :{evaluated:false,sample_count:neuralHybridSelection.length,model_brier_score:null,
       reason:'HYBRID_LOGISTIC_REFERENCE_UNAVAILABLE'};
-  const hybridSelectionCandidates=boostedTreeFit&&neuralFit
+  const hybridNeuralComponentReady=hasSelectedNeuralResidual(neuralFit);
+  const hybridSelectionCandidates=boostedTreeFit&&hybridNeuralComponentReady
     ?[0.25,0.5,0.75].map(boostedWeight=>{
       const fit={
         kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
@@ -2000,7 +2007,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   const hybridFit=bestHybridCandidate?.fit||null;
   const hybridValidation=hybridCandidates[0]?.validation||
     {evaluated:false,sample_count:upEventValidation.length,model_brier_score:null,
-      reason:!boostedTreeFit||!neuralFit?'HYBRID_REQUIRES_BOTH_MODELS':
+      reason:!boostedTreeFit?'HYBRID_GBDT_FIT_UNAVAILABLE':
+        !hybridNeuralComponentReady?'HYBRID_NEURAL_MEMBER_NOT_SELECTED_ON_INNER_SELECTION':
         !hybridSelectionSupported?'HYBRID_INNER_SELECTION_CLASS_SUPPORT_BELOW_MINIMUM':
         'NO_BLEND_WEIGHT_BEAT_BASE_RATE_AND_SAME_WINDOW_LOGISTIC'};
   const challengerCandidates=[
@@ -2311,7 +2319,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       holdout_comparison:validationWinner?.name==='GBDT_RESIDUAL'?challengerHoldoutComparison:null
     },
     hybrid_model: {
-      status:!hybridSelectionCandidates.length?'WAITING_FOR_BOTH_CHALLENGERS':
+      status:!boostedTreeFit?'WAITING_FOR_BOTH_CHALLENGERS':
+        !neuralFit?'WAITING_FOR_BOTH_CHALLENGERS':
+        !hybridNeuralComponentReady?'NEURAL_COMPONENT_NOT_SELECTED':
         !bestHybridCandidate?'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC':
         String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?'OUT_OF_SAMPLE_VALIDATED':
         String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')?'VALIDATION_SELECTED_HOLDOUT_FAILED':
@@ -2330,6 +2340,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       selection_positive_samples:hybridSelectionTargets.positive,
       selection_negative_samples:hybridSelectionTargets.negative,
       selection_supported:hybridSelectionSupported,
+      neural_component_selected:hybridNeuralComponentReady,
+      neural_selected_member_index:neuralFit?.selected_member_index??null,
+      neural_selected_residual_scale:neuralFit?.selected_residual_scale??null,
       selection_start_at:neuralHybridSelectionStartAt,
       selection_logistic_brier_score:hybridSelectionLogistic.model_brier_score??null,
       selection_required_brier_margin:comparisonMargin,

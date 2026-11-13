@@ -11,7 +11,8 @@ import {
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_FEATURE_NAMES,
   buildCognitiveFeatureVector,
-  evaluateCognitiveDirectionalRanking
+  evaluateCognitiveDirectionalRanking,
+  hasSelectedNeuralResidual
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
@@ -43,6 +44,24 @@ test('cognitive features separate early-flow divergence from momentum and missin
   assert.equal(withoutMicro[index.micro_buy_flow_acceleration],0);
   assert.equal(withoutMicro[index.micro_availability_mask],0,
     'missing 5m evidence must not look like neutral buyer flow');
+});
+
+test('hybrid fail-closed gate requires an inner-selected positive neural residual',()=>{
+  const unselected={
+    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+    members:[{kind:'RESIDUAL_DEEP_MLP_V2'}],
+    seeds:[11],selected_member_index:-1,selected_residual_scale:0
+  };
+  assert.equal(hasSelectedNeuralResidual(unselected),false);
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,selected_member_index:0,selected_residual_scale:0
+  }),false,'zero residual is only the logistic anchor');
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,selected_member_index:0,selected_residual_scale:0.1
+  }),true,'a selected MLP residual may be used by the blend');
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,seeds:[11,29]
+  }),false,'member and seed manifests must agree');
 });
 
 test('V5 neural and hybrid challengers require a strict 0.003 Brier improvement',()=>{
@@ -309,8 +328,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
-    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC',
-      'TRAINED_NOT_SELECTED','VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
+      'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
+      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
       assert.equal(profile.boosted_tree_model.selected,true);
