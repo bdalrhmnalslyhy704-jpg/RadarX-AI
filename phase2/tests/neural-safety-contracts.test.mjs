@@ -178,6 +178,9 @@ test('temporal alignment rejects invalid shape configuration and whitespace nume
     'TEMPORAL_EVENT_TIME_NON_FINITE');
   assert.equal(validateTemporalSequenceAlignment({...base,binaryMaskChannels:[28,28]}).reason,
     'TEMPORAL_BINARY_MASK_CHANNEL_CONTRACT_INVALID');
+  const extreme=seq();extreme[0][3]=4.000001;
+  assert.equal(validateTemporalSequenceAlignment({...base,temporal_sequence:extreme}).reason,
+    'TEMPORAL_SEQUENCE_VALUE_NON_FINITE_OR_OUT_OF_RANGE:0');
 });
 
 test('hybrid prequalification rejects invalid thresholds instead of silently weakening release gates',()=>{
@@ -192,6 +195,11 @@ test('hybrid prequalification rejects invalid thresholds instead of silently wea
   });
   assert.equal(invalidSupport.qualified,false);
   assert.equal(invalidSupport.reason,'COMPONENT_PREQUALIFICATION_CONFIG_INVALID');
+  const missingSelection=prequalifyHybridComponent({
+    name:'EMPTY',fitValid:true,selection:null
+  });
+  assert.equal(missingSelection.qualified,false);
+  assert.equal(missingSelection.reason,'COMPONENT_SELECTION_METRICS_MISSING_OR_NON_FINITE');
   const invalidHybrid=prequalifyHybridComponents([], {minimumQualified:0});
   assert.equal(invalidHybrid.qualified,false);
   assert.equal(invalidHybrid.reason,'HYBRID_MINIMUM_QUALIFIED_CONFIGURATION_INVALID');
