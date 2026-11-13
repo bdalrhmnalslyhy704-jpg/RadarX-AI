@@ -7,6 +7,10 @@ on:
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
       - '.github/workflows/build224-tcn-lstm-hybrid.yml'
   pull_request:
     branches:
@@ -14,6 +18,10 @@ on:
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
       - '.github/workflows/build224-tcn-lstm-hybrid.yml'
 
 permissions:
@@ -39,5 +47,10 @@ jobs:
         run: |
           node --check phase2/core/temporal-lstm-hybrid.mjs
           node --check phase2/tests/temporal-lstm-hybrid.test.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
       - name: Run recurrent BPTT finite differences, training, purged selection and stress tests
         run: node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
+      - name: Verify same-cohort daily 24h TCN-LSTM integration
+        run: node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
