@@ -1373,6 +1373,11 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralInnerSelectionMargin = null,
   neuralTrainingHistoryFraction = 1.0,
   neuralAnchorAdaptation = 'FROZEN',
+  enableFactorizationMachine=false,
+  factorizationRank=8,
+  factorizationIterations=null,
+  factorizationLearningRate=null,
+  factorizationL2=null,
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
   maxResolvedSamples = 0
 } = {}) {
@@ -1639,7 +1644,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit,
-      anchorAdaptation:neuralAnchorAdaptation
+      anchorAdaptation:neuralAnchorAdaptation,
+      enableFactorizationMachine,
+      factorizationRank,factorizationIterations,factorizationLearningRate,factorizationL2
     }):null;
   let neuralFinalTraining=neuralModelTraining;
   // Enforce at least the declared V5 challenger margin; caller options may
