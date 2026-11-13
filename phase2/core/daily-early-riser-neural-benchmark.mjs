@@ -148,6 +148,39 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
   return {row,reason:null};
 }
 
+function buildDailyCognitiveProfile(rows,options={}){
+  return buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
+    minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
+    minimumValidationSamples:Math.max(1000,Math.trunc(options.minimumValidationSamples||3000)),
+    minimumHoldoutSamples:Math.max(1000,Math.trunc(options.minimumHoldoutSamples||5000)),
+    validationFraction:0.20,holdoutFraction:0.20,recentWindowFraction:0.60,
+    recentSelectionMargin:0.005,l2:0.08,outcomeHorizonMs:options.outcomeHorizonMs,
+    allowedOutcomeSources:options.allowedOutcomeSources,
+    iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
+    learningRate:0.10,minNeuralTrainingSamples:240,
+    minimumNeuralSelectionSamples:300,
+    minimumNeuralSelectionPositiveSamples:10,
+    minimumNeuralSelectionNegativeSamples:30,
+    maxNeuralTrainingSamples:DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
+    neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
+      DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
+    temporalSamples:[],temporalOptions:{},
+    neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
+    neuralLearningRate:0.012,neuralL2:0.04,neuralSelectionMargin:0.003,
+    neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
+      DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
+      DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    enableFactorizationMachine:options.enableFactorizationMachine===true,
+    factorizationRank:Math.max(2,Math.min(16,Math.trunc(options.factorizationRank||8))),
+    factorizationIterations:Math.max(30,Math.min(180,Math.trunc(options.factorizationIterations||20))),
+    factorizationLearningRate:Math.max(0.0005,Math.min(0.03,Number(options.factorizationLearningRate||0.008))),
+    factorizationL2:Math.max(0.001,Math.min(0.5,Number(options.factorizationL2||0.06))),
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,maxResolvedSamples:0
+  });
+}
+
 function countOutcomes(rows){
   const counts={UP:0,DOWN:0,FLAT:0};
   for(const row of rows)counts[row.outcome]++;
@@ -292,44 +325,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       }
     };
   }
-  const profile=buildCognitiveLearningProfile(rows,{
-    minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
-    minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
-    minimumValidationSamples:Math.max(1000,Math.trunc(options.minimumValidationSamples||3000)),
-    minimumHoldoutSamples:Math.max(1000,Math.trunc(options.minimumHoldoutSamples||5000)),
-    validationFraction:0.20,
-    holdoutFraction:0.20,
-    recentWindowFraction:0.60,
-    recentSelectionMargin:0.005,
-    l2:0.08,
-    outcomeHorizonMs,
-    allowedOutcomeSources:[selectedOutcomeSource],
-    iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
-    learningRate:0.10,
-    minNeuralTrainingSamples:240,
-    minimumNeuralSelectionSamples:300,
-    minimumNeuralSelectionPositiveSamples:10,
-    minimumNeuralSelectionNegativeSamples:30,
-    maxNeuralTrainingSamples:DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
-    neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
-      DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
-    temporalSamples:[],
-    temporalOptions:{},
-    neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
-    neuralLearningRate:0.012,
-    neuralL2:0.04,
-    neuralSelectionMargin:0.003,
-    neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
-      DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
-    neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
-      DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
-    enableFactorizationMachine:options.enableFactorizationMachine===true,
-    factorizationRank:Math.max(2,Math.min(16,Math.trunc(options.factorizationRank||8))),
-    factorizationIterations:Math.max(30,Math.min(180,Math.trunc(options.factorizationIterations||20))),
-    factorizationLearningRate:Math.max(0.0005,Math.min(0.03,Number(options.factorizationLearningRate||0.008))),
-    factorizationL2:Math.max(0.001,Math.min(0.5,Number(options.factorizationL2||0.06))),
-    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
-    maxResolvedSamples:0
+  const profile=buildDailyCognitiveProfile(rows,{
+    ...options,outcomeHorizonMs,allowedOutcomeSources:[selectedOutcomeSource]
   });
   const neural=profile.neural_network||{};
   const neuralAnchorMode=options.neuralAnchorAdaptation ??
