@@ -323,6 +323,11 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
     neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
       DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    enableFactorizationMachine:options.enableFactorizationMachine===true,
+    factorizationRank:Math.max(2,Math.min(16,Math.trunc(options.factorizationRank||8))),
+    factorizationIterations:Math.max(30,Math.min(180,Math.trunc(options.factorizationIterations||20))),
+    factorizationLearningRate:Math.max(0.0005,Math.min(0.03,Number(options.factorizationLearningRate||0.008))),
+    factorizationL2:Math.max(0.001,Math.min(0.5,Number(options.factorizationL2||0.06))),
     featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     maxResolvedSamples:0
   });
