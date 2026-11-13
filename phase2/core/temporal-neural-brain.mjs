@@ -3193,6 +3193,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     output_features:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
     training_strategy:'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1',
+    attention_position_bias_l2_multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
     training_samples:attentionSupportedRegimes.reduce((sum,regime)=>
       sum+Number(regimeLocalTcnAttentionResults[regime]?.training_samples||0),0),
     selection_samples:attentionSupportedRegimes.reduce((sum,regime)=>
