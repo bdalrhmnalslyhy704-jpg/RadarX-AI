@@ -265,7 +265,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
     assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
     assert.equal(profile.neural_network.training_strategy,
-      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6');
+      'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
