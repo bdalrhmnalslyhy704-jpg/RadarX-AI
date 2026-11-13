@@ -7,10 +7,29 @@ Train the 35-feature MLP and rank-16 factorization challenger on the same frozen
 The benchmark workflow waits for the exact checksum-audited census run to finish successfully before downloading its artifact. Never fall back to a prior census run.
 
 
-Census source correction pin: 87c8079d7e8bcfdb7db1484f014b2cd046cd819d.
+Census source correction pin: 8ab02b51eed39d930591ec0d50d4a89c62b0724e.
 The dense benchmark must wait for that exact census run to finish successfully. Do not substitute another run or consume partial artifacts.
 
 LATEST MODEL CODE VERIFICATION RUN
 This trigger is issued after the training-only AdamW/cosine/clipping, best-checkpoint/early-stopping, strict MLP tensor interface, analytic hybrid weight split and complete per-member diagnostics were added. The benchmark must check out this trigger commit and run the dense 24h MLP + factor-cross challenger using the current isolated branch code, while waiting for the exact already-running census source commit:
-87c8079d7e8bcfdb7db1484f014b2cd046cd819d
+8ab02b51eed39d930591ec0d50d4a89c62b0724e
 Do not consume any other census or reduce the 750,000 USDT lane floor.
+
+
+FINAL DENSE GENERALIZATION PROJECTION CHALLENGER — EXACT SOURCE PIN
+
+Census source commit: 8ab02b51eed39d930591ec0d50d4a89c62b0724e
+The resolver must find a successful Census run whose head_sha equals the exact source commit above. It must pass that exact run ID and artifact to both benchmark paths. No stale artifact or previous run may be used.
+
+Run the additional isolated 35-feature projection residual MLP:
+- train-only z-score scaling;
+- train-only same-window Logistic anchor, frozen during neural residual fitting;
+- tanh feature projection, per-sample LayerNorm, train-only deterministic inverted Dropout, and rank-6 pairwise factor interactions;
+- predeclared dropout/L2 candidates selected only on the disjoint selection window;
+- one-day label-maturity purges between train, selection, external validation and final holdout;
+- Brier as the proper probability objective; separately report a false-confidence asymmetric risk-Brier that triples the penalty for negative outcomes predicted at >=0.70;
+- require inner improvement >0.00025 and both external validation and untouched holdout improvements >0.003, positive UTC-day-cluster bootstrap 95% lower bound, and no worsening in the asymmetric risk-Brier.
+
+Keep ambiguous rows audited and excluded from supervised fitting. Keep all features baseline-close only. Do not calibrate, tune, or update weights on external validation or final holdout. If any SHA, sample-count, liquidity, label, chronology, or sequence audit fails, fail closed.
+
+Research only. No production merge, deployment, real order execution, or lowering of the 750,000 USDT floor.
