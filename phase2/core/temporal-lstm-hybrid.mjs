@@ -604,11 +604,14 @@ function setPath(root, path, next) {
 export function auditTcnLstmHybridGradients(sequence, target, {
   model = initializeModel(29),
   baselineLogit = 0,
-  epsilon = 1e-5
+  epsilon = 1e-5,
+  dropoutScale = null
 } = {}) {
   validateSequence(sequence);
   if (!finite(epsilon) || epsilon <= 0) throw new TypeError('TCN_LSTM_GRADIENT_EPSILON_INVALID');
-  const analytic = lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit);
+  const analytic = lossAndGradientsTcnLstmHybrid(
+    sequence, target, model, baselineLogit, {dropoutScale}
+  );
   const parameters = trainableParameters(model);
   const parameterPaths = flattenPaths(parameters);
   const gradientPaths = flattenPaths(analytic.gradients);
@@ -621,9 +624,9 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     const path = parameterPaths[index];
     const original = getPath(parameters, path);
     setPath(parameters, path, original + epsilon);
-    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit).probability - target) ** 2;
+    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
     setPath(parameters, path, original - epsilon);
-    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit).probability - target) ** 2;
+    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
     setPath(parameters, path, original);
     const numerical = (plus - minus) / (2 * epsilon);
     const exact = getPath(analytic.gradients, gradientPaths[index]);
@@ -1044,9 +1047,9 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   bootstrapIterations = 400,
   seed = 29,
   candidates = [
-    { name:'LR_0015_L2_0005', learningRate:0.0015, l2:0.0005, epochs:6 },
-    { name:'LR_0025_L2_0015', learningRate:0.0025, l2:0.0015, epochs:6 },
-    { name:'LR_0035_L2_0035', learningRate:0.0035, l2:0.0035, epochs:6 }
+    { name:'LR_0015_L2_0005_DROP00', learningRate:0.0015, l2:0.0005, dropout:0, epochs:6 },
+    { name:'LR_0025_L2_0015_DROP10', learningRate:0.0025, l2:0.0015, dropout:0.10, epochs:6 },
+    { name:'LR_0035_L2_0035_DROP20', learningRate:0.0035, l2:0.0035, dropout:0.20, epochs:6 }
   ]
 } = {}) {
   const waiting = (status, reason, extra = {}) => ({
