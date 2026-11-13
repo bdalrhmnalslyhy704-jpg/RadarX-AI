@@ -1154,6 +1154,310 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   };
 }
 
+function validateChronologicalPartitions(partitions) {
+  const names = ['training', 'selection', 'calibration', 'validation', 'holdout'];
+  const seen = new Set();
+  const summary = {};
+  for (let index = 0; index < names.length; index++) {
+    const name = names[index], rows = partitions[index];
+    assertRows(rows, name.toUpperCase());
+    const identities = rows.map(sampleIdentity);
+    for (const identity of identities) {
+      if (seen.has(identity))
+        throw new TypeError('TCN_LSTM_CROSS_PARTITION_IDENTITY_OVERLAP:' + identity);
+      seen.add(identity);
+    }
+    const at = rows.map(row => row.at), resolved = rows.map(row => row.resolved_at);
+    if (at.some(value => !finite(value) || value <= 0) ||
+        resolved.some((value, rowIndex) => !finite(value) || value <= at[rowIndex]))
+      throw new TypeError('TCN_LSTM_PARTITION_EVENT_OR_MATURITY_TIME_INVALID:' + name);
+    const firstAt = Math.min(...at), lastAt = Math.max(...at);
+    const latestResolved = Math.max(...resolved);
+    summary[name] = {
+      rows: rows.length,
+      positives: rows.filter(row => row.target === 1).length,
+      negatives: rows.filter(row => row.target === 0).length,
+      first_at: firstAt,
+      last_at: lastAt,
+      latest_resolved_at: latestResolved
+    };
+    if (index > 0) {
+      const previous = partitions[index - 1];
+      const previousResolved = Math.max(...previous.map(row => row.resolved_at));
+      if (!(previousResolved < firstAt))
+        throw new TypeError('TCN_LSTM_CHRONOLOGICAL_PURGE_VIOLATION:' + name);
+    }
+  }
+  return summary;
+}
+
+function fitPlattCalibration(rows, predictor, {
+  minimumSamples = 30, minimumPositive = 8, minimumNegative = 8,
+  iterations = 500, learningRate = 0.03, regularization = 0.05
+} = {}) {
+  const positive = rows.filter(row => row.target === 1).length;
+  const negative = rows.length - positive;
+  if (rows.length < minimumSamples || positive < minimumPositive || negative < minimumNegative)
+    return {
+      fitted: false, reason: 'TCN_LSTM_CALIBRATION_SUPPORT_BELOW_MINIMUM',
+      samples: rows.length, positive, negative,
+      slope: 1, intercept: 0
+    };
+  const logits = rows.map(row => {
+    const probability = predictor(row.sequence);
+    if (!finite(probability) || probability < 0 || probability > 1)
+      throw new TypeError('TCN_LSTM_CALIBRATION_RAW_PROBABILITY_INVALID');
+    const bounded = clamp(probability, 1e-8, 1 - 1e-8);
+    return clamp(Math.log(bounded / (1 - bounded)), -LOGIT_LIMIT, LOGIT_LIMIT);
+  });
+  const slopePenalty = clamp(regularization, 0.001, 2);
+  const interceptPenalty = slopePenalty * 0.25;
+  let slope = 1, intercept = 0;
+  const steps = Math.max(100, Math.min(2000, Math.trunc(iterations)));
+  const rate = clamp(learningRate, 0.001, 0.15);
+  let bestLoss = Infinity, best = { slope, intercept };
+  let wait = 0;
+  for (let step = 0; step < steps; step++) {
+    let loss = 0, gradSlope = 0, gradIntercept = 0;
+    for (let index = 0; index < rows.length; index++) {
+      const target = rows[index].target;
+      const probability = sigmoid(slope * logits[index] + intercept);
+      const error = probability - target;
+      loss += -(target * Math.log(Math.max(1e-12, probability)) +
+        (1 - target) * Math.log(Math.max(1e-12, 1 - probability)));
+      gradSlope += error * logits[index];
+      gradIntercept += error;
+    }
+    loss = loss / rows.length + slopePenalty * (slope - 1) ** 2 +
+      interceptPenalty * intercept * intercept;
+    gradSlope = gradSlope / rows.length + 2 * slopePenalty * (slope - 1);
+    gradIntercept = gradIntercept / rows.length + 2 * interceptPenalty * intercept;
+    if (![loss, gradSlope, gradIntercept].every(finite))
+      throw new TypeError('TCN_LSTM_CALIBRATION_NON_FINITE_OBJECTIVE');
+    if (loss < bestLoss - 1e-10) {
+      bestLoss = loss;
+      best = { slope, intercept };
+      wait = 0;
+    } else wait++;
+    const decay = 0.15 + 0.85 * 0.5 * (1 + Math.cos(Math.PI * step / Math.max(1, steps - 1)));
+    slope = clamp(slope - rate * decay * gradSlope, 0.05, 8);
+    intercept = clamp(intercept - rate * decay * gradIntercept, -8, 8);
+    if (wait >= 80) break;
+  }
+  if (![best.slope, best.intercept, bestLoss].every(finite))
+    throw new TypeError('TCN_LSTM_CALIBRATION_BEST_STATE_INVALID');
+  return {
+    fitted: true, method: 'CALIBRATION_BLOCK_REGULARIZED_PLATT_LOGISTIC_NLL_V1',
+    fit_boundary: 'CALIBRATION_PARTITION_ONLY',
+    samples: rows.length, positive, negative,
+    slope: best.slope, intercept: best.intercept,
+    objective: bestLoss, iterations: steps,
+    raw_logits_clipped: true,
+    slope_bounds: [0.05, 8], intercept_bounds: [-8, 8]
+  };
+}
+
+function applyPlattCalibration(probability, calibrator) {
+  if (!calibrator?.fitted) return null;
+  if (!finite(probability) || probability < 0 || probability > 1)
+    throw new TypeError('TCN_LSTM_CALIBRATED_PROBABILITY_INVALID');
+  const bounded = clamp(probability, 1e-8, 1 - 1e-8);
+  const logit = Math.log(bounded / (1 - bounded));
+  return sigmoid(clamp(calibrator.slope * logit + calibrator.intercept, -LOGIT_LIMIT, LOGIT_LIMIT));
+}
+
+function probabilityMetrics(rows, predictions) {
+  if (predictions.length !== rows.length || !predictions.length ||
+      predictions.some(value => !finite(value) || value < 0 || value > 1))
+    throw new TypeError('TCN_LSTM_OOS_PREDICTION_VECTOR_INVALID');
+  let brier = 0, logLoss = 0, riskBrier = 0, falseHigh = 0, negatives = 0;
+  const bins = Array.from({ length: 10 }, () => ({ n: 0, p: 0, y: 0 }));
+  for (let index = 0; index < rows.length; index++) {
+    const target = rows[index].target;
+    const probability = clamp(predictions[index], 1e-9, 1 - 1e-9);
+    const error = (probability - target) ** 2;
+    brier += error;
+    logLoss += -(target * Math.log(probability) + (1 - target) * Math.log(1 - probability));
+    const falseConfidence = target === 0 && probability >= 0.70;
+    riskBrier += error * (falseConfidence ? 3 : 1);
+    if (target === 0) {
+      negatives++;
+      if (probability >= 0.80) falseHigh++;
+    }
+    const bin = bins[Math.min(9, Math.floor(probability * 10))];
+    bin.n++; bin.p += probability; bin.y += target;
+  }
+  const count = rows.length;
+  const ece = bins.reduce((sum, bin) => sum +
+    (bin.n / count) * (bin.n ? Math.abs(bin.p / bin.n - bin.y / bin.n) : 0), 0);
+  return {
+    rows: count,
+    positives: rows.filter(row => row.target === 1).length,
+    negatives,
+    brier: brier / count,
+    log_loss: logLoss / count,
+    expected_calibration_error: ece,
+    asymmetric_risk_brier: riskBrier / count,
+    false_high_confidence_rate_pct: negatives ? falseHigh / negatives * 100 : null
+  };
+}
+
+function pairedFiveDayClusterBootstrap(rows, modelProbabilities, baselineProbabilities, {
+  iterations = 500, seed = 73
+} = {}) {
+  const groups = new Map();
+  for (let index = 0; index < rows.length; index++) {
+    const bucket = Math.floor(rows[index].at / (5 * 86400000));
+    if (!groups.has(bucket)) groups.set(bucket, []);
+    groups.get(bucket).push(
+      (baselineProbabilities[index] - rows[index].target) ** 2 -
+      (modelProbabilities[index] - rows[index].target) ** 2
+    );
+  }
+  const clusters = [...groups.values()];
+  if (clusters.length < 10)
+    return {
+      evaluated: false, reason: 'FEWER_THAN_10_FIVE_UTC_DAY_CLUSTERS',
+      clusters: clusters.length, iterations: 0,
+      improvement_ci95_low: null, improvement_ci95_high: null
+    };
+  const random = mulberry32(seed);
+  const improvements = [];
+  const count = Math.max(200, Math.min(5000, Math.trunc(iterations)));
+  for (let replicate = 0; replicate < count; replicate++) {
+    let total = 0, rowsCount = 0;
+    for (let draw = 0; draw < clusters.length; draw++) {
+      const selected = clusters[Math.floor(random() * clusters.length)];
+      for (const value of selected) { total += value; rowsCount++; }
+    }
+    if (rowsCount) improvements.push(total / rowsCount);
+  }
+  improvements.sort((a, b) => a - b);
+  const quantile = fraction => improvements[Math.min(
+    improvements.length - 1,
+    Math.floor((improvements.length - 1) * fraction)
+  )];
+  return {
+    evaluated: true, method: 'PAIRED_FIVE_UTC_DAY_CLUSTER_BOOTSTRAP_V1',
+    clusters: clusters.length, iterations: improvements.length,
+    block_length_days: 5,
+    improvement_ci95_low: quantile(0.025),
+    improvement_ci95_high: quantile(0.975)
+  };
+}
+
+function evaluateCalibratedSplit(rows, selectedFit, modelCalibrator, baselineCalibrator, {
+  bootstrapSeed = 73, bootstrapIterations = 500
+} = {}) {
+  const rawModel = rows.map(row => predictTcnLstmHybridProbability(row.sequence, selectedFit));
+  const rawBaseline = rows.map(row =>
+    sigmoid(predictTcnLstmLogisticLogit(row.sequence, selectedFit.baseline_fit)));
+  const modelPredictions = rawModel.map(value => applyPlattCalibration(value, modelCalibrator));
+  const baselinePredictions = rawBaseline.map(value => applyPlattCalibration(value, baselineCalibrator));
+  if (modelPredictions.some(value => value === null) ||
+      baselinePredictions.some(value => value === null))
+    throw new TypeError('TCN_LSTM_OOS_CALIBRATOR_NOT_FITTED');
+  const model = probabilityMetrics(rows, modelPredictions);
+  const baseline = probabilityMetrics(rows, baselinePredictions);
+  const improvement = baseline.brier - model.brier;
+  const confidence = pairedFiveDayClusterBootstrap(rows, modelPredictions, baselinePredictions, {
+    iterations: bootstrapIterations, seed: bootstrapSeed
+  });
+  return {
+    model, baseline,
+    brier_improvement: improvement,
+    paired_bootstrap_95ci: confidence,
+    required_brier_improvement: 0.003,
+    passed: improvement > 0.003 &&
+      confidence.evaluated === true && confidence.improvement_ci95_low > 0 &&
+      model.asymmetric_risk_brier <= baseline.asymmetric_risk_brier + 1e-10
+  };
+}
+
+/**
+ * Full, purged five-partition evaluation:
+ * training -> inner selection -> calibration -> external validation -> untouched holdout.
+ * Holdout is not opened unless the external validation gate passes.
+ */
+export function evaluateTcnLstmHybridGeneralization({
+  trainingRows = [], selectionRows = [], calibrationRows = [],
+  validationRows = [], holdoutRows = [],
+  candidates, requiredInnerImprovement = 0.00025,
+  maxTrainingSamples = 2048, bootstrapIterations = 500, seed = 29
+} = {}) {
+  const partitionSummary = validateChronologicalPartitions([
+    trainingRows, selectionRows, calibrationRows, validationRows, holdoutRows
+  ]);
+  const selection = selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, {
+    candidates, requiredImprovement: requiredInnerImprovement,
+    seed, maxTrainingSamples
+  });
+  const base = {
+    schema: TCN_LSTM_HYBRID_SCHEMA,
+    architecture: 'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
+    partition_summary: partitionSummary,
+    selection,
+    calibration: { fitted: false },
+    validation: { evaluated: false },
+    holdout: { evaluated: false, reason: 'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES' },
+    validated_for_research: false,
+    holdout_passed: false,
+    probability_ready: false,
+    live_eligibility_ready: false,
+    real_order_execution: false
+  };
+  if (selection.status !== 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' || !selection.selected_fit)
+    return { ...base, status: 'ABSTAIN_INNER_SELECTION_GATE_FAILED' };
+
+  const selectedFit = selection.selected_fit;
+  const modelPredictor = sequence => predictTcnLstmHybridProbability(sequence, selectedFit);
+  const baselinePredictor = sequence =>
+    sigmoid(predictTcnLstmLogisticLogit(sequence, selectedFit.baseline_fit));
+  const modelCalibrator = fitPlattCalibration(calibrationRows, modelPredictor);
+  const baselineCalibrator = fitPlattCalibration(calibrationRows, baselinePredictor);
+  const calibrationPassed = modelCalibrator.fitted && baselineCalibrator.fitted;
+  if (!calibrationPassed)
+    return {
+      ...base, status: 'ABSTAIN_CALIBRATION_SUPPORT_FAILED',
+      calibration: { model: modelCalibrator, baseline: baselineCalibrator }
+    };
+
+  const validation = evaluateCalibratedSplit(
+    validationRows, selectedFit, modelCalibrator, baselineCalibrator,
+    { bootstrapSeed: seed + 101, bootstrapIterations }
+  );
+  const validationPassed = validation.passed;
+  if (!validationPassed)
+    return {
+      ...base,
+      status: 'VALIDATION_NOT_PASSED_HOLDOUT_REMAINS_LOCKED',
+      calibration: { model: modelCalibrator, baseline: baselineCalibrator },
+      validation
+    };
+
+  const holdout = evaluateCalibratedSplit(
+    holdoutRows, selectedFit, modelCalibrator, baselineCalibrator,
+    { bootstrapSeed: seed + 1001, bootstrapIterations }
+  );
+  return {
+    ...base,
+    status: holdout.passed
+      ? 'HOLDOUT_PASSED_RESEARCH_ONLY_NOT_PRODUCTION_APPROVED'
+      : 'VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
+    calibration: {
+      model: modelCalibrator, baseline: baselineCalibrator,
+      fit_boundary: 'CALIBRATION_PARTITION_ONLY'
+    },
+    validation,
+    holdout,
+    validated_for_research: validationPassed && holdout.passed,
+    holdout_passed: holdout.passed,
+    probability_ready: false,
+    live_eligibility_ready: false,
+    real_order_execution: false
+  };
+}
+
 export function benchmarkTcnLstmHybridInference(sequence, profile, {
   warmup = 10, iterations = 100
 } = {}) {
