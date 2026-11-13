@@ -741,6 +741,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
+      temporal_sequence_timestamps:candidate.temporal_sequence_timestamps,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',
