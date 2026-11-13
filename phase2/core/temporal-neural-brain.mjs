@@ -1980,6 +1980,8 @@ function fitRegimeLocalTemporalTcn({
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   temporalPoolingMode='LAST_12_MEAN_V1',
   attentionPositionBiasL2Multiplier=1,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={},
   minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
   minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
   minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
@@ -2085,7 +2087,8 @@ function fitRegimeLocalTemporalTcn({
   const fitted=fitEnsemble(training,{
     epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
     learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode,
-    attentionPositionBiasL2Multiplier
+    attentionPositionBiasL2Multiplier,enableAsymmetricDirectionalRankingLoss,
+    directionalRankingLossConfig
   });
   const selectionLogistic=evaluate(selection,
     sequence=>predictLogistic(sequence,baseline),baseRate);
@@ -2584,7 +2587,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const sharedTcnCalibrationSupported=sharedCalibrationTargets.samples>=30&&
     sharedCalibrationTargets.positive>=5&&sharedCalibrationTargets.negative>=20;
   const sharedTcnFit=sharedTcnTrainingSupported?fitEnsemble(sharedTrainingRows,{
-    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline
+    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline,
+    enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig
   }):null;
   const sharedSelectionLogistic=evaluate(pooledMemberSelectionRows,
     sequence=>predictLogistic(sequence,pooledBaseline),baseRate);
@@ -2694,6 +2698,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
       epochs:regimeLocalTcnEpochs,learningRate,l2,comparisonMargin,
       maxTrainingSamples:regimeLocalTcnMaxTrainingSamples,
+      enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
       minTrainingSamples:minRegimeTraining,
       minTrainingPositive:minRegimeTrainingPositive,
       minTrainingNegative:minRegimeNegative,
@@ -2720,6 +2725,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         epochs:regimeLocalTcnPyramidEpochs,learningRate,l2,comparisonMargin,
         maxTrainingSamples:regimeLocalTcnPyramidMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ORDERED_POOLING_MODE,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,
         minTrainingNegative:minRegimeNegative,
@@ -2747,6 +2753,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         epochs:regimeLocalTcnMultiscaleEpochs,learningRate,l2,comparisonMargin,
         maxTrainingSamples:regimeLocalTcnMultiscaleMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,
         minTrainingNegative:minRegimeNegative,
@@ -2775,6 +2782,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
         attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,minTrainingNegative:minRegimeNegative,
         minSelectionSamples,minSelectionPositive,minSelectionNegative,
