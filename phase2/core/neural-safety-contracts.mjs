@@ -3,8 +3,12 @@ const DEFAULT_CHANNELS = 29;
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 const EPSILON = 1e-12;
 
-const finite = value => value !== null && value !== undefined &&
-  value !== '' && typeof value !== 'boolean' && Number.isFinite(Number(value));
+const finite = value => {
+  if (value === null || value === undefined || typeof value === 'boolean') return false;
+  if (typeof value !== 'number' && typeof value !== 'string') return false;
+  if (typeof value === 'string' && value.trim() === '') return false;
+  return Number.isFinite(Number(value));
+};
 const sigmoid = value => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, value))));
 const softplus = value => value > 30 ? value : Math.log1p(Math.exp(Math.max(-30, value)));
 
@@ -23,6 +27,15 @@ export function validateTemporalSequenceAlignment({
     steps: Array.isArray(temporal_sequence) ? temporal_sequence.length : 0,
     channels: Array.isArray(temporal_sequence?.[0]) ? temporal_sequence[0].length : 0
   });
+  if (!Number.isSafeInteger(expectedSteps) || expectedSteps < 1 ||
+      !Number.isSafeInteger(expectedChannels) || expectedChannels < 1 ||
+      !Number.isSafeInteger(intervalMs) || intervalMs < 1)
+    return fail('TEMPORAL_VALIDATION_CONFIGURATION_INVALID');
+  if (!Array.isArray(binaryMaskChannels) ||
+      binaryMaskChannels.some(channel => !Number.isSafeInteger(channel) ||
+        channel < 0 || channel >= expectedChannels) ||
+      new Set(binaryMaskChannels).size !== binaryMaskChannels.length)
+    return fail('TEMPORAL_BINARY_MASK_CHANNEL_CONTRACT_INVALID');
   if (typeof id !== 'string' || !id.trim()) return fail('TEMPORAL_ID_MISSING');
   if (typeof symbol !== 'string' || !symbol.trim()) return fail('TEMPORAL_SYMBOL_MISSING');
   if (![at, resolved_at, horizon_ms, feature_information_cutoff_at].every(finite))
@@ -39,9 +52,6 @@ export function validateTemporalSequenceAlignment({
       return fail('TEMPORAL_SEQUENCE_CHANNEL_COUNT_MISMATCH:' + step);
     if (row.some(value => !finite(value) || Math.abs(Number(value)) > 4))
       return fail('TEMPORAL_SEQUENCE_VALUE_NON_FINITE_OR_OUT_OF_RANGE:' + step);
-    if (!Array.isArray(binaryMaskChannels) ||
-        binaryMaskChannels.some(channel=>!Number.isInteger(channel)||channel<0||channel>=expectedChannels))
-      return fail('TEMPORAL_BINARY_MASK_CHANNEL_CONTRACT_INVALID');
     for (const channel of binaryMaskChannels) {
       if (Number(row[channel]) !== 0 && Number(row[channel]) !== 1)
         return fail('TEMPORAL_BINARY_MASK_CHANNEL_INVALID:' + channel + ':' + step);
@@ -154,6 +164,26 @@ export function prequalifyHybridComponent({
   name, fitValid, selection = {}, requiredMargin = 0.00025,
   minimumSamples = 40, minimumPositive = 3, minimumNegative = 8
 } = {}) {
+  const configValid = finite(requiredMargin) && Number(requiredMargin) >= 0 &&
+    Number(requiredMargin) <= 1 &&
+    Number.isSafeInteger(minimumSamples) && minimumSamples >= 1 &&
+    Number.isSafeInteger(minimumPositive) && minimumPositive >= 1 &&
+    Number.isSafeInteger(minimumNegative) && minimumNegative >= 1;
+  if (!configValid) return {
+    name: String(name || 'UNNAMED_COMPONENT'),
+    evaluated: false,
+    fit_valid: fitValid === true,
+    support_ready: false,
+    samples: null,
+    positive_samples: null,
+    negative_samples: null,
+    candidate_brier: null,
+    same_window_logistic_brier: null,
+    improvement: null,
+    required_margin: finite(requiredMargin) ? Number(requiredMargin) : null,
+    qualified: false,
+    reason: 'COMPONENT_PREQUALIFICATION_CONFIG_INVALID'
+  };
   const samples = Number(selection.samples);
   const positives = Number(selection.positive);
   const negatives = Number(selection.negative);
@@ -191,6 +221,14 @@ export function prequalifyHybridComponent({
 export function prequalifyHybridComponents(components, {
   requiredMargin = 0.00025, minimumQualified = 2
 } = {}) {
+  if (!Number.isSafeInteger(minimumQualified) || minimumQualified < 1)
+    return {
+      qualified: false,
+      required_qualified_components: null,
+      qualified_component_count: 0,
+      components: [],
+      reason: 'HYBRID_MINIMUM_QUALIFIED_CONFIGURATION_INVALID'
+    };
   const audits = (Array.isArray(components) ? components : []).map(component =>
     prequalifyHybridComponent({ ...component, requiredMargin }));
   const qualified = audits.filter(row => row.qualified);
@@ -226,9 +264,11 @@ export function calculateAsymmetricDirectionalRankingLoss({
   if (!Array.isArray(timestamps) || timestamps.length !== n ||
       timestamps.some(value => !finite(value)))
     throw new TypeError('DIRECTIONAL_LOSS_TIMESTAMP_VECTOR_INVALID');
-  const symbolList = Array.isArray(symbols) ? symbols : [];
-  if (symbolList.length && symbolList.length !== n)
+  if (!Array.isArray(symbols) || (symbols.length && symbols.length !== n))
     throw new TypeError('DIRECTIONAL_LOSS_SYMBOL_VECTOR_INVALID');
+  const symbolList = symbols;
+  if (!Array.isArray(sampleWeights))
+    throw new TypeError('DIRECTIONAL_LOSS_SAMPLE_WEIGHTS_INVALID');
   const weights = sampleWeights.length ? sampleWeights : Array(n).fill(1);
   if (!Array.isArray(weights) || weights.length !== n ||
       weights.some(value => !finite(value) || Number(value) <= 0))
@@ -249,8 +289,10 @@ export function calculateAsymmetricDirectionalRankingLoss({
     if (!finite(value) || Number(value) < 0)
       throw new TypeError('DIRECTIONAL_LOSS_CONFIG_INVALID:' + key);
   }
-  if (cfg.pairTemperature <= 0 || cfg.falsePositiveProbabilityThreshold >= 1 ||
-      cfg.maxPairsPerTimestamp < 1)
+  if (cfg.brierWeight <= 0 || cfg.pairTemperature <= 0 ||
+      cfg.falsePositiveProbabilityThreshold >= 1 ||
+      !Number.isSafeInteger(cfg.maxPairsPerTimestamp) ||
+      cfg.maxPairsPerTimestamp < 1 || cfg.maxPairsPerTimestamp > 4096)
     throw new TypeError('DIRECTIONAL_LOSS_CONFIG_OUT_OF_RANGE');
   const probs = logits.map(value => sigmoid(Number(value)));
   const baselineProbs = baselineLogits.map(value => sigmoid(Number(value)));
@@ -272,23 +314,59 @@ export function calculateAsymmetricDirectionalRankingLoss({
     groups.get(key)[targets[i] === 1 ? 'positive' : 'negative'].push(i);
   }
   const pairs = [];
+  const cap = cfg.maxPairsPerTimestamp;
   for (const [timestamp, group] of groups) {
-    const candidates = [];
-    for (const positive of group.positive) {
+    // Bound memory independently of the number of positive/negative Cartesian
+    // pairs. A high-coin-count timestamp must not allocate an O(P*N) array.
+    const negativeSymbolCounts = new Map();
+    if (symbolList.length) {
       for (const negative of group.negative) {
-        if (symbolList.length && String(symbolList[positive]) === String(symbolList[negative])) continue;
-        candidates.push([positive, negative]);
+        const key = String(symbolList[negative]);
+        negativeSymbolCounts.set(key, (negativeSymbolCounts.get(key) || 0) + 1);
       }
     }
-    const cap = Math.trunc(cfg.maxPairsPerTimestamp);
-    if (candidates.length <= cap) pairs.push(...candidates.map(pair => ({ timestamp, pair })));
-    else {
-      // Deterministic even coverage across the full pair list; no random seed
-      // or label-dependent post-hoc sampling.
-      for (let slot = 0; slot < cap; slot++) {
-        const index = Math.floor(slot * (candidates.length - 1) / Math.max(1, cap - 1));
-        pairs.push({ timestamp, pair: candidates[index] });
+    const eligibleRows = [];
+    let totalPairs = 0;
+    for (const positive of group.positive) {
+      const excluded = symbolList.length
+        ? (negativeSymbolCounts.get(String(symbolList[positive])) || 0) : 0;
+      const count = group.negative.length - excluded;
+      if (count <= 0) continue;
+      totalPairs += count;
+      if (!Number.isSafeInteger(totalPairs))
+        throw new TypeError('DIRECTIONAL_LOSS_PAIR_COUNT_EXCEEDS_SAFE_INTEGER');
+      eligibleRows.push({ positive, count, cumulative: totalPairs });
+    }
+    if (totalPairs === 0) continue;
+    const take = Math.min(totalPairs, cap);
+    for (let slot = 0; slot < take; slot++) {
+      // Deterministically cover the whole ordinal range without materializing
+      // every pair. The midpoint is used for a one-pair sample.
+      const ordinal = take === totalPairs ? slot
+        : take === 1 ? Math.floor((totalPairs - 1) / 2)
+        : Math.floor(slot * (totalPairs - 1) / (take - 1));
+      let low = 0, high = eligibleRows.length - 1;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (eligibleRows[middle].cumulative > ordinal) high = middle;
+        else low = middle + 1;
       }
+      const selected = eligibleRows[low];
+      const previous = selected.cumulative - selected.count;
+      let negativeOffset = ordinal - previous;
+      let selectedNegative = -1;
+      for (const negative of group.negative) {
+        if (symbolList.length &&
+            String(symbolList[selected.positive]) === String(symbolList[negative])) continue;
+        if (negativeOffset === 0) {
+          selectedNegative = negative;
+          break;
+        }
+        negativeOffset--;
+      }
+      if (selectedNegative < 0)
+        throw new TypeError('DIRECTIONAL_LOSS_PAIR_SAMPLE_INDEX_INVALID');
+      pairs.push({ timestamp, pair: [selected.positive, selectedNegative] });
     }
   }
   let rankingLoss = 0;
