@@ -160,6 +160,8 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
     target_definition:expectedDefinition,
     target_semantics:targetSemanticsFor(labelMode),
     temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
+    temporal_sequence_timestamps:Array.isArray(sample.temporal_sequence_timestamps)
+      ?sample.temporal_sequence_timestamps:null,
     historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
     features:baselineFeatures,
     liquidity_lane:sample.liquidity_lane||null,
@@ -281,6 +283,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     minimumValidationSamples:Math.max(24,Math.trunc(options.temporalMinValidationSamples||24)),
     minimumHoldoutSamples:Math.max(40,Math.trunc(options.temporalMinHoldoutSamples||40)),
     liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
+    requireSequenceTimestamps:true,
+    enableAsymmetricDirectionalRankingLoss:options.enableAsymmetricDirectionalRankingLoss===true,
+    directionalRankingLossConfig:options.directionalRankingLossConfig||{},
     epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
     targetDefinition:targetContract,
     outcomeHorizonMs,
@@ -366,6 +371,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   }
   const profile=buildDailyCognitiveProfile(rows,{
     ...options,dailyFeatureSchema:modelFeatureSchema,
+    enableAsymmetricDirectionalRankingLoss:options.enableAsymmetricDirectionalRankingLoss===true,
+    directionalRankingLossConfig:options.directionalRankingLossConfig||{},
     outcomeHorizonMs,modelTargetDefinition:targetContract,
     modelTargetSemantics,allowedOutcomeSources:[selectedOutcomeSource]
   });
