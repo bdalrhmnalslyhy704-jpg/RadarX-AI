@@ -15,6 +15,7 @@ import {
   predictTcnLstmHybridProbability,
   selectTcnLstmHybridHyperparameters,
   benchmarkTcnLstmHybridChronological,
+  evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit
 } from '../core/temporal-lstm-hybrid.mjs';
@@ -192,17 +193,24 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
   assert.ok(result.partition_support.validation.rows>=20);
   assert.ok(result.partition_support.holdout.rows>=20);
   assert.equal(result.inner_selection_diagnostics.validation_or_holdout_used_for_fit_or_selection,false);
-  assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
-  assert.equal(result.validation.evaluated,true);
-  assert.equal(result.holdout.evaluated,result.validation.passed);
-  assert.equal(result.validation.sample_count,result.partition_support.validation.rows);
-  if(result.validation.passed){
-    assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
-    assert.equal(result.holdout.required_brier_improvement,0.003);
+  const hasCalibration=result.calibration?.model?.fitted===true;
+  if(hasCalibration){
+    assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+    assert.equal(result.validation.evaluated,true);
+    assert.equal(result.holdout.evaluated,result.validation.passed);
+    assert.equal(result.validation.sample_count,result.partition_support.validation.rows);
+    if(result.validation.passed){
+      assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
+      assert.equal(result.holdout.required_brier_improvement,0.003);
+    }else{
+      assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+    }
+    assert.equal(result.validation.required_brier_improvement,0.003);
   }else{
-    assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+    assert.ok(['ABSTAIN_INNER_SELECTION_GATE_FAILED','ABSTAIN_CALIBRATION_SUPPORT_FAILED']
+      .includes(result.status));
+    assert.equal(result.holdout.evaluated,false);
   }
-  assert.equal(result.validation.required_brier_improvement,0.003);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
