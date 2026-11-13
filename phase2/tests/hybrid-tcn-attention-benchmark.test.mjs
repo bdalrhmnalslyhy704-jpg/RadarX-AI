@@ -255,10 +255,16 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(incomplete.ready, false);
   assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
 
-  const completedPath = [{
-    closeTime: at + FOUR_HOURS, closed: true,
-    open: 10, high: 10.4, low: 9.99, close: 10.2
-  }];
+  const completedPath = Array.from({
+    length: FOUR_HOURS / FIFTEEN_MINUTES
+  }, (_, index) => ({
+    closeTime: at + (index + 1) * FIFTEEN_MINUTES,
+    closed: true,
+    open: 10,
+    high: index === FOUR_HOURS / FIFTEEN_MINUTES - 1 ? 10.4 : 10.2,
+    low: 9.99,
+    close: 10.2
+  }));
   const prepared = prepareHybridBenchmarkEvent({
     id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
     candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
@@ -276,6 +282,14 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.gross_return_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_at, at + FOUR_HOURS);
+
+  const gappedPath = prepareHybridBenchmarkEvent({
+    id: 'gapped-forward-path', symbol: 'ETHUSDT', decisionAt: at,
+    candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7,
+    futureCandles: completedPath.slice(1)
+  });
+  assert.equal(gappedPath.ready, false);
+  assert.equal(gappedPath.reason, 'GAPPED_OR_MISALIGNED_FORWARD_HORIZON');
 
   const singleLetter = prepareHybridBenchmarkEvent({
     id: 'single-letter-symbol', symbol: 'WUSDT', decisionAt: at,
