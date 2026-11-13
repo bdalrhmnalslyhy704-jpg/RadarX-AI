@@ -41,3 +41,7 @@ Use the current branch code from this trigger commit, including the five-consecu
 CONTROLLED INITIALIZATION UPDATE
 
 The two predeclared dropout/L2 configurations must use the same deterministic initialization seed (101); only dropout and L2 differ. Evaluate with current branch source at this trigger commit, including the five-day UTC block bootstrap. Do not use reports from earlier dense triggers as the final result.
+
+CHECKPOINT SELECTION UPDATE
+
+The projection challenger must use deterministic no-dropout Brier on the TRAIN block after each optimizer update to select its best checkpoint and drive early stopping. Stochastic dropout Brier is a separate training diagnostic only. No validation or holdout metric may select an epoch or checkpoint.
