@@ -305,6 +305,21 @@ test('barrier resolver chooses the stop when the same candle touches take-profit
   assert.equal(trade.max_favorable_excursion_at, at);
 });
 
+test('barrier resolver rejects a missing closed candle before a later barrier touch',()=>{
+  const at=Date.UTC(2026,1,1);
+  const result=resolveBarrierTrade({
+    entryPrice:100,decisionAt:at,
+    futureCandles:[
+      {closeTime:at+FIFTEEN_MINUTES,closed:true,open:100,high:100.5,low:99.5,close:100.2},
+      {closeTime:at+3*FIFTEEN_MINUTES,closed:true,open:100,high:104,low:99,close:103}
+    ]
+  });
+  assert.equal(result.resolved,false);
+  assert.equal(result.reason,'GAPPED_OR_MISALIGNED_FORWARD_HORIZON');
+  assert.equal(result.expected_timestamp,at+2*FIFTEEN_MINUTES);
+  assert.equal(result.observed_timestamp,at+3*FIFTEEN_MINUTES);
+});
+
 test('profit-loss logit gradients match a central finite-difference check', () => {
   const rows = [
     { at: 1, symbol: 'AUSDT', gross_return_pct: 3,
