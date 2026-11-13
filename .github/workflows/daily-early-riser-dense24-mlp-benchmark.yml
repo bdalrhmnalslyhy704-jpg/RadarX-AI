@@ -188,6 +188,7 @@ jobs:
             --factorization-learning-rate 0.008 \
             --factorization-l2 0.06
       - name: Run isolated projection, regularization and strict OOS Brier gate
+        if: always()
         env:
           DENSE_CENSUS_RUN_ID: ${{ needs.resolve-census.outputs.run_id }}
           DENSE_CENSUS_SOURCE_COMMIT: ${{ needs.resolve-census.outputs.source_commit }}
