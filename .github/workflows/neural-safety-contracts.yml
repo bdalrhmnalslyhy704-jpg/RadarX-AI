@@ -6,6 +6,8 @@ on:
       - research/daily-early-riser-mlp-budget-20261113
     paths:
       - 'phase2/core/neural-safety-contracts.mjs'
+      - 'phase2/tools/neural-hybrid-oos-matrix.mjs'
+      - 'phase2/tests/neural-hybrid-oos-matrix.test.mjs'
       - 'phase2/core/adaptive-trader-engine.mjs'
       - 'phase2/core/daily-early-riser-census.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
@@ -41,6 +43,8 @@ jobs:
       - name: Syntax-check all modified neural paths
         run: |
           node --check phase2/core/neural-safety-contracts.mjs
+          node --check phase2/tools/neural-hybrid-oos-matrix.mjs
+          node --check phase2/tests/neural-hybrid-oos-matrix.test.mjs
           node --check phase2/core/adaptive-trader-engine.mjs
           node --check phase2/core/daily-early-riser-census.mjs
           node --check phase2/core/cognitive-brain.mjs
@@ -52,6 +56,7 @@ jobs:
         run: |
           node --test --test-timeout=180000 \
             phase2/tests/neural-safety-contracts.test.mjs \
+            phase2/tests/neural-hybrid-oos-matrix.test.mjs \
             phase2/tests/temporal-neural-brain.test.mjs \
             phase2/tests/cognitive-brain.test.mjs \
             phase2/tests/daily-early-riser-neural-benchmark.test.mjs
