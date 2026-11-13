@@ -633,6 +633,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       feature_importance:boosted.feature_importance??[],
       validation:boosted.validation??null,
       holdout:boosted.holdout??null,
+      same_window_logistic_validation:boosted.same_window_logistic_validation??null,
+      same_window_logistic_holdout:boosted.same_window_logistic_holdout??null,
       holdout_comparison:selected.challenger_candidate_metrics?.find(row=>row.name==='GBDT_RESIDUAL')??null
     },
     hybrid_model:{
@@ -644,7 +646,10 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       boosted_weight:hybrid.boosted_weight??null,
       selection_winner_candidate:hybrid.selection_winner_candidate??null,
       validation:hybrid.validation??null,
+      validation_logistic_brier_score:hybrid.validation_logistic_brier_score??null,
+      candidate_validation_metrics:hybrid.candidate_validation_metrics??[],
       holdout:hybrid.holdout??null,
+      holdout_comparison:hybrid.holdout_comparison??selected.challenger_holdout_comparison??null,
       candidate_selection_metrics:hybrid.candidate_selection_metrics??[]
     },
     model_selection:{
