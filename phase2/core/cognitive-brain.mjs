@@ -2534,6 +2534,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       anchor_output_bias_delta:neuralFit?.anchor_output_bias_delta??0,
       member_training_objectives:neuralFit?.members?.map(member=>member.training_objective)||[],
       member_training_profiles:neuralFit?.member_training_profiles||[],
+      member_training_diagnostics:neuralFit?.member_training_diagnostics||[],
       internal_selection_logistic_brier:neuralSelectionLogistic.model_brier_score??null,
       internal_selection_required_margin:innerSelectionMargin,
       outer_validation_required_margin:comparisonMargin,
