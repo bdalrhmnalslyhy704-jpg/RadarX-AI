@@ -13,6 +13,7 @@ import {
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
+  predictTcnLstmHybridCalibratedProbability,
   selectTcnLstmHybridHyperparameters,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
@@ -194,13 +195,36 @@ test('volatility extremes remain finite while malformed and out-of-contract tens
     /TCN_LSTM_SEQUENCE_VALUE_INVALID/);
 });
 
-test('inference latency is measured without asserting a hardware-specific promise',()=>{
+test('raw and fully calibrated inference paths are finite and measured without hardware claims',()=>{
   const rows=makeRows(0,32);
   const profile=trainTcnLstmHybrid(rows,{epochs:1,learningRate:0.0015,l2:0.001,batchSize:8});
-  const result=benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{warmup:2,iterations:10});
-  assert.ok(result.p50_ms>=0);
-  assert.ok(result.p95_ms>=result.p50_ms);
-  assert.equal(result.production_latency_claim,false);
+  const raw=benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{warmup:2,iterations:10});
+  assert.ok(raw.p50_ms>=0);
+  assert.ok(raw.p95_ms>=raw.p50_ms);
+  assert.equal(raw.calibrated,false);
+  assert.equal(raw.measured_path,'RAW_TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR');
+  assert.equal(raw.production_latency_claim,false);
+
+  const calibrator={fitted:true,slope:1.2,intercept:-0.08};
+  const probability=predictTcnLstmHybridCalibratedProbability(
+    rows[0].sequence,profile,calibrator
+  );
+  assert.ok(Number.isFinite(probability)&&probability>=0&&probability<=1);
+  const calibrated=benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{
+    warmup:2,iterations:10,modelCalibrator:calibrator
+  });
+  assert.ok(calibrated.p50_ms>=0);
+  assert.ok(calibrated.p95_ms>=calibrated.p50_ms);
+  assert.equal(calibrated.calibrated,true);
+  assert.equal(calibrated.measured_path,
+    'TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR_PLUS_PLATT_CALIBRATION');
+  assert.equal(calibrated.production_latency_claim,false);
+  assert.throws(()=>predictTcnLstmHybridCalibratedProbability(
+    rows[0].sequence,profile,{fitted:false}
+  ),/TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED/);
+  assert.throws(()=>benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{
+    warmup:2,iterations:10,modelCalibrator:{fitted:false}
+  }),/TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED/);
 });
 
 test('full TCN-LSTM benchmark uses purged time partitions and reports untouched outer Brier',()=>{
@@ -240,11 +264,13 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
-  assert.equal(result.inference_latency.evaluated,result.trained);
+  assert.equal(result.inference_latency.evaluated,
+    result.calibration?.model?.fitted===true);
   assert.equal(result.zero_latency_claim,false);
   if(result.inference_latency.evaluated){
     assert.ok(result.inference_latency.p50_ms>=0);
     assert.ok(result.inference_latency.p95_ms>=result.inference_latency.p50_ms);
+    assert.equal(result.inference_latency.calibrated,true);
     assert.equal(result.inference_latency.production_latency_claim,false);
   }
 });
