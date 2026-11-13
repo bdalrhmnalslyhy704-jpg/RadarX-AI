@@ -62,6 +62,7 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   training_objective: 'OVERLAP_AWARE_RISK_BUDGET_NORMALIZED_TIME_BUCKETED_PORTFOLIO_SHARPE_RANKING_V7'
 });
 const EPS = 1e-8;
+const DEFAULT_BARRIER_CANDLE_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
 const DEFAULT_MAX_CONCURRENT_POSITIONS = 30;
 const DEFAULT_POSITION_FRACTION = 1 / DEFAULT_MAX_CONCURRENT_POSITIONS;
@@ -495,20 +496,71 @@ export function buildHybridSequence({
 export function resolveBarrierTrade({
   entryPrice, decisionAt, futureCandles = [], takeProfitPct = 3, stopLossPct = 2,
   horizonMs = 4 * 60 * 60 * 1000,
+  candleIntervalMs = DEFAULT_BARRIER_CANDLE_INTERVAL_MS,
   feeBpsPerSide = 10, slippageBpsPerSide = 5
 } = {}) {
   const entry = finite(entryPrice);
   const at = finite(decisionAt);
   if (!(entry > 0) || at === null) throw new Error('INVALID_BARRIER_TRADE_ENTRY');
+  const interval = finite(candleIntervalMs);
+  if (!Number.isSafeInteger(interval) || interval <= 0) {
+    return { resolved: false, reason: 'INVALID_CANDLE_INTERVAL' };
+  }
   const take = entry * (1 + Math.max(0.01, Number(takeProfitPct) || 3) / 100);
   const stop = entry * (1 - Math.max(0.01, Number(stopLossPct) || 2) / 100);
   const horizonEnd = at + Math.max(1, Number(horizonMs) || 4 * 60 * 60 * 1000);
-  const path = (Array.isArray(futureCandles) ? futureCandles : [])
-    .filter(row => validClosedCandle(row) && candleTime(row) > at && candleTime(row) <= horizonEnd)
-    .sort((a, b) => candleTime(a) - candleTime(b));
-  if (!path.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
+  const future = (Array.isArray(futureCandles) ? futureCandles : [])
+    .map(candle => ({ candle, at: candleTime(candle) }));
+  if (future.some(item => item.at === null)) {
+    return { resolved: false, reason: 'INVALID_FUTURE_CANDLE_TIMESTAMP' };
+  }
+  const candidates = future
+    .filter(item => item.at > at && item.at <= horizonEnd)
+    .sort((a, b) => a.at - b.at);
+  if (!candidates.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
+
+  // Validate the forward path only as far as the first exit. A missing candle
+  // before a barrier touch makes the outcome unknowable; candles after an exit
+  // are deliberately not required or inspected.
+  const path = [];
+  let expectedAt = at + interval;
+  let previousAt = at;
   let exitPrice = null, exitAt = null, exitReason = null;
-  for (const candle of path) {
+  for (const item of candidates) {
+    const candle = item.candle;
+    const candleAt = item.at;
+    if (candleAt < previousAt) {
+      return { resolved: false, reason: 'UNSORTED_FUTURE_CANDLES',
+        previous_at: previousAt, observed_at: candleAt, candle_interval_ms: interval };
+    }
+    if (candleAt === previousAt) {
+      return { resolved: false, reason: 'DUPLICATE_FUTURE_CANDLE_TIMESTAMP',
+        observed_at: candleAt, candle_interval_ms: interval };
+    }
+    if (candleAt > expectedAt) {
+      return { resolved: false, reason: 'GAP_IN_FUTURE_CANDLES',
+        expected_at: expectedAt, observed_at: candleAt,
+        last_contiguous_at: previousAt, candle_interval_ms: interval };
+    }
+    if (candleAt < expectedAt) {
+      return { resolved: false, reason: 'OFF_CADENCE_FUTURE_CANDLE',
+        expected_at: expectedAt, observed_at: candleAt,
+        last_contiguous_at: previousAt, candle_interval_ms: interval };
+    }
+    const openAt = finite(candle?.openTime) ?? finite(candle?.open_time);
+    if (openAt !== null && openAt !== candleAt - interval + 1) {
+      return { resolved: false, reason: 'MISALIGNED_FUTURE_CANDLE',
+        expected_open_at: candleAt - interval + 1, observed_open_at: openAt,
+        observed_at: candleAt, candle_interval_ms: interval };
+    }
+    if (!validClosedCandle(candle)) {
+      return { resolved: false, reason: 'INVALID_FUTURE_CANDLE',
+        observed_at: candleAt, candle_interval_ms: interval };
+    }
+    path.push(candle);
+    previousAt = candleAt;
+    expectedAt = candleAt + interval;
+
     const open = candleNumber(candle, 'open');
     const high = candleNumber(candle, 'high');
     const low = candleNumber(candle, 'low');
@@ -518,34 +570,36 @@ export function resolveBarrierTrade({
       // Ambiguous OHLC ordering is resolved against the strategy, never in its favour.
       exitPrice = open <= stop ? open : stop;
       exitReason = 'STOP_FIRST_SAME_CANDLE_AMBIGUITY';
-      exitAt = candleTime(candle);
+      exitAt = candleAt;
       break;
     }
     if (hitStop) {
       exitPrice = open <= stop ? open : stop;
       exitReason = 'STOP_LOSS';
-      exitAt = candleTime(candle);
+      exitAt = candleAt;
       break;
     }
     if (hitTake) {
       exitPrice = open >= take ? open : take;
       exitReason = 'TAKE_PROFIT';
-      exitAt = candleTime(candle);
+      exitAt = candleAt;
       break;
     }
   }
+  if (!path.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
   if (exitPrice === null) {
     const last = path.at(-1);
     if (candleTime(last) < horizonEnd) {
       return { resolved: false, reason: 'INCOMPLETE_FORWARD_HORIZON',
-        required_through: horizonEnd, observed_through: candleTime(last) };
+        required_through: horizonEnd, observed_through: candleTime(last),
+        candle_interval_ms: interval };
     }
     exitPrice = candleNumber(last, 'close');
     exitAt = candleTime(last);
     exitReason = 'HORIZON_CLOSE';
   }
   const grossReturnPct = (exitPrice / entry - 1) * 100;
-  const executedPath=path.filter(candle=>candleTime(candle)<=exitAt);
+  const executedPath=path;
   const adverseCandle=executedPath.reduce((worst,candle)=>
     !worst||candleNumber(candle,'low')<candleNumber(worst,'low')?candle:worst,null);
   const adversePrice=exitReason==='STOP_LOSS'||exitReason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY'
@@ -596,7 +650,8 @@ export function resolveBarrierTrade({
     max_favorable_excursion_at: maxFavorableExcursionAt,
     round_trip_cost_bps: round(roundTripCostBps, 4),
     net_return_pct: round(grossReturnPct - roundTripCostBps / 100, 6),
-    conservative_same_candle_rule: true
+    conservative_same_candle_rule: true,
+    candle_interval_ms: interval
   };
 }
 
@@ -605,7 +660,8 @@ export function resolveBarrierTrade({
  * fully matured 4-hour forward path. The neural tensor ends at decisionAt. */
 export function prepareHybridBenchmarkEvent({
   id, symbol, decisionAt, candles = [], benchmarkCandles = [],
-  futureCandles = [], entryPrice, classicScore, featureSnapshotSha = null
+  futureCandles = [], entryPrice, classicScore, featureSnapshotSha = null,
+  candleIntervalMs = DEFAULT_BARRIER_CANDLE_INTERVAL_MS
 } = {}) {
   const at = finite(decisionAt);
   const normalizedSymbol = String(symbol ?? '').trim().toUpperCase();
@@ -617,7 +673,8 @@ export function prepareHybridBenchmarkEvent({
   const features = buildHybridSequence({ candles, benchmarkCandles, asOf: at });
   if (features.ready !== true) return { ready: false, reason: features.reason || 'FEATURE_TENSOR_NOT_READY' };
   const outcome = resolveBarrierTrade({
-    entryPrice, decisionAt: at, futureCandles, horizonMs: 4 * 60 * 60 * 1000
+    entryPrice, decisionAt: at, futureCandles, horizonMs: 4 * 60 * 60 * 1000,
+    candleIntervalMs
   });
   if (outcome.resolved !== true) return { ready: false, reason: outcome.reason, outcome };
   return {
