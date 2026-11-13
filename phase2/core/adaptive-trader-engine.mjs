@@ -547,6 +547,10 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    // The sequence builder consumes exactly the final 24 contiguous closed 15m candles.
+    // Persist each close time so downstream training can verify step-to-label alignment.
+    temporal_sequence_timestamps: temporalSequence
+      ?candles.slice(-24).map(row=>Number(row.closeTime)):null,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
