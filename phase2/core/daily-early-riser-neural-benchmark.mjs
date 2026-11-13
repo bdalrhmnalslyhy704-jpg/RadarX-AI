@@ -149,6 +149,7 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
     symbol,at,resolved_at:resolvedAt,horizon_ms:horizonMs,
     outcome:label.outcome,outcome_source:expectedSource,
     target_definition:expectedDefinition,
+    target_semantics:targetSemanticsFor(labelMode),
     temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
     historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
     features:baselineFeatures,

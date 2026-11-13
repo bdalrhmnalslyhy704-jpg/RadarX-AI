@@ -303,6 +303,10 @@ function validResolvedSamples(samples, {
       const resolvedAt = finite(row.resolved_at);
       const horizon = finite(row.horizon_ms);
       const source = String(row.outcome_source || '');
+      const rowTargetDefinition=String(row.target_definition||'');
+      const rowTargetSemantics=String(row.target_semantics||'');
+      const targetContractValid=(!rowTargetDefinition||rowTargetDefinition===modelTargetDefinition)&&
+        (!rowTargetSemantics||rowTargetSemantics===modelTargetSemantics);
       const expectedSource = row.historical_baseline === true
         ? 'HISTORICAL_CLOSED_CANDLE' : radarOutcome ? source : 'CLOSED_CANDLE_4H';
       const sourceValid = allowedSources ? allowedSources.has(source) : source === expectedSource;
@@ -310,7 +314,7 @@ function validResolvedSamples(samples, {
         (allowResolutionLag ? resolvedAt >= at + horizonMs : resolvedAt - at === horizonMs);
       if (!id || !symbol || at === null || at <= 0 ||
           resolvedAt === null || !resolvedAfterHorizon ||
-          horizon !== horizonMs || !sourceValid ||
+          horizon !== horizonMs || !sourceValid || !targetContractValid ||
           (radarOutcome && !String(row.radar || '').trim())) return false;
       // Alerts from several radars can refer to the same pair/candle. Count the market event once.
       const baselineKey = symbol + ':' + String(Math.trunc(at));
@@ -1366,6 +1370,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   validationFraction = 0.2, holdoutFraction = 0.2,
   recentWindowFraction = 0.6, recentSelectionMargin = 0.005, l2 = 0.08,
   outcomeHorizonMs = MIN_OUTCOME_HORIZON_MS,
+  modelTargetDefinition = TEMPORAL_TARGET_DEFINITION,
+  modelTargetSemantics = 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2',
   allowResolutionLag = false,
   allowedOutcomeSources = null,
   iterations = 900, learningRate = 0.12,
@@ -1397,13 +1403,15 @@ export function buildCognitiveLearningProfile(samples = [], {
   const activeFeatureSchema=featureSchema;
   const temporalNetwork=buildTemporalNeuralProfile(temporalSamples,temporalOptions);
   const cognitiveSampleFingerprint=sampleIdentityFingerprint(validResolvedSamples(samples,{
-    outcomeHorizonMs,allowResolutionLag,allowedOutcomeSources,featureSchema:activeFeatureSchema
+    outcomeHorizonMs,modelTargetDefinition,modelTargetSemantics,
+    allowResolutionLag,allowedOutcomeSources,featureSchema:activeFeatureSchema
   }));
   const temporalSampleFingerprint=String(temporalNetwork?.outer_sample_fingerprint||'');
   const sharedSampleIdentityMatches=Boolean(temporalSampleFingerprint&&
     cognitiveSampleFingerprint===temporalSampleFingerprint);
   const allResolved = validResolvedSamples(samples, {
-    outcomeHorizonMs, allowResolutionLag, allowedOutcomeSources,featureSchema:activeFeatureSchema
+    outcomeHorizonMs,modelTargetDefinition,modelTargetSemantics,
+    allowResolutionLag,allowedOutcomeSources,featureSchema:activeFeatureSchema
   });
   const maxSamples = Math.max(0, Math.trunc(Number(maxResolvedSamples) || 0));
   const resolved = maxSamples > 0 ? allResolved.slice(-maxSamples) : allResolved;

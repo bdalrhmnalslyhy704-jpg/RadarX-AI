@@ -793,6 +793,7 @@ test('72h safe-opportunity target definition is carried into the cognitive compa
     labelMode:'safe_opportunity',horizonHours:72
   });
   assert.ok(prepared.row,prepared.reason||'safe 72h sample should be valid');
+  assert.equal(prepared.row.target_semantics,expectedSemantics);
   const profile=buildCognitiveLearningProfile([prepared.row],{
     outcomeHorizonMs:horizonMs,
     allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
@@ -805,6 +806,17 @@ test('72h safe-opportunity target definition is carried into the cognitive compa
   assert.equal(profile.comparison_contract.target_semantics,expectedSemantics);
   assert.equal(profile.neural_network.target_definition,expectedDefinition);
   assert.equal(profile.neural_network.target_semantics,expectedSemantics);
+  const mismatched={...prepared.row,target_definition:'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'};
+  const rejected=buildCognitiveLearningProfile([mismatched],{
+    outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    modelTargetDefinition:expectedDefinition,
+    modelTargetSemantics:expectedSemantics,
+    temporalSamples:[],temporalOptions:{}
+  });
+  assert.equal(rejected.resolved_samples,0,
+    'a row from a different target contract must never enter this model fit');
 });
 
 test('daily MLP output-head initialization scale is explicit and bounded for controlled ablations',()=>{
