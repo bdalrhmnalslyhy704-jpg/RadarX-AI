@@ -36,6 +36,7 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
 export const HYBRID_SEQUENCE_STEPS = 24;
 export const HYBRID_SEQUENCE_CHANNELS = HYBRID_FEATURE_NAMES.length;
 export const HYBRID_CANDLE_INTERVAL_MS = 15 * 60 * 1000;
+export const HYBRID_REPLAY_CANDLE_INTERVAL_MS = 60 * 1000;
 export const HYBRID_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
@@ -702,12 +703,14 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const classic = finite(raw.classic_score);
     const sequence = raw.sequence;
     const sequenceTimestamps=raw.sequence_timestamps;
+    const expectedSequenceIntervalMs=outcomeSource==='BINANCE_SPOT_CLOSED_1M_REPLAY'
+      ?HYBRID_REPLAY_CANDLE_INTERVAL_MS:HYBRID_CANDLE_INTERVAL_MS;
     const temporalAlignment=validateTemporalSequenceAlignment({
       id,symbol,at,resolved_at:resolvedAt,horizon_ms:maturityMs,
       temporal_sequence:sequence,temporal_sequence_timestamps:sequenceTimestamps,
       feature_information_cutoff_at:latestInputAt,
       expectedSteps:HYBRID_SEQUENCE_STEPS,expectedChannels:HYBRID_SEQUENCE_CHANNELS,
-      intervalMs:HYBRID_CANDLE_INTERVAL_MS,requireSequenceTimestamps:true,
+      intervalMs:expectedSequenceIntervalMs,requireSequenceTimestamps:true,
       binaryMaskChannels:[]
     });
     const kamaEfficiencyRatio = finite(raw.kama_efficiency_ratio) ?? finite(sequence?.at(-1)?.[HYBRID_SEQUENCE_CHANNELS - 1]);
