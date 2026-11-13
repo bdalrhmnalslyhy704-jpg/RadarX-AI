@@ -290,6 +290,36 @@ test('five-partition calibrated evaluation gates holdout behind external validat
     assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
 });
 
+test('holdout outcome labels remain unread until external validation passes',()=>{
+  const rows=makeRows(0,400,'sealed-holdout');
+  const days=[...new Set(rows.map(row=>Math.floor(row.at/DAY)*DAY))].sort((a,b)=>a-b);
+  const holdoutStart=days[Math.floor(days.length*0.87)]+DAY;
+  const sealed=rows.map(row=>{
+    if(row.at<holdoutStart)return row;
+    const copy={...row};
+    delete copy.target;
+    Object.defineProperty(copy,'target',{
+      enumerable:true,configurable:false,
+      get(){throw new Error('HOLDOUT_LABEL_READ_BEFORE_EXTERNAL_VALIDATION');}
+    });
+    return copy;
+  });
+  const result=benchmarkTcnLstmHybridChronological(sealed,{
+    maxTrainingSamples:80,bootstrapIterations:200,seed:37,
+    requiredInnerImprovement:0,
+    requiredOuterImprovement:1.0,
+    candidates:[
+      {name:'DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
+      {name:'DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:1}
+    ]
+  });
+  assert.equal(result.validation.evaluated,true);
+  assert.equal(result.validation.passed,false);
+  assert.equal(result.status,'VALIDATION_NOT_PASSED_HOLDOUT_REMAINS_LOCKED');
+  assert.equal(result.holdout.evaluated,false);
+  assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+});
+
 test('five-partition evaluator rejects leakage, overlapping identities and unresolved label maturity',()=>{
   const training=makeRows(0,40,'train');
   const selection=makeRows(41,20,'selection');
