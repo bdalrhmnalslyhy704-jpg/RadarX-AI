@@ -33,3 +33,8 @@ Run the additional isolated 35-feature projection residual MLP:
 Keep ambiguous rows audited and excluded from supervised fitting. Keep all features baseline-close only. Do not calibrate, tune, or update weights on external validation or final holdout. If any SHA, sample-count, liquidity, label, chronology, or sequence audit fails, fail closed.
 
 Research only. No production merge, deployment, real order execution, or lowering of the 750,000 USDT floor.
+
+
+LATEST STRICT EVALUATION REVISION
+
+Use the current branch code from this trigger commit, including the five-consecutive-UTC-day paired block bootstrap for external-validation and final-holdout Brier improvement confidence intervals. The one-day target-maturity purge between each partition remains mandatory. Run the projection evaluator even if the legacy MLP/factorization diagnostic step fails, provided the exact verified census files are present. Upload the JSON report even when the OOS superiority gate fails.
