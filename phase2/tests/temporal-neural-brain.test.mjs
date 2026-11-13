@@ -479,9 +479,9 @@ test('TCN training loop consumes the asymmetric same-time ranking objective',()=
   });
   const members=profile.temporal_tcn?.member_training_diagnostics||[];
   assert.ok(members.length>0,'shared TCN ensemble should reach the training loop');
-  assert.ok(members.every(member=>Array.isArray(member.epochs)),
-    'each trained member should retain epoch diagnostics');
-  const rankingDiagnostics=members.flatMap(member=>member.epochs)
+  assert.ok(members.every(member=>Array.isArray(member.epoch_history)),
+    'each trained member should retain per-epoch diagnostics');
+  const rankingDiagnostics=members.flatMap(member=>member.epoch_history)
     .map(epoch=>epoch.directional_ranking_loss).filter(Boolean);
   assert.ok(rankingDiagnostics.length>0,
     'the asymmetric objective must be calculated inside the actual TCN optimizer loop');
