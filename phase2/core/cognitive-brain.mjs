@@ -1214,6 +1214,9 @@ export function fitFactorizationMachineModel(training,{
       schema:'FACTOR_CROSS_PER_EPOCH_TRAINING_DIAGNOSTICS_V2',
       epochs_completed:epochHistory.length,requested_epochs:steps,
       best_epoch:bestEpoch,best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+      optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
+      scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
+      gradient_clip_norm:maximumGradientNorm,
       early_stopping:{
         enabled:true,monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY',
         patience:earlyStoppingPatience,minimum_epochs:minimumEpochs,
