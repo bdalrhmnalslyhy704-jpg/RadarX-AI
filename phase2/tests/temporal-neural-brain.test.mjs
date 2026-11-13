@@ -459,7 +459,7 @@ function sample(group,index,{up=null}={}){
 }
 
 test('TCN training loop consumes the asymmetric same-time ranking objective',()=>{
-  const rows=Array.from({length:30*12},(_,index)=>{
+  const rows=Array.from({length:45*12},(_,index)=>{
     const group=Math.floor(index/12),within=index%12;
     return sample(group,within,{up:within%2===0});
   });
