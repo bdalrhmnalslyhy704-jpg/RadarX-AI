@@ -36,7 +36,7 @@ test('MLP V5 training loop consumes the asymmetric same-time ranking objective',
       at,resolved_at:at+FOUR_HOURS,
       horizon_ms:FOUR_HOURS,
       outcome:signal?'UP':'DOWN',
-      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2'
     };
   });
