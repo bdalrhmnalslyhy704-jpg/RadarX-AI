@@ -3130,13 +3130,32 @@ export function buildTemporalNeuralProfile(samples = [], {
     regimeLocalTcnAttentionResults[regime]?.validation_passed===true);
   const attentionSelectedRegimes=regimes.filter(regime=>
     regimeLocalTcnAttentionResults[regime]?.holdout_passed===true);
-  const attentionValidation=aggregateEvaluations(attentionSupportedRegimes.map(regime=>
+  // A regime's neural validation is withheld when inner member selection or
+  // calibration fails. Its Logistic comparator must be withheld too; otherwise
+  // the aggregate would compare different regimes/sample counts and mislead.
+  const attentionPairedValidationRegimes=attentionSupportedRegimes.filter(regime=>{
+    const result=regimeLocalTcnAttentionResults[regime]||{};
+    const model=result.validation,logisticResult=result.validation_logistic;
+    return model?.evaluated===true&&logisticResult?.evaluated===true&&
+      Number(model.sample_count)===Number(logisticResult.sample_count)&&
+      Number(model.positive_count)===Number(logisticResult.positive_count)&&
+      Number(model.negative_count)===Number(logisticResult.negative_count);
+  });
+  const attentionPairedHoldoutRegimes=attentionSelectedRegimes.filter(regime=>{
+    const result=regimeLocalTcnAttentionResults[regime]||{};
+    const model=result.holdout,logisticResult=result.holdout_logistic;
+    return model?.evaluated===true&&logisticResult?.evaluated===true&&
+      Number(model.sample_count)===Number(logisticResult.sample_count)&&
+      Number(model.positive_count)===Number(logisticResult.positive_count)&&
+      Number(model.negative_count)===Number(logisticResult.negative_count);
+  });
+  const attentionValidation=aggregateEvaluations(attentionPairedValidationRegimes.map(regime=>
     regimeLocalTcnAttentionResults[regime]?.validation));
-  const attentionValidationLogistic=aggregateEvaluations(attentionSupportedRegimes.map(regime=>
+  const attentionValidationLogistic=aggregateEvaluations(attentionPairedValidationRegimes.map(regime=>
     regimeLocalTcnAttentionResults[regime]?.validation_logistic));
-  const attentionHoldout=aggregateEvaluations(attentionSelectedRegimes.map(regime=>
+  const attentionHoldout=aggregateEvaluations(attentionPairedHoldoutRegimes.map(regime=>
     regimeLocalTcnAttentionResults[regime]?.holdout));
-  const attentionHoldoutLogistic=aggregateEvaluations(attentionSelectedRegimes.map(regime=>
+  const attentionHoldoutLogistic=aggregateEvaluations(attentionPairedHoldoutRegimes.map(regime=>
     regimeLocalTcnAttentionResults[regime]?.holdout_logistic));
   const regimeLocalTcnAttentionProfile={
     status:!attentionSupportedRegimes.length?'WAITING_FOR_ATTENTION_TCN_SUPPORT':
@@ -3175,6 +3194,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       validation_selected_regimes:attentionValidationRegimes
     },
     supported_regimes:attentionSupportedRegimes,
+    paired_validation_regimes:attentionPairedValidationRegimes,
+    paired_holdout_regimes:attentionPairedHoldoutRegimes,
     member_selection_logistic_ranking_metrics_by_regime:Object.fromEntries(regimes.map(regime=>[
       regime,regimeLocalTcnAttentionResults[regime]?.member_selection_logistic_ranking_metrics??null
     ])),
