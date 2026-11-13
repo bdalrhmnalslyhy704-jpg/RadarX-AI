@@ -286,8 +286,11 @@ function applyAdam(parameters, gradients, state, step, rate, l2,
     const vHat = nextVariance / (1 - Math.pow(0.999, step));
     const parameterL2=path.at(-1)==='attentionPositionBiases'
       ?temporalParameterL2('attentionPositionBiases',l2,attentionPositionBiasL2Multiplier):l2;
+    const stepSize=rate;
+    // AdamW applies weight decay directly to parameters, outside Adam moments.
+    const decayedParameter=parameter*(1-stepSize*parameterL2);
     return {
-      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + parameterL2 * parameter), -2.5, 2.5),
+      value: clamp(decayedParameter-stepSize*mHat/(Math.sqrt(vHat)+EPSILON), -2.5, 2.5),
       moment: nextMoment,
       variance: nextVariance
     };
@@ -1166,7 +1169,10 @@ function fitMember(rows, seed, {
   const rowGradientScratch=zeroTrainableGradients(model);
   const trainingWorkspace=createTemporalTrainingWorkspace(model);
   const epochHistory=[];
-  for (let epoch = 1; epoch <= epochs; epoch++) {
+  const effectiveEpochs=Math.max(1,Math.min(180,Math.trunc(Number(epochs)||10)));
+  const baseLearningRate=Math.max(0.0001,Math.min(0.04,Number(learningRate)||0.006));
+  const gradientClipNorm=1.0;
+  for (let epoch = 1; epoch <= effectiveEpochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     for (const row of rows) {
@@ -1191,7 +1197,18 @@ function fitMember(rows, seed, {
     if(!isFiniteTemporalTree(averaged))
       throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NON_FINITE');
     const gradientStats=summarizeNumericTree(averaged);
-    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2,
+    const gradientL2Norm=Math.sqrt(gradientStats.sumSquares);
+    if(!Number.isFinite(gradientL2Norm))
+      throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NORM_NON_FINITE');
+    const gradientClipScale=gradientL2Norm>gradientClipNorm
+      ?gradientClipNorm/gradientL2Norm:1;
+    const clippedGradients=gradientClipScale<1
+      ?scaleTree(averaged,gradientClipScale):averaged;
+    const cosineScale=0.1+0.9*0.5*(1+Math.cos(
+      Math.PI*(epoch-1)/Math.max(1,effectiveEpochs-1)
+    ));
+    const epochLearningRate=baseLearningRate*cosineScale;
+    const step = applyAdam(trainableParameters(), clippedGradients, optimizer, epoch, epochLearningRate, l2,
       attentionPositionBiasL2Multiplier);
     if(!isFiniteTemporalTree(step.parameters)||!isFiniteTemporalTree(step.state))
       throw new TypeError('TEMPORAL_OPTIMIZER_NON_FINITE_STATE');
@@ -1209,7 +1226,9 @@ function fitMember(rows, seed, {
         ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
       mean_negative_training_objective_loss:negativeSamples
         ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
-      averaged_gradient_l2_norm:Number(Math.sqrt(gradientStats.sumSquares).toFixed(8)),
+      averaged_gradient_l2_norm:Number(gradientL2Norm.toFixed(8)),
+      gradient_clip_scale:Number(gradientClipScale.toFixed(8)),
+      learning_rate:Number(epochLearningRate.toFixed(8)),
       maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
       residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
     });
@@ -1219,6 +1238,11 @@ function fitMember(rows, seed, {
     diagnostic_only:true,
     loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
     epochs_completed:epochHistory.length,
+    optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
+    scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
+    gradient_clip_norm:gradientClipNorm,
+    learning_rate_start:baseLearningRate,
+    learning_rate_end:baseLearningRate*0.1,
     training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
     training_sample_profile:model.training_sample_profile,
     objective:trainingObjective,
@@ -1277,6 +1301,9 @@ export function auditTemporalOneBatchOverfit(trainingRows,{
     sample_count:32,positive_samples:positiveSamples,negative_samples:negativeSamples,
     architecture:model.temporal_pooling,
     epochs_completed:model.training_diagnostics?.epochs_completed??0,
+    optimizer:model.training_diagnostics?.optimizer??null,
+    scheduler:model.training_diagnostics?.scheduler??null,
+    gradient_clip_norm:model.training_diagnostics?.gradient_clip_norm??null,
     finite_predictions:finitePredictions,
     all_epoch_gradient_and_loss_diagnostics_finite:allEpochDiagnosticsFinite,
     initial_training_log_loss:history[0]?.mean_weighted_training_objective_loss??null,

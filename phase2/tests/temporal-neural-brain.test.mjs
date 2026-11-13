@@ -101,6 +101,10 @@ test('TCN passes a deterministic 32-sequence one-batch fit with finite gradients
   console.log('[TEMPORAL_TCN_32_ROW_OVERFIT]',JSON.stringify(report));
   assert.deepEqual(report.input_shape,[24,29]);
   assert.equal(report.sample_count,32);
+  assert.equal(report.epochs_completed,80);
+  assert.equal(report.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(report.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(report.gradient_clip_norm,1);
   assert.equal(report.finite_predictions,true);
   assert.equal(report.all_epoch_gradient_and_loss_diagnostics_finite,true);
   assert.equal(report.passed,true,JSON.stringify(report));
@@ -662,6 +666,9 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   for(let index=0;index<profile.member_training_diagnostics.length;index++){
     const diagnostic=profile.member_training_diagnostics[index];
     assert.equal(diagnostic.schema,'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1');
+    assert.equal(diagnostic.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+    assert.equal(diagnostic.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+    assert.equal(diagnostic.gradient_clip_norm,1);
     assert.equal(diagnostic.diagnostic_only,true);
     assert.equal(diagnostic.loss_measurement,'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH');
     assert.equal(diagnostic.epochs_completed,profile.member_training_profiles[index].epochs);
