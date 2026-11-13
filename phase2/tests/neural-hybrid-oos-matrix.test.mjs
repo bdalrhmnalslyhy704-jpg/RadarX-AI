@@ -139,3 +139,93 @@ test('Brier rows from a different or missing source SHA cannot share an approval
   assert.equal(report.source_integrity.same_input_sha256,false);
   assert.equal(report.promotion_eligible,false);
 });
+
+
+test('same-cohort TCN-LSTM calibration and external gates are included in the family Brier matrix',()=>{
+  const target=makeTarget();
+  target.temporal_tcn_lstm_hybrid_challenger={
+    selected_for_research:true,
+    status:'HOLDOUT_PASSED_RESEARCH_ONLY_NOT_PRODUCTION_APPROVED',
+    inner_selection_diagnostics:{
+      status:'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY',
+      selected_configuration:'LR_0025_L2_0015_DROP10',
+      baseline:{selection_brier:0.1005},
+      candidates:[
+        {name:'LR_0015_L2_0005_DROP00',selection_brier:0.1003,
+          logistic_selection_brier:0.1005,improvement:0.0002,passed_inner_margin:false},
+        {name:'LR_0025_L2_0015_DROP10',selection_brier:0.1000,
+          logistic_selection_brier:0.1005,improvement:0.0005,passed_inner_margin:true}
+      ]
+    },
+    validation:{
+      evaluated:true,sample_count:100,required_brier_improvement:0.003,
+      model:{rows:100,brier:0.090,asymmetric_risk_brier:0.100},
+      baseline:{rows:100,brier:0.094,asymmetric_risk_brier:0.101},
+      brier_improvement:0.004,
+      paired_bootstrap_95ci:{evaluated:true,improvement_ci95_low:0.001},
+      passed:true
+    },
+    holdout:{
+      evaluated:true,sample_count:100,required_brier_improvement:0.003,
+      model:{rows:100,brier:0.080,asymmetric_risk_brier:0.095},
+      baseline:{rows:100,brier:0.084,asymmetric_risk_brier:0.096},
+      brier_improvement:0.004,
+      paired_bootstrap_95ci:{evaluated:true,improvement_ci95_low:0.001},
+      passed:true
+    },
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+  const report=buildBrierMatrixReport({
+    input_sha256:'a'.repeat(64),
+    target_results:{'5_PCT_SAFE_OPPORTUNITY_24H':target}
+  },{hybridTcnReport,requiredTargets:[5]});
+  const row=report.rows.find(item=>item.family==='HYBRID_TCN_LSTM_ATTENTION');
+  assert.ok(row,'TCN-LSTM must have its own matrix row');
+  assert.equal(row.variant,'CAUSAL_TCN_LSTM_LOCKED_DROPOUT_QUERY_ATTENTION');
+  assert.equal(row.inner_selection.passed,true);
+  assert.equal(row.inner_selection.improvement,0.0005);
+  assert.equal(row.external_validation.passed,true);
+  assert.equal(row.external_validation.model_brier,0.09);
+  assert.equal(row.external_validation.logistic_brier,0.094);
+  assert.equal(row.untouched_final_holdout.passed,true);
+  assert.equal(row.untouched_final_holdout.model_brier,0.08);
+  assert.equal(row.untouched_final_holdout.logistic_brier,0.084);
+  assert.equal(row.production_approved,false);
+  const family=report.family_summary.find(item=>item.family==='HYBRID_TCN_LSTM_ATTENTION');
+  assert.equal(family.rows,1);
+  assert.equal(family.validation_and_holdout_passed_all_targets,true);
+});
+
+test('TCN-LSTM Brier matrix keeps a locked holdout unevaluated when external validation fails',()=>{
+  const target=makeTarget();
+  target.temporal_tcn_lstm_hybrid_challenger={
+    selected_for_research:false,
+    inner_selection_diagnostics:{
+      status:'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY',
+      selected_configuration:'LR_0015_L2_0005_DROP00',
+      baseline:{selection_brier:0.1005},
+      candidates:[{name:'LR_0015_L2_0005_DROP00',selection_brier:0.1000,
+        logistic_selection_brier:0.1005,improvement:0.0005,passed_inner_margin:true}]
+    },
+    validation:{
+      evaluated:true,sample_count:100,required_brier_improvement:0.003,
+      model:{rows:100,brier:0.100,asymmetric_risk_brier:0.110},
+      baseline:{rows:100,brier:0.101,asymmetric_risk_brier:0.109},
+      brier_improvement:0.001,passed:false,
+      paired_bootstrap_95ci:{evaluated:true,improvement_ci95_low:-0.001}
+    },
+    holdout:{evaluated:false,reason:'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES'},
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+  const report=buildBrierMatrixReport({
+    input_sha256:'a'.repeat(64),
+    target_results:{'5_PCT_SAFE_OPPORTUNITY_24H':target}
+  },{requiredTargets:[5]});
+  const row=report.rows.find(item=>item.family==='HYBRID_TCN_LSTM_ATTENTION');
+  assert.ok(row);
+  assert.equal(row.external_validation.evaluated,true);
+  assert.equal(row.external_validation.passed,false);
+  assert.equal(row.untouched_final_holdout.evaluated,false);
+  assert.equal(row.historical_gate_status,'HOLDOUT_BRIER_UNAVAILABLE');
+  assert.equal(report.promotion_eligible,false);
+});
