@@ -509,14 +509,11 @@ export function resolveBarrierTrade({
   const take = entry * (1 + Math.max(0.01, Number(takeProfitPct) || 3) / 100);
   const stop = entry * (1 - Math.max(0.01, Number(stopLossPct) || 2) / 100);
   const horizonEnd = at + Math.max(1, Number(horizonMs) || 4 * 60 * 60 * 1000);
-  const future = (Array.isArray(futureCandles) ? futureCandles : [])
-    .map(candle => ({ candle, at: candleTime(candle) }));
-  if (future.some(item => item.at === null)) {
-    return { resolved: false, reason: 'INVALID_FUTURE_CANDLE_TIMESTAMP' };
-  }
-  const candidates = future
-    .filter(item => item.at > at && item.at <= horizonEnd)
-    .sort((a, b) => a.at - b.at);
+  // Preserve the supplied chronological order so timestamps after the first exit
+  // are never needed just to pre-sort or validate the completed trade.
+  const candidates = (Array.isArray(futureCandles) ? futureCandles : [])
+    .map(candle => ({ candle, at: candleTime(candle) }))
+    .filter(item => item.at === null || (item.at > at && item.at <= horizonEnd));
   if (!candidates.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
 
   // Validate the forward path only as far as the first exit. A missing candle
@@ -529,6 +526,10 @@ export function resolveBarrierTrade({
   for (const item of candidates) {
     const candle = item.candle;
     const candleAt = item.at;
+    if (candleAt === null) {
+      return { resolved: false, reason: 'INVALID_FUTURE_CANDLE_TIMESTAMP',
+        last_contiguous_at: previousAt, candle_interval_ms: interval };
+    }
     if (candleAt < previousAt) {
       return { resolved: false, reason: 'UNSORTED_FUTURE_CANDLES',
         previous_at: previousAt, observed_at: candleAt, candle_interval_ms: interval };
