@@ -84,7 +84,8 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
   assert.equal(result.checked_parameters,TCN_LSTM_PARAMETER_COUNT);
   assert.equal(result.passed,true,
     'max absolute gradient error='+result.maximum_absolute_error+
-    ', max relative error='+result.maximum_relative_error);
+    ', max relative error='+result.maximum_relative_error+
+    ', worst parameter='+JSON.stringify(result.worst_parameter));
   assert.ok(result.maximum_absolute_error<2e-5);
 });
 
