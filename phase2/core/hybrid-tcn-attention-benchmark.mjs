@@ -1107,9 +1107,15 @@ export function profitDrawdownObjective(probabilities, rows, {
   focalNegativeWeight = 1.6,
   crossSectionalRankingWeight = 0.15
 } = {}) {
-  if (!Array.isArray(probabilities) || probabilities.length !== rows.length || !rows.length) {
+  if (!Array.isArray(rows) || !Array.isArray(probabilities) ||
+      probabilities.length !== rows.length || !rows.length) {
     throw new Error('PROFIT_OBJECTIVE_REQUIRES_MATCHED_NON_EMPTY_ROWS');
   }
+  if(probabilities.some(value=>finite(value)===null||Number(value)<0||Number(value)>1))
+    throw new TypeError('HYBRID_OBJECTIVE_PROBABILITY_NON_FINITE_OR_OUT_OF_RANGE');
+  if(rows.some(row=>!row||finite(row.at)===null||finite(row.gross_return_pct)===null||
+      !String(row.symbol||'').trim()))
+    throw new TypeError('HYBRID_OBJECTIVE_EVENT_IDENTITY_OR_RETURN_INVALID');
   const cost = Math.max(0, Number(roundTripCostBps) || 0);
   const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.01, 1);
   const temp = clamp(Number(temperature) || 0.10, 0.02, 0.5);
@@ -1341,9 +1347,17 @@ export function trainHybridTcnAttention(trainingRows, {
   const trace = [];
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
     const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
+    if(caches.some(cache=>!Number.isFinite(cache.probability)||
+        cache.probability<0||cache.probability>1||!Number.isFinite(cache.rawLogit)))
+      throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE');
     const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
+    if(!Number.isFinite(objective.loss)||
+       !Array.isArray(objective.logit_gradients)||
+       objective.logit_gradients.length!==normalizedRows.length||
+       objective.logit_gradients.some(value=>!Number.isFinite(value)))
+      throw new TypeError('HYBRID_TCN_OBJECTIVE_OR_GRADIENT_NON_FINITE');
     let gradients = zerosLike(parameters());
     for (let index = 0; index < normalizedRows.length; index++) {
       const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
@@ -1381,6 +1395,8 @@ export function predictHybridTcnAttention(sequence, fitted) {
         step.every(value => finite(value) !== null))) return null;
   const normalizedSequence = normalizeHybridSequence(sequence, fitted.normalization);
   const result = forwardHybrid(normalizedSequence, fitted.model);
+  if(!Number.isFinite(result.probability)||result.probability<0||result.probability>1||
+     !Number.isFinite(result.rawLogit)||!Number.isFinite(result.logitScale))return null;
   return {
     probability: round(result.probability, 8),
     raw_logit: round(result.rawLogit, 8),
