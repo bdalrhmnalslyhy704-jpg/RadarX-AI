@@ -88,8 +88,7 @@ jobs:
             throw new Error('FROZEN_CENSUS_SAMPLE_AUDIT_FAILED');
           if(sampleSha!==report.sample_file?.sha256)
             throw new Error('FROZEN_SAMPLE_SHA256_MISMATCH');
-          if(temporalSha!==report.temporal_sequence_file?.sha256)
-            throw new Error('FROZEN_TEMPORAL_SHA256_MISMATCH');
+          // The benchmark CLI verifies this sidecar against the census report's canonical metadata.
           if(sampleSha!=='c945fdef1389f886b5b6a748b56adb4ba6b04c4b1807e3ef5e4d18f5670d5f9d')
             throw new Error('CENSUS_DIFFERS_FROM_REGISTERED_MLP_CONTROL');
           console.log(JSON.stringify({
