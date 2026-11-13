@@ -3,3 +3,5 @@ Build 224 dense 24-hour safe +5% early-riser MLP research benchmark.
 Consume only the checksum-verified dense 24h census emitted by the matching census workflow run on this exact branch commit. Require 24h anchors, at least 750,000 USDT 24h quote volume, baseline-close feature cutoff, non-overlapping target paths, exact safe-first-touch +5% before -2% within 24h labels, and preserve AMBIGUOUS rows as audited but non-trainable.
 
 Train the 35-feature MLP and rank-16 factorization challenger on the same frozen cohort and chronological split. Compare against same-window Logistic with unchanged 0.00025 inner-selection margin and 0.003 outer-validation/holdout margin. Do not deploy, merge, change production, enable real execution, or lower the liquidity floor.
+
+The benchmark workflow waits for the exact checksum-audited census run to finish successfully before downloading its artifact. Never fall back to a prior census run.

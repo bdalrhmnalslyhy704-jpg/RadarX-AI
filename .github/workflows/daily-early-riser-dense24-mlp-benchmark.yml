@@ -17,8 +17,9 @@ concurrency:
 
 jobs:
   resolve-census:
-    name: Resolve exact completed dense 24h census run
+    name: Wait for exact completed dense 24h census run
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     outputs:
       run_id: ${{ steps.locate.outputs.run_id }}
       run_number: ${{ steps.locate.outputs.run_number }}
@@ -35,23 +36,44 @@ jobs:
           const branch=encodeURIComponent('research/daily-early-riser-mlp-budget-20261113');
           const url='https://api.github.com/repos/'+process.env.REPOSITORY+
             '/actions/runs?branch='+branch+'&event=push&per_page=100';
-          const response=await fetch(url,{headers:{
+          const headers={
             accept:'application/vnd.github+json',
             authorization:'Bearer '+process.env.GH_TOKEN,
             'x-github-api-version':'2022-11-28'
-          }});
-          if(!response.ok)throw new Error('CENSUS_RUN_LOOKUP_HTTP_'+response.status);
-          const payload=await response.json();
-          const matches=(payload.workflow_runs||[]).filter(run=>
-            run.name==='Build 224 Daily Early-Riser Binance Spot Historical Census'&&
-            run.head_sha===process.env.CENSUS_COMMIT&&
-            run.status==='completed'&&run.conclusion==='success'
-          ).sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at));
-          if(matches.length!==1)throw new Error('EXPECTED_EXACTLY_ONE_SUCCESSFUL_DENSE_CENSUS_RUN_FOUND_'+matches.length);
-          const run=matches[0];
-          console.log(JSON.stringify({run_id:run.id,run_number:run.run_number,head_sha:run.head_sha,created_at:run.created_at}));
+          };
+          let selected=null;
+          const maxAttempts=300;
+          for(let attempt=1;attempt<=maxAttempts;attempt++){
+            const response=await fetch(url,{headers});
+            if(!response.ok)throw new Error('CENSUS_RUN_LOOKUP_HTTP_'+response.status);
+            const payload=await response.json();
+            const candidates=(payload.workflow_runs||[]).filter(run=>
+              run.name==='Build 224 Daily Early-Riser Binance Spot Historical Census'&&
+              run.head_sha===process.env.CENSUS_COMMIT
+            ).sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at));
+            const finished=candidates.find(run=>run.status==='completed');
+            if(finished){
+              if(finished.conclusion!=='success')
+                throw new Error('DENSE_CENSUS_RUN_FAILED:'+finished.conclusion+':'+finished.id);
+              selected=finished;
+              break;
+            }
+            const active=candidates[0];
+            console.log(JSON.stringify({
+              attempt,waiting_for_census:true,
+              matching_run_id:active?.id??null,
+              matching_run_status:active?.status??'NOT_VISIBLE_YET'
+            }));
+            await new Promise(resolve=>setTimeout(resolve,60_000));
+          }
+          if(!selected)throw new Error('DENSE_CENSUS_DID_NOT_COMPLETE_WITHIN_300_MINUTES');
+          console.log(JSON.stringify({
+            run_id:selected.id,run_number:selected.run_number,
+            head_sha:selected.head_sha,created_at:selected.created_at,
+            updated_at:selected.updated_at,conclusion:selected.conclusion
+          }));
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
-            'run_id='+run.id+'\nrun_number='+run.run_number+'\n');
+            'run_id='+selected.id+'\nrun_number='+selected.run_number+'\n');
           NODE
         shell: bash
 
