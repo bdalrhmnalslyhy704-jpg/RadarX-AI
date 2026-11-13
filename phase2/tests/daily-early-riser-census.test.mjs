@@ -11,10 +11,41 @@ import {
   classifyDailyEarlyRiserTargetSet,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
-import {summarizeDailyTargetDiagnostics,auditSampleLabelHorizons} from '../tools/daily-early-riser-historical-census.mjs';
+import {
+  loadBtcReferenceKlines,
+  summarizeDailyTargetDiagnostics,
+  auditSampleLabelHorizons
+} from '../tools/daily-early-riser-historical-census.mjs';
 
 const INTERVAL=15*60*1000;
 const FIVE=5*60*1000;
+
+
+test('BTC reference 15m and 5m archives include current partial-month daily files',async()=>{
+  const months=['2025-11','2025-12'];
+  const dailyDates=['2026-11-01','2026-11-02'];
+  const calls=[];
+  const btc15Rows=[['15m']];
+  const btc5Rows=[['5m']];
+  const loaded=await loadBtcReferenceKlines({
+    months,dailyDates,tempDir:'/tmp/radarx-btc-reference-test',
+    loadInterval:async input=>{
+      calls.push(input);
+      return {
+        rows:input.interval==='15m'?btc15Rows:btc5Rows,
+        files:[],rejected:{},complete_from_first_available:true
+      };
+    }
+  });
+  assert.deepEqual(calls.map(({symbol,interval,months:loadedMonths,dailyDates:loadedDays})=>({
+    symbol,interval,months:loadedMonths,dailyDates:loadedDays
+  })),[
+    {symbol:'BTCUSDT',interval:'15m',months,dailyDates},
+    {symbol:'BTCUSDT',interval:'5m',months,dailyDates}
+  ]);
+  assert.deepEqual(loaded.btc15.rows,btc15Rows);
+  assert.deepEqual(loaded.btc5.rows,btc5Rows);
+});
 
 function candle(openTime,{
   open=100,high=100.2,low=99.8,close=100,
