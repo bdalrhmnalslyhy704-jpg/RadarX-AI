@@ -1819,6 +1819,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralTrainingHistoryFraction = 1.0,
   neuralAnchorAdaptation = 'FROZEN',
   neuralOutputInitializationScale = 0.015,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={},
   enableFactorizationMachine=false,
   factorizationRank=8,
   factorizationIterations=null,
@@ -2096,6 +2098,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       baselineFit:neuralSameWindowLogisticFit,
       anchorAdaptation:neuralAnchorAdaptation,
       outputInitializationScale:neuralOutputInitializationScale,
+      enableAsymmetricDirectionalRankingLoss,
+      directionalRankingLossConfig,
       enableFactorizationMachine,
       factorizationRank,factorizationIterations,factorizationLearningRate,factorizationL2
     }):null;
