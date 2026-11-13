@@ -1113,6 +1113,13 @@ function trainingObjectiveLoss(probability,target,objective) {
     objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brier+0.5*logLoss:brier;
 }
+function isFiniteTemporalTree(value){
+  if(Array.isArray(value))return value.every(isFiniteTemporalTree);
+  if(value&&typeof value==='object')
+    return Object.values(value).every(isFiniteTemporalTree);
+  return typeof value==='number'&&Number.isFinite(value);
+}
+
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
@@ -1121,6 +1128,18 @@ function fitMember(rows, seed, {
   temporalPoolingMode='LAST_12_MEAN_V1',
   attentionPositionBiasL2Multiplier=1
 } = {}) {
+  if(!Array.isArray(rows)||rows.length===0)
+    throw new TypeError('TEMPORAL_TRAINING_ROWS_EMPTY');
+  for(let index=0;index<rows.length;index++){
+    const row=rows[index];
+    if(!validSequence(row?.sequence))
+      throw new TypeError('TEMPORAL_TRAINING_SEQUENCE_INVALID:'+index);
+    if(row.target!==0&&row.target!==1)
+      throw new TypeError('TEMPORAL_TRAINING_TARGET_INVALID:'+index);
+    if(row._pooled_baseline_features!==undefined&&
+      !isValidTemporalPooledBaselineFeatures(row._pooled_baseline_features))
+      throw new TypeError('TEMPORAL_POOLED_BASELINE_TENSOR_INVALID:'+index);
+  }
   const model = initializeModel(seed,baseRate,baselineFit,temporalPoolingMode);
   const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
   const negativeSamples=Math.max(0,rows.length-positiveSamples);
@@ -1153,8 +1172,12 @@ function fitMember(rows, seed, {
     for (const row of rows) {
       const cache = forwardWithWorkspace(row.sequence,model,1,
         row._pooled_baseline_features,trainingWorkspace);
+      if(!Number.isFinite(cache.probability))
+        throw new TypeError('TEMPORAL_FORWARD_NON_FINITE_PROBABILITY');
       const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
         trainingObjective,rowGradientScratch,trainingWorkspace);
+      if(!isFiniteTemporalTree(itemGradient))
+        throw new TypeError('TEMPORAL_BACKPROP_NON_FINITE_GRADIENT');
       const sampleWeight=row.target>0.5?positiveSampleWeight:1;
       const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
       weightedObjectiveLoss+=rowLoss*sampleWeight;
@@ -1165,9 +1188,13 @@ function fitMember(rows, seed, {
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
+    if(!isFiniteTemporalTree(averaged))
+      throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NON_FINITE');
     const gradientStats=summarizeNumericTree(averaged);
     const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2,
       attentionPositionBiasL2Multiplier);
+    if(!isFiniteTemporalTree(step.parameters)||!isFiniteTemporalTree(step.state))
+      throw new TypeError('TEMPORAL_OPTIMIZER_NON_FINITE_STATE');
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
@@ -1198,6 +1225,66 @@ function fitMember(rows, seed, {
     epoch_history:epochHistory
   };
   return model;
+}
+
+export function auditTemporalOneBatchOverfit(trainingRows,{
+  epochs=80,seed=53,learningRate=0.006,l2=0.012
+}={}){
+  if(!Array.isArray(trainingRows)||trainingRows.length!==32)
+    throw new TypeError('TEMPORAL_OVERFIT_AUDIT_REQUIRES_EXACTLY_32_ROWS');
+  for(let index=0;index<trainingRows.length;index++){
+    const row=trainingRows[index];
+    if(!validSequence(row?.sequence))
+      throw new TypeError('TEMPORAL_OVERFIT_AUDIT_SEQUENCE_INVALID:'+index);
+    if(row.target!==0&&row.target!==1)
+      throw new TypeError('TEMPORAL_OVERFIT_AUDIT_TARGET_INVALID:'+index);
+  }
+  const prepared=trainingRows.map(row=>({
+    ...row,_pooled_baseline_features:pooledSequence(row.sequence)
+  }));
+  const positiveSamples=prepared.filter(row=>row.target===1).length;
+  const negativeSamples=prepared.length-positiveSamples;
+  if(positiveSamples===0||negativeSamples===0)
+    throw new TypeError('TEMPORAL_OVERFIT_AUDIT_REQUIRES_BOTH_CLASSES');
+  const baseRate=positiveSamples/prepared.length;
+  const model=fitMember(prepared,seed,{
+    epochs:Math.max(30,Math.min(180,Math.trunc(Number(epochs)||80))),
+    learningRate:Math.max(0.0005,Math.min(0.03,Number(learningRate)||0.006)),
+    l2:Math.max(0,Math.min(0.5,Number(l2)||0.012)),
+    baseRate,baselineFit:null,
+    trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    positiveClassWeighting:'NONE',
+    temporalPoolingMode:'LAST_12_MEAN_V1'
+  });
+  const predictions=prepared.map(row=>
+    forward(row.sequence,model,1,row._pooled_baseline_features).probability
+  );
+  const finitePredictions=predictions.every(Number.isFinite);
+  const brier=finitePredictions?mean(predictions.map((value,index)=>
+    (value-prepared[index].target)**2)):null;
+  const accuracy=finitePredictions?Number((predictions.filter((value,index)=>
+    (value>=0.5)===(prepared[index].target===1)).length/32*100).toFixed(2)):null;
+  const history=model.training_diagnostics?.epoch_history||[];
+  const allEpochDiagnosticsFinite=history.length===model.training_diagnostics?.epochs_completed&&
+    history.every(row=>Number.isFinite(row.mean_weighted_training_objective_loss)&&
+      Number.isFinite(row.averaged_gradient_l2_norm)&&
+      Number.isFinite(row.maximum_absolute_averaged_gradient)&&
+      Number.isFinite(row.residual_readout_l2_norm));
+  return {
+    schema:'TEMPORAL_TCN_32_SAMPLE_OVERFIT_AUDIT_V1',
+    diagnostic_only:true,production_training_changed:false,
+    input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+    sample_count:32,positive_samples:positiveSamples,negative_samples:negativeSamples,
+    architecture:model.temporal_pooling,
+    epochs_completed:model.training_diagnostics?.epochs_completed??0,
+    finite_predictions:finitePredictions,
+    all_epoch_gradient_and_loss_diagnostics_finite:allEpochDiagnosticsFinite,
+    initial_training_log_loss:history[0]?.mean_weighted_training_objective_loss??null,
+    final_training_log_loss:history.at(-1)?.mean_weighted_training_objective_loss??null,
+    post_fit_brier:brier,post_fit_accuracy_pct:accuracy,
+    passed:finitePredictions&&allEpochDiagnosticsFinite&&brier!==null&&
+      brier<=0.01&&accuracy===100
+  };
 }
 
 function calibratedProbability(rawProbability, calibrator) {

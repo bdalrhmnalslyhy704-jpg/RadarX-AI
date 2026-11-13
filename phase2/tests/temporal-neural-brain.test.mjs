@@ -14,6 +14,7 @@ import {
   auditTemporalGradientNumerics,
   auditTemporalTrainingWorkspace,
   benchmarkTemporalTrainingWorkspace,
+  auditTemporalOneBatchOverfit,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -77,6 +78,32 @@ test('ordered four-segment pooling preserves temporal order instead of collapsin
   }
   assert.equal(poolOrderedTemporalSegments(early.slice(1)),null,
     'incomplete latent windows must fail closed');
+});
+
+test('TCN passes a deterministic 32-sequence one-batch fit with finite gradients',()=>{
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    const direction=target?1:-1;
+    const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+      Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>{
+        if(channel===0)return direction*(0.9+time*0.001);
+        if(channel===1)return direction*0.35;
+        return Math.sin((index+1)*(time+2)*(channel+1)*0.001)*0.03;
+      })
+    );
+    return {
+      id:'TCN32:'+index,symbol:'TCN32USDT',at:1_700_000_000_000+index*60_000,
+      resolved_at:1_700_000_060_000+index*60_000,
+      outcome:target?'UP':'DOWN',target,sequence
+    };
+  });
+  const report=auditTemporalOneBatchOverfit(rows,{epochs:80,seed:53});
+  console.log('[TEMPORAL_TCN_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.deepEqual(report.input_shape,[24,29]);
+  assert.equal(report.sample_count,32);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_epoch_gradient_and_loss_diagnostics_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
 });
 
 test('V8, V9 and V10 analytical gradients match central finite differences for all proper-score objectives',()=>{
