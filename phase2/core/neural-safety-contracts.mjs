@@ -184,6 +184,8 @@ export function prequalifyHybridComponent({
     qualified: false,
     reason: 'COMPONENT_PREQUALIFICATION_CONFIG_INVALID'
   };
+  if (!selection || typeof selection !== 'object' || Array.isArray(selection))
+    selection = {};
   const samples = Number(selection.samples);
   const positives = Number(selection.positive);
   const negatives = Number(selection.negative);
