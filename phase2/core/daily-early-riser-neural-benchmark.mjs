@@ -609,3 +609,144 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     }
   };
 }
+
+export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options={}){
+  const target=finite(targetPct);
+  if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET');
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE');
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||(labelMode==='first_passage'&&horizonHours!==24))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_HORIZON');
+  const outcomeHorizonMs=horizonHours*60*60*1000;
+  const requiredLiquidityLane=String(options.requiredLiquidityLane||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
+  const expectedSource=outcomeSourceFor(labelMode);
+  const groups={BTC_RISK_ON:[],BTC_RISK_OFF:[]};
+  const rejectionCounts={};
+  let assigned=0;
+  for(const sample of Array.isArray(samples)?samples:[]){
+    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target,{labelMode,horizonHours});
+    if(!prepared.row){
+      const reason=prepared.reason||'UNKNOWN_REJECTION';
+      rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
+      continue;
+    }
+    if(requiredLiquidityLane&&prepared.row.liquidity_lane!==requiredLiquidityLane){
+      rejectionCounts.LIQUIDITY_LANE_FILTER=(rejectionCounts.LIQUIDITY_LANE_FILTER||0)+1;
+      continue;
+    }
+    const sequence=prepared.row.temporal_sequence;
+    if(!validTemporalSequence(sequence)){
+      rejectionCounts.BTC_REGIME_SEQUENCE_MISSING=(rejectionCounts.BTC_REGIME_SEQUENCE_MISSING||0)+1;
+      continue;
+    }
+    const btc24h=finite(sequence[TEMPORAL_SEQUENCE_STEPS-1]?.[19]);
+    if(btc24h===null){
+      rejectionCounts.BTC_REGIME_FEATURE_INVALID=(rejectionCounts.BTC_REGIME_FEATURE_INVALID||0)+1;
+      continue;
+    }
+    const regime=btc24h>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
+    groups[regime].push(prepared.row);
+    assigned++;
+  }
+  for(const rows of Object.values(groups))
+    rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const minValidation=Math.max(1000,Math.trunc(options.minimumValidationSamples||1500));
+  const minHoldout=Math.max(1000,Math.trunc(options.minimumHoldoutSamples||2000));
+  const specialists={};
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const rows=groups[regime];
+    const profile=rows.length>=Math.max(300,Math.trunc(options.minTrainingSamples||600))
+      ?buildDailyCognitiveProfile(rows,{
+        ...options,outcomeHorizonMs,allowedOutcomeSources:[expectedSource],
+        minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
+        minimumValidationSamples:minValidation,minimumHoldoutSamples:minHoldout,
+        neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction??1,
+        temporalSamples:[],temporalOptions:{}
+      }):null;
+    const neural=profile?.neural_network||{};
+    const inner=neural.inner_selection_diagnostics||{};
+    const validation=neural.validation||{evaluated:false,sample_count:0,model_brier_score:null};
+    const validationComparison=neural.validation_comparison||{};
+    const holdout=neural.holdout||{evaluated:false,sample_count:0,model_brier_score:null};
+    const holdoutComparison=neural.holdout_comparison||{};
+    const selectionPassed=inner.passed===true&&neural.trained===true;
+    const validationPassed=selectionPassed&&neural.selected===true&&
+      validation.evaluated===true&&validationComparison.beats_base_rate===true&&
+      validationComparison.beats_same_window_logistic===true&&
+      validationComparison.beats_global_logistic===true&&
+      validationComparison.beats_recent_logistic===true;
+    const holdoutPassed=validationPassed&&holdout.evaluated===true&&
+      holdoutComparison.passed===true;
+    const status=!profile?'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT':
+      !neural.trained?'MLP_NOT_TRAINED':
+      !selectionPassed?'TRAINED_NOT_SELECTED_ON_INNER_SELECTION':
+      !validationPassed?'INNER_SELECTION_PASSED_OUTER_VALIDATION_FAILED':
+      !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY';
+    const outcomes=countOutcomes(rows);
+    specialists[regime]={
+      regime,status,architecture:neural.architecture??null,
+      training_strategy:neural.training_strategy??null,
+      sample_count:rows.length,outcomes,
+      positive_rate_pct:rows.length?Number((outcomes.UP/rows.length*100).toFixed(3)):null,
+      first_at:rows[0]?.at??null,last_at:rows.at(-1)?.at??null,
+      trained:neural.trained===true,
+      training_samples:neural.preselection_training_samples??neural.training_samples??0,
+      fitted_training_samples:neural.training_samples??0,
+      selection_samples:neural.selection_samples??0,
+      validation_samples:validation.sample_count??0,
+      holdout_samples:holdout.sample_count??0,
+      inner_selection:inner,
+      validation,validation_comparison:validationComparison,
+      holdout,holdout_comparison:holdoutComparison,
+      selected_member_index:neural.selected_member_index??null,
+      selected_residual_scale:neural.selected_residual_scale??null,
+      selection_passed:selectionPassed,validation_passed:validationPassed,
+      holdout_passed:holdoutPassed,
+      probability_ready:false,live_eligibility_ready:false,
+      chronology:profile?.comparison_contract??null,
+      model_selection_reason:profile?.model_selection?.reason??null
+    };
+  }
+  const regimes=Object.values(specialists);
+  const allSupported=regimes.length===2&&regimes.every(item=>item.sample_count>=300);
+  const trained=allSupported&&regimes.every(item=>item.trained);
+  const selected=trained&&regimes.every(item=>item.selection_passed);
+  const validationPassed=selected&&regimes.every(item=>item.validation_passed);
+  const holdoutPassed=validationPassed&&regimes.every(item=>item.holdout_passed);
+  const coverageComplete=Object.values(rejectionCounts).every(value=>
+    !['BTC_REGIME_SEQUENCE_MISSING','BTC_REGIME_FEATURE_INVALID'].includes(value));
+  return {
+    schema:'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1',
+    status:!coverageComplete?'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE':
+      !allSupported?'WAITING_FOR_BOTH_BTC_REGIME_SUPPORT':
+      !trained?'REGIME_LOCAL_MLP_TRAINING_INCOMPLETE':
+      !selected?'REGIME_LOCAL_MLP_NOT_SELECTED_ON_INNER_SELECTION':
+      !validationPassed?'REGIME_LOCAL_MLP_DID_NOT_BEAT_LOGISTIC_ON_VALIDATION':
+      !holdoutPassed?'REGIME_LOCAL_MLP_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'REGIME_LOCAL_MLP_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    target_pct:target,label_mode:labelMode,horizon_hours:horizonHours,
+    outcome_source:expectedSource,required_liquidity_lane:requiredLiquidityLane||null,
+    feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    btc_regime_definition:'LAST_CLOSED_15M_SEQUENCE_BTC_24H_RETURN_CHANNEL_19_SIGN_V1',
+    chronology_policy:'EACH_BTC_REGIME_HAS_ITS_OWN_PURGED_TRAIN_SELECTION_CALIBRATION_VALIDATION_AND_UNTOUCHED_HOLDOUT',
+    comparison_margin:0.003,
+    inner_selection_margin:DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    neural_training_history_fraction:options.neuralTrainingHistoryFraction??1,
+    sample_count:assigned,
+    unassigned_or_rejected_samples:Object.values(rejectionCounts).reduce((sum,value)=>sum+value,0),
+    rejection_counts:rejectionCounts,
+    regime_sample_counts:Object.fromEntries(Object.entries(groups).map(([name,rows])=>[name,rows.length])),
+    trained,selected_for_research:selected,
+    validation_passed:validationPassed,
+    research_out_of_sample_validated:holdoutPassed,
+    probability_ready:false,live_eligibility_ready:false,
+    production_touched:false,real_order_execution:false,
+    regime_specialists:specialists
+  };
+}
