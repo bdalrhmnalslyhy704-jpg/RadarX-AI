@@ -1071,10 +1071,9 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     String(a.symbol||'').localeCompare(String(b.symbol||''))||
     sampleIdentity(a).localeCompare(sampleIdentity(b)));
   if (outcomeHorizonMs !== DAY_MS ||
-      rows.some(row=>row.resolved_at-row.at !== DAY_MS ||
-        row.horizon_ms !== undefined && Number(row.horizon_ms) !== DAY_MS))
+      rows.some(row=>row.horizon_ms !== undefined && Number(row.horizon_ms) !== DAY_MS))
     return waiting('TARGET_CONTRACT_OR_HORIZON_REJECTED',
-      'TCN_LSTM_REQUIRES_MATURED_24H_LABELS',{input_samples:rows.length,outcome_horizon_ms:outcomeHorizonMs});
+      'TCN_LSTM_REQUIRES_24H_LABEL_CONTRACT',{input_samples:rows.length,outcome_horizon_ms:outcomeHorizonMs});
   const targetDefinitions=new Set(rows.map(row=>row.target_definition).filter(Boolean));
   const outcomeSources=new Set(rows.map(row=>row.outcome_source).filter(Boolean));
   if ((targetDefinitions.size>1)||(outcomeSources.size>1)||
@@ -1167,6 +1166,11 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     return {
       ...base,status:'CHRONOLOGY_OR_CLASS_SUPPORT_REJECTED',evaluated:false,
       reason:'PARTITION_SUPPORT_PURGE_OR_IDENTITY_GATE_FAILED'
+    };
+  if(rows.some(row=>row.resolved_at-row.at!==DAY_MS))
+    return {
+      ...base,status:'TARGET_CONTRACT_OR_HORIZON_REJECTED',evaluated:false,
+      reason:'TCN_LSTM_REQUIRES_MATURED_24H_LABELS'
     };
 
   const evaluation=evaluateTcnLstmHybridGeneralization({
