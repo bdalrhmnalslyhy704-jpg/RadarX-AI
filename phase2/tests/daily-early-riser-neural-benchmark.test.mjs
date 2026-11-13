@@ -80,6 +80,42 @@ test('TCN-only V10 training-window ablation is capped at 8,192 while standard pr
   }),4096);
 });
 
+test('regime-local MLP reconstructs BTC return from the same-window official asset and relative returns when TCN sequence is absent',()=>{
+  const riskOn=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  riskOn.daily_change_pct=4;
+  riskOn.relative_strength_vs_btc_24h_pct=2;
+  const riskOff=sampleWith({at:1_800_000_900_000,targetPct:5,outcome:'DOWN'});
+  riskOff.daily_change_pct=-3;
+  riskOff.relative_strength_vs_btc_24h_pct=1;
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([riskOn,riskOff],5,{
+    labelMode:'first_passage',horizonHours:24
+  });
+  assert.deepEqual(result.regime_sample_counts,{BTC_RISK_ON:1,BTC_RISK_OFF:1});
+  assert.equal(result.rejection_counts.BTC_REGIME_ALL_SOURCES_MISSING,undefined);
+  assert.equal(result.rejection_counts.BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS,undefined);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.sample_count,1);
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.sample_count,1);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.status,'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.probability_ready,false);
+});
+
+test('regime-local MLP rejects an archived BTC regime that conflicts with the closed temporal sequence',()=>{
+  const sample=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  sample.daily_change_pct=4;
+  sample.relative_strength_vs_btc_24h_pct=2;
+  sample.temporal_sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      channel===19&&time===TEMPORAL_SEQUENCE_STEPS-1?-0.25:0));
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([sample],5,{
+    labelMode:'first_passage',horizonHours:24
+  });
+  assert.equal(result.rejection_counts.BTC_REGIME_SOURCE_DISAGREEMENT,1);
+  assert.equal(result.sample_count,0);
+  assert.equal(result.status,'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE');
+  assert.equal(result.probability_ready,false);
+});
+
 test('regime-local MLP assigns samples by the final closed BTC 24h feature and never merges unsupported regimes',()=>{
   const sequenceFor=sign=>Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
     Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
