@@ -293,6 +293,13 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
   assert.ok(regimeResults.every(result=>
     result.member_selection_scores.length>0&&
     result.member_selection_scores.every(candidate=>candidate.ranking_metrics?.top_10_pct?.groups>0)));
+  assert.equal(attention.validation.sample_count,attention.validation_logistic.sample_count,
+    'aggregate V11 and Logistic validation must contain exactly the same regimes and rows');
+  assert.equal(attention.validation.positive_count,attention.validation_logistic.positive_count);
+  assert.deepEqual(attention.paired_validation_regimes,
+    regimeResults.filter(result=>result.validation?.evaluated===true&&
+      result.validation_logistic?.evaluated===true&&
+      result.validation.sample_count===result.validation_logistic.sample_count).map(result=>result.regime));
   assert.equal(attention.probability_ready,false,
     'research challenger cannot publish a live probability from a synthetic unit fixture');
   assert.equal(attention.live_eligibility_ready,false);
