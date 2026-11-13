@@ -1,0 +1,172 @@
+name: Build 224 Daily MLP Training-Budget Ablation
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/daily-early-riser-mlp-training-budget-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-mlp-training-budget-ablation
+  cancel-in-progress: false
+
+jobs:
+  verify-contracts:
+    name: Verify MLP budget controls and daily-label contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax and focused research tests
+        run: |
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=120000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+
+  mlp-training-budget:
+    name: Safe 72h MLP +5% with ${{ matrix.iterations }} base iterations
+    needs: verify-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        iterations: [60, 120]
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Download exact frozen Binance Spot census
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-20
+          repository: ${{ github.repository }}
+          run-id: '43336370744'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts
+      - name: Verify frozen sample and temporal sidecar integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const report=JSON.parse(fs.readFileSync('artifacts/daily-early-riser-census.json','utf8'));
+          const sha=path=>{
+            const h=createHash('sha256');h.update(fs.readFileSync(path));return h.digest('hex');
+          };
+          const sampleSha=sha('artifacts/daily-early-riser-samples.jsonl');
+          const temporalSha=sha('artifacts/daily-early-riser-temporal-sequences.jsonl');
+          if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(report.status))
+            throw new Error('FROZEN_CENSUS_NOT_AUDITED');
+          if(report.data_quality?.all_sample_audits_ready!==true)
+            throw new Error('FROZEN_CENSUS_SAMPLE_AUDIT_FAILED');
+          if(sampleSha!==report.sample_file?.sha256)
+            throw new Error('FROZEN_SAMPLE_SHA256_MISMATCH');
+          if(temporalSha!==report.temporal_sequence_file?.sha256)
+            throw new Error('FROZEN_TEMPORAL_SHA256_MISMATCH');
+          if(sampleSha!=='c945fdef1389f886b5b6a748b56adb4ba6b04c4b1807e3ef5e4d18f5670d5f9d')
+            throw new Error('CENSUS_DIFFERS_FROM_REGISTERED_MLP_CONTROL');
+          console.log(JSON.stringify({
+            census_status:report.status,
+            sample_sha256:sampleSha,
+            temporal_sha256:temporalSha,
+            sample_rows:report.sample_file.rows,
+            temporal_rows:report.temporal_sequence_file.rows
+          }));
+          NODE
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Train controlled MLP iteration-budget challenger
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-safe-72h-5pct-mlp-iterations-${{ matrix.iterations }}.json \
+            --target 5 \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --skip-temporal true \
+            --neural-training-history-fraction 1.0 \
+            --neural-iterations ${{ matrix.iterations }}
+      - name: Publish selection, validation and holdout comparison
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-safe-72h-5pct-mlp-iterations-${{ matrix.iterations }}.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'MLP budget report missing; inspect the training step.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const neural=target.neural_network||{};
+          const summary={
+            status:report.status,
+            label_mode:report.label_mode,
+            horizon_hours:report.horizon_hours,
+            target_pct:target.target_pct,
+            iterations:report.neural_iterations,
+            neural_status:neural.status,
+            training_strategy:neural.training_strategy,
+            architecture:neural.architecture,
+            input_sha256:report.input_sha256,
+            accepted_samples:target.samples?.accepted??null,
+            fitted_training_samples:neural.training_samples??null,
+            selection_samples:neural.selection_samples??null,
+            inner_selection:neural.inner_selection_diagnostics??null,
+            member_training_profiles:neural.member_training_profiles??[],
+            candidate_scores:neural.member_selection_brier_scores??[],
+            validation:neural.validation??null,
+            validation_comparison:neural.validation_comparison??null,
+            holdout:neural.holdout??null,
+            holdout_comparison:neural.holdout_comparison??null,
+            predictive_superiority_verified:report.predictive_superiority_verified===true,
+            profitability_verified:report.profitability_verified===true,
+            production_touched:report.production_touched===true,
+            deployed:report.deployed===true,
+            merged:report.merged===true,
+            paper_trading:report.paper_trading===true,
+            real_order_execution:report.real_order_execution===true
+          };
+          console.log('[MLP_TRAINING_BUDGET_ABLATION] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## MLP training-budget result ('+${{ matrix.iterations }}+' base iterations)\\n\\n```json\\n'+
+            JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+      - name: Upload isolated MLP iteration-budget report
+        if: always() && hashFiles('artifacts/daily-early-riser-safe-72h-5pct-mlp-iterations-${{ matrix.iterations }}.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-mlp-iterations-${{ matrix.iterations }}
+          path: artifacts/daily-early-riser-safe-72h-5pct-mlp-iterations-${{ matrix.iterations }}.json
+          retention-days: 30

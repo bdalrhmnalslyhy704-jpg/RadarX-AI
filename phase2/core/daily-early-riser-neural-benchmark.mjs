@@ -40,6 +40,12 @@ const finite=value=>{
   const number=Number(value);
   return Number.isFinite(number)?number:null;
 };
+export const DAILY_EARLY_RISER_MLP_MAX_ITERATIONS=180;
+export function effectiveDailyMlpIterations(value=20){
+  const requested=finite(value);
+  return Math.max(30,Math.min(DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
+    Math.trunc(requested??20)));
+}
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
 const targetDefinition=(target,labelMode='first_passage',horizonHours=24)=>
   labelMode==='upside_opportunity'
@@ -166,7 +172,7 @@ function buildDailyCognitiveProfile(rows,options={}){
     neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
       DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
     temporalSamples:[],temporalOptions:{},
-    neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
+    neuralIterations:effectiveDailyMlpIterations(options.neuralIterations),
     neuralLearningRate:0.012,neuralL2:0.04,neuralSelectionMargin:0.003,
     neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
       DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,

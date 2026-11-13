@@ -11,6 +11,8 @@ import {
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   effectiveDailyTcnMultiscaleTrainingBudget,
+  effectiveDailyMlpIterations,
+  DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
@@ -746,4 +748,21 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   assert.ok(source.includes("args['enable-factorization-machine']"));
   assert.ok(source.includes('enableFactorizationMachine,factorizationRank,factorizationIterations'));
   assert.ok(source.includes('factorization_candidate_scores'));
+});
+
+test('daily MLP iteration budget is explicit, bounded and supports deeper convergence ablations',()=>{
+  assert.equal(effectiveDailyMlpIterations(),30);
+  assert.equal(effectiveDailyMlpIterations(20),30);
+  assert.equal(effectiveDailyMlpIterations(60),60);
+  assert.equal(effectiveDailyMlpIterations(120),120);
+  assert.equal(effectiveDailyMlpIterations(999),DAILY_EARLY_RISER_MLP_MAX_ITERATIONS);
+  assert.equal(effectiveDailyMlpIterations(-5),30);
+  assert.equal(DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,180);
+});
+
+test('daily neural benchmark CLI forwards and records an explicit MLP iteration budget',async()=>{
+  const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes("args['neural-iterations']"));
+  assert.ok(source.includes('neural_iterations:neuralIterations'));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,'));
 });

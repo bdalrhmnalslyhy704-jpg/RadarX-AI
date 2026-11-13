@@ -175,6 +175,8 @@ async function main(){
     (regimeLocalMlpOnly?1:0.60));
   if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
     throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
+  const neuralIterations=Math.max(30,Math.min(180,
+    Math.trunc(Number(args['neural-iterations']||30))));
   const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
   const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
   const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
@@ -217,6 +219,7 @@ async function main(){
     regime_local_mlp_only:regimeLocalMlpOnly,
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
+    neural_iterations:neuralIterations,
     enable_factorization_machine:enableFactorizationMachine,
     factorization_rank:factorizationRank,
     factorization_iterations:factorizationIterations,
@@ -310,7 +313,8 @@ async function main(){
       const result=regimeLocalMlpOnly
         ?benchmarkDailyEarlyRiserRegimeLocalMlp(loaded.samples,target,{
           labelMode,horizonHours,requiredLiquidityLane,
-          neuralTrainingHistoryFraction,minimumValidationSamples:1500,minimumHoldoutSamples:2000
+          neuralTrainingHistoryFraction,neuralIterations,
+          minimumValidationSamples:1500,minimumHoldoutSamples:2000
         })
         :benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
         tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
@@ -319,7 +323,7 @@ async function main(){
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
-        neuralTrainingHistoryFraction,
+        neuralTrainingHistoryFraction,neuralIterations,
         enableFactorizationMachine,factorizationRank,factorizationIterations,
         factorizationLearningRate,factorizationL2,
         requiredLiquidityLane
