@@ -224,10 +224,14 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(incomplete.ready, false);
   assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
 
-  const completedPath = [{
-    closeTime: at + FOUR_HOURS, closed: true,
-    open: 10, high: 10.4, low: 9.99, close: 10.2
-  }];
+  const completedPath = Array.from({ length: FOUR_HOURS / FIFTEEN_MINUTES }, (_, index) => ({
+    closeTime: at + (index + 1) * FIFTEEN_MINUTES,
+    closed: true,
+    open: 10,
+    high: index === FOUR_HOURS / FIFTEEN_MINUTES - 1 ? 10.4 : 10.2,
+    low: 9.99,
+    close: 10.1
+  }));
   const prepared = prepareHybridBenchmarkEvent({
     id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
     candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
