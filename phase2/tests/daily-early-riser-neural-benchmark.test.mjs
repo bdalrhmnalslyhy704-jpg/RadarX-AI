@@ -685,8 +685,12 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(fmNeural.factorization_member_enabled,true);
   assert.equal(fmNeural.ensemble_members,4);
   assert.equal(fmNeural.ensemble_members_required,4);
+  assert.equal(fmNeural.member_training_profiles.length,fmNeural.ensemble_members,
+    'the fitted member manifest must include the optional factor-cross member');
   assert.equal(fmNeural.member_training_profiles.filter(item=>
     item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
+  assert.equal(fmNeural.member_training_diagnostics.length,fmNeural.ensemble_members,
+    'each trained member must expose its own training-only checkpoint diagnostics');
   assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,
     3*5+NEURAL_FACTOR_CROSS_RESIDUAL_SCALES.length,
     'the low-rank pairwise member must use its fine residual grid while MLP keeps the original five scales');

@@ -1182,14 +1182,6 @@ function fitNeuralEnsemble(training, options = {}) {
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
   }));
-  const completedMemberProfiles=memberProfiles.map((profile,index)=>({
-    ...profile,
-    requested_iterations:profile.iterations,
-    iterations:members[index]?.training_diagnostics?.epochs_completed??profile.iterations,
-    best_epoch:members[index]?.training_diagnostics?.best_epoch??null,
-    best_training_objective:members[index]?.training_diagnostics?.best_training_objective??null,
-    early_stopping:members[index]?.training_diagnostics?.early_stopping??null
-  }));
   const memberSeeds=[...seeds];
   const factorizationMemberIndex=options.enableFactorizationMachine===true?members.length:-1;
   if(options.enableFactorizationMachine===true){
@@ -1211,6 +1203,14 @@ function fitNeuralEnsemble(training, options = {}) {
     memberProfiles.push(factorizationProfile);
   }
   if(members.length!==memberSeeds.length||members.some(member=>!member))return null;
+  const completedMemberProfiles=memberProfiles.map((profile,index)=>({
+    ...profile,
+    requested_iterations:profile.iterations,
+    iterations:members[index]?.training_diagnostics?.epochs_completed??profile.iterations,
+    best_epoch:members[index]?.training_diagnostics?.best_epoch??null,
+    best_training_objective:members[index]?.training_diagnostics?.best_training_objective??null,
+    early_stopping:members[index]?.training_diagnostics?.early_stopping??null
+  }));
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
     architecture:members[0].architecture,
