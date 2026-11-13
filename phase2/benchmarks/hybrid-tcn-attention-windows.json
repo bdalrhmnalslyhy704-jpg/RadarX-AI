@@ -1,0 +1,180 @@
+[
+  {
+    "id": "late-2024-bull-expanded",
+    "label": "November 6-8 2024 BTC bull market — 48h",
+    "start": "2024-11-06T00:00:00.000Z",
+    "end": "2024-11-08T00:00:00.000Z"
+  },
+  {
+    "id": "early-2025-sideways-expanded",
+    "label": "January 11 2025 BTC sideways market — 24h",
+    "start": "2025-01-11T00:00:00.000Z",
+    "end": "2025-01-12T00:00:00.000Z"
+  },
+  {
+    "id": "early-2025-bear-expanded",
+    "label": "February 24-26 2025 BTC bear market — 48h",
+    "start": "2025-02-24T00:00:00.000Z",
+    "end": "2025-02-26T00:00:00.000Z"
+  },
+  {
+    "id": "missed-risers-post-soph-jun-2025",
+    "label": "Post-listing missed-riser cohort — June 2025",
+    "start": "2025-06-01T00:00:00.000Z",
+    "end": "2025-06-03T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-jul-2025-btc-rally",
+    "label": "Post-listing BTC bull move — 9-11 July 2025",
+    "start": "2025-07-09T00:00:00.000Z",
+    "end": "2025-07-11T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-aug-2025",
+    "label": "Post-listing missed-riser cohort — August 2025",
+    "start": "2025-08-15T00:00:00.000Z",
+    "end": "2025-08-17T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-nov-2025",
+    "label": "Post-listing missed-riser cohort — November 2025",
+    "start": "2025-11-10T00:00:00.000Z",
+    "end": "2025-11-12T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-feb-2026",
+    "label": "Post-listing missed-riser cohort — February 2026",
+    "start": "2026-02-20T00:00:00.000Z",
+    "end": "2026-02-22T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-jun-2026",
+    "label": "Post-listing missed-riser cohort — June 2026",
+    "start": "2026-06-15T00:00:00.000Z",
+    "end": "2026-06-17T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-aug-2026-btc-rally",
+    "label": "Post-listing BTC bull move — 19-21 August 2026",
+    "start": "2026-08-19T00:00:00.000Z",
+    "end": "2026-08-21T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  },
+  {
+    "id": "missed-risers-post-soph-oct-2026",
+    "label": "Post-listing missed-riser cohort — October 2026",
+    "start": "2026-10-15T00:00:00.000Z",
+    "end": "2026-10-17T00:00:00.000Z",
+    "symbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "BNBUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "LINKUSDT",
+      "SUIUSDT",
+      "PARTIUSDT",
+      "BEAMXUSDT",
+      "SOLVUSDT",
+      "SOPHUSDT"
+    ]
+  }
+]

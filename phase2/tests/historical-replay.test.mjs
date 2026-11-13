@@ -4,11 +4,25 @@ import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {aggregateFiveMinuteCandles, normalizeHistoricalCandles, runHistoricalReplay} from '../core/historical-replay.mjs';
-import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow} from '../tools/historical-replay.mjs';
+import {fetchAggregateTrades, withHistoricalRateLimitRetry, historicalProfileRequirements, assessHistoricalProfileCoverage, buildCandidateShadowResult, attachHistoricalMoveOutcomeAnalysis, countExpectedClosedMinuteCandles, HISTORICAL_DETECTOR_PROFILES, qualifiesHighActivityStructurePendingShadow, compactHistoricalReplayReport} from '../tools/historical-replay.mjs';
 
 
 const MINUTE = 60_000;
 const ORIGIN = Math.floor((Date.now() - 400 * MINUTE) / (5 * MINUTE)) * (5 * MINUTE);
+
+test('hybrid matrix persistence removes bulky per-step diagnostics but preserves replay summaries',()=>{
+  const compact=compactHistoricalReplayReport({generated_at:'2026-11-08T00:00:00Z',results:[{
+    symbol:'GTCUSDT',summary:{replay_steps:360,accepted:3},data_quality:{candle_fetch_complete:true},
+    evaluation:{moderate_move:{classification:'MISSED'}},steps:[{large:'detail-1'},{large:'detail-2'}]
+  }]});
+  assert.equal(compact.results[0].symbol,'GTCUSDT');
+  assert.equal(compact.results[0].summary.replay_steps,360);
+  assert.equal(compact.results[0].evaluation.moderate_move.classification,'MISSED');
+  assert.equal(compact.results[0].replay_step_detail_count,2);
+  assert.equal(compact.results[0].replay_step_details_omitted,true);
+  assert.equal(Object.hasOwn(compact.results[0],'steps'),false);
+  assert.match(compact.step_detail_policy,/OMITTED_FROM_MATRIX_WINDOW_JSON/);
+});
 
 test('high-activity historical watch shadow recognizes verified buyer flow while keeping liquidity and push explicitly unverified',()=>{
   const alert={
@@ -806,6 +820,46 @@ test('incomplete future candle horizon stays unavailable instead of fabricating 
   assert.equal(replay.steps.length,1);
   assert.equal(replay.steps[0].outcome.horizon_observed,false);
   assert.equal(replay.steps[0].outcome.forward_return_pct_at_horizon,null);
+});
+
+test('hybrid replay records a barrier exit before the four-hour horizon despite a later data gap',()=>{
+  const base=candles(100);
+  const decision=base[80];
+  const entry=decision.close;
+  const firstFuture={
+    ...base[81],
+    open:entry,
+    high:entry*1.04,
+    low:entry*0.999,
+    close:entry*1.03,
+    closed:true
+  };
+  // The following observed candle is separated by a gap and appears well before
+  // the four-hour maturity. It must not invalidate a trade already exited above.
+  const afterGap={...base[98],closed:true};
+  const input=[...base.slice(0,81),firstFuture,afterGap];
+  const replay=runHistoricalReplay({
+    symbol:'EARLYEXITUSDT',
+    oneMinuteCandles:input,
+    startTime:decision.openTime,
+    endTime:decision.closeTime,
+    outcomeEndTime:afterGap.closeTime,
+    outcomeHorizonMs:4*60*60*1000,
+    tradeCoverageComplete:false,
+    allowCandleOnlyFallback:true,
+    captureHybridBenchmarkRows:true,
+    captureHybridBenchmarkEveryMs:MINUTE,
+    hybridBenchmarkCandles:base,
+    evaluate(){return {accepted:false,score:90,reason_codes:['EARLY_EXIT_TEST']};}
+  });
+  assert.equal(replay.steps.length,1);
+  assert.equal(replay.steps[0].outcome.horizon_observed,false,
+    'the full four-hour outcome is deliberately not observable in this fixture');
+  assert.equal(replay.hybrid_benchmark_rows.length,1,
+    'the first barrier exit must be captured without waiting for the four-hour horizon');
+  assert.equal(replay.hybrid_benchmark_rows[0].outcome_exit_reason,'TAKE_PROFIT');
+  assert.equal(replay.hybrid_benchmark_rows[0].resolved_at,firstFuture.closeTime);
+  assert.equal(replay.hybrid_benchmark_rows[0].gross_return_pct,3);
 });
 
 test('exact +5/+15 event timestamps remain unavailable when aggregate-trade coverage is incomplete',()=>{
