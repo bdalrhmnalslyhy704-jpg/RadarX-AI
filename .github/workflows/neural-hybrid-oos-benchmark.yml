@@ -6,6 +6,25 @@ on:
       - research/daily-early-riser-mlp-budget-20261113
     paths:
       - 'research/TRIGGER_NEURAL_HYBRID_OOS_BENCHMARK.txt'
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
+  pull_request:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/neural-safety-contracts.mjs'
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/neural-hybrid-oos-matrix.mjs'
+      - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - 'phase2/tests/daily-early-riser-census-artifact-validation.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/cognitive-brain.test.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
 
 permissions:
   actions: read
