@@ -38,3 +38,6 @@ Research only. No production merge, deployment, real order execution, or lowerin
 LATEST STRICT EVALUATION REVISION
 
 Use the current branch code from this trigger commit, including the five-consecutive-UTC-day paired block bootstrap for external-validation and final-holdout Brier improvement confidence intervals. The one-day target-maturity purge between each partition remains mandatory. Run the projection evaluator even if the legacy MLP/factorization diagnostic step fails, provided the exact verified census files are present. Upload the JSON report even when the OOS superiority gate fails.
+CONTROLLED INITIALIZATION UPDATE
+
+The two predeclared dropout/L2 configurations must use the same deterministic initialization seed (101); only dropout and L2 differ. Evaluate with current branch source at this trigger commit, including the five-day UTC block bootstrap. Do not use reports from earlier dense triggers as the final result.
