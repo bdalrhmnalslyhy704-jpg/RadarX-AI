@@ -90,7 +90,7 @@ test('matrix enforces strict margins at selection, external validation and untou
   assert.equal(row.external_validation.passed,true);
   assert.equal(row.untouched_final_holdout.passed,true);
   assert.equal(report.source_integrity.same_input_sha256,true);
-  assert.equal(report.overall_status,'HISTORICAL_ALL_FAMILY_GATES_PASSED_FORWARD_SHADOW_STILL_REQUIRED',\n    JSON.stringify({families:report.family_summary,integrity:report.source_integrity,rows:report.rows.map(row=>({family:row.family,variant:row.variant,selected:row.selected,inner:row.inner_selection,validation:row.external_validation,holdout:row.untouched_final_holdout,status:row.historical_gate_status}))}));
+  assert.equal(report.overall_status,'HISTORICAL_ALL_FAMILY_GATES_PASSED_FORWARD_SHADOW_STILL_REQUIRED');
   assert.equal(report.promotion_eligible,true);
   assert.match(renderBrierTable(report),/MLP_V5/);
 });
