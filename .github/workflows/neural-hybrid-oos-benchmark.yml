@@ -167,6 +167,9 @@ jobs:
           node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
           node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
       - name: Train all tabular and temporal challengers on the same 24h safe +5% cohort
+        env:
+          RADARX_CENSUS_SOURCE_RUN_ID: ${{ needs.resolve-census.outputs.run_id }}
+          RADARX_CENSUS_SOURCE_COMMIT: ${{ needs.resolve-census.outputs.source_commit }}
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \
