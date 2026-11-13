@@ -23,3 +23,19 @@ Rebuild the exact full-market sample on this source commit only. Keep 24h anchor
 This run is a data-production job only. Do not execute legacy MLP/GBDT/TCN training inside the census job. Upload the census report, JSONL rows, temporal sidecar, checksums, archive manifests, and per-symbol audit. The downstream dense benchmark must resolve this exact source commit and run ID, download only its completed artifact, and verify raw-file SHA-256 before fitting any model.
 
 No stale census fallback. No partial artifact fallback. No under-floor cohort promotion. No production merge, deployment, exchange order, or real execution.
+
+TEMPORAL SIDECAR TIMESTAMP AUDIT — REQUIRED BEFORE ANY TCN FIT
+
+The historical 24x29 temporal builder must persist the 24 exact closed-15m candle close timestamps beside every sequence. For each emitted sidecar row require:
+- exactly 24 sequence rows and exactly 29 numeric channels per row;
+- exactly 24 timestamps, finite and strictly ordered at 900,000 ms intervals;
+- final timestamp exactly equals that sample's baseline close / feature_information_cutoff_at;
+- first timestamp is final_timestamp - 23 * 900,000 ms;
+- channel 29 (index 28) is the existing microstructure-availability mask and must be exactly 0 or 1;
+- sidecar identity (id, symbol, anchor time) matches the sample row exactly;
+- SHA-256 and row counts are bound in the census report.
+
+No synthetic timestamp, inferred timestamp, forward-fill of OHLC/price channels, or older untimed sidecar fallback is permitted. Samples without an exact timed 24x29 sequence may remain available to the tabular analysis only, but must be excluded from all TCN/Hybrid-TCN fitting. The census audit must report timed_sequence_rows, untimed_sequence_rows, bad_cadence_rows, bad_anchor_rows, invalid_mask_rows and temporal_sidecar_sha256 separately.
+
+Rebuild from this commit so the downloaded census artifact includes the strict timestamped sidecar. Do not accept a previously generated artifact, even if its tabular JSONL SHA remains valid.
+
