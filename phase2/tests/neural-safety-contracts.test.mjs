@@ -39,8 +39,8 @@ test('temporal alignment requires exact shape, 15m cadence, baseline close and t
   }).reason,'OUTCOME_MATURITY_DOES_NOT_MATCH_HORIZON');
   const badMask=seq();badMask[4][28]=0.5;
   assert.equal(validateTemporalSequenceAlignment({
-    ...base,temporal_sequence:badMask
-  }).reason,'TEMPORAL_MICRO_AVAILABILITY_MASK_INVALID:4');
+    ...base,temporal_sequence:badMask,binaryMaskChannels:[28]
+  }).reason,'TEMPORAL_BINARY_MASK_CHANNEL_INVALID:28:4');
 });
 
 test('causal forward fill masks approved sparse features and never fills leading or price-channel gaps',()=>{
