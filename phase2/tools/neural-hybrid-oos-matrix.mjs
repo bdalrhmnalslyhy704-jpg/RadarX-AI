@@ -66,20 +66,6 @@ function aggregateRegimes(model,stage,logisticStage){
   };
 }
 function innerGate(model){
-  const diagnostics=model?.inner_selection_diagnostics;
-  if(diagnostics){
-    const candidate=diagnostics.best_candidate||{};
-    const modelBrier=firstFinite(candidate.brier_score);
-    const logisticBrier=firstFinite(diagnostics.logistic_baseline_brier_score);
-    const passed=diagnostics.passed===true&&
-      modelBrier!==null&&logisticBrier!==null&&
-      logisticBrier-modelBrier>INNER_MARGIN;
-    return {evaluated:modelBrier!==null&&logisticBrier!==null,
-      model_brier:modelBrier,logistic_brier:logisticBrier,
-      improvement:modelBrier!==null&&logisticBrier!==null?logisticBrier-modelBrier:null,
-      required_margin:INNER_MARGIN,passed,
-      reason:diagnostics.failure_reason||null};
-  }
   const recurrentSelection=model?.inner_selection_diagnostics;
   if (Array.isArray(recurrentSelection?.candidates)) {
     const chosen = recurrentSelection.candidates.find(row =>
@@ -106,6 +92,20 @@ function innerGate(model){
         passed:row.passed_inner_margin===true
       }))
     };
+  }
+  const diagnostics=model?.inner_selection_diagnostics;
+  if(diagnostics){
+    const candidate=diagnostics.best_candidate||{};
+    const modelBrier=firstFinite(candidate.brier_score);
+    const logisticBrier=firstFinite(diagnostics.logistic_baseline_brier_score);
+    const passed=diagnostics.passed===true&&
+      modelBrier!==null&&logisticBrier!==null&&
+      logisticBrier-modelBrier>INNER_MARGIN;
+    return {evaluated:modelBrier!==null&&logisticBrier!==null,
+      model_brier:modelBrier,logistic_brier:logisticBrier,
+      improvement:modelBrier!==null&&logisticBrier!==null?logisticBrier-modelBrier:null,
+      required_margin:INNER_MARGIN,passed,
+      reason:diagnostics.failure_reason||null};
   }
   const candidates=Array.isArray(model?.candidate_selection_metrics)
     ?model.candidate_selection_metrics:[];
