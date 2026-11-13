@@ -2904,6 +2904,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         boosted_tree_logistic:boostedSameWindowLogisticCalibration
       },
       validation:hybridValidation,
+      validation_logistic_brier_score:boostedSameWindowLogisticValidation.model_brier_score??null,
       candidate_selection_metrics:hybridSelectionCandidates.map(candidate=>({
         name:candidate.name,boosted_weight:candidate.fit.boosted_weight,
         weight_fit_sample_count:candidate.fit.blend_weight_fit_samples??0,
@@ -2924,6 +2925,7 @@ export function buildCognitiveLearningProfile(samples = [], {
         name:candidate.name,boosted_weight:candidate.fit.boosted_weight,
         validation_sample_count:candidate.validation?.sample_count??0,
         model_brier_score:candidate.validation?.model_brier_score??null,
+        same_window_logistic_brier_score:boostedSameWindowLogisticValidation.model_brier_score??null,
         base_rate_brier_score:candidate.validation?.base_rate_brier_score??null,
         auc_roc:candidate.validation?.ranking_metrics?.auc_roc??null,
         top_10pct_precision_pct:candidate.validation?.ranking_metrics?.top_10_pct?.precision_pct??null,
