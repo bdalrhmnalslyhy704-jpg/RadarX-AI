@@ -1454,7 +1454,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       outcome_horizon_ms: horizonMs,
       comparison_contract:{
         target_definition:modelTargetDefinition,
-        target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+        target_semantics:modelTargetSemantics,
         shared_outer_split_applied:false,
         sample_identity_matches:sharedSampleIdentityMatches,
         sample_fingerprint:cognitiveSampleFingerprint,
@@ -2104,7 +2104,7 @@ export function buildCognitiveLearningProfile(samples = [], {
     outcome_horizon_ms: horizonMs,
     comparison_contract:{
       target_definition:modelTargetDefinition,
-      target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+      target_semantics:modelTargetSemantics,
       shared_outer_split_applied:sharedOuterSplitApplied,
       sample_identity_matches:sharedSampleIdentityMatches,
       sample_fingerprint:cognitiveSampleFingerprint,
