@@ -15,7 +15,8 @@ export function validateTemporalSequenceAlignment({
   expectedSteps = DEFAULT_STEPS,
   expectedChannels = DEFAULT_CHANNELS,
   intervalMs = DEFAULT_INTERVAL_MS,
-  requireSequenceTimestamps = true
+  requireSequenceTimestamps = true,
+  binaryMaskChannels = []
 } = {}) {
   const fail = reason => ({
     valid: false, reason, cadence_verified: false,
@@ -38,12 +39,13 @@ export function validateTemporalSequenceAlignment({
       return fail('TEMPORAL_SEQUENCE_CHANNEL_COUNT_MISMATCH:' + step);
     if (row.some(value => !finite(value) || Math.abs(Number(value)) > 4))
       return fail('TEMPORAL_SEQUENCE_VALUE_NON_FINITE_OR_OUT_OF_RANGE:' + step);
-    // The daily strict-timestamp contract validates channel 29 as the
-    // explicit 5m-micro availability mask. Legacy untimed callers remain
-    // compatible; they are never eligible for the new daily strict path.
-    if (requireSequenceTimestamps &&
-        Number(row[expectedChannels - 1]) !== 0 && Number(row[expectedChannels - 1]) !== 1)
-      return fail('TEMPORAL_MICRO_AVAILABILITY_MASK_INVALID:' + step);
+    if (!Array.isArray(binaryMaskChannels) ||
+        binaryMaskChannels.some(channel=>!Number.isInteger(channel)||channel<0||channel>=expectedChannels))
+      return fail('TEMPORAL_BINARY_MASK_CHANNEL_CONTRACT_INVALID');
+    for (const channel of binaryMaskChannels) {
+      if (Number(row[channel]) !== 0 && Number(row[channel]) !== 1)
+        return fail('TEMPORAL_BINARY_MASK_CHANNEL_INVALID:' + channel + ':' + step);
+    }
   }
   if (!Array.isArray(temporal_sequence_timestamps)) {
     return requireSequenceTimestamps
