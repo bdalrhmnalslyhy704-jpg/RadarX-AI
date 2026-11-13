@@ -180,6 +180,13 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
+  const enableAsymmetricDirectionalRankingLoss=String(
+    args['asymmetric-directional-ranking-loss']??'true')==='true';
+  const directionalRankingLossConfig={
+    brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,baselineGapWeight:0.2,
+    pairMargin:0.1,pairTemperature:0.5,falsePositiveProbabilityThreshold:0.7,
+    requiredBaselineImprovement:0.00025,maxPairsPerTimestamp:256
+  };
   const regimeLocalMlpOnly=String(args['regime-local-mlp-only']||'false')==='true';
   const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
     Number(args['attention-position-bias-l2-multiplier']||1)));
@@ -237,6 +244,8 @@ async function main(){
     regime_local_mlp_only:regimeLocalMlpOnly,
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
+    asymmetric_directional_ranking_loss_enabled:enableAsymmetricDirectionalRankingLoss,
+    directional_ranking_loss_config:directionalRankingLossConfig,
     neural_iterations:neuralIterations,
     neural_output_initialization_scale:neuralOutputInitializationScale,
     daily_feature_schema_key:dailyFeatureSchemaKey,
@@ -266,6 +275,9 @@ async function main(){
           :'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
+      directional_ranking_loss:enableAsymmetricDirectionalRankingLoss
+        ?'Training-only Brier base plus same-timestamp UP-vs-DOWN pairwise ranking, false-positive confidence penalty, and frozen same-window Logistic margin hinge. This objective is not an acceptance score and does not establish out-of-sample superiority.'
+        :'Disabled; proper-scoring objectives remain active.',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest '+String(Math.round(neuralTrainingHistoryFraction*100))+'% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
       models:tcnOnly
@@ -346,6 +358,7 @@ async function main(){
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
         neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         dailyFeatureSchema,
         enableFactorizationMachine,factorizationRank,factorizationIterations,
         factorizationLearningRate,factorizationL2,
