@@ -289,16 +289,24 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
   const targetCoverage=requiredTargets.map(target=>({
     target_pct:target,present:targetEntries.some(row=>row.target===target)
   }));
-  const coreFamilies=['MLP_V5','TCN_V8','TCN_V9','TCN_V10','TCN_V11',
-    'HYBRID_MLP_GBDT','HYBRID_TCN_ATTENTION'];
-  const familySummary=coreFamilies.map(family=>{
-    const familyRows=rows.filter(row=>row.family===family);
-    const allTargetsPresent=requiredTargets.every(target=>
-      familyRows.some(row=>row.target_pct===target));
+  const coreFamilies=[
+    {family:'MLP_V5',members:['MLP_V5']},
+    {family:'TCN_V8_TO_V11',members:['TCN_V8','TCN_V9','TCN_V10','TCN_V11']},
+    {family:'HYBRID_MLP_GBDT',members:['HYBRID_MLP_GBDT']},
+    {family:'HYBRID_TCN_ATTENTION',members:['HYBRID_TCN_ATTENTION']}
+  ];
+  const familySummary=coreFamilies.map(group=>{
+    const familyRows=rows.filter(row=>group.members.includes(row.family));
+    const missingVariantTargets=group.members.flatMap(member=>
+      requiredTargets.filter(target=>!familyRows.some(row=>
+        row.family===member&&row.target_pct===target)).map(target=>({variant:member,target_pct:target})));
+    const allTargetsPresent=missingVariantTargets.length===0;
     const allPassed=allTargetsPresent&&familyRows.length>0&&
       familyRows.every(row=>row.selected&&row.inner_selection.passed&&
         row.external_validation.passed&&row.untouched_final_holdout.passed);
-    return {family,targets_present:familyRows.map(row=>row.target_pct),
+    return {family:group.family,required_variants:group.members,
+      variants_present:[...new Set(familyRows.map(row=>row.family))],
+      missing_variant_targets:missingVariantTargets,
       required_targets:requiredTargets,all_required_targets_present:allTargetsPresent,
       validation_and_holdout_passed_all_targets:allPassed,
       rows:familyRows.length};
