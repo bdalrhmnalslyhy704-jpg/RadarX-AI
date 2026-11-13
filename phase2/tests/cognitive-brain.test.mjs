@@ -10,6 +10,8 @@ import {
   hasCognitiveBrierSuperiority,
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_FEATURE_NAMES,
+  COGNITIVE_DAILY_FEATURE_SCHEMA,
+  COGNITIVE_DAILY_FEATURE_NAMES,
   buildCognitiveFeatureVector,
   evaluateCognitiveDirectionalRanking,
   hasSelectedNeuralResidual,
@@ -443,6 +445,54 @@ test('MLP tensor interface rejects reordered features, mismatched schemas, bad s
   }:row);
   assert.throws(()=>auditNeuralOneBatchOverfit(misaligned),
     /NEURAL_FEATURE_VECTOR_VALUE_MISMATCH:15/);
+});
+
+test('daily-context 35-feature MLP tensor contract also overfits one deterministic 32-row batch',()=>{
+  assert.equal(COGNITIVE_DAILY_FEATURE_NAMES.length,35);
+  const rows=Array.from({length:32},(_,index)=>{
+    const positive=index<16,sign=positive?1:-1;
+    const features={
+      volume_ratio:positive?4:0.25,
+      trade_ratio:positive?3:0.3,
+      taker_buy_ratio:positive?0.78:0.22,
+      compression_ratio:positive?0.35:1.25,
+      relative_strength_vs_btc_pct:sign*2,
+      recent_15m_return_pct:sign*0.9,
+      higher_low:positive,trend_aligned:positive,
+      micro_5m_available:true,
+      micro_5m_taker_buy_ratio:positive?0.76:0.24,
+      return_30m_pct:sign*1.2,
+      hourly_return_pct:sign*2.1,
+      return_3h_pct:sign*3.4,
+      btc_hourly_return_pct:sign*0.2,
+      daily_change_pct:sign*5.5,
+      relative_strength_vs_btc_24h_pct:sign*3,
+      quote_volume_24h:2_000_000,
+      breakout_distance_pct:sign*0.65,
+      current_range_pct:2.5,
+      lower_wick_pct:positive?1.1:0.2,
+      micro_5m_volume_ratio:positive?2.4:0.3,
+      micro_5m_trade_ratio:positive?2.1:0.4,
+      micro_5m_return_pct:sign*0.6,
+      micro_5m_close_location:positive?0.85:0.15
+    };
+    return {
+      id:'DAILY35:'+index,symbol:'DAILY35USDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,features,
+      feature_schema:COGNITIVE_DAILY_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_DAILY_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features,COGNITIVE_DAILY_FEATURE_SCHEMA)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:48,seed:29});
+  console.log('[COGNITIVE_MLP_35_FEATURE_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.equal(report.feature_count,35);
+  assert.equal(report.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_gradients_finite,true);
+  assert.equal(report.all_parameters_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
 });
 
 test('MLP numerical training audit drives an exactly balanced 32-row batch to near-zero Brier',()=>{
