@@ -82,8 +82,9 @@ export function auditSampleLabelHorizons(samples,{
     for(const target of targets){
       const key='plus_'+String(target).replace('.','_')+'_pct';
       const label=sample.targets?.[key];
-      if(!label||label.status!=='RESOLVED'||
-        !['UP','DOWN','FLAT'].includes(label.outcome)||
+      const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+      const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+      if(!label||(!validResolved&&!validAmbiguous)||
         label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
         label.target_definition!=='FIRST_PASSAGE_PLUS_'+target+
           '_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'||
