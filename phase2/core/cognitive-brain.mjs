@@ -1679,11 +1679,15 @@ export function buildCognitiveLearningProfile(samples = [], {
     const refitBaseline=selectedIndex>=0?fitLogisticModel(refitRows,{l2,iterations,learningRate}):null;
     const selectedProfile=selectedIndex>=0?neuralFit.member_training_profiles[selectedIndex]||{}:{};
     const refitMember=selectedIndex>=0&&refitBaseline
-      ?fitNeuralNetworkModel(refitRows,{
-        hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline,
-        anchorAdaptation:neuralFit.anchor_adaptation_mode
-      }):null;
+      ?selectedProfile.model_kind==='RESIDUAL_FACTOR_CROSS_V1'
+        ?fitFactorizationMachineModel(refitRows,{
+          ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline
+        })
+        :fitNeuralNetworkModel(refitRows,{
+          hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
+          ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline,
+          anchorAdaptation:neuralFit.anchor_adaptation_mode
+        }):null;
     if(refitMember&&refitBaseline){
       neuralFit.members[selectedIndex]=refitMember;
       neuralFit.anchor_adaptation=refitMember.anchor_adaptation;
