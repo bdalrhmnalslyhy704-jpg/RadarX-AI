@@ -62,11 +62,12 @@ test('causal forward fill masks approved sparse features and never fills leading
   ],{endTimestamp:end,expectedSteps:4,intervalMs:INTERVAL,expectedChannels:2,
     allowedSparseChannels:[],maxGapIntervals:2}),/FORWARD_FILL_NOT_ALLOWED_FOR_CHANNEL/);
   assert.throws(()=>causalForwardFillWindow([
-    {timestamp:grid[1],values:[2,5]},
-    {timestamp:grid[2],values:[3,6]},
-    {timestamp:grid[3],values:[4,7]}
+    {timestamp:grid[0],values:[1,5]},
+    {timestamp:grid[1],values:[2,null]},
+    {timestamp:grid[2],values:[3,null]},
+    {timestamp:grid[3],values:[4,null]}
   ],{endTimestamp:end,expectedSteps:4,intervalMs:INTERVAL,expectedChannels:2,
-    allowedSparseChannels:[1],maxGapIntervals:3}),/FORWARD_FILL_GAP_EXCEEDS_SAFE_LIMIT/);
+    allowedSparseChannels:[1],maxGapIntervals:2}),/FORWARD_FILL_GAP_EXCEEDS_SAFE_LIMIT/);
   assert.throws(()=>causalForwardFillWindow([
     {timestamp:end+INTERVAL,values:[1,2]}
   ],{endTimestamp:end,expectedSteps:4,intervalMs:INTERVAL,expectedChannels:2,
