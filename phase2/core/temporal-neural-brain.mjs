@@ -2007,6 +2007,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableRegimeLocalTcnAttention=false,
   regimeLocalTcnAttentionMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnAttentionEpochs=6,
+  regimeLocalTcnAttentionPositionBiasL2Multiplier=1,
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
@@ -2529,6 +2530,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         epochs:regimeLocalTcnAttentionEpochs,learningRate,l2,comparisonMargin,
         maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
+        attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,minTrainingNegative:minRegimeNegative,
         minSelectionSamples,minSelectionPositive,minSelectionNegative,
