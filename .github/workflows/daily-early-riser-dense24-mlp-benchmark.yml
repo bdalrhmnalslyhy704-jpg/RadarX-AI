@@ -51,7 +51,7 @@ jobs:
           const run=matches[0];
           console.log(JSON.stringify({run_id:run.id,run_number:run.run_number,head_sha:run.head_sha,created_at:run.created_at}));
           fs.appendFileSync(process.env.GITHUB_OUTPUT,
-            'run_id='+run.id+'\\nrun_number='+run.run_number+'\\n');
+            'run_id='+run.id+'\nrun_number='+run.run_number+'\n');
           NODE
         shell: bash
 
