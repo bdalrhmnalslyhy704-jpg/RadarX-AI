@@ -9,6 +9,11 @@ on:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
+      - '.github/workflows/daily-early-riser-census.yml'
+      - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
       - '.github/workflows/cognitive-neural-surgical-check.yml'
 
 permissions:
@@ -41,5 +46,7 @@ jobs:
           node --check phase2/tests/temporal-neural-brain.test.mjs
       - name: Run MLP one-batch overfit, neural integration and hybrid regression tests
         run: node --test --test-timeout=180000 phase2/tests/cognitive-brain.test.mjs
+      - name: Run checksum census label and horizon audit regressions
+        run: node --test --test-timeout=180000 phase2/tests/daily-early-riser-census.test.mjs
       - name: Run TCN finite-difference gradient and workspace equivalence audits
         run: node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs

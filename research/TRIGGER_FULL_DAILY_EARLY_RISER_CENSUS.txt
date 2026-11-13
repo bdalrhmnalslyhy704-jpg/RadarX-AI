@@ -1,23 +1,17 @@
-Build 224 final risk-aware safe-entry and V11 temporal-attention experiment at current isolated research revision.
+BUILD 224 — RETRIGGER DENSE 24H VERIFIED SPOT CENSUS AFTER AUDIT FIX
 
-Replay checksum-verified official Binance Spot monthly archives and complete current-month daily archives through 2026-11-11 UTC. Use only verified closed 15m/5m candles, with features cut off exactly at each baseline close and non-overlapping 72h anchors.
+Source branch: research/daily-early-riser-mlp-budget-20261113
+Window: 2025-11-01 UTC inclusive through 2026-11-11 UTC inclusive (end-exclusive 2026-11-12).
+Universe: all eligible directional Binance Spot USDT pairs.
+Opportunity horizons: 24h only.
+Anchor spacing: 24h (96 closed 15m candles).
+Liquidity floor: STANDARD_750K_PLUS, quote volume at least 750,000 USDT.
+Data: official checksum-verified Binance Spot monthly 15m and 5m archives, current partial-month daily archives, closed candles only.
 
-For each eligible historical anchor preserve independent labels:
-1. Existing 24h target-first-passage results. A same-15m-candle touch of upside and downside barriers is a valid AMBIGUOUS observation for census auditing, but MUST be excluded from supervised training and never converted to UP/DOWN/FLAT.
-2. +5/+10/+15 upside touch events at 24h, 48h, and 72h independent of drawdown.
-3. -2%/-5% drawdown risk at 24h, 48h, and 72h.
-4. Tradable safe-first-touch events: +5/+10/+15 must be touched before the -2% adverse barrier in the same horizon. If both touch within the same 15m candle, mark AMBIGUOUS and exclude it from supervised fitting.
+This rerun includes the corrected per-symbol label audit: each symbol's opportunity, drawdown and safe-first-touch labels must be checked against the exact configured horizon list. The sample builder and audit must receive the same opportunityHorizonsHours and drawdownAdversePcts. The generic audit default of 24h, 48h and 72h must not be applied to a 24h-only cohort. A missing 48h/72h label is a real failure only when that horizon was requested.
 
-Audit all expected labels, outcomes, exact source/definition/horizon, maturity, valid OHLC continuity, feature cutoff, 24x29 temporal sidecar identity/SHA-256, and the volume-to-lane mapping. Accept formally marked AMBIGUOUS first-passage labels only as audited-but-nontrainable observations; preserve them as ambiguous, never relabel them. Retain all under-floor observations only for Micro Watch diagnostics. The standard-entry MLP/GBDT/hybrid benchmark and all 24x29 TCN variants, including the V11 learned-query temporal-attention challenger, must fit STANDARD_750K_PLUS samples only; any MICRO_WATCH_ONLY_UNDER_750K row must be rejected by standard training filters and cannot gain standard eligibility.
+Preserve the full audit. Do not ignore missing-after-listing archives, checksum failures, feature cutoff violations, gaps, overlapping anchors, ambiguous labels, invalid targets, or liquidity-lane violations. Archive months before a symbol's first available archive are recorded as missing provenance, not silently treated as observed market data; completeness from first available listing remains mandatory.
 
-For every symbol, emit its audit status, overlap violations, feature-cutoff and horizon violation counts, first-passage/opportunity/drawdown/safe-first-touch label violations, liquidity-lane violations, and rejected-feature reason counts in progress logs. Preserve the per-symbol diagnostic list in the census report so every failed symbol can be investigated rather than silently dropped.
+After the census report is AUDITED, pass the exact completed census commit/run ID and its SHA-256-verified artifact into the dense 24h safe +5% MLP benchmark. Do not use partial/INCOMPLETE census artifacts for model training.
 
-Run isolated tabular MLP, GBDT and hybrid safe-first-touch +5%/72h challengers separately. For temporal training, use the TCN-only V11 attention experiment mode: train the shared temporal TCN control and V11 learned-query attention challenger with same-cohort regime-local Logistic anchors, while disabling competing regional V8/V9/V10 TCN ablations for this run (`--tcn-only true --attention-only true`). All temporal models must use the same target, exact sample cohort, chronological purged splits, and same-window Logistic comparator. Compare each challenger under the unchanged strict >0.003 Brier improvement rule on inner selection, outer validation, and untouched holdout. Report within-timestamp top-5/10/20% precision, recall, lift, and average precision next to Logistic ranking metrics, but do not use ranking metrics to bypass the Brier acceptance gate. Preserve disjoint selection/calibration blocks, sidecar checksums, purge gaps, and no peeking.
-
-The census report MUST remain INCOMPLETE and training MUST be blocked if a source, path, archive, overlap, feature-cutoff, label-contract, or liquidity-lane audit genuinely fails. Only formally recognized same-candle ambiguity can pass as audited-nontrainable; no other audit failure may be ignored.
-
-Research-only: no production changes, no merge, no deployment, no real orders. Paper trading remains true and real_order_execution remains false. Do not reduce the 750,000 USDT threshold.
-
-DENSE 24H MLP RESEARCH BRANCH
-
-This branch intentionally builds a separate one-year census for the safe +5% first-touch target at 24h. Use only the 24h opportunity horizon, one anchor every 24h (96 closed 15m bars), and the unchanged STANDARD_750K_PLUS lane floor of 750,000 USDT. The maximum labeled horizon is therefore 24h and adjacent anchor outcome paths do not overlap. Keep feature information cut off exactly at each baseline close; use only official checksum-verified Binance Spot archives and closed candles. Preserve ambiguous same-candle outcomes as ambiguous and exclude them from supervised fitting. This dense 24h archive is a research-only challenger cohort; do not replace the 72h census or production configuration. No merge, deployment, order execution, or weakening of acceptance gates is authorized.
+Research-only: no production edits, no merge, no deploy, no exchange orders. Paper-only, real_order_execution=false. Preserve the 750,000 USDT liquidity threshold and strict out-of-sample superiority gates.
