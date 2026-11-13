@@ -24,6 +24,7 @@ import {
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
+  factorizationMachineProjection,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
@@ -463,6 +464,31 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
   assert.equal(profile.neural_network.status,'WAITING_FOR_MATURED_TRAINING_SAMPLES');
 });
 
+
+test('low-rank factor-cross projection equals pairwise interactions and passes finite-difference derivative audit',()=>{
+  const vector=[0.7,-0.4,1.1,0.25];
+  const factors=[[0.2,-0.4],[0.7,0.3],[-0.2,0.5],[0.15,-0.1]];
+  const projection=factorizationMachineProjection(vector,factors);
+  assert.ok(projection);
+  for(let component=0;component<2;component++){
+    let exact=0;
+    for(let i=0;i<vector.length;i++)for(let j=i+1;j<vector.length;j++)
+      exact+=factors[i][component]*factors[j][component]*vector[i]*vector[j];
+    assert.ok(Math.abs(projection.interactions[component]-exact)<1e-12);
+    for(let feature=0;feature<vector.length;feature++){
+      const epsilon=1e-6;
+      const plus=factors.map(row=>[...row]),minus=factors.map(row=>[...row]);
+      plus[feature][component]+=epsilon;minus[feature][component]-=epsilon;
+      const upper=factorizationMachineProjection(vector,plus).interactions[component];
+      const lower=factorizationMachineProjection(vector,minus).interactions[component];
+      const numeric=(upper-lower)/(2*epsilon);
+      const analytic=projection.factor_derivatives[feature][component];
+      assert.ok(Math.abs(numeric-analytic)<1e-8,
+        `factor derivative mismatch at feature ${feature}, component ${component}: ${numeric} vs ${analytic}`);
+    }
+  }
+  assert.equal(factorizationMachineProjection(vector,[[]]),null);
+});
 
 test('daily feature schema can train and evaluate a real 35-input MLP without dimension fallback',()=>{
   const horizon=24*60*60*1000;
