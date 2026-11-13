@@ -218,6 +218,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
     regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
       Math.trunc(options.temporalRegimeLocalTcnMaxTrainingSamples||4096))),
+    enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
     regimeLocalTcnEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnEpochs||6))),
     enableRegimeLocalTcnPyramid:options.enableRegimeLocalTcnPyramid!==false,
