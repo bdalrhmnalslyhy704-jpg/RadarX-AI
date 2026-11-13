@@ -957,7 +957,27 @@ function fitNeuralEnsemble(training, options = {}) {
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
   }));
-  if(members.length!==seeds.length||members.some(member=>!member))return null;
+  const memberSeeds=[...seeds];
+  const factorizationMemberIndex=options.enableFactorizationMachine===true?members.length:-1;
+  if(options.enableFactorizationMachine===true){
+    const factorizationProfile={
+      model_kind:'RESIDUAL_FACTOR_CROSS_V1',
+      rank:Math.max(2,Math.min(16,Math.trunc(Number(options.factorizationRank)||8))),
+      iterations:Math.max(30,Math.min(180,Math.trunc(Number(options.factorizationIterations)||baseIterations))),
+      learningRate:clamp(Number(options.factorizationLearningRate)||baseLearningRate*0.75,0.0005,0.03),
+      l2:clamp(Number(options.factorizationL2)||baseL2*1.5,0.001,0.5),
+      seed:Math.max(1,Math.min(997,Math.trunc(Number(options.factorizationSeed)||73))),
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      positiveClassWeighting:'NONE'
+    };
+    const factorizationMember=fitFactorizationMachineModel(training,{
+      baselineFit:options.baselineFit,...factorizationProfile
+    });
+    if(!factorizationMember)return null;
+    members.push(factorizationMember);memberSeeds.push(factorizationProfile.seed);
+    memberProfiles.push(factorizationProfile);
+  }
+  if(members.length!==memberSeeds.length||members.some(member=>!member))return null;
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
     architecture:members[0].architecture,
@@ -967,9 +987,12 @@ function fitNeuralEnsemble(training, options = {}) {
     output_size:1,
     members,
     ensemble_members:members.length,
-    seeds:[...seeds],
+    seeds:memberSeeds,
+    factorization_member_index:factorizationMemberIndex,
     member_training_profiles:memberProfiles,
-    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
+    training_strategy:factorizationMemberIndex>=0
+      ?'RESIDUAL_MLP_PLUS_LOW_RANK_FACTOR_CROSS_V1_SAME_WINDOW_LOGISTIC_ANCHOR'
+      :'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
     training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V7',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
@@ -1021,7 +1044,9 @@ function predictFromFit(features, fit, residualScale=1) {
     );
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
-    if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
+    const expectedMembers=Array.isArray(fit.seeds)&&fit.seeds.length
+      ?fit.seeds.length:NEURAL_POLICY.ensembleSeeds.length;
+    if(!Array.isArray(fit.members)||fit.members.length!==expectedMembers)return null;
     const selected=Number(fit.selected_member_index);
     let rawPrediction;
     if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length){
