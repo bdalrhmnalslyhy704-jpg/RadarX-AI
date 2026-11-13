@@ -563,6 +563,32 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(fullHistoryProfile.neural_network.holdout.sample_count,
     profile.neural_network.holdout.sample_count,
     'history ablation must preserve untouched holdout membership');
+
+  const factorizedProfile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,minimumValidationSamples:30,minimumHoldoutSamples:30,
+    validationFraction:0.2,holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,allowedOutcomeSources:['UNIT_TEST_DAILY_35'],
+    minNeuralTrainingSamples:240,maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
+    iterations:40,learningRate:0.08,neuralIterations:10,
+    neuralInnerSelectionMargin:0.00025,neuralTrainingHistoryFraction:1,
+    neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    enableFactorizationMachine:true,factorizationRank:3,
+    factorizationIterations:30,factorizationLearningRate:0.008,factorizationL2:0.06,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  });
+  const fmNeural=factorizedProfile.neural_network;
+  assert.equal(fmNeural.trained,true);
+  assert.equal(fmNeural.factorization_member_enabled,true);
+  assert.equal(fmNeural.ensemble_members,4);
+  assert.equal(fmNeural.ensemble_members_required,4);
+  assert.equal(fmNeural.member_training_profiles.filter(item=>
+    item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
+  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,20,
+    'the low-rank pairwise member must enter the same 4-member x 5-scale selection grid');
+  assert.ok(fmNeural.max_training_outcome_resolved_at<fmNeural.selection_start_at,
+    'factor-cross fit must remain strictly before the disjoint selection block');
 });
 
 test('daily anchor diagnostics report requested and applied modes without a false frozen default',()=>{
@@ -624,4 +650,7 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   assert.ok(source.includes('enableRegimeLocalTcnAttention:true'));
   assert.ok(source.includes("args['neural-training-history-fraction']"));
   assert.ok(source.includes('neuralTrainingHistoryFraction,'));
+  assert.ok(source.includes("args['enable-factorization-machine']"));
+  assert.ok(source.includes('enableFactorizationMachine,factorizationRank,factorizationIterations'));
+  assert.ok(source.includes('factorization_candidate_scores'));
 });
