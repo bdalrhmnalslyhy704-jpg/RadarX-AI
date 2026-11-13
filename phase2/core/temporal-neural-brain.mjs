@@ -1739,6 +1739,7 @@ function fitRegimeLocalTemporalTcn({
   comparisonMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN,
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   temporalPoolingMode='LAST_12_MEAN_V1',
+  attentionPositionBiasL2Multiplier=1,
   minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
   minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
   minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
@@ -1843,7 +1844,8 @@ function fitRegimeLocalTemporalTcn({
   const baseline=fitLogistic(training);
   const fitted=fitEnsemble(training,{
     epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
-    learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode
+    learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode,
+    attentionPositionBiasL2Multiplier
   });
   const selectionLogistic=evaluate(selection,
     sequence=>predictLogistic(sequence,baseline),baseRate);
