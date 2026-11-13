@@ -1043,6 +1043,9 @@ function pairedBlockBootstrap(rows, profile, iterations = 400, seed = 1771) {
 export function benchmarkTcnLstmHybridChronological(inputRows, {
   requiredInnerImprovement = 0.00025,
   requiredOuterImprovement = 0.003,
+  outcomeHorizonMs = DAY_MS,
+  requiredTargetDefinition = null,
+  requiredOutcomeSource = null,
   maxTrainingSamples = 2048,
   bootstrapIterations = 400,
   seed = 29,
@@ -1067,6 +1070,21 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   const rows = [...inputRows].sort((a,b)=>a.at-b.at||
     String(a.symbol||'').localeCompare(String(b.symbol||''))||
     sampleIdentity(a).localeCompare(sampleIdentity(b)));
+  if (outcomeHorizonMs !== DAY_MS ||
+      rows.some(row=>row.resolved_at-row.at !== DAY_MS ||
+        row.horizon_ms !== undefined && Number(row.horizon_ms) !== DAY_MS))
+    return waiting('TARGET_CONTRACT_OR_HORIZON_REJECTED',
+      'TCN_LSTM_REQUIRES_MATURED_24H_LABELS',{input_samples:rows.length,outcome_horizon_ms:outcomeHorizonMs});
+  const targetDefinitions=new Set(rows.map(row=>row.target_definition).filter(Boolean));
+  const outcomeSources=new Set(rows.map(row=>row.outcome_source).filter(Boolean));
+  if ((targetDefinitions.size>1)||(outcomeSources.size>1)||
+      (requiredTargetDefinition!==null&&[...targetDefinitions].some(value=>value!==requiredTargetDefinition))||
+      (requiredOutcomeSource!==null&&[...outcomeSources].some(value=>value!==requiredOutcomeSource)))
+    return waiting('TARGET_CONTRACT_OR_HORIZON_REJECTED',
+      'TCN_LSTM_TARGET_DEFINITION_OR_SOURCE_MISMATCH',{
+        target_definitions:[...targetDefinitions],outcome_sources:[...outcomeSources],
+        required_target_definition:requiredTargetDefinition,required_outcome_source:requiredOutcomeSource
+      });
   const days = [...new Set(rows.map(row=>Math.floor(row.at/DAY_MS)*DAY_MS))]
     .sort((a,b)=>a-b);
   if (days.length < 60)
@@ -1126,6 +1144,9 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     schema:TCN_LSTM_HYBRID_SCHEMA,
     architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
     input_samples:rows.length,unique_utc_days:days.length,
+    target_definition:requiredTargetDefinition??[...targetDefinitions][0]??null,
+    outcome_source:requiredOutcomeSource??[...outcomeSources][0]??null,
+    outcome_horizon_ms:outcomeHorizonMs,
     split_boundaries:{
       selection_after_utc:new Date(day1+DAY_MS).toISOString(),
       calibration_after_utc:new Date(day2+DAY_MS).toISOString(),
