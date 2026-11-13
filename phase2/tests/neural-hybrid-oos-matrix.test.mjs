@@ -71,9 +71,9 @@ const makeTarget=()=>({
     holdout_logistic:{evaluated:true,sample_count:100,model_brier_score:0.084}
   }
 });
-const hybridTcnReport={
+const hybridTcnReport={selected:true,input_sha256:'a'.repeat(64),
   target_results:{
-    '5':{validation:{evaluated:true,sample_count:100,model_brier_score:0.09},
+    '5':{selected:true,validation:{evaluated:true,sample_count:100,model_brier_score:0.09},
       validation_logistic:{model_brier_score:0.094},
       holdout:{evaluated:true,sample_count:100,model_brier_score:0.08},
       holdout_logistic:{model_brier_score:0.084},
