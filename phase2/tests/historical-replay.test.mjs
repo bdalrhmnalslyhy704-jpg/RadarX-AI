@@ -822,6 +822,46 @@ test('incomplete future candle horizon stays unavailable instead of fabricating 
   assert.equal(replay.steps[0].outcome.forward_return_pct_at_horizon,null);
 });
 
+test('hybrid replay records a barrier exit before the four-hour horizon despite a later data gap',()=>{
+  const base=candles(100);
+  const decision=base[80];
+  const entry=decision.close;
+  const firstFuture={
+    ...base[81],
+    open:entry,
+    high:entry*1.04,
+    low:entry*0.999,
+    close:entry*1.03,
+    closed:true
+  };
+  // The following observed candle is separated by a gap and appears well before
+  // the four-hour maturity. It must not invalidate a trade already exited above.
+  const afterGap={...base[98],closed:true};
+  const input=[...base.slice(0,81),firstFuture,afterGap];
+  const replay=runHistoricalReplay({
+    symbol:'EARLYEXITUSDT',
+    oneMinuteCandles:input,
+    startTime:decision.openTime,
+    endTime:decision.closeTime,
+    outcomeEndTime:afterGap.closeTime,
+    outcomeHorizonMs:4*60*60*1000,
+    tradeCoverageComplete:false,
+    allowCandleOnlyFallback:true,
+    captureHybridBenchmarkRows:true,
+    captureHybridBenchmarkEveryMs:MINUTE,
+    hybridBenchmarkCandles:base,
+    evaluate(){return {accepted:false,score:90,reason_codes:['EARLY_EXIT_TEST']};}
+  });
+  assert.equal(replay.steps.length,1);
+  assert.equal(replay.steps[0].outcome.horizon_observed,false,
+    'the full four-hour outcome is deliberately not observable in this fixture');
+  assert.equal(replay.hybrid_benchmark_rows.length,1,
+    'the first barrier exit must be captured without waiting for the four-hour horizon');
+  assert.equal(replay.hybrid_benchmark_rows[0].outcome_exit_reason,'TAKE_PROFIT');
+  assert.equal(replay.hybrid_benchmark_rows[0].resolved_at,firstFuture.closeTime);
+  assert.equal(replay.hybrid_benchmark_rows[0].gross_return_pct,3);
+});
+
 test('exact +5/+15 event timestamps remain unavailable when aggregate-trade coverage is incomplete',()=>{
   const rows=candles(250);
   const first={...rows[180],high:rows[180].open*1.06,close:rows[180].open*1.02};
