@@ -979,6 +979,27 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     };
   });
   const profile=buildCognitiveLearningProfile(rows);
+  console.log('[GBDT_NONLINEAR_FIXTURE_DIAGNOSTIC]',JSON.stringify({
+    tree:{trained:profile.boosted_tree_model.trained,selected:profile.boosted_tree_model.selected,
+      tree_count:profile.boosted_tree_model.tree_count,
+      candidate_count:profile.boosted_tree_model.candidate_attempt_count,
+      fit_count:profile.boosted_tree_model.candidate_tree_fit_count,
+      selection_count:profile.boosted_tree_model.selection_sample_count,
+      selection_support:profile.boosted_tree_model.selection_support_ready,
+      selected_configuration:profile.boosted_tree_model.selected_configuration,
+      fit_failure_reason:profile.boosted_tree_model.fit_failure_reason,
+      probability_calibration:profile.boosted_tree_model.probability_calibration,
+      selection:profile.boosted_tree_model.selection_logistic,
+      candidates:profile.boosted_tree_model.candidate_selection_metrics?.map(row=>({
+        configuration:row.configuration,selection_brier:row.selection_brier_score,
+        selection_beats_logistic:row.selection_beats_same_window_logistic,
+        selected:row.selected_for_refit
+      }))},
+    hybrid:{status:profile.hybrid_model.status,trained:profile.hybrid_model.trained,
+      weight_fit_samples:profile.hybrid_model.weight_fit_samples,
+      selection_samples:profile.hybrid_model.selection_samples,
+      weight:profile.hybrid_model.boosted_weight}
+  }));
   assert.equal(profile.boosted_tree_model.trained,true,
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
