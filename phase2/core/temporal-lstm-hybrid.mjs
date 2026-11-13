@@ -41,6 +41,7 @@ export const TCN_LSTM_PARAMETER_COUNT =
   TCN_LSTM_HIDDEN + 1;
 
 const EPSILON = 1e-12;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const LOGIT_LIMIT = 30;
 const SOFTMAX_LIMIT = 40;
 const BASELINE_FEATURES = TCN_LSTM_INPUT_CHANNELS * 2;
@@ -1015,7 +1016,12 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   requiredOuterImprovement = 0.003,
   maxTrainingSamples = 2048,
   bootstrapIterations = 400,
-  seed = 29
+  seed = 29,
+  candidates = [
+    { name:'LR_0015_L2_0005', learningRate:0.0015, l2:0.0005, epochs:6 },
+    { name:'LR_0025_L2_0015', learningRate:0.0025, l2:0.0015, epochs:6 },
+    { name:'LR_0035_L2_0035', learningRate:0.0035, l2:0.0035, epochs:6 }
+  ]
 } = {}) {
   if (!Array.isArray(inputRows) || inputRows.length < 120)
     return {
@@ -1086,7 +1092,7 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
 
   const selectionReport=selectTcnLstmHybridHyperparameters(train,selection,{
     requiredImprovement:requiredInnerImprovement,
-    seed,maxTrainingSamples
+    candidates,seed,maxTrainingSamples
   });
   const base={
     schema:TCN_LSTM_HYBRID_SCHEMA,
