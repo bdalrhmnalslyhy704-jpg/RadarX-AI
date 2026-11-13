@@ -477,9 +477,11 @@ function falseConfidence(rows,predictions) {
     false_high_confidence_rate_pct:negatives?Number((falseHigh/negatives*100).toFixed(4)):null};
 }
 function dateClusters(rows,predictions,baselinePredictions) {
+  // Fixed five-UTC-day clusters retain short-range serial dependence and
+  // cross-asset same-day dependence in the paired bootstrap.
   const map=new Map();
   for(let i=0;i<rows.length;i++){
-    const key=new Date(rows[i].at).toISOString().slice(0,10);
+    const key=Math.floor(rows[i].at/(5*DENSE_GENERALIZATION_DAY_MS));
     if(!map.has(key))map.set(key,{model:[],baseline:[]});
     const group=map.get(key);
     group.model.push((predictions[i]-rows[i].target)**2);
@@ -502,11 +504,12 @@ function bootstrapImprovement(rows,predictions,baselinePredictions,{iterations=4
   values.sort((a,b)=>a-b);
   const q=(p)=>values[Math.min(values.length-1,Math.floor((values.length-1)*p))];
   return {evaluated:true,clusters:clusters.length,iterations:values.length,
+    block_length_days:5,
     improvement_ci95_low:Number(q(0.025).toFixed(6)),
     improvement_ci95_high:Number(q(0.975).toFixed(6))};
 }
 
-export function evaluateDenseProjectionSplit(rows,fit,baselineFit,{bootstrapSeed=91}={}) {
+export function evaluateDenseProjectionSplit(rows,fit,baselineFit,{bootstrapSeed=91,bootstrapIterations=400}={}) {
   const predictions=rows.map(row=>predictDenseProjectionProbability(row.vector,fit));
   const baselinePredictions=rows.map(row=>{
     const x=transformVector(row.vector,baselineFit.scaler);
@@ -518,7 +521,7 @@ export function evaluateDenseProjectionSplit(rows,fit,baselineFit,{bootstrapSeed
   const modelRisk=asymmetricRiskBrier(rows,predictions);
   const baselineRisk=asymmetricRiskBrier(rows,baselinePredictions);
   const improvement=baselineBrier-modelBrier;
-  const ci=bootstrapImprovement(rows,predictions,baselinePredictions,{seed:bootstrapSeed});
+  const ci=bootstrapImprovement(rows,predictions,baselinePredictions,{seed:bootstrapSeed,iterations:bootstrapIterations});
   return {
     rows:rows.length,positives:rows.filter(row=>row.target===1).length,
     negatives:rows.filter(row=>row.target===0).length,
