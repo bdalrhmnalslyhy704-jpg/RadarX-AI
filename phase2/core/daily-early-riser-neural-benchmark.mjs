@@ -1,4 +1,4 @@
-import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA} from './cognitive-brain.mjs';
+import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
@@ -34,6 +34,15 @@ export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
 export const DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
+export const DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA = COGNITIVE_FEATURE_SCHEMA;
+export function effectiveDailyMlpFeatureSchema(value='DAILY_CONTEXT_35'){
+  const key=String(value??'DAILY_CONTEXT_35').trim().toUpperCase();
+  if(['CORE_FLOW_18',COGNITIVE_FEATURE_SCHEMA].includes(key))
+    return DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA;
+  if(['DAILY_CONTEXT_35',COGNITIVE_DAILY_FEATURE_SCHEMA].includes(key))
+    return DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA;
+  throw new Error('UNSUPPORTED_DAILY_MLP_FEATURE_SCHEMA');
+}
 
 const finite=value=>{
   if(value===null||value===undefined||value===''||typeof value==='boolean')return null;
@@ -203,7 +212,7 @@ function buildDailyCognitiveProfile(rows,options={}){
     factorizationIterations:Math.max(30,Math.min(180,Math.trunc(options.factorizationIterations||20))),
     factorizationLearningRate:Math.max(0.0005,Math.min(0.03,Number(options.factorizationLearningRate||0.008))),
     factorizationL2:Math.max(0.001,Math.min(0.5,Number(options.factorizationL2||0.06))),
-    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,maxResolvedSamples:0
+    featureSchema:options.dailyFeatureSchema||DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,maxResolvedSamples:0
   });
 }
 
@@ -230,6 +239,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const requiredLiquidityLane=String(options.requiredLiquidityLane||'').trim();
   if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
+  const modelFeatureSchema=effectiveDailyMlpFeatureSchema(
+    options.dailyFeatureSchema??DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  );
   const rows=[];
   const rejected={};
   const seen=new Set();
@@ -353,7 +365,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     };
   }
   const profile=buildDailyCognitiveProfile(rows,{
-    ...options,outcomeHorizonMs,modelTargetDefinition:targetContract,
+    ...options,dailyFeatureSchema:modelFeatureSchema,
+    outcomeHorizonMs,modelTargetDefinition:targetContract,
     modelTargetSemantics,allowedOutcomeSources:[selectedOutcomeSource]
   });
   const neural=profile.neural_network||{};
@@ -372,9 +385,11 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     target_definition:targetContract,
     required_liquidity_lane:requiredLiquidityLane||null,
     horizon_ms:outcomeHorizonMs,
-    feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    feature_schema:modelFeatureSchema,
     feature_names:profile.feature_names??[],
-    feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema. Daily MLP research also compares a frozen logistic anchor with a trust-region-tethered anchor (max coefficient delta 0.12, bias delta 0.15); the outer validation and untouched holdout still require 0.003 Brier improvement. TCN remains the separate 24x29 temporal model.',
+    feature_schema_note:modelFeatureSchema===DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA
+      ?'Controlled CORE_FLOW_18 ablation: the 18 original cross-asset flow features only. The TCN remains the separate 24x29 closed-candle temporal model.'
+      :'DAILY_CONTEXT_35 control: the original 18 cross-asset flow features plus 17 baseline-only daily/micro context features. The TCN remains the separate 24x29 closed-candle temporal model.',
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,

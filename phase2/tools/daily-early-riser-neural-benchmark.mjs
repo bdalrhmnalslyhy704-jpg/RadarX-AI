@@ -7,6 +7,8 @@ import readline from 'node:readline';
 import {
   DAILY_EARLY_RISER_TARGETS_PCT,
   DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+  effectiveDailyMlpFeatureSchema,
   effectiveDailyMlpOutputInitializationScale,
   benchmarkDailyEarlyRiserTarget,
   benchmarkDailyEarlyRiserRegimeLocalMlp
@@ -182,6 +184,9 @@ async function main(){
   const neuralOutputInitializationScale=effectiveDailyMlpOutputInitializationScale(
     args['neural-output-initialization-scale']??DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE
   );
+  const dailyFeatureSchema=effectiveDailyMlpFeatureSchema(args['daily-feature-schema']??'DAILY_CONTEXT_35');
+  const dailyFeatureSchemaKey=dailyFeatureSchema===DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+    ?'DAILY_CONTEXT_35':'CORE_FLOW_18';
   const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
   const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
   const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
@@ -226,6 +231,8 @@ async function main(){
     neural_training_history_fraction:neuralTrainingHistoryFraction,
     neural_iterations:neuralIterations,
     neural_output_initialization_scale:neuralOutputInitializationScale,
+    daily_feature_schema_key:dailyFeatureSchemaKey,
+    daily_feature_schema:dailyFeatureSchema,
     enable_factorization_machine:enableFactorizationMachine,
     factorization_rank:factorizationRank,
     factorization_iterations:factorizationIterations,
@@ -330,6 +337,7 @@ async function main(){
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
         neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
+        dailyFeatureSchema,
         enableFactorizationMachine,factorizationRank,factorizationIterations,
         factorizationLearningRate,factorizationL2,
         requiredLiquidityLane
@@ -383,6 +391,7 @@ async function main(){
         label_mode:labelMode,
         horizon_hours:horizonHours,
         feature_schema:result.feature_schema,
+        feature_schema_key:dailyFeatureSchemaKey,
         feature_count:result.feature_names?.length??null,
         samples:result.samples?.accepted??regimeLocalMlp?.sample_count??0,
         training:result.chronology?.training_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.training_samples||0),0),
@@ -391,6 +400,7 @@ async function main(){
         neural:{
           status:neural.status??null,trained:neural.trained===true,
           output_initialization_scale:neural.output_initialization_scale??null,
+          daily_feature_schema_key:dailyFeatureSchemaKey,
           training_strategy:neural.training_strategy??null,
           factorization_member_enabled:neural.factorization_member_enabled===true,
           factorization_member_index:neural.factorization_member_index??-1,

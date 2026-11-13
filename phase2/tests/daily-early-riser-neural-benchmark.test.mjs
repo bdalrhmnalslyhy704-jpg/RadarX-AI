@@ -14,6 +14,9 @@ import {
   effectiveDailyMlpIterations,
   DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
   effectiveDailyMlpOutputInitializationScale,
+  DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA,
+  DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+  effectiveDailyMlpFeatureSchema,
   DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
   DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE,
   DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE,
@@ -849,4 +852,28 @@ test('daily neural benchmark CLI forwards and records output-head initialization
   assert.ok(source.includes('neural_output_initialization_scale:neuralOutputInitializationScale'));
   assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale'));
   assert.ok(source.includes('output_initialization_scale:neural.output_initialization_scale'));
+});
+
+test('daily MLP feature-schema selector is restricted to explicit 18- and 35-channel contracts',()=>{
+  assert.equal(effectiveDailyMlpFeatureSchema('CORE_FLOW_18'),DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA);
+  assert.equal(effectiveDailyMlpFeatureSchema('DAILY_CONTEXT_35'),DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.equal(effectiveDailyMlpFeatureSchema(),DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.throws(()=>effectiveDailyMlpFeatureSchema('ARBITRARY_FEATURES'),
+    /UNSUPPORTED_DAILY_MLP_FEATURE_SCHEMA/);
+});
+
+test('daily target benchmark forwards the requested 18-feature schema without changing labels or horizon',()=>{
+  const samples=Array.from({length:6},(_,index)=>sampleWith({
+    at:1_800_000_000_000+index*15*60*1000,
+    targetPct:5,outcome:index%2===0?'UP':'DOWN'
+  }));
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    labelMode:'first_passage',horizonHours:24,skipTemporal:true,
+    dailyFeatureSchema:'CORE_FLOW_18'
+  });
+  assert.equal(result.feature_schema,DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA);
+  assert.equal(result.feature_names.length,18);
+  assert.equal(result.neural_network.input_neurons,18);
+  assert.equal(result.target_definition,'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1');
+  assert.equal(result.horizon_hours,24);
 });
