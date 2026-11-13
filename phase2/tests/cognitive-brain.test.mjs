@@ -541,8 +541,14 @@ test('MLP numerical training audit drives an exactly balanced 32-row batch to ne
   const report=auditNeuralOneBatchOverfit(rows,{iterations:48,seed:17});
   console.log('[COGNITIVE_MLP_32_ROW_OVERFIT]',JSON.stringify(report));
   assert.equal(report.sample_count,32);
-  assert.equal(report.epochs_completed,48,
+  assert.ok(report.epochs_completed>=30&&report.epochs_completed<=48,
     'the diagnostic must prove one-batch fit within a few dozen epochs');
+  assert.equal(report.requested_epochs,48);
+  assert.ok(report.early_stopping?.enabled);
+  assert.equal(report.early_stopping?.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping?.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping?.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch>=1&&report.best_epoch<=report.epochs_completed);
   assert.equal(report.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
   assert.equal(report.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
   assert.equal(report.gradient_clip_norm,1);

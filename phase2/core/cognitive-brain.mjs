@@ -682,14 +682,19 @@ function fitNeuralNetworkModel(training, {
     };
   };
   const maximumGradientNorm=1.0;
+  const earlyStoppingPatience=Math.min(20,Math.max(8,Math.ceil(steps*0.25)));
+  const minimumEpochs=Math.min(30,steps);
+  const checkpointMinDelta=1e-8;
   const epochHistory=[];
+  let bestTrainingObjective=Number.POSITIVE_INFINITY,bestEpoch=0;
+  let epochsWithoutImprovement=0,bestCheckpoint=null,stoppedEarly=false;
 
   for(let epoch=1;epoch<=steps;epoch++){
     const gradInput=zerosLike(inputWeights),gradHidden=zerosLike(hiddenWeights);
     const gradBias1=Array(units1).fill(0),gradBias2=Array(units2).fill(0);
     const gradOutput=Array(units2).fill(0);
     const gradSkip=anchorAdaptationEnabled?Array(inputSize).fill(0):null;
-    let gradOutputBias=0,weightedBrier=0;
+    let gradOutputBias=0,weightedBrier=0,weightedObjectiveLoss=0;
 
     for(const row of rows){
       const hidden1=new Array(units1);
@@ -712,6 +717,15 @@ function fitNeuralNetworkModel(training, {
       const probability=logistic(output);
       if(!Number.isFinite(probability))throw new TypeError('NEURAL_FORWARD_NON_FINITE');
       weightedBrier+=(probability-row.target)**2*row.sample_weight;
+      const safeProbability=clamp(probability,1e-12,1-1e-12);
+      const brierLoss=(safeProbability-row.target)**2;
+      const logLoss=-(row.target*Math.log(safeProbability)+
+        (1-row.target)*Math.log(1-safeProbability));
+      const objectiveLoss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLoss
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*brierLoss+0.5*logLoss:brierLoss;
+      weightedObjectiveLoss+=objectiveLoss*row.sample_weight;
       // Optimize the same unweighted Brier proper-scoring objective used by
       // chronological validation, model selection, and the untouched holdout.
       const brierGradient=2*(probability-row.target)*probability*(1-probability);
@@ -745,6 +759,23 @@ function fitNeuralNetworkModel(training, {
     }
 
     const n=Math.max(1,totalSampleWeight);
+    const trainingObjectiveScore=weightedObjectiveLoss/n;
+    if(!Number.isFinite(trainingObjectiveScore))
+      throw new TypeError('NEURAL_TRAINING_OBJECTIVE_NON_FINITE');
+    if(trainingObjectiveScore<bestTrainingObjective-checkpointMinDelta){
+      bestTrainingObjective=trainingObjectiveScore;
+      bestEpoch=epoch;
+      epochsWithoutImprovement=0;
+      bestCheckpoint={
+        inputWeights:inputWeights.map(row=>[...row]),
+        hiddenWeights:hiddenWeights.map(row=>[...row]),
+        hiddenBias1:[...hiddenBias1],hiddenBias2:[...hiddenBias2],
+        outputWeights:[...outputWeights],skipWeights:[...skipWeights],
+        outputBias
+      };
+    }else{
+      epochsWithoutImprovement++;
+    }
     const gradientLeaves=[
       ...gradInput.flat(),...gradHidden.flat(),...gradBias1,...gradBias2,...gradOutput,
       ...(gradSkip||[]),gradOutputBias
@@ -810,11 +841,30 @@ function fitNeuralNetworkModel(training, {
       pre_update_weighted_brier:Number((weightedBrier/n).toFixed(8)),
       gradient_l2_norm:Number(meanGradientNorm.toFixed(8)),
       clip_scale:Number(clipScale.toFixed(8)),
-      learning_rate:Number(epochRate.toFixed(8))
+      learning_rate:Number(epochRate.toFixed(8)),
+      pre_update_training_objective:Number(trainingObjectiveScore.toFixed(8)),
+      best_training_objective:Number(bestTrainingObjective.toFixed(8))
     });
+    // The stop signal is derived exclusively from the training block. It does
+    // not read validation, calibration-check or untouched holdout outcomes.
+    if(epoch>=minimumEpochs&&epochsWithoutImprovement>=earlyStoppingPatience){
+      stoppedEarly=true;
+      break;
+    }
     // In the default mode, skipWeights and outputBias remain exactly frozen.
     // The opt-in trust-region experiment constrains all linear-anchor movement.
   }
+
+  if(!bestCheckpoint)throw new Error('NEURAL_BEST_CHECKPOINT_MISSING');
+  for(let index=0;index<inputWeights.length;index++)
+    inputWeights[index]=[...bestCheckpoint.inputWeights[index]];
+  for(let index=0;index<hiddenWeights.length;index++)
+    hiddenWeights[index]=[...bestCheckpoint.hiddenWeights[index]];
+  hiddenBias1.splice(0,hiddenBias1.length,...bestCheckpoint.hiddenBias1);
+  hiddenBias2.splice(0,hiddenBias2.length,...bestCheckpoint.hiddenBias2);
+  outputWeights.splice(0,outputWeights.length,...bestCheckpoint.outputWeights);
+  skipWeights.splice(0,skipWeights.length,...bestCheckpoint.skipWeights);
+  outputBias=bestCheckpoint.outputBias;
 
   const maxAnchorSkipDelta=skipWeights.reduce((maximum,value,index)=>
     Math.max(maximum,Math.abs(value-initialSkipWeights[index])),0);
@@ -832,12 +882,24 @@ function fitNeuralNetworkModel(training, {
     positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
+    requested_iterations:steps,
+    epochs_completed:epochHistory.length,
+    best_epoch:bestEpoch,
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
     gradient_clip_norm:maximumGradientNorm,
     training_diagnostics:{
       schema:'COGNITIVE_MLP_NUMERICAL_TRAINING_AUDIT_V1',
       epochs_completed:epochHistory.length,
+      requested_epochs:steps,
+      best_epoch:bestEpoch,
+      best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+      early_stopping:{
+        enabled:true,monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY',
+        patience:earlyStoppingPatience,minimum_epochs:minimumEpochs,
+        stopped_early:stoppedEarly,restored_best_checkpoint:true,
+        validation_or_holdout_used:false
+      },
       all_gradients_finite:true,all_parameters_finite:true,
       initial_pre_update_brier:epochHistory[0]?.pre_update_weighted_brier??null,
       final_pre_update_brier:epochHistory.at(-1)?.pre_update_weighted_brier??null,
@@ -908,7 +970,12 @@ export function auditNeuralOneBatchOverfit(trainingRows,{
     schema:'COGNITIVE_MLP_32_SAMPLE_OVERFIT_AUDIT_V1',
     diagnostic_only:true,production_training_changed:false,
     sample_count:32,feature_count:fit.input_size,feature_schema:fit.feature_schema,
-    architecture:fit.architecture,epochs_completed:fit.iterations,
+    architecture:fit.architecture,
+    epochs_completed:diagnostics.epochs_completed??fit.iterations,
+    requested_epochs:diagnostics.requested_epochs??fit.iterations,
+    best_epoch:diagnostics.best_epoch??null,
+    best_training_objective:diagnostics.best_training_objective??null,
+    early_stopping:diagnostics.early_stopping??null,
     finite_predictions:finitePredictions,
     all_gradients_finite:diagnostics.all_gradients_finite===true,
     all_parameters_finite:diagnostics.all_parameters_finite===true,

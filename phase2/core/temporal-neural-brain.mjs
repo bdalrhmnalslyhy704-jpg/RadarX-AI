@@ -1122,6 +1122,13 @@ function isFiniteTemporalTree(value){
     return Object.values(value).every(isFiniteTemporalTree);
   return typeof value==='number'&&Number.isFinite(value);
 }
+function cloneTemporalTree(value){
+  if(Array.isArray(value))return value.map(cloneTemporalTree);
+  if(value&&typeof value==='object')
+    return Object.fromEntries(Object.entries(value).map(([key,child])=>
+      [key,cloneTemporalTree(child)]));
+  return value;
+}
 
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
@@ -1172,6 +1179,11 @@ function fitMember(rows, seed, {
   const effectiveEpochs=Math.max(1,Math.min(180,Math.trunc(Number(epochs)||10)));
   const baseLearningRate=Math.max(0.0001,Math.min(0.04,Number(learningRate)||0.006));
   const gradientClipNorm=1.0;
+  const earlyStoppingPatience=Math.min(20,Math.max(8,Math.ceil(effectiveEpochs*0.25)));
+  const minimumEpochs=Math.min(30,effectiveEpochs);
+  const checkpointMinDelta=1e-8;
+  let bestTrainingObjective=Number.POSITIVE_INFINITY,bestEpoch=0;
+  let epochsWithoutImprovement=0,bestCheckpoint=null,stoppedEarly=false;
   for (let epoch = 1; epoch <= effectiveEpochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
@@ -1196,6 +1208,17 @@ function fitMember(rows, seed, {
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
     if(!isFiniteTemporalTree(averaged))
       throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NON_FINITE');
+    const trainingObjectiveScore=weightedObjectiveLoss/Math.max(1,totalSampleWeight);
+    if(!Number.isFinite(trainingObjectiveScore))
+      throw new TypeError('TEMPORAL_TRAINING_OBJECTIVE_NON_FINITE');
+    if(trainingObjectiveScore<bestTrainingObjective-checkpointMinDelta){
+      bestTrainingObjective=trainingObjectiveScore;
+      bestEpoch=epoch;
+      epochsWithoutImprovement=0;
+      bestCheckpoint=cloneTemporalTree(trainableParameters());
+    }else{
+      epochsWithoutImprovement++;
+    }
     const gradientStats=summarizeNumericTree(averaged);
     const gradientL2Norm=Math.sqrt(gradientStats.sumSquares);
     if(!Number.isFinite(gradientL2Norm))
@@ -1220,8 +1243,8 @@ function fitMember(rows, seed, {
       epoch,
       // Loss is measured on training rows immediately before this epoch's update.
       // It is diagnostic only and is never used for selection or early stopping.
-      mean_weighted_training_objective_loss:Number((weightedObjectiveLoss/
-        Math.max(1,totalSampleWeight)).toFixed(8)),
+      mean_weighted_training_objective_loss:Number(trainingObjectiveScore.toFixed(8)),
+      best_training_objective:Number(bestTrainingObjective.toFixed(8)),
       mean_positive_training_objective_loss:positiveSamples
         ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
       mean_negative_training_objective_loss:negativeSamples
@@ -1232,12 +1255,29 @@ function fitMember(rows, seed, {
       maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
       residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
     });
+    // Early stopping is training-only; no validation/calibration/holdout rows
+    // participate in the monitor or checkpoint decision.
+    if(epoch>=minimumEpochs&&epochsWithoutImprovement>=earlyStoppingPatience){
+      stoppedEarly=true;
+      break;
+    }
   }
+  if(!bestCheckpoint)throw new Error('TEMPORAL_BEST_CHECKPOINT_MISSING');
+  Object.assign(model,cloneTemporalTree(bestCheckpoint));
   model.training_diagnostics={
     schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
     diagnostic_only:true,
     loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
     epochs_completed:epochHistory.length,
+    requested_epochs:effectiveEpochs,
+    best_epoch:bestEpoch,
+    best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+    early_stopping:{
+      enabled:true,monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY',
+      patience:earlyStoppingPatience,minimum_epochs:minimumEpochs,
+      stopped_early:stoppedEarly,restored_best_checkpoint:true,
+      validation_or_holdout_used:false
+    },
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
     gradient_clip_norm:gradientClipNorm,
@@ -1301,6 +1341,10 @@ export function auditTemporalOneBatchOverfit(trainingRows,{
     sample_count:32,positive_samples:positiveSamples,negative_samples:negativeSamples,
     architecture:model.temporal_pooling,
     epochs_completed:model.training_diagnostics?.epochs_completed??0,
+    requested_epochs:model.training_diagnostics?.requested_epochs??null,
+    best_epoch:model.training_diagnostics?.best_epoch??null,
+    best_training_objective:model.training_diagnostics?.best_training_objective??null,
+    early_stopping:model.training_diagnostics?.early_stopping??null,
     optimizer:model.training_diagnostics?.optimizer??null,
     scheduler:model.training_diagnostics?.scheduler??null,
     gradient_clip_norm:model.training_diagnostics?.gradient_clip_norm??null,
@@ -1835,6 +1879,10 @@ function fitEnsemble(rows, options = {}) {
   const members=SEEDS.map((seed,index)=>fitMember(preparedRows,seed,{
     ...options,...memberProfiles[index],baseRate
   }));
+  const completedMemberProfiles=memberProfiles.map((profile,index)=>({
+    ...profile,requested_epochs:profile.epochs,
+    epochs:members[index].training_diagnostics?.epochs_completed??profile.epochs
+  }));
   return {
     members,seeds:[...SEEDS],
     architecture,
@@ -1849,7 +1897,7 @@ function fitEnsemble(rows, options = {}) {
           ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
           :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
-    member_training_profiles:memberProfiles,
+    member_training_profiles:completedMemberProfiles,
     attention_position_bias_l2_multiplier:attentionPositionBiasL2Multiplier,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,
