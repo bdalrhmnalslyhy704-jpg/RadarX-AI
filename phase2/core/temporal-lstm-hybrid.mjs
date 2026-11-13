@@ -1179,16 +1179,18 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
     maxTrainingSamples,bootstrapIterations,seed
   });
   const selectedFit=evaluation.selection?.selected_fit??null;
-  const inferenceLatency=selectedFit
+  const modelCalibrator=evaluation.calibration?.model??null;
+  const inferenceLatency=selectedFit&&modelCalibrator?.fitted===true
     ?{
       evaluated:true,
       ...benchmarkTcnLstmHybridInference(rows[0].sequence,selectedFit,{
-        warmup:20,iterations:200
+        warmup:20,iterations:200,modelCalibrator
       })
     }
     :{
       evaluated:false,
-      reason:'NO_SELECTED_FIT_AFTER_INNER_SELECTION_GATE',
+      reason:!selectedFit?'NO_SELECTED_FIT_AFTER_INNER_SELECTION_GATE':
+        'CALIBRATION_NOT_FITTED',
       production_latency_claim:false
     };
   return {
@@ -1317,11 +1319,22 @@ function fitPlattCalibration(rows, predictor, {
 
 function applyPlattCalibration(probability, calibrator) {
   if (!calibrator?.fitted) return null;
-  if (!finite(probability) || probability < 0 || probability > 1)
+  if (!finite(probability) || probability < 0 || probability > 1 ||
+      !finite(calibrator.slope) || !finite(calibrator.intercept))
     throw new TypeError('TCN_LSTM_CALIBRATED_PROBABILITY_INVALID');
   const bounded = clamp(probability, 1e-8, 1 - 1e-8);
   const logit = Math.log(bounded / (1 - bounded));
   return sigmoid(clamp(calibrator.slope * logit + calibrator.intercept, -LOGIT_LIMIT, LOGIT_LIMIT));
+}
+
+export function predictTcnLstmHybridCalibratedProbability(sequence, profile, calibrator) {
+  if (!calibrator?.fitted)
+    throw new TypeError('TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED');
+  const raw = predictTcnLstmHybridProbability(sequence, profile);
+  const calibrated = applyPlattCalibration(raw, calibrator);
+  if (!finite(calibrated) || calibrated < 0 || calibrated > 1)
+    throw new TypeError('TCN_LSTM_CALIBRATED_INFERENCE_NON_FINITE');
+  return calibrated;
 }
 
 function probabilityMetrics(rows, predictions) {
@@ -1529,17 +1542,21 @@ export function evaluateTcnLstmHybridGeneralization({
 }
 
 export function benchmarkTcnLstmHybridInference(sequence, profile, {
-  warmup = 10, iterations = 100
+  warmup = 10, iterations = 100, modelCalibrator = null
 } = {}) {
   if (!Number.isSafeInteger(warmup) || warmup < 0 ||
       !Number.isSafeInteger(iterations) || iterations < 10 || iterations > 10000)
     throw new TypeError('TCN_LSTM_INFERENCE_BENCHMARK_CONFIGURATION_INVALID');
-  for (let index = 0; index < warmup; index++)
-    predictTcnLstmHybridProbability(sequence, profile);
+  if (modelCalibrator !== null && !modelCalibrator?.fitted)
+    throw new TypeError('TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED');
+  const predict = modelCalibrator
+    ?()=>predictTcnLstmHybridCalibratedProbability(sequence,profile,modelCalibrator)
+    :()=>predictTcnLstmHybridProbability(sequence,profile);
+  for (let index = 0; index < warmup; index++) predict();
   const durations = [];
   for (let index = 0; index < iterations; index++) {
     const start = performance.now();
-    predictTcnLstmHybridProbability(sequence, profile);
+    predict();
     durations.push(performance.now() - start);
   }
   durations.sort((a, b) => a - b);
@@ -1551,6 +1568,10 @@ export function benchmarkTcnLstmHybridInference(sequence, profile, {
     p50_ms: Number(quantile(0.50).toFixed(6)),
     p95_ms: Number(quantile(0.95).toFixed(6)),
     max_ms: Number(durations.at(-1).toFixed(6)),
+    calibrated:modelCalibrator?.fitted===true,
+    measured_path:modelCalibrator?.fitted===true
+      ?'TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR_PLUS_PLATT_CALIBRATION'
+      :'RAW_TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR',
     measurement: 'LOCAL_SINGLE_PROCESS_SYNCHRONOUS_WALL_CLOCK',
     production_latency_claim: false
   };
