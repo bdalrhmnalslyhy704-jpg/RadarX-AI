@@ -640,16 +640,35 @@ export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options
       continue;
     }
     const sequence=prepared.row.temporal_sequence;
-    if(!validTemporalSequence(sequence)){
-      rejectionCounts.BTC_REGIME_SEQUENCE_MISSING=(rejectionCounts.BTC_REGIME_SEQUENCE_MISSING||0)+1;
+    const sequenceBtc24h=validTemporalSequence(sequence)
+      ?finite(sequence[TEMPORAL_SEQUENCE_STEPS-1]?.[19]):null;
+    const assetDailyReturn=finite(sample.daily_change_pct);
+    const relativeStrength=finite(sample.relative_strength_vs_btc_24h_pct);
+    const archivedBtc24h=assetDailyReturn!==null&&relativeStrength!==null
+      ?assetDailyReturn-relativeStrength:null;
+    // The census stores asset 24h return and (asset - BTC) relative return,
+    // both measured over the same 96 closed 15m candles. Their difference
+    // reconstructs BTC 24h return without requiring the optional 24x29 tensor.
+    if(sequenceBtc24h!==null&&archivedBtc24h!==null&&
+      Math.abs(archivedBtc24h)>0.00002&&
+      (sequenceBtc24h>=0)!==(archivedBtc24h>=0)){
+      rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT=
+        (rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT||0)+1;
       continue;
     }
-    const btc24h=finite(sequence[TEMPORAL_SEQUENCE_STEPS-1]?.[19]);
+    const btc24h=sequenceBtc24h??(
+      archivedBtc24h!==null&&Math.abs(archivedBtc24h)>0.00002?archivedBtc24h:null
+    );
     if(btc24h===null){
-      rejectionCounts.BTC_REGIME_FEATURE_INVALID=(rejectionCounts.BTC_REGIME_FEATURE_INVALID||0)+1;
+      const reason=sequenceBtc24h===null&&archivedBtc24h===null
+        ?'BTC_REGIME_ALL_SOURCES_MISSING':'BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS';
+      rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
       continue;
     }
     const regime=btc24h>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
+    prepared.row.btc_regime_source=sequenceBtc24h!==null
+      ?'TEMPORAL_SEQUENCE_CHANNEL_19'
+      :'ARCHIVED_96_CLOSED_15M_ASSET_MINUS_RELATIVE_RETURN';
     groups[regime].push(prepared.row);
     assigned++;
   }
@@ -719,8 +738,9 @@ export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options
   const selected=trained&&regimes.every(item=>item.selection_passed);
   const validationPassed=selected&&regimes.every(item=>item.validation_passed);
   const holdoutPassed=validationPassed&&regimes.every(item=>item.holdout_passed);
-  const coverageComplete=Number(rejectionCounts.BTC_REGIME_SEQUENCE_MISSING||0)===0&&
-    Number(rejectionCounts.BTC_REGIME_FEATURE_INVALID||0)===0;
+  const coverageComplete=Number(rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT||0)===0&&
+    Number(rejectionCounts.BTC_REGIME_ALL_SOURCES_MISSING||0)===0&&
+    Number(rejectionCounts.BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS||0)===0;
   return {
     schema:'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1',
     status:!coverageComplete?'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE':
