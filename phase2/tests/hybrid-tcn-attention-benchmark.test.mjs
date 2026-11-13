@@ -159,6 +159,30 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   assert.deepEqual(beforeFuture.sequence, built.sequence);
 });
 
+test('Hybrid TCN causal tensor rejects cadence gaps and records exact 24-step close times',()=>{
+  const candles=makeCandles();
+  const asOf=candles.at(-1).closeTime;
+  const good=buildHybridSequence({candles,benchmarkCandles:candles,asOf});
+  assert.equal(good.ready,true);
+  assert.equal(good.sequence_timestamps.length,24);
+  assert.equal(good.sequence_timestamps.at(-1),asOf);
+  assert.equal(good.interval_ms,FIFTEEN_MINUTES);
+  const gapCandles=candles.filter((row,index)=>index!==30);
+  const gap=buildHybridSequence({candles:gapCandles,benchmarkCandles:candles,asOf});
+  assert.equal(gap.ready,false);
+  assert.equal(gap.reason,'TEMPORAL_SEQUENCE_CADENCE_GAP_OR_REORDER');
+  const stale=buildHybridSequence({candles:candles.slice(0,-1),benchmarkCandles:candles,asOf});
+  assert.equal(stale.ready,false);
+  assert.equal(stale.reason,'TEMPORAL_SEQUENCE_LAST_CLOSE_DIFFERS_FROM_DECISION');
+});
+
+test('Hybrid TCN objective refuses NaN probabilities instead of allowing a NaN optimizer loss',()=>{
+  assert.throws(()=>profitDrawdownObjective([Number.NaN],makeRows(1)),
+    /HYBRID_OBJECTIVE_PROBABILITY_NON_FINITE_OR_OUT_OF_RANGE/);
+  assert.throws(()=>profitDrawdownObjective([1.2],makeRows(1)),
+    /HYBRID_OBJECTIVE_PROBABILITY_NON_FINITE_OR_OUT_OF_RANGE/);
+});
+
 test('KAMA efficiency ratio distinguishes directional movement from a choppy path', () => {
   const trend = Array.from({ length: 11 }, (_, index) => ({
     closeTime: Date.UTC(2026, 0, 1) + index * FIFTEEN_MINUTES,
