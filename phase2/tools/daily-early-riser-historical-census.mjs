@@ -360,8 +360,17 @@ async function main(){
   const months=listBinanceSpotArchiveMonths(start,end);
   const concurrency=Math.max(1,Math.min(8,Math.trunc(Number(args.concurrency)||4)));
   const maxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
-  const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
-  const maxSamples=Math.max(1,Math.min(2000,Math.trunc(Number(args['max-samples-per-symbol'])||500)));
+  const liquidityLane=String(args['liquidity-lane']||'CORE').toUpperCase();
+  if(!['CORE','MICRO'].includes(liquidityLane))throw new Error('INVALID_LIQUIDITY_LANE');
+  const defaultMinVolume=liquidityLane==='MICRO'?100000:DEFAULT_MIN_VOLUME;
+  const minVolume=Math.max(0,finite(args['min-quote-volume'])??defaultMinVolume);
+  const extendedEventLabels=String(args['extended-event-labels']||'false')==='true';
+  const sampleStrideBars=Math.max(1,Math.trunc(Number(args['sample-stride-bars'])||
+    (extendedEventLabels?288:DAILY_EARLY_RISER_HORIZON_BARS)));
+  if(extendedEventLabels&&sampleStrideBars!==288)
+    throw new Error('EXTENDED_EVENT_LABELS_REQUIRE_288_BAR_NON_OVERLAPPING_ANCHORS');
+  if(liquidityLane==='MICRO'&&(minVolume<100000||minVolume>=750000))
+    throw new Error('MICRO_LANE_REQUIRES_100K_TO_UNDER_750K_VOLUME_FLOOR');
   const output=resolve(args.output||OUTPUT_PATH),samplesOutput=resolve(args['samples-output']||SAMPLES_PATH);
   const temporalSamplesOutput=resolve(args['temporal-samples-output']||
     process.env.RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES||
@@ -387,8 +396,15 @@ async function main(){
     adverse_pct:DEFAULT_ADVERSE_PCT,
     horizon_bars:DAILY_EARLY_RISER_HORIZON_BARS,
     horizon_hours:24,
-    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
+    anchor_cadence:extendedEventLabels?
+      'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_72H':
+      'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
     volume_floor_usdt:minVolume,
+    liquidity_lane:liquidityLane,
+    micro_volume_ceiling_usdt:liquidityLane==='MICRO'?750000:null,
+    extended_event_labels:extendedEventLabels,
+    sample_stride_bars:sampleStrideBars,
+    eventual_event_horizons_hours:extendedEventLabels?[24,48,72]:[],
     closed_candles_only:true,
     baseline_features_have_future_data:false,
     simultaneous_intrabar_target_stop:'AMBIGUOUS_NOT_A_WIN',
@@ -472,13 +488,17 @@ async function main(){
         const census=buildDailyEarlyRiserHistoricalSamples({
           symbol,klines:btcKlines,
           fastKlines:{data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+          sampleStrideBars,extendedEventLabels,liquidityLane
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
         const horizonViolations=census.samples.filter(row=>
           Object.values(row.targets||{}).some(label=>
-            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)||
+          (extendedEventLabels&&Object.values(row.eventual_targets||{})
+            .flatMap(targets=>Object.values(targets||{})).some(label=>
+              Number(label?.resolved_at)-Number(row.at)!==Number(label?.horizon_ms)))).length;
         result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           coverage_15m:{first_available_month:btc15.first_available_month,
@@ -516,13 +536,17 @@ async function main(){
             const census=buildDailyEarlyRiserHistoricalSamples({
               symbol,klines:{data:asset15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               fastKlines:{data:asset5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+              sampleStrideBars,extendedEventLabels,liquidityLane
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
             const horizonViolations=census.samples.filter(row=>
               Object.values(row.targets||{}).some(label=>
-                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)||
+              (extendedEventLabels&&Object.values(row.eventual_targets||{})
+                .flatMap(targets=>Object.values(targets||{})).some(label=>
+                  Number(label?.resolved_at)-Number(row.at)!==Number(label?.horizon_ms)))).length;
             result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,

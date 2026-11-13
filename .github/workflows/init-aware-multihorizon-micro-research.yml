@@ -1,0 +1,164 @@
+name: Build 224 INIT-aware Micro Multi-Horizon Neural Research
+
+on:
+  push:
+    branches:
+      - research/init-aware-multihorizon-micro-20261113
+    paths:
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/init-aware-multihorizon-micro-research.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/init-aware-multihorizon-micro-research.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-init-aware-micro-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify eventual labels, Micro isolation and model adapters
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax and focused scientific-contract tests
+        run: |
+          node --check phase2/core/daily-early-riser-census.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-historical-census.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=60000 phase2/tests/temporal-neural-brain.test.mjs
+
+  full-market-micro-census-and-benchmark:
+    name: Build verified Micro event census and compare challengers
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      NODE_OPTIONS: --max-old-space-size=320
+      RADARX_DAILY_EARLY_RISER_REPORT: artifacts/init-aware-micro-census.json
+      RADARX_DAILY_EARLY_RISER_SAMPLES: artifacts/init-aware-micro-samples.jsonl
+      RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES: artifacts/init-aware-micro-temporal.jsonl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build one-year checksummed Binance Spot Micro census with 72h labels
+        run: |
+          node phase2/tools/daily-early-riser-historical-census.mjs \
+            --start '2025-11-01' \
+            --end-exclusive '2026-11-01' \
+            --max-symbols '0' \
+            --min-quote-volume '100000' \
+            --liquidity-lane 'MICRO' \
+            --extended-event-labels 'true' \
+            --sample-stride-bars '288' \
+            --max-samples-per-symbol '500' \
+            --concurrency '4'
+      - name: Stop on incomplete census, overlapping windows or bad horizon labels
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report=JSON.parse(fs.readFileSync('artifacts/init-aware-micro-census.json','utf8'));
+          const q=report.data_quality||{};
+          const m=report.methodology||{};
+          const checks={
+            status:report.status,
+            liquidity_lane:m.liquidity_lane,
+            extended_event_labels:m.extended_event_labels,
+            stride:m.sample_stride_bars,
+            all_sample_audits_ready:q.all_sample_audits_ready,
+            no_overlapping_labels:q.no_overlapping_daily_labels,
+            feature_cutoff_violations:q.feature_cutoff_violations,
+            horizon_violations:q.horizon_violations,
+            failed_symbols:q.symbols_failed,
+            incomplete_symbols:q.symbols_incomplete_archive,
+            samples:q.total_daily_samples
+          };
+          console.log(JSON.stringify(checks,null,2));
+          if(report.status!=='AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'||
+             m.liquidity_lane!=='MICRO'||m.extended_event_labels!==true||
+             Number(m.sample_stride_bars)!==288||
+             q.all_sample_audits_ready!==true||q.no_overlapping_daily_labels!==true||
+             Number(q.feature_cutoff_violations)!==0||Number(q.horizon_violations)!==0||
+             Number(q.symbols_failed)!==0||Number(q.symbols_incomplete_archive)!==0)
+            throw new Error('INIT_AWARE_MICRO_CENSUS_QUALITY_GATE_FAILED');
+          if(Number(q.total_daily_samples)<1000)
+            throw new Error('INIT_AWARE_MICRO_SAMPLE_SUPPORT_TOO_SMALL');
+          NODE
+      - name: Fit MLP, GBDT, hybrid and TCN on eventual 72h upside targets
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/init-aware-micro-samples.jsonl \
+            --temporal-input artifacts/init-aware-micro-temporal.jsonl \
+            --census-report artifacts/init-aware-micro-census.json \
+            --output artifacts/init-aware-micro-72h-neural-benchmark.json \
+            --eventual-horizon-hours '72'
+      - name: Publish benchmark and risk-label summary
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const files=[
+            'artifacts/init-aware-micro-census.json',
+            'artifacts/init-aware-micro-72h-neural-benchmark.json'
+          ];
+          const summary={};
+          for(const file of files){
+            if(fs.existsSync(file)){
+              const value=JSON.parse(fs.readFileSync(file,'utf8'));
+              summary[file]=file.includes('census')
+                ?{status:value.status,universe:value.universe,data_quality:value.data_quality,
+                  methodology:value.methodology,targets:value.targets,
+                  sample_file:value.sample_file,temporal_sample_file:value.temporal_sample_file}
+                :{status:value.status,research_mode:value.research_mode,
+                  eventual_horizon_hours:value.eventual_horizon_hours,
+                  targets:value.target_results,production_touched:value.production_touched,
+                  deployed:value.deployed,merged:value.merged,
+                  predictive_superiority_verified:value.predictive_superiority_verified,
+                  profitability_verified:value.profitability_verified};
+            }
+          }
+          fs.mkdirSync('artifacts',{recursive:true});
+          fs.writeFileSync('artifacts/init-aware-micro-summary.json',
+            JSON.stringify(summary,null,2)+'\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            JSON.stringify(summary,null,2)+'\\n');
+          NODE
+      - name: Upload complete research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-init-aware-micro-72h-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 30
