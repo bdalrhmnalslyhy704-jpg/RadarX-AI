@@ -10,3 +10,6 @@ No production merge, deploy, real orders, or live trading. Keep paper-only and a
 
 WORKFLOW ENABLED AT REVISION 45d4457dcf8e6737a6b8524d13182942edd59630.
 Run this exact verified same-cohort 24h Brier matrix. Do not substitute older census or artifacts.
+
+PROVENANCE UPDATE 41bc80200a2472885783b88df8c3ce78c8217ead:
+Record the exact Census source run ID and source commit SHA inside the neural benchmark JSON report. Re-run the same-cohort evaluation against the exact Census commit cde938585d9a44cdf751db1ceb23c3f211fa32a1. Do not use artifacts from an earlier trigger or different source.
