@@ -7,18 +7,18 @@ Train the 35-feature MLP and rank-16 factorization challenger on the same frozen
 The benchmark workflow waits for the exact checksum-audited census run to finish successfully before downloading its artifact. Never fall back to a prior census run.
 
 
-Census source correction pin: 8ab02b51eed39d930591ec0d50d4a89c62b0724e.
+Census source correction pin: cde938585d9a44cdf751db1ceb23c3f211fa32a1.
 The dense benchmark must wait for that exact census run to finish successfully. Do not substitute another run or consume partial artifacts.
 
 LATEST MODEL CODE VERIFICATION RUN
 This trigger is issued after the training-only AdamW/cosine/clipping, best-checkpoint/early-stopping, strict MLP tensor interface, analytic hybrid weight split and complete per-member diagnostics were added. The benchmark must check out this trigger commit and run the dense 24h MLP + factor-cross challenger using the current isolated branch code, while waiting for the exact already-running census source commit:
-8ab02b51eed39d930591ec0d50d4a89c62b0724e
+cde938585d9a44cdf751db1ceb23c3f211fa32a1
 Do not consume any other census or reduce the 750,000 USDT lane floor.
 
 
 FINAL DENSE GENERALIZATION PROJECTION CHALLENGER — EXACT SOURCE PIN
 
-Census source commit: 8ab02b51eed39d930591ec0d50d4a89c62b0724e
+Census source commit: cde938585d9a44cdf751db1ceb23c3f211fa32a1
 The resolver must find a successful Census run whose head_sha equals the exact source commit above. It must pass that exact run ID and artifact to both benchmark paths. No stale artifact or previous run may be used.
 
 Run the additional isolated 35-feature projection residual MLP:
