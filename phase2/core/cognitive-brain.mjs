@@ -99,7 +99,7 @@ function featureNamesForSchema(schema=COGNITIVE_FEATURE_SCHEMA){
 function isCognitiveBinaryModelVariant(value) {
   const variant=String(value||'').trim();
   return variant==='NEURAL_GLOBAL'||variant==='GBDT_RESIDUAL'||
-    /^HYBRID_GBDT_MLP_W(?:25|50|75)$/.test(variant);
+    /^HYBRID_GBDT_MLP_(?:W(?:25|50|75)|BRIER_OPTIMAL)$/.test(variant);
 }
 
 const FACTORS = Object.freeze([
@@ -1182,6 +1182,29 @@ function applyAcceptedProbabilityCalibration(rawProbability,calibration){
   return clamp(logistic(slope*Math.log(raw/(1-raw))+intercept),0.02,0.98);
 }
 
+export function deriveBrierOptimalBlendWeight(
+  boostedProbabilities,neuralProbabilities,targets
+){
+  if(!Array.isArray(boostedProbabilities)||!Array.isArray(neuralProbabilities)||
+     !Array.isArray(targets)||boostedProbabilities.length!==neuralProbabilities.length||
+     boostedProbabilities.length!==targets.length||targets.length<2)return null;
+  let numerator=0,denominator=0;
+  for(let index=0;index<targets.length;index++){
+    const boosted=finite(boostedProbabilities[index]);
+    const neural=finite(neuralProbabilities[index]);
+    const target=finite(targets[index]);
+    if(boosted===null||neural===null||target===null||
+       boosted<0||boosted>1||neural<0||neural>1||![0,1].includes(target))
+      return null;
+    const delta=boosted-neural;
+    numerator+=delta*(target-neural);
+    denominator+=delta*delta;
+  }
+  if(!Number.isFinite(numerator)||!Number.isFinite(denominator)||denominator<=1e-12)
+    return null;
+  return clamp(numerator/denominator,0,1);
+}
+
 export function hasSelectedNeuralResidual(fit){
   const index=fit?.selected_member_index;
   const scale=finite(fit?.selected_residual_scale);
@@ -2127,35 +2150,71 @@ export function buildCognitiveLearningProfile(samples = [], {
     validation_beats_base_rate:candidate.configuration.name===bestBoostedTreeCandidate?.configuration.name&&
       boostedTreeValidation.beat_base_rate===true
   }));
-  // Calibrated component probabilities are blended only after the disjoint
-  // calibration check. Choose the blend weight on a later pre-validation
-  // block, then score that single frozen weight on outer validation.
-  const hybridSelectionTargets={
-    samples:neuralHybridSelection.length,
-    positive:neuralHybridSelection.filter(row=>row.target===1).length,
-    negative:neuralHybridSelection.filter(row=>row.target===0).length
+  // Derive one convex Brier-optimal probability weight on an earlier
+  // chronological slice, then freeze and evaluate it on a later disjoint slice.
+  // Components are already fitted and calibrated; neither slice updates them.
+  const hybridTimes=[...new Set(neuralHybridSelection.map(row=>row.at))].sort((a,b)=>a-b);
+  const hybridWeightFitCutIndex=hybridTimes.length>=4
+    ?Math.max(1,Math.min(hybridTimes.length-2,Math.floor(hybridTimes.length*0.60))):-1;
+  const hybridWeightSelectionStartAt=hybridWeightFitCutIndex>=0
+    ?hybridTimes[hybridWeightFitCutIndex]:null;
+  const hybridWeightFitRows=hybridWeightSelectionStartAt===null?[]:
+    neuralHybridSelection.filter(row=>row.at<hybridWeightSelectionStartAt&&
+      row.resolved_at<hybridWeightSelectionStartAt);
+  const hybridWeightSelectionRows=hybridWeightSelectionStartAt===null?[]:
+    neuralHybridSelection.filter(row=>row.at>=hybridWeightSelectionStartAt&&
+      row.resolved_at<validationStartAt);
+  const hybridWeightFitTargets={
+    samples:hybridWeightFitRows.length,
+    positive:hybridWeightFitRows.filter(row=>row.target===1).length,
+    negative:hybridWeightFitRows.filter(row=>row.target===0).length
   };
+  const hybridSelectionTargets={
+    samples:hybridWeightSelectionRows.length,
+    positive:hybridWeightSelectionRows.filter(row=>row.target===1).length,
+    negative:hybridWeightSelectionRows.filter(row=>row.target===0).length
+  };
+  const hybridWeightFitSupported=hybridWeightFitTargets.samples>=neuralSelectionMinimum&&
+    hybridWeightFitTargets.positive>=3&&hybridWeightFitTargets.negative>=8;
   const hybridSelectionSupported=hybridSelectionTargets.samples>=neuralSelectionMinimum&&
     hybridSelectionTargets.positive>=3&&hybridSelectionTargets.negative>=8;
   const hybridSelectionLogistic=boostedTreeRefitBaselineFit
-    ?evaluateHoldout(neuralHybridSelection,boostedTreeRefitBaselineFit,comparisonMargin)
-    :{evaluated:false,sample_count:neuralHybridSelection.length,model_brier_score:null,
+    ?evaluateHoldout(hybridWeightSelectionRows,boostedTreeRefitBaselineFit,comparisonMargin)
+    :{evaluated:false,sample_count:hybridWeightSelectionRows.length,model_brier_score:null,
       reason:'HYBRID_LOGISTIC_REFERENCE_UNAVAILABLE'};
   const hybridNeuralComponentReady=hasSelectedNeuralResidual(neuralFit);
-  const hybridSelectionCandidates=boostedTreeFit&&hybridNeuralComponentReady
-    ?[0.25,0.5,0.75].map(boostedWeight=>{
-      const fit={
+  const hybridWeightFitPredictions=boostedTreeFit&&hybridNeuralComponentReady&&
+    hybridWeightFitSupported?{
+      boosted:hybridWeightFitRows.map(row=>predictFromFit(row.features,boostedTreeFit)),
+      neural:hybridWeightFitRows.map(row=>predictFromFit(row.features,neuralFit)),
+      targets:hybridWeightFitRows.map(row=>row.target)
+    }:null;
+  const hybridOptimalBoostedWeight=hybridWeightFitPredictions&&
+    hybridWeightFitPredictions.boosted.every(Number.isFinite)&&
+    hybridWeightFitPredictions.neural.every(Number.isFinite)
+    ?deriveBrierOptimalBlendWeight(hybridWeightFitPredictions.boosted,
+      hybridWeightFitPredictions.neural,hybridWeightFitPredictions.targets):null;
+  const hybridSelectionCandidates=boostedTreeFit&&hybridNeuralComponentReady&&
+    hybridWeightFitSupported&&hybridOptimalBoostedWeight!==null
+    ?[{
+      name:'HYBRID_GBDT_MLP_BRIER_OPTIMAL',
+      fit:{
         kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
-        neural_fit:neuralFit,boosted_weight:boostedWeight,
+        neural_fit:neuralFit,boosted_weight:hybridOptimalBoostedWeight,
         base_rate:boostedTreeFit.base_rate,
-        architecture:'GBDT_'+Math.round(boostedWeight*100)+'_V5_'+Math.round((1-boostedWeight)*100)+'_PROBABILITY_BLEND_V3',
-        training_strategy:'DISJOINT_CALIBRATED_SELECTION_BLOCK_GBDT_MLP_BLEND_V3'
-      };
-      return {
-        name:'HYBRID_GBDT_MLP_W'+Math.round(boostedWeight*100),
-        fit,selection:evaluateHoldout(neuralHybridSelection,fit,comparisonMargin)
-      };
-    }):[];
+        architecture:'GBDT_BRIER_OPTIMAL_CONVEX_WEIGHT_V4',
+        training_strategy:'CHRONOLOGICAL_WEIGHT_FIT_THEN_DISJOINT_SELECTION_V1',
+        blend_weight_fit_samples:hybridWeightFitRows.length,
+        blend_weight_fit_start_at:hybridWeightFitRows[0]?.at??null,
+        blend_weight_fit_end_at:hybridWeightFitRows.at(-1)?.at??null,
+        blend_weight_selection_start_at:hybridWeightSelectionStartAt
+      },
+      selection:evaluateHoldout(hybridWeightSelectionRows,{
+        kind:'BLENDED_GBDT_MLP_V1',boosted_fit:boostedTreeFit,
+        neural_fit:neuralFit,boosted_weight:hybridOptimalBoostedWeight,
+        base_rate:boostedTreeFit.base_rate
+      },comparisonMargin)
+    }]:[];
   const qualifiedHybridCandidates=hybridSelectionSupported&&hybridSelectionLogistic.evaluated===true
     ?hybridSelectionCandidates.filter(candidate=>candidate.selection?.evaluated===true&&
       candidate.selection.beat_base_rate===true&&
@@ -2173,8 +2232,10 @@ export function buildCognitiveLearningProfile(samples = [], {
     {evaluated:false,sample_count:upEventValidation.length,model_brier_score:null,
       reason:!boostedTreeFit?'HYBRID_GBDT_FIT_UNAVAILABLE':
         !hybridNeuralComponentReady?'HYBRID_NEURAL_MEMBER_NOT_SELECTED_ON_INNER_SELECTION':
-        !hybridSelectionSupported?'HYBRID_INNER_SELECTION_CLASS_SUPPORT_BELOW_MINIMUM':
-        'NO_BLEND_WEIGHT_BEAT_BASE_RATE_AND_SAME_WINDOW_LOGISTIC'};
+        !hybridWeightFitSupported?'HYBRID_WEIGHT_FIT_SUPPORT_BELOW_MINIMUM':
+        hybridOptimalBoostedWeight===null?'HYBRID_OPTIMAL_WEIGHT_UNIDENTIFIABLE':
+        !hybridSelectionSupported?'HYBRID_SELECTION_SUPPORT_BELOW_MINIMUM':
+        'NO_ANALYTIC_BLEND_WEIGHT_BEAT_BASE_RATE_AND_SAME_WINDOW_LOGISTIC'};
   const challengerCandidates=[
     {name:'NEURAL_GLOBAL',fit:neuralFit,validation:neuralValidation},
     {name:'GBDT_RESIDUAL',fit:boostedTreeFit,validation:boostedTreeValidation},
@@ -2486,20 +2547,30 @@ export function buildCognitiveLearningProfile(samples = [], {
       status:!boostedTreeFit?'WAITING_FOR_BOTH_CHALLENGERS':
         !neuralFit?'WAITING_FOR_BOTH_CHALLENGERS':
         !hybridNeuralComponentReady?'NEURAL_COMPONENT_NOT_SELECTED':
+        !hybridWeightFitSupported?'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT':
+        hybridOptimalBoostedWeight===null?'HYBRID_WEIGHT_NOT_IDENTIFIABLE':
         !bestHybridCandidate?'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC':
-        String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?'OUT_OF_SAMPLE_VALIDATED':
-        String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')?'VALIDATION_SELECTED_HOLDOUT_FAILED':
+        String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP')?'OUT_OF_SAMPLE_VALIDATED':
+        String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP')?'VALIDATION_SELECTED_HOLDOUT_FAILED':
         'TRAINED_NOT_SELECTED',
       model_kind:'BLENDED_GBDT_MLP_V1',
       architecture:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.architecture||
         bestHybridCandidate?.fit?.architecture||'GBDT_V5_PROBABILITY_BLEND_V2',
-      trained:hybridSelectionCandidates.length===3,
-      selected:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
-      probability_ready:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W'),
-      selected_candidate:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP_W')?activeChallenger:null,
+      trained:hybridSelectionCandidates.length>0,
+      selected:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP'),
+      probability_ready:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP'),
+      selected_candidate:String(activeChallenger||'').startsWith('HYBRID_GBDT_MLP')?activeChallenger:null,
       boosted_weight:hybridCandidates.find(candidate=>candidate.name===activeChallenger)?.fit?.boosted_weight??
         bestHybridCandidate?.fit?.boosted_weight??null,
       selection_winner_candidate:bestHybridCandidate?.name??null,
+      weight_fit_samples:hybridWeightFitTargets.samples,
+      weight_fit_positive_samples:hybridWeightFitTargets.positive,
+      weight_fit_negative_samples:hybridWeightFitTargets.negative,
+      weight_fit_start_at:hybridWeightFitRows[0]?.at??null,
+      weight_fit_end_at:hybridWeightFitRows.at(-1)?.at??null,
+      weight_fit_cut_at:hybridWeightSelectionStartAt,
+      weight_fit_supported:hybridWeightFitSupported,
+      analytic_weight_identifiable:hybridOptimalBoostedWeight!==null,
       selection_samples:hybridSelectionTargets.samples,
       selection_positive_samples:hybridSelectionTargets.positive,
       selection_negative_samples:hybridSelectionTargets.negative,
@@ -2518,6 +2589,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       validation:hybridValidation,
       candidate_selection_metrics:hybridSelectionCandidates.map(candidate=>({
         name:candidate.name,boosted_weight:candidate.fit.boosted_weight,
+        weight_fit_sample_count:candidate.fit.blend_weight_fit_samples??0,
+        weight_fit_start_at:candidate.fit.blend_weight_fit_start_at??null,
+        weight_fit_end_at:candidate.fit.blend_weight_fit_end_at??null,
+        weight_fit_selection_start_at:candidate.fit.blend_weight_selection_start_at??null,
         selection_sample_count:candidate.selection?.sample_count??0,
         selection_brier_score:candidate.selection?.model_brier_score??null,
         selection_base_rate_brier_score:candidate.selection?.base_rate_brier_score??null,
@@ -2542,9 +2617,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       })),
       // Publish the validation winner's holdout evidence even when it failed.
       // Evidence visibility must not depend on acceptance state.
-      holdout:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')
+      holdout:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP')
         ?challengerHoldout:null,
-      holdout_comparison:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP_W')
+      holdout_comparison:String(validationWinner?.name||'').startsWith('HYBRID_GBDT_MLP')
         ?challengerHoldoutComparison:null
     },
     model_selection: {

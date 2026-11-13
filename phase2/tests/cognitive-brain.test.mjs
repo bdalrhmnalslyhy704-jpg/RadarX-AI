@@ -15,6 +15,7 @@ import {
   buildCognitiveFeatureVector,
   evaluateCognitiveDirectionalRanking,
   hasSelectedNeuralResidual,
+  deriveBrierOptimalBlendWeight,
   auditNeuralOneBatchOverfit,
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
@@ -48,6 +49,24 @@ test('cognitive features separate early-flow divergence from momentum and missin
   assert.equal(withoutMicro[index.micro_buy_flow_acceleration],0);
   assert.equal(withoutMicro[index.micro_availability_mask],0,
     'missing 5m evidence must not look like neutral buyer flow');
+});
+
+test('hybrid blend weight is the exact constrained Brier minimizer and fails on unidentifiable inputs',()=>{
+  const boosted=[0.8,0.2,0.7,0.3,0.9,0.1];
+  const neural=[0.4,0.6,0.5,0.5,0.4,0.6];
+  const targets=[1,0,1,0,1,0];
+  const weight=deriveBrierOptimalBlendWeight(boosted,neural,targets);
+  assert.ok(Number.isFinite(weight)&&weight>=0&&weight<=1);
+  const brier=candidate=>boosted.reduce((sum,value,index)=>{
+    const p=candidate*value+(1-candidate)*neural[index];
+    return sum+(p-targets[index])**2;
+  },0);
+  const epsilon=1e-5;
+  assert.ok(brier(weight)<=brier(Math.max(0,weight-epsilon))+1e-10);
+  assert.ok(brier(weight)<=brier(Math.min(1,weight+epsilon))+1e-10);
+  assert.equal(deriveBrierOptimalBlendWeight([0.5,0.5],[0.5,0.5],[1,0]),null);
+  assert.equal(deriveBrierOptimalBlendWeight([0.4,0.6],[0.5],[1,0]),null);
+  assert.equal(deriveBrierOptimalBlendWeight([0.4,Number.NaN],[0.5,0.2],[1,0]),null);
 });
 
 test('hybrid fail-closed gate requires an inner-selected positive neural residual',()=>{
