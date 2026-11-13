@@ -46,7 +46,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: daily-early-riser-census-${{ github.ref }}
+  group: daily-early-riser-census-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
