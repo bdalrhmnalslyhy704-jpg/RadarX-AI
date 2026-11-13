@@ -9,3 +9,8 @@ The benchmark workflow waits for the exact checksum-audited census run to finish
 
 Census source correction pin: 87c8079d7e8bcfdb7db1484f014b2cd046cd819d.
 The dense benchmark must wait for that exact census run to finish successfully. Do not substitute another run or consume partial artifacts.
+
+LATEST MODEL CODE VERIFICATION RUN
+This trigger is issued after the training-only AdamW/cosine/clipping, best-checkpoint/early-stopping, strict MLP tensor interface, analytic hybrid weight split and complete per-member diagnostics were added. The benchmark must check out this trigger commit and run the dense 24h MLP + factor-cross challenger using the current isolated branch code, while waiting for the exact already-running census source commit:
+87c8079d7e8bcfdb7db1484f014b2cd046cd819d
+Do not consume any other census or reduce the 750,000 USDT lane floor.
