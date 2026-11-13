@@ -129,3 +129,12 @@ test('family-wide approval requires all requested horizons and a uniform source 
   assert.equal(report.promotion_eligible,false);
   assert.equal(report.target_coverage.find(x=>x.target_pct===15).present,false);
 });
+
+test('Brier rows from a different or missing source SHA cannot share an approval matrix',()=>{
+  const daily={input_sha256:'a'.repeat(64),
+    target_results:{'5_PCT_FIRST_PASSAGE_24H':makeTarget()}};
+  const different={...hybridTcnReport,input_sha256:'b'.repeat(64)};
+  const report=buildBrierMatrixReport(daily,{hybridTcnReport:different,requiredTargets:[5]});
+  assert.equal(report.source_integrity.same_input_sha256,false);
+  assert.equal(report.promotion_eligible,false);
+});
