@@ -30,7 +30,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          CENSUS_COMMIT: 8ab02b51eed39d930591ec0d50d4a89c62b0724e
+          CENSUS_COMMIT: cde938585d9a44cdf751db1ceb23c3f211fa32a1
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
