@@ -6,6 +6,7 @@ on:
       - research/daily-early-riser-mlp-budget-20261113
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - '.github/workflows/daily-early-riser-mlp-training-budget-ablation.yml'
