@@ -14,7 +14,8 @@ import {
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
-  benchmarkDailyEarlyRiserTarget
+  benchmarkDailyEarlyRiserTarget,
+  benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from '../core/daily-early-riser-census.mjs';
 import {
@@ -77,6 +78,36 @@ test('TCN-only V10 training-window ablation is capped at 8,192 while standard pr
   assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({
     tcnOnly:false,temporalRegimeLocalTcnMultiscaleMaxTrainingSamples:8192
   }),4096);
+});
+
+test('regime-local MLP assigns samples by the final closed BTC 24h feature and never merges unsupported regimes',()=>{
+  const sequenceFor=sign=>Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      channel===19&&time===TEMPORAL_SEQUENCE_STEPS-1?sign:0));
+  const riskOn=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  const riskOff=sampleWith({at:1_800_000_900_000,targetPct:5,outcome:'DOWN'});
+  riskOn.temporal_sequence=sequenceFor(0.25);
+  riskOff.temporal_sequence=sequenceFor(-0.25);
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([riskOn,riskOff],5,{
+    labelMode:'first_passage',horizonHours:24,
+    neuralTrainingHistoryFraction:1
+  });
+  assert.equal(result.schema,'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1');
+  assert.equal(result.btc_regime_definition,
+    'LAST_CLOSED_15M_SEQUENCE_BTC_24H_RETURN_CHANNEL_19_SIGN_V1');
+  assert.deepEqual(result.regime_sample_counts,{BTC_RISK_ON:1,BTC_RISK_OFF:1});
+  assert.equal(result.sample_count,2);
+  assert.equal(result.trained,false,
+    'one sample in each regime cannot pass the specialist minimum-data gate');
+  assert.equal(result.research_out_of_sample_validated,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.production_touched,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.status,
+    'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.status,
+    'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
 });
 
 test('TCN-only mode returns temporal challengers without running MLP, tabular GBDT or hybrid profiles',()=>{
