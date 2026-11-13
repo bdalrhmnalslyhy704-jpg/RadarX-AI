@@ -70,6 +70,33 @@ const makeTarget=()=>({
     validation_logistic:{evaluated:true,sample_count:100,model_brier_score:0.094},
     holdout:{evaluated:true,sample_count:100,model_brier_score:0.08},
     holdout_logistic:{evaluated:true,sample_count:100,model_brier_score:0.084}
+  },
+  temporal_tcn_lstm_hybrid_challenger:{
+    selected_for_research:true,
+    status:'HOLDOUT_PASSED_RESEARCH_ONLY_NOT_PRODUCTION_APPROVED',
+    inner_selection_diagnostics:{
+      status:'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY',
+      selected_configuration:'LR_0025_L2_0015_DROP10',
+      baseline:{selection_brier:0.1005},
+      candidates:[{name:'LR_0025_L2_0015_DROP10',selection_brier:0.10,
+        logistic_selection_brier:0.1005,improvement:0.0005,passed_inner_margin:true}]
+    },
+    validation:{
+      evaluated:true,sample_count:100,required_brier_improvement:0.003,
+      model:{rows:100,brier:0.09,asymmetric_risk_brier:0.095},
+      baseline:{rows:100,brier:0.094,asymmetric_risk_brier:0.096},
+      brier_improvement:0.004,
+      paired_bootstrap_95ci:{evaluated:true,improvement_ci95_low:0.001},
+      passed:true
+    },
+    holdout:{
+      evaluated:true,sample_count:100,required_brier_improvement:0.003,
+      model:{rows:100,brier:0.08,asymmetric_risk_brier:0.085},
+      baseline:{rows:100,brier:0.084,asymmetric_risk_brier:0.086},
+      brier_improvement:0.004,
+      paired_bootstrap_95ci:{evaluated:true,improvement_ci95_low:0.001},
+      passed:true
+    }
   }
 });
 const hybridTcnReport={selected:true,input_sha256:'a'.repeat(64),
