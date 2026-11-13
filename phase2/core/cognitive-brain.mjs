@@ -120,6 +120,10 @@ const FACTORS = Object.freeze([
 ]);
 
 import {createHash} from 'node:crypto';
+import {
+  calculateAsymmetricDirectionalRankingLoss,
+  prequalifyHybridComponent
+} from './neural-safety-contracts.mjs';
 
 function sampleIdentityFingerprint(rows){
   const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
@@ -623,7 +627,9 @@ function fitNeuralNetworkModel(training, {
   trainingObjective = 'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting = 'NONE',
   anchorAdaptation = 'FROZEN',
-  outputInitializationScale = 0.015
+  outputInitializationScale = 0.015,
+  enableAsymmetricDirectionalRankingLoss = false,
+  directionalRankingLossConfig = {}
 } = {}) {
   const sourceRows=Array.isArray(training)?training:[];
   const featureNames=[...(sourceRows[0]?.feature_names||FEATURE_NAMES)];
@@ -632,7 +638,8 @@ function fitNeuralNetworkModel(training, {
   assertNeuralFeatureBatch(sourceRows,featureNames,featureSchema);
   const rawRows=sourceRows.map(row=>({
     vector:Array.isArray(row.vector)?row.vector:normalizedFeatures(row.features,featureSchema),
-    target:finite(row.target)===null?targetOf(row):clamp(Number(row.target),0,1)
+    target:finite(row.target)===null?targetOf(row):clamp(Number(row.target),0,1),
+    at:finite(row.at),symbol:String(row.symbol||'').trim().toUpperCase()
   }));
   if(!rawRows.length)return null;
   const positiveSamples=rawRows.filter(row=>row.target>0.5).length;
@@ -729,8 +736,36 @@ function fitNeuralNetworkModel(training, {
     const gradOutput=Array(units2).fill(0);
     const gradSkip=anchorAdaptationEnabled?Array(inputSize).fill(0):null;
     let gradOutputBias=0,weightedBrier=0,weightedObjectiveLoss=0;
-
-    for(const row of rows){
+    let directionalLoss=null;
+    if(enableAsymmetricDirectionalRankingLoss){
+      const trainingLogit=vector=>{
+        const first=hiddenBias1.map((bias,j)=>{
+          let value=bias;
+          for(let i=0;i<inputSize;i++)value+=vector[i]*inputWeights[i][j];
+          return Math.tanh(value);
+        });
+        const second=hiddenBias2.map((bias,j)=>{
+          let value=bias;
+          for(let i=0;i<units1;i++)value+=first[i]*hiddenWeights[i][j];
+          return Math.tanh(value);
+        });
+        let value=outputBias;
+        for(let j=0;j<units2;j++)value+=outputWeights[j]*second[j];
+        for(let i=0;i<inputSize;i++)value+=skipWeights[i]*vector[i];
+        return value;
+      };
+      const currentLogits=rows.map(row=>trainingLogit(row.vector));
+      const baselineLogits=rows.map(row=>hasBaseline?linearLogit(row.vector,baselineFit):logit(baseRate));
+      directionalLoss=calculateAsymmetricDirectionalRankingLoss({
+        logits:currentLogits,targets:rows.map(row=>row.target),
+        timestamps:rows.map(row=>row.at),symbols:rows.map(row=>row.symbol),
+        baselineLogits,sampleWeights:rows.map(row=>row.sample_weight),
+        config:directionalRankingLossConfig
+      });
+      weightedObjectiveLoss=directionalLoss.loss*totalSampleWeight;
+    }
+    for(let rowIndex=0;rowIndex<rows.length;rowIndex++){
+      const row=rows[rowIndex];
       const hidden1=new Array(units1);
       for(let j=0;j<units1;j++){
         let sum=hiddenBias1[j];
@@ -759,16 +794,18 @@ function fitNeuralNetworkModel(training, {
         ?logLoss
         :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
           ?0.5*brierLoss+0.5*logLoss:brierLoss;
-      weightedObjectiveLoss+=objectiveLoss*row.sample_weight;
-      // Optimize the same unweighted Brier proper-scoring objective used by
-      // chronological validation, model selection, and the untouched holdout.
+      if(!directionalLoss)weightedObjectiveLoss+=objectiveLoss*row.sample_weight;
+      // Optimize the proper-score objective by default. The optional ranking
+      // path supplies an exact derivative of its composite objective w.r.t. logit.
       const brierGradient=2*(probability-row.target)*probability*(1-probability);
       const logLossGradient=probability-row.target;
-      const error=(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-        ?logLossGradient
-        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-          ?0.5*brierGradient+0.5*logLossGradient
-          :brierGradient)*row.sample_weight;
+      const error=directionalLoss
+        ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight
+        :(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+          ?logLossGradient
+          :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+            ?0.5*brierGradient+0.5*logLossGradient
+            :brierGradient)*row.sample_weight;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -877,6 +914,7 @@ function fitNeuralNetworkModel(training, {
       clip_scale:Number(clipScale.toFixed(8)),
       learning_rate:Number(epochRate.toFixed(8)),
       pre_update_training_objective:Number(trainingObjectiveScore.toFixed(8)),
+      directional_ranking_loss:directionalLoss?.metrics??null,
       best_training_objective:Number(bestTrainingObjective.toFixed(8))
     });
     // The stop signal is derived exclusively from the training block. It does
@@ -1272,16 +1310,19 @@ function fitNeuralEnsemble(training, options = {}) {
   // Keep total optimization work equal to three base schedules while reducing
   // dependence on one epoch/regularization choice. Selection remains on the
   // chronological validation block; the untouched holdout is never consulted.
+  const enabledDirectionalLoss=options.enableAsymmetricDirectionalRankingLoss===true;
+  const objectiveFor=objective=>enabledDirectionalLoss
+    ?'ASYMMETRIC_DIRECTIONAL_RANKING_V1':objective;
   const memberProfiles=[
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       outputInitializationScale,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE'},
+      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE')},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       outputInitializationScale,
-      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'},
+      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE')},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       outputInitializationScale,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
