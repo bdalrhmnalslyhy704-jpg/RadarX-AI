@@ -218,7 +218,8 @@ export function calculateAsymmetricDirectionalRankingLoss({
   if (!Array.isArray(timestamps) || timestamps.length !== n ||
       timestamps.some(value => !finite(value)))
     throw new TypeError('DIRECTIONAL_LOSS_TIMESTAMP_VECTOR_INVALID');
-  if (symbols.length && (!Array.isArray(symbols) || symbols.length !== n))
+  const symbolList = Array.isArray(symbols) ? symbols : [];
+  if (symbolList.length && symbolList.length !== n)
     throw new TypeError('DIRECTIONAL_LOSS_SYMBOL_VECTOR_INVALID');
   const weights = sampleWeights.length ? sampleWeights : Array(n).fill(1);
   if (!Array.isArray(weights) || weights.length !== n ||
@@ -267,7 +268,7 @@ export function calculateAsymmetricDirectionalRankingLoss({
     const candidates = [];
     for (const positive of group.positive) {
       for (const negative of group.negative) {
-        if (symbols.length && String(symbols[positive]) === String(symbols[negative])) continue;
+        if (symbolList.length && String(symbolList[positive]) === String(symbolList[negative])) continue;
         candidates.push([positive, negative]);
       }
     }
@@ -283,6 +284,10 @@ export function calculateAsymmetricDirectionalRankingLoss({
     }
   }
   let rankingLoss = 0;
+  const pairWeightSum = pairs.reduce((sum, item) => {
+    const [positive, negative] = item.pair;
+    return sum + Math.sqrt(Number(weights[positive]) * Number(weights[negative]));
+  }, 0);
   for (const item of pairs) {
     const [positive, negative] = item.pair;
     const pairWeight = Math.sqrt(Number(weights[positive]) * Number(weights[negative]));
@@ -292,15 +297,10 @@ export function calculateAsymmetricDirectionalRankingLoss({
     rankingLoss += pairWeight * pairLoss;
     const derivative = -sigmoid(scaled) * pairWeight;
     // Equal-and-opposite derivatives preserve the timestamp-local ranking objective.
-    gradient[positive] += cfg.rankingWeight * derivative / Math.max(EPSILON, pairs.length);
-    gradient[negative] -= cfg.rankingWeight * derivative / Math.max(EPSILON, pairs.length);
+    gradient[positive] += cfg.rankingWeight * derivative / Math.max(EPSILON, pairWeightSum);
+    gradient[negative] -= cfg.rankingWeight * derivative / Math.max(EPSILON, pairWeightSum);
   }
-  rankingLoss = pairs.length
-    ? rankingLoss / Math.max(EPSILON, pairs.reduce((sum, item) => {
-        const [positive, negative] = item.pair;
-        return sum + Math.sqrt(Number(weights[positive]) * Number(weights[negative]));
-      }, 0))
-    : 0;
+  rankingLoss = pairs.length ? rankingLoss / Math.max(EPSILON, pairWeightSum) : 0;
   let falsePositivePenalty = 0, negativeWeight = 0;
   for (let i = 0; i < n; i++) {
     if (targets[i] !== 0) continue;
