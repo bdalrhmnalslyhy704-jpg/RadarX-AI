@@ -1042,15 +1042,15 @@ export function fitFactorizationMachineModel(training,{
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting='NONE'
 }={}){
-  const featureNames=training[0]?.feature_names||FEATURE_NAMES;
-  const featureSchema=training[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
+  const sourceRows=Array.isArray(training)?training:[];
+  const featureNames=[...(sourceRows[0]?.feature_names||FEATURE_NAMES)];
+  const featureSchema=sourceRows[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
   const featureCount=featureNames.length;
-  const rows=(Array.isArray(training)?training:[]).map(row=>({
-    vector:Array.isArray(row?.vector)&&row.vector.length===featureCount
-      ?row.vector:normalizedFeatures(row?.features||{},featureSchema),
-    target:finite(row?.target)===null?targetOf(row):clamp(Number(row.target),0,1)
-  })).filter(row=>row.vector.length===featureCount&&
-    row.vector.every(Number.isFinite)&&Number.isFinite(row.target));
+  assertNeuralFeatureBatch(sourceRows,featureNames,featureSchema);
+  const rows=sourceRows.map(row=>({
+    vector:Array.isArray(row.vector)?row.vector:normalizedFeatures(row.features,featureSchema),
+    target:finite(row.target)===null?targetOf(row):clamp(Number(row.target),0,1)
+  }));
   if(rows.length<NEURAL_POLICY.minTrainingSamples)return null;
   const positiveSamples=rows.filter(row=>row.target>0.5).length;
   const negativeSamples=rows.length-positiveSamples;
@@ -1080,11 +1080,17 @@ export function fitFactorizationMachineModel(training,{
   const secondFactorMoment=factors.map(row=>row.map(()=>0));
   const firstCrossMoment=Array(dimensions).fill(0);
   const secondCrossMoment=Array(dimensions).fill(0);
+  const maximumGradientNorm=1.0;
+  const earlyStoppingPatience=Math.min(20,Math.max(8,Math.ceil(steps*0.25)));
+  const minimumEpochs=Math.min(30,steps);
+  const checkpointMinDelta=1e-8;
   const epochHistory=[];
+  let bestTrainingObjective=Number.POSITIVE_INFINITY,bestEpoch=0;
+  let epochsWithoutImprovement=0,bestCheckpoint=null,stoppedEarly=false;
   for(let epoch=1;epoch<=steps;epoch++){
     const factorGradient=factors.map(row=>row.map(()=>0));
     const crossGradient=Array(dimensions).fill(0);
-    let lossSum=0,finiteRows=0;
+    let lossSum=0;
     for(const row of rows){
       const projection=factorizationMachineProjection(row.vector,factors);
       if(!projection)throw new TypeError('FACTOR_CROSS_PROJECTION_INVALID');
@@ -1093,22 +1099,23 @@ export function fitFactorizationMachineModel(training,{
         kind:'RESIDUAL_FACTOR_CROSS_V1',skip_weights:skipWeights,
         intercept,factors,cross_weights:crossWeights
       },1);
-      if(!Number.isFinite(probability))throw new TypeError('FACTOR_CROSS_NON_FINITE_PROBABILITY');
-      const brierGradient=2*(probability-row.target)*probability*(1-probability);
-      const logLossGradient=probability-row.target;
+      if(!Number.isFinite(probability))
+        throw new TypeError('FACTOR_CROSS_NON_FINITE_PROBABILITY');
+      const safeProbability=clamp(probability,1e-12,1-1e-12);
+      const brierGradient=2*(safeProbability-row.target)*safeProbability*(1-safeProbability);
+      const logLossGradient=safeProbability-row.target;
       const error=(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
         ?logLossGradient
         :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
           ?0.5*brierGradient+0.5*logLossGradient:brierGradient)*sampleWeight;
-      const loss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-        ?-(row.target*Math.log(clamp(probability,1e-12,1-1e-12))+
-          (1-row.target)*Math.log(clamp(1-probability,1e-12,1-1e-12)))
+      const brierLoss=(safeProbability-row.target)**2;
+      const logLoss=-(row.target*Math.log(safeProbability)+
+        (1-row.target)*Math.log(1-safeProbability));
+      const objectiveLoss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLoss
         :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-          ?0.5*(probability-row.target)**2+
-            0.5*-(row.target*Math.log(clamp(probability,1e-12,1-1e-12))+
-              (1-row.target)*Math.log(clamp(1-probability,1e-12,1-1e-12)))
-          :(probability-row.target)**2;
-      lossSum+=loss*sampleWeight;finiteRows++;
+          ?0.5*brierLoss+0.5*logLoss:brierLoss;
+      lossSum+=objectiveLoss*sampleWeight;
       for(let component=0;component<dimensions;component++){
         crossGradient[component]+=error*projection.interactions[component];
         for(let feature=0;feature<featureCount;feature++)
@@ -1116,30 +1123,75 @@ export function fitFactorizationMachineModel(training,{
             projection.factor_derivatives[feature][component];
       }
     }
+    const objectiveScore=lossSum/Math.max(1,totalSampleWeight);
+    if(!Number.isFinite(objectiveScore))
+      throw new TypeError('FACTOR_CROSS_TRAINING_OBJECTIVE_NON_FINITE');
+    if(objectiveScore<bestTrainingObjective-checkpointMinDelta){
+      bestTrainingObjective=objectiveScore;
+      bestEpoch=epoch;
+      epochsWithoutImprovement=0;
+      bestCheckpoint={
+        factors:factors.map(row=>[...row]),
+        crossWeights:[...crossWeights]
+      };
+    }else{
+      epochsWithoutImprovement++;
+    }
+    const averagedFactorGradient=factorGradient.map(row=>
+      row.map(value=>value/Math.max(1,totalSampleWeight)));
+    const averagedCrossGradient=crossGradient.map(value=>
+      value/Math.max(1,totalSampleWeight));
+    const gradientLeaves=[...averagedFactorGradient.flat(),...averagedCrossGradient];
+    if(gradientLeaves.some(value=>!Number.isFinite(value)))
+      throw new TypeError('FACTOR_CROSS_NON_FINITE_GRADIENT');
+    const gradientL2Norm=Math.sqrt(gradientLeaves.reduce((sum,value)=>sum+value*value,0));
+    if(!Number.isFinite(gradientL2Norm))
+      throw new TypeError('FACTOR_CROSS_GRADIENT_NORM_NON_FINITE');
+    const gradientClipScale=gradientL2Norm>maximumGradientNorm
+      ?maximumGradientNorm/gradientL2Norm:1;
+    const epochRate=rate*(0.1+0.9*0.5*(1+Math.cos(
+      Math.PI*(epoch-1)/Math.max(1,steps-1)
+    )));
     for(let feature=0;feature<featureCount;feature++)for(let component=0;component<dimensions;component++){
-      const gradient=clamp(factorGradient[feature][component]/Math.max(1,totalSampleWeight),-3,3);
+      const gradient=clamp(averagedFactorGradient[feature][component]*gradientClipScale,-3,3);
       const m=0.9*firstFactorMoment[feature][component]+0.1*gradient;
       const v=0.999*secondFactorMoment[feature][component]+0.001*gradient*gradient;
       firstFactorMoment[feature][component]=m;secondFactorMoment[feature][component]=v;
       const mHat=m/(1-Math.pow(0.9,epoch)),vHat=v/(1-Math.pow(0.999,epoch));
-      factors[feature][component]=clamp(factors[feature][component]-rate*
-        (mHat/(Math.sqrt(vHat)+1e-8)+regularization*factors[feature][component]),-2.5,2.5);
+      const decayed=factors[feature][component]*(1-epochRate*regularization);
+      factors[feature][component]=clamp(decayed-
+        epochRate*mHat/(Math.sqrt(vHat)+1e-8),-2.5,2.5);
     }
     for(let component=0;component<dimensions;component++){
-      const gradient=clamp(crossGradient[component]/Math.max(1,totalSampleWeight),-3,3);
+      const gradient=clamp(averagedCrossGradient[component]*gradientClipScale,-3,3);
       const m=0.9*firstCrossMoment[component]+0.1*gradient;
       const v=0.999*secondCrossMoment[component]+0.001*gradient*gradient;
       firstCrossMoment[component]=m;secondCrossMoment[component]=v;
       const mHat=m/(1-Math.pow(0.9,epoch)),vHat=v/(1-Math.pow(0.999,epoch));
-      crossWeights[component]=clamp(crossWeights[component]-rate*
-        (mHat/(Math.sqrt(vHat)+1e-8)+regularization*crossWeights[component]),-2.5,2.5);
+      const decayed=crossWeights[component]*(1-epochRate*regularization);
+      crossWeights[component]=clamp(decayed-
+        epochRate*mHat/(Math.sqrt(vHat)+1e-8),-2.5,2.5);
     }
+    const parametersFinite=factors.flat().every(Number.isFinite)&&crossWeights.every(Number.isFinite);
+    if(!parametersFinite)throw new TypeError('FACTOR_CROSS_OPTIMIZER_NON_FINITE_PARAMETER');
     epochHistory.push({
-      epoch,mean_training_loss:Number((lossSum/Math.max(1,totalSampleWeight)).toFixed(8)),
+      epoch,mean_training_objective:Number(objectiveScore.toFixed(8)),
+      best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+      gradient_l2_norm:Number(gradientL2Norm.toFixed(8)),
+      gradient_clip_scale:Number(gradientClipScale.toFixed(8)),
+      learning_rate:Number(epochRate.toFixed(8)),
       factor_l2_norm:Number(Math.sqrt(factors.flat().reduce((sum,value)=>sum+value*value,0)).toFixed(8)),
       cross_head_l2_norm:Number(Math.sqrt(crossWeights.reduce((sum,value)=>sum+value*value,0)).toFixed(8))
     });
+    if(epoch>=minimumEpochs&&epochsWithoutImprovement>=earlyStoppingPatience){
+      stoppedEarly=true;
+      break;
+    }
   }
+  if(!bestCheckpoint)throw new Error('FACTOR_CROSS_BEST_CHECKPOINT_MISSING');
+  for(let feature=0;feature<featureCount;feature++)
+    factors[feature]=[...bestCheckpoint.factors[feature]];
+  crossWeights.splice(0,crossWeights.length,...bestCheckpoint.crossWeights);
   return {
     kind:'RESIDUAL_FACTOR_CROSS_V1',
     architecture:featureCount+'x'+dimensions+'-FACTOR_CROSS+FROZEN_LOGISTIC',
@@ -1149,12 +1201,28 @@ export function fitFactorizationMachineModel(training,{
     training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
     positive_class_weighting:useWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveWeight.toFixed(5)),
-    training_objective:trainingObjective,iterations:steps,l2:regularization,
+    training_objective:trainingObjective,iterations:epochHistory.length,
+    requested_iterations:steps,l2:regularization,
+    optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
+    scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
+    gradient_clip_norm:maximumGradientNorm,
     anchor_adaptation:'FROZEN_LOGISTIC',anchor_trust_radius:0,anchor_bias_trust_radius:0,
     anchor_tether_strength:0,anchor_learning_rate_scale:0,
     max_anchor_skip_delta:0,anchor_output_bias_delta:0,
     residual_anchor:validBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR',
-    training_diagnostics:{schema:'FACTOR_CROSS_PER_EPOCH_TRAINING_DIAGNOSTICS_V1',epoch_history:epochHistory}
+    training_diagnostics:{
+      schema:'FACTOR_CROSS_PER_EPOCH_TRAINING_DIAGNOSTICS_V2',
+      epochs_completed:epochHistory.length,requested_epochs:steps,
+      best_epoch:bestEpoch,best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+      early_stopping:{
+        enabled:true,monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY',
+        patience:earlyStoppingPatience,minimum_epochs:minimumEpochs,
+        stopped_early:stoppedEarly,restored_best_checkpoint:true,
+        validation_or_holdout_used:false
+      },
+      all_gradients_finite:true,all_parameters_finite:true,
+      epoch_history:epochHistory
+    }
   };
 }
 

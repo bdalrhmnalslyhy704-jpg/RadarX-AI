@@ -691,6 +691,16 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
   assert.equal(fmNeural.member_training_diagnostics.length,fmNeural.ensemble_members,
     'each trained member must expose its own training-only checkpoint diagnostics');
+  const factorIndex=fmNeural.factorization_member_index;
+  const factorDiagnostics=fmNeural.member_training_diagnostics[factorIndex];
+  const factorProfile=fmNeural.member_training_profiles[factorIndex];
+  assert.equal(factorDiagnostics.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(factorDiagnostics.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(factorDiagnostics.gradient_clip_norm,1);
+  assert.equal(factorDiagnostics.early_stopping?.validation_or_holdout_used,false);
+  assert.equal(factorDiagnostics.early_stopping?.restored_best_checkpoint,true);
+  assert.equal(factorProfile.iterations,factorDiagnostics.epochs_completed);
+  assert.equal(factorProfile.requested_iterations,factorDiagnostics.requested_epochs);
   assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,
     3*5+NEURAL_FACTOR_CROSS_RESIDUAL_SCALES.length,
     'the low-rank pairwise member must use its fine residual grid while MLP keeps the original five scales');
