@@ -52,12 +52,12 @@ export function validateTemporalSequenceAlignment({
       temporal_sequence_timestamps.some(value => !finite(value)))
     return fail('TEMPORAL_SEQUENCE_TIMESTAMP_COUNT_OR_VALUE_INVALID');
   const times = temporal_sequence_timestamps.map(Number);
+  if (times.at(-1) !== Number(at))
+    return fail('TEMPORAL_SEQUENCE_LAST_CLOSE_DIFFERS_FROM_BASELINE');
   for (let step = 1; step < times.length; step++) {
     if (times[step] - times[step - 1] !== intervalMs)
       return fail('TEMPORAL_SEQUENCE_TIMESTAMP_GAP_OR_REORDER:' + step);
   }
-  if (times.at(-1) !== Number(at))
-    return fail('TEMPORAL_SEQUENCE_LAST_CLOSE_DIFFERS_FROM_BASELINE');
   return {
     valid: true, reason: 'EXACT_CAUSAL_15M_SEQUENCE_ALIGNMENT',
     cadence_verified: true, legacy_untimed: false,
