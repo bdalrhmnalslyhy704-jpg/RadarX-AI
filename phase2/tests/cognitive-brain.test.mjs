@@ -25,7 +25,7 @@ const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
 
 test('MLP V5 training loop consumes the asymmetric same-time ranking objective',()=>{
-  const rows=Array.from({length:45*12},(_,index)=>{
+  const rows=Array.from({length:60*12},(_,index)=>{
     const group=Math.floor(index/12),within=index%12;
     const at=BASE_TIME+group*8*60*60*1000;
     const signal=within%2===0;
@@ -61,7 +61,7 @@ test('MLP V5 training loop consumes the asymmetric same-time ranking objective',
   });
   const diagnostics=profile.neural_network?.member_training_diagnostics||[];
   assert.ok(diagnostics.length>0,
-    'MLP V5 ensemble should reach the gradient-fit loop');
+    'MLP V5 ensemble should reach the gradient-fit loop: '+JSON.stringify({status:profile.neural_network?.status,split:profile.comparison_contract,training_samples:profile.neural_network?.training_samples,fit_samples:profile.neural_network?.fit_training_samples,selection_samples:profile.neural_network?.selection_samples,selection_positive:profile.neural_network?.selection_positive_samples,selection_negative:profile.neural_network?.selection_negative_samples}));
   assert.ok(diagnostics.every(member=>Array.isArray(member.epoch_history)),
     'each MLP member should retain its actual epoch history');
   const ranking=diagnostics.flatMap(member=>member.epoch_history)
