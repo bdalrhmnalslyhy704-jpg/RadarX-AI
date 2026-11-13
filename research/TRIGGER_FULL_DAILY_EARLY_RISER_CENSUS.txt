@@ -15,3 +15,11 @@ Preserve the full audit. Do not ignore missing-after-listing archives, checksum 
 After the census report is AUDITED, pass the exact completed census commit/run ID and its SHA-256-verified artifact into the dense 24h safe +5% MLP benchmark. Do not use partial/INCOMPLETE census artifacts for model training.
 
 Research-only: no production edits, no merge, no deploy, no exchange orders. Paper-only, real_order_execution=false. Preserve the 750,000 USDT liquidity threshold and strict out-of-sample superiority gates.
+
+DENSE 24H / 750K FINAL GENERALIZATION RUN — SOURCE REVISION
+
+Rebuild the exact full-market sample on this source commit only. Keep 24h anchors, 96 closed 15m baseline candles, 24h outcome path, and STANDARD_750K_PLUS (quote volume >= 750,000 USDT). Keep 24h opportunity/drawdown/safe-first-touch audit configuration aligned. Same-candle +5%/-2% cases remain AMBIGUOUS and audited but are never relabelled or trained.
+
+This run is a data-production job only. Do not execute legacy MLP/GBDT/TCN training inside the census job. Upload the census report, JSONL rows, temporal sidecar, checksums, archive manifests, and per-symbol audit. The downstream dense benchmark must resolve this exact source commit and run ID, download only its completed artifact, and verify raw-file SHA-256 before fitting any model.
+
+No stale census fallback. No partial artifact fallback. No under-floor cohort promotion. No production merge, deployment, exchange order, or real execution.
