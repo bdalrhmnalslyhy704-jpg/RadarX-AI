@@ -362,6 +362,12 @@ async function main(){
         holdout:result.chronology.holdout_samples,
         neural:{
           status:neural.status??null,trained:neural.trained===true,
+          training_strategy:neural.training_strategy??null,
+          factorization_member_enabled:neural.factorization_member_enabled===true,
+          factorization_member_index:neural.factorization_member_index??-1,
+          ensemble_members:neural.ensemble_members??0,
+          ensemble_members_required:neural.ensemble_members_required??null,
+          member_training_profiles:neural.member_training_profiles??[],
           preselection_training_samples:neural.preselection_training_samples??0,
           fitted_training_samples:neural.training_samples??0,
           required_training_samples:neural.samples_required??null,
@@ -388,6 +394,8 @@ async function main(){
           selected_member_index:neural.selected_member_index??null,
           selected_residual_scale:neural.selected_residual_scale??null,
           member_selection_brier_scores:neural.member_selection_brier_scores??[],
+          factorization_candidate_scores:(neural.member_selection_brier_scores??[]).filter(row=>
+            neural.member_training_profiles?.[row.index]?.model_kind==='RESIDUAL_FACTOR_CROSS_V1'),
           probability_calibration:neural.probability_calibration??null,
           failure_reason:neural.inner_selection_diagnostics?.failure_reason??null,
           validation_brier:neural.validation?.model_brier_score??null,
