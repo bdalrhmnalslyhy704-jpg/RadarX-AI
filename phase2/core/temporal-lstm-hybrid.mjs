@@ -250,9 +250,17 @@ function trainableParameters(model) {
   };
 }
 
-export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
+export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
+  dropoutScale = null
+} = {}) {
   validateSequence(sequence);
   if (!finite(baselineLogit)) throw new TypeError('TCN_LSTM_BASELINE_LOGIT_NON_FINITE');
+  const inputDropoutScale = dropoutScale === null
+    ? Array(TCN_LSTM_HIDDEN).fill(1) : dropoutScale;
+  if (!Array.isArray(inputDropoutScale) ||
+      inputDropoutScale.length !== TCN_LSTM_HIDDEN ||
+      inputDropoutScale.some(value => !finite(value) || value < 0 || value > 2))
+    throw new TypeError('TCN_LSTM_LOCKED_DROPOUT_MASK_INVALID');
   const hidden = TCN_LSTM_HIDDEN;
   let current = sequence.map(row => Array.from({ length: hidden }, (_, output) => {
     let value = model.projectionBiases[output];
@@ -293,8 +301,11 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
   const lstmCaches = [];
   let previousHidden = Array(hidden).fill(0);
   let previousCell = Array(hidden).fill(0);
+  const lstmInputSequence = [];
   for (let time = 0; time < TCN_LSTM_STEPS; time++) {
-    const input = current[time];
+    const input = current[time].map((value, channel) =>
+      value * inputDropoutScale[channel]);
+    lstmInputSequence.push(input);
     const inputGate = Array(hidden), forgetGate = Array(hidden);
     const outputGate = Array(hidden), candidateGate = Array(hidden);
     const cell = Array(hidden), cellTanh = Array(hidden), state = Array(hidden);
@@ -321,7 +332,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
       state[unit] = outputGate[unit] * cellTanh[unit];
     }
     lstmCaches.push({
-      input, previousHidden, previousCell,
+      input, dropoutScale:inputDropoutScale, previousHidden, previousCell,
       inputGate, forgetGate, outputGate, candidateGate,
       cell, cellTanh, state
     });
@@ -364,6 +375,8 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0) {
     projected_sequence: projected,
     lstm_hidden_sequence: lstmCaches.map(row => row.state),
     lstm_cell_sequence: lstmCaches.map(row => row.cell),
+    lstm_input_sequence:lstmInputSequence,
+    input_dropout_scale:[...inputDropoutScale],
     cache: { projected, tcnCaches, lstmCaches, pooled, attentionWeights }
   };
 }
@@ -426,10 +439,12 @@ function zeroGradients(model) {
   return zerosLike(trainableParameters(model));
 }
 
-export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0) {
+export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0, {
+  dropoutScale = null
+} = {}) {
   if (target !== 0 && target !== 1)
     throw new TypeError('TCN_LSTM_TARGET_INVALID');
-  const forward = inspectTcnLstmForward(sequence, model, baselineLogit);
+  const forward = inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale});
   const parameters = trainableParameters(model);
   const gradients = zeroGradients(model);
   const hidden = TCN_LSTM_HIDDEN;
@@ -503,7 +518,8 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
       gradients.lstmBiases[gate] += gateGradient[gate];
     nextHiddenGradient = previousHiddenGradient;
     nextCellGradient = cellGradient;
-    tcnOutputGradients[time] = inputGradient;
+    tcnOutputGradients[time] = inputGradient.map((value, channel) =>
+      value * step.dropoutScale[channel]);
   }
 
   let outputGradient = tcnOutputGradients;
@@ -688,7 +704,7 @@ function evaluateBrier(rows, model, anchor) {
 }
 
 export function trainTcnLstmHybrid(trainingRows, {
-  epochs = 8, learningRate = 0.0025, l2 = 0.0015,
+  epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = 2048,
   baselineFit = null, earlyStoppingPatience = 5
 } = {}) {
@@ -700,7 +716,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     throw new TypeError('TCN_LSTM_TRAINING_CONFIGURATION_INVALID');
   const rate = clamp(Number(learningRate), 0.0001, 0.01);
   const regularization = clamp(Number(l2), 0, 0.2);
-  if (!finite(rate) || !finite(regularization))
+  const dropoutRate = Number(dropout);
+  if (!finite(rate) || !finite(regularization) ||
+      !finite(dropoutRate) || dropoutRate < 0 || dropoutRate > 0.40)
     throw new TypeError('TCN_LSTM_HYPERPARAMETER_INVALID');
   const ordered = [...trainingRows].sort((a, b) =>
     (finite(a.at) ? a.at : 0) - (finite(b.at) ? b.at : 0));
@@ -745,8 +763,12 @@ export function trainTcnLstmHybrid(trainingRows, {
       for (const rowIndex of indexes) {
         const row = rows[rowIndex];
         const baselineLogit = predictTcnLstmLogisticLogit(row.sequence, anchor);
+        // One Bernoulli mask per channel, locked for all 24 time steps.
+        // This is variational input dropout, not per-step recurrent dropout.
+        const dropoutScale = Array(TCN_LSTM_HIDDEN).fill(0).map(() =>
+          dropoutRate > 0 && random() < dropoutRate ? 0 : 1 / (1 - dropoutRate));
         const item = lossAndGradientsTcnLstmHybrid(
-          row.sequence, row.target, model, baselineLogit
+          row.sequence, row.target, model, baselineLogit, {dropoutScale}
         );
         epochLoss += item.loss;
         seen++;
@@ -780,7 +802,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
-      dropout: TCN_LSTM_DROPOUT
+      dropout: dropoutRate,
+      dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
     });
     if (epoch >= Math.min(5, epochs) && wait >= patience) {
       stoppedEarly = true;
@@ -805,8 +828,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     receptive_field: TCN_LSTM_RECEPTIVE_FIELD,
     attention: 'SINGLE_HEAD_QUERY_SOFTMAX_OVER_LSTM_HIDDEN_STATES',
     trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
-    dropout: TCN_LSTM_DROPOUT,
-    dropout_policy: 'DISABLED_UNTIL_LOCKED_RECURRENT_DROPOUT_ABLATION_PASSES',
+    dropout: dropoutRate,
+    dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
     model, baseline_fit: anchor,
     training: {
       rows: rows.length,
@@ -865,9 +888,9 @@ function brierFrom(rows, probabilities) {
  */
 export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, {
   candidates = [
-    { name: 'LR_0015_L2_0005', learningRate: 0.0015, l2: 0.0005, epochs: 6 },
-    { name: 'LR_0025_L2_0015', learningRate: 0.0025, l2: 0.0015, epochs: 6 },
-    { name: 'LR_0035_L2_0035', learningRate: 0.0035, l2: 0.0035, epochs: 6 }
+    { name: 'LR_0015_L2_0005_DROP00', learningRate: 0.0015, l2: 0.0005, dropout: 0, epochs: 6 },
+    { name: 'LR_0025_L2_0015_DROP10', learningRate: 0.0025, l2: 0.0015, dropout: 0.10, epochs: 6 },
+    { name: 'LR_0035_L2_0035_DROP20', learningRate: 0.0035, l2: 0.0035, dropout: 0.20, epochs: 6 }
   ],
   requiredImprovement = 0.00025,
   seed = 29,
@@ -901,15 +924,17 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const evaluated = [];
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
+    const candidateDropout = config?.dropout === undefined ? 0 : config.dropout;
     if (!config || typeof config.name !== 'string' ||
         !finite(config.learningRate) || !finite(config.l2) ||
-        !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30 ||
-        config.dropout !== undefined && config.dropout !== 0)
+        !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
+        !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
     const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
       epochs: config.epochs,
       learningRate: config.learningRate,
       l2: config.l2,
+      dropout:candidateDropout,
       seed: seed + index * 101,
       maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor
@@ -917,7 +942,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
     const score = brierFrom(selectionRows, predictions);
     evaluated.push({
-      name: config.name, config: { ...config, dropout: 0 },
+      name: config.name, config: { ...config, dropout: candidateDropout },
       selection_brier: score,
       logistic_selection_brier: baselineBrier,
       improvement: baselineBrier - score,
