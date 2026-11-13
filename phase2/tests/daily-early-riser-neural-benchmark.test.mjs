@@ -536,6 +536,33 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     'the adjusted output bias must stay inside the declared trust region');
   assert.equal(profile.neural_network.validation.evaluated,true);
   assert.equal(profile.neural_network.holdout.evaluated,true);
+
+  const fullHistoryProfile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,minimumValidationSamples:30,minimumHoldoutSamples:30,
+    validationFraction:0.2,holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,allowedOutcomeSources:['UNIT_TEST_DAILY_35'],
+    minNeuralTrainingSamples:240,maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
+    iterations:40,learningRate:0.08,neuralIterations:10,
+    neuralInnerSelectionMargin:0.00025,neuralTrainingHistoryFraction:1,
+    neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  });
+  assert.equal(fullHistoryProfile.neural_network.trained,true);
+  assert.equal(fullHistoryProfile.neural_network.training_history_fraction,1);
+  assert.equal(fullHistoryProfile.neural_network.fit_training_samples,
+    fullHistoryProfile.neural_network.preselection_training_samples,
+    '100% MLP fit must use the entire eligible timestamp-grouped train block');
+  assert.ok(fullHistoryProfile.neural_network.max_training_outcome_resolved_at<
+    fullHistoryProfile.neural_network.selection_start_at,
+    'full-history MLP must remain purged before member selection');
+  assert.equal(fullHistoryProfile.neural_network.validation.sample_count,
+    profile.neural_network.validation.sample_count,
+    'history ablation must preserve outer validation membership');
+  assert.equal(fullHistoryProfile.neural_network.holdout.sample_count,
+    profile.neural_network.holdout.sample_count,
+    'history ablation must preserve untouched holdout membership');
 });
 
 test('daily anchor diagnostics report requested and applied modes without a false frozen default',()=>{
@@ -595,4 +622,6 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   assert.ok(source.includes('enableRegimeLocalTcnPyramid:!attentionOnly'));
   assert.ok(source.includes('enableRegimeLocalTcnMultiscale:!attentionOnly'));
   assert.ok(source.includes('enableRegimeLocalTcnAttention:true'));
+  assert.ok(source.includes("args['neural-training-history-fraction']"));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,'));
 });
