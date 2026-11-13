@@ -220,7 +220,7 @@ async function main(){
         ?attentionOnly
           ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
           :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
-        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
+        :['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
