@@ -371,6 +371,43 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
   }
 });
 
+test('MLP tensor interface rejects reordered features, mismatched schemas, bad shapes and non-finite inputs',()=>{
+  const baseFeatures={
+    volume_ratio:2,trade_ratio:1.5,taker_buy_ratio:0.62,
+    compression_ratio:0.7,relative_strength_vs_btc_pct:1,
+    recent_15m_return_pct:0.4,micro_5m_available:true,
+    micro_5m_taker_buy_ratio:0.65
+  };
+  const rows=Array.from({length:32},(_,index)=>({
+    id:'CONTRACT:'+index,symbol:'CONTRACTUSDT',
+    at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+    outcome:index%2?'UP':'DOWN',target:index%2,
+    features:baseFeatures,feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    vector:buildCognitiveFeatureVector(baseFeatures)
+  }));
+  const reordered=rows.map((row,index)=>index===7?{
+    ...row,feature_names:[...row.feature_names].reverse()
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(reordered),
+    /NEURAL_FEATURE_NAME_ORDER_MISMATCH:7/);
+  const wrongSchema=rows.map((row,index)=>index===9?{
+    ...row,feature_schema:'CROSS_ASSET_DAILY_CONTEXT_FEATURES_V3'
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(wrongSchema),
+    /NEURAL_FEATURE_SCHEMA_MISMATCH:9/);
+  const wrongShape=rows.map((row,index)=>index===11?{
+    ...row,vector:row.vector.slice(1)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(wrongShape),
+    /NEURAL_FEATURE_VECTOR_SHAPE_MISMATCH:11/);
+  const nonFinite=rows.map((row,index)=>index===13?{
+    ...row,vector:row.vector.map((value,feature)=>feature===4?Number.NaN:value)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(nonFinite),
+    /NEURAL_FEATURE_VECTOR_NON_FINITE_OR_NON_NUMERIC:13/);
+});
+
 test('MLP numerical training audit drives an exactly balanced 32-row batch to near-zero Brier',()=>{
   const rows=Array.from({length:32},(_,index)=>{
     const positive=index<16;

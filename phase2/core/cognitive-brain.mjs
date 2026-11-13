@@ -668,9 +668,12 @@ function fitNeuralNetworkModel(training, {
     const correctedMoment=nextMoment/(1-Math.pow(0.9,step));
     const correctedVariance=nextVariance/(1-Math.pow(0.999,step));
     // Decoupled weight decay remains outside Adam's moment estimates.
-    const regularized=decay?regularization*value:0;
+    const stepSize=stepRate*learningRateScale;
+    // True decoupled AdamW update: decay is applied to the parameter itself,
+    // not added to the gradient before Adam's adaptive moment normalization.
+    const decayedValue=decay?value*(1-stepSize*regularization):value;
     return {
-      value:clamp(value-stepRate*learningRateScale*(correctedMoment/(Math.sqrt(correctedVariance)+1e-8)+regularized),-bound,bound),
+      value:clamp(decayedValue-stepSize*correctedMoment/(Math.sqrt(correctedVariance)+1e-8),-bound,bound),
       moment:nextMoment,variance:nextVariance
     };
   };
@@ -825,7 +828,7 @@ function fitNeuralNetworkModel(training, {
     positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
-    optimizer:'BIAS_CORRECTED_ADAMW_STYLE',
+    optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
     gradient_clip_norm:maximumGradientNorm,
     training_diagnostics:{
