@@ -92,6 +92,31 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
   assert.ok(result.maximum_absolute_error<2e-5);
 });
 
+test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{
+  const sequence=makeSequence(1,19);
+  const scale=[0,1.25,0,1.25,1.25,0,1.25,0];
+  const model=createTcnLstmHybridModelForAudit(23);
+  const forward=inspectTcnLstmForward(sequence,model,0.12,{dropoutScale:scale});
+  assert.deepEqual(forward.input_dropout_scale,scale);
+  for(let time=0;time<TCN_LSTM_STEPS;time++){
+    for(let channel=0;channel<scale.length;channel++){
+      assert.ok(Math.abs(
+        forward.lstm_input_sequence[time][channel]-
+        forward.tcn_latent_sequence[time][channel]*scale[channel]
+      )<1e-12);
+    }
+  }
+  const audit=auditTcnLstmHybridGradients(sequence,1,{
+    model:createTcnLstmHybridModelForAudit(23),
+    baselineLogit:-0.09,
+    epsilon:1e-5,
+    dropoutScale:scale
+  });
+  assert.equal(audit.passed,true,
+    'locked-dropout max abs error='+audit.maximum_absolute_error+
+    ' worst='+JSON.stringify(audit.worst_parameter));
+});
+
 test('training-only Logistic anchor is deterministic and identity-bound to its training rows',()=>{
   const rows=makeRows(0,40);
   const first=fitTcnLstmLogisticAnchor(rows);
@@ -127,7 +152,7 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   const result=selectTcnLstmHybridHyperparameters(training,selection,{
     candidates:[
       {name:'LOW_RATE',learningRate:0.0015,l2:0.0005,epochs:2},
-      {name:'MID_RATE',learningRate:0.0025,l2:0.0015,epochs:2}
+      {name:'MID_RATE',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:2}
     ],
     requiredImprovement:0.00025,seed:7,maxTrainingSamples:40
   });
@@ -136,6 +161,7 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.equal(result.candidates.length,2);
   assert.ok(result.candidates.every(row=>
     Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
+  assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
