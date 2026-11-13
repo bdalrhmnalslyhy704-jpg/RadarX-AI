@@ -598,9 +598,10 @@ export function resolveBarrierTrade({
   if (!path.length) return { resolved: false, reason: 'NO_CLOSED_FUTURE_CANDLES' };
   if (exitPrice === null) {
     const last = path.at(-1);
-    if (candleTime(last) < horizonEnd) {
+    const requiredHorizonCloseAt = horizonEnd + closeBoundaryOffset;
+    if (candleTime(last) < requiredHorizonCloseAt) {
       return { resolved: false, reason: 'INCOMPLETE_FORWARD_HORIZON',
-        required_through: horizonEnd, observed_through: candleTime(last),
+        required_through: requiredHorizonCloseAt, observed_through: candleTime(last),
         candle_interval_ms: interval };
     }
     exitPrice = candleNumber(last, 'close');
