@@ -560,13 +560,17 @@ function assertNeuralFeatureBatch(training,featureNames,featureSchema){
     if(row.feature_names!==undefined&&
       (!Array.isArray(row.feature_names)||JSON.stringify(row.feature_names)!==JSON.stringify(featureNames)))
       throw new TypeError('NEURAL_FEATURE_NAME_ORDER_MISMATCH:'+index);
+    if(!row.features||typeof row.features!=='object'||Array.isArray(row.features))
+      throw new TypeError('NEURAL_FEATURE_INPUT_MISSING:'+index);
     if(Array.isArray(row.vector)){
       if(row.vector.length!==featureNames.length)
         throw new TypeError('NEURAL_FEATURE_VECTOR_SHAPE_MISMATCH:'+index);
       if(row.vector.some(value=>typeof value!=='number'||!Number.isFinite(value)))
         throw new TypeError('NEURAL_FEATURE_VECTOR_NON_FINITE_OR_NON_NUMERIC:'+index);
-    }else if(!row.features||typeof row.features!=='object'||Array.isArray(row.features)){
-      throw new TypeError('NEURAL_FEATURE_INPUT_MISSING:'+index);
+      const canonical=normalizedFeatures(row.features,featureSchema);
+      if(canonical.length!==row.vector.length||row.vector.some((value,feature)=>
+          Math.abs(value-canonical[feature])>1e-10))
+        throw new TypeError('NEURAL_FEATURE_VECTOR_VALUE_MISMATCH:'+index);
     }
     const target=finite(row.target);
     if(target===null&&!['UP','DOWN','FLAT'].includes(row.outcome))
@@ -1189,6 +1193,34 @@ export function hasSelectedNeuralResidual(fit){
     ['RESIDUAL_DEEP_MLP_V2','RESIDUAL_FACTOR_CROSS_V1'].includes(fit.members[index]?.kind);
 }
 
+export function isValidCognitiveMlpFit(fit){
+  try{
+    const schema=fit?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
+    const expectedNames=featureNamesForSchema(schema);
+    const inputSize=Number(fit?.input_size);
+    const hidden1=fit?.hidden_bias_1?.length;
+    const hidden2=fit?.hidden_bias_2?.length;
+    return fit?.kind==='RESIDUAL_DEEP_MLP_V2'&&
+      Number.isInteger(inputSize)&&inputSize===expectedNames.length&&
+      Array.isArray(fit.feature_names)&&
+      JSON.stringify(fit.feature_names)===JSON.stringify(expectedNames)&&
+      Array.isArray(fit.input_weights)&&fit.input_weights.length===inputSize&&
+      Array.isArray(fit.hidden_bias_1)&&hidden1>0&&
+      Array.isArray(fit.hidden_weights)&&fit.hidden_weights.length===hidden1&&
+      fit.hidden_weights.every(row=>Array.isArray(row)&&row.length===hidden2&&
+        row.every(Number.isFinite))&&
+      fit.input_weights.every(row=>Array.isArray(row)&&row.length===hidden1&&
+        row.every(Number.isFinite))&&
+      Array.isArray(fit.hidden_bias_2)&&hidden2>0&&fit.hidden_bias_2.every(Number.isFinite)&&
+      Array.isArray(fit.output_weights)&&fit.output_weights.length===hidden2&&
+      fit.output_weights.every(Number.isFinite)&&
+      Array.isArray(fit.skip_weights)&&fit.skip_weights.length===inputSize&&
+      fit.skip_weights.every(Number.isFinite)&&
+      fit.hidden_bias_1.every(Number.isFinite)&&
+      Number.isFinite(fit.output_bias);
+  }catch{return false;}
+}
+
 function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
     return applyAcceptedProbabilityCalibration(
@@ -1223,13 +1255,7 @@ function predictFromFit(features, fit, residualScale=1) {
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
     const inputSize=Number(fit.input_size)||fit.feature_names?.length||FEATURE_NAMES.length;
-    if(!Array.isArray(fit.input_weights)||fit.input_weights.length!==inputSize||
-       !Array.isArray(fit.hidden_bias_1)||!Array.isArray(fit.hidden_weights)||
-       !Array.isArray(fit.hidden_bias_2)||!Array.isArray(fit.output_weights)||
-       !Array.isArray(fit.skip_weights)||fit.input_weights.some(row=>!Array.isArray(row))||
-       fit.hidden_weights.length!==fit.hidden_bias_1.length||
-       fit.hidden_bias_2.length!==fit.output_weights.length||
-       fit.skip_weights.length!==inputSize)return null;
+    if(!isValidCognitiveMlpFit(fit))return null;
     const vector=normalizedFeatures(features,fit.feature_schema||COGNITIVE_FEATURE_SCHEMA);
     if(vector.length!==inputSize)return null;
     const hidden1=fit.hidden_bias_1.map((bias,j)=>{

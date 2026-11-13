@@ -13,7 +13,8 @@ import {
   buildCognitiveFeatureVector,
   evaluateCognitiveDirectionalRanking,
   hasSelectedNeuralResidual,
-  auditNeuralOneBatchOverfit
+  auditNeuralOneBatchOverfit,
+  isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
@@ -371,6 +372,37 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
   }
 });
 
+test('MLP inference tensor validator rejects ragged matrices and non-finite parameters',()=>{
+  const inputSize=COGNITIVE_FEATURE_NAMES.length,hidden1=10,hidden2=6;
+  const valid={
+    kind:'RESIDUAL_DEEP_MLP_V2',input_size:inputSize,
+    feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    input_weights:Array.from({length:inputSize},()=>Array(hidden1).fill(0.01)),
+    hidden_bias_1:Array(hidden1).fill(0),
+    hidden_weights:Array.from({length:hidden1},()=>Array(hidden2).fill(0.01)),
+    hidden_bias_2:Array(hidden2).fill(0),
+    output_weights:Array(hidden2).fill(0.01),
+    skip_weights:Array(inputSize).fill(0),
+    output_bias:0
+  };
+  assert.equal(isValidCognitiveMlpFit(valid),true);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,input_weights:valid.input_weights.map((row,index)=>
+      index===4?row.slice(1):row)
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,hidden_weights:valid.hidden_weights.map((row,index)=>
+      index===2?row.concat(0):row)
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,output_weights:[...valid.output_weights.slice(1),Number.NaN]
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,feature_names:[...valid.feature_names].reverse()
+  }),false);
+});
+
 test('MLP tensor interface rejects reordered features, mismatched schemas, bad shapes and non-finite inputs',()=>{
   const baseFeatures={
     volume_ratio:2,trade_ratio:1.5,taker_buy_ratio:0.62,
@@ -406,6 +438,11 @@ test('MLP tensor interface rejects reordered features, mismatched schemas, bad s
   }:row);
   assert.throws(()=>auditNeuralOneBatchOverfit(nonFinite),
     /NEURAL_FEATURE_VECTOR_NON_FINITE_OR_NON_NUMERIC:13/);
+  const misaligned=rows.map((row,index)=>index===15?{
+    ...row,vector:row.vector.map((value,feature)=>feature===0?value+0.1:value)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(misaligned),
+    /NEURAL_FEATURE_VECTOR_VALUE_MISMATCH:15/);
 });
 
 test('MLP numerical training audit drives an exactly balanced 32-row batch to near-zero Brier',()=>{
