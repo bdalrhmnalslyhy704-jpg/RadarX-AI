@@ -35,6 +35,7 @@ import {
   TEMPORAL_ATTENTION_POOLING_MODE,
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+  temporalParameterL2,
   poolOrderedTemporalSegments,
   poolMultiscaleTemporalSegments,
   poolLearnedTemporalAttention,
@@ -217,6 +218,9 @@ test('V11 learned temporal query attention focuses probability mass on informati
     'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11');
   assert.equal(TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
     TEMPORAL_TRAINABLE_PARAMETER_COUNT+TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS);
+  assert.equal(temporalParameterL2('attentionPositionBiases',0.012,8),0.096);
+  assert.equal(temporalParameterL2('attentionQuery',0.012,8),0.012);
+  assert.equal(temporalParameterL2('attentionPositionBiases',0.012,-1),null);
   assert.ok(pooled);
   assert.equal(pooled.features.length,TEMPORAL_LATENT_CHANNELS);
   assert.equal(pooled.weights.length,TEMPORAL_SEQUENCE_STEPS);
@@ -270,12 +274,14 @@ test('safe-opportunity temporal profile trains the isolated V11 attention readou
     enableRegimeLocalTcnAttention:true,
     regimeLocalTcnAttentionEpochs:1,
     regimeLocalTcnAttentionMaxTrainingSamples:1024,
+    regimeLocalTcnAttentionPositionBiasL2Multiplier:8,
     enableTemporalBoostedTree:false
   });
   const attention=profile.regime_local_tcn_attention_challenger;
   assert.ok(attention,'attention challenger must be present in the benchmark result');
   assert.equal(profile.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
   assert.equal(attention.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1');
+  assert.equal(attention.attention_position_bias_l2_multiplier,8);
   assert.equal(attention.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
   assert.equal(attention.attention_dimension,TEMPORAL_LATENT_CHANNELS);
   assert.equal(attention.relative_position_bias_count,TEMPORAL_SEQUENCE_STEPS);
