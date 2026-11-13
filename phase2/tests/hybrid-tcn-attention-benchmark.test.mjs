@@ -56,6 +56,10 @@ function makeRows(count = 700) {
       at,
       latest_input_at: at,
       resolved_at: at + FOUR_HOURS,
+      maturity_ms:FOUR_HOURS,
+      outcome_horizon_ms:FOUR_HOURS,
+      sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
+        at-(HYBRID_SEQUENCE_STEPS-1-step)*FIFTEEN_MINUTES),
       gross_return_pct: positive ? 3 : -2,
       max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       max_adverse_excursion_at: at + FIFTEEN_MINUTES,
@@ -124,7 +128,11 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   assert.ok(built.kama_efficiency_ratio >= 0 && built.kama_efficiency_ratio <= 1);
   assert.ok(Number.isFinite(built.volatility_zscore));
   assert.ok(Number.isFinite(built.btc_trend_return_pct));
-  assert.ok(built.latest_input_at <= asOf);
+  assert.equal(built.latest_input_at,asOf);
+  assert.equal(built.sequence_timestamps.length,HYBRID_SEQUENCE_STEPS);
+  assert.equal(built.sequence_timestamps.at(-1),asOf);
+  assert.ok(built.sequence_timestamps.every((value,index)=>index===0||
+    value-built.sequence_timestamps[index-1]===FIFTEEN_MINUTES));
   assert.ok(built.sequence.every(row => row.every(Number.isFinite)));
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
   assert.ok(built.sequence.at(-1)[11] > 0, 'aggregate trade buy imbalance should be represented');
@@ -236,6 +244,10 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(prepared.row.outcome_source, 'BINANCE_SPOT_CLOSED_15M');
   assert.equal(prepared.row.outcome_definition, 'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_CLOSED_SPOT_V1');
   assert.equal(prepared.row.latest_input_at, at);
+  assert.equal(prepared.row.sequence_timestamps.length,HYBRID_SEQUENCE_STEPS);
+  assert.equal(prepared.row.sequence_timestamps.at(-1),at);
+  assert.equal(prepared.row.outcome_horizon_ms,FOUR_HOURS);
+  assert.equal(prepared.row.maturity_ms,prepared.row.resolved_at-at);
   assert.equal(prepared.row.resolved_at, at + FOUR_HOURS);
   assert.equal(prepared.row.gross_return_pct, 3);
   assert.equal(prepared.row.max_favorable_excursion_pct, 3);
