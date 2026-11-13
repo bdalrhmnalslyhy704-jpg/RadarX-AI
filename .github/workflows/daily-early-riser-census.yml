@@ -6,6 +6,7 @@ on:
       - research/daily-early-riser-census-20261109
       - research/daily-early-riser-neural-20261110
       - research/daily-early-riser-opportunity-targets-20261113
+      - research/daily-early-riser-mlp-budget-20261113
     paths:
       - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
   workflow_dispatch:
@@ -45,7 +46,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: daily-early-riser-census-${{ github.ref }}
+  group: daily-early-riser-census-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -60,7 +61,7 @@ jobs:
       OPPORTUNITY_HORIZONS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '24,48,72' || '24' }}
       ANCHOR_STRIDE_HOURS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '72' || '24' }}
       CENSUS_MIN_VOLUME: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '0' || github.event.inputs.min_quote_volume || '750000' }}
-      CENSUS_END_EXCLUSIVE: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '2026-11-12' || github.event.inputs.end_exclusive || '2026-11-01' }}
+      CENSUS_END_EXCLUSIVE: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '2026-11-12' || github.ref_name == 'research/daily-early-riser-mlp-budget-20261113' && '2026-11-12' || github.event.inputs.end_exclusive || '2026-11-01' }}
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4
@@ -123,7 +124,7 @@ jobs:
             --attention-only true \
             --output artifacts/daily-early-riser-safe-72h-5pct-tcn.json
       - name: Train standard daily baseline and neural challengers on legacy census branches
-        if: github.ref_name != 'research/daily-early-riser-opportunity-targets-20261113'
+        if: github.ref_name != 'research/daily-early-riser-opportunity-targets-20261113' && github.ref_name != 'research/daily-early-riser-mlp-budget-20261113'
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \

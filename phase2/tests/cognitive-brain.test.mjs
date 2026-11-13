@@ -10,12 +10,71 @@ import {
   hasCognitiveBrierSuperiority,
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_FEATURE_NAMES,
+  COGNITIVE_DAILY_FEATURE_SCHEMA,
+  COGNITIVE_DAILY_FEATURE_NAMES,
   buildCognitiveFeatureVector,
-  evaluateCognitiveDirectionalRanking
+  evaluateCognitiveDirectionalRanking,
+  hasSelectedNeuralResidual,
+  deriveBrierOptimalBlendWeight,
+  isMeaningfulHybridBlendWeight,
+  auditNeuralOneBatchOverfit,
+  isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
+
+test('MLP V5 training loop consumes the asymmetric same-time ranking objective',()=>{
+  const rows=Array.from({length:60*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    const at=BASE_TIME+group*8*60*60*1000;
+    const signal=within%2===0;
+    return {
+      ...sample(index,signal?'UP':'DOWN'),
+      id:'MLP-RANK:'+group+':'+within,
+      symbol:'RANK'+String(within).padStart(3,'0')+'USDT',
+      at,resolved_at:at+FOUR_HOURS,
+      horizon_ms:FOUR_HOURS,
+      outcome:signal?'UP':'DOWN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
+      target_semantics:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2_PCT_4H_15M_V2'
+    };
+  });
+  const profile=buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:60,
+    minimumValidationSamples:20,
+    minimumHoldoutSamples:20,
+    minimumNeuralSelectionSamples:20,
+    minimumNeuralSelectionPositiveSamples:6,
+    minimumNeuralSelectionNegativeSamples:6,
+    minNeuralTrainingSamples:60,
+    maxNeuralTrainingSamples:400,
+    neuralIterations:30,
+    neuralTrainingHistoryFraction:1,
+    enableAsymmetricDirectionalRankingLoss:true,
+    directionalRankingLossConfig:{
+      brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,
+      baselineGapWeight:0.2,pairMargin:0.1,pairTemperature:0.5,
+      falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025,
+      maxPairsPerTimestamp:256
+    }
+  });
+  const diagnostics=profile.neural_network?.member_training_diagnostics||[];
+  assert.ok(diagnostics.length>0,
+    'MLP V5 ensemble should reach the gradient-fit loop: '+JSON.stringify({status:profile.neural_network?.status,split:profile.comparison_contract,training_samples:profile.neural_network?.training_samples,fit_samples:profile.neural_network?.fit_training_samples,selection_samples:profile.neural_network?.selection_samples,selection_positive:profile.neural_network?.selection_positive_samples,selection_negative:profile.neural_network?.selection_negative_samples}));
+  assert.ok(diagnostics.every(member=>Array.isArray(member.epoch_history)),
+    'each MLP member should retain its actual epoch history');
+  const ranking=diagnostics.flatMap(member=>member.epoch_history)
+    .map(epoch=>epoch.directional_ranking_loss).filter(Boolean);
+  assert.ok(ranking.length>0,
+    'ranking objective must execute inside the MLP optimizer loop');
+  assert.ok(ranking.some(metrics=>metrics.same_timestamp_pair_count>0),
+    'MLP training should build same-time cross-sectional UP/DOWN pairs');
+  assert.ok(ranking.every(metrics=>Number.isFinite(metrics.candidate_brier)&&
+    Number.isFinite(metrics.baseline_brier)&&
+    Number.isFinite(metrics.pairwise_ranking_loss)),
+    'the MLP ranking objective diagnostics must remain finite');
+});
 
 test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
   assert.equal(COGNITIVE_FEATURE_SCHEMA,'CROSS_ASSET_EARLY_FLOW_FEATURES_V2');
@@ -43,6 +102,51 @@ test('cognitive features separate early-flow divergence from momentum and missin
   assert.equal(withoutMicro[index.micro_buy_flow_acceleration],0);
   assert.equal(withoutMicro[index.micro_availability_mask],0,
     'missing 5m evidence must not look like neutral buyer flow');
+});
+
+test('hybrid blend uses a true two-component Brier optimum and rejects endpoint collapse',()=>{
+  const boosted=[0.9,0.4,0.1,0.6];
+  const neural=[0.4,0.9,0.6,0.1];
+  const targets=[1,1,0,0];
+  const weight=deriveBrierOptimalBlendWeight(boosted,neural,targets);
+  assert.ok(Math.abs(weight-0.5)<1e-12);
+  assert.equal(isMeaningfulHybridBlendWeight(weight),true);
+  const brier=candidate=>boosted.reduce((sum,value,index)=>{
+    const p=candidate*value+(1-candidate)*neural[index];
+    return sum+(p-targets[index])**2;
+  },0);
+  const epsilon=1e-5;
+  assert.ok(brier(weight)<=brier(Math.max(0.05,weight-epsilon))+1e-10);
+  assert.ok(brier(weight)<=brier(Math.min(0.95,weight+epsilon))+1e-10);
+  const endpoint=deriveBrierOptimalBlendWeight(
+    [0.8,0.2,0.7,0.3,0.9,0.1],
+    [0.4,0.6,0.5,0.5,0.4,0.6],[1,0,1,0,1,0]);
+  assert.equal(endpoint,1);
+  assert.equal(isMeaningfulHybridBlendWeight(endpoint),false,
+    'a pure component cannot be published as a hybrid');
+  assert.equal(isMeaningfulHybridBlendWeight(0.04),false);
+  assert.equal(isMeaningfulHybridBlendWeight(0.96),false);
+  assert.equal(deriveBrierOptimalBlendWeight([0.5,0.5],[0.5,0.5],[1,0]),null);
+  assert.equal(deriveBrierOptimalBlendWeight([0.4,0.6],[0.5],[1,0]),null);
+  assert.equal(deriveBrierOptimalBlendWeight([0.4,Number.NaN],[0.5,0.2],[1,0]),null);
+});
+
+test('hybrid fail-closed gate requires an inner-selected positive neural residual',()=>{
+  const unselected={
+    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+    members:[{kind:'RESIDUAL_DEEP_MLP_V2'}],
+    seeds:[11],selected_member_index:-1,selected_residual_scale:0
+  };
+  assert.equal(hasSelectedNeuralResidual(unselected),false);
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,selected_member_index:0,selected_residual_scale:0
+  }),false,'zero residual is only the logistic anchor');
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,selected_member_index:0,selected_residual_scale:0.1
+  }),true,'a selected MLP residual may be used by the blend');
+  assert.equal(hasSelectedNeuralResidual({
+    ...unselected,seeds:[11,29]
+  }),false,'member and seed manifests must agree');
 });
 
 test('V5 neural and hybrid challengers require a strict 0.003 Brier improvement',()=>{
@@ -245,7 +349,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
     assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
     assert.equal(profile.neural_network.training_strategy,
-      'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6');
+      'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -309,8 +413,11 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
-    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC',
-      'TRAINED_NOT_SELECTED','VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
+    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
+      'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT',
+      'HYBRID_WEIGHT_NOT_IDENTIFIABLE','HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT',
+      'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
+      'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
     if(profile.model_selection.selected_model==='GBDT_RESIDUAL'){
       assert.equal(profile.boosted_tree_model.selected,true);
@@ -320,7 +427,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       assert.equal(profile.hybrid_model.selected,true);
       assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
     }
-    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP_W')){
+    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP')){
       assert.equal(profile.hybrid_model.holdout?.evaluated,true,
         'the validation winner must expose untouched holdout metrics even when it fails');
       assert.equal(profile.model_selection.challenger_holdout?.evaluated,true);
@@ -348,6 +455,196 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(highProbability.probability_status, 'OUT_OF_SAMPLE_VALIDATED');
     assert.ok(highProbability.counterfactual_evidence.length > 0);
   }
+});
+
+test('MLP inference tensor validator rejects ragged matrices and non-finite parameters',()=>{
+  const inputSize=COGNITIVE_FEATURE_NAMES.length,hidden1=10,hidden2=6;
+  const valid={
+    kind:'RESIDUAL_DEEP_MLP_V2',input_size:inputSize,
+    feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    input_weights:Array.from({length:inputSize},()=>Array(hidden1).fill(0.01)),
+    hidden_bias_1:Array(hidden1).fill(0),
+    hidden_weights:Array.from({length:hidden1},()=>Array(hidden2).fill(0.01)),
+    hidden_bias_2:Array(hidden2).fill(0),
+    output_weights:Array(hidden2).fill(0.01),
+    skip_weights:Array(inputSize).fill(0),
+    output_bias:0
+  };
+  assert.equal(isValidCognitiveMlpFit(valid),true);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,input_weights:valid.input_weights.map((row,index)=>
+      index===4?row.slice(1):row)
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,hidden_weights:valid.hidden_weights.map((row,index)=>
+      index===2?row.concat(0):row)
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,output_weights:[...valid.output_weights.slice(1),Number.NaN]
+  }),false);
+  assert.equal(isValidCognitiveMlpFit({
+    ...valid,feature_names:[...valid.feature_names].reverse()
+  }),false);
+});
+
+test('MLP tensor interface rejects reordered features, mismatched schemas, bad shapes and non-finite inputs',()=>{
+  const baseFeatures={
+    volume_ratio:2,trade_ratio:1.5,taker_buy_ratio:0.62,
+    compression_ratio:0.7,relative_strength_vs_btc_pct:1,
+    recent_15m_return_pct:0.4,micro_5m_available:true,
+    micro_5m_taker_buy_ratio:0.65
+  };
+  const rows=Array.from({length:32},(_,index)=>({
+    id:'CONTRACT:'+index,symbol:'CONTRACTUSDT',
+    at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+    outcome:index%2?'UP':'DOWN',target:index%2,
+    features:baseFeatures,feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    vector:buildCognitiveFeatureVector(baseFeatures)
+  }));
+  const reordered=rows.map((row,index)=>index===7?{
+    ...row,feature_names:[...row.feature_names].reverse()
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(reordered),
+    /NEURAL_FEATURE_NAME_ORDER_MISMATCH:7/);
+  const wrongSchema=rows.map((row,index)=>index===9?{
+    ...row,feature_schema:'CROSS_ASSET_DAILY_CONTEXT_FEATURES_V3'
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(wrongSchema),
+    /NEURAL_FEATURE_SCHEMA_MISMATCH:9/);
+  const wrongShape=rows.map((row,index)=>index===11?{
+    ...row,vector:row.vector.slice(1)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(wrongShape),
+    /NEURAL_FEATURE_VECTOR_SHAPE_MISMATCH:11/);
+  const nonFinite=rows.map((row,index)=>index===13?{
+    ...row,vector:row.vector.map((value,feature)=>feature===4?Number.NaN:value)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(nonFinite),
+    /NEURAL_FEATURE_VECTOR_NON_FINITE_OR_NON_NUMERIC:13/);
+  const misaligned=rows.map((row,index)=>index===15?{
+    ...row,vector:row.vector.map((value,feature)=>feature===0?value+0.1:value)
+  }:row);
+  assert.throws(()=>auditNeuralOneBatchOverfit(misaligned),
+    /NEURAL_FEATURE_VECTOR_VALUE_MISMATCH:15/);
+});
+
+test('daily-context 35-feature MLP tensor contract also overfits one deterministic 32-row batch',()=>{
+  assert.equal(COGNITIVE_DAILY_FEATURE_NAMES.length,35);
+  const rows=Array.from({length:32},(_,index)=>{
+    const positive=index<16,sign=positive?1:-1;
+    const features={
+      volume_ratio:positive?4:0.25,
+      trade_ratio:positive?3:0.3,
+      taker_buy_ratio:positive?0.78:0.22,
+      compression_ratio:positive?0.35:1.25,
+      relative_strength_vs_btc_pct:sign*2,
+      recent_15m_return_pct:sign*0.9,
+      higher_low:positive,trend_aligned:positive,
+      micro_5m_available:true,
+      micro_5m_taker_buy_ratio:positive?0.76:0.24,
+      return_30m_pct:sign*1.2,
+      hourly_return_pct:sign*2.1,
+      return_3h_pct:sign*3.4,
+      btc_hourly_return_pct:sign*0.2,
+      daily_change_pct:sign*5.5,
+      relative_strength_vs_btc_24h_pct:sign*3,
+      quote_volume_24h:2_000_000,
+      breakout_distance_pct:sign*0.65,
+      current_range_pct:2.5,
+      lower_wick_pct:positive?1.1:0.2,
+      micro_5m_volume_ratio:positive?2.4:0.3,
+      micro_5m_trade_ratio:positive?2.1:0.4,
+      micro_5m_return_pct:sign*0.6,
+      micro_5m_close_location:positive?0.85:0.15
+    };
+    return {
+      id:'DAILY35:'+index,symbol:'DAILY35USDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,features,
+      feature_schema:COGNITIVE_DAILY_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_DAILY_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features,COGNITIVE_DAILY_FEATURE_SCHEMA)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:48,seed:29});
+  console.log('[COGNITIVE_MLP_35_FEATURE_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.equal(report.feature_count,35);
+  assert.equal(report.feature_schema,COGNITIVE_DAILY_FEATURE_SCHEMA);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_gradients_finite,true);
+  assert.equal(report.all_parameters_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
+});
+
+test('MLP numerical training audit drives an exactly balanced 32-row batch to near-zero Brier',()=>{
+  const rows=Array.from({length:32},(_,index)=>{
+    const positive=index<16;
+    const features=positive?{
+      volume_ratio:4,trade_ratio:3,taker_buy_ratio:0.78,
+      compression_ratio:0.35,relative_strength_vs_btc_pct:2,
+      recent_15m_return_pct:0.9,higher_low:true,trend_aligned:true,
+      micro_5m_available:true,micro_5m_taker_buy_ratio:0.76
+    }:{
+      volume_ratio:0.25,trade_ratio:0.3,taker_buy_ratio:0.22,
+      compression_ratio:1.25,relative_strength_vs_btc_pct:-2,
+      recent_15m_return_pct:-0.9,higher_low:false,trend_aligned:false,
+      micro_5m_available:true,micro_5m_taker_buy_ratio:0.24
+    };
+    return {
+      id:'MLP32:'+index,symbol:'MLP32USDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,features,
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:48,seed:17});
+  console.log('[COGNITIVE_MLP_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.ok(report.epochs_completed>=30&&report.epochs_completed<=48,
+    'the diagnostic must prove one-batch fit within a few dozen epochs');
+  assert.equal(report.requested_epochs,48);
+  assert.ok(report.early_stopping?.enabled);
+  assert.equal(report.early_stopping?.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping?.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping?.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch>=1&&report.best_epoch<=report.epochs_completed);
+  assert.equal(report.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(report.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(report.gradient_clip_norm,1);
+  assert.equal(report.feature_count,18);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_gradients_finite,true);
+  assert.equal(report.all_parameters_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
+});
+
+test('MLP early stopping restores best training-only checkpoint on a zero-signal plateau',()=>{
+  const features={};
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    return {
+      id:'MLP-PLATEAU:'+index,symbol:'MLPPLATEAUUSDT',
+      at:BASE_TIME+index*60_000,resolved_at:BASE_TIME+(index+1)*60_000,
+      outcome:target?'UP':'DOWN',target,features,
+      feature_schema:COGNITIVE_FEATURE_SCHEMA,
+      feature_names:[...COGNITIVE_FEATURE_NAMES],
+      vector:buildCognitiveFeatureVector(features)
+    };
+  });
+  const report=auditNeuralOneBatchOverfit(rows,{iterations:180,seed:71});
+  console.log('[COGNITIVE_MLP_EARLY_STOPPING_PLATEAU]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.ok(report.epochs_completed<report.requested_epochs,
+    'a training-only plateau must stop before the requested epoch budget');
+  assert.equal(report.early_stopping.stopped_early,true);
+  assert.equal(report.early_stopping.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch<=report.epochs_completed);
 });
 
 test('the learner changes its conclusion when the same evidence leads to opposite matured outcomes', () => {
@@ -725,7 +1022,7 @@ test('prequential audit scores only immutable, matured V5 forecasts and detects 
 
 
 test('Newton boosted-tree challenger learns nonlinear conjunctions without using the final holdout for selection',()=>{
-  const rows=Array.from({length:720},(_,index)=>{
+  const rows=Array.from({length:1440},(_,index)=>{
     const volumeState=index%2===0;
     const compressionState=Math.floor(index/2)%2===0;
     const isPositive=volumeState&&compressionState;
@@ -745,6 +1042,27 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     };
   });
   const profile=buildCognitiveLearningProfile(rows);
+  console.log('[GBDT_NONLINEAR_FIXTURE_DIAGNOSTIC]',JSON.stringify({
+    tree:{trained:profile.boosted_tree_model.trained,selected:profile.boosted_tree_model.selected,
+      tree_count:profile.boosted_tree_model.tree_count,
+      candidate_count:profile.boosted_tree_model.candidate_attempt_count,
+      fit_count:profile.boosted_tree_model.candidate_tree_fit_count,
+      selection_count:profile.boosted_tree_model.selection_sample_count,
+      selection_support:profile.boosted_tree_model.selection_support_ready,
+      selected_configuration:profile.boosted_tree_model.selected_configuration,
+      fit_failure_reason:profile.boosted_tree_model.fit_failure_reason,
+      probability_calibration:profile.boosted_tree_model.probability_calibration,
+      selection:profile.boosted_tree_model.selection_logistic,
+      candidates:profile.boosted_tree_model.candidate_selection_metrics?.map(row=>({
+        configuration:row.configuration,selection_brier:row.selection_brier_score,
+        selection_beats_logistic:row.selection_beats_same_window_logistic,
+        selected:row.selected_for_refit
+      }))},
+    hybrid:{status:profile.hybrid_model.status,trained:profile.hybrid_model.trained,
+      weight_fit_samples:profile.hybrid_model.weight_fit_samples,
+      selection_samples:profile.hybrid_model.selection_samples,
+      weight:profile.hybrid_model.boosted_weight}
+  }));
   assert.equal(profile.boosted_tree_model.trained,true,
     'the new tree challenger must train once the outer training block has enough mature rows');
   assert.ok(profile.boosted_tree_model.tree_count>0);
@@ -753,8 +1071,14 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     'the GBDT component must expose its own later, disjoint probability calibration');
   assert.equal(profile.boosted_tree_model.validation.evaluated,true);
   assert.equal(profile.boosted_tree_model.search_grid_size,9);
-  assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,9,
-    'nine pre-declared GBDT schedules must be compared on a disjoint inner selection block');
+  assert.equal(profile.boosted_tree_model.candidate_fit_diagnostics.length,9,
+    'every pre-declared GBDT schedule must report whether a gainful root split exists');
+  assert.equal(profile.boosted_tree_model.candidate_attempt_count,9);
+  assert.ok(profile.boosted_tree_model.candidate_fit_diagnostics.every(row=>
+    row.root_gain?.evaluated===true&&Number.isFinite(row.root_gain.best_root_split_gain??0)));
+  assert.equal(profile.boosted_tree_model.candidate_selection_metrics.length,
+    profile.boosted_tree_model.candidate_tree_fit_count,
+    'only actual fitted GBDT trees may enter selection scoring');
   const treeCandidates=profile.boosted_tree_model.candidate_selection_metrics;
   assert.ok(treeCandidates.every(row=>
     row.training_samples===profile.boosted_tree_model.selection_training_samples&&
@@ -780,17 +1104,43 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
-  assert.equal(profile.hybrid_model.trained,true);
-  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,3,
-    'all three pre-declared blend weights must be evaluated on the disjoint inner selection block');
-  assert.deepEqual(profile.hybrid_model.candidate_selection_metrics.map(row=>row.boosted_weight),
-    [0.25,0.5,0.75]);
+  assert.equal(profile.hybrid_model.minimum_component_weight,0.05);
+  if(profile.hybrid_model.trained){
+    assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
+      'only a genuine two-component analytically weighted hybrid may be trained');
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,false);
+    const blendCandidate=profile.hybrid_model.candidate_selection_metrics[0];
+    assert.equal(blendCandidate.name,'HYBRID_GBDT_MLP_BRIER_OPTIMAL');
+    assert.ok(Number.isFinite(blendCandidate.boosted_weight)&&
+      blendCandidate.boosted_weight>=0.05&&blendCandidate.boosted_weight<=0.95);
+  }else{
+    assert.equal(profile.hybrid_model.candidate_selection_metrics.length,0);
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,true);
+    assert.equal(profile.hybrid_model.status,'HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT');
+  }
+  const blendCandidate=profile.hybrid_model.candidate_selection_metrics[0];
+  if(profile.hybrid_model.trained){
+    assert.ok(blendCandidate.weight_fit_sample_count>=20);
+    assert.ok(blendCandidate.weight_fit_start_at<=blendCandidate.weight_fit_end_at);
+    assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
+      'blend-weight fitting labels must finish before its disjoint selection block begins');
+  }else{
+    assert.equal(profile.hybrid_model.raw_optimal_boosted_weight,0,
+      'fixture should demonstrate a pure-MLP optimum that is rejected as a hybrid');
+  }
+  assert.ok(profile.hybrid_model.weight_fit_samples>=20);
+  assert.ok(profile.hybrid_model.weight_fit_end_at<profile.hybrid_model.weight_fit_cut_at);
   assert.ok(profile.hybrid_model.selection_samples>=20);
+  assert.ok(profile.hybrid_model.weight_fit_cut_at<profile.validation_start_at,
+    'the frozen blend weight must be tested on a later pre-validation block');
   assert.ok(profile.hybrid_model.selection_start_at<profile.validation_start_at,
     'blend-weight selection must finish before outer validation begins');
-  assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
-    row.selection_sample_count===profile.hybrid_model.selection_samples&&
-    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)));
+  if(profile.hybrid_model.trained){
+    assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
+      row.selection_sample_count===profile.hybrid_model.selection_samples&&
+      Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)&&
+      Number.isFinite(row.weight_fit_sample_count)&&row.weight_fit_sample_count===profile.hybrid_model.weight_fit_samples));
+  }
   assert.ok(profile.hybrid_model.candidate_validation_metrics.length<=1,
     'only the inner-selected blend weight may reach outer validation');
   if(profile.hybrid_model.candidate_validation_metrics.length===1){

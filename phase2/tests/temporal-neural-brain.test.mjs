@@ -14,6 +14,7 @@ import {
   auditTemporalGradientNumerics,
   auditTemporalTrainingWorkspace,
   benchmarkTemporalTrainingWorkspace,
+  auditTemporalOneBatchOverfit,
   TEMPORAL_LATENT_CHANNELS,
   TEMPORAL_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_GRADIENT_ACCUMULATION,
@@ -77,6 +78,66 @@ test('ordered four-segment pooling preserves temporal order instead of collapsin
   }
   assert.equal(poolOrderedTemporalSegments(early.slice(1)),null,
     'incomplete latent windows must fail closed');
+});
+
+test('TCN passes a deterministic 32-sequence one-batch fit with finite gradients',()=>{
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    const direction=target?1:-1;
+    const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+      Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>{
+        if(channel===0)return direction*(0.9+time*0.001);
+        if(channel===1)return direction*0.35;
+        return Math.sin((index+1)*(time+2)*(channel+1)*0.001)*0.03;
+      })
+    );
+    return {
+      id:'TCN32:'+index,symbol:'TCN32USDT',at:1_700_000_000_000+index*60_000,
+      resolved_at:1_700_000_060_000+index*60_000,
+      outcome:target?'UP':'DOWN',target,sequence
+    };
+  });
+  const report=auditTemporalOneBatchOverfit(rows,{epochs:80,seed:53});
+  console.log('[TEMPORAL_TCN_32_ROW_OVERFIT]',JSON.stringify(report));
+  assert.deepEqual(report.input_shape,[24,29]);
+  assert.equal(report.sample_count,32);
+  assert.ok(report.epochs_completed>=30&&report.epochs_completed<=80);
+  assert.equal(report.requested_epochs,80);
+  assert.ok(report.early_stopping?.enabled);
+  assert.equal(report.early_stopping?.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping?.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping?.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch>=1&&report.best_epoch<=report.epochs_completed);
+  assert.equal(report.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(report.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(report.gradient_clip_norm,1);
+  assert.equal(report.finite_predictions,true);
+  assert.equal(report.all_epoch_gradient_and_loss_diagnostics_finite,true);
+  assert.equal(report.passed,true,JSON.stringify(report));
+});
+
+test('TCN early stopping restores best training-only checkpoint on a zero-signal plateau',()=>{
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const rows=Array.from({length:32},(_,index)=>{
+    const target=index<16?1:0;
+    return {
+      id:'TCN-PLATEAU:'+index,symbol:'TCNPLATEAUUSDT',
+      at:1_700_000_000_000+index*60_000,
+      resolved_at:1_700_000_060_000+index*60_000,
+      outcome:target?'UP':'DOWN',target,sequence
+    };
+  });
+  const report=auditTemporalOneBatchOverfit(rows,{epochs:180,seed:79});
+  console.log('[TEMPORAL_TCN_EARLY_STOPPING_PLATEAU]',JSON.stringify(report));
+  assert.equal(report.sample_count,32);
+  assert.deepEqual(report.input_shape,[24,29]);
+  assert.ok(report.epochs_completed<report.requested_epochs,
+    'a training-only plateau must stop before the requested epoch budget');
+  assert.equal(report.early_stopping.stopped_early,true);
+  assert.equal(report.early_stopping.monitor,'TRAINING_BLOCK_OBJECTIVE_ONLY');
+  assert.equal(report.early_stopping.validation_or_holdout_used,false);
+  assert.equal(report.early_stopping.restored_best_checkpoint,true);
+  assert.ok(report.best_epoch<=report.epochs_completed);
 });
 
 test('V8, V9 and V10 analytical gradients match central finite differences for all proper-score objectives',()=>{
@@ -397,6 +458,42 @@ function sample(group,index,{up=null}={}){
   };
 }
 
+test('TCN training loop consumes the asymmetric same-time ranking objective',()=>{
+  const rows=Array.from({length:45*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    return sample(group,within,{up:within%2===0});
+  });
+  const profile=buildTemporalNeuralProfile(rows,{
+    minTrainingSamples:80,
+    minimumValidationSamples:30,
+    minimumHoldoutSamples:30,
+    liveHoldoutSamples:20,
+    epochs:1,
+    enableTemporalBoostedTree:false,
+    enableAsymmetricDirectionalRankingLoss:true,
+    directionalRankingLossConfig:{
+      brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,
+      baselineGapWeight:0.2,pairMargin:0.1,pairTemperature:0.5,
+      falsePositiveProbabilityThreshold:0.7,requiredBaselineImprovement:0.00025
+    }
+  });
+  const members=profile.member_training_diagnostics||[];
+  assert.ok(members.length>0,'shared TCN ensemble should reach the training loop: '+JSON.stringify({status:profile.status,resolved_samples:profile.resolved_samples,training_samples:profile.training_samples,validation_samples:profile.validation_samples,holdout_samples:profile.holdout_samples,required_training_samples:profile.required_training_samples,training_targets:profile.shared_model_training_targets,model_selection:profile.shared_model_selection_targets,split:profile.shared_model_split_boundaries}));
+  assert.ok(members.every(member=>Array.isArray(member.epoch_history)),
+    'each trained member should retain per-epoch diagnostics');
+  const rankingDiagnostics=members.flatMap(member=>member.epoch_history)
+    .map(epoch=>epoch.directional_ranking_loss).filter(Boolean);
+  assert.ok(rankingDiagnostics.length>0,
+    'the asymmetric objective must be calculated inside the actual TCN optimizer loop');
+  assert.ok(rankingDiagnostics.some(metrics=>metrics.same_timestamp_pair_count>0),
+    'the model must build cross-sectional positive/negative pairs on shared timestamps');
+  assert.ok(rankingDiagnostics.every(metrics=>
+    Number.isFinite(metrics.candidate_brier)&&
+    Number.isFinite(metrics.baseline_brier)&&
+    Number.isFinite(metrics.pairwise_ranking_loss)),
+    'training objective diagnostics must remain finite');
+});
+
 test('temporal target encodes only an actual +3% first-passage as success',()=>{
   assert.equal(temporalBinaryTarget('UP'),1);
   assert.equal(temporalBinaryTarget('DOWN'),0);
@@ -635,9 +732,16 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   for(let index=0;index<profile.member_training_diagnostics.length;index++){
     const diagnostic=profile.member_training_diagnostics[index];
     assert.equal(diagnostic.schema,'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1');
+    assert.equal(diagnostic.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+    assert.equal(diagnostic.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+    assert.equal(diagnostic.gradient_clip_norm,1);
     assert.equal(diagnostic.diagnostic_only,true);
     assert.equal(diagnostic.loss_measurement,'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH');
     assert.equal(diagnostic.epochs_completed,profile.member_training_profiles[index].epochs);
+    assert.equal(diagnostic.requested_epochs,profile.member_training_profiles[index].requested_epochs);
+    assert.ok(diagnostic.early_stopping?.enabled);
+    assert.equal(diagnostic.early_stopping?.validation_or_holdout_used,false);
+    assert.equal(diagnostic.early_stopping?.restored_best_checkpoint,true);
     assert.equal(diagnostic.epoch_history.length,diagnostic.epochs_completed);
     assert.ok(diagnostic.epoch_history.every(epoch=>
       Number.isFinite(epoch.mean_weighted_training_objective_loss)&&

@@ -547,6 +547,10 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    // The sequence builder consumes exactly the final 24 contiguous closed 15m candles.
+    // Persist each close time so downstream training can verify step-to-label alignment.
+    temporal_sequence_timestamps: temporalSequence
+      ?candles.slice(-24).map(row=>Number(row.closeTime)):null,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
@@ -737,6 +741,7 @@ export function buildAdaptiveTraderHistoricalOutcomeSamples({
       quote_volume_24h:Number(volume24h.toFixed(2)),change_24h_pct:Number(dailyReturn.toFixed(3)),
       selection_lane:'HISTORICAL_CLOSED_CANDLE',features,outcome,
       temporal_sequence:candidate.temporal_sequence,
+      temporal_sequence_timestamps:candidate.temporal_sequence_timestamps,
       target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2',
       first_passage:passage,
       outcome_source:'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1',

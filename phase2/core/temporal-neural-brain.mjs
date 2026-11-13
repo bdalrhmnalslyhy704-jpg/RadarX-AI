@@ -63,6 +63,10 @@ const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
 import {performance} from 'node:perf_hooks';
+import {
+  validateTemporalSequenceAlignment,
+  calculateAsymmetricDirectionalRankingLoss
+} from './neural-safety-contracts.mjs';
 
 function sampleIdentityFingerprint(rows){
   const canonical=(Array.isArray(rows)?rows:[]).map(row=>[
@@ -122,7 +126,8 @@ function cleanRows(samples, {
   targetDefinition = TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs = HORIZON_MS,
   allowedOutcomeSources = null,
-  outcomeContractKind = 'FIRST_PASSAGE'
+  outcomeContractKind = 'FIRST_PASSAGE',
+  requireSequenceTimestamps = false
 } = {}) {
   const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
   const allowedSources = Array.isArray(allowedOutcomeSources)
@@ -151,6 +156,15 @@ function cleanRows(samples, {
     if (!id || !symbol || at === null || at <= 0 || resolvedAt === null ||
         resolvedAt - at !== horizonMs || horizon !== horizonMs ||
         seen.has(id) || seen.has(baseline)) return false;
+    const alignment=validateTemporalSequenceAlignment({
+      id,symbol,at,resolved_at:resolvedAt,horizon_ms:horizon,
+      temporal_sequence:row.temporal_sequence,
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps,
+      feature_information_cutoff_at:row.feature_information_cutoff_at??at,
+      requireSequenceTimestamps,
+      binaryMaskChannels:requireSequenceTimestamps?[28]:[]
+    });
+    if(!alignment.valid)return false;
     seen.add(id); seen.add(baseline);
     return true;
   }).map(row => ({
@@ -160,7 +174,9 @@ function cleanRows(samples, {
     resolved_at: Number(row.resolved_at),
     outcome: row.outcome,
     target: targetOf(row),
-    sequence: row.temporal_sequence.map(step => step.map(Number))
+    sequence: row.temporal_sequence.map(step => step.map(Number)),
+    temporal_sequence_timestamps:Array.isArray(row.temporal_sequence_timestamps)
+      ?row.temporal_sequence_timestamps.map(Number):null
   })).sort((a, b) => a.at - b.at || a.symbol.localeCompare(b.symbol));
 }
 
@@ -286,8 +302,11 @@ function applyAdam(parameters, gradients, state, step, rate, l2,
     const vHat = nextVariance / (1 - Math.pow(0.999, step));
     const parameterL2=path.at(-1)==='attentionPositionBiases'
       ?temporalParameterL2('attentionPositionBiases',l2,attentionPositionBiasL2Multiplier):l2;
+    const stepSize=rate;
+    // AdamW applies weight decay directly to parameters, outside Adam moments.
+    const decayedParameter=parameter*(1-stepSize*parameterL2);
     return {
-      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + parameterL2 * parameter), -2.5, 2.5),
+      value: clamp(decayedParameter-stepSize*mHat/(Math.sqrt(vHat)+EPSILON), -2.5, 2.5),
       moment: nextMoment,
       variance: nextVariance
     };
@@ -880,7 +899,7 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   };
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null) {
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null, gradientLogitOverride=null) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
@@ -897,11 +916,13 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   const probabilityError=cache.probability-target;
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
-  const error=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-    ?logLossGradient
-    :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-      ?0.5*brierGradient+0.5*logLossGradient
-      :brierGradient;
+  const error=gradientLogitOverride===null
+    ?trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+      ?logLossGradient
+      :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+        ?0.5*brierGradient+0.5*logLossGradient:brierGradient
+    :Number(gradientLogitOverride);
+  if(!Number.isFinite(error))throw new TypeError('TEMPORAL_GRADIENT_LOGIT_OVERRIDE_NON_FINITE');
   if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
     const weights=cache.attention_weights;
     if(!Array.isArray(weights)||weights.length!==TEMPORAL_SEQUENCE_STEPS||
@@ -1113,14 +1134,42 @@ function trainingObjectiveLoss(probability,target,objective) {
     objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brier+0.5*logLoss:brier;
 }
+function isFiniteTemporalTree(value){
+  if(Array.isArray(value))return value.every(isFiniteTemporalTree);
+  if(value&&typeof value==='object')
+    return Object.values(value).every(isFiniteTemporalTree);
+  return typeof value==='number'&&Number.isFinite(value);
+}
+function cloneTemporalTree(value){
+  if(Array.isArray(value))return value.map(cloneTemporalTree);
+  if(value&&typeof value==='object')
+    return Object.fromEntries(Object.entries(value).map(([key,child])=>
+      [key,cloneTemporalTree(child)]));
+  return value;
+}
+
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting='NONE',
   temporalPoolingMode='LAST_12_MEAN_V1',
-  attentionPositionBiasL2Multiplier=1
+  attentionPositionBiasL2Multiplier=1,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={}
 } = {}) {
+  if(!Array.isArray(rows)||rows.length===0)
+    throw new TypeError('TEMPORAL_TRAINING_ROWS_EMPTY');
+  for(let index=0;index<rows.length;index++){
+    const row=rows[index];
+    if(!validSequence(row?.sequence))
+      throw new TypeError('TEMPORAL_TRAINING_SEQUENCE_INVALID:'+index);
+    if(row.target!==0&&row.target!==1)
+      throw new TypeError('TEMPORAL_TRAINING_TARGET_INVALID:'+index);
+    if(row._pooled_baseline_features!==undefined&&
+      !isValidTemporalPooledBaselineFeatures(row._pooled_baseline_features))
+      throw new TypeError('TEMPORAL_POOLED_BASELINE_TENSOR_INVALID:'+index);
+  }
   const model = initializeModel(seed,baseRate,baselineFit,temporalPoolingMode);
   const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
   const negativeSamples=Math.max(0,rows.length-positiveSamples);
@@ -1147,17 +1196,64 @@ function fitMember(rows, seed, {
   const rowGradientScratch=zeroTrainableGradients(model);
   const trainingWorkspace=createTemporalTrainingWorkspace(model);
   const epochHistory=[];
-  for (let epoch = 1; epoch <= epochs; epoch++) {
+  const effectiveEpochs=Math.max(1,Math.min(180,Math.trunc(Number(epochs)||10)));
+  const baseLearningRate=Math.max(0.0001,Math.min(0.04,Number(learningRate)||0.006));
+  const gradientClipNorm=1.0;
+  const earlyStoppingPatience=Math.min(20,Math.max(8,Math.ceil(effectiveEpochs*0.25)));
+  const minimumEpochs=Math.min(30,effectiveEpochs);
+  const checkpointMinDelta=1e-8;
+  let bestTrainingObjective=Number.POSITIVE_INFINITY,bestEpoch=0;
+  let epochsWithoutImprovement=0,bestCheckpoint=null,stoppedEarly=false;
+  for (let epoch = 1; epoch <= effectiveEpochs; epoch++) {
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
-    for (const row of rows) {
+    let directionalLoss=null;
+    if(enableAsymmetricDirectionalRankingLoss){
+      const currentLogits=rows.map(row=>{
+        const probability=forwardWithWorkspace(row.sequence,model,1,
+          row._pooled_baseline_features,trainingWorkspace).probability;
+        if(!Number.isFinite(probability))throw new TypeError('TEMPORAL_RANKING_FORWARD_NON_FINITE');
+        const p=clamp(probability,1e-12,1-1e-12);
+        return Math.log(p/(1-p));
+      });
+      if(!baselineFit||!Array.isArray(baselineFit.weights)||
+        !Number.isFinite(Number(baselineFit.bias)))
+        throw new TypeError('TEMPORAL_RANKING_SAME_WINDOW_LOGISTIC_ANCHOR_MISSING');
+      const baselineLogits=rows.map(row=>{
+        const features=row._pooled_baseline_features;
+        if(!isValidTemporalPooledBaselineFeatures(features)||
+          baselineFit.weights.length!==features.length)
+          throw new TypeError('TEMPORAL_RANKING_BASELINE_FEATURES_INVALID');
+        let value=Number(baselineFit.bias);
+        for(let feature=0;feature<features.length;feature++)
+          value+=Number(baselineFit.weights[feature])*Number(features[feature]);
+        if(!Number.isFinite(value))
+          throw new TypeError('TEMPORAL_RANKING_BASELINE_LOGIT_NON_FINITE');
+        return value;
+      });
+      directionalLoss=calculateAsymmetricDirectionalRankingLoss({
+        logits:currentLogits,targets:rows.map(row=>row.target),
+        timestamps:rows.map(row=>row.at),symbols:rows.map(row=>row.symbol),
+        baselineLogits,sampleWeights:rows.map(row=>row.target>0.5?positiveSampleWeight:1),
+        config:directionalRankingLossConfig
+      });
+      weightedObjectiveLoss=directionalLoss.loss*totalSampleWeight;
+    }
+    for (let rowIndex=0;rowIndex<rows.length;rowIndex++) {
+      const row=rows[rowIndex];
       const cache = forwardWithWorkspace(row.sequence,model,1,
         row._pooled_baseline_features,trainingWorkspace);
+      if(!Number.isFinite(cache.probability))
+        throw new TypeError('TEMPORAL_FORWARD_NON_FINITE_PROBABILITY');
+      const gradientOverride=directionalLoss
+        ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight:null;
       const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
-        trainingObjective,rowGradientScratch,trainingWorkspace);
-      const sampleWeight=row.target>0.5?positiveSampleWeight:1;
+        trainingObjective,rowGradientScratch,trainingWorkspace,gradientOverride);
+      if(!isFiniteTemporalTree(itemGradient))
+        throw new TypeError('TEMPORAL_BACKPROP_NON_FINITE_GRADIENT');
+      const sampleWeight=directionalLoss?1:(row.target>0.5?positiveSampleWeight:1);
       const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
-      weightedObjectiveLoss+=rowLoss*sampleWeight;
+      if(!directionalLoss)weightedObjectiveLoss+=rowLoss*sampleWeight;
       if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
       else negativeObjectiveLoss+=rowLoss;
       for (const key of Object.keys(gradient)) {
@@ -1165,9 +1261,35 @@ function fitMember(rows, seed, {
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
+    if(!isFiniteTemporalTree(averaged))
+      throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NON_FINITE');
+    const trainingObjectiveScore=weightedObjectiveLoss/Math.max(1,totalSampleWeight);
+    if(!Number.isFinite(trainingObjectiveScore))
+      throw new TypeError('TEMPORAL_TRAINING_OBJECTIVE_NON_FINITE');
+    if(trainingObjectiveScore<bestTrainingObjective-checkpointMinDelta){
+      bestTrainingObjective=trainingObjectiveScore;
+      bestEpoch=epoch;
+      epochsWithoutImprovement=0;
+      bestCheckpoint=cloneTemporalTree(trainableParameters());
+    }else{
+      epochsWithoutImprovement++;
+    }
     const gradientStats=summarizeNumericTree(averaged);
-    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2,
+    const gradientL2Norm=Math.sqrt(gradientStats.sumSquares);
+    if(!Number.isFinite(gradientL2Norm))
+      throw new TypeError('TEMPORAL_EPOCH_GRADIENT_NORM_NON_FINITE');
+    const gradientClipScale=gradientL2Norm>gradientClipNorm
+      ?gradientClipNorm/gradientL2Norm:1;
+    const clippedGradients=gradientClipScale<1
+      ?scaleTree(averaged,gradientClipScale):averaged;
+    const cosineScale=0.1+0.9*0.5*(1+Math.cos(
+      Math.PI*(epoch-1)/Math.max(1,effectiveEpochs-1)
+    ));
+    const epochLearningRate=baseLearningRate*cosineScale;
+    const step = applyAdam(trainableParameters(), clippedGradients, optimizer, epoch, epochLearningRate, l2,
       attentionPositionBiasL2Multiplier);
+    if(!isFiniteTemporalTree(step.parameters)||!isFiniteTemporalTree(step.state))
+      throw new TypeError('TEMPORAL_OPTIMIZER_NON_FINITE_STATE');
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
@@ -1176,28 +1298,120 @@ function fitMember(rows, seed, {
       epoch,
       // Loss is measured on training rows immediately before this epoch's update.
       // It is diagnostic only and is never used for selection or early stopping.
-      mean_weighted_training_objective_loss:Number((weightedObjectiveLoss/
-        Math.max(1,totalSampleWeight)).toFixed(8)),
+      mean_weighted_training_objective_loss:Number(trainingObjectiveScore.toFixed(8)),
+      best_training_objective:Number(bestTrainingObjective.toFixed(8)),
       mean_positive_training_objective_loss:positiveSamples
         ?Number((positiveObjectiveLoss/positiveSamples).toFixed(8)):null,
       mean_negative_training_objective_loss:negativeSamples
         ?Number((negativeObjectiveLoss/negativeSamples).toFixed(8)):null,
-      averaged_gradient_l2_norm:Number(Math.sqrt(gradientStats.sumSquares).toFixed(8)),
+      directional_ranking_loss:directionalLoss?.metrics??null,
+      averaged_gradient_l2_norm:Number(gradientL2Norm.toFixed(8)),
+      gradient_clip_scale:Number(gradientClipScale.toFixed(8)),
+      learning_rate:Number(epochLearningRate.toFixed(8)),
       maximum_absolute_averaged_gradient:Number(gradientStats.maxAbsolute.toFixed(8)),
       residual_readout_l2_norm:Number(vectorL2Norm(model.outputWeights).toFixed(8))
     });
+    // Early stopping is training-only; no validation/calibration/holdout rows
+    // participate in the monitor or checkpoint decision.
+    if(epoch>=minimumEpochs&&epochsWithoutImprovement>=earlyStoppingPatience){
+      stoppedEarly=true;
+      break;
+    }
   }
+  if(!bestCheckpoint)throw new Error('TEMPORAL_BEST_CHECKPOINT_MISSING');
+  Object.assign(model,cloneTemporalTree(bestCheckpoint));
   model.training_diagnostics={
     schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
     diagnostic_only:true,
     loss_measurement:'FULL_TRAINING_BLOCK_PRE_UPDATE_PER_EPOCH',
     epochs_completed:epochHistory.length,
+    requested_epochs:effectiveEpochs,
+    best_epoch:bestEpoch,
+    best_training_objective:Number(bestTrainingObjective.toFixed(8)),
+    early_stopping:{
+      enabled:true,monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY',
+      patience:earlyStoppingPatience,minimum_epochs:minimumEpochs,
+      stopped_early:stoppedEarly,restored_best_checkpoint:true,
+      validation_or_holdout_used:false
+    },
+    optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
+    scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
+    gradient_clip_norm:gradientClipNorm,
+    learning_rate_start:baseLearningRate,
+    learning_rate_end:baseLearningRate*0.1,
     training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
     training_sample_profile:model.training_sample_profile,
     objective:trainingObjective,
     epoch_history:epochHistory
   };
   return model;
+}
+
+export function auditTemporalOneBatchOverfit(trainingRows,{
+  epochs=80,seed=53,learningRate=0.006,l2=0.012
+}={}){
+  if(!Array.isArray(trainingRows)||trainingRows.length!==32)
+    throw new TypeError('TEMPORAL_OVERFIT_AUDIT_REQUIRES_EXACTLY_32_ROWS');
+  for(let index=0;index<trainingRows.length;index++){
+    const row=trainingRows[index];
+    if(!validSequence(row?.sequence))
+      throw new TypeError('TEMPORAL_OVERFIT_AUDIT_SEQUENCE_INVALID:'+index);
+    if(row.target!==0&&row.target!==1)
+      throw new TypeError('TEMPORAL_OVERFIT_AUDIT_TARGET_INVALID:'+index);
+  }
+  const prepared=trainingRows.map(row=>({
+    ...row,_pooled_baseline_features:pooledSequence(row.sequence)
+  }));
+  const positiveSamples=prepared.filter(row=>row.target===1).length;
+  const negativeSamples=prepared.length-positiveSamples;
+  if(positiveSamples===0||negativeSamples===0)
+    throw new TypeError('TEMPORAL_OVERFIT_AUDIT_REQUIRES_BOTH_CLASSES');
+  const baseRate=positiveSamples/prepared.length;
+  const model=fitMember(prepared,seed,{
+    epochs:Math.max(30,Math.min(180,Math.trunc(Number(epochs)||80))),
+    learningRate:Math.max(0.0005,Math.min(0.03,Number(learningRate)||0.006)),
+    l2:Math.max(0,Math.min(0.5,Number(l2)||0.012)),
+    baseRate,baselineFit:null,
+    trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+    positiveClassWeighting:'NONE',
+    temporalPoolingMode:'LAST_12_MEAN_V1'
+  });
+  const predictions=prepared.map(row=>
+    forward(row.sequence,model,1,row._pooled_baseline_features).probability
+  );
+  const finitePredictions=predictions.every(Number.isFinite);
+  const brier=finitePredictions?mean(predictions.map((value,index)=>
+    (value-prepared[index].target)**2)):null;
+  const accuracy=finitePredictions?Number((predictions.filter((value,index)=>
+    (value>=0.5)===(prepared[index].target===1)).length/32*100).toFixed(2)):null;
+  const history=model.training_diagnostics?.epoch_history||[];
+  const allEpochDiagnosticsFinite=history.length===model.training_diagnostics?.epochs_completed&&
+    history.every(row=>Number.isFinite(row.mean_weighted_training_objective_loss)&&
+      Number.isFinite(row.averaged_gradient_l2_norm)&&
+      Number.isFinite(row.maximum_absolute_averaged_gradient)&&
+      Number.isFinite(row.residual_readout_l2_norm));
+  return {
+    schema:'TEMPORAL_TCN_32_SAMPLE_OVERFIT_AUDIT_V1',
+    diagnostic_only:true,production_training_changed:false,
+    input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+    sample_count:32,positive_samples:positiveSamples,negative_samples:negativeSamples,
+    architecture:model.temporal_pooling,
+    epochs_completed:model.training_diagnostics?.epochs_completed??0,
+    requested_epochs:model.training_diagnostics?.requested_epochs??null,
+    best_epoch:model.training_diagnostics?.best_epoch??null,
+    best_training_objective:model.training_diagnostics?.best_training_objective??null,
+    early_stopping:model.training_diagnostics?.early_stopping??null,
+    optimizer:model.training_diagnostics?.optimizer??null,
+    scheduler:model.training_diagnostics?.scheduler??null,
+    gradient_clip_norm:model.training_diagnostics?.gradient_clip_norm??null,
+    finite_predictions:finitePredictions,
+    all_epoch_gradient_and_loss_diagnostics_finite:allEpochDiagnosticsFinite,
+    initial_training_log_loss:history[0]?.mean_weighted_training_objective_loss??null,
+    final_training_log_loss:history.at(-1)?.mean_weighted_training_objective_loss??null,
+    post_fit_brier:brier,post_fit_accuracy_pct:accuracy,
+    passed:finitePredictions&&allEpochDiagnosticsFinite&&brier!==null&&
+      brier<=0.01&&accuracy===100
+  };
 }
 
 function calibratedProbability(rawProbability, calibrator) {
@@ -1698,17 +1912,20 @@ function fitEnsemble(rows, options = {}) {
   const architecture=attentionPooling?TEMPORAL_ATTENTION_MODEL_ARCHITECTURE:
     multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
     orderedPooling?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
+  const enabledDirectionalLoss=options.enableAsymmetricDirectionalRankingLoss===true;
+  const objectiveFor=objective=>enabledDirectionalLoss
+    ?'ASYMMETRIC_DIRECTIONAL_RANKING_V1':objective;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'),
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier}
@@ -1720,6 +1937,10 @@ function fitEnsemble(rows, options = {}) {
   }));
   const members=SEEDS.map((seed,index)=>fitMember(preparedRows,seed,{
     ...options,...memberProfiles[index],baseRate
+  }));
+  const completedMemberProfiles=memberProfiles.map((profile,index)=>({
+    ...profile,requested_epochs:profile.epochs,
+    epochs:members[index].training_diagnostics?.epochs_completed??profile.epochs
   }));
   return {
     members,seeds:[...SEEDS],
@@ -1735,7 +1956,7 @@ function fitEnsemble(rows, options = {}) {
           ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
           :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
-    member_training_profiles:memberProfiles,
+    member_training_profiles:completedMemberProfiles,
     attention_position_bias_l2_multiplier:attentionPositionBiasL2Multiplier,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,
@@ -1766,6 +1987,8 @@ function fitRegimeLocalTemporalTcn({
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   temporalPoolingMode='LAST_12_MEAN_V1',
   attentionPositionBiasL2Multiplier=1,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={},
   minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
   minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
   minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
@@ -1871,7 +2094,8 @@ function fitRegimeLocalTemporalTcn({
   const fitted=fitEnsemble(training,{
     epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
     learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode,
-    attentionPositionBiasL2Multiplier
+    attentionPositionBiasL2Multiplier,enableAsymmetricDirectionalRankingLoss,
+    directionalRankingLossConfig
   });
   const selectionLogistic=evaluate(selection,
     sequence=>predictLogistic(sequence,baseline),baseRate);
@@ -2021,6 +2245,9 @@ export function buildTemporalNeuralProfile(samples = [], {
   outcomeHorizonMs=HORIZON_MS,
   allowedOutcomeSources=null,
   outcomeContractKind='FIRST_PASSAGE',
+  requireSequenceTimestamps=false,
+  enableAsymmetricDirectionalRankingLoss=false,
+  directionalRankingLossConfig={},
   enableRegimeLocalTcn=false,
   regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnEpochs=6,
@@ -2037,7 +2264,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
-  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,outcomeContractKind});
+  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,
+    outcomeContractKind,requireSequenceTimestamps});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
@@ -2366,7 +2594,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const sharedTcnCalibrationSupported=sharedCalibrationTargets.samples>=30&&
     sharedCalibrationTargets.positive>=5&&sharedCalibrationTargets.negative>=20;
   const sharedTcnFit=sharedTcnTrainingSupported?fitEnsemble(sharedTrainingRows,{
-    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline
+    epochs,learningRate,l2,baseRate,baselineFit:pooledBaseline,
+    enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig
   }):null;
   const sharedSelectionLogistic=evaluate(pooledMemberSelectionRows,
     sequence=>predictLogistic(sequence,pooledBaseline),baseRate);
@@ -2476,6 +2705,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
       epochs:regimeLocalTcnEpochs,learningRate,l2,comparisonMargin,
       maxTrainingSamples:regimeLocalTcnMaxTrainingSamples,
+      enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
       minTrainingSamples:minRegimeTraining,
       minTrainingPositive:minRegimeTrainingPositive,
       minTrainingNegative:minRegimeNegative,
@@ -2502,6 +2732,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         epochs:regimeLocalTcnPyramidEpochs,learningRate,l2,comparisonMargin,
         maxTrainingSamples:regimeLocalTcnPyramidMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ORDERED_POOLING_MODE,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,
         minTrainingNegative:minRegimeNegative,
@@ -2529,6 +2760,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         epochs:regimeLocalTcnMultiscaleEpochs,learningRate,l2,comparisonMargin,
         maxTrainingSamples:regimeLocalTcnMultiscaleMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,
         minTrainingNegative:minRegimeNegative,
@@ -2557,6 +2789,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
         attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         minTrainingSamples:minRegimeTraining,
         minTrainingPositive:minRegimeTrainingPositive,minTrainingNegative:minRegimeNegative,
         minSelectionSamples,minSelectionPositive,minSelectionNegative,
@@ -3492,6 +3725,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_selection_targets:sharedSelectionTargets,
     shared_model_calibration_targets:sharedCalibrationTargets,
     shared_model_selection_logistic_brier:sharedSelectionLogistic.model_brier_score??null,
+    shared_model_selection_candidate_brier:sharedTcnSelectedCandidate?.metrics?.model_brier_score??null,
+    shared_model_selection_diagnostic_brier:sharedTcnDiagnosticCandidate?.metrics?.model_brier_score??null,
     shared_model_selection_passed:sharedTcnSelectionPassed,
     shared_model_selected_member_index:sharedTcnSelectedIndex,
     shared_model_selected_residual_scale:sharedTcnSelectedScale,

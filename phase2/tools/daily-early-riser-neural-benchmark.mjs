@@ -6,6 +6,10 @@ import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
   DAILY_EARLY_RISER_TARGETS_PCT,
+  DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+  effectiveDailyMlpFeatureSchema,
+  effectiveDailyMlpOutputInitializationScale,
   benchmarkDailyEarlyRiserTarget,
   benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
@@ -37,6 +41,11 @@ function validTemporalSequence(sequence){
       step.every(value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&
         Number.isFinite(Number(value))&&Math.abs(Number(value))<=4));
 }
+function validTemporalSequenceTimestamps(timestamps,anchorAt){
+  return Array.isArray(timestamps)&&timestamps.length===24&&
+    timestamps.every(Number.isFinite)&&timestamps.at(-1)===Number(anchorAt)&&
+    timestamps.every((value,index)=>index===0||value-timestamps[index-1]===15*60*1000);
+}
 async function loadTemporalSequences(path,expectedSha256,expectedRows){
   const sourceStat=await stat(path);
   if(!sourceStat.isFile()||sourceStat.size<=0)throw new Error('TEMPORAL_SIDECAR_NOT_READABLE');
@@ -57,11 +66,12 @@ async function loadTemporalSequences(path,expectedSha256,expectedRows){
     const id=String(row?.id||'').trim();
     const symbol=String(row?.symbol||'').trim().toUpperCase();
     const at=Number(row?.at);
-    if(!id||!symbol||!Number.isFinite(at)||at<=0||!validTemporalSequence(row.temporal_sequence)){
+    if(!id||!symbol||!Number.isFinite(at)||at<=0||!validTemporalSequence(row.temporal_sequence)||
+       !validTemporalSequenceTimestamps(row.temporal_sequence_timestamps,at)){
       invalidShape++;continue;
     }
     if(byId.has(id)){duplicateIds++;continue;}
-    byId.set(id,{symbol,at,sequence:row.temporal_sequence});
+    byId.set(id,{symbol,at,sequence:row.temporal_sequence,timestamps:row.temporal_sequence_timestamps});
   }
   if(malformed||invalidShape||duplicateIds||byId.size!==Number(expectedRows))
     throw new Error('TEMPORAL_SIDECAR_ROW_AUDIT_FAILED:'+JSON.stringify({
@@ -96,6 +106,7 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
     const identityMatches=temporalRow&&temporalRow.symbol===String(sample.symbol||'').trim().toUpperCase()&&
       temporalRow.at===Number(sample.at);
     const temporal_sequence=identityMatches?temporalRow.sequence:null;
+    const temporal_sequence_timestamps=identityMatches?temporalRow.timestamps:null;
     if(declaredAvailable&&!temporal_sequence)temporalFlaggedMissing++;
     if(!declaredAvailable&&temporalRow)temporalUnexpected++;
     if(temporal_sequence)temporalAttached++;
@@ -111,6 +122,7 @@ async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_p
       daily_change_pct:sample.daily_change_pct,
       relative_strength_vs_btc_24h_pct:sample.relative_strength_vs_btc_24h_pct,
       temporal_sequence,
+      temporal_sequence_timestamps,
       ...(labelMode==='first_passage'?{targets:{[key]:label}}:
         labelMode==='safe_opportunity'
           ?{safe_opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
@@ -168,6 +180,13 @@ async function main(){
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
+  const enableAsymmetricDirectionalRankingLoss=String(
+    args['asymmetric-directional-ranking-loss']??'true')==='true';
+  const directionalRankingLossConfig={
+    brierWeight:1,rankingWeight:0.25,falsePositiveWeight:0.5,baselineGapWeight:0.2,
+    pairMargin:0.1,pairTemperature:0.5,falsePositiveProbabilityThreshold:0.7,
+    requiredBaselineImprovement:0.00025,maxPairsPerTimestamp:256
+  };
   const regimeLocalMlpOnly=String(args['regime-local-mlp-only']||'false')==='true';
   const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
     Number(args['attention-position-bias-l2-multiplier']||1)));
@@ -175,6 +194,14 @@ async function main(){
     (regimeLocalMlpOnly?1:0.60));
   if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
     throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
+  const neuralIterations=Math.max(30,Math.min(180,
+    Math.trunc(Number(args['neural-iterations']||30))));
+  const neuralOutputInitializationScale=effectiveDailyMlpOutputInitializationScale(
+    args['neural-output-initialization-scale']??DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE
+  );
+  const dailyFeatureSchema=effectiveDailyMlpFeatureSchema(args['daily-feature-schema']??'DAILY_CONTEXT_35');
+  const dailyFeatureSchemaKey=dailyFeatureSchema===DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+    ?'DAILY_CONTEXT_35':'CORE_FLOW_18';
   const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
   const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
   const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
@@ -217,6 +244,12 @@ async function main(){
     regime_local_mlp_only:regimeLocalMlpOnly,
     temporal_attention_only:attentionOnly,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
+    asymmetric_directional_ranking_loss_enabled:enableAsymmetricDirectionalRankingLoss,
+    directional_ranking_loss_config:directionalRankingLossConfig,
+    neural_iterations:neuralIterations,
+    neural_output_initialization_scale:neuralOutputInitializationScale,
+    daily_feature_schema_key:dailyFeatureSchemaKey,
+    daily_feature_schema:dailyFeatureSchema,
     enable_factorization_machine:enableFactorizationMachine,
     factorization_rank:factorizationRank,
     factorization_iterations:factorizationIterations,
@@ -231,6 +264,8 @@ async function main(){
     input_file:input,
     temporal_input_file:temporalInput,
     census_report_file:censusReportPath,
+    census_source_run_id:process.env.RADARX_CENSUS_SOURCE_RUN_ID||null,
+    census_source_commit:process.env.RADARX_CENSUS_SOURCE_COMMIT||null,
     temporal_sidecar_audit:null,
     main_sample_file_audit:null,
     target_results:{},
@@ -242,6 +277,9 @@ async function main(){
           :'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
+      directional_ranking_loss:enableAsymmetricDirectionalRankingLoss
+        ?'Training-only Brier base plus same-timestamp UP-vs-DOWN pairwise ranking, false-positive confidence penalty, and frozen same-window Logistic margin hinge. This objective is not an acceptance score and does not establish out-of-sample superiority.'
+        :'Disabled; proper-scoring objectives remain active.',
       mlp_training_history:'The daily MLP gradient-fit window uses the newest '+String(Math.round(neuralTrainingHistoryFraction*100))+'% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
       models:tcnOnly
@@ -288,6 +326,7 @@ async function main(){
       Number(expectedTemporal.invalid_declared_sequences)!==0||
       Number(expectedTemporal.declared_sequence_count)!==Number(expectedTemporal.rows)+Number(expectedTemporal.invalid_declared_sequences)||
       expectedTemporal.sequence_steps!==24||expectedTemporal.sequence_channels!==29||
+      expectedTemporal.timestamps_verified!==true||expectedTemporal.interval_ms!==15*60*1000||
       typeof expectedTemporal.sha256!=='string'||!/^[a-f0-9]{64}$/i.test(expectedTemporal.sha256))
       throw new Error('CENSUS_TEMPORAL_SIDECAR_METADATA_MISSING');
     const temporalSidecar=await loadTemporalSequences(temporalInput,
@@ -310,7 +349,8 @@ async function main(){
       const result=regimeLocalMlpOnly
         ?benchmarkDailyEarlyRiserRegimeLocalMlp(loaded.samples,target,{
           labelMode,horizonHours,requiredLiquidityLane,
-          neuralTrainingHistoryFraction,minimumValidationSamples:1500,minimumHoldoutSamples:2000
+          neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
+          minimumValidationSamples:1500,minimumHoldoutSamples:2000
         })
         :benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
         tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
@@ -319,7 +359,9 @@ async function main(){
         enableRegimeLocalTcnMultiscale:!attentionOnly,
         enableRegimeLocalTcnAttention:true,
         temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
-        neuralTrainingHistoryFraction,
+        neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
+        enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
+        dailyFeatureSchema,
         enableFactorizationMachine,factorizationRank,factorizationIterations,
         factorizationLearningRate,factorizationL2,
         requiredLiquidityLane
@@ -373,6 +415,7 @@ async function main(){
         label_mode:labelMode,
         horizon_hours:horizonHours,
         feature_schema:result.feature_schema,
+        feature_schema_key:dailyFeatureSchemaKey,
         feature_count:result.feature_names?.length??null,
         samples:result.samples?.accepted??regimeLocalMlp?.sample_count??0,
         training:result.chronology?.training_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.training_samples||0),0),
@@ -380,6 +423,8 @@ async function main(){
         holdout:result.chronology?.holdout_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.holdout_samples||0),0),
         neural:{
           status:neural.status??null,trained:neural.trained===true,
+          output_initialization_scale:neural.output_initialization_scale??null,
+          daily_feature_schema_key:dailyFeatureSchemaKey,
           training_strategy:neural.training_strategy??null,
           factorization_member_enabled:neural.factorization_member_enabled===true,
           factorization_member_index:neural.factorization_member_index??-1,

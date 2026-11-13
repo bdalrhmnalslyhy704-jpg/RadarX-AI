@@ -385,6 +385,60 @@ test('label audit rejects missing horizon labels and any incorrect under-floor l
   assert.equal(bad.liquidity_lane_violations,1);
 });
 
+test('historical census audit validates only the configured opportunity horizons',()=>{
+  const at=1_700_000_000_000;
+  const horizonMs=24*60*60*1000;
+  const targets={};
+  const opportunity_targets={'24h':{}};
+  const drawdown_risks={'24h':{}};
+  const safe_opportunity_targets={'24h':{}};
+  for(const target of [5,10,15]){
+    const key='plus_'+target+'_pct';
+    targets[key]={
+      status:'RESOLVED',outcome:'FLAT',resolved_at:at+horizonMs,
+      horizon_ms:horizonMs,outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'
+    };
+    opportunity_targets['24h'][key]={
+      status:'RESOLVED',outcome:'FLAT',resolved_at:at+horizonMs,
+      horizon_ms:horizonMs,
+      outcome_source:'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1',
+      target_definition:'ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_24H_15M_V1',
+      independent_of_adverse_barrier:true
+    };
+    safe_opportunity_targets['24h'][key]={
+      status:'RESOLVED',outcome:'FLAT',resolved_at:at+horizonMs,
+      horizon_ms:horizonMs,outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+      target_definition:'FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_24H_15M_V1',
+      independent_of_future_after_first_touch:true
+    };
+  }
+  for(const threshold of [2,5]){
+    const key='minus_'+threshold+'_pct';
+    drawdown_risks['24h'][key]={
+      status:'RESOLVED',outcome:'FLAT',resolved_at:at+horizonMs,
+      horizon_ms:horizonMs,
+      outcome_source:'BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1',
+      target_definition:'ANY_DRAWDOWN_TOUCH_MINUS_'+threshold+'_PCT_WITHIN_24H_15M_V1',
+      independent_of_upside_barrier:true
+    };
+  }
+  const sample={
+    id:'24H-ONLY-AUDIT',symbol:'ONLY24USDT',at,quote_volume_24h:900_000,
+    liquidity_lane:'STANDARD_750K_PLUS',
+    targets,opportunity_targets,drawdown_risks,safe_opportunity_targets
+  };
+  const configured=auditSampleLabelHorizons([sample],{
+    opportunityHorizonsHours:[24],drawdownAdversePcts:[2,5]
+  });
+  assert.equal(configured.total,0,JSON.stringify(configured));
+  const defaultAllHorizons=auditSampleLabelHorizons([sample]);
+  assert.equal(defaultAllHorizons.opportunity_horizon_violations,6);
+  assert.equal(defaultAllHorizons.drawdown_horizon_violations,4);
+  assert.equal(defaultAllHorizons.safe_first_touch_horizon_violations,6);
+  assert.equal(defaultAllHorizons.total,16);
+});
+
 test('historical report keeps 72h upside events independent from drawdown and separates Micro Watch',()=>{
   const make=(id,score,up,lane,mae,mfe)=>{
     const target={status:'RESOLVED',outcome:up?'UP':'FLAT',

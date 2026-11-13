@@ -11,7 +11,15 @@ import {
   DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
   DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
   effectiveDailyTcnMultiscaleTrainingBudget,
+  effectiveDailyMlpIterations,
+  DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,
+  effectiveDailyMlpOutputInitializationScale,
+  DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA,
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+  effectiveDailyMlpFeatureSchema,
+  DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE,
+  DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
   benchmarkDailyEarlyRiserTarget,
@@ -26,6 +34,7 @@ import {
   COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
   factorizationMachineProjection,
+  NEURAL_FACTOR_CROSS_RESIDUAL_SCALES,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
@@ -676,10 +685,33 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(fmNeural.factorization_member_enabled,true);
   assert.equal(fmNeural.ensemble_members,4);
   assert.equal(fmNeural.ensemble_members_required,4);
+  assert.equal(fmNeural.member_training_profiles.length,fmNeural.ensemble_members,
+    'the fitted member manifest must include the optional factor-cross member');
   assert.equal(fmNeural.member_training_profiles.filter(item=>
     item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
-  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,20,
-    'the low-rank pairwise member must enter the same 4-member x 5-scale selection grid');
+  assert.equal(fmNeural.member_training_diagnostics.length,fmNeural.ensemble_members,
+    'each trained member must expose its own training-only checkpoint diagnostics');
+  const factorIndex=fmNeural.factorization_member_index;
+  const factorDiagnostics=fmNeural.member_training_diagnostics[factorIndex];
+  const factorProfile=fmNeural.member_training_profiles[factorIndex];
+  assert.equal(factorDiagnostics.optimizer,'ADAMW_DECOUPLED_WEIGHT_DECAY');
+  assert.equal(factorDiagnostics.scheduler,'COSINE_DECAY_10_PERCENT_FLOOR');
+  assert.equal(factorDiagnostics.gradient_clip_norm,1);
+  assert.equal(factorDiagnostics.early_stopping?.validation_or_holdout_used,false);
+  assert.equal(factorDiagnostics.early_stopping?.restored_best_checkpoint,true);
+  assert.equal(factorProfile.iterations,factorDiagnostics.epochs_completed);
+  assert.equal(factorProfile.requested_iterations,factorDiagnostics.requested_epochs);
+  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,
+    3*5+NEURAL_FACTOR_CROSS_RESIDUAL_SCALES.length,
+    'the low-rank pairwise member must use its fine residual grid while MLP keeps the original five scales');
+  assert.deepEqual(NEURAL_FACTOR_CROSS_RESIDUAL_SCALES,
+    [0,0.025,0.05,0.075,0.1,0.125,0.15,0.2,0.25,0.5,1]);
+  const fmBaselineBrier=fmNeural.inner_selection_diagnostics.logistic_baseline_brier_score;
+  const fmZeroScale=fmNeural.member_selection_brier_scores.find(item=>
+    item.index===fmNeural.factorization_member_index&&item.residual_scale===0);
+  assert.ok(fmZeroScale,'the factor-cross zero-residual candidate must be evaluated');
+  assert.ok(Math.abs(fmZeroScale.brier_score-fmBaselineBrier)<1e-10,
+    'zero factor-cross residual must reproduce the exact same-window logistic anchor score');
   assert.ok(fmNeural.max_training_outcome_resolved_at<fmNeural.selection_start_at,
     'factor-cross fit must remain strictly before the disjoint selection block');
 });
@@ -746,4 +778,125 @@ test('persisted benchmark report retains the independent regime-local TCN challe
   assert.ok(source.includes("args['enable-factorization-machine']"));
   assert.ok(source.includes('enableFactorizationMachine,factorizationRank,factorizationIterations'));
   assert.ok(source.includes('factorization_candidate_scores'));
+});
+
+test('daily MLP iteration budget is explicit, bounded and supports deeper convergence ablations',()=>{
+  assert.equal(effectiveDailyMlpIterations(),30);
+  assert.equal(effectiveDailyMlpIterations(20),30);
+  assert.equal(effectiveDailyMlpIterations(60),60);
+  assert.equal(effectiveDailyMlpIterations(120),120);
+  assert.equal(effectiveDailyMlpIterations(999),DAILY_EARLY_RISER_MLP_MAX_ITERATIONS);
+  assert.equal(effectiveDailyMlpIterations(-5),30);
+  assert.equal(DAILY_EARLY_RISER_MLP_MAX_ITERATIONS,180);
+});
+
+test('daily neural benchmark CLI forwards and records an explicit MLP iteration budget',async()=>{
+  const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes("args['neural-iterations']"));
+  assert.ok(source.includes('neural_iterations:neuralIterations'));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,'));
+});
+
+test('72h safe-opportunity target definition is carried into the cognitive comparison contract',()=>{
+  const at=1_800_000_000_000;
+  const horizonMs=72*60*60*1000;
+  const expectedDefinition='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1';
+  const expectedSemantics='PLUS_TARGET_BEFORE_MINUS_2_PERCENT_WITHIN_HORIZON';
+  const sample=sampleWith({
+    at,targetPct:5,outcome:'UP',resolvedAt:at+horizonMs,horizonMs,
+    outcomeSource:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE
+  });
+  sample.safe_opportunity_targets={
+    '72h':{
+      plus_5_pct:{
+        status:'RESOLVED',outcome:'UP',resolved_at:at+horizonMs,horizon_ms:horizonMs,
+        outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+        target_definition:expectedDefinition
+      }
+    }
+  };
+  const prepared=prepareDailyEarlyRiserCognitiveRow(sample,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.ok(prepared.row,prepared.reason||'safe 72h sample should be valid');
+  assert.equal(prepared.row.target_semantics,expectedSemantics);
+  const profile=buildCognitiveLearningProfile([prepared.row],{
+    outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    modelTargetDefinition:expectedDefinition,
+    modelTargetSemantics:expectedSemantics,
+    temporalSamples:[],temporalOptions:{}
+  });
+  assert.equal(profile.comparison_contract.target_definition,expectedDefinition);
+  assert.equal(profile.comparison_contract.target_semantics,expectedSemantics);
+  assert.equal(profile.neural_network.target_definition,expectedDefinition);
+  assert.equal(profile.neural_network.target_semantics,expectedSemantics);
+  const mismatched={...prepared.row,target_definition:'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'};
+  const rejected=buildCognitiveLearningProfile([mismatched],{
+    outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    modelTargetDefinition:expectedDefinition,
+    modelTargetSemantics:expectedSemantics,
+    temporalSamples:[],temporalOptions:{}
+  });
+  assert.equal(rejected.resolved_samples,0,
+    'a row from a different target contract must never enter this model fit');
+  const wrongSemantics={...prepared.row,target_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H'};
+  const semanticsRejected=buildCognitiveLearningProfile([wrongSemantics],{
+    outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    modelTargetDefinition:expectedDefinition,
+    modelTargetSemantics:expectedSemantics,
+    temporalSamples:[],temporalOptions:{}
+  });
+  assert.equal(semanticsRejected.resolved_samples,0,
+    'a row with incompatible target semantics must also be excluded');
+});
+
+test('daily MLP output-head initialization scale is explicit and bounded for controlled ablations',()=>{
+  assert.equal(effectiveDailyMlpOutputInitializationScale(),
+    DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(0.06),0.06);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(0.10),0.10);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(-1),
+    DAILY_EARLY_RISER_MLP_MIN_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale(1),
+    DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE);
+  assert.equal(effectiveDailyMlpOutputInitializationScale('invalid'),
+    DAILY_EARLY_RISER_MLP_DEFAULT_OUTPUT_INITIALIZATION_SCALE);
+});
+
+test('daily neural benchmark CLI forwards and records output-head initialization scale',async()=>{
+  const source=await readFile(new URL('../tools/daily-early-riser-neural-benchmark.mjs',import.meta.url),'utf8');
+  assert.ok(source.includes("args['neural-output-initialization-scale']"));
+  assert.ok(source.includes('neural_output_initialization_scale:neuralOutputInitializationScale'));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale'));
+  assert.ok(source.includes('output_initialization_scale:neural.output_initialization_scale'));
+});
+
+test('daily MLP feature-schema selector is restricted to explicit 18- and 35-channel contracts',()=>{
+  assert.equal(effectiveDailyMlpFeatureSchema('CORE_FLOW_18'),DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA);
+  assert.equal(effectiveDailyMlpFeatureSchema('DAILY_CONTEXT_35'),DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.equal(effectiveDailyMlpFeatureSchema(),DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA);
+  assert.throws(()=>effectiveDailyMlpFeatureSchema('ARBITRARY_FEATURES'),
+    /UNSUPPORTED_DAILY_MLP_FEATURE_SCHEMA/);
+});
+
+test('daily target benchmark forwards the requested 18-feature schema without changing labels or horizon',()=>{
+  const samples=Array.from({length:6},(_,index)=>sampleWith({
+    at:1_800_000_000_000+index*15*60*1000,
+    targetPct:5,outcome:index%2===0?'UP':'DOWN'
+  }));
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    labelMode:'first_passage',horizonHours:24,skipTemporal:true,
+    dailyFeatureSchema:'CORE_FLOW_18'
+  });
+  assert.equal(result.feature_schema,DAILY_EARLY_RISER_CORE_FEATURE_SCHEMA);
+  assert.equal(result.feature_names.length,18);
+  assert.equal(result.neural_network.input_neurons,18);
+  assert.equal(result.target_definition,'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1');
+  assert.equal(result.horizon_hours,24);
 });

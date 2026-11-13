@@ -1,0 +1,15 @@
+Build 224 unified daily 24h safe-first-touch neural/hybrid Brier evaluation.
+
+Consume only the fully successful timestamp-audited daily Census artifact from exact source commit cde938585d9a44cdf751db1ceb23c3f211fa32a1. Download only the exact matching run ID/artifact. Verify raw sample SHA against the census report, sample row count, 750,000 USDT 24h quote-volume floor, closed 15m observation source, baseline feature cutoff, safe +5% before -2% within 24h target contract, and non-overlapping 24h anchors. Require the 24x29 sidecar's exact per-step timestamps and sample identity.
+
+Train MLP V5, GBDT control, Hybrid MLP+GBDT, shared TCN control and regime-specific TCN V8/V9/V10/V11 on the same 24h +5% safe-first-touch cohort. Ranking loss is training-only; compare all probability outputs with same-window Logistic Brier on identical validation and untouched holdout windows. Preserve the inner >0.00025 and outer >0.003 strict margins.
+
+Write a unified neural-hybrid-oos-matrix.json table. Hybrid TCN+Attention from PR #410 remains NOT_EVALUATED until its benchmark can consume the exact same 24h cohort and emit row-level probabilities/Brier against a same-window Logistic comparator. Do not treat its old 4h trade/PnL replay as a Brier comparison.
+
+No production merge, deploy, real orders, or live trading. Keep paper-only and all rejection gates fail-closed.
+
+WORKFLOW ENABLED AT REVISION 45d4457dcf8e6737a6b8524d13182942edd59630.
+Run this exact verified same-cohort 24h Brier matrix. Do not substitute older census or artifacts.
+
+PROVENANCE UPDATE 41bc80200a2472885783b88df8c3ce78c8217ead:
+Record the exact Census source run ID and source commit SHA inside the neural benchmark JSON report. Re-run the same-cohort evaluation against the exact Census commit cde938585d9a44cdf751db1ceb23c3f211fa32a1. Do not use artifacts from an earlier trigger or different source.

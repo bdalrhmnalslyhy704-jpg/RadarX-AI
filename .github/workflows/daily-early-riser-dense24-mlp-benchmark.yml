@@ -1,0 +1,253 @@
+name: Build 224 Dense 24h Safe Early-Riser MLP Benchmark
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'research/TRIGGER_DENSE_24H_SAFE_MLP.txt'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-dense24-safe-mlp-benchmark-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-census:
+    name: Wait for exact completed dense 24h census run
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    outputs:
+      run_id: ${{ steps.locate.outputs.run_id }}
+      run_number: ${{ steps.locate.outputs.run_number }}
+      source_commit: ${{ steps.locate.outputs.source_commit }}
+    steps:
+      - name: Find completed census for the exact source commit
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CENSUS_COMMIT: cde938585d9a44cdf751db1ceb23c3f211fa32a1
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const branch=encodeURIComponent('research/daily-early-riser-mlp-budget-20261113');
+          const url='https://api.github.com/repos/'+process.env.REPOSITORY+
+            '/actions/runs?branch='+branch+'&event=push&per_page=100';
+          const headers={
+            accept:'application/vnd.github+json',
+            authorization:'Bearer '+process.env.GH_TOKEN,
+            'x-github-api-version':'2022-11-28'
+          };
+          let selected=null;
+          const maxAttempts=300;
+          for(let attempt=1;attempt<=maxAttempts;attempt++){
+            const response=await fetch(url,{headers});
+            if(!response.ok)throw new Error('CENSUS_RUN_LOOKUP_HTTP_'+response.status);
+            const payload=await response.json();
+            const candidates=(payload.workflow_runs||[]).filter(run=>
+              run.name==='Build 224 Daily Early-Riser Binance Spot Historical Census'&&
+              run.head_sha===process.env.CENSUS_COMMIT
+            ).sort((a,b)=>Date.parse(b.updated_at)-Date.parse(a.updated_at));
+            const finished=candidates.find(run=>run.status==='completed');
+            if(finished){
+              if(finished.conclusion!=='success')
+                throw new Error('DENSE_CENSUS_RUN_FAILED:'+finished.conclusion+':'+finished.id);
+              selected=finished;
+              break;
+            }
+            const active=candidates[0];
+            console.log(JSON.stringify({
+              attempt,waiting_for_census:true,
+              matching_run_id:active?.id??null,
+              matching_run_status:active?.status??'NOT_VISIBLE_YET'
+            }));
+            await new Promise(resolve=>setTimeout(resolve,60_000));
+          }
+          if(!selected)throw new Error('DENSE_CENSUS_DID_NOT_COMPLETE_WITHIN_300_MINUTES');
+          console.log(JSON.stringify({
+            run_id:selected.id,run_number:selected.run_number,
+            head_sha:selected.head_sha,created_at:selected.created_at,
+            updated_at:selected.updated_at,conclusion:selected.conclusion
+          }));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,
+            'run_id='+selected.id+'\nrun_number='+selected.run_number+'\nsource_commit='+selected.head_sha+'\n');
+          NODE
+        shell: bash
+
+  train-dense-24h:
+    name: Safe +5% MLP/Factorization on dense 24h anchors
+    needs: resolve-census
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Download exact dense 24h census artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-${{ needs.resolve-census.outputs.run_number }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.resolve-census.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: artifacts
+      - name: Verify dense 24h archive, label and liquidity integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s artifacts/daily-early-riser-census.json
+          test -s artifacts/daily-early-riser-samples.jsonl
+          test -s artifacts/daily-early-riser-temporal-sequences.jsonl
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const report=JSON.parse(fs.readFileSync('artifacts/daily-early-riser-census.json','utf8'));
+          const bytes=fs.readFileSync('artifacts/daily-early-riser-samples.jsonl');
+          const sha=createHash('sha256').update(bytes).digest('hex');
+          if(!['READY','AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT'].includes(report.status) ||
+             report.data_quality?.all_sample_audits_ready!==true)
+            throw new Error('DENSE_24H_CENSUS_NOT_AUDITED');
+          if(sha!==report.sample_file?.sha256)
+            throw new Error('DENSE_24H_SAMPLE_SHA256_MISMATCH');
+          const rows=bytes.toString('utf8').split(/\r?\n/).filter(Boolean).map(line=>JSON.parse(line));
+          if(rows.length<10000)throw new Error('DENSE_24H_SAMPLE_COUNT_TOO_LOW:'+rows.length);
+          let badLane=0,missingLabel=0,overlap=0,badCutoff=0,badSource=0;
+          const timesBySymbol=new Map();
+          let positives=0,negatives=0,flats=0,ambiguous=0;
+          for(const row of rows){
+            const quoteVolume=Number(row.quote_volume_24h);
+            if(row.liquidity_lane!=='STANDARD_750K_PLUS'||!Number.isFinite(quoteVolume)||quoteVolume<750000)badLane++;
+            const label=row.safe_opportunity_targets?.['24h']?.plus_5_pct;
+            const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+            const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+            if(!label||(!validResolved&&!validAmbiguous)||
+               label.horizon_ms!==86400000||
+               label.target_definition!=='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_24H_15M_V1')
+              missingLabel++;
+            if(label?.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1')badSource++;
+            if(row.feature_information_cutoff_at!==row.at||
+               row.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')badCutoff++;
+            if(label?.outcome==='UP')positives++;
+            else if(label?.outcome==='DOWN')negatives++;
+            else if(label?.outcome==='FLAT')flats++;
+            else if(label?.outcome==='AMBIGUOUS')ambiguous++;
+            const at=Number(row.at),symbol=String(row.symbol||'');
+            if(!timesBySymbol.has(symbol))timesBySymbol.set(symbol,[]);
+            timesBySymbol.get(symbol).push(at);
+          }
+          for(const times of timesBySymbol.values()){
+            times.sort((a,b)=>a-b);
+            for(let index=1;index<times.length;index++)
+              if(times[index]-times[index-1]<86400000)overlap++;
+          }
+          if(badLane||missingLabel||overlap||badCutoff||badSource)
+            throw new Error(JSON.stringify({badLane,missingLabel,overlap,badCutoff,badSource}));
+          console.log(JSON.stringify({
+            census_status:report.status,rows:rows.length,sample_sha256:sha,
+            accepted:report.sample_file.rows,standard_lane_only:true,
+            horizon_hours:24,per_symbol_anchor_gap_minimum_ms:86400000,
+            outcomes:{UP:positives,DOWN:negatives,FLAT:flats,AMBIGUOUS:ambiguous},
+            underfloor_rows:badLane,invalid_or_missing_labels:missingLabel,
+            bad_outcome_source:badSource,bad_feature_cutoff:badCutoff,overlap_violations:overlap
+          }));
+          NODE
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Test dense projection and strict chronological evaluation contracts
+        run: |
+          node --check phase2/core/dense-generalization-projection.mjs
+          node --check phase2/tools/dense-24h-generalization-evaluation.mjs
+          node --test --test-timeout=180000 phase2/tests/dense-generalization-projection.test.mjs
+      - name: Train 24h safe +5% MLP and factorization challenger
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --output artifacts/daily-early-riser-dense-24h-safe-5pct-mlp-factor.json \
+            --target 5 \
+            --label-mode safe_opportunity \
+            --horizon-hours 24 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --skip-temporal true \
+            --neural-training-history-fraction 1.0 \
+            --neural-iterations 120 \
+            --neural-output-initialization-scale 0.015 \
+            --daily-feature-schema DAILY_CONTEXT_35 \
+            --enable-factorization-machine true \
+            --factorization-rank 16 \
+            --factorization-iterations 120 \
+            --factorization-learning-rate 0.008 \
+            --factorization-l2 0.06
+      - name: Run isolated projection, regularization and strict OOS Brier gate
+        if: always()
+        env:
+          DENSE_CENSUS_RUN_ID: ${{ needs.resolve-census.outputs.run_id }}
+          DENSE_CENSUS_SOURCE_COMMIT: ${{ needs.resolve-census.outputs.source_commit }}
+        run: |
+          node phase2/tools/dense-24h-generalization-evaluation.mjs \\
+            --samples artifacts/daily-early-riser-samples.jsonl \\
+            --census-report artifacts/daily-early-riser-census.json \\
+            --output artifacts/dense-24h-generalization-report.json \\
+            --census-run-id "$DENSE_CENSUS_RUN_ID" \\
+            --census-source-commit "$DENSE_CENSUS_SOURCE_COMMIT"
+      - name: Publish dense 24h selection, validation and holdout metrics
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-dense-24h-safe-5pct-mlp-factor.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Dense 24h benchmark report missing; inspect training logs.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const neural=target.neural_network||{};
+          const inner=neural.inner_selection_diagnostics||{};
+          const rows=neural.member_selection_brier_scores??[];
+          const factorIndex=neural.factorization_member_index??-1;
+          const factorScores=rows.filter(item=>item.index===factorIndex);
+          const factorBest=[...factorScores].sort((a,b)=>a.brier_score-b.brier_score)[0]??null;
+          const summary={
+            status:report.status,horizon_hours:report.horizon_hours,
+            target_definition:target.target_definition,
+            feature_schema:target.feature_schema,feature_count:target.feature_names?.length??null,
+            input_sha256:report.input_sha256,accepted_samples:target.samples?.accepted??null,
+            training_samples:neural.training_samples??null,selection_samples:neural.selection_samples??null,
+            logistic_selection_brier:inner.logistic_baseline_brier_score??null,
+            required_inner_margin:inner.required_brier_margin??null,
+            inner_selection_passed:inner.passed===true,best_candidate:inner.best_candidate??null,
+            factorization_best_candidate:factorBest,factorization_scores:factorScores,
+            validation:neural.validation??null,validation_comparison:neural.validation_comparison??null,
+            holdout:neural.holdout??null,holdout_comparison:neural.holdout_comparison??null,
+            predictive_superiority_verified:report.predictive_superiority_verified===true,
+            profitability_verified:report.profitability_verified===true,
+            production_touched:report.production_touched===true,
+            deployed:report.deployed===true,merged:report.merged===true,
+            real_order_execution:report.real_order_execution===true
+          };
+          console.log('[DENSE_24H_SAFE_MLP_BENCHMARK] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            '## Dense 24h safe +5% neural benchmark\\n\\n```json\\n'+
+            JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+      - name: Upload isolated dense 24h model report
+        if: always() && (hashFiles('artifacts/daily-early-riser-dense-24h-safe-5pct-mlp-factor.json') != '' || hashFiles('artifacts/dense-24h-generalization-report.json') != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-dense-24h-safe-mlp-benchmark
+          path: |
+            artifacts/daily-early-riser-dense-24h-safe-5pct-mlp-factor.json
+            artifacts/dense-24h-generalization-report.json
+          if-no-files-found: warn
+          retention-days: 30

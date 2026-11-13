@@ -1,0 +1,41 @@
+name: Build 224 Dense Projection and Generalization Unit Tests
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/dense-generalization-projection.mjs'
+      - 'phase2/tools/dense-24h-generalization-evaluation.mjs'
+      - 'phase2/tests/dense-generalization-projection.test.mjs'
+      - '.github/workflows/dense-projection-unit-test.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-dense-projection-unit-tests
+  cancel-in-progress: false
+
+jobs:
+  verify-dense-generalization:
+    name: Verify dense projection, integrity and leakage gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check new isolated pipeline
+        run: |
+          node --check phase2/core/dense-generalization-projection.mjs
+          node --check phase2/tools/dense-24h-generalization-evaluation.mjs
+          node --check phase2/tests/dense-generalization-projection.test.mjs
+      - name: Run dense 24h integrity, chronology, projection and head-to-head tests
+        run: node --test --test-timeout=180000 phase2/tests/dense-generalization-projection.test.mjs
