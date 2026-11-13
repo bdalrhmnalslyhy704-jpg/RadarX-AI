@@ -452,6 +452,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,
+    temporal_tcn_lstm_hybrid_training_performed:temporalTcnLstm.trained===true,
+    temporal_tcn_lstm_hybrid_challenger:temporalTcnLstm,
     temporal_tree_training_performed:temporalTree.trained===true,
     temporal_tree_challenger:{
       status:temporalTree.status??'NOT_EVALUATED',
