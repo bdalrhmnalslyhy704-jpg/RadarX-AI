@@ -310,6 +310,30 @@ test('barrier resolver exits on the first touch and ignores malformed future can
   assert.equal(trade.gross_return_pct, 3);
 });
 
+test('barrier resolver recognizes a complete four-hour path ending at the inclusive close boundary', () => {
+  const at = Date.UTC(2026, 1, 5);
+  const futureCandles = Array.from({ length: FOUR_HOURS / ONE_MINUTE }, (_, index) => ({
+    openTime: at + index * ONE_MINUTE,
+    closeTime: at + (index + 1) * ONE_MINUTE - 1,
+    closed: true,
+    open: 100,
+    high: 100.5,
+    low: 99.5,
+    close: 100.1
+  }));
+  const trade = resolveBarrierTrade({
+    entryPrice: 100,
+    decisionAt: at,
+    futureCandles,
+    candleIntervalMs: ONE_MINUTE,
+    horizonMs: FOUR_HOURS
+  });
+  assert.equal(trade.resolved, true);
+  assert.equal(trade.exit_reason, 'HORIZON_CLOSE');
+  assert.equal(trade.exit_at, at + FOUR_HOURS - 1);
+  assert.equal(trade.candle_interval_ms, ONE_MINUTE);
+});
+
 test('barrier resolver does not skip an invalid candle before a later touch', () => {
   const at = Date.UTC(2026, 1, 4);
   const trade = resolveBarrierTrade({
