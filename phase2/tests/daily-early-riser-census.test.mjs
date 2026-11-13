@@ -369,6 +369,13 @@ test('label audit rejects missing horizon labels and any incorrect under-floor l
   };
   const clean=auditSampleLabelHorizons([sample]);
   assert.equal(clean.total,0,JSON.stringify(clean));
+  // Same-candle first-passage ambiguity is a valid audited observation, but
+  // the learning adapter must exclude it rather than reinterpret it as FLAT.
+  sample.targets.plus_5_pct.status='AMBIGUOUS';
+  sample.targets.plus_5_pct.outcome='AMBIGUOUS';
+  const ambiguous=auditSampleLabelHorizons([sample]);
+  assert.equal(ambiguous.first_passage_horizon_violations,0);
+  assert.equal(ambiguous.total,0,JSON.stringify(ambiguous));
   delete sample.opportunity_targets['72h'].plus_10_pct;
   delete sample.safe_opportunity_targets['72h'].plus_15_pct;
   sample.liquidity_lane='STANDARD_750K_PLUS';
