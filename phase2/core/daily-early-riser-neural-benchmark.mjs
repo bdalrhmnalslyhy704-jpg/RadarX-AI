@@ -535,6 +535,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neural_network:{
       status:neural.status??'NOT_EVALUATED',
       architecture:neural.architecture??null,
+      training_strategy:neural.training_strategy??null,
+      factorization_member_enabled:neural.factorization_member_enabled===true,
+      factorization_member_index:neural.factorization_member_index??-1,
+      ensemble_members:neural.ensemble_members??0,
+      ensemble_members_required:neural.ensemble_members_required??null,
+      member_training_profiles:neural.member_training_profiles??[],
       input_neurons:neural.input_neurons??null,
       hidden_neurons:neural.hidden_neurons??null,
       second_hidden_neurons:neural.second_hidden_neurons??null,
