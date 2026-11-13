@@ -16,6 +16,9 @@ export const COGNITIVE_MODEL_BUILD_CONTRACT = 'RADARX_COGNITIVE_AGENT_V5_TCN_V7'
 
 const MIN_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
 const NEURAL_RESIDUAL_SCALES = Object.freeze([0,0.1,0.25,0.5,1]);
+export const NEURAL_FACTOR_CROSS_RESIDUAL_SCALES=Object.freeze([
+  0,0.025,0.05,0.075,0.1,0.125,0.15,0.2,0.25,0.5,1
+]);
 const NEURAL_POLICY = Object.freeze({
   hiddenUnits: 10,
   secondHiddenUnits: 6,
@@ -1684,12 +1687,14 @@ export function buildCognitiveLearningProfile(samples = [], {
   const neuralSelectionLogistic=neuralSameWindowLogisticFit
     ?evaluateHoldout(neuralSelection,neuralSameWindowLogisticFit,innerSelectionMargin)
     :{evaluated:false,model_brier_score:null};
-  const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>
-    neuralResidualScales.map(residualScale=>({
+  const neuralMemberSelection=neuralFit?neuralFit.members.flatMap((member,index)=>{
+    const memberResidualScales=member?.kind==='RESIDUAL_FACTOR_CROSS_V1'
+      ?NEURAL_FACTOR_CROSS_RESIDUAL_SCALES:neuralResidualScales;
+    return memberResidualScales.map(residualScale=>({
       index,residual_scale:residualScale,
       metrics:evaluateHoldout(neuralSelection,{...member,residual_scale:residualScale},innerSelectionMargin)
-    }))
-  ):[];
+    }));
+  }):[];
   const neuralMemberOrder=neuralMemberSelection.filter(row=>row.metrics.evaluated===true&&
     neuralSelectionLogistic.evaluated===true&&
     row.metrics.model_brier_score+innerSelectionMargin<neuralSelectionLogistic.model_brier_score)
@@ -2183,6 +2188,7 @@ export function buildCognitiveLearningProfile(samples = [], {
       output_initialization_scale:neuralFit?.output_initialization_scale??clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
       candidate_residual_scales:[...neuralResidualScales],
+      factorization_candidate_residual_scales:[...NEURAL_FACTOR_CROSS_RESIDUAL_SCALES],
       selection_samples:neuralSelection.length,
       selection_start_at:neuralSelectionStartAt,
       calibration_start_at:neuralCalibrationStartAt,

@@ -34,6 +34,7 @@ import {
   COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
   factorizationMachineProjection,
+  NEURAL_FACTOR_CROSS_RESIDUAL_SCALES,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
@@ -686,8 +687,11 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
   assert.equal(fmNeural.ensemble_members_required,4);
   assert.equal(fmNeural.member_training_profiles.filter(item=>
     item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
-  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,20,
-    'the low-rank pairwise member must enter the same 4-member x 5-scale selection grid');
+  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,
+    3*5+NEURAL_FACTOR_CROSS_RESIDUAL_SCALES.length,
+    'the low-rank pairwise member must use its fine residual grid while MLP keeps the original five scales');
+  assert.deepEqual(NEURAL_FACTOR_CROSS_RESIDUAL_SCALES,
+    [0,0.025,0.05,0.075,0.1,0.125,0.15,0.2,0.25,0.5,1]);
   const fmBaselineBrier=fmNeural.inner_selection_diagnostics.logistic_baseline_brier_score;
   const fmZeroScale=fmNeural.member_selection_brier_scores.find(item=>
     item.index===fmNeural.factorization_member_index&&item.residual_scale===0);
