@@ -120,6 +120,7 @@ jobs:
             --target 5 \
             --liquidity-lane STANDARD_750K_PLUS \
             --tcn-only true \
+            --attention-only true \
             --output artifacts/daily-early-riser-safe-72h-5pct-tcn.json
       - name: Train standard daily baseline and neural challengers on legacy census branches
         if: github.ref_name != 'research/daily-early-riser-opportunity-targets-20261113'
