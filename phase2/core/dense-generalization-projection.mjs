@@ -388,9 +388,6 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     if(!Number.isFinite(objectiveMean)||Object.values(g).some(value=>
       Array.isArray(value[0])?value.flat().some(x=>!Number.isFinite(x)):value.some(x=>!Number.isFinite(x))))
       throw new Error('DENSE24_PROJECTION_NON_FINITE_GRADIENT');
-    if(objectiveMean<bestObjective-1e-9){
-      bestObjective=objectiveMean;bestEpoch=epoch;wait=0;best=cloneModel(model);
-    }else wait++;
     const normSquared=Object.values(g).reduce((sum,value)=>sum+
       (Array.isArray(value[0])?value.flat():value).reduce((s,x)=>s+x*x,0),0);
     const gradNorm=Math.sqrt(normSquared);
@@ -400,7 +397,6 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     }
     for(const key of ['b','gamma','beta','head','cross'])for(let j=0;j<g[key].length;j++)g[key][j]*=clip;
     const lr=rate*(0.10+0.90*0.5*(1+Math.cos(Math.PI*(epoch-1)/Math.max(1,steps-1))));
-    const matState=(key)=>state[key].map(x=>({m:x.m,v:x.v}));
     for(const key of ['W','U']){
       for(let i=0;i<model[key].length;i++){
         const st=state[key][i];
@@ -411,7 +407,21 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
       adamVector(model[key],g[key],state[key],epoch,lr,reg,
         key==='head'||key==='cross'||key==='gamma');
     }
-    history.push({epoch,training_brier:Number(objectiveMean.toFixed(8)),
+    // Select the best checkpoint and early-stop monitor using deterministic,
+    // no-dropout TRAINING predictions only. This avoids choosing a checkpoint
+    // because of a lucky stochastic dropout mask. Validation/holdout remain unseen.
+    let monitorObjective=0;
+    for(let i=0;i<n;i++){
+      const probability=forwardProjection(X[i],model,anchor,0,null).probability;
+      monitorObjective+=(probability-Y[i])**2;
+    }
+    const monitorBrier=monitorObjective/n;
+    if(!Number.isFinite(monitorBrier))throw new Error('DENSE24_PROJECTION_TRAIN_MONITOR_NON_FINITE');
+    if(monitorBrier<bestObjective-1e-9){
+      bestObjective=monitorBrier;bestEpoch=epoch;wait=0;best=cloneModel(model);
+    }else wait++;
+    history.push({epoch,training_brier:Number(monitorBrier.toFixed(8)),
+      dropout_training_brier:Number(objectiveMean.toFixed(8)),
       gradient_l2_norm:Number(gradNorm.toFixed(8)),learning_rate:Number(lr.toFixed(8)),
       dropout:pDrop,l2:reg});
     if(epoch>=minEpochs&&wait>=patience){stoppedEarly=true;break;}
