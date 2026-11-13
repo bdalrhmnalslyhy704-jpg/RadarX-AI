@@ -983,6 +983,20 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(Number.isFinite(ranking.auc_roc)&&ranking.auc_roc>=0&&ranking.auc_roc<=1);
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
+  console.log('[HYBRID_WEIGHT_SPLIT_DEBUG]',JSON.stringify({
+    trained:profile.hybrid_model.trained,status:profile.hybrid_model.status,
+    neuralHybridSelectionSamples:profile.hybrid_model.weight_fit_samples+
+      profile.hybrid_model.selection_samples,
+    weightFitSamples:profile.hybrid_model.weight_fit_samples,
+    weightFitPositive:profile.hybrid_model.weight_fit_positive_samples,
+    weightFitNegative:profile.hybrid_model.weight_fit_negative_samples,
+    selectionSamples:profile.hybrid_model.selection_samples,
+    selectionPositive:profile.hybrid_model.selection_positive_samples,
+    selectionNegative:profile.hybrid_model.selection_negative_samples,
+    cutAt:profile.hybrid_model.weight_fit_cut_at,
+    fitStart:profile.hybrid_model.weight_fit_start_at,
+    fitEnd:profile.hybrid_model.weight_fit_end_at
+  }));
   assert.equal(profile.hybrid_model.trained,true);
   assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
     'one analytically derived convex weight is fitted before its disjoint selection block');
