@@ -595,6 +595,7 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     throw new TypeError('TCN_LSTM_GRADIENT_PARAMETER_SHAPE_MISMATCH');
   let maximumAbsoluteError = 0, maximumRelativeError = 0;
   let sumSquaredError = 0;
+  let worstParameter = null;
   for (let index = 0; index < parameterPaths.length; index++) {
     const path = parameterPaths[index];
     const original = getPath(parameters, path);
@@ -609,6 +610,14 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     const relative = absolute / Math.max(1e-7, Math.abs(numerical), Math.abs(exact));
     maximumAbsoluteError = Math.max(maximumAbsoluteError, absolute);
     maximumRelativeError = Math.max(maximumRelativeError, relative);
+    if (!worstParameter || absolute > worstParameter.absolute_error)
+      worstParameter = {
+        path: path.join('.'),
+        analytic_gradient: exact,
+        numerical_gradient: numerical,
+        absolute_error: absolute,
+        relative_error: relative
+      };
     sumSquaredError += absolute * absolute;
   }
   return {
@@ -616,6 +625,7 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     checked_parameters: parameterPaths.length,
     maximum_absolute_error: maximumAbsoluteError,
     maximum_relative_error: maximumRelativeError,
+    worst_parameter: worstParameter,
     root_mean_squared_error: Math.sqrt(sumSquaredError / Math.max(1, parameterPaths.length)),
     passed: maximumAbsoluteError < 2e-5 && maximumRelativeError < 2e-3,
     method: 'CENTRAL_FINITE_DIFFERENCE_ALL_TRAINABLE_PARAMETERS_V1'
