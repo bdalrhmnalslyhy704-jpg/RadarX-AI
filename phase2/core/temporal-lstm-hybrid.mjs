@@ -1358,7 +1358,6 @@ function evaluateCalibratedSplit(rows, selectedFit, modelCalibrator, baselineCal
     brier_improvement: improvement,
     paired_bootstrap_95ci: confidence,
     required_brier_improvement: requiredImprovement,
-    evaluated:true,sample_count:rows.length,
     passed: improvement > requiredImprovement &&
       confidence.evaluated === true && confidence.improvement_ci95_low > 0 &&
       model.asymmetric_risk_brier <= baseline.asymmetric_risk_brier + 1e-10
