@@ -1182,6 +1182,14 @@ function fitNeuralEnsemble(training, options = {}) {
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
   }));
+  const completedMemberProfiles=memberProfiles.map((profile,index)=>({
+    ...profile,
+    requested_iterations:profile.iterations,
+    iterations:members[index]?.training_diagnostics?.epochs_completed??profile.iterations,
+    best_epoch:members[index]?.training_diagnostics?.best_epoch??null,
+    best_training_objective:members[index]?.training_diagnostics?.best_training_objective??null,
+    early_stopping:members[index]?.training_diagnostics?.early_stopping??null
+  }));
   const memberSeeds=[...seeds];
   const factorizationMemberIndex=options.enableFactorizationMachine===true?members.length:-1;
   if(options.enableFactorizationMachine===true){
@@ -1214,7 +1222,11 @@ function fitNeuralEnsemble(training, options = {}) {
     ensemble_members:members.length,
     seeds:memberSeeds,
     factorization_member_index:factorizationMemberIndex,
-    member_training_profiles:memberProfiles,
+    member_training_profiles:completedMemberProfiles,
+    member_training_diagnostics:members.map((member,index)=>({
+      member_index:index,seed:memberSeeds[index],
+      ...(member?.training_diagnostics||{})
+    })),
     training_strategy:factorizationMemberIndex>=0
       ?'RESIDUAL_MLP_PLUS_LOW_RANK_FACTOR_CROSS_V1_SAME_WINDOW_LOGISTIC_ANCHOR'
       :'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
