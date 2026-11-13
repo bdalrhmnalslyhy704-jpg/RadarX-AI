@@ -549,7 +549,7 @@ export function runDenseGeneralizationBenchmark(preparedRows,split,{bootstrapIte
   const anchor=fitDenseLogisticAnchor(train,scaler);
   const configs=[
     {name:'DROP10_L2_003',dropout:0.10,l2:0.03,rank:6,hidden:12,epochs:36,seed:101},
-    {name:'DROP25_L2_010',dropout:0.25,l2:0.10,rank:6,hidden:12,epochs:36,seed:211}
+    {name:'DROP25_L2_010',dropout:0.25,l2:0.10,rank:6,hidden:12,epochs:36,seed:101}
   ];
   const candidates=configs.map((config,index)=>{
     const fit=fitDenseGeneralizationProjection(train,anchor,scaler,config);
