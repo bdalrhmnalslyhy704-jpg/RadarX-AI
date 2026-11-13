@@ -1,0 +1,47 @@
+name: Build 224 Early-Riser Opportunity Unit Tests
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-opportunity-targets-20261113
+    paths:
+      - '.github/workflows/daily-early-riser-opportunity-unit-tests.yml'
+      - 'phase2/core/daily-early-riser-census.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/daily-early-riser-historical-census.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-census.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  opportunity-contracts:
+    name: Validate opportunity labels, risk separation and report diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated research branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax validation
+        run: |
+          node --check phase2/core/daily-early-riser-census.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/daily-early-riser-historical-census.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+      - name: Run opportunity and neural benchmark contract tests
+        run: |
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
+          node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=120000 phase2/tests/temporal-neural-brain.test.mjs

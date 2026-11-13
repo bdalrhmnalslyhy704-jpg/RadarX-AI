@@ -1,0 +1,130 @@
+name: Build 224 V11 Temporal-Attention Regularization Ablation
+
+on:
+  push:
+    branches:
+      - research/daily-early-riser-opportunity-targets-20261113
+    paths:
+      - '.github/workflows/daily-early-riser-v11-regularization-ablation.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: build224-v11-regularization-ablation
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    name: Re-run V11 attention on the identical audited Binance sample set
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout the isolated Build 224 research branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/daily-early-riser-opportunity-targets-20261113
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Restore the exact audited census artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-daily-early-riser-census-20
+          run-id: 43336370744
+          github-token: ${{ github.token }}
+          path: research-input
+
+      - name: Verify restored inputs before training
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s research-input/daily-early-riser-census.json
+          test -s research-input/daily-early-riser-samples.jsonl
+          test -s research-input/daily-early-riser-temporal-sequences.jsonl
+          node -e "const r=require('./research-input/daily-early-riser-census.json'); if(!['AUDITED_WITH_SURVIVOR_UNIVERSE_CAVEAT','READY'].includes(r.status)) process.exit(1); if(r.data_quality?.all_sample_audits_ready!==true) process.exit(1); console.log(JSON.stringify({status:r.status,samples:r.sample_file?.rows,temporal_rows:r.temporal_sample_file?.rows,data_quality:r.data_quality?.status}));"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Train regularized V11 with the unchanged target, cohort, and Logistic control
+        run: |
+          mkdir -p artifacts
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input research-input/daily-early-riser-samples.jsonl \
+            --temporal-input research-input/daily-early-riser-temporal-sequences.jsonl \
+            --census-report research-input/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --tcn-only true \
+            --attention-only true \
+            --attention-position-bias-l2-multiplier 8 \
+            --output artifacts/daily-early-riser-safe-72h-5pct-tcn-attention-l2x8.json
+
+      - name: Publish paired V11 versus Logistic results
+        if: always()
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/daily-early-riser-safe-72h-5pct-tcn-attention-l2x8.json';
+          if(!fs.existsSync(path)){
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'Regularized V11 report missing; inspect the training step logs.\\n');
+            process.exit(0);
+          }
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const target=Object.values(report.target_results||{})[0]||{};
+          const attention=target.temporal_regime_local_tcn_attention_challenger||{};
+          const regimes=Object.entries(attention.regimes||{}).map(([name,row])=>({
+            regime:name,status:row.status,trained:row.trained===true,
+            training_samples:row.training_samples,selection_samples:row.selection_samples,
+            selection_logistic_brier:row.member_selection_logistic_brier??null,
+            selection_best_brier:row.selection_best_candidate?.brier_score??null,
+            validation_samples:row.validation?.sample_count??0,
+            validation_brier:row.validation?.model_brier_score??null,
+            validation_logistic_brier:row.validation_logistic?.model_brier_score??null,
+            validation_delta_vs_logistic:row.validation?.evaluated===true&&row.validation_logistic?.evaluated===true
+              ?Number((row.validation.model_brier_score-row.validation_logistic.model_brier_score).toFixed(5)):null,
+            holdout_samples:row.holdout?.sample_count??0,
+            holdout_brier:row.holdout?.model_brier_score??null,
+            holdout_logistic_brier:row.holdout_logistic?.model_brier_score??null,
+            support_gaps:row.support_gaps??[]
+          }));
+          const summary={
+            status:report.status,run_dataset_sha256:report.input_sha256,
+            target_pct:report.requested_targets?.[0]??5,
+            label_mode:report.label_mode,horizon_hours:report.horizon_hours,
+            liquidity_lane:report.required_liquidity_lane,
+            position_bias_l2_multiplier:attention.attention_position_bias_l2_multiplier??8,
+            attention_status:attention.status,architecture:attention.architecture,
+            trained:attention.trained===true,training_samples:attention.training_samples,
+            paired_validation_regimes:attention.paired_validation_regimes??[],
+            validation:attention.validation??null,
+            validation_logistic:attention.validation_logistic??null,
+            holdout:attention.holdout??null,
+            holdout_logistic:attention.holdout_logistic??null,
+            holdout_comparison:attention.holdout_comparison??null,
+            regimes,
+            predictive_superiority_verified:report.predictive_superiority_verified===true,
+            profitability_verified:report.profitability_verified===true,
+            production_touched:report.production_touched===true,
+            real_order_execution:report.real_order_execution===true
+          };
+          console.log('[V11_REGULARIZATION_ABLATION] '+JSON.stringify(summary));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'## V11 attention regularization ablation\\n\\n```json\\n'+JSON.stringify(summary,null,2)+'\\n```\\n');
+          NODE
+
+      - name: Upload compact ablation report
+        if: always() && hashFiles('artifacts/daily-early-riser-safe-72h-5pct-tcn-attention-l2x8.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-v11-attention-l2x8-ablation
+          path: artifacts/daily-early-riser-safe-72h-5pct-tcn-attention-l2x8.json
+          retention-days: 30

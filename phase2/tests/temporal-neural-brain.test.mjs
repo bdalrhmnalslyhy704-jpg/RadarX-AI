@@ -32,8 +32,15 @@ import {
   TEMPORAL_MULTISCALE_RECEPTIVE_FIELD,
   TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT,
   TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+  TEMPORAL_ATTENTION_POOLING_MODE,
+  TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+  TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+  temporalParameterL2,
+  TEMPORAL_RANKING_BUCKET_MS,
+  timeGroupedRankingMetrics,
   poolOrderedTemporalSegments,
   poolMultiscaleTemporalSegments,
+  poolLearnedTemporalAttention,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalProbability
@@ -90,9 +97,9 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
   assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
   assert.equal(report.input_shape[0],24);
   assert.equal(report.input_shape[1],29);
-  assert.equal(report.pooling_modes.length,3);
+  assert.equal(report.pooling_modes.length,4);
   assert.equal(report.objectives.length,3);
-  assert.equal(report.results.length,9);
+  assert.equal(report.results.length,12);
   assert.ok(report.checked_parameter_derivatives>=100);
   assert.equal(report.failed_parameter_derivatives,0,
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
@@ -113,7 +120,7 @@ test('reused TCN training workspace is numerically equivalent to allocation-base
     passed:report.passed
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
-  assert.equal(report.result_cases,18);
+  assert.equal(report.result_cases,24);
   assert.ok(report.results.every(row=>
     row.output_values_compared>0&&row.gradient_values_compared>0));
   assert.ok(report.maximum_output_absolute_error<=1e-12,
@@ -143,7 +150,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
     }))
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
-  assert.equal(report.measured_cases,9);
+  assert.equal(report.measured_cases,12);
   assert.equal(report.measurement_rounds,3);
   assert.equal(report.changes_training_math,false);
   assert.equal(report.all_checksums_finite,true);
@@ -200,6 +207,137 @@ test('V10 full-window multiscale pooling preserves segment means, endpoints and 
     'non-numeric latent values must fail closed');
   assert.equal(poolMultiscaleTemporalSegments(linear.slice(1)),null,
     'incomplete windows must fail closed');
+});
+
+test('V11 learned temporal query attention focuses probability mass on informative relative-time steps',()=>{
+  const latent=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_LATENT_CHANNELS},(_,channel)=>channel===0?time/24:0));
+  const query=Array.from({length:TEMPORAL_LATENT_CHANNELS},(_,channel)=>channel===0?1:0);
+  const biases=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+  const pooled=poolLearnedTemporalAttention(latent,query,biases);
+  assert.equal(TEMPORAL_ATTENTION_POOLING_MODE,'LEARNED_QUERY_TIME_ATTENTION_V1');
+  assert.equal(TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11');
+  assert.equal(TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+    TEMPORAL_TRAINABLE_PARAMETER_COUNT+TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS);
+  assert.equal(temporalParameterL2('attentionPositionBiases',0.012,8),0.096);
+  assert.equal(temporalParameterL2('attentionQuery',0.012,8),0.012);
+  assert.equal(temporalParameterL2('attentionPositionBiases',0.012,-1),null);
+  assert.ok(pooled);
+  assert.equal(pooled.features.length,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(pooled.weights.length,TEMPORAL_SEQUENCE_STEPS);
+  assert.ok(Math.abs(pooled.weights.reduce((sum,value)=>sum+value,0)-1)<1e-12);
+  assert.ok(pooled.weights.every(value=>value>0&&Number.isFinite(value)));
+  assert.ok(pooled.weights.at(-1)>pooled.weights[0],
+    'query attention should assign more mass to higher query-aligned latent activations');
+  assert.ok(pooled.features[0]>latent.reduce((sum,row)=>sum+row[0],0)/TEMPORAL_SEQUENCE_STEPS,
+    'attention-weighted features should differ from a uniform temporal mean');
+  assert.equal(poolLearnedTemporalAttention(latent,query.slice(1),biases),null);
+  assert.equal(poolLearnedTemporalAttention(latent,query,biases.slice(1)),null);
+});
+
+test('safe-opportunity temporal profile trains the isolated V11 attention readout under the same purged Logistic gate',()=>{
+  const horizonMs=72*60*60*1000;
+  const targetDefinition='FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1';
+  const outcomeSource='BINANCE_OFFICIAL_CLOSED_15M_SAFE_FIRST_TOUCH_HORIZONS_V1';
+  const rows=[];
+  const groups=70,perGroup=20;
+  for(let group=0;group<groups;group++){
+    for(let index=0;index<perGroup;index++){
+      const at=BASE_TIME+group*96*60*60*1000;
+      const outcome=(group+index)%2===0?'UP':'DOWN';
+      const riskOn=index<10;
+      const sequence=sequenceFor(outcome==='UP',group+index).map(step=>{
+        const copy=[...step];copy[19]=riskOn?0.55:-0.55;return copy;
+      });
+      rows.push({
+        id:'SAFE72-ATTN-'+group+'-'+index,
+        symbol:'SAFEPAIR'+String(index).padStart(3,'0')+'USDT',
+        at,resolved_at:at+horizonMs,horizon_ms:horizonMs,
+        training_eligible:true,historical_baseline:true,closed_candle_baseline:true,
+        target_definition:targetDefinition,outcome_source:outcomeSource,outcome,
+        outcome_contract:{
+          kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome,
+          horizon_hours:72,adverse_pct:2
+        },
+        temporal_sequence:sequence
+      });
+    }
+  }
+  const profile=buildTemporalNeuralProfile(rows,{
+    minTrainingSamples:160,maxTrainingSamples:2000,
+    minimumValidationSamples:24,minimumHoldoutSamples:40,liveHoldoutSamples:100,
+    epochs:1,learningRate:0.006,l2:0.012,comparisonMargin:0.003,
+    targetDefinition,outcomeHorizonMs:horizonMs,
+    allowedOutcomeSources:[outcomeSource],outcomeContractKind:'SAFE_FIRST_PASSAGE',
+    enableRegimeLocalTcn:false,
+    enableRegimeLocalTcnPyramid:false,
+    enableRegimeLocalTcnMultiscale:false,
+    enableRegimeLocalTcnAttention:true,
+    regimeLocalTcnAttentionEpochs:1,
+    regimeLocalTcnAttentionMaxTrainingSamples:1024,
+    regimeLocalTcnAttentionPositionBiasL2Multiplier:8,
+    enableTemporalBoostedTree:false
+  });
+  const attention=profile.regime_local_tcn_attention_challenger;
+  assert.ok(attention,'attention challenger must be present in the benchmark result');
+  assert.equal(profile.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
+  assert.equal(attention.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1');
+  assert.equal(attention.attention_position_bias_l2_multiplier,8);
+  assert.equal(attention.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
+  assert.equal(attention.attention_dimension,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(attention.relative_position_bias_count,TEMPORAL_SEQUENCE_STEPS);
+  assert.equal(attention.trainable_parameter_count,TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT);
+  assert.ok(attention.trained,'both BTC regimes have enough chronological samples to fit the attention challenger');
+  assert.ok(attention.training_samples>=160);
+  const regimeResults=Object.values(attention.regime_specialists||{});
+  assert.equal(regimeResults.length,2);
+  assert.ok(regimeResults.every(result=>result.validation_samples>0&&result.holdout_samples>0),
+    'both trained BTC regimes must have disjoint validation and holdout blocks');
+  assert.ok(regimeResults.every(result=>
+    result.member_selection_logistic_ranking_metrics?.method==='WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2'));
+  assert.ok(regimeResults.every(result=>
+    result.selection_best_candidate?.ranking_metrics?.method==='WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2'));
+  assert.ok(regimeResults.every(result=>
+    result.member_selection_scores.length>0&&
+    result.member_selection_scores.every(candidate=>candidate.ranking_metrics?.top_10_pct?.groups>0)));
+  assert.equal(attention.validation.sample_count,attention.validation_logistic.sample_count,
+    'aggregate V11 and Logistic validation must contain exactly the same regimes and rows');
+  assert.equal(attention.validation.positive_count,attention.validation_logistic.positive_count);
+  assert.deepEqual(attention.paired_validation_regimes,
+    regimeResults.filter(result=>result.validation?.evaluated===true&&
+      result.validation_logistic?.evaluated===true&&
+      result.validation.sample_count===result.validation_logistic.sample_count).map(result=>result.regime));
+  assert.equal(attention.probability_ready,false,
+    'research challenger cannot publish a live probability from a synthetic unit fixture');
+  assert.equal(attention.live_eligibility_ready,false);
+  assert.equal(profile.live_eligibility_ready,false);
+});
+
+test('early-riser ranking groups competing coins by the same 15m candle and excludes singleton buckets',()=>{
+  const bucket=Math.floor(BASE_TIME/TEMPORAL_RANKING_BUCKET_MS)*TEMPORAL_RANKING_BUCKET_MS;
+  const rows=[
+    {at:bucket+1,symbol:'AAAUSDT'},
+    {at:bucket+25,symbol:'BBBUSDT'},
+    {at:bucket+1000,symbol:'CCCUSDT'},
+    {at:bucket+TEMPORAL_RANKING_BUCKET_MS,symbol:'DDDUSDT'},
+    {at:bucket+TEMPORAL_RANKING_BUCKET_MS+2,symbol:'EEEUSDT'},
+    {at:bucket+2*TEMPORAL_RANKING_BUCKET_MS,symbol:'SINGLEUSDT'}
+  ];
+  const metrics=timeGroupedRankingMetrics(rows,
+    [0.95,0.10,0.50,0.90,0.20,0.99],
+    [1,0,1,0,1,1]);
+  assert.equal(TEMPORAL_RANKING_BUCKET_MS,900000);
+  assert.equal(metrics.method,'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2');
+  assert.equal(metrics.total_time_buckets,3);
+  assert.equal(metrics.groups,2);
+  assert.equal(metrics.singleton_buckets_excluded,1);
+  assert.equal(metrics.multi_symbol_rows,5);
+  assert.equal(metrics.mean_symbols_per_ranking_bucket,2.5);
+  assert.equal(metrics.maximum_symbols_per_ranking_bucket,3);
+  assert.equal(metrics.groups_with_positive,2);
+  assert.equal(metrics.top_20_pct.groups,2);
+  assert.ok(metrics.average_precision>0&&metrics.average_precision<=1);
 });
 
 test('reused TCN gradient scratch resets object-wrapped trainable arrays between rows',()=>{

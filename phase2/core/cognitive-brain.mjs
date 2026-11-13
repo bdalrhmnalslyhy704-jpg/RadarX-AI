@@ -768,6 +768,175 @@ function fitNeuralNetworkModel(training, {
   };
 }
 
+
+export function factorizationMachineProjection(vector,factors){
+  if(!Array.isArray(vector)||!vector.length||
+    !vector.every(value=>finite(value)!==null)||
+    !Array.isArray(factors)||factors.length!==vector.length||
+    !Array.isArray(factors[0])||!factors[0].length||
+    factors.some(row=>!Array.isArray(row)||row.length!==factors[0].length||
+      row.some(value=>finite(value)===null)))return null;
+  const rank=factors[0].length;
+  const sums=Array(rank).fill(0),sumSquares=Array(rank).fill(0);
+  for(let feature=0;feature<vector.length;feature++){
+    const x=Number(vector[feature]);
+    for(let component=0;component<rank;component++){
+      const value=Number(factors[feature][component])*x;
+      sums[component]+=value;sumSquares[component]+=value*value;
+    }
+  }
+  const interactions=sums.map((sum,component)=>0.5*(sum*sum-sumSquares[component]));
+  const factorDerivatives=factors.map((row,feature)=>
+    row.map((weight,component)=>Number(vector[feature])*
+      (sums[component]-Number(weight)*Number(vector[feature]))));
+  if(interactions.some(value=>!Number.isFinite(value))||
+    factorDerivatives.some(row=>row.some(value=>!Number.isFinite(value))))return null;
+  return {interactions,factor_derivatives:factorDerivatives,sums};
+}
+
+export function predictFactorizationMachineProbability(vector,fit,residualScale=1){
+  if(fit?.kind!=='RESIDUAL_FACTOR_CROSS_V1'||
+    !Array.isArray(fit.skip_weights)||fit.skip_weights.length!==vector?.length||
+    !Array.isArray(fit.factors)||fit.factors.length!==vector.length||
+    !Array.isArray(fit.cross_weights)||!Number.isFinite(Number(fit.intercept)))return null;
+  const projection=factorizationMachineProjection(vector,fit.factors);
+  if(!projection||projection.interactions.length!==fit.cross_weights.length)return null;
+  let logit=Number(fit.intercept);
+  for(let index=0;index<vector.length;index++)
+    logit+=Number(fit.skip_weights[index])*Number(vector[index]);
+  const scale=clamp(finite(residualScale)??1,0,1);
+  for(let component=0;component<fit.cross_weights.length;component++)
+    logit+=scale*Number(fit.cross_weights[component])*projection.interactions[component];
+  return Number.isFinite(logit)?clamp(logistic(logit),0.02,0.98):null;
+}
+
+/**
+ * Low-rank Factorization-Machine residual challenger.
+ * The same-window logistic skip path is frozen; only pairwise feature
+ * interactions are learned. No selection, calibration, validation or holdout
+ * labels enter the gradient path.
+ */
+export function fitFactorizationMachineModel(training,{
+  baselineFit=null,rank=8,iterations=100,learningRate=0.008,l2=0.06,seed=73,
+  trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+  positiveClassWeighting='NONE'
+}={}){
+  const featureNames=training[0]?.feature_names||FEATURE_NAMES;
+  const featureSchema=training[0]?.feature_schema||COGNITIVE_FEATURE_SCHEMA;
+  const featureCount=featureNames.length;
+  const rows=(Array.isArray(training)?training:[]).map(row=>({
+    vector:Array.isArray(row?.vector)&&row.vector.length===featureCount
+      ?row.vector:normalizedFeatures(row?.features||{},featureSchema),
+    target:finite(row?.target)===null?targetOf(row):clamp(Number(row.target),0,1)
+  })).filter(row=>row.vector.length===featureCount&&
+    row.vector.every(Number.isFinite)&&Number.isFinite(row.target));
+  if(rows.length<NEURAL_POLICY.minTrainingSamples)return null;
+  const positiveSamples=rows.filter(row=>row.target>0.5).length;
+  const negativeSamples=rows.length-positiveSamples;
+  const useWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
+  const positiveWeight=useWeighting&&positiveSamples>0
+    ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
+  const totalSampleWeight=negativeSamples+positiveSamples*positiveWeight;
+  const dimensions=Math.max(2,Math.min(16,Math.trunc(Number(rank)||8)));
+  const steps=Math.max(30,Math.min(180,Math.trunc(Number(iterations)||100)));
+  const rate=clamp(Number(learningRate)||0.008,0.0005,0.03);
+  const regularization=clamp(Number(l2)||0.06,0.001,0.5);
+  const seedValue=Math.max(1,Math.min(997,Math.trunc(Number(seed)||73)));
+  const seedOffset=seedValue*0.6180339887498949;
+  const baseRate=betaRate(rows.reduce((sum,row)=>sum+row.target,0),rows.length);
+  const validBaseline=baselineFit&&Array.isArray(baselineFit.weights)&&
+    baselineFit.weights.length===featureCount&&Number.isFinite(Number(baselineFit.intercept));
+  const skipWeights=validBaseline
+    ?baselineFit.weights.map(value=>clamp(Number(value)||0,-4,4))
+    :Array(featureCount).fill(0);
+  const intercept=validBaseline?Number(baselineFit.intercept):logit(baseRate);
+  const factors=Array.from({length:featureCount},(_,feature)=>
+    Array.from({length:dimensions},(_,component)=>
+      0.055*Math.sin((feature+1)*7.913+(component+1)*3.117+seedOffset)));
+  const crossWeights=Array.from({length:dimensions},(_,component)=>
+    0.08*Math.cos((component+1)*5.731+seedOffset));
+  const firstFactorMoment=factors.map(row=>row.map(()=>0));
+  const secondFactorMoment=factors.map(row=>row.map(()=>0));
+  const firstCrossMoment=Array(dimensions).fill(0);
+  const secondCrossMoment=Array(dimensions).fill(0);
+  const epochHistory=[];
+  for(let epoch=1;epoch<=steps;epoch++){
+    const factorGradient=factors.map(row=>row.map(()=>0));
+    const crossGradient=Array(dimensions).fill(0);
+    let lossSum=0,finiteRows=0;
+    for(const row of rows){
+      const projection=factorizationMachineProjection(row.vector,factors);
+      if(!projection)throw new TypeError('FACTOR_CROSS_PROJECTION_INVALID');
+      const sampleWeight=row.target>0.5?positiveWeight:1;
+      const probability=predictFactorizationMachineProbability(row.vector,{
+        kind:'RESIDUAL_FACTOR_CROSS_V1',skip_weights:skipWeights,
+        intercept,factors,cross_weights:crossWeights
+      },1);
+      if(!Number.isFinite(probability))throw new TypeError('FACTOR_CROSS_NON_FINITE_PROBABILITY');
+      const brierGradient=2*(probability-row.target)*probability*(1-probability);
+      const logLossGradient=probability-row.target;
+      const error=(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLossGradient
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*brierGradient+0.5*logLossGradient:brierGradient)*sampleWeight;
+      const loss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?-(row.target*Math.log(clamp(probability,1e-12,1-1e-12))+
+          (1-row.target)*Math.log(clamp(1-probability,1e-12,1-1e-12)))
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*(probability-row.target)**2+
+            0.5*-(row.target*Math.log(clamp(probability,1e-12,1-1e-12))+
+              (1-row.target)*Math.log(clamp(1-probability,1e-12,1-1e-12)))
+          :(probability-row.target)**2;
+      lossSum+=loss*sampleWeight;finiteRows++;
+      for(let component=0;component<dimensions;component++){
+        crossGradient[component]+=error*projection.interactions[component];
+        for(let feature=0;feature<featureCount;feature++)
+          factorGradient[feature][component]+=error*crossWeights[component]*
+            projection.factor_derivatives[feature][component];
+      }
+    }
+    for(let feature=0;feature<featureCount;feature++)for(let component=0;component<dimensions;component++){
+      const gradient=clamp(factorGradient[feature][component]/Math.max(1,totalSampleWeight),-3,3);
+      const m=0.9*firstFactorMoment[feature][component]+0.1*gradient;
+      const v=0.999*secondFactorMoment[feature][component]+0.001*gradient*gradient;
+      firstFactorMoment[feature][component]=m;secondFactorMoment[feature][component]=v;
+      const mHat=m/(1-Math.pow(0.9,epoch)),vHat=v/(1-Math.pow(0.999,epoch));
+      factors[feature][component]=clamp(factors[feature][component]-rate*
+        (mHat/(Math.sqrt(vHat)+1e-8)+regularization*factors[feature][component]),-2.5,2.5);
+    }
+    for(let component=0;component<dimensions;component++){
+      const gradient=clamp(crossGradient[component]/Math.max(1,totalSampleWeight),-3,3);
+      const m=0.9*firstCrossMoment[component]+0.1*gradient;
+      const v=0.999*secondCrossMoment[component]+0.001*gradient*gradient;
+      firstCrossMoment[component]=m;secondCrossMoment[component]=v;
+      const mHat=m/(1-Math.pow(0.9,epoch)),vHat=v/(1-Math.pow(0.999,epoch));
+      crossWeights[component]=clamp(crossWeights[component]-rate*
+        (mHat/(Math.sqrt(vHat)+1e-8)+regularization*crossWeights[component]),-2.5,2.5);
+    }
+    epochHistory.push({
+      epoch,mean_training_loss:Number((lossSum/Math.max(1,totalSampleWeight)).toFixed(8)),
+      factor_l2_norm:Number(Math.sqrt(factors.flat().reduce((sum,value)=>sum+value*value,0)).toFixed(8)),
+      cross_head_l2_norm:Number(Math.sqrt(crossWeights.reduce((sum,value)=>sum+value*value,0)).toFixed(8))
+    });
+  }
+  return {
+    kind:'RESIDUAL_FACTOR_CROSS_V1',
+    architecture:featureCount+'x'+dimensions+'-FACTOR_CROSS+FROZEN_LOGISTIC',
+    input_size:featureCount,rank:dimensions,feature_names:[...featureNames],
+    feature_schema:featureSchema,factors,cross_weights:crossWeights,
+    skip_weights:skipWeights,intercept,base_rate:baseRate,
+    training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
+    positive_class_weighting:useWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    positive_sample_weight:Number(positiveWeight.toFixed(5)),
+    training_objective:trainingObjective,iterations:steps,l2:regularization,
+    anchor_adaptation:'FROZEN_LOGISTIC',anchor_trust_radius:0,anchor_bias_trust_radius:0,
+    anchor_tether_strength:0,anchor_learning_rate_scale:0,
+    max_anchor_skip_delta:0,anchor_output_bias_delta:0,
+    residual_anchor:validBaseline?'SAME_WINDOW_LOGISTIC_FROZEN':'TRAINING_PREVALENCE_PRIOR',
+    training_diagnostics:{schema:'FACTOR_CROSS_PER_EPOCH_TRAINING_DIAGNOSTICS_V1',epoch_history:epochHistory}
+  };
+}
+
 function fitNeuralEnsemble(training, options = {}) {
   const seeds=NEURAL_POLICY.ensembleSeeds;
   const baseIterations=Math.max(30,Math.min(180,Math.trunc(Number(options.iterations)||NEURAL_POLICY.iterations)));
@@ -788,7 +957,27 @@ function fitNeuralEnsemble(training, options = {}) {
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
   }));
-  if(members.length!==seeds.length||members.some(member=>!member))return null;
+  const memberSeeds=[...seeds];
+  const factorizationMemberIndex=options.enableFactorizationMachine===true?members.length:-1;
+  if(options.enableFactorizationMachine===true){
+    const factorizationProfile={
+      model_kind:'RESIDUAL_FACTOR_CROSS_V1',
+      rank:Math.max(2,Math.min(16,Math.trunc(Number(options.factorizationRank)||8))),
+      iterations:Math.max(30,Math.min(180,Math.trunc(Number(options.factorizationIterations)||baseIterations))),
+      learningRate:clamp(Number(options.factorizationLearningRate)||baseLearningRate*0.75,0.0005,0.03),
+      l2:clamp(Number(options.factorizationL2)||baseL2*1.5,0.001,0.5),
+      seed:Math.max(1,Math.min(997,Math.trunc(Number(options.factorizationSeed)||73))),
+      trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
+      positiveClassWeighting:'NONE'
+    };
+    const factorizationMember=fitFactorizationMachineModel(training,{
+      baselineFit:options.baselineFit,...factorizationProfile
+    });
+    if(!factorizationMember)return null;
+    members.push(factorizationMember);memberSeeds.push(factorizationProfile.seed);
+    memberProfiles.push(factorizationProfile);
+  }
+  if(members.length!==memberSeeds.length||members.some(member=>!member))return null;
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
     architecture:members[0].architecture,
@@ -798,9 +987,12 @@ function fitNeuralEnsemble(training, options = {}) {
     output_size:1,
     members,
     ensemble_members:members.length,
-    seeds:[...seeds],
+    seeds:memberSeeds,
+    factorization_member_index:factorizationMemberIndex,
     member_training_profiles:memberProfiles,
-    training_strategy:'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
+    training_strategy:factorizationMemberIndex>=0
+      ?'RESIDUAL_MLP_PLUS_LOW_RANK_FACTOR_CROSS_V1_SAME_WINDOW_LOGISTIC_ANCHOR'
+      :'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
     training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V7',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
@@ -844,8 +1036,17 @@ function predictFromFit(features, fit, residualScale=1) {
     const weight=clamp(Number(fit.boosted_weight)||0,0,1);
     return clamp(weight*boosted+(1-weight)*neural,0.02,0.98);
   }
+  if(fit?.kind==='RESIDUAL_FACTOR_CROSS_V1'){
+    const vector=normalizedFeatures(features,fit.feature_schema||COGNITIVE_FEATURE_SCHEMA);
+    if(vector.length!==Number(fit.input_size))return null;
+    return applyAcceptedProbabilityCalibration(
+      predictFactorizationMachineProbability(vector,fit,residualScale),fit.probability_calibrator
+    );
+  }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
-    if(!Array.isArray(fit.members)||fit.members.length!==NEURAL_POLICY.ensembleSeeds.length)return null;
+    const expectedMembers=Array.isArray(fit.seeds)&&fit.seeds.length
+      ?fit.seeds.length:NEURAL_POLICY.ensembleSeeds.length;
+    if(!Array.isArray(fit.members)||fit.members.length!==expectedMembers)return null;
     const selected=Number(fit.selected_member_index);
     let rawPrediction;
     if(Number.isInteger(selected)&&selected>=0&&selected<fit.members.length){
@@ -1172,6 +1373,11 @@ export function buildCognitiveLearningProfile(samples = [], {
   neuralInnerSelectionMargin = null,
   neuralTrainingHistoryFraction = 1.0,
   neuralAnchorAdaptation = 'FROZEN',
+  enableFactorizationMachine=false,
+  factorizationRank=8,
+  factorizationIterations=null,
+  factorizationLearningRate=null,
+  factorizationL2=null,
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
   maxResolvedSamples = 0
 } = {}) {
@@ -1438,7 +1644,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
       iterations:neuralIterations,learningRate:neuralLearningRate,l2:neuralL2,
       baselineFit:neuralSameWindowLogisticFit,
-      anchorAdaptation:neuralAnchorAdaptation
+      anchorAdaptation:neuralAnchorAdaptation,
+      enableFactorizationMachine,
+      factorizationRank,factorizationIterations,factorizationLearningRate,factorizationL2
     }):null;
   let neuralFinalTraining=neuralModelTraining;
   // Enforce at least the declared V5 challenger margin; caller options may
@@ -1478,11 +1686,15 @@ export function buildCognitiveLearningProfile(samples = [], {
     const refitBaseline=selectedIndex>=0?fitLogisticModel(refitRows,{l2,iterations,learningRate}):null;
     const selectedProfile=selectedIndex>=0?neuralFit.member_training_profiles[selectedIndex]||{}:{};
     const refitMember=selectedIndex>=0&&refitBaseline
-      ?fitNeuralNetworkModel(refitRows,{
-        hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
-        ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline,
-        anchorAdaptation:neuralFit.anchor_adaptation_mode
-      }):null;
+      ?selectedProfile.model_kind==='RESIDUAL_FACTOR_CROSS_V1'
+        ?fitFactorizationMachineModel(refitRows,{
+          ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline
+        })
+        :fitNeuralNetworkModel(refitRows,{
+          hiddenUnits:NEURAL_POLICY.hiddenUnits,secondHiddenUnits:NEURAL_POLICY.secondHiddenUnits,
+          ...selectedProfile,seed:neuralFit.seeds[selectedIndex],baselineFit:refitBaseline,
+          anchorAdaptation:neuralFit.anchor_adaptation_mode
+        }):null;
     if(refitMember&&refitBaseline){
       neuralFit.members[selectedIndex]=refitMember;
       neuralFit.anchor_adaptation=refitMember.anchor_adaptation;
@@ -1937,9 +2149,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       scoring_base_rate:neuralFit?.base_rate??null,
       maximum_training_sample_budget:neuralLimit,
       model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-      training_strategy:neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
-        ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
-        :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
+      training_strategy:neuralFit?.training_strategy||
+        (neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
+          ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
+          :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6'),
       training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
       target_definition:TEMPORAL_TARGET_DEFINITION,
       residual_scale_selection:'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1',
@@ -1963,7 +2176,10 @@ export function buildCognitiveLearningProfile(samples = [], {
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
       selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
-      ensemble_members_required:NEURAL_POLICY.ensembleSeeds.length,
+      ensemble_members_required:neuralFit?.seeds?.length??NEURAL_POLICY.ensembleSeeds.length,
+      factorization_member_enabled:Number.isInteger(neuralFit?.factorization_member_index)&&
+        neuralFit.factorization_member_index>=0,
+      factorization_member_index:neuralFit?.factorization_member_index??-1,
       selected_member_index:neuralFit?.selected_member_index??null,
       anchor_adaptation:neuralFit?.anchor_adaptation??'FROZEN_LOGISTIC',
       anchor_trust_radius:neuralFit?.anchor_trust_radius??0,

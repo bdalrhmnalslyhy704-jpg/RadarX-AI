@@ -6,7 +6,8 @@ import {dirname,resolve} from 'node:path';
 import readline from 'node:readline';
 import {
   DAILY_EARLY_RISER_TARGETS_PCT,
-  benchmarkDailyEarlyRiserTarget
+  benchmarkDailyEarlyRiserTarget,
+  benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
 
 const DEFAULT_INPUT='artifacts/daily-early-riser-samples.jsonl';
@@ -70,7 +71,7 @@ async function loadTemporalSequences(path,expectedSha256,expectedRows){
   return {by_id:byId,sha256:actualSha256,rows:byId.size,bytes:sourceStat.size,
     sequence_steps:24,sequence_channels:29};
 }
-async function loadTargetSamples(path,targetPct,temporalById){
+async function loadTargetSamples(path,targetPct,temporalById,{labelMode='first_passage',horizonHours=24}={}){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   const input=createReadStream(path,{encoding:'utf8'});
   const lines=readline.createInterface({input,crlfDelay:Infinity});
@@ -83,7 +84,10 @@ async function loadTargetSamples(path,targetPct,temporalById){
     let sample;
     try{sample=JSON.parse(line);}
     catch{malformed++;continue;}
-    const label=sample?.targets?.[key];
+    const label=labelMode==='first_passage'?sample?.targets?.[key]:
+      labelMode==='safe_opportunity'
+        ?sample?.safe_opportunity_targets?.[String(horizonHours)+'h']?.[key]
+        :sample?.opportunity_targets?.[String(horizonHours)+'h']?.[key];
     if(!label){missingTarget++;continue;}
     // Retain only one target and the pre-event feature object to bound memory.
     const temporalRow=temporalById.get(String(sample.id||''))||null;
@@ -104,8 +108,15 @@ async function loadTargetSamples(path,targetPct,temporalById){
       feature_information_cutoff_at:sample.feature_information_cutoff_at,
       observation_source:sample.observation_source,
       features:sample.features,
+      daily_change_pct:sample.daily_change_pct,
+      relative_strength_vs_btc_24h_pct:sample.relative_strength_vs_btc_24h_pct,
       temporal_sequence,
-      targets:{[key]:label}
+      ...(labelMode==='first_passage'?{targets:{[key]:label}}:
+        labelMode==='safe_opportunity'
+          ?{safe_opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
+            liquidity_lane:sample.liquidity_lane,quote_volume_24h:sample.quote_volume_24h}
+          :{opportunity_targets:{[String(horizonHours)+'h']:{[key]:label}},
+            liquidity_lane:sample.liquidity_lane,quote_volume_24h:sample.quote_volume_24h})
     });
   }
   return {samples,lines_read:linesRead,malformed_lines:malformed,missing_target_rows:missingTarget,
@@ -141,6 +152,8 @@ function compactTarget(result){
     temporal_regime_local_tcn_challenger:result.temporal_regime_local_tcn_challenger,
     temporal_regime_local_tcn_pyramid_challenger:result.temporal_regime_local_tcn_pyramid_challenger,
     temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger,
+    temporal_regime_local_tcn_attention_challenger:result.temporal_regime_local_tcn_attention_challenger,
+    regime_local_mlp_challenger:result.schema==='RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1'?result:null,
     temporal_tcn_reason:result.temporal_tcn_reason,
     temporal_tcn:result.temporal_tcn,
     binary_up_event_contract:result.binary_up_event_contract,
@@ -154,21 +167,65 @@ async function main(){
   const temporalInput=resolve(args['temporal-input']||DEFAULT_TEMPORAL_INPUT);
   const censusReportPath=resolve(args['census-report']||DEFAULT_CENSUS_REPORT);
   const tcnOnly=String(args['tcn-only']||'false')==='true';
+  const attentionOnly=String(args['attention-only']||'false')==='true';
+  const regimeLocalMlpOnly=String(args['regime-local-mlp-only']||'false')==='true';
+  const attentionPositionBiasL2Multiplier=Math.max(1,Math.min(64,
+    Number(args['attention-position-bias-l2-multiplier']||1)));
+  const neuralTrainingHistoryFraction=Number(args['neural-training-history-fraction']??
+    (regimeLocalMlpOnly?1:0.60));
+  if(!Number.isFinite(neuralTrainingHistoryFraction)||neuralTrainingHistoryFraction<0.35||neuralTrainingHistoryFraction>1)
+    throw new Error('NEURAL_TRAINING_HISTORY_FRACTION_OUT_OF_RANGE');
+  const enableFactorizationMachine=String(args['enable-factorization-machine']||'false')==='true';
+  const factorizationRank=Math.max(2,Math.min(16,Math.trunc(Number(args['factorization-rank']||8))));
+  const factorizationIterations=Math.max(30,Math.min(180,Math.trunc(Number(args['factorization-iterations']||100))));
+  const factorizationLearningRate=Math.max(0.0005,Math.min(0.03,Number(args['factorization-learning-rate']||0.008)));
+  const factorizationL2=Math.max(0.001,Math.min(0.5,Number(args['factorization-l2']||0.06)));
+  if(attentionOnly&&!tcnOnly)throw new Error('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE');
+  if(regimeLocalMlpOnly&&(tcnOnly||attentionOnly))
+    throw new Error('REGIME_LOCAL_MLP_ONLY_CANNOT_RUN_WITH_TCN_ONLY_FLAGS');
+  const labelMode=String(args['label-mode']||'first_passage');
+  const requiredLiquidityLane=String(args['liquidity-lane']||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
+  const horizonHours=Number(args['horizon-hours']||24);
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode)||
+    ![24,48,72].includes(horizonHours)||
+    (labelMode==='first_passage'&&horizonHours!==24))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE_OR_HORIZON');
   const requestedTarget=args.target===undefined?null:Number(args.target);
   if(requestedTarget!==null&&!DAILY_EARLY_RISER_TARGETS_PCT.includes(requestedTarget))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET_ARGUMENT');
   const targetsToRun=requestedTarget===null?DAILY_EARLY_RISER_TARGETS_PCT:[requestedTarget];
-  const defaultOutput=tcnOnly
+  const defaultOutput=regimeLocalMlpOnly
+    ?'artifacts/daily-early-riser-regime-local-mlp-benchmark.json'
+    :tcnOnly
     ?(requestedTarget===null?'artifacts/daily-early-riser-tcn-only-benchmark.json':
-      'artifacts/daily-early-riser-tcn-only-'+requestedTarget+'.json')
+      'artifacts/daily-early-riser-tcn-only-'+labelMode+'-'+horizonHours+'h-'+requestedTarget+'.json')
     :DEFAULT_OUTPUT;
   const output=resolve(args.output||defaultOutput);
   const started=Date.now();
   const report={
     schema:tcnOnly?'RADARX_DAILY_EARLY_RISER_TCN_ONLY_BENCHMARK_V1':
       'RADARX_DAILY_EARLY_RISER_NEURAL_BENCHMARK_V2',
-    research_mode:tcnOnly?'TCN_ONLY_ISOLATED_COMPUTE':'FULL_DAILY_NEURAL_BENCHMARK',
+    research_mode:tcnOnly
+      ?attentionOnly?'V11_ATTENTION_ONLY_ISOLATED_COMPUTE':'TCN_ONLY_ISOLATED_COMPUTE'
+      :regimeLocalMlpOnly?'REGIME_LOCAL_MLP_ONLY_ISOLATED_COMPUTE'
+      :String(args['skip-temporal']||'false')==='true'
+        ?'FULL_TABULAR_NEURAL_BENCHMARK_WITH_TCN_ISOLATED'
+        :'FULL_DAILY_NEURAL_BENCHMARK',
+    temporal_training_isolated:regimeLocalMlpOnly||String(args['skip-temporal']||'false')==='true',
+    regime_local_mlp_only:regimeLocalMlpOnly,
+    temporal_attention_only:attentionOnly,
+    neural_training_history_fraction:neuralTrainingHistoryFraction,
+    enable_factorization_machine:enableFactorizationMachine,
+    factorization_rank:factorizationRank,
+    factorization_iterations:factorizationIterations,
+    factorization_learning_rate:factorizationLearningRate,
+    factorization_l2:factorizationL2,
+    required_liquidity_lane:requiredLiquidityLane||null,
     requested_targets:targetsToRun,
+    label_mode:labelMode,
+    horizon_hours:horizonHours,
     status:'RUNNING',
     created_at:new Date().toISOString(),
     input_file:input,
@@ -178,16 +235,22 @@ async function main(){
     main_sample_file_audit:null,
     target_results:{},
     methodology:{
-      labels:'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
+      labels:labelMode==='upside_opportunity'
+        ?'Independent upside-touch event within the requested 24h/48h/72h horizon; earlier drawdown is labelled separately and does not erase the event'
+        :labelMode==='safe_opportunity'
+          ?'First touch of +5%, +10% or +15% must precede the -2% adverse barrier in the requested 24h/48h/72h horizon; same-candle ordering is ambiguous'
+          :'First passage to +5%, +10% or +15% before a -2% adverse barrier within 96 consecutive closed 15m candles',
       input_cutoff:'Features are accepted only when feature_information_cutoff_at equals the baseline candle close',
       chronology:'The existing nested chronological V5 selection, calibration, validation and holdout gates are retained; outcomes crossing boundaries are purged',
-      mlp_training_history:'The daily MLP gradient-fit window uses the newest 60% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
+      mlp_training_history:'The daily MLP gradient-fit window uses the newest '+String(Math.round(neuralTrainingHistoryFraction*100))+'% of its chronological model-fit timestamps; the same-window logistic anchor uses exactly the same rows, while member selection, calibration, outer validation and untouched holdout remain later disjoint blocks',
       feature_schema:'Daily MLP/GBDT use an isolated 35-channel V3 schema; legacy Cognitive V5 remains 18 channels outside this daily experiment. Daily context is computed from baseline-only closed candles. The independent daily TCN uses the original 24x29 closed-candle temporal sequence.',
-      models:tcnOnly?
-        ['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','Regime-local training-only Logistic anchors']:
-        ['Residual Deep MLP V5 ensemble','Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN for each first-passage target'],
+      models:tcnOnly
+        ?attentionOnly
+          ?['Shared temporal TCN control','BTC-regime learned-query time-attention TCN V11','Matched regime-local Logistic anchors']
+          :['Shared temporal TCN V8 control','Independent BTC-regime TCN control','Ordered four-segment TCN V9','Full-receptive-field multiscale TCN V10','BTC-regime learned-query time-attention TCN V11','Regime-local training-only Logistic anchors']
+        :['Residual Deep MLP V5 ensemble',...(enableFactorizationMachine?['Low-rank Factorization-Machine pairwise residual']:[]),'Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11'],
       comparison_margin_brier:0.003,
-      tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under target-specific 24h first-passage contracts; the production TCN default remains unchanged at 4h',
+      tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
       holdout_status:'Historical diagnostic holdout only; a future forward Shadow period is still required'
     },
     production_touched:false,
@@ -235,7 +298,7 @@ async function main(){
       sequence_steps:24,sequence_channels:29,verified_against_census_report:true
     };
     for(const target of targetsToRun){
-      const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id);
+      const loaded=await loadTargetSamples(input,target,temporalSidecar.by_id,{labelMode,horizonHours});
       if(loaded.lines_read!==Number(expectedSamples.rows)||loaded.samples.length!==Number(expectedSamples.rows)||
         loaded.malformed_lines!==0||loaded.missing_target_rows!==0)
         throw new Error('MAIN_SAMPLE_FILE_ROW_COUNT_PARSE_OR_TARGET_MISMATCH:'+target);
@@ -243,10 +306,25 @@ async function main(){
         loaded.temporal_unexpected!==0||loaded.temporal_attached!==temporalSidecar.rows||
         loaded.temporal_flagged_available!==Number(expectedTemporal.declared_sequence_count))
         throw new Error('TEMPORAL_SEQUENCE_SAMPLE_IDENTITY_OR_COVERAGE_MISMATCH:'+target);
-      const result=benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
-        tcnOnly,enableTemporalBoostedTree:!tcnOnly
+      const skipTemporal=regimeLocalMlpOnly||String(args['skip-temporal']||'false')==='true';
+      const result=regimeLocalMlpOnly
+        ?benchmarkDailyEarlyRiserRegimeLocalMlp(loaded.samples,target,{
+          labelMode,horizonHours,requiredLiquidityLane,
+          neuralTrainingHistoryFraction,minimumValidationSamples:1500,minimumHoldoutSamples:2000
+        })
+        :benchmarkDailyEarlyRiserTarget(loaded.samples,target,{
+        tcnOnly,enableTemporalBoostedTree:!tcnOnly,labelMode,horizonHours,skipTemporal,
+        enableRegimeLocalTcn:!attentionOnly,
+        enableRegimeLocalTcnPyramid:!attentionOnly,
+        enableRegimeLocalTcnMultiscale:!attentionOnly,
+        enableRegimeLocalTcnAttention:true,
+        temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier:attentionPositionBiasL2Multiplier,
+        neuralTrainingHistoryFraction,
+        enableFactorizationMachine,factorizationRank,factorizationIterations,
+        factorizationLearningRate,factorizationL2,
+        requiredLiquidityLane
       });
-      report.target_results[String(target)+'_PCT']={
+      report.target_results[String(target)+'_PCT_'+labelMode.toUpperCase()+'_'+horizonHours+'H']={
         ...compactTarget(result),
         source_rows:{
           lines_read:loaded.lines_read,
@@ -268,6 +346,8 @@ async function main(){
       const localTcn=result.temporal_regime_local_tcn_challenger||{};
       const localTcnPyramid=result.temporal_regime_local_tcn_pyramid_challenger||{};
       const localTcnMultiscale=result.temporal_regime_local_tcn_multiscale_challenger||{};
+      const localTcnAttention=result.temporal_regime_local_tcn_attention_challenger||{};
+      const regimeLocalMlp=result.schema==='RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1'?result:null;
       const regimeSummary=Object.fromEntries(Object.entries(tcn.regime_specialists||{})
         .map(([regime,value])=>[regime,{
           status:value?.status??null,
@@ -290,14 +370,22 @@ async function main(){
         }]));
       console.log('[DAILY_NEURAL_TARGET_COMPLETE] '+JSON.stringify({
         target_pct:target,
+        label_mode:labelMode,
+        horizon_hours:horizonHours,
         feature_schema:result.feature_schema,
         feature_count:result.feature_names?.length??null,
-        samples:result.samples.accepted,
-        training:result.chronology.training_samples,
-        validation:result.chronology.validation_samples,
-        holdout:result.chronology.holdout_samples,
+        samples:result.samples?.accepted??regimeLocalMlp?.sample_count??0,
+        training:result.chronology?.training_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.training_samples||0),0),
+        validation:result.chronology?.validation_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.validation_samples||0),0),
+        holdout:result.chronology?.holdout_samples??Object.values(regimeLocalMlp?.regime_specialists||{}).reduce((sum,row)=>sum+Number(row.holdout_samples||0),0),
         neural:{
           status:neural.status??null,trained:neural.trained===true,
+          training_strategy:neural.training_strategy??null,
+          factorization_member_enabled:neural.factorization_member_enabled===true,
+          factorization_member_index:neural.factorization_member_index??-1,
+          ensemble_members:neural.ensemble_members??0,
+          ensemble_members_required:neural.ensemble_members_required??null,
+          member_training_profiles:neural.member_training_profiles??[],
           preselection_training_samples:neural.preselection_training_samples??0,
           fitted_training_samples:neural.training_samples??0,
           required_training_samples:neural.samples_required??null,
@@ -324,6 +412,8 @@ async function main(){
           selected_member_index:neural.selected_member_index??null,
           selected_residual_scale:neural.selected_residual_scale??null,
           member_selection_brier_scores:neural.member_selection_brier_scores??[],
+          factorization_candidate_scores:(neural.member_selection_brier_scores??[]).filter(row=>
+            neural.member_training_profiles?.[row.index]?.model_kind==='RESIDUAL_FACTOR_CROSS_V1'),
           probability_calibration:neural.probability_calibration??null,
           failure_reason:neural.inner_selection_diagnostics?.failure_reason??null,
           validation_brier:neural.validation?.model_brier_score??null,
@@ -402,6 +492,65 @@ async function main(){
           holdout_comparison:localTcnPyramid.holdout_comparison??null,
           regimes:localTcnPyramid.regime_specialists??{}
         },
+
+        regime_local_mlp:regimeLocalMlp?{
+          status:regimeLocalMlp.status,trained:regimeLocalMlp.trained,
+          selected_for_research:regimeLocalMlp.selected_for_research,
+          validation_passed:regimeLocalMlp.validation_passed,
+          research_out_of_sample_validated:regimeLocalMlp.research_out_of_sample_validated,
+          sample_count:regimeLocalMlp.sample_count,
+          regime_sample_counts:regimeLocalMlp.regime_sample_counts,
+          rejection_counts:regimeLocalMlp.rejection_counts,
+          regimes:regimeLocalMlp.regime_specialists
+        }:null,
+        regime_local_tcn_attention:{
+
+          status:localTcnAttention.status??null,
+
+          model_kind:localTcnAttention.model_kind??null,
+
+          architecture:localTcnAttention.architecture??null,
+          position_bias_l2_multiplier:localTcnAttention.attention_position_bias_l2_multiplier??1,
+
+          temporal_pooling:localTcnAttention.temporal_pooling??null,
+
+          attention_dimension:localTcnAttention.attention_dimension??0,
+
+          relative_position_bias_count:localTcnAttention.relative_position_bias_count??0,
+
+          output_features:localTcnAttention.output_features??0,
+
+          trainable_parameter_count:localTcnAttention.trainable_parameter_count??0,
+
+          training_sample_budget:localTcnAttention.training_sample_budget??0,
+
+          trained:localTcnAttention.trained===true,
+
+          training_samples:localTcnAttention.training_samples??0,
+
+          supported_regimes:localTcnAttention.supported_regimes??[],
+
+          validation_selected_regimes:localTcnAttention.validation_selected_regimes??[],
+
+          selected_regimes:localTcnAttention.selected_regimes??[],
+
+          validation:localTcnAttention.validation??null,
+
+          validation_logistic:localTcnAttention.validation_logistic??null,
+
+          holdout:localTcnAttention.holdout??null,
+
+          holdout_logistic:localTcnAttention.holdout_logistic??null,
+
+          holdout_comparison:localTcnAttention.holdout_comparison??null,
+
+          member_selection_logistic_ranking_metrics_by_regime:localTcnAttention.member_selection_logistic_ranking_metrics_by_regime??{},
+          selection_best_candidate_by_regime:localTcnAttention.selection_best_candidate_by_regime??{},
+          member_selection_scores_by_regime:localTcnAttention.member_selection_scores_by_regime??{},
+          regimes:localTcnAttention.regime_specialists??{}
+
+        },
+
         regime_local_tcn_multiscale:{
           status:localTcnMultiscale.status??null,
           model_kind:localTcnMultiscale.model_kind??null,

@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {
   DAILY_EARLY_RISER_HORIZON_MS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
   DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
   DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
@@ -13,8 +14,10 @@ import {
   DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
-  benchmarkDailyEarlyRiserTarget
+  benchmarkDailyEarlyRiserTarget,
+  benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
+import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from '../core/daily-early-riser-census.mjs';
 import {
   buildCognitiveLearningProfile,
   buildCognitiveFeatureVector,
@@ -22,6 +25,7 @@ import {
   COGNITIVE_FEATURE_SCHEMA,
   COGNITIVE_DAILY_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
+  factorizationMachineProjection,
   effectiveNeuralInnerSelectionMargin,
   effectiveNeuralSelectionMinimum,
   hasNeuralSelectionSupport
@@ -74,6 +78,72 @@ test('TCN-only V10 training-window ablation is capped at 8,192 while standard pr
   assert.equal(effectiveDailyTcnMultiscaleTrainingBudget({
     tcnOnly:false,temporalRegimeLocalTcnMultiscaleMaxTrainingSamples:8192
   }),4096);
+});
+
+test('regime-local MLP reconstructs BTC return from the same-window official asset and relative returns when TCN sequence is absent',()=>{
+  const riskOn=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  riskOn.daily_change_pct=4;
+  riskOn.relative_strength_vs_btc_24h_pct=2;
+  const riskOff=sampleWith({at:1_800_000_900_000,targetPct:5,outcome:'DOWN'});
+  riskOff.daily_change_pct=-3;
+  riskOff.relative_strength_vs_btc_24h_pct=1;
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([riskOn,riskOff],5,{
+    labelMode:'first_passage',horizonHours:24
+  });
+  assert.deepEqual(result.regime_sample_counts,{BTC_RISK_ON:1,BTC_RISK_OFF:1});
+  assert.equal(result.rejection_counts.BTC_REGIME_ALL_SOURCES_MISSING,undefined);
+  assert.equal(result.rejection_counts.BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS,undefined);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.sample_count,1);
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.sample_count,1);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.status,'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.status,'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.probability_ready,false);
+});
+
+test('regime-local MLP rejects an archived BTC regime that conflicts with the closed temporal sequence',()=>{
+  const sample=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  sample.daily_change_pct=4;
+  sample.relative_strength_vs_btc_24h_pct=2;
+  sample.temporal_sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      channel===19&&time===TEMPORAL_SEQUENCE_STEPS-1?-0.25:0));
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([sample],5,{
+    labelMode:'first_passage',horizonHours:24
+  });
+  assert.equal(result.rejection_counts.BTC_REGIME_SOURCE_DISAGREEMENT,1);
+  assert.equal(result.sample_count,0);
+  assert.equal(result.status,'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE');
+  assert.equal(result.probability_ready,false);
+});
+
+test('regime-local MLP assigns samples by the final closed BTC 24h feature and never merges unsupported regimes',()=>{
+  const sequenceFor=sign=>Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>
+      channel===19&&time===TEMPORAL_SEQUENCE_STEPS-1?sign:0));
+  const riskOn=sampleWith({at:1_800_000_000_000,targetPct:5,outcome:'UP'});
+  const riskOff=sampleWith({at:1_800_000_900_000,targetPct:5,outcome:'DOWN'});
+  riskOn.temporal_sequence=sequenceFor(0.25);
+  riskOff.temporal_sequence=sequenceFor(-0.25);
+  const result=benchmarkDailyEarlyRiserRegimeLocalMlp([riskOn,riskOff],5,{
+    labelMode:'first_passage',horizonHours:24,
+    neuralTrainingHistoryFraction:1
+  });
+  assert.equal(result.schema,'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1');
+  assert.equal(result.btc_regime_definition,
+    'LAST_CLOSED_15M_SEQUENCE_BTC_24H_RETURN_CHANNEL_19_SIGN_V1');
+  assert.deepEqual(result.regime_sample_counts,{BTC_RISK_ON:1,BTC_RISK_OFF:1});
+  assert.equal(result.sample_count,2);
+  assert.equal(result.trained,false,
+    'one sample in each regime cannot pass the specialist minimum-data gate');
+  assert.equal(result.research_out_of_sample_validated,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.production_touched,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.regime_specialists.BTC_RISK_ON.status,
+    'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
+  assert.equal(result.regime_specialists.BTC_RISK_OFF.status,
+    'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT');
 });
 
 test('TCN-only mode returns temporal challengers without running MLP, tabular GBDT or hybrid profiles',()=>{
@@ -188,6 +258,156 @@ test('target definitions remain independent for +5%, +10% and +15%',()=>{
   assert.equal(prepareDailyEarlyRiserCognitiveRow(input,15).row.outcome,'FLAT');
 });
 
+
+
+test('72h upside opportunity adapter keeps a later rally positive after an early drawdown',()=>{
+  const at=1_800_000_000_000;
+  const input=sampleWith({at,targetPct:5,outcome:'DOWN'});
+  const label={
+    status:'RESOLVED',outcome:'UP',
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome_source:DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
+    target_definition:'ANY_UPSIDE_TOUCH_PLUS_5_PCT_WITHIN_72H_15M_V1',
+    target_reached:true,first_target_index:210,
+    independent_of_adverse_barrier:true
+  };
+  input.opportunity_targets={'72h':{plus_5_pct:label}};
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'upside_opportunity',horizonHours:72
+  });
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.outcome,'UP');
+  assert.equal(prepared.row.horizon_ms,72*60*60*1000);
+  assert.equal(prepared.row.target_definition,label.target_definition);
+  assert.equal(prepared.row.first_passage,undefined,
+    'opportunity labels must not masquerade as first-passage tradeability labels');
+  assert.deepEqual(prepared.row.outcome_contract,{
+    kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:'UP',
+    horizon_hours:72,independent_of_adverse_barrier:true
+  });
+});
+
+test('safe-opportunity adapter preserves the target-before-drawdown entry objective',()=>{
+  const at=1_800_000_000_000;
+  const input=sampleWith({at,targetPct:5,outcome:'DOWN'});
+  const label={
+    status:'RESOLVED',outcome:'UP',resolved_at:at+72*60*60*1000,
+    horizon_ms:72*60*60*1000,outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+    target_definition:'FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1',
+    first_touch_index:12,independent_of_future_after_first_touch:true
+  };
+  input.safe_opportunity_targets={'72h':{plus_5_pct:label}};
+  const prepared=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.equal(prepared.reason,null);
+  assert.equal(prepared.row.outcome,'UP');
+  assert.equal(prepared.row.outcome_source,DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE);
+  assert.equal(prepared.row.target_definition,label.target_definition);
+  assert.deepEqual(prepared.row.outcome_contract,{
+    kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome:'UP',
+    horizon_hours:72,adverse_pct:2
+  });
+
+  label.outcome='DOWN';
+  const down=prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  });
+  assert.equal(down.row.outcome,'DOWN');
+  label.outcome='AMBIGUOUS';label.status='AMBIGUOUS';
+  assert.equal(prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'safe_opportunity',horizonHours:72
+  }).reason,'LABEL_NOT_RESOLVED');
+});
+
+test('temporal TCN accepts the explicitly typed safe first-touch contract',()=>{
+  const at=1_800_000_000_000;
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const row={
+    id:'AAAUSDT:SAFE72',symbol:'AAAUSDT',at,
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome:'UP',outcome_source:DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
+    target_definition:'FIRST_TOUCH_PLUS_5_PCT_BEFORE_MINUS_2_PCT_WITHIN_72H_15M_V1',
+    outcome_contract:{kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome:'UP',
+      horizon_hours:72,adverse_pct:2},
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    temporal_sequence:sequence
+  };
+  const result=buildTemporalNeuralProfile([row],{
+    targetDefinition:row.target_definition,
+    outcomeHorizonMs:72*60*60*1000,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE],
+    outcomeContractKind:'SAFE_FIRST_PASSAGE'
+  });
+  assert.equal(result.resolved_samples,1);
+  assert.equal(result.outcome_contract_kind,'SAFE_FIRST_PASSAGE');
+});
+
+test('standard-lane training excludes Micro Watch rows instead of mixing liquidity cohorts',()=>{
+  const standard=sampleWith({at:1_800_000_000_000,outcome:'UP'});
+  standard.symbol='STANDARDUSDT';standard.id='STANDARDUSDT:STANDARD';
+  standard.liquidity_lane='STANDARD_750K_PLUS';standard.quote_volume_24h=1_200_000;
+  const micro=sampleWith({at:1_800_000_000_000+15*60*1000,outcome:'UP'});
+  micro.symbol='MICROUSDT';micro.id='MICROUSDT:MICRO';
+  micro.liquidity_lane='MICRO_WATCH_ONLY_UNDER_750K';micro.quote_volume_24h=420_000;
+  const result=benchmarkDailyEarlyRiserTarget([standard,micro],5,{
+    requiredLiquidityLane:'STANDARD_750K_PLUS',skipTemporal:true
+  });
+  assert.equal(result.required_liquidity_lane,'STANDARD_750K_PLUS');
+  assert.equal(result.samples.accepted,1);
+  assert.equal(result.samples.rejection_reasons.LIQUIDITY_LANE_FILTER,1);
+  assert.equal(result.approval.real_order_execution,false);
+  assert.throws(()=>benchmarkDailyEarlyRiserTarget([standard],5,{
+    requiredLiquidityLane:'ALL_LANES'
+  }),/UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE/);
+});
+
+test('skip-temporal research split lets tabular challengers finish without competing for TCN compute',()=>{
+  const samples=Array.from({length:40},(_,index)=>sampleWith({
+    at:1_800_000_000_000+index*24*60*60*1000,
+    outcome:index%7===0?'UP':'DOWN'
+  }));
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    skipTemporal:true,enableTemporalBoostedTree:true,
+    minTrainingSamples:10,minimumValidationSamples:5,minimumHoldoutSamples:5,
+    minNeuralTrainingSamples:240
+  });
+  assert.equal(result.temporal_tcn_reason,'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT');
+  assert.equal(result.temporal_tcn_training_performed,false);
+  assert.equal(result.temporal_tcn.status,'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT');
+  assert.equal(result.approval.real_order_execution,false);
+});
+
+test('temporal TCN accepts the explicitly typed 72h upside contract without relabelling it as first passage',()=>{
+  const at=1_800_000_000_000;
+  const sequence=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(TEMPORAL_SEQUENCE_CHANNELS).fill(0));
+  const row={
+    id:'AAAUSDT:UPSIDE72',symbol:'AAAUSDT',at,
+    resolved_at:at+72*60*60*1000,horizon_ms:72*60*60*1000,
+    outcome:'UP',outcome_source:DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE,
+    target_definition:'ANY_UPSIDE_TOUCH_PLUS_5_PCT_WITHIN_72H_15M_V1',
+    outcome_contract:{kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:'UP',horizon_hours:72},
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    temporal_sequence:sequence
+  };
+  const result=buildTemporalNeuralProfile([row],{
+    targetDefinition:row.target_definition,
+    outcomeHorizonMs:72*60*60*1000,
+    allowedOutcomeSources:[DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE],
+    outcomeContractKind:'UPSIDE_TOUCH'
+  });
+  assert.equal(result.resolved_samples,1);
+  assert.equal(result.target_definition,row.target_definition);
+  assert.equal(result.outcome_contract_kind,'UPSIDE_TOUCH');
+  assert.equal(result.status,'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES');
+});
+
+test('opportunity benchmark refuses the first-passage dataset instead of silently training on the wrong objective',()=>{
+  const input=sampleWith({targetPct:5,outcome:'UP'});
+  assert.equal(prepareDailyEarlyRiserCognitiveRow(input,5,{
+    labelMode:'upside_opportunity',horizonHours:72
+  }).reason,'LABEL_NOT_RESOLVED');
+});
 
 test('invalid temporal channels are withheld without discarding a valid tabular sample',()=>{
   const input=sampleWith({targetPct:5,outcome:'UP'});
@@ -312,6 +532,31 @@ test('daily profile reaches the decoupled selection gate without temporal-declar
 });
 
 
+test('low-rank factor-cross projection equals pairwise interactions and passes finite-difference derivative audit',()=>{
+  const vector=[0.7,-0.4,1.1,0.25];
+  const factors=[[0.2,-0.4],[0.7,0.3],[-0.2,0.5],[0.15,-0.1]];
+  const projection=factorizationMachineProjection(vector,factors);
+  assert.ok(projection);
+  for(let component=0;component<2;component++){
+    let exact=0;
+    for(let i=0;i<vector.length;i++)for(let j=i+1;j<vector.length;j++)
+      exact+=factors[i][component]*factors[j][component]*vector[i]*vector[j];
+    assert.ok(Math.abs(projection.interactions[component]-exact)<1e-12);
+    for(let feature=0;feature<vector.length;feature++){
+      const epsilon=1e-6;
+      const plus=factors.map(row=>[...row]),minus=factors.map(row=>[...row]);
+      plus[feature][component]+=epsilon;minus[feature][component]-=epsilon;
+      const upper=factorizationMachineProjection(vector,plus).interactions[component];
+      const lower=factorizationMachineProjection(vector,minus).interactions[component];
+      const numeric=(upper-lower)/(2*epsilon);
+      const analytic=projection.factor_derivatives[feature][component];
+      assert.ok(Math.abs(numeric-analytic)<1e-8,
+        `factor derivative mismatch at feature ${feature}, component ${component}: ${numeric} vs ${analytic}`);
+    }
+  }
+  assert.equal(factorizationMachineProjection(vector,[[]]),null);
+});
+
 test('daily feature schema can train and evaluate a real 35-input MLP without dimension fallback',()=>{
   const horizon=24*60*60*1000;
   const samples=[];
@@ -384,6 +629,59 @@ test('daily feature schema can train and evaluate a real 35-input MLP without di
     'the adjusted output bias must stay inside the declared trust region');
   assert.equal(profile.neural_network.validation.evaluated,true);
   assert.equal(profile.neural_network.holdout.evaluated,true);
+
+  const fullHistoryProfile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,minimumValidationSamples:30,minimumHoldoutSamples:30,
+    validationFraction:0.2,holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,allowedOutcomeSources:['UNIT_TEST_DAILY_35'],
+    minNeuralTrainingSamples:240,maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
+    iterations:40,learningRate:0.08,neuralIterations:10,
+    neuralInnerSelectionMargin:0.00025,neuralTrainingHistoryFraction:1,
+    neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  });
+  assert.equal(fullHistoryProfile.neural_network.trained,true);
+  assert.equal(fullHistoryProfile.neural_network.training_history_fraction,1);
+  assert.equal(fullHistoryProfile.neural_network.fit_training_samples,
+    fullHistoryProfile.neural_network.preselection_training_samples,
+    '100% MLP fit must use the entire eligible timestamp-grouped train block');
+  assert.ok(fullHistoryProfile.neural_network.max_training_outcome_resolved_at<
+    fullHistoryProfile.neural_network.selection_start_at,
+    'full-history MLP must remain purged before member selection');
+  assert.equal(fullHistoryProfile.neural_network.validation.sample_count,
+    profile.neural_network.validation.sample_count,
+    'history ablation must preserve outer validation membership');
+  assert.equal(fullHistoryProfile.neural_network.holdout.sample_count,
+    profile.neural_network.holdout.sample_count,
+    'history ablation must preserve untouched holdout membership');
+
+  const factorizedProfile=buildCognitiveLearningProfile(samples,{
+    minTrainingSamples:100,minimumValidationSamples:30,minimumHoldoutSamples:30,
+    validationFraction:0.2,holdoutFraction:0.2,
+    outcomeHorizonMs:horizon,allowedOutcomeSources:['UNIT_TEST_DAILY_35'],
+    minNeuralTrainingSamples:240,maxNeuralTrainingSamples:6000,
+    minimumNeuralSelectionSamples:40,minimumNeuralSelectionPositiveSamples:2,
+    minimumNeuralSelectionNegativeSamples:8,temporalSamples:[],
+    iterations:40,learningRate:0.08,neuralIterations:10,
+    neuralInnerSelectionMargin:0.00025,neuralTrainingHistoryFraction:1,
+    neuralAnchorAdaptation:DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    enableFactorizationMachine:true,factorizationRank:3,
+    factorizationIterations:30,factorizationLearningRate:0.008,factorizationL2:0.06,
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA
+  });
+  const fmNeural=factorizedProfile.neural_network;
+  assert.equal(fmNeural.trained,true);
+  assert.equal(fmNeural.factorization_member_enabled,true);
+  assert.equal(fmNeural.ensemble_members,4);
+  assert.equal(fmNeural.ensemble_members_required,4);
+  assert.equal(fmNeural.member_training_profiles.filter(item=>
+    item.model_kind==='RESIDUAL_FACTOR_CROSS_V1').length,1);
+  assert.equal(fmNeural.inner_selection_diagnostics.candidate_member_scale_count,20,
+    'the low-rank pairwise member must enter the same 4-member x 5-scale selection grid');
+  assert.ok(fmNeural.max_training_outcome_resolved_at<fmNeural.selection_start_at,
+    'factor-cross fit must remain strictly before the disjoint selection block');
 });
 
 test('daily anchor diagnostics report requested and applied modes without a false frozen default',()=>{
@@ -435,4 +733,17 @@ test('persisted benchmark report retains the independent regime-local TCN challe
     'compactTarget must serialize the ordered-pooling TCN challenger instead of dropping it');
   assert.ok(source.includes('temporal_regime_local_tcn_multiscale_challenger:result.temporal_regime_local_tcn_multiscale_challenger'),
     'compactTarget must serialize the full-receptive-field V10 challenger instead of dropping it');
+  assert.ok(source.includes("const attentionOnly=String(args['attention-only']||'false')==='true'"));
+  assert.ok(source.includes('V11_ATTENTION_ONLY_REQUIRES_TCN_ONLY_MODE'));
+  assert.ok(source.includes('research_mode:tcnOnly'));
+  assert.ok(source.includes('V11_ATTENTION_ONLY_ISOLATED_COMPUTE'));
+  assert.ok(source.includes('enableRegimeLocalTcn:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnPyramid:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnMultiscale:!attentionOnly'));
+  assert.ok(source.includes('enableRegimeLocalTcnAttention:true'));
+  assert.ok(source.includes("args['neural-training-history-fraction']"));
+  assert.ok(source.includes('neuralTrainingHistoryFraction,'));
+  assert.ok(source.includes("args['enable-factorization-machine']"));
+  assert.ok(source.includes('enableFactorizationMachine,factorizationRank,factorizationIterations'));
+  assert.ok(source.includes('factorization_candidate_scores'));
 });

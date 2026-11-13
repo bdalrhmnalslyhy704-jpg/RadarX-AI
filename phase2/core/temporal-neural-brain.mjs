@@ -42,6 +42,11 @@ export const TEMPORAL_MULTISCALE_RECEPTIVE_FIELD=31;
 export const TEMPORAL_MULTISCALE_TRAINABLE_PARAMETER_COUNT=1888;
 export const TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE=
   'TCN_24x29_TO16_LATENT_FOUR_LAYER_DILATED_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V10';
+export const TEMPORAL_ATTENTION_POOLING_MODE='LEARNED_QUERY_TIME_ATTENTION_V1';
+export const TEMPORAL_ATTENTION_MODEL_ARCHITECTURE=
+  'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11';
+export const TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT=
+  TEMPORAL_TRAINABLE_PARAMETER_COUNT+TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS;
 
 const DILATIONS = Object.freeze([1, 2, 4]);
 const KERNEL_TAPS = 2;
@@ -91,6 +96,13 @@ export function hasTemporalBrierSuperiority(candidateScore, baselineScore,
     baseline - candidate - required > 1e-12;
 }
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+export function temporalParameterL2(parameterName,baseL2,attentionPositionBiasL2Multiplier=1){
+  const base=finite(baseL2),multiplier=finite(attentionPositionBiasL2Multiplier);
+  if(base===null||base<0||multiplier===null||multiplier<0)return null;
+  return parameterName==='attentionPositionBiases'
+    ?base*multiplier:base;
+}
 const mean = values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
 const logistic = value => 1 / (1 + Math.exp(-clamp(value, -12, 12)));
 export function temporalBinaryTarget(outcome) {
@@ -109,18 +121,23 @@ function validSequence(sequence) {
 function cleanRows(samples, {
   targetDefinition = TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs = HORIZON_MS,
-  allowedOutcomeSources = null
+  allowedOutcomeSources = null,
+  outcomeContractKind = 'FIRST_PASSAGE'
 } = {}) {
   const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
   const allowedSources = Array.isArray(allowedOutcomeSources)
     ? new Set(allowedOutcomeSources.map(String)) : null;
   const seen = new Set();
+  const validOutcomeContract=row=>outcomeContractKind==='FIRST_PASSAGE'
+    ?row?.first_passage?.path_resolution==='15M'&&row.first_passage.outcome===row.outcome
+    :row?.outcome_contract?.kind===outcomeContractKind&&
+      row.outcome_contract.path_resolution==='15M'&&
+      row.outcome_contract.outcome===row.outcome;
   return (Array.isArray(samples) ? samples : []).filter(row => {
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
         row.target_definition !== targetDefinition ||
-        row.first_passage?.path_resolution !== '15M' ||
-        row.first_passage?.outcome !== row.outcome ||
+        !validOutcomeContract(row) ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
         !(allowedSources ? allowedSources.has(String(row.outcome_source || '')) :
           row.outcome_source === (row.historical_baseline === true
@@ -155,7 +172,7 @@ function zerosLike(value) {
   return 0;
 }
 function zeroTrainableGradients(model) {
-  return {
+  const gradients={
     projectionWeights:zerosLike(model.projectionWeights),
     projectionBiases:zerosLike(model.projectionBiases),
     depthWeights:zerosLike(model.depthWeights),
@@ -163,6 +180,11 @@ function zeroTrainableGradients(model) {
     biases:zerosLike(model.biases),
     outputWeights:zerosLike(model.outputWeights)
   };
+  if(Array.isArray(model.attentionQuery)){
+    gradients.attentionQuery=zerosLike(model.attentionQuery);
+    gradients.attentionPositionBiases=zerosLike(model.attentionPositionBiases);
+  }
+  return gradients;
 }
 export function resetGradientBuffer(target) {
   if(Array.isArray(target)){
@@ -238,12 +260,13 @@ function adamTree(parameters, gradients, moments, variances, step, rate, l2) {
     (correctedMoment / (Math.sqrt(correctedVariance) + EPSILON) + l2 * parameters), -2.5, 2.5);
   return { value, moment, variance };
 }
-function applyAdam(parameters, gradients, state, step, rate, l2) {
-  const walk = (parameter, gradient, moment, variance) => {
+function applyAdam(parameters, gradients, state, step, rate, l2,
+  attentionPositionBiasL2Multiplier=1) {
+  const walk = (parameter, gradient, moment, variance, path=[]) => {
     if (Array.isArray(parameter)) {
       const values = [], moments = [], variances = [];
       for (let index = 0; index < parameter.length; index++) {
-        const next = walk(parameter[index], gradient[index], moment[index], variance[index]);
+        const next = walk(parameter[index], gradient[index], moment[index], variance[index],path);
         values.push(next.value); moments.push(next.moment); variances.push(next.variance);
       }
       return { value: values, moment: moments, variance: variances };
@@ -251,7 +274,7 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
     if (parameter && typeof parameter === 'object') {
       const values = {}, moments = {}, variances = {};
       for (const key of Object.keys(parameter)) {
-        const next = walk(parameter[key], gradient[key], moment[key], variance[key]);
+        const next = walk(parameter[key], gradient[key], moment[key], variance[key],[...path,key]);
         values[key] = next.value; moments[key] = next.moment; variances[key] = next.variance;
       }
       return { value: values, moment: moments, variance: variances };
@@ -261,13 +284,15 @@ function applyAdam(parameters, gradients, state, step, rate, l2) {
     const nextVariance = 0.999 * variance + 0.001 * gradientValue * gradientValue;
     const mHat = nextMoment / (1 - Math.pow(0.9, step));
     const vHat = nextVariance / (1 - Math.pow(0.999, step));
+    const parameterL2=path.at(-1)==='attentionPositionBiases'
+      ?temporalParameterL2('attentionPositionBiases',l2,attentionPositionBiasL2Multiplier):l2;
     return {
-      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + l2 * parameter), -2.5, 2.5),
+      value: clamp(parameter - rate * (mHat / (Math.sqrt(vHat) + EPSILON) + parameterL2 * parameter), -2.5, 2.5),
       moment: nextMoment,
       variance: nextVariance
     };
   };
-  const next = walk(parameters, gradients, state.m, state.v);
+  const next = walk(parameters, gradients, state.m, state.v,[]);
   return { parameters: next.value, state: { m: next.moment, v: next.variance } };
 }
 
@@ -296,12 +321,17 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
       0.002*Math.sin((layer+1)*5.3+(channel+1)*1.7+offset)));
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
   const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
+  const attentionPooling=temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE;
   const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
     orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:channels;
   const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*channels+channels+
-    layers*(KERNEL_TAPS*channels+channels*channels+channels)+outputFeatureCount;
+    layers*(KERNEL_TAPS*channels+channels*channels+channels)+outputFeatureCount+
+    (attentionPooling?channels+TEMPORAL_SEQUENCE_STEPS:0);
   const outputWeights=Array.from({length:outputFeatureCount},(_,feature)=>
     0.01*Math.sin((feature+1)*4.73+offset));
+  const attentionQuery=attentionPooling?Array.from({length:channels},(_,channel)=>
+    0.025*Math.sin((channel+1)*2.91+offset)):null;
+  const attentionPositionBiases=attentionPooling?Array(TEMPORAL_SEQUENCE_STEPS).fill(0):null;
   const prior=clamp(Number(baseRate)||0.5,0.02,0.98);
   const baselineWeights=Array.isArray(baselineFit?.weights)&&
     baselineFit.weights.length===inputChannels*2
@@ -311,10 +341,12 @@ function initializeModel(seed, baseRate = 0.5, baselineFit = null, temporalPooli
     ?Number(baselineFit.bias):Math.log(prior/(1-prior));
   return {
     projectionWeights,projectionBiases,depthWeights,pointWeights,biases,outputWeights,
+    ...(attentionPooling?{attentionQuery,attentionPositionBiases}:{}),
     skipWeights:baselineWeights,outputBias:baselineBias,baseline_by_regime:null,
     residual_anchor:baselineFit?'TRAINING_ONLY_LOGISTIC_ANCHOR':'TRAINING_PREVALENCE_PRIOR',
     temporal_pooling:temporalPoolingMode,dilations,
     output_features:outputFeatureCount,
+    attention_dimension:attentionPooling?channels:0,
     latent_channels:channels,trainable_parameters:trainableParameterCount
   };
 }
@@ -385,6 +417,34 @@ export function poolMultiscaleTemporalSegments(latentRows){
   return {features,featureRoutes,poolSegments};
 }
 
+/**
+ * Single-head temporal query attention over all 24 latent steps.
+ * score_t = (q · h_t) / sqrt(C) + b_t
+ * alpha = softmax(score), pooled = sum_t alpha_t * h_t
+ * Query and relative-position biases are fitted on the training partition only.
+ */
+export function poolLearnedTemporalAttention(latentRows,query,positionBiases){
+  if(!Array.isArray(latentRows)||latentRows.length!==TEMPORAL_SEQUENCE_STEPS||
+    latentRows.some(row=>!Array.isArray(row)||row.length!==TEMPORAL_LATENT_CHANNELS||
+      row.some(value=>typeof value!=='number'||!Number.isFinite(value)))||
+    !Array.isArray(query)||query.length!==TEMPORAL_LATENT_CHANNELS||
+    query.some(value=>typeof value!=='number'||!Number.isFinite(value))||
+    !Array.isArray(positionBiases)||positionBiases.length!==TEMPORAL_SEQUENCE_STEPS||
+    positionBiases.some(value=>typeof value!=='number'||!Number.isFinite(value)))return null;
+  const scale=1/Math.sqrt(TEMPORAL_LATENT_CHANNELS);
+  const scores=latentRows.map((row,time)=>positionBiases[time]+
+    row.reduce((sum,value,channel)=>sum+value*query[channel],0)*scale);
+  const maximum=Math.max(...scores);
+  const exponents=scores.map(score=>Math.exp(clamp(score-maximum,-40,0)));
+  const denominator=exponents.reduce((sum,value)=>sum+value,0);
+  if(!Number.isFinite(denominator)||denominator<=0)return null;
+  const weights=exponents.map(value=>value/denominator);
+  const features=Array(TEMPORAL_LATENT_CHANNELS).fill(0);
+  for(let time=0;time<latentRows.length;time++)for(let channel=0;channel<features.length;channel++)
+    features[channel]+=weights[time]*latentRows[time][channel];
+  return {features,weights,scores};
+}
+
 function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=null) {
   const channels=TEMPORAL_LATENT_CHANNELS;
   const projected=sequence.map(row=>Array.from({length:channels},(_,outputChannel)=>{
@@ -416,8 +476,15 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     depthCaches.push(depth);activations.push(output);
   }
   const final=activations.at(-1);
-  let pooled,poolSegments,poolStart,poolCount,poolRoutes;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let pooled,poolSegments,poolStart,poolCount,poolRoutes,attentionWeights=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const attention=poolLearnedTemporalAttention(final,model.attentionQuery,
+      model.attentionPositionBiases);
+    if(!attention)throw new TypeError('TEMPORAL_ATTENTION_POOLING_INPUT_INVALID');
+    pooled=attention.features;attentionWeights=attention.weights;
+    poolSegments=[{start:0,count:TEMPORAL_SEQUENCE_STEPS,feature_offset:0,segment_index:0}];
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     const multi=poolMultiscaleTemporalSegments(final);
     if(!multi)throw new TypeError('TEMPORAL_MULTISCALE_POOLING_INPUT_INVALID');
     pooled=multi.features;poolSegments=multi.poolSegments;poolRoutes=multi.featureRoutes;
@@ -436,7 +503,7 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
     }
     poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
   }
-  if(!poolRoutes){
+  if(!poolRoutes&&model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE){
     poolRoutes=pooled.map((_,feature)=>{
       const segment=poolSegments[Math.floor(feature/channels)];
       return {channel:feature%channels,time_weights:Array.from(
@@ -456,7 +523,8 @@ function forward(sequence, model, residualScale=1, precomputedBaselineFeatures=n
   for(let feature=0;feature<pooled.length;feature++){
     logit+=pooled[feature]*model.outputWeights[feature]*boundedResidualScale;
   }
-  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,poolSegments,poolRoutes,baselineFeatures};
+  return {probability:logistic(logit),activations,depthCaches,pooled,poolStart,poolCount,
+    poolSegments,poolRoutes,attention_weights:attentionWeights,baselineFeatures};
 }
 
 
@@ -472,7 +540,14 @@ function createTemporalTrainingWorkspace(model) {
     Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0)));
   const zeroLatents=Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0));
   let poolSegments,poolRoutes,poolStart,poolCount,outputFeatures;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let attentionWeights=null,attentionScores=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
+    poolSegments=[{start:0,count:TEMPORAL_SEQUENCE_STEPS,feature_offset:0,segment_index:0}];
+    outputFeatures=TEMPORAL_LATENT_CHANNELS;
+    attentionWeights=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+    attentionScores=Array(TEMPORAL_SEQUENCE_STEPS).fill(0);
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     const pooled=poolMultiscaleTemporalSegments(zeroLatents);
     poolSegments=pooled.poolSegments;poolRoutes=pooled.featureRoutes;
     poolStart=0;poolCount=TEMPORAL_SEQUENCE_STEPS;
@@ -488,7 +563,7 @@ function createTemporalTrainingWorkspace(model) {
     poolSegments=[{start:poolStart,count:poolCount,feature_offset:0,segment_index:0}];
     outputFeatures=channels;
   }
-  if(!poolRoutes){
+  if(!poolRoutes&&model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE){
     poolRoutes=Array.from({length:outputFeatures},(_,feature)=>{
       const segment=poolSegments[Math.floor(feature/channels)];
       return {channel:feature%channels,time_weights:Array.from(
@@ -502,7 +577,7 @@ function createTemporalTrainingWorkspace(model) {
     activationGradients:Array.from({length:dilations.length+1},()=>
       Array.from({length:TEMPORAL_SEQUENCE_STEPS},()=>Array(channels).fill(0))),
     pooled:Array(outputFeatures).fill(0),
-    poolSegments,poolRoutes,poolStart,poolCount
+    poolSegments,poolRoutes,poolStart,poolCount,attentionWeights,attentionScores
   };
 }
 
@@ -553,7 +628,32 @@ function forwardWithWorkspace(sequence,model,residualScale=1,
   }
   const final=workspace.activations.at(-1);
   const pooled=workspace.pooled;
-  if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
+  let attentionWeights=null;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const scores=workspace.attentionScores,weights=workspace.attentionWeights;
+    const scale=1/Math.sqrt(channels);
+    let maximum=-Infinity;
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      let score=model.attentionPositionBiases[time];
+      for(let channel=0;channel<channels;channel++)
+        score+=final[time][channel]*model.attentionQuery[channel]*scale;
+      scores[time]=score;maximum=Math.max(maximum,score);
+    }
+    let denominator=0;
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      const value=Math.exp(clamp(scores[time]-maximum,-40,0));
+      weights[time]=value;denominator+=value;
+    }
+    if(!Number.isFinite(denominator)||denominator<=0)
+      throw new TypeError('TEMPORAL_ATTENTION_SOFTMAX_INVALID');
+    pooled.fill(0);
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      weights[time]/=denominator;
+      for(let channel=0;channel<channels;channel++)
+        pooled[channel]+=weights[time]*final[time][channel];
+    }
+    attentionWeights=weights;
+  }else if(model.temporal_pooling===TEMPORAL_MULTISCALE_POOLING_MODE){
     for(let segment=0;segment<TEMPORAL_MULTISCALE_POOLING_SEGMENTS;segment++){
       const start=Math.floor(segment*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
       const end=Math.floor((segment+1)*final.length/TEMPORAL_MULTISCALE_POOLING_SEGMENTS);
@@ -608,7 +708,8 @@ function forwardWithWorkspace(sequence,model,residualScale=1,
     probability:logistic(logit),activations:workspace.activations,
     depthCaches:workspace.depthCaches,pooled,
     poolStart:workspace.poolStart,poolCount:workspace.poolCount,
-    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,baselineFeatures
+    poolSegments:workspace.poolSegments,poolRoutes:workspace.poolRoutes,
+    attention_weights:attentionWeights,baselineFeatures
   };
 }
 
@@ -634,7 +735,8 @@ function maxTreeDifference(left,right,state={maximum:0,count:0}) {
 export function auditTemporalTrainingWorkspace(sequence,target=1) {
   if(!validSequence(sequence))throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_SEQUENCE_INVALID');
   if(target!==0&&target!==1)throw new TypeError('TEMPORAL_TRAINING_WORKSPACE_TARGET_INVALID');
-  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_ATTENTION_POOLING_MODE];
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
@@ -653,9 +755,9 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
         const reused=forwardWithWorkspace(currentSequence,model,1,baselineFeatures,workspace);
         const outputDifference=maxTreeDifference(
           [reference.probability,reference.activations,reference.depthCaches,
-            reference.pooled,reference.poolStart,reference.poolCount],
+            reference.pooled,reference.poolStart,reference.poolCount,reference.attention_weights],
           [reused.probability,reused.activations,reused.depthCaches,
-            reused.pooled,reused.poolStart,reused.poolCount]
+            reused.pooled,reused.poolStart,reused.poolCount,reused.attention_weights]
         );
         const referenceGradients=gradientsFor(currentSequence,target,model,reference,objective);
         const reusedGradients=gradientsFor(currentSequence,target,model,reused,objective,
@@ -700,7 +802,8 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   const count=Math.max(10,Math.min(500,Math.trunc(Number(iterations)||40)));
   const warmup=Math.max(2,Math.min(50,Math.trunc(Number(warmupIterations)||6)));
   const rounds=Math.max(2,Math.min(7,Math.trunc(Number(measurementRounds)||3)));
-  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE];
+  const modes=['LAST_12_MEAN_V1',TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_ATTENTION_POOLING_MODE];
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
@@ -799,15 +902,42 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
     :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brierGradient+0.5*logLossGradient
       :brierGradient;
-  const poolRoutes=Array.isArray(cache.poolRoutes)?cache.poolRoutes:null;
-  for(let feature=0;feature<cache.pooled.length;feature++){
-    const route=poolRoutes?.[feature];
-    if(!route||!Array.isArray(route.time_weights))
-      throw new TypeError('TEMPORAL_POOLING_GRADIENT_ROUTE_MISSING');
-    targetGradients.outputWeights[feature]=error*cache.pooled[feature];
-    for(const item of route.time_weights){
-      activationGradients[dilations.length][item.time][route.channel]+=
-        error*model.outputWeights[feature]*item.weight;
+  if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
+    const weights=cache.attention_weights;
+    if(!Array.isArray(weights)||weights.length!==TEMPORAL_SEQUENCE_STEPS||
+      !Array.isArray(targetGradients.attentionQuery)||
+      !Array.isArray(targetGradients.attentionPositionBiases))
+      throw new TypeError('TEMPORAL_ATTENTION_GRADIENT_CACHE_INVALID');
+    const pooledGradient=model.outputWeights.map((weight,feature)=>{
+      targetGradients.outputWeights[feature]=error*cache.pooled[feature];
+      return error*weight;
+    });
+    const scale=1/Math.sqrt(channels);
+    for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++){
+      let scoreGradient=0;
+      for(let channel=0;channel<channels;channel++)
+        scoreGradient+=pooledGradient[channel]*(final[time][channel]-cache.pooled[channel]);
+      scoreGradient*=weights[time];
+      targetGradients.attentionPositionBiases[time]+=scoreGradient;
+      for(let channel=0;channel<channels;channel++){
+        activationGradients[dilations.length][time][channel]+=
+          weights[time]*pooledGradient[channel]+
+          scoreGradient*model.attentionQuery[channel]*scale;
+        targetGradients.attentionQuery[channel]+=
+          scoreGradient*final[time][channel]*scale;
+      }
+    }
+  }else{
+    const poolRoutes=Array.isArray(cache.poolRoutes)?cache.poolRoutes:null;
+    for(let feature=0;feature<cache.pooled.length;feature++){
+      const route=poolRoutes?.[feature];
+      if(!route||!Array.isArray(route.time_weights))
+        throw new TypeError('TEMPORAL_POOLING_GRADIENT_ROUTE_MISSING');
+      targetGradients.outputWeights[feature]=error*cache.pooled[feature];
+      for(const item of route.time_weights){
+        activationGradients[dilations.length][item.time][route.channel]+=
+          error*model.outputWeights[feature]*item.weight;
+      }
     }
   }
   for(let layer=dilations.length-1;layer>=0;layer--){
@@ -875,7 +1005,8 @@ export function auditTemporalGradientNumerics(
   const modes=[
     'LAST_12_MEAN_V1',
     TEMPORAL_ORDERED_POOLING_MODE,
-    TEMPORAL_MULTISCALE_POOLING_MODE
+    TEMPORAL_MULTISCALE_POOLING_MODE,
+    TEMPORAL_ATTENTION_POOLING_MODE
   ];
   const baselineFeatures=pooledSequence(sequence);
   const lossFor=(model,objective)=>{
@@ -900,14 +1031,19 @@ export function auditTemporalGradientNumerics(
       ?Array.from({length:TEMPORAL_MULTISCALE_POOLING_SEGMENTS},(_,segment)=>
         [segment*48,segment*48+16,segment*48+32]).flat()
       :mode===TEMPORAL_ORDERED_POOLING_MODE?[0,16,32,48]:[0];
-    for(const index of outputIndices)paths.push(['outputWeights',[index]]);
+    const activePaths=[...paths];
+    for(const index of outputIndices)activePaths.push(['outputWeights',[index]]);
+    if(mode===TEMPORAL_ATTENTION_POOLING_MODE){
+      activePaths.push(['attentionQuery',[0]],['attentionPositionBiases',[0]],
+        ['attentionPositionBiases',[TEMPORAL_SEQUENCE_STEPS-1]]);
+    }
     for(const objective of objectives){
       const cache=forward(sequence,model,1,baselineFeatures);
       const analytical=gradientsFor(sequence,target,model,cache,objective);
       let maximumAbsoluteError=0,maximumRelativeError=0;
       let checked=0,failed=0;
       const details=[];
-      for(const [key,path] of paths){
+      for(const [key,path] of activePaths){
         let parameter=model[key];
         for(const index of path.slice(0,-1))parameter=parameter[index];
         const index=path.at(-1);
@@ -982,7 +1118,8 @@ function fitMember(rows, seed, {
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
   trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
   positiveClassWeighting='NONE',
-  temporalPoolingMode='LAST_12_MEAN_V1'
+  temporalPoolingMode='LAST_12_MEAN_V1',
+  attentionPositionBiasL2Multiplier=1
 } = {}) {
   const model = initializeModel(seed,baseRate,baselineFit,temporalPoolingMode);
   const positiveSamples=rows.filter(row=>Number(row?.target)>0.5).length;
@@ -1000,7 +1137,11 @@ function fitMember(rows, seed, {
   const trainableParameters=()=>({
     projectionWeights:model.projectionWeights,projectionBiases:model.projectionBiases,
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
-    biases:model.biases,outputWeights:model.outputWeights
+    biases:model.biases,outputWeights:model.outputWeights,
+    ...(Array.isArray(model.attentionQuery)?{
+      attentionQuery:model.attentionQuery,
+      attentionPositionBiases:model.attentionPositionBiases
+    }:{})
   });
   let optimizer = { m: zerosLike(trainableParameters()), v: zerosLike(trainableParameters()) };
   const rowGradientScratch=zeroTrainableGradients(model);
@@ -1019,13 +1160,14 @@ function fitMember(rows, seed, {
       weightedObjectiveLoss+=rowLoss*sampleWeight;
       if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
       else negativeObjectiveLoss+=rowLoss;
-      for (const key of ['projectionWeights','projectionBiases','depthWeights','pointWeights','biases','outputWeights']) {
+      for (const key of Object.keys(gradient)) {
         addScaledTreeInPlace(gradient[key], itemGradient[key], sampleWeight);
       }
     }
     const averaged = scaleTree(gradient, 1 / Math.max(1, totalSampleWeight));
     const gradientStats=summarizeNumericTree(averaged);
-    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2);
+    const step = applyAdam(trainableParameters(), averaged, optimizer, epoch, learningRate, l2,
+      attentionPositionBiasL2Multiplier);
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
@@ -1343,10 +1485,125 @@ function predictTemporalResidualTrees(sequence,fit,residualScale=1,treeCount=nul
   return logistic(clamp(value,-12,12));
 }
 
+export const TEMPORAL_RANKING_BUCKET_MS=15*60*1000;
+
+/**
+ * Evaluate coin selection only among symbols observable at the same closed
+ * 15m candle boundary. Timestamp values are bucketed because exchange archive
+ * close timestamps can differ by a few milliseconds across symbol files.
+ * Singleton buckets are reported but excluded: they cannot test ranking skill.
+ */
+export function timeGroupedRankingMetrics(rows,predictions,targets){
+  const buckets=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=Number(rows[index]?.at);
+    if(!Number.isFinite(at)||at<=0)continue;
+    const bucket=Math.floor(at/TEMPORAL_RANKING_BUCKET_MS);
+    if(!buckets.has(bucket))buckets.set(bucket,[]);
+    buckets.get(bucket).push({
+      score:Number(predictions[index]),target:Number(targets[index]),
+      symbol:String(rows[index]?.symbol||''),index
+    });
+  }
+  const allGroups=[...buckets.values()];
+  const singletonGroups=allGroups.filter(items=>items.length<2).length;
+  const groups=allGroups.filter(items=>items.length>=2);
+  const fractions=[5,10,20],stats=new Map(fractions.map(key=>
+    [key,{precision:[],recall:[],lift:[],selected:[]}]));
+  let averagePrecisionSum=0,averagePrecisionGroups=0,totalPositives=0;
+  let multiSymbolRows=0,maximumGroupSize=0;
+  for(const items of groups){
+    const ordered=[...items].sort((a,b)=>b.score-a.score||
+      a.symbol.localeCompare(b.symbol)||a.index-b.index);
+    const positives=ordered.reduce((sum,row)=>sum+(row.target===1?1:0),0);
+    totalPositives+=positives;
+    multiSymbolRows+=ordered.length;
+    maximumGroupSize=Math.max(maximumGroupSize,ordered.length);
+    if(positives>0){
+      let hits=0,precisionSum=0;
+      for(let rank=0;rank<ordered.length;rank++)if(ordered[rank].target===1){
+        hits++;precisionSum+=hits/(rank+1);
+      }
+      averagePrecisionSum+=precisionSum/positives;averagePrecisionGroups++;
+    }
+    for(const pct of fractions){
+      const selected=Math.max(1,Math.ceil(ordered.length*pct/100));
+      const hits=ordered.slice(0,selected).reduce((sum,row)=>sum+(row.target===1?1:0),0);
+      const metric=stats.get(pct);
+      metric.precision.push(hits/selected);metric.selected.push(selected);
+      if(positives>0){
+        metric.recall.push(hits/positives);
+        metric.lift.push((hits/selected)/(positives/ordered.length));
+      }
+    }
+  }
+  const average=values=>values.length?values.reduce((sum,value)=>sum+value,0)/values.length:null;
+  const result={
+    method:'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2',
+    bucket_ms:TEMPORAL_RANKING_BUCKET_MS,
+    total_time_buckets:allGroups.length,
+    groups:groups.length,
+    singleton_buckets_excluded:singletonGroups,
+    multi_symbol_rows:multiSymbolRows,
+    mean_symbols_per_ranking_bucket:groups.length
+      ?Number((multiSymbolRows/groups.length).toFixed(3)):null,
+    maximum_symbols_per_ranking_bucket:maximumGroupSize,
+    groups_with_positive:averagePrecisionGroups,
+    positive_events:totalPositives,
+    average_precision:averagePrecisionGroups
+      ?Number((averagePrecisionSum/averagePrecisionGroups).toFixed(5)):null
+  };
+  for(const pct of fractions){
+    const metric=stats.get(pct);
+    result['top_'+pct+'_pct']={
+      groups:metric.precision.length,
+      mean_selected_per_timestamp:average(metric.selected)===null?null:
+        Number(average(metric.selected).toFixed(3)),
+      precision_pct:average(metric.precision)===null?null:
+        Number((average(metric.precision)*100).toFixed(2)),
+      recall_pct:average(metric.recall)===null?null:
+        Number((average(metric.recall)*100).toFixed(2)),
+      lift:average(metric.lift)===null?null:Number(average(metric.lift).toFixed(5))
+    };
+  }
+  return result;
+}
+
+function aggregateRankingMetrics(entries){
+  const valid=(Array.isArray(entries)?entries:[]).filter(row=>
+    row?.ranking_metrics&&Number(row.ranking_metrics.groups)>0);
+  if(!valid.length)return null;
+  const weighted=(path,weightKey='groups')=>{
+    const usable=valid.map(row=>({
+      value:path(row.ranking_metrics),weight:Number(row.ranking_metrics[weightKey])||0
+    })).filter(item=>Number.isFinite(Number(item.value))&&item.weight>0);
+    const count=usable.reduce((sum,item)=>sum+item.weight,0);
+    return count?usable.reduce((sum,item)=>sum+Number(item.value)*item.weight,0)/count:null;
+  };
+  const result={
+    method:'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2',
+    groups:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups||0),0),
+    groups_with_positive:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.groups_with_positive||0),0),
+    positive_events:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics.positive_events||0),0),
+    average_precision:weighted(metric=>metric.average_precision,'groups_with_positive')
+  };
+  for(const pct of [5,10,20]){
+    const name='top_'+pct+'_pct';
+    result[name]={
+      groups:valid.reduce((sum,row)=>sum+Number(row.ranking_metrics[name]?.groups||0),0),
+      mean_selected_per_timestamp:weighted(metric=>metric[name]?.mean_selected_per_timestamp),
+      precision_pct:weighted(metric=>metric[name]?.precision_pct),
+      recall_pct:weighted(metric=>metric[name]?.recall_pct,'groups_with_positive'),
+      lift:weighted(metric=>metric[name]?.lift,'groups_with_positive')
+    };
+  }
+  return result;
+}
+
 function evaluate(rows, predictFn, baseRate) {
   if (!rows.length) return {
     evaluated:false,sample_count:0,positive_count:0,negative_count:0,positive_rate_pct:null,
-    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,ranking_metrics:null,
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN
   };
   const predictions = rows.map(row => predictFn(row.sequence));
@@ -1357,7 +1614,7 @@ function evaluate(rows, predictFn, baseRate) {
   if (predictions.some(value => !Number.isFinite(value))) return {
     evaluated:false,sample_count:rows.length,positive_count:positiveCount,
     negative_count:negativeCount,positive_rate_pct:positiveRatePct,
-    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,
+    model_brier_score:null,base_rate_brier_score:null,beat_base_rate:false,ranking_metrics:null,
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     reason:'NON_FINITE_TEMPORAL_PREDICTION'
   };
@@ -1380,6 +1637,7 @@ function evaluate(rows, predictFn, baseRate) {
     base_rate_brier_score: Number(baseBrier.toFixed(5)),
     log_loss: Number(logLoss.toFixed(5)),
     directional_accuracy_pct: directional.length ? Number((correct / directional.length * 100).toFixed(1)) : null,
+    ranking_metrics:timeGroupedRankingMetrics(rows,predictions,targets),
     beat_base_rate: hasTemporalBrierSuperiority(modelBrier,baseBrier),
     required_brier_margin:TEMPORAL_BRIER_SUPERIORITY_MARGIN,
     improvement_vs_base_rate: Number((baseBrier - modelBrier).toFixed(5))
@@ -1397,6 +1655,7 @@ function aggregateEvaluations(entries){
   const weighted=key=>valid.reduce((sum,row)=>sum+Number(row[key])*Number(row.sample_count),0)/count;
   const model=weighted('model_brier_score'),base=weighted('base_rate_brier_score');
   const positive=valid.reduce((sum,row)=>sum+Number(row.positive_count||0),0);
+  const rankingMetrics=aggregateRankingMetrics(valid);
   const negative=count-positive;
   const directionalRows=valid.filter(row=>Number.isFinite(Number(row.directional_accuracy_pct)));
   const directionalCount=directionalRows.reduce((sum,row)=>sum+Number(row.sample_count),0);
@@ -1405,6 +1664,7 @@ function aggregateEvaluations(entries){
     positive_rate_pct:Number((positive/count*100).toFixed(2)),
     model_brier_score:Number(model.toFixed(5)),base_rate_brier_score:Number(base.toFixed(5)),
     log_loss:valid.every(row=>Number.isFinite(Number(row.log_loss)))?Number(weighted('log_loss').toFixed(5)):null,
+    ranking_metrics:rankingMetrics,
     directional_accuracy_pct:directionalCount?Number((directionalRows.reduce((sum,row)=>sum+
       Number(row.directional_accuracy_pct)*Number(row.sample_count),0)/directionalCount).toFixed(1)):null,
     beat_base_rate:hasTemporalBrierSuperiority(model,base),
@@ -1423,27 +1683,35 @@ function fitEnsemble(rows, options = {}) {
   const baseLearningRate=Math.max(0.0001,Number(options.learningRate)||0.006);
   const baseL2=Math.max(0,Number(options.l2)||0.012);
   const temporalPoolingMode=String(options.temporalPoolingMode||'LAST_12_MEAN_V1');
+  const attentionPositionBiasL2Multiplier=Math.max(0,Math.min(64,
+    finite(options.attentionPositionBiasL2Multiplier)??1));
   const multiscalePooling=temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE;
   const orderedPooling=temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE;
+  const attentionPooling=temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE;
   const layerCount=multiscalePooling?TEMPORAL_MULTISCALE_DILATIONS.length:DILATIONS.length;
   const outputFeatureCount=multiscalePooling?TEMPORAL_MULTISCALE_POOLING_FEATURE_COUNT:
     orderedPooling?TEMPORAL_ORDERED_POOLING_FEATURE_COUNT:TEMPORAL_LATENT_CHANNELS;
   const trainableParameterCount=TEMPORAL_SEQUENCE_CHANNELS*TEMPORAL_LATENT_CHANNELS+
     TEMPORAL_LATENT_CHANNELS+layerCount*(KERNEL_TAPS*TEMPORAL_LATENT_CHANNELS+
-      TEMPORAL_LATENT_CHANNELS*TEMPORAL_LATENT_CHANNELS+TEMPORAL_LATENT_CHANNELS)+outputFeatureCount;
-  const architecture=multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
+      TEMPORAL_LATENT_CHANNELS*TEMPORAL_LATENT_CHANNELS+TEMPORAL_LATENT_CHANNELS)+outputFeatureCount+
+    (attentionPooling?TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS:0);
+  const architecture=attentionPooling?TEMPORAL_ATTENTION_MODEL_ARCHITECTURE:
+    multiscalePooling?TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE:
     orderedPooling?TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE:TEMPORAL_MODEL_ARCHITECTURE;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       trainingObjective:'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
       trainingObjective:'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode},
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       trainingObjective:'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
       positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
-      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode}
+      latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
+      attentionPositionBiasL2Multiplier}
   ];
   // These features depend only on the immutable 24x29 input, not on model
   // weights. Prepare them once and reuse across all epochs and ensemble members.
@@ -1459,13 +1727,16 @@ function fitEnsemble(rows, options = {}) {
     temporal_pooling:temporalPoolingMode,
     output_features:outputFeatureCount,
     trainable_parameter_count:trainableParameterCount,
-    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
-        :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
+    training_strategy:attentionPooling
+      ?'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_ORDERED_FOUR_SEGMENT_POOLING_V1'
+          :'INDEPENDENT_TEMPORAL_TCN_REGIME_LOCAL_SELECTION_CALIBRATION_V22_TRAIN_ONLY_CLASS_BALANCE',
     baseline_anchor:'REGIME_SPECIFIC_TRAINING_ONLY_NO_CROSS_REGIME_FALLBACK_V3',
     member_training_profiles:memberProfiles,
+    attention_position_bias_l2_multiplier:attentionPositionBiasL2Multiplier,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,
       seed:SEEDS[index],
@@ -1494,6 +1765,7 @@ function fitRegimeLocalTemporalTcn({
   comparisonMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN,
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   temporalPoolingMode='LAST_12_MEAN_V1',
+  attentionPositionBiasL2Multiplier=1,
   minTrainingSamples=80,minTrainingPositive=8,minTrainingNegative=20,
   minSelectionSamples=10,minSelectionPositive=3,minSelectionNegative=8,
   minCalibrationSamples=30,minCalibrationPositive=5,minCalibrationNegative=20,
@@ -1547,17 +1819,21 @@ function fitRegimeLocalTemporalTcn({
   if(!chronologyValid)supportGaps.push('REGIME_LOCAL_CHRONOLOGY_OR_PURGE_VIOLATION');
   const base={
     regime,status:supportGaps.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':'READY_FOR_REGIME_LOCAL_TCN_FIT',
-    model_kind:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
+    model_kind:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
     model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
     temporal_pooling:temporalPoolingMode,
-    training_strategy:temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
-      ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
-      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
-        ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
-        :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    training_strategy:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1':
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+        ?'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1':
+        temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
+          ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
+          :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
     training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
     training_sample_budget:limit,
     training_samples:training.length,available_training_samples:allTraining.length,
@@ -1594,7 +1870,8 @@ function fitRegimeLocalTemporalTcn({
   const baseline=fitLogistic(training);
   const fitted=fitEnsemble(training,{
     epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
-    learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode
+    learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode,
+    attentionPositionBiasL2Multiplier
   });
   const selectionLogistic=evaluate(selection,
     sequence=>predictLogistic(sequence,baseline),baseRate);
@@ -1693,15 +1970,18 @@ function fitRegimeLocalTemporalTcn({
     baseline_anchor_training_samples:training.length,
     baseline_anchor_fingerprint:sampleIdentityFingerprint(training),
     member_selection_logistic_brier:selectionLogistic.model_brier_score??null,
+    member_selection_logistic_ranking_metrics:selectionLogistic.ranking_metrics??null,
     selection_best_candidate:diagnostic?{
       member_index:diagnostic.index,residual_scale:diagnostic.residual_scale,
       brier_score:diagnostic.metrics.model_brier_score,
-      base_rate_brier_score:diagnostic.metrics.base_rate_brier_score
+      base_rate_brier_score:diagnostic.metrics.base_rate_brier_score,
+      ranking_metrics:diagnostic.metrics.ranking_metrics??null
     }:null,
     member_selection_scores:candidates.map(row=>({
       index:row.index,residual_scale:row.residual_scale,
       brier_score:row.metrics.model_brier_score,
       base_rate_brier_score:row.metrics.base_rate_brier_score,
+      ranking_metrics:row.metrics.ranking_metrics??null,
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:selectionLogistic.model_brier_score??null,
       beats_same_window_logistic:selectionLogistic.evaluated===true&&
@@ -1740,6 +2020,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   targetDefinition=TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs=HORIZON_MS,
   allowedOutcomeSources=null,
+  outcomeContractKind='FIRST_PASSAGE',
   enableRegimeLocalTcn=false,
   regimeLocalTcnMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnEpochs=6,
@@ -1749,10 +2030,14 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableRegimeLocalTcnMultiscale=false,
   regimeLocalTcnMultiscaleMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   regimeLocalTcnMultiscaleEpochs=6,
+  enableRegimeLocalTcnAttention=false,
+  regimeLocalTcnAttentionMaxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
+  regimeLocalTcnAttentionEpochs=6,
+  regimeLocalTcnAttentionPositionBiasL2Multiplier=1,
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
-  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources});
+  const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,outcomeContractKind});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
@@ -1810,7 +2095,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture,target_definition:targetDefinition,temporal_label_resolution:'15M_ONLY',
+    architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,temporal_label_resolution:'15M_ONLY',
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
@@ -1848,7 +2133,7 @@ export function buildTemporalNeuralProfile(samples = [], {
      holdout.length<minimumHoldoutSamples){
     return{
       status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-      architecture,target_definition:targetDefinition,
+      architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,
       temporal_label_resolution:'15M_ONLY',
       sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
       ensemble_members:0,ensemble_members_required:SEEDS.length,
@@ -2050,6 +2335,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeLocalTcnResults={};
   const regimeLocalTcnPyramidResults={};
   const regimeLocalTcnMultiscaleResults={};
+  const regimeLocalTcnAttentionResults={};
   const temporalBoostedTreeResults={};
   const trainingByRegime={},selectionByRegime={},validationByRegime={},holdoutByRegime={};
   const trainingTargets={},selectionTargets={},validationTargets={},holdoutTargets={};
@@ -2259,6 +2545,33 @@ export function buildTemporalNeuralProfile(samples = [], {
         model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
         temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE,
         training_strategy:'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1',
+        training_samples:0,trained:false,selected_for_research:false,
+        validation_passed:false,holdout_passed:false,probability_ready:false,
+        live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
+      };
+    regimeLocalTcnAttentionResults[regime]=enableRegimeLocalTcnAttention
+      ?fitRegimeLocalTemporalTcn({
+        regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
+        calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
+        epochs:regimeLocalTcnAttentionEpochs,learningRate,l2,comparisonMargin,
+        maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
+        temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
+        attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
+        minTrainingSamples:minRegimeTraining,
+        minTrainingPositive:minRegimeTrainingPositive,minTrainingNegative:minRegimeNegative,
+        minSelectionSamples,minSelectionPositive,minSelectionNegative,
+        minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+        minValidationSamples:minRegimeValidation,minValidationPositive:minRegimePositive,
+        minValidationNegative:minRegimeNegative,
+        minHoldoutSamples:minRegimeHoldout,minHoldoutPositive:minRegimePositive,
+        minHoldoutNegative:minRegimeNegative
+      })
+      :{
+        regime,status:'NOT_ENABLED_FOR_THIS_PROFILE',
+        model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1',
+        model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+        temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+        training_strategy:'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1',
         training_samples:0,trained:false,selected_for_research:false,
         validation_passed:false,holdout_passed:false,probability_ready:false,
         live_eligibility_ready:false,support_gaps:['EXPLICIT_RESEARCH_OPT_IN_REQUIRED']
@@ -2859,6 +3172,96 @@ export function buildTemporalNeuralProfile(samples = [], {
     },
     regime_specialists:regimeLocalTcnMultiscaleResults
   };
+  const attentionSupportedRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.trained===true);
+  const attentionValidationRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation_passed===true);
+  const attentionSelectedRegimes=regimes.filter(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout_passed===true);
+  // A regime's neural validation is withheld when inner member selection or
+  // calibration fails. Its Logistic comparator must be withheld too; otherwise
+  // the aggregate would compare different regimes/sample counts and mislead.
+  const attentionPairedValidationRegimes=attentionSupportedRegimes.filter(regime=>{
+    const result=regimeLocalTcnAttentionResults[regime]||{};
+    const model=result.validation,logisticResult=result.validation_logistic;
+    return model?.evaluated===true&&logisticResult?.evaluated===true&&
+      Number(model.sample_count)===Number(logisticResult.sample_count)&&
+      Number(model.positive_count)===Number(logisticResult.positive_count)&&
+      Number(model.negative_count)===Number(logisticResult.negative_count);
+  });
+  const attentionPairedHoldoutRegimes=attentionSelectedRegimes.filter(regime=>{
+    const result=regimeLocalTcnAttentionResults[regime]||{};
+    const model=result.holdout,logisticResult=result.holdout_logistic;
+    return model?.evaluated===true&&logisticResult?.evaluated===true&&
+      Number(model.sample_count)===Number(logisticResult.sample_count)&&
+      Number(model.positive_count)===Number(logisticResult.positive_count)&&
+      Number(model.negative_count)===Number(logisticResult.negative_count);
+  });
+  const attentionValidation=aggregateEvaluations(attentionPairedValidationRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation));
+  const attentionValidationLogistic=aggregateEvaluations(attentionPairedValidationRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.validation_logistic));
+  const attentionHoldout=aggregateEvaluations(attentionPairedHoldoutRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout));
+  const attentionHoldoutLogistic=aggregateEvaluations(attentionPairedHoldoutRegimes.map(regime=>
+    regimeLocalTcnAttentionResults[regime]?.holdout_logistic));
+  const regimeLocalTcnAttentionProfile={
+    status:!attentionSupportedRegimes.length?'WAITING_FOR_ATTENTION_TCN_SUPPORT':
+      !attentionValidationRegimes.length?'ATTENTION_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
+      !attentionSelectedRegimes.length?'ATTENTION_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'ATTENTION_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model_kind:'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1',
+    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    attention_dimension:TEMPORAL_LATENT_CHANNELS,
+    relative_position_bias_count:TEMPORAL_SEQUENCE_STEPS,
+    output_features:TEMPORAL_LATENT_CHANNELS,
+    trainable_parameter_count:TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
+    training_strategy:'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1',
+    attention_position_bias_l2_multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
+    training_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.training_samples||0),0),
+    selection_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.selection_samples||0),0),
+    calibration_samples:attentionSupportedRegimes.reduce((sum,regime)=>
+      sum+Number(regimeLocalTcnAttentionResults[regime]?.calibration_samples||0),0),
+    validation_samples:attentionValidation.sample_count||0,
+    validation:attentionValidation,
+    validation_logistic:attentionValidationLogistic,
+    holdout_samples:attentionHoldout.sample_count||0,
+    holdout:attentionHoldout,
+    holdout_logistic:attentionHoldoutLogistic,
+    holdout_comparison:{
+      required_brier_margin:comparisonMargin,
+      model_brier_score:attentionHoldout.model_brier_score??null,
+      logistic_brier_score:attentionHoldoutLogistic.model_brier_score??null,
+      beats_logistic:attentionHoldout.evaluated===true&&attentionHoldoutLogistic.evaluated===true&&
+        attentionHoldout.model_brier_score+comparisonMargin<attentionHoldoutLogistic.model_brier_score,
+      passed:attentionSelectedRegimes.length>0,
+      selected_regimes:attentionSelectedRegimes,
+      validation_selected_regimes:attentionValidationRegimes
+    },
+    supported_regimes:attentionSupportedRegimes,
+    paired_validation_regimes:attentionPairedValidationRegimes,
+    paired_holdout_regimes:attentionPairedHoldoutRegimes,
+    member_selection_logistic_ranking_metrics_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.member_selection_logistic_ranking_metrics??null
+    ])),
+    selection_best_candidate_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.selection_best_candidate??null
+    ])),
+    member_selection_scores_by_regime:Object.fromEntries(regimes.map(regime=>[
+      regime,regimeLocalTcnAttentionResults[regime]?.member_selection_scores??[]
+    ])),
+    validation_selected_regimes:attentionValidationRegimes,
+    selected_regimes:attentionSelectedRegimes,
+    trained:attentionSupportedRegimes.length>0,
+    selected_for_research:attentionValidationRegimes.length>0,
+    research_out_of_sample_validated:attentionSelectedRegimes.length>0,
+    probability_ready:false,live_eligibility_ready:false,
+    regime_specialists:regimeLocalTcnAttentionResults
+  };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
   const selectedRegimes=regimes.filter(regime=>regimeResults[regime]?.holdout_passed===true);
@@ -3019,10 +3422,12 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:targetDefinition,
+    outcome_contract_kind:outcomeContractKind,
     temporal_boosted_tree:temporalBoostedTreeProfile,
     regime_local_tcn_challenger:regimeLocalTcnProfile,
     regime_local_tcn_pyramid_challenger:regimeLocalTcnPyramidProfile,
     regime_local_tcn_multiscale_challenger:regimeLocalTcnMultiscaleProfile,
+    regime_local_tcn_attention_challenger:regimeLocalTcnAttentionProfile,
     latent_channels:TEMPORAL_LATENT_CHANNELS,
     trainable_parameter_count:TEMPORAL_TRAINABLE_PARAMETER_COUNT,
     temporal_label_resolution:'15M_ONLY',

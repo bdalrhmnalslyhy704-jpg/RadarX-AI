@@ -1,5 +1,6 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
+import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
 export const DAILY_EARLY_RISER_TARGETS_PCT = Object.freeze([5,10,15]);
@@ -30,6 +31,8 @@ export function effectiveDailyTcnMultiscaleTrainingBudget(options={}) {
 }
 export const DAILY_EARLY_RISER_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_15M_FIRST_PASSAGE_24H_V1';
+export const DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE =
+  'BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1';
 export const DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA = COGNITIVE_DAILY_FEATURE_SCHEMA;
 
 const finite=value=>{
@@ -38,7 +41,16 @@ const finite=value=>{
   return Number.isFinite(number)?number:null;
 };
 const targetKey=target=>'plus_'+String(target).replace('.','_')+'_pct';
-const targetDefinition=target=>'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+const targetDefinition=(target,labelMode='first_passage',horizonHours=24)=>
+  labelMode==='upside_opportunity'
+    ?'ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+horizonHours+'H_15M_V1'
+    :labelMode==='safe_opportunity'
+      ?'FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_'+horizonHours+'H_15M_V1'
+      :'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1';
+const outcomeSourceFor=labelMode=>labelMode==='upside_opportunity'
+  ?DAILY_EARLY_RISER_OPPORTUNITY_OUTCOME_SOURCE
+  :labelMode==='safe_opportunity'
+    ?DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE:DAILY_EARLY_RISER_OUTCOME_SOURCE;
 
 export function summarizeDailyNeuralAnchorDiagnostics(
   neural={},requestedMode=DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION
@@ -61,26 +73,40 @@ function validTemporalSequence(sequence){
       step.every(value=>finite(value)!==null&&Math.abs(Number(value))<=4));
 }
 
-export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
+export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
   const target=finite(targetPct);
   if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
     return {row:null,reason:'UNSUPPORTED_TARGET'};
   if(!sample||typeof sample!=='object')
     return {row:null,reason:'SAMPLE_INVALID'};
-  const label=sample.targets?.[targetKey(target)];
-  if(!label||label.status!=='RESOLVED'||!['UP','DOWN','FLAT'].includes(label.outcome))
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode))
+    return {row:null,reason:'UNSUPPORTED_LABEL_MODE'};
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||
+    (labelMode==='first_passage'&&horizonHours!==24))
+    return {row:null,reason:'UNSUPPORTED_LABEL_HORIZON'};
+  const horizonMs=horizonHours*60*60*1000;
+  const key=targetKey(target);
+  const label=labelMode==='first_passage'
+    ?sample.targets?.[key]
+    :labelMode==='safe_opportunity'
+      ?sample.safe_opportunity_targets?.[String(horizonHours)+'h']?.[key]
+      :sample.opportunity_targets?.[String(horizonHours)+'h']?.[key];
+  const allowedOutcomes=labelMode==='upside_opportunity'?['UP','FLAT']:['UP','DOWN','FLAT'];
+  if(!label||label.status!=='RESOLVED'||!allowedOutcomes.includes(label.outcome))
     return {row:null,reason:'LABEL_NOT_RESOLVED'};
   const at=finite(sample.at);
   const resolvedAt=finite(label.resolved_at);
-  const horizon=finite(label.horizon_ms);
-  if(at===null||resolvedAt===null||resolvedAt-at!==DAILY_EARLY_RISER_HORIZON_MS||
-    horizon!==DAILY_EARLY_RISER_HORIZON_MS)
+  const labelHorizon=finite(label.horizon_ms);
+  if(at===null||resolvedAt===null||resolvedAt-at!==horizonMs||labelHorizon!==horizonMs)
     return {row:null,reason:'LABEL_HORIZON_MISMATCH'};
   if(finite(sample.feature_information_cutoff_at)!==at||
     sample.observation_source!=='BINANCE_OFFICIAL_CLOSED_15M_BASELINE')
     return {row:null,reason:'FEATURE_CUTOFF_NOT_AT_BASELINE'};
-  if(label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
-    label.target_definition!==targetDefinition(target))
+  const expectedSource=outcomeSourceFor(labelMode);
+  const expectedDefinition=targetDefinition(target,labelMode,horizonHours);
+  if(label.outcome_source!==expectedSource||label.target_definition!==expectedDefinition)
     return {row:null,reason:'OUTCOME_SOURCE_OR_DEFINITION_MISMATCH'};
   const symbol=String(sample.symbol||'').trim().toUpperCase();
   const id=String(sample.id||'').trim();
@@ -94,25 +120,65 @@ export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct){
     const value=finite(sample[key]);
     if(value!==null)baselineFeatures[key]=value;
   }
-  return {
-    row:{
-      id:id+':TRADEABLE_FIRST_PASSAGE_PLUS_'+target+'_PCT',
-      symbol,
-      at,
-      resolved_at:resolvedAt,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
-      outcome:label.outcome,
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
-      target_definition:label.target_definition,
-      first_passage:{path_resolution:'15M',outcome:label.outcome},
-      temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
-      historical_baseline:true,
-      closed_candle_baseline:true,
-      training_eligible:true,
-      features:baselineFeatures
-    },
-    reason:null
+  const row={
+    id:id+':'+(labelMode==='first_passage'?'TRADEABLE_FIRST_PASSAGE':
+      labelMode==='safe_opportunity'?'SAFE_FIRST_TOUCH':'UPSIDE_OPPORTUNITY')+
+      '_PLUS_'+target+'_PCT_'+horizonHours+'H',
+    symbol,at,resolved_at:resolvedAt,horizon_ms:horizonMs,
+    outcome:label.outcome,outcome_source:expectedSource,
+    target_definition:expectedDefinition,
+    temporal_sequence:validTemporalSequence(sample.temporal_sequence)?sample.temporal_sequence:null,
+    historical_baseline:true,closed_candle_baseline:true,training_eligible:true,
+    features:baselineFeatures,
+    liquidity_lane:sample.liquidity_lane||null,
+    quote_volume_24h:finite(sample.quote_volume_24h)
   };
+  if(labelMode==='first_passage')
+    row.first_passage={path_resolution:'15M',outcome:label.outcome};
+  else if(labelMode==='safe_opportunity')
+    row.outcome_contract={
+      kind:'SAFE_FIRST_PASSAGE',path_resolution:'15M',outcome:label.outcome,
+      horizon_hours:horizonHours,adverse_pct:2
+    };
+  else
+    row.outcome_contract={
+      kind:'UPSIDE_TOUCH',path_resolution:'15M',outcome:label.outcome,
+      horizon_hours:horizonHours,independent_of_adverse_barrier:true
+    };
+  return {row,reason:null};
+}
+
+function buildDailyCognitiveProfile(rows,options={}){
+  return buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
+    minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
+    minimumValidationSamples:Math.max(1000,Math.trunc(options.minimumValidationSamples||3000)),
+    minimumHoldoutSamples:Math.max(1000,Math.trunc(options.minimumHoldoutSamples||5000)),
+    validationFraction:0.20,holdoutFraction:0.20,recentWindowFraction:0.60,
+    recentSelectionMargin:0.005,l2:0.08,outcomeHorizonMs:options.outcomeHorizonMs,
+    allowedOutcomeSources:options.allowedOutcomeSources,
+    iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
+    learningRate:0.10,minNeuralTrainingSamples:240,
+    minimumNeuralSelectionSamples:300,
+    minimumNeuralSelectionPositiveSamples:10,
+    minimumNeuralSelectionNegativeSamples:30,
+    maxNeuralTrainingSamples:DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
+    neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
+      DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
+    temporalSamples:[],temporalOptions:{},
+    neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
+    neuralLearningRate:0.012,neuralL2:0.04,neuralSelectionMargin:0.003,
+    neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
+      DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
+      DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
+    enableFactorizationMachine:options.enableFactorizationMachine===true,
+    factorizationRank:Math.max(2,Math.min(16,Math.trunc(options.factorizationRank||8))),
+    factorizationIterations:Math.max(30,Math.min(180,Math.trunc(options.factorizationIterations||20))),
+    factorizationLearningRate:Math.max(0.0005,Math.min(0.03,Number(options.factorizationLearningRate||0.008))),
+    factorizationL2:Math.max(0.001,Math.min(0.5,Number(options.factorizationL2||0.06))),
+    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,maxResolvedSamples:0
+  });
 }
 
 function countOutcomes(rows){
@@ -125,14 +191,31 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const target=finite(targetPct);
   if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
     throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET');
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE');
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||(labelMode==='first_passage'&&horizonHours!==24))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_HORIZON');
+  const outcomeHorizonMs=horizonHours*60*60*1000;
+  const contractKind=labelMode==='first_passage'?'FIRST_PASSAGE':
+    labelMode==='safe_opportunity'?'SAFE_FIRST_PASSAGE':'UPSIDE_TOUCH';
+  const selectedOutcomeSource=outcomeSourceFor(labelMode);
+  const requiredLiquidityLane=String(options.requiredLiquidityLane||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
   const rows=[];
   const rejected={};
   const seen=new Set();
   for(const sample of Array.isArray(samples)?samples:[]){
-    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target);
+    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target,{labelMode,horizonHours});
     if(!prepared.row){
       const reason=prepared.reason||'UNKNOWN_REJECTION';
       rejected[reason]=(rejected[reason]||0)+1;
+      continue;
+    }
+    if(requiredLiquidityLane&&prepared.row.liquidity_lane!==requiredLiquidityLane){
+      rejected.LIQUIDITY_LANE_FILTER=(rejected.LIQUIDITY_LANE_FILTER||0)+1;
       continue;
     }
     const identity=prepared.row.symbol+':'+String(prepared.row.at);
@@ -146,8 +229,13 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
   const outcomeCounts=countOutcomes(rows);
   const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
-  const targetContract=targetDefinition(target);
-  const temporal=buildTemporalNeuralProfile(temporalRows,{
+  const targetContract=targetDefinition(target,labelMode,horizonHours);
+  const temporal=options.skipTemporal===true?{
+    status:'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT',trained:false,selected:false,
+    probability_ready:false,live_eligibility_ready:false,
+    resolved_samples:0,training_samples:0,validation_samples:0,holdout_samples:0,
+    temporal_boosted_tree:{status:'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT',trained:false}
+  }:buildTemporalNeuralProfile(temporalRows,{
     minTrainingSamples:Math.max(160,Math.trunc(options.temporalMinTrainingSamples||160)),
     maxTrainingSamples:Math.max(160,Math.min(DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES,
       Math.trunc(options.temporalMaxTrainingSamples||DAILY_EARLY_RISER_TCN_MAX_TRAINING_SAMPLES))),
@@ -156,8 +244,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     liveHoldoutSamples:Math.max(100,Math.trunc(options.temporalLiveHoldoutSamples||150)),
     epochs:Math.max(5,Math.min(20,Math.trunc(options.temporalEpochs||10))),
     targetDefinition:targetContract,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
+    outcomeHorizonMs,
+    allowedOutcomeSources:[selectedOutcomeSource],
+    outcomeContractKind:contractKind,
     comparisonMargin:0.003,
     enableRegimeLocalTcn:options.enableRegimeLocalTcn!==false,
     regimeLocalTcnMaxTrainingSamples:Math.max(80,Math.min(4096,
@@ -171,6 +260,13 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       Math.trunc(options.temporalRegimeLocalTcnPyramidEpochs||6))),
     enableRegimeLocalTcnMultiscale:options.enableRegimeLocalTcnMultiscale!==false,
     regimeLocalTcnMultiscaleMaxTrainingSamples:effectiveDailyTcnMultiscaleTrainingBudget(options),
+    enableRegimeLocalTcnAttention:options.enableRegimeLocalTcnAttention!==false,
+    regimeLocalTcnAttentionMaxTrainingSamples:Math.max(80,Math.min(4096,
+      Math.trunc(options.temporalRegimeLocalTcnAttentionMaxTrainingSamples||4096))),
+    regimeLocalTcnAttentionEpochs:Math.max(1,Math.min(8,
+      Math.trunc(options.temporalRegimeLocalTcnAttentionEpochs||6))),
+    regimeLocalTcnAttentionPositionBiasL2Multiplier:Math.max(1,Math.min(64,
+      finite(options.temporalRegimeLocalTcnAttentionPositionBiasL2Multiplier)??1)),
     regimeLocalTcnMultiscaleEpochs:Math.max(1,Math.min(8,
       Math.trunc(options.temporalRegimeLocalTcnMultiscaleEpochs||6))),
     enableTemporalBoostedTree:options.enableTemporalBoostedTree!==false
@@ -179,10 +275,14 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   if(options.tcnOnly===true){
     return {
       target_pct:target,
-      outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-      outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
+      outcome_semantics:labelMode==='upside_opportunity'?'ANY_UPSIDE_TOUCH_WITHIN_HORIZON_INDEPENDENT_OF_DRAWDOWN':
+        labelMode==='safe_opportunity'?'PLUS_TARGET_BEFORE_MINUS_2_PERCENT_WITHIN_HORIZON':'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+      label_mode:labelMode,
+      horizon_hours:horizonHours,
+      outcome_source:selectedOutcomeSource,
       target_definition:targetContract,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      required_liquidity_lane:requiredLiquidityLane||null,
+      horizon_ms:outcomeHorizonMs,
       feature_schema:'TCN_ONLY_24X29_CLOSED_CANDLE_SEQUENCE',
       feature_names:[],
       research_mode:'TCN_ONLY_ISOLATED_COMPUTE',
@@ -197,6 +297,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       temporal_regime_local_tcn_challenger:temporal.regime_local_tcn_challenger??null,
       temporal_regime_local_tcn_pyramid_challenger:temporal.regime_local_tcn_pyramid_challenger??null,
       temporal_regime_local_tcn_multiscale_challenger:temporal.regime_local_tcn_multiscale_challenger??null,
+      temporal_regime_local_tcn_attention_challenger:temporal.regime_local_tcn_attention_challenger??null,
       samples:{
         accepted:rows.length,
         rejected:Object.values(rejected).reduce((sum,value)=>sum+value,0),
@@ -224,39 +325,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       }
     };
   }
-  const profile=buildCognitiveLearningProfile(rows,{
-    minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
-    minimumBucket:Math.max(20,Math.trunc(options.minimumBucket||50)),
-    minimumValidationSamples:Math.max(1000,Math.trunc(options.minimumValidationSamples||3000)),
-    minimumHoldoutSamples:Math.max(1000,Math.trunc(options.minimumHoldoutSamples||5000)),
-    validationFraction:0.20,
-    holdoutFraction:0.20,
-    recentWindowFraction:0.60,
-    recentSelectionMargin:0.005,
-    l2:0.08,
-    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
-    allowedOutcomeSources:[DAILY_EARLY_RISER_OUTCOME_SOURCE],
-    iterations:Math.max(300,Math.trunc(options.logisticIterations||500)),
-    learningRate:0.10,
-    minNeuralTrainingSamples:240,
-    minimumNeuralSelectionSamples:300,
-    minimumNeuralSelectionPositiveSamples:10,
-    minimumNeuralSelectionNegativeSamples:30,
-    maxNeuralTrainingSamples:DAILY_EARLY_RISER_MLP_MAX_TRAINING_SAMPLES,
-    neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction ??
-      DAILY_EARLY_RISER_MLP_TRAINING_HISTORY_FRACTION,
-    temporalSamples:[],
-    temporalOptions:{},
-    neuralIterations:Math.max(10,Math.min(40,Math.trunc(options.neuralIterations||20))),
-    neuralLearningRate:0.012,
-    neuralL2:0.04,
-    neuralSelectionMargin:0.003,
-    neuralInnerSelectionMargin:options.neuralInnerSelectionMargin ??
-      DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
-    neuralAnchorAdaptation:options.neuralAnchorAdaptation ??
-      DAILY_EARLY_RISER_MLP_ANCHOR_ADAPTATION,
-    featureSchema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
-    maxResolvedSamples:0
+  const profile=buildDailyCognitiveProfile(rows,{
+    ...options,outcomeHorizonMs,allowedOutcomeSources:[selectedOutcomeSource]
   });
   const neural=profile.neural_network||{};
   const neuralAnchorMode=options.neuralAnchorAdaptation ??
@@ -266,10 +336,14 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const selected=profile.model_selection||{};
   return {
     target_pct:target,
-    outcome_semantics:'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
-    outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
-    target_definition:'FIRST_PASSAGE_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1',
-    horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+    outcome_semantics:labelMode==='upside_opportunity'?'ANY_UPSIDE_TOUCH_WITHIN_HORIZON_INDEPENDENT_OF_DRAWDOWN':
+      labelMode==='safe_opportunity'?'PLUS_TARGET_BEFORE_MINUS_2_PERCENT_WITHIN_HORIZON':'TARGET_BEFORE_MINUS_2_PERCENT_ADVERSE_BARRIER_WITHIN_24H',
+    label_mode:labelMode,
+    horizon_hours:horizonHours,
+    outcome_source:selectedOutcomeSource,
+    target_definition:targetContract,
+    required_liquidity_lane:requiredLiquidityLane||null,
+    horizon_ms:outcomeHorizonMs,
     feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
     feature_names:profile.feature_names??[],
     feature_schema_note:'Daily MLP/GBDT use an isolated 35-channel V3 schema. Daily MLP research also compares a frozen logistic anchor with a trust-region-tethered anchor (max coefficient delta 0.12, bias delta 0.15); the outer validation and untouched holdout still require 0.003 Brier improvement. TCN remains the separate 24x29 temporal model.',
@@ -307,7 +381,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       status:temporal.status??'NOT_EVALUATED',
       architecture:temporal.architecture??null,
       target_definition:temporal.target_definition??targetContract,
-      horizon_ms:DAILY_EARLY_RISER_HORIZON_MS,
+      horizon_ms:outcomeHorizonMs,
       sequence_steps:temporal.sequence_steps??TEMPORAL_SEQUENCE_STEPS,
       sequence_channels:temporal.sequence_channels??TEMPORAL_SEQUENCE_CHANNELS,
       resolved_samples:temporal.resolved_samples??0,
@@ -364,6 +438,7 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       regime_specialists:temporal.regime_local_tcn_pyramid_challenger?.regime_specialists??{},
       member_training_diagnostics:temporal.regime_local_tcn_pyramid_challenger?.member_training_diagnostics??[]
     },
+    temporal_regime_local_tcn_attention_challenger:temporal.regime_local_tcn_attention_challenger??null,
     temporal_regime_local_tcn_multiscale_challenger:{
       status:temporal.regime_local_tcn_multiscale_challenger?.status??'NOT_EVALUATED',
       model_kind:temporal.regime_local_tcn_multiscale_challenger?.model_kind??'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
@@ -457,6 +532,12 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     neural_network:{
       status:neural.status??'NOT_EVALUATED',
       architecture:neural.architecture??null,
+      training_strategy:neural.training_strategy??null,
+      factorization_member_enabled:neural.factorization_member_enabled===true,
+      factorization_member_index:neural.factorization_member_index??-1,
+      ensemble_members:neural.ensemble_members??0,
+      ensemble_members_required:neural.ensemble_members_required??null,
+      member_training_profiles:neural.member_training_profiles??[],
       input_neurons:neural.input_neurons??null,
       hidden_neurons:neural.hidden_neurons??null,
       second_hidden_neurons:neural.second_hidden_neurons??null,
@@ -526,5 +607,166 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       production_eligible:false,
       real_order_execution:false
     }
+  };
+}
+
+export function benchmarkDailyEarlyRiserRegimeLocalMlp(samples,targetPct,options={}){
+  const target=finite(targetPct);
+  if(target===null||!DAILY_EARLY_RISER_TARGETS_PCT.includes(target))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_TARGET');
+  const labelMode=String(options.labelMode||'first_passage');
+  if(!['first_passage','upside_opportunity','safe_opportunity'].includes(labelMode))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_MODE');
+  const horizonHours=finite(options.horizonHours)??24;
+  if(![24,48,72].includes(horizonHours)||(labelMode==='first_passage'&&horizonHours!==24))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LABEL_HORIZON');
+  const outcomeHorizonMs=horizonHours*60*60*1000;
+  const requiredLiquidityLane=String(options.requiredLiquidityLane||'').trim();
+  if(requiredLiquidityLane&&!['STANDARD_750K_PLUS','MICRO_WATCH_ONLY_UNDER_750K'].includes(requiredLiquidityLane))
+    throw new Error('UNSUPPORTED_DAILY_EARLY_RISER_LIQUIDITY_LANE');
+  const expectedSource=outcomeSourceFor(labelMode);
+  const groups={BTC_RISK_ON:[],BTC_RISK_OFF:[]};
+  const rejectionCounts={};
+  let assigned=0;
+  for(const sample of Array.isArray(samples)?samples:[]){
+    const prepared=prepareDailyEarlyRiserCognitiveRow(sample,target,{labelMode,horizonHours});
+    if(!prepared.row){
+      const reason=prepared.reason||'UNKNOWN_REJECTION';
+      rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
+      continue;
+    }
+    if(requiredLiquidityLane&&prepared.row.liquidity_lane!==requiredLiquidityLane){
+      rejectionCounts.LIQUIDITY_LANE_FILTER=(rejectionCounts.LIQUIDITY_LANE_FILTER||0)+1;
+      continue;
+    }
+    const sequence=prepared.row.temporal_sequence;
+    const sequenceBtc24h=validTemporalSequence(sequence)
+      ?finite(sequence[TEMPORAL_SEQUENCE_STEPS-1]?.[19]):null;
+    const assetDailyReturn=finite(sample.daily_change_pct);
+    const relativeStrength=finite(sample.relative_strength_vs_btc_24h_pct);
+    const archivedBtc24h=assetDailyReturn!==null&&relativeStrength!==null
+      ?assetDailyReturn-relativeStrength:null;
+    // The census stores asset 24h return and (asset - BTC) relative return,
+    // both measured over the same 96 closed 15m candles. Their difference
+    // reconstructs BTC 24h return without requiring the optional 24x29 tensor.
+    if(sequenceBtc24h!==null&&archivedBtc24h!==null&&
+      Math.abs(archivedBtc24h)>0.00002&&
+      (sequenceBtc24h>=0)!==(archivedBtc24h>=0)){
+      rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT=
+        (rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT||0)+1;
+      continue;
+    }
+    const btc24h=sequenceBtc24h??(
+      archivedBtc24h!==null&&Math.abs(archivedBtc24h)>0.00002?archivedBtc24h:null
+    );
+    if(btc24h===null){
+      const reason=sequenceBtc24h===null&&archivedBtc24h===null
+        ?'BTC_REGIME_ALL_SOURCES_MISSING':'BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS';
+      rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
+      continue;
+    }
+    const regime=btc24h>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
+    prepared.row.btc_regime_source=sequenceBtc24h!==null
+      ?'TEMPORAL_SEQUENCE_CHANNEL_19'
+      :'ARCHIVED_96_CLOSED_15M_ASSET_MINUS_RELATIVE_RETURN';
+    groups[regime].push(prepared.row);
+    assigned++;
+  }
+  for(const rows of Object.values(groups))
+    rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const minValidation=Math.max(1000,Math.trunc(options.minimumValidationSamples||1500));
+  const minHoldout=Math.max(1000,Math.trunc(options.minimumHoldoutSamples||2000));
+  const specialists={};
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const rows=groups[regime];
+    const profile=rows.length>=Math.max(300,Math.trunc(options.minTrainingSamples||600))
+      ?buildDailyCognitiveProfile(rows,{
+        ...options,outcomeHorizonMs,allowedOutcomeSources:[expectedSource],
+        minTrainingSamples:Math.max(300,Math.trunc(options.minTrainingSamples||600)),
+        minimumValidationSamples:minValidation,minimumHoldoutSamples:minHoldout,
+        neuralTrainingHistoryFraction:options.neuralTrainingHistoryFraction??1,
+        temporalSamples:[],temporalOptions:{}
+      }):null;
+    const neural=profile?.neural_network||{};
+    const inner=neural.inner_selection_diagnostics||{};
+    const validation=neural.validation||{evaluated:false,sample_count:0,model_brier_score:null};
+    const validationComparison=neural.validation_comparison||{};
+    const holdout=neural.holdout||{evaluated:false,sample_count:0,model_brier_score:null};
+    const holdoutComparison=neural.holdout_comparison||{};
+    const selectionPassed=inner.passed===true&&neural.trained===true;
+    const validationPassed=selectionPassed&&neural.selected===true&&
+      validation.evaluated===true&&validationComparison.beats_base_rate===true&&
+      validationComparison.beats_same_window_logistic===true&&
+      validationComparison.beats_global_logistic===true&&
+      validationComparison.beats_recent_logistic===true;
+    const holdoutPassed=validationPassed&&holdout.evaluated===true&&
+      holdoutComparison.passed===true;
+    const status=!profile?'WAITING_FOR_REGIME_LOCAL_MLP_SAMPLE_SUPPORT':
+      !neural.trained?'MLP_NOT_TRAINED':
+      !selectionPassed?'TRAINED_NOT_SELECTED_ON_INNER_SELECTION':
+      !validationPassed?'INNER_SELECTION_PASSED_OUTER_VALIDATION_FAILED':
+      !holdoutPassed?'VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY';
+    const outcomes=countOutcomes(rows);
+    specialists[regime]={
+      regime,status,architecture:neural.architecture??null,
+      training_strategy:neural.training_strategy??null,
+      sample_count:rows.length,outcomes,
+      positive_rate_pct:rows.length?Number((outcomes.UP/rows.length*100).toFixed(3)):null,
+      first_at:rows[0]?.at??null,last_at:rows.at(-1)?.at??null,
+      trained:neural.trained===true,
+      training_samples:neural.preselection_training_samples??neural.training_samples??0,
+      fitted_training_samples:neural.training_samples??0,
+      selection_samples:neural.selection_samples??0,
+      validation_samples:validation.sample_count??0,
+      holdout_samples:holdout.sample_count??0,
+      inner_selection:inner,
+      validation,validation_comparison:validationComparison,
+      holdout,holdout_comparison:holdoutComparison,
+      selected_member_index:neural.selected_member_index??null,
+      selected_residual_scale:neural.selected_residual_scale??null,
+      selection_passed:selectionPassed,validation_passed:validationPassed,
+      holdout_passed:holdoutPassed,
+      probability_ready:false,live_eligibility_ready:false,
+      chronology:profile?.comparison_contract??null,
+      model_selection_reason:profile?.model_selection?.reason??null
+    };
+  }
+  const regimes=Object.values(specialists);
+  const allSupported=regimes.length===2&&regimes.every(item=>item.sample_count>=300);
+  const trained=allSupported&&regimes.every(item=>item.trained);
+  const selected=trained&&regimes.every(item=>item.selection_passed);
+  const validationPassed=selected&&regimes.every(item=>item.validation_passed);
+  const holdoutPassed=validationPassed&&regimes.every(item=>item.holdout_passed);
+  const coverageComplete=Number(rejectionCounts.BTC_REGIME_SOURCE_DISAGREEMENT||0)===0&&
+    Number(rejectionCounts.BTC_REGIME_ALL_SOURCES_MISSING||0)===0&&
+    Number(rejectionCounts.BTC_REGIME_RETURN_NEAR_ZERO_AMBIGUOUS||0)===0;
+  return {
+    schema:'RADARX_DAILY_EARLY_RISER_REGIME_LOCAL_MLP_ABLATION_V1',
+    status:!coverageComplete?'REGIME_ASSIGNMENT_COVERAGE_INCOMPLETE':
+      !allSupported?'WAITING_FOR_BOTH_BTC_REGIME_SUPPORT':
+      !trained?'REGIME_LOCAL_MLP_TRAINING_INCOMPLETE':
+      !selected?'REGIME_LOCAL_MLP_NOT_SELECTED_ON_INNER_SELECTION':
+      !validationPassed?'REGIME_LOCAL_MLP_DID_NOT_BEAT_LOGISTIC_ON_VALIDATION':
+      !holdoutPassed?'REGIME_LOCAL_MLP_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
+      'REGIME_LOCAL_MLP_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY',
+    target_pct:target,label_mode:labelMode,horizon_hours:horizonHours,
+    outcome_source:expectedSource,required_liquidity_lane:requiredLiquidityLane||null,
+    feature_schema:DAILY_EARLY_RISER_MODEL_FEATURE_SCHEMA,
+    btc_regime_definition:'LAST_CLOSED_15M_SEQUENCE_BTC_24H_RETURN_CHANNEL_19_SIGN_V1',
+    chronology_policy:'EACH_BTC_REGIME_HAS_ITS_OWN_PURGED_TRAIN_SELECTION_CALIBRATION_VALIDATION_AND_UNTOUCHED_HOLDOUT',
+    comparison_margin:0.003,
+    inner_selection_margin:DAILY_EARLY_RISER_MLP_INNER_SELECTION_MARGIN,
+    neural_training_history_fraction:options.neuralTrainingHistoryFraction??1,
+    sample_count:assigned,
+    unassigned_or_rejected_samples:Object.values(rejectionCounts).reduce((sum,value)=>sum+value,0),
+    rejection_counts:rejectionCounts,
+    regime_sample_counts:Object.fromEntries(Object.entries(groups).map(([name,rows])=>[name,rows.length])),
+    trained,selected_for_research:selected,
+    validation_passed:validationPassed,
+    research_out_of_sample_validated:holdoutPassed,
+    probability_ready:false,live_eligibility_ready:false,
+    production_touched:false,real_order_execution:false,
+    regime_specialists:specialists
   };
 }

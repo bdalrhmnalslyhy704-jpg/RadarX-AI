@@ -6,6 +6,7 @@ import {appendFile,mkdir,mkdtemp,rename,rm,writeFile} from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {
   parseBinanceSpotKlineArchiveCsv,
   listBinanceSpotArchiveMonths,
@@ -19,18 +20,21 @@ import {
   DAILY_EARLY_RISER_TARGETS_PCT,
   DAILY_EARLY_RISER_HORIZON_BARS,
   DAILY_EARLY_RISER_OUTCOME_SOURCE,
+  DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS,
+  DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE,
   buildDailyEarlyRiserHistoricalSamples
 } from '../core/daily-early-riser-census.mjs';
 
 const execFile=promisify(execFileCallback);
 const API_ROOT='https://data-api.binance.vision';
 const ARCHIVE_ROOT='https://data.binance.vision/data/spot/monthly/klines';
+const DAILY_ARCHIVE_ROOT='https://data.binance.vision/data/spot/daily/klines';
 const FIFTEEN_MS=15*60*1000;
 const FIVE_MS=5*60*1000;
 const MAX_ARCHIVE_BYTES=64*1024*1024;
 const MAX_UNZIPPED_BYTES=96*1024*1024;
 const DEFAULT_START='2025-11-01T00:00:00.000Z';
-const DEFAULT_END='2026-11-01T00:00:00.000Z';
+const DEFAULT_END='2026-11-12T00:00:00.000Z';
 const DEFAULT_MIN_VOLUME=750000;
 const DEFAULT_ADVERSE_PCT=2;
 const OUTPUT_PATH=resolve(process.env.RADARX_DAILY_EARLY_RISER_REPORT||
@@ -56,6 +60,87 @@ const finite=value=>{
   return Number.isFinite(n)?n:null;
 };
 const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
+
+
+export function auditSampleLabelHorizons(samples,{
+  opportunityHorizonsHours=[24,48,72],drawdownAdversePcts=[2,5]
+}={}){
+  let firstPassageViolations=0,opportunityViolations=0,drawdownViolations=0,
+    safeFirstTouchViolations=0,laneViolations=0;
+  const targets=[...DAILY_EARLY_RISER_TARGETS_PCT];
+  const horizons=[...new Set(opportunityHorizonsHours.map(finite)
+    .filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))];
+  const risks=[...new Set(drawdownAdversePcts.map(finite)
+    .filter(value=>value!==null&&value>0&&value<=50))];
+  for(const sample of Array.isArray(samples)?samples:[]){
+    const at=finite(sample?.at),volume=finite(sample?.quote_volume_24h);
+    if(at===null){firstPassageViolations++;opportunityViolations++;drawdownViolations++;
+      safeFirstTouchViolations++;continue;}
+    if(volume===null||
+      sample.liquidity_lane!==(volume>=750000?'STANDARD_750K_PLUS':'MICRO_WATCH_ONLY_UNDER_750K'))
+      laneViolations++;
+    for(const target of targets){
+      const key='plus_'+String(target).replace('.','_')+'_pct';
+      const label=sample.targets?.[key];
+      const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+      const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+      if(!label||(!validResolved&&!validAmbiguous)||
+        label.outcome_source!==DAILY_EARLY_RISER_OUTCOME_SOURCE||
+        label.target_definition!=='FIRST_PASSAGE_PLUS_'+target+
+          '_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1'||
+        finite(label.resolved_at)-at!==24*60*60*1000||
+        finite(label.horizon_ms)!==24*60*60*1000)
+        firstPassageViolations++;
+    }
+    for(const hours of horizons){
+      const horizonKey=String(hours)+'h';
+      for(const target of targets){
+        const key='plus_'+String(target).replace('.','_')+'_pct';
+        const label=sample.opportunity_targets?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        if(!label||label.status!=='RESOLVED'||!['UP','FLAT'].includes(label.outcome)||
+          label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_UPSIDE_TOUCH_HORIZONS_V1'||
+          label.target_definition!=='ANY_UPSIDE_TOUCH_PLUS_'+target+'_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_adverse_barrier!==true)
+          opportunityViolations++;
+      }
+      for(const threshold of risks){
+        const key='minus_'+String(threshold).replace('.','_')+'_pct';
+        const label=sample.drawdown_risks?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        if(!label||label.status!=='RESOLVED'||!['DOWN','FLAT'].includes(label.outcome)||
+          label.outcome_source!=='BINANCE_OFFICIAL_CLOSED_15M_INDEPENDENT_DRAWDOWN_HORIZONS_V1'||
+          label.target_definition!=='ANY_DRAWDOWN_TOUCH_MINUS_'+threshold+'_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_upside_barrier!==true)
+          drawdownViolations++;
+      }
+      for(const target of targets){
+        const key='plus_'+String(target).replace('.','_')+'_pct';
+        const label=sample.safe_opportunity_targets?.[horizonKey]?.[key];
+        const expected=hours*60*60*1000;
+        const validResolved=label?.status==='RESOLVED'&&['UP','DOWN','FLAT'].includes(label.outcome);
+        const validAmbiguous=label?.status==='AMBIGUOUS'&&label.outcome==='AMBIGUOUS';
+        if(!label||(!validResolved&&!validAmbiguous)||
+          label.outcome_source!==DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE||
+          label.target_definition!=='FIRST_TOUCH_PLUS_'+target+'_PCT_BEFORE_MINUS_2_PCT_WITHIN_'+hours+'H_15M_V1'||
+          finite(label.resolved_at)-at!==expected||finite(label.horizon_ms)!==expected||
+          label.independent_of_future_after_first_touch!==true)
+          safeFirstTouchViolations++;
+      }
+    }
+  }
+  return {
+    first_passage_horizon_violations:firstPassageViolations,
+    opportunity_horizon_violations:opportunityViolations,
+    drawdown_horizon_violations:drawdownViolations,
+    safe_first_touch_horizon_violations:safeFirstTouchViolations,
+    liquidity_lane_violations:laneViolations,
+    total:firstPassageViolations+opportunityViolations+drawdownViolations+
+      safeFirstTouchViolations+laneViolations
+  };
+}
 
 function parseArgs(argv){
   const values={};
@@ -115,6 +200,9 @@ async function getJson(url){
 function archiveUrl(symbol,interval,month){
   return ARCHIVE_ROOT+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+month+'.zip';
 }
+function dailyArchiveUrl(symbol,interval,date){
+  return DAILY_ARCHIVE_ROOT+'/'+symbol+'/'+interval+'/'+symbol+'-'+interval+'-'+date+'.zip';
+}
 async function loadVerifiedMonth({symbol,interval,month,tempDir}){
   const url=archiveUrl(symbol,interval,month);
   const checksum=await fetchResponse(url+'.CHECKSUM',{timeoutMs:30000});
@@ -151,7 +239,46 @@ async function loadVerifiedMonth({symbol,interval,month,tempDir}){
     rows:parsed.rows
   };
 }
-async function loadSymbolInterval({symbol,interval,months,tempDir}){
+async function loadVerifiedDay({symbol,interval,date,tempDir}){
+  const url=dailyArchiveUrl(symbol,interval,date);
+  const checksum=await fetchResponse(url+'.CHECKSUM',{timeoutMs:30000});
+  if(checksum.status===404)return {status:'MISSING',reason:'DAILY_CHECKSUM_404',symbol,interval,
+    month:date.slice(0,7),date,archive_type:'DAILY',url};
+  if(!checksum.ok)throw new Error('DAILY_CHECKSUM_HTTP_'+checksum.status+':'+symbol+':'+interval+':'+date);
+  const checksumText=await checksum.text();
+  const expected=checksumText.match(/[a-f0-9]{64}/i)?.[0]?.toLowerCase();
+  if(!expected)throw new Error('OFFICIAL_DAILY_CHECKSUM_INVALID:'+symbol+':'+interval+':'+date);
+  const response=await fetchResponse(url,{timeoutMs:120000});
+  if(response.status===404)return {status:'MISSING',reason:'DAILY_ARCHIVE_404',symbol,interval,
+    month:date.slice(0,7),date,archive_type:'DAILY',url};
+  if(!response.ok)throw new Error('DAILY_ARCHIVE_HTTP_'+response.status+':'+symbol+':'+interval+':'+date);
+  const announced=Number(response.headers.get('content-length'));
+  if(Number.isFinite(announced)&&announced>MAX_ARCHIVE_BYTES)
+    throw new Error('DAILY_ARCHIVE_SIZE_LIMIT:'+symbol+':'+interval+':'+date);
+  const bytes=Buffer.from(await response.arrayBuffer());
+  if(!bytes.length||bytes.length>MAX_ARCHIVE_BYTES)
+    throw new Error('DAILY_ARCHIVE_SIZE_INVALID:'+symbol+':'+interval+':'+date);
+  const actual=execHash(bytes);
+  if(actual!==expected)throw new Error('DAILY_ARCHIVE_SHA256_MISMATCH:'+symbol+':'+interval+':'+date);
+  const zipPath=join(tempDir,symbol+'-'+interval+'-'+date+'-daily.zip');
+  await writeFile(zipPath,bytes,{flag:'wx'});
+  let csv='';
+  try{
+    const unzipped=await execFile('unzip',['-p',zipPath],{
+      encoding:'utf8',maxBuffer:MAX_UNZIPPED_BYTES,timeout:120000
+    });
+    csv=unzipped.stdout;
+  }finally{await rm(zipPath,{force:true}).catch(()=>{});}
+  const intervalMs=interval==='15m'?FIFTEEN_MS:FIVE_MS;
+  const parsed=parseBinanceSpotKlineArchiveCsv(csv,{intervalMs});
+  return {
+    status:'VERIFIED',symbol,interval,month:date.slice(0,7),date,archive_type:'DAILY',
+    url,sha256:actual,compressed_bytes:bytes.length,row_count:parsed.rows.length,
+    rejected:parsed.rejected,continuity_ratio:parsed.continuity_ratio,rows:parsed.rows
+  };
+}
+
+async function loadSymbolInterval({symbol,interval,months,dailyDates=[],tempDir}){
   const byOpen=new Map(),files=[];
   const rejected={malformed:0,invalid_timestamp:0,invalid_price_or_volume:0,
     invalid_close_boundary:0,duplicate_open_time:0};
@@ -164,6 +291,19 @@ async function loadSymbolInterval({symbol,interval,months,tempDir}){
     files.push(manifest);
     if(archive.status!=='VERIFIED')continue;
     for(const [key,value] of Object.entries(archive.rejected||{}))rejected[key]=(rejected[key]||0)+Number(value||0);
+    for(const row of rows)byOpen.set(Number(row[0]),row);
+  }
+  for(const date of dailyDates){
+    let archive;
+    try{archive=await loadVerifiedDay({symbol,interval,date,tempDir});}
+    catch(error){archive={status:'FAILED',symbol,interval,month:date.slice(0,7),date,
+      archive_type:'DAILY',url:dailyArchiveUrl(symbol,interval,date),
+      reason:String(error?.message||error).slice(0,240)};}
+    const {rows,...manifest}=archive;
+    files.push(manifest);
+    if(archive.status!=='VERIFIED')continue;
+    for(const [key,value] of Object.entries(archive.rejected||{}))
+      rejected[key]=(rejected[key]||0)+Number(value||0);
     for(const row of rows)byOpen.set(Number(row[0]),row);
   }
   const rows=[...byOpen.entries()].sort((a,b)=>a[0]-b[0]).map(([,row])=>row);
@@ -240,7 +380,63 @@ function rankingMetric(rows,targetKey,fraction,includeFlat=false,labelField='tra
     positive_prevalence_pct:ranked.length?Number((up/ranked.length*100).toFixed(3)):null
   };
 }
-function summarizeTarget(rows,targetPct){
+function summarizeBinaryOpportunity(rows,horizonKey,targetKey){
+  const eligible=rows.filter(row=>{
+    const label=row.opportunity_targets?.[horizonKey]?.[targetKey];
+    return label?.status==='RESOLVED'&&['UP','FLAT'].includes(label.outcome);
+  });
+  const ranked=eligible.map((row,index)=>({
+    index,row,label:row.opportunity_targets[horizonKey][targetKey],
+    score:finite(row.base_score)??Number.NEGATIVE_INFINITY
+  })).sort((a,b)=>b.score-a.score||a.index-b.index);
+  const positives=ranked.filter(item=>item.label.outcome==='UP').length;
+  const negatives=ranked.length-positives;
+  const top=fraction=>{
+    const count=ranked.length?Math.max(1,Math.ceil(ranked.length*fraction)):0;
+    const chosen=ranked.slice(0,count);
+    const up=chosen.filter(item=>item.label.outcome==='UP').length;
+    return {
+      selected_count:chosen.length,selected_up:up,
+      precision_pct:chosen.length?Number((up/chosen.length*100).toFixed(3)):null,
+      recall_pct:positives?Number((up/positives*100).toFixed(3)):null
+    };
+  };
+  const upRows=ranked.filter(item=>item.label.outcome==='UP');
+  const micro=eligible.filter(row=>row.liquidity_lane==='MICRO_WATCH_ONLY_UNDER_750K');
+  const standard=eligible.filter(row=>row.liquidity_lane==='STANDARD_750K_PLUS');
+  const describe=cohort=>{
+    const wins=cohort.filter(row=>row.opportunity_targets?.[horizonKey]?.[targetKey]?.outcome==='UP');
+    return {
+      samples:cohort.length,upside_events:wins.length,
+      upside_rate_pct:cohort.length?Number((wins.length/cohort.length*100).toFixed(3)):null
+    };
+  };
+  const values=field=>upRows.map(item=>finite(item.label[field])).filter(value=>value!==null);
+  return {
+    eligible_samples:eligible.length,upside_events:positives,no_touch_events:negatives,
+    upside_prevalence_pct:eligible.length?Number((positives/eligible.length*100).toFixed(3)):null,
+    top_10_pct:top(0.10),top_20_pct:top(0.20),
+    median_time_to_target_minutes:median(values('time_to_target_minutes')),
+    median_max_favorable_excursion_pct:median(values('max_favorable_excursion_pct')),
+    median_max_adverse_excursion_pct:median(values('max_adverse_excursion_pct')),
+    micro_watch_only:describe(micro),standard_750k_plus:describe(standard)
+  };
+}
+function summarizeIndependentDrawdown(rows,horizonKey,riskKey){
+  const eligible=rows.map(row=>row.drawdown_risks?.[horizonKey]?.[riskKey])
+    .filter(label=>label?.status==='RESOLVED'&&['DOWN','FLAT'].includes(label.outcome));
+  const touched=eligible.filter(label=>label.outcome==='DOWN');
+  const values=field=>touched.map(label=>finite(label[field])).filter(value=>value!==null);
+  return {
+    eligible_samples:eligible.length,drawdown_events:touched.length,
+    no_drawdown_events:eligible.length-touched.length,
+    drawdown_rate_pct:eligible.length?Number((touched.length/eligible.length*100).toFixed(3)):null,
+    median_time_to_drawdown_minutes:median(values('time_to_drawdown_minutes')),
+    median_max_adverse_excursion_pct:median(values('max_adverse_excursion_pct')),
+    median_max_favorable_excursion_pct:median(values('max_favorable_excursion_pct'))
+  };
+}
+export function summarizeDailyTargetDiagnostics(rows,targetPct){
   const key='plus_'+String(targetPct).replace('.','_')+'_pct';
   // Tradeability: target must be reached before the -2% adverse barrier.
   const tradeableOutcomes=countsForTarget(rows,key);
@@ -274,8 +470,23 @@ function summarizeTarget(rows,targetPct){
     }
     return counts;
   };
+  const opportunityDiagnostics=Object.fromEntries([24,48,72].map(hours=>{
+    const horizonKey=String(hours)+'h';
+    const sample=rows.find(row=>row.opportunity_targets?.[horizonKey]);
+    if(!sample)return [horizonKey,{status:'NOT_COLLECTED'}];
+    const opportunity=Object.fromEntries([5,10,15].map(target=>{
+      const targetKey='plus_'+String(target).replace('.','_')+'_pct';
+      return [targetKey,summarizeBinaryOpportunity(rows,horizonKey,targetKey)];
+    }));
+    const drawdown=Object.fromEntries([2,5].map(threshold=>{
+      const riskKey='minus_'+String(threshold).replace('.','_')+'_pct';
+      return [riskKey,summarizeIndependentDrawdown(rows,horizonKey,riskKey)];
+    }));
+    return [horizonKey,{status:'RESOLVED_LABELS',opportunity,independent_drawdown_risk:drawdown}];
+  }));
   return {
     target_pct:targetPct,adverse_pct:DEFAULT_ADVERSE_PCT,horizon_hours:24,
+    independent_opportunity_and_drawdown_diagnostics:opportunityDiagnostics,
     market_move_event:{
       outcomes:marketMoveOutcomes,successful_event_count:marketMovers.length,
       target_hit_after_adverse_barrier_count:marketMoversAfterAdverse,
@@ -357,10 +568,35 @@ async function main(){
   const startText=args.start||DEFAULT_START,endText=args['end-exclusive']||DEFAULT_END;
   const start=parseUtc(startText,'START'),end=parseUtc(endText,'END_EXCLUSIVE');
   if(end<=start)throw new Error('END_MUST_BE_AFTER_START');
-  const months=listBinanceSpotArchiveMonths(start,end);
+  const allMonths=listBinanceSpotArchiveMonths(start,end);
+  const endDate=new Date(end);
+  const endIsUtcMonthBoundary=endDate.getUTCDate()===1&&endDate.getUTCHours()===0&&
+    endDate.getUTCMinutes()===0&&endDate.getUTCSeconds()===0&&endDate.getUTCMilliseconds()===0;
+  const partialMonth=endIsUtcMonthBoundary?null:
+    endDate.getUTCFullYear()+'-'+String(endDate.getUTCMonth()+1).padStart(2,'0');
+  const months=partialMonth?allMonths.filter(month=>month!==partialMonth):allMonths;
+  const dailyDates=[];
+  if(partialMonth){
+    const [year,month]=partialMonth.split('-').map(Number);
+    const monthStart=Date.UTC(year,month-1,1);
+    const lastFullDayStart=Math.floor(end/86400000)*86400000;
+    for(let day=monthStart;day<lastFullDayStart;day+=86400000)
+      dailyDates.push(new Date(day).toISOString().slice(0,10));
+  }
   const concurrency=Math.max(1,Math.min(8,Math.trunc(Number(args.concurrency)||4)));
   const maxSymbols=Math.max(0,Math.trunc(Number(args['max-symbols'])||0));
   const minVolume=Math.max(0,finite(args['min-quote-volume'])??DEFAULT_MIN_VOLUME);
+  const opportunityHorizonsHours=[...new Set(String(args['opportunity-horizons']||'24')
+    .split(',').map(value=>finite(value.trim()))
+    .filter(value=>DAILY_EARLY_RISER_OPPORTUNITY_HORIZONS_HOURS.includes(value)))].sort((a,b)=>a-b);
+  if(!opportunityHorizonsHours.length)
+    throw new Error('NO_VALID_OPPORTUNITY_HORIZONS');
+  const maxOpportunityHorizonHours=Math.max(...opportunityHorizonsHours);
+  const sampleStrideHours=Math.max(1,Math.trunc(Number(args['sample-stride-hours'])||maxOpportunityHorizonHours));
+  if(sampleStrideHours<maxOpportunityHorizonHours||sampleStrideHours%24!==0)
+    throw new Error('SAMPLE_STRIDE_MUST_BE_NON_OVERLAPPING_MULTIPLE_OF_24H');
+  const sampleStrideBars=sampleStrideHours*60*60*1000/FIFTEEN_MS;
+  const drawdownAdversePcts=[2,5];
   const maxSamples=Math.max(1,Math.min(2000,Math.trunc(Number(args['max-samples-per-symbol'])||500)));
   const output=resolve(args.output||OUTPUT_PATH),samplesOutput=resolve(args['samples-output']||SAMPLES_PATH);
   const temporalSamplesOutput=resolve(args['temporal-samples-output']||
@@ -381,13 +617,19 @@ async function main(){
   const methods={
     market:'BINANCE_SPOT_USDT_ONLY',
     universe:'CURRENTLY_TRADING_SPOT_USDT_SURVIVORS_ONLY',
-    data_source:'BINANCE_OFFICIAL_MONTHLY_KLINE_ARCHIVES',
+    data_source:'BINANCE_OFFICIAL_MONTHLY_AND_DAILY_KLINE_ARCHIVES',
+    current_partial_month:partialMonth,
+    daily_archive_dates:dailyDates,
     intervals:['15m','5m'],
     targets_pct:[...DAILY_EARLY_RISER_TARGETS_PCT],
     adverse_pct:DEFAULT_ADVERSE_PCT,
     horizon_bars:DAILY_EARLY_RISER_HORIZON_BARS,
     horizon_hours:24,
-    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_SYMBOL_PER_24H',
+    opportunity_horizons_hours:opportunityHorizonsHours,
+    drawdown_adverse_pcts:drawdownAdversePcts,
+    max_opportunity_horizon_hours:maxOpportunityHorizonHours,
+    anchor_stride_hours:sampleStrideHours,
+    anchor_cadence:'ONE_FIXED_UTC_PHASE_ANCHOR_PER_'+sampleStrideHours+'_HOURS',
     volume_floor_usdt:minVolume,
     closed_candles_only:true,
     baseline_features_have_future_data:false,
@@ -472,13 +714,13 @@ async function main(){
         const census=buildDailyEarlyRiserHistoricalSamples({
           symbol,klines:btcKlines,
           fastKlines:{data:btc5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+          btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+          opportunityHorizonsHours,drawdownAdversePcts,sampleStrideBars
         });
         const featureCutoffViolations=census.samples.filter(row=>
           row.feature_information_cutoff_at!==row.at).length;
-        const horizonViolations=census.samples.filter(row=>
-          Object.values(row.targets||{}).some(label=>
-            Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+        const horizonAudit=auditSampleLabelHorizons(census.samples,{opportunityHorizonsHours,drawdownAdversePcts});
+        const horizonViolations=horizonAudit.total;
         result={symbol,status:featureCutoffViolations||horizonViolations?'SAMPLE_AUDIT_FAILED':'PROCESSED',
           rows_15m:btc15.rows.length,rows_5m:btc5.rows.length,
           coverage_15m:{first_available_month:btc15.first_available_month,
@@ -491,12 +733,12 @@ async function main(){
             complete_from_first_available:btc5.complete_from_first_available},
           samples:census.samples.length,audit:census.audit,
           feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
-          output:census.samples};
+          ...horizonAudit,output:census.samples};
       }else{
         try{
           const [asset15,asset5]=await Promise.all([
-            loadSymbolInterval({symbol,interval:'15m',months,tempDir}),
-            loadSymbolInterval({symbol,interval:'5m',months,tempDir})
+            loadSymbolInterval({symbol,interval:'15m',months,dailyDates,tempDir}),
+            loadSymbolInterval({symbol,interval:'5m',months,dailyDates,tempDir})
           ]);
           manifest.push(...asset15.files,...asset5.files);
           if(!asset15.complete_from_first_available||!asset5.complete_from_first_available){
@@ -516,13 +758,13 @@ async function main(){
             const census=buildDailyEarlyRiserHistoricalSamples({
               symbol,klines:{data:asset15.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
               fastKlines:{data:asset5.rows,source:'BINANCE_OFFICIAL_ARCHIVE'},
-              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples
+              btcKlines,now:end,minQuoteVolume24h:minVolume,maxSamplesPerSymbol:maxSamples,
+              opportunityHorizonsHours,drawdownAdversePcts,sampleStrideBars
             });
             const featureCutoffViolations=census.samples.filter(row=>
               row.feature_information_cutoff_at!==row.at).length;
-            const horizonViolations=census.samples.filter(row=>
-              Object.values(row.targets||{}).some(label=>
-                Number(label?.resolved_at)-Number(row.at)!==24*60*60*1000)).length;
+            const horizonAudit=auditSampleLabelHorizons(census.samples);
+            const horizonViolations=horizonAudit.total;
             result={symbol,status:census.audit.status==='READY'&&!featureCutoffViolations&&!horizonViolations
                 ?'PROCESSED':'SAMPLE_AUDIT_FAILED',
               rows_15m:asset15.rows.length,rows_5m:asset5.rows.length,
@@ -537,7 +779,7 @@ async function main(){
                 complete_from_first_available:asset5.complete_from_first_available},
               samples:census.samples.length,audit:census.audit,
               feature_cutoff_violations:featureCutoffViolations,horizon_violations:horizonViolations,
-              output:census.samples};
+              ...horizonAudit,output:census.samples};
           }
         }catch(error){
           const reason=String(error?.message||error).slice(0,240);
@@ -562,7 +804,21 @@ async function main(){
       report.archive_manifest=manifest;
       console.log('[DAILY_CENSUS_PROGRESS] '+JSON.stringify({
         completed,total:symbols.length,symbol,status:result.status,samples:result.samples,
-        total_samples:totalSamples,archives:manifest.length
+        total_samples:totalSamples,archives:manifest.length,
+        audit_status:result.audit?.status??null,
+        audit_reason:result.audit?.reason??null,
+        overlap_violations:result.audit?.overlap_violations??null,
+        rejected_feature_reason_counts:result.audit?.rejected_feature_reason_counts??{},
+        rejected_invalid_feature_rows:result.audit?.rejected_invalid_feature_rows??0,
+        feature_cutoff_violations:result.feature_cutoff_violations??0,
+        horizon_violations:result.horizon_violations??0,
+        first_passage_horizon_violations:result.first_passage_horizon_violations??0,
+        opportunity_horizon_violations:result.opportunity_horizon_violations??0,
+        drawdown_horizon_violations:result.drawdown_horizon_violations??0,
+        safe_first_touch_horizon_violations:result.safe_first_touch_horizon_violations??0,
+        liquidity_lane_violations:result.liquidity_lane_violations??0,
+        archive_coverage_15m:result.coverage_15m?.complete_from_first_available??null,
+        archive_coverage_5m:result.coverage_5m?.complete_from_first_available??null
       }));
       await Promise.all([writeQueue,temporalWriteQueue]);
       await persistReport();
@@ -572,8 +828,8 @@ async function main(){
     await reportQueue;
     const allMetricRows=results.flatMap(row=>row?.metricRows||[]);
     report.targets=Object.fromEntries(DAILY_EARLY_RISER_TARGETS_PCT.map(target=>
-      [String(target)+'_PCT',summarizeTarget(allMetricRows,target)]));
-    const archiveFilesExpected=symbols.length*months.length*2;
+      [String(target)+'_PCT',summarizeDailyTargetDiagnostics(allMetricRows,target)]));
+    const archiveFilesExpected=symbols.length*(months.length+dailyDates.length)*2;
     const verified=manifest.filter(row=>row.status==='VERIFIED').length;
     const missing=manifest.filter(row=>row.status==='MISSING').length;
     const failed=manifest.filter(row=>row.status==='FAILED').length;
@@ -589,6 +845,33 @@ async function main(){
       sum+(row.horizon_violations||0),0);
     const allAuditsReady=report.symbol_results.every(row=>
       row.status==='PROCESSED'&&row.audit?.status==='READY'&&row.audit?.overlap_violations===0);
+    const sampleAuditFailedRows=report.symbol_results.filter(row=>row.status==='SAMPLE_AUDIT_FAILED');
+    const sampleAuditFailureReasons={};
+    for(const row of sampleAuditFailedRows){
+      const add=(key,count=1)=>{if(Number(count)>0)
+        sampleAuditFailureReasons[key]=(sampleAuditFailureReasons[key]||0)+Number(count);};
+      if(row.audit?.status&&row.audit.status!=='READY')add('AUDIT_STATUS:'+row.audit.status);
+      if(row.audit?.reason)add('AUDIT_REASON:'+row.audit.reason);
+      add('OVERLAP_VIOLATIONS',row.audit?.overlap_violations||0);
+      add('FEATURE_CUTOFF_VIOLATIONS',row.feature_cutoff_violations||0);
+      add('FIRST_PASSAGE_HORIZON_VIOLATIONS',row.first_passage_horizon_violations||0);
+      add('OPPORTUNITY_HORIZON_VIOLATIONS',row.opportunity_horizon_violations||0);
+      add('DRAWDOWN_HORIZON_VIOLATIONS',row.drawdown_horizon_violations||0);
+      add('SAFE_FIRST_TOUCH_HORIZON_VIOLATIONS',row.safe_first_touch_horizon_violations||0);
+      add('LIQUIDITY_LANE_VIOLATIONS',row.liquidity_lane_violations||0);
+    }
+    const sampleAuditFailureDetails=sampleAuditFailedRows.map(row=>({
+      symbol:row.symbol,status:row.status,audit_status:row.audit?.status??null,
+      audit_reason:row.audit?.reason??null,overlap_violations:row.audit?.overlap_violations??0,
+      feature_cutoff_violations:row.feature_cutoff_violations??0,
+      horizon_violations:row.horizon_violations??0,
+      first_passage_horizon_violations:row.first_passage_horizon_violations??0,
+      opportunity_horizon_violations:row.opportunity_horizon_violations??0,
+      drawdown_horizon_violations:row.drawdown_horizon_violations??0,
+      safe_first_touch_horizon_violations:row.safe_first_touch_horizon_violations??0,
+      liquidity_lane_violations:row.liquidity_lane_violations??0,
+      rejected_feature_reason_counts:row.audit?.rejected_feature_reason_counts??{}
+    }));
     report.data_quality={
       status:failed===0&&symbolFailures.length===0&&allAuditsReady&&
         featureCutoffViolations===0&&horizonViolations===0
@@ -609,7 +892,10 @@ async function main(){
       no_overlapping_daily_labels:report.symbol_results.every(row=>
         row.audit===null||row.audit?.overlap_violations===0),
       feature_cutoff_violations:featureCutoffViolations,
-      horizon_violations:horizonViolations
+      horizon_violations:horizonViolations,
+      symbols_sample_audit_failed:sampleAuditFailedRows.length,
+      sample_audit_failure_reasons:sampleAuditFailureReasons,
+      sample_audit_failure_details:sampleAuditFailureDetails
     };
     report.sample_file={
       path:samplesOutput,rows:totalSamples,
@@ -643,7 +929,9 @@ async function main(){
     await rm(tempDir,{recursive:true,force:true}).catch(()=>{});
   }
 }
-main().catch(error=>{
-  console.error('[DAILY_CENSUS_FATAL] '+String(error?.stack||error));
-  process.exitCode=1;
-});
+if(process.argv[1]&&resolve(process.argv[1])===resolve(fileURLToPath(import.meta.url))){
+  main().catch(error=>{
+    console.error('[DAILY_CENSUS_FATAL] '+String(error?.stack||error));
+    process.exitCode=1;
+  });
+}

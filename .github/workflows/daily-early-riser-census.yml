@@ -5,6 +5,7 @@ on:
     branches:
       - research/daily-early-riser-census-20261109
       - research/daily-early-riser-neural-20261110
+      - research/daily-early-riser-opportunity-targets-20261113
     paths:
       - 'research/TRIGGER_FULL_DAILY_EARLY_RISER_CENSUS.txt'
   workflow_dispatch:
@@ -17,7 +18,7 @@ on:
       end_exclusive:
         description: Exclusive UTC end date (YYYY-MM-DD)
         required: false
-        default: '2026-11-01'
+        default: '2026-11-12'
         type: string
       max_symbols:
         description: 0 means all currently trading directional Spot USDT symbols
@@ -56,6 +57,10 @@ jobs:
       RADARX_DAILY_EARLY_RISER_REPORT: artifacts/daily-early-riser-census.json
       RADARX_DAILY_EARLY_RISER_SAMPLES: artifacts/daily-early-riser-samples.jsonl
       RADARX_DAILY_EARLY_RISER_TEMPORAL_SAMPLES: artifacts/daily-early-riser-temporal-sequences.jsonl
+      OPPORTUNITY_HORIZONS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '24,48,72' || '24' }}
+      ANCHOR_STRIDE_HOURS: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '72' || '24' }}
+      CENSUS_MIN_VOLUME: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '0' || github.event.inputs.min_quote_volume || '750000' }}
+      CENSUS_END_EXCLUSIVE: ${{ github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113' && '2026-11-12' || github.event.inputs.end_exclusive || '2026-11-01' }}
     steps:
       - name: Checkout isolated Build 224 research branch
         uses: actions/checkout@v4
@@ -77,17 +82,48 @@ jobs:
         run: |
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-census.test.mjs
           node --test --test-timeout=60000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --test --test-timeout=120000 phase2/tests/temporal-neural-brain.test.mjs
       - name: Replay checksum-verified monthly Spot archives and build daily event census
         id: census
         run: |
           node phase2/tools/daily-early-riser-historical-census.mjs \
             --start '${{ github.event.inputs.start || '2025-11-01' }}' \
-            --end-exclusive '${{ github.event.inputs.end_exclusive || '2026-11-01' }}' \
+            --end-exclusive "$CENSUS_END_EXCLUSIVE" \
             --max-symbols '${{ github.event.inputs.max_symbols || '0' }}' \
-            --min-quote-volume '${{ github.event.inputs.min_quote_volume || '750000' }}' \
+            --min-quote-volume "$CENSUS_MIN_VOLUME" \
+            --opportunity-horizons "$OPPORTUNITY_HORIZONS" \
+            --sample-stride-hours "$ANCHOR_STRIDE_HOURS" \
             --max-samples-per-symbol '${{ github.event.inputs.max_samples_per_symbol || '500' }}' \
             --concurrency '${{ github.event.inputs.concurrency || '4' }}'
-      - name: Train and evaluate daily MLP, GBDT, hybrid, and 24x29 TCN challengers
+      - name: Train risk-aware 72h MLP, GBDT and hybrid challengers separately
+        if: github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113'
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --skip-temporal true \
+            --output artifacts/daily-early-riser-safe-72h-5pct-neural.json
+      - name: Train isolated 24x29 TCN on the same safe first-touch target
+        if: github.ref_name == 'research/daily-early-riser-opportunity-targets-20261113'
+        run: |
+          node phase2/tools/daily-early-riser-neural-benchmark.mjs \
+            --input artifacts/daily-early-riser-samples.jsonl \
+            --temporal-input artifacts/daily-early-riser-temporal-sequences.jsonl \
+            --census-report artifacts/daily-early-riser-census.json \
+            --label-mode safe_opportunity \
+            --horizon-hours 72 \
+            --target 5 \
+            --liquidity-lane STANDARD_750K_PLUS \
+            --tcn-only true \
+            --attention-only true \
+            --output artifacts/daily-early-riser-safe-72h-5pct-tcn.json
+      - name: Train standard daily baseline and neural challengers on legacy census branches
+        if: github.ref_name != 'research/daily-early-riser-opportunity-targets-20261113'
         run: |
           node phase2/tools/daily-early-riser-neural-benchmark.mjs \
             --input artifacts/daily-early-riser-samples.jsonl \
@@ -121,8 +157,10 @@ jobs:
             methodology:report.methodology,
             data_quality:report.data_quality,
             targets:report.targets,
-            daily_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-neural-benchmark.json')
-              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-neural-benchmark.json','utf8')):null,
+            daily_safe_opportunity_neural_benchmark:fs.existsSync('artifacts/daily-early-riser-safe-72h-5pct-neural.json')
+              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-safe-72h-5pct-neural.json','utf8')):null,
+            daily_safe_opportunity_tcn_benchmark:fs.existsSync('artifacts/daily-early-riser-safe-72h-5pct-tcn.json')
+              ?JSON.parse(fs.readFileSync('artifacts/daily-early-riser-safe-72h-5pct-tcn.json','utf8')):null,
             sample_file:report.sample_file,
             temporal_sample_file:report.temporal_sample_file,
             production_touched:report.production_touched===true,
