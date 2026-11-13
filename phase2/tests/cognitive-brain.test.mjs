@@ -352,6 +352,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
     assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
+      'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','HYBRID_WEIGHT_NOT_IDENTIFIABLE',
       'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.hybrid_model.status));
@@ -363,7 +364,7 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
       assert.equal(profile.hybrid_model.selected,true);
       assert.equal(profile.hybrid_model.holdout_comparison.passed,true);
     }
-    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP_W')){
+    if(profile.model_selection.validation_challenger?.startsWith('HYBRID_GBDT_MLP')){
       assert.equal(profile.hybrid_model.holdout?.evaluated,true,
         'the validation winner must expose untouched holdout metrics even when it fails');
       assert.equal(profile.model_selection.challenger_holdout?.evaluated,true);
@@ -983,16 +984,27 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
   assert.ok(ranking.top_10_pct.sample_count>=1);
   assert.ok(ranking.top_20_pct.sample_count>=ranking.top_10_pct.sample_count);
   assert.equal(profile.hybrid_model.trained,true);
-  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,3,
-    'all three pre-declared blend weights must be evaluated on the disjoint inner selection block');
-  assert.deepEqual(profile.hybrid_model.candidate_selection_metrics.map(row=>row.boosted_weight),
-    [0.25,0.5,0.75]);
+  assert.equal(profile.hybrid_model.candidate_selection_metrics.length,1,
+    'one analytically derived convex weight is fitted before its disjoint selection block');
+  const blendCandidate=profile.hybrid_model.candidate_selection_metrics[0];
+  assert.equal(blendCandidate.name,'HYBRID_GBDT_MLP_BRIER_OPTIMAL');
+  assert.ok(Number.isFinite(blendCandidate.boosted_weight)&&
+    blendCandidate.boosted_weight>=0&&blendCandidate.boosted_weight<=1);
+  assert.ok(blendCandidate.weight_fit_sample_count>=20);
+  assert.ok(blendCandidate.weight_fit_start_at<=blendCandidate.weight_fit_end_at);
+  assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
+    'blend-weight fitting labels must finish before its disjoint selection block begins');
+  assert.ok(profile.hybrid_model.weight_fit_samples>=20);
+  assert.ok(profile.hybrid_model.weight_fit_end_at<profile.hybrid_model.weight_fit_cut_at);
   assert.ok(profile.hybrid_model.selection_samples>=20);
+  assert.ok(profile.hybrid_model.weight_fit_cut_at<profile.validation_start_at,
+    'the frozen blend weight must be tested on a later pre-validation block');
   assert.ok(profile.hybrid_model.selection_start_at<profile.validation_start_at,
     'blend-weight selection must finish before outer validation begins');
   assert.ok(profile.hybrid_model.candidate_selection_metrics.every(row=>
     row.selection_sample_count===profile.hybrid_model.selection_samples&&
-    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)));
+    Number.isFinite(row.selection_brier_score)&&Number.isFinite(row.selection_base_rate_brier_score)&&
+    Number.isFinite(row.weight_fit_sample_count)&&row.weight_fit_sample_count===profile.hybrid_model.weight_fit_samples));
   assert.ok(profile.hybrid_model.candidate_validation_metrics.length<=1,
     'only the inner-selected blend weight may reach outer validation');
   if(profile.hybrid_model.candidate_validation_metrics.length===1){
