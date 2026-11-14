@@ -45,7 +45,20 @@ function makeRows({days=20,rowsPerDay=400}={}){
         path_resolution:'1M',observed_candles:240,raw_klines_sha256:'a'.repeat(64),
         baseline_price:100,take_profit_price:103,stop_loss_price:98,
         exit_price:positive?103.4:outcome==='DOWN'?97.7:100.08,
-        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP'
+        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP',
+        exit_candle:outcome==='FLAT'?{
+          open_time:at+1+239*60_000,close_time:at+NEURAL_CLOSURE_HORIZON_MS,
+          open:100.05,high:100.1,low:100.02,close:100.08,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:outcome==='UP'?{
+          open_time:at+1,close_time:at+60_000,
+          open:103.4,high:103.8,low:103.2,close:103.5,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:{
+          open_time:at+1,close_time:at+60_000,
+          open:97.7,high:98,low:97.5,close:97.8,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }
       },
       features:[index/rowsPerDay,day/30]
     });
@@ -175,29 +188,48 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
   const up={
     outcome:'UP',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:3,
-    first_touch:{resolution:'TAKE_PROFIT_FIRST',baseline_price:100,
-      take_profit_price:103,stop_loss_price:98,exit_price:103,exit_price_source:'BARRIER'}
+    first_touch:{resolution:'TAKE_PROFIT_FIRST',first_touch_at:BASE+59_999,
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:103,exit_price_source:'BARRIER',
+      exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
+        open:100,high:103.2,low:99.2,close:102.8,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'}}
   };
   const down={
     outcome:'DOWN',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:-2,
-    first_touch:{resolution:'STOP_LOSS_FIRST',baseline_price:100,
-      take_profit_price:103,stop_loss_price:98,exit_price:98,exit_price_source:'BARRIER'}
+    first_touch:{resolution:'STOP_LOSS_FIRST',first_touch_at:BASE+59_999,
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:98,exit_price_source:'BARRIER',
+      exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
+        open:100,high:102,low:97.8,close:98.3,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'}}
   };
   const flat={
     outcome:'FLAT',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:1.25,
-    first_touch:{resolution:'HORIZON_END',baseline_price:100,
-      take_profit_price:103,stop_loss_price:98,exit_price:101.25,exit_price_source:'HORIZON_CLOSE'}
+    first_touch:{resolution:'HORIZON_END',first_touch_at:BASE+NEURAL_CLOSURE_HORIZON_MS,
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:101.25,exit_price_source:'HORIZON_CLOSE',
+      exit_candle:{open_time:BASE+1+239*60_000,
+        close_time:BASE+NEURAL_CLOSURE_HORIZON_MS,
+        open:101,high:101.5,low:100.8,close:101.25,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'}}
   };
 
   assert.ok(Math.abs(realizedExecutionGrossReturnPct(up)-3)<1e-10);
   assert.ok(Math.abs(realizedExecutionGrossReturnPct(down)+2)<1e-10);
   assertClose(realizedExecutionGrossReturnPct(flat),1.25);
   const gapUp={...up,realized_return_pct:4,first_touch:{...up.first_touch,
-    exit_price:104,exit_price_source:'OPEN_GAP'}};
+    first_touch_at:BASE+1,exit_price:104,exit_price_source:'OPEN_GAP',
+    exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
+      open:104,high:104.2,low:103.9,close:104.1,
+      is_closed:true,source:'BINANCE_PUBLIC_REST'}}};
   const gapDown={...down,realized_return_pct:-3.5,first_touch:{...down.first_touch,
-    exit_price:96.5,exit_price_source:'OPEN_GAP'}};
+    first_touch_at:BASE+1,exit_price:96.5,exit_price_source:'OPEN_GAP',
+    exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
+      open:96.5,high:99,low:96,close:96.8,
+      is_closed:true,source:'BINANCE_PUBLIC_REST'}}};
   assertClose(realizedExecutionGrossReturnPct(gapUp),4);
   assertClose(realizedExecutionGrossReturnPct(gapDown),-3.5);
   const overstatedBarrierFill={...up,realized_return_pct:3.5,first_touch:{...up.first_touch,
