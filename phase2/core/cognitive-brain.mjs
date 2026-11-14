@@ -1554,6 +1554,25 @@ export function isValidCognitiveMlpFit(fit){
 
 
 /** Read-only inference for the selected V5 member on the fixed 4h first-touch cohort. */
+export function predictFourHourCognitiveResearchProbability(features,fitOrModelState){
+  const state=fitOrModelState?.fit??fitOrModelState;
+  const fit=state?.fit??state;
+  const inference=state?.research_inference??fitOrModelState?.research_inference;
+  if(!fit||typeof fit!=='object')return null;
+  if(inference?.mode==='INNER_SELECTED_MEMBER'){
+    const probability=predictFromFit(features,fit);
+    return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+  }
+  if(inference?.mode==='INNER_BEST_DIAGNOSTIC_MEMBER'){
+    const index=Number(inference.index),scale=finite(inference.residual_scale);
+    if(!Number.isInteger(index)||index<0||index>=fit.members?.length||
+      scale===null||scale<=0)return null;
+    const probability=predictFromFit(features,fit.members[index],scale);
+    return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+  }
+  return null;
+}
+
 export function predictFourHourCognitiveChallengerProbability(features,fitOrModelState){
   const fit=fitOrModelState?.fit??fitOrModelState;
   if(!fit||typeof fit!=='object')return null;
@@ -2795,8 +2814,16 @@ export function buildCognitiveLearningProfile(samples = [], {
     ? Number((globalValidation.model_brier_score - recentValidation.model_brier_score).toFixed(5))
     : null;
 
-  const neuralResearchArtifact=sourceCommitSha&&neuralFit&&
-    Number.isInteger(neuralFit.selected_member_index)&&neuralFit.selected_member_index>=0
+  const neuralResearchCandidate=neuralFit&&neuralFit.selected_member_index>=0
+    ?{index:neuralFit.selected_member_index,
+       residual_scale:neuralFit.selected_residual_scale,
+       mode:'INNER_SELECTED_MEMBER'}
+    :neuralBestMemberCandidate&&neuralFit&&neuralBestMemberCandidate.residual_scale>0
+      ?{index:neuralBestMemberCandidate.index,
+         residual_scale:neuralBestMemberCandidate.residual_scale,
+         mode:'INNER_BEST_DIAGNOSTIC_MEMBER'}
+      :null;
+  const neuralResearchArtifact=sourceCommitSha&&neuralFit&&neuralResearchCandidate
     ?createVersionedModelArtifact({
       modelName:'RADARX_COGNITIVE_MLP_V5_FIRST_TOUCH_4H',
       modelFamily:'COGNITIVE_MLP_V5',
@@ -2817,7 +2844,10 @@ export function buildCognitiveLearningProfile(samples = [], {
         feature_names:[...activeFeatureNames],
         normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1',
         selection_residual_scale:neuralFit.selected_residual_scale,
-        probability_calibrator:neuralFit.probability_calibrator??null
+        probability_calibrator:neuralResearchCandidate.mode==='INNER_SELECTED_MEMBER'
+          ?neuralFit.probability_calibrator??null:null,
+        research_inference:neuralResearchCandidate,
+        diagnostic_only:neuralResearchCandidate.mode!=='INNER_SELECTED_MEMBER'
       })
     }):null;
   const hybridResearchArtifact=sourceCommitSha&&hybridFit
