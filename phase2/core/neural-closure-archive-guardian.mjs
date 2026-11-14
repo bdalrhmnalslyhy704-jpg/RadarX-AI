@@ -5,7 +5,7 @@ import { resolve, sep } from 'node:path';
 import { createGunzip } from 'node:zlib';
 
 const SHA256_PATTERN=/^[a-f0-9]{64}$/;
-const ARCHIVE_NAME_PATTERN=/^[A-Z0-9_-]+\\.(?:1m|5m|15m)\\.json\\.gz$/;
+const ARCHIVE_NAME_PATTERN=/^[A-Z0-9_-]+\.(?:1m|5m|15m)\.json\.gz$/;
 
 async function digestStream(stream,code) {
   const hash=createHash('sha256');
