@@ -96,6 +96,21 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
     'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
 });
 
+test('fixed-SHA trainer exports failed-inner TCN-LSTM candidates only as diagnostic outer predictions',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/);
+  assert.match(trainer,/selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
+  assert.match(trainer,/if\(selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/passed:innerQualified/);
+  assert.match(trainer,/inner_selection_qualified:innerQualified/);
+  assert.match(trainer,/diagnostic_only:!innerQualified/);
+  assert.match(trainer,/INNER_BEST_DIAGNOSTIC_ONLY/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.doesNotMatch(trainer,/qualificationByModel\.TCN_LSTM_HYBRID=\{\s*passed:true/,
+    'trainer must never force-pass a diagnostic-only LSTM');
+});
+
 test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the shared Brier benchmark',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/requiredImprovement:0\.00025/);
