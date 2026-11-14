@@ -1315,13 +1315,22 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     closed_candle_baseline:true,
     historical_baseline:false,
     training_eligible:true,
+    market:'BINANCE_SPOT_USDT',
+    source_audit:{
+      exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'VALIDPAIRUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000,
+      observed_candles:240,raw_klines_sha256:'b'.repeat(64)
+    },
     outcome:'UP',
     outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     first_touch:{
       resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+59_999,
-      path_resolution:'1M',observed_candles:240
+      path_resolution:'1M',observed_candles:240,
+      raw_klines_sha256:'b'.repeat(64),
+      baseline_price:100,take_profit_price:103,stop_loss_price:98
     },
     temporal_sequence:Array.from({length:24},(_,time)=>
       Array.from({length:29},(_,channel)=>channel===28?0.65:
@@ -1346,6 +1355,9 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
   const badSource={...row,outcome_source:'HISTORICAL_CLOSED_CANDLE'};
   assert.throws(()=>buildFourHourCognitiveLearningProfile([badSource]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  const badBarrier={...row,first_touch:{...row.first_touch,take_profit_price:104}};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badBarrier]),
     /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
   assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
     modelTargetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
