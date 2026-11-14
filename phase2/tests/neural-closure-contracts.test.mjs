@@ -10,7 +10,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  runNeuralClosureBenchmark
+  runNeuralClosureBenchmark,sha256Canonical,sha256CanonicalArray
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -142,6 +142,34 @@ test('strict four-hour row validation rejects target/source/cutoff drift and dup
   assert.throws(()=>validateFourHourRows(rows.map((row,index)=>index===0
     ?{...row,outcome_source:'MOCK'}:row)),/TARGET_OR_SOURCE_MISMATCH/);
   assert.throws(()=>validateFourHourRows(rows.concat(rows[0])),/DUPLICATE_ID/);
+});
+
+test('row validation drops unused duplicate temporal sequence aliases without changing canonical tensor',()=>{
+  const source=makeRows({days:1,rowsPerDay:1})[0];
+  source.temporal_sequence=[[0.1,0.2],[0.3,0.4]];
+  source.temporal_sequence_timestamps=[100,200];
+  source.sequence=[[0.1,0.2],[0.3,0.4]];
+  source.sequence_timestamps=[100,200];
+  const [validated]=validateFourHourRows([source]);
+  assert.deepEqual(validated.temporal_sequence,source.temporal_sequence);
+  assert.deepEqual(validated.temporal_sequence_timestamps,source.temporal_sequence_timestamps);
+  assert.equal(Object.hasOwn(validated,'sequence'),false);
+  assert.equal(Object.hasOwn(validated,'sequence_timestamps'),false);
+});
+
+test('streamed canonical array SHA exactly matches full canonical JSON SHA',()=>{
+  const values=[
+    {z:3,a:{y:2,x:[1,2]}},
+    {b:false,a:[{q:1,p:'x'}]},
+    [1,'two',null]
+  ];
+  assert.equal(sha256CanonicalArray(values),sha256Canonical(values));
+  const project=value=>({keep:value.a??value[0],flag:value.b??null});
+  assert.equal(
+    sha256CanonicalArray(values,project),
+    sha256Canonical(values.map(project))
+  );
+  assert.equal(sha256CanonicalArray([]),sha256Canonical([]));
 });
 
 test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()=>{
