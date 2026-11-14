@@ -30,7 +30,7 @@ on:
       days:
         description: 'Closed history days (minimum 60)'
         required: true
-        default: '60'
+        default: '90'
         type: string
       max_symbols:
         description: 'Maximum USDT Spot symbols (10–30)'
@@ -70,13 +70,13 @@ jobs:
           node --test phase2/tests/neural-closure-data-builder.test.mjs
       - name: Build a 60-day first-touch cohort from the official public Spot API
         env:
-          DAYS: ${{ inputs.days || '60' }}
+          DAYS: ${{ inputs.days || '90' }}
           MAX_SYMBOLS: ${{ inputs.max_symbols || '20' }}
         run: |
           node --expose-gc --max-old-space-size=768 phase2/tools/build-neural-closure-dataset.mjs \
             --days "$DAYS" \
             --maxSymbols "$MAX_SYMBOLS" \
-            --minSymbols 10 \
+            --minSymbols 19 \
             --minQuoteVolumeUsdt 750000 \
             --output artifacts/neural-closure/dataset.json \
             --archiveDir artifacts/neural-closure/raw
