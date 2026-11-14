@@ -1001,11 +1001,11 @@ export function runNeuralClosureBenchmark({
     }
     const rawMap=verified.map;
     verifiedPredictions.set(modelName,rawMap);
-    const calibration=modelName==='LOGISTIC_REGRESSION'
-      ?{status:'BASELINE_RAW',selected_method:'RAW_LOGISTIC_BASELINE',
-        selected_calibrator:null,support_ready:true,
-        minimum_positive_support_per_block:minimumClassSupport}
-      :chooseCalibration(rawMap,calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
+    // Calibrate the logistic anchor and every neural challenger with the
+    // exact same chronological fit/purge/check rows. Otherwise a neural model
+    // could appear to beat the baseline in Brier only because it was calibrated.
+    const calibration=chooseCalibration(rawMap,
+      calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
         purgedRows:calibrationBlocks.purged,calibrationDays:calibrationBlocks.days
       });
     const validationRows=calibrationBlocks.check;
@@ -1062,6 +1062,7 @@ export function runNeuralClosureBenchmark({
     const gates={
       minimum_holdout_positive_support:holdoutCounts.positive>=minimumClassSupport,
       calibration_class_support:model.calibration.support_ready===true,
+      baseline_calibration_class_support:baseline.calibration?.support_ready===true,
       brier_improvement:improvement>requiredBrierImprovement,
       minimum_oos_trades:candidate.trade_count>=minimumHoldoutTrades,
       minimum_net_win_rate:finite(candidate.win_rate_pct)&&candidate.win_rate_pct>=minimumWinRatePct,
@@ -1096,6 +1097,7 @@ export function runNeuralClosureBenchmark({
   const fixedBenchmarkSha=sha256Canonical({
     source_commit_sha:String(sourceCommitSha).toLowerCase(),
     dataset_sha256:datasetSha,row_count:rows.length,
+    calibration_policy_schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
     qualification_matrix_sha256:qualificationMatrixSha,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     split_schema:split.schema,purge_ms:NEURAL_CLOSURE_PURGE_MS,
@@ -1103,7 +1105,7 @@ export function runNeuralClosureBenchmark({
     prediction_matrix_sha256:predictionMatrixSha
   });
   return {
-    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1',
+    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2',
     status:NEURAL_CLOSURE_MODEL_FAMILIES.some(name=>models[name]?.acceptance?.passed)
       ?'NEURAL_SUPERIORITY_PROVEN':'NEURAL_SUPERIORITY_NOT_PROVEN',
     integrity:{
@@ -1132,7 +1134,18 @@ export function runNeuralClosureBenchmark({
       train_support:trainCounts,validation_support:validationCounts,
       holdout_support:holdoutCounts,
       calibration_fit_rows:calibrationBlocks.fit.length,
+      calibration_purged_rows:calibrationBlocks.purged.length,
       calibration_check_rows:calibrationBlocks.check.length
+    },
+    calibration_policy:{
+      schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+      methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+      selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+      same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+      calibration_fit_rows:calibrationBlocks.fit.length,
+      calibration_purged_rows:calibrationBlocks.purged.length,
+      calibration_check_rows:calibrationBlocks.check.length,
+      holdout_used_for_calibration:false
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,
