@@ -184,13 +184,33 @@ jobs:
           if(brainProfile.feature_schema!=='CROSS_ASSET_EARLY_FLOW_FEATURES_V2'){
             throw new Error('CONTAINER_COGNITIVE_FEATURE_SCHEMA_MISMATCH '+String(brainProfile.feature_schema||'MISSING'));
           }
+          const sharedPhaseNames=['training','member_selection','calibration','validation','holdout'];
+          const temporalStageFingerprints=temporalNetwork.shared_model_stage_fingerprints||{};
+          const neuralStageFingerprints=neuralNetwork.shared_phase_sample_fingerprints||{};
+          const sharedPhaseFingerprintsMatch=sharedPhaseNames.every(phase=>
+            typeof temporalStageFingerprints[phase]==='string'&&
+            temporalStageFingerprints[phase]===neuralStageFingerprints[phase]);
           if(Number(brainProfile.resolved_samples)>0&&
              (sharedComparison.sample_identity_matches!==true||
               sharedComparison.sample_fingerprint!==temporalNetwork.outer_sample_fingerprint||
-              sharedComparison.temporal_sample_fingerprint!==temporalNetwork.outer_sample_fingerprint)){
-            throw new Error('CONTAINER_SHARED_NEURAL_SAMPLE_IDENTITY_MISMATCH '+JSON.stringify({
+              sharedComparison.temporal_sample_fingerprint!==temporalNetwork.outer_sample_fingerprint||
+              sharedComparison.shared_phase_identity_matches!==true||
+              sharedComparison.shared_phase_alignment_ready!==true||
+              neuralNetwork.shared_phase_alignment_ready!==true||
+              !sharedPhaseFingerprintsMatch||
+              Number(neuralNetwork.training_samples)!==Number(temporalNetwork.shared_model_training_samples)||
+              Number(neuralNetwork.selection_samples)!==Number(temporalNetwork.shared_model_selection_samples)||
+              Number(neuralNetwork.calibration_samples)!==Number(temporalNetwork.shared_model_calibration_samples))){
+            throw new Error('CONTAINER_SHARED_NEURAL_PHASE_IDENTITY_MISMATCH '+JSON.stringify({
               cognitive_samples:sharedComparison.sample_fingerprint||null,
-              temporal_samples:temporalNetwork.outer_sample_fingerprint||null
+              temporal_samples:temporalNetwork.outer_sample_fingerprint||null,
+              neural_stage_counts:neuralNetwork.shared_phase_sample_counts||null,
+              temporal_stage_counts:{
+                training:temporalNetwork.shared_model_training_samples,
+                selection:temporalNetwork.shared_model_selection_samples,
+                calibration:temporalNetwork.shared_model_calibration_samples
+              },
+              phase_fingerprints_match:sharedPhaseFingerprintsMatch
             }));
           }
           if(x.cognitive_model_contract!=='RADARX_COGNITIVE_AGENT_V5_TCN_V7'||

@@ -253,18 +253,19 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(profile.neural_network.calibration_check_samples>=20);
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.ok(profile.neural_network.selection_samples >= 20);
-    assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
-    assert.equal(profile.neural_network.scoring_base_rate,profile.neural_network.refit_base_rate,
-      'Brier baseline must use the final refit training prevalence, not the pre-refit ensemble prevalence');
-    assert.equal(profile.neural_network.refit_positive_samples+profile.neural_network.refit_negative_samples,
-      profile.neural_network.refit_training_samples);
-    assert.ok(Math.abs(profile.neural_network.refit_base_rate-
-      ((profile.neural_network.refit_positive_samples+2)/(profile.neural_network.refit_training_samples+4)))<1e-12,
-      'reported refit prevalence must match the final refit labels');
-    assert.ok(profile.neural_network.refit_training_samples<=profile.neural_network.maximum_training_sample_budget);
-    assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
-    assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
-      'all refit labels must mature before the independent calibration block begins');
+    assert.equal(profile.neural_network.refit_training_samples,0,
+      'member selection must not add rows to gradient training');
+    assert.equal(profile.neural_network.training_samples,profile.neural_network.preselection_training_samples);
+    assert.equal(profile.neural_network.scoring_base_rate,profile.neural_network.training_only_base_rate,
+      'Brier baseline must use the same training-only rows as the fitted neural weights');
+    assert.equal(profile.neural_network.training_only_positive_samples+
+      profile.neural_network.training_only_negative_samples,profile.neural_network.training_samples);
+    assert.ok(Math.abs(profile.neural_network.training_only_base_rate-
+      ((profile.neural_network.training_only_positive_samples+2)/
+       (profile.neural_network.training_samples+4)))<1e-12,
+      'reported training prior must match the exact neural fit labels');
+    assert.ok(profile.neural_network.training_samples<=profile.neural_network.maximum_training_sample_budget);
+    assert.equal(profile.neural_network.max_refit_training_outcome_resolved_at,null);
     assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
       'V5 fitting labels must be resolved before the separate selection block');
     assert.ok(profile.neural_network.max_selection_outcome_resolved_at < profile.validation_start_at,

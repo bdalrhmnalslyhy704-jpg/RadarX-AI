@@ -48,6 +48,216 @@ test('high-activity historical watch shadow recognizes verified buyer flow while
   }),false,'strong flow without emerging price structure remains blocked');
 });
 
+test('historical replay preserves metrics from radar-specific analysis objects, not only strong_move alerts',()=>{
+  const rows=candles(300);
+  const source=rows[200];
+  const replay=runHistoricalReplay({
+    symbol:'IOSTUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:source.openTime,
+    endTime:source.closeTime,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    allowCandleOnlyFallback:true,
+    evaluate(){
+      return {
+        accepted:false,
+        candidate_detected:true,
+        candidate_mode:'LIQUIDITY_ABSORPTION_RADAR_CANDIDATE_SHADOW',
+        candidate_eligible:true,
+        alert:{
+          symbol:'IOSTUSDT',
+          radar:'LIQUIDITY_ABSORPTION_RADAR',
+          eligible:true,
+          data_quality:90,
+          closed_candles_only:true,
+          analysis:{
+            eligible:false,
+            score:69.9,
+            metrics:{
+              absorption_score:84.2,
+              depth_imbalance:0.32,
+              spread_bps:4.2,
+              taker_buy_ratio:0.63,
+              volume_ratio:2.4,
+              net_move_pct:0.8,
+              structure_score:77
+            }
+          }
+        },
+        reason_codes:['CANDLE_ONLY_MICROSTRUCTURE_PROXY']
+      };
+    }
+  });
+  assert.equal(replay.steps.length,1);
+  const row=replay.steps[0];
+  assert.equal(row.candidate_detected,true);
+  assert.equal(row.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(row.signal_metrics.volume_ratio,2.4);
+  assert.equal(row.signal_metrics.taker_buy_ratio_1m_3m,0.63);
+  assert.equal(row.market_evidence.spread_bps,4.2);
+  assert.equal(row.profile_metrics.absorption_score,84.2);
+  assert.equal(row.profile_metrics.depth_imbalance,0.32);
+  assert.equal(row.profile_metrics.net_move_pct,0.8);
+  assert.equal(row.profile_metrics.structure_score,77);
+  assert.equal(row.market_evidence.liquidity_quality,null,
+    'profile metrics must not be misrepresented as historical order-book liquidity quality');
+});
+
+test('historical replay normalizes Falcon Eye Bollinger, ATR, momentum and relative-strength metrics',()=>{
+  const rows=candles(300);
+  const source=rows[205];
+  const replay=runHistoricalReplay({
+    symbol:'IOSTUSDT',
+    oneMinuteCandles:rows,
+    aggTrades:syntheticTrades(rows),
+    startTime:source.openTime,
+    endTime:source.closeTime,
+    outcomeHorizonMs:0,
+    tradeCoverageComplete:true,
+    allowCandleOnlyFallback:true,
+    evaluate(){
+      return {
+        accepted:false,
+        candidate_detected:true,
+        candidate_mode:'FALCON_EYE_RADAR_CANDIDATE_SHADOW',
+        candidate_eligible:true,
+        alert:{
+          symbol:'IOSTUSDT',
+          radar:'FALCON_EYE_RADAR',
+          eligible:true,
+          data_quality:90,
+          closed_candles_only:true,
+          analysis:{
+            eligible:true,
+            score:78.9,
+            metrics:{
+              return_1m:0.18,
+              return_3m:0.43,
+              volume_ratio:3.4,
+              trade_ratio:2.1,
+              taker_buy_ratio:0.67,
+              bollinger_width:0.013,
+              bollinger_ratio:1.4,
+              atr_ratio:1.25,
+              efficiency_ratio:0.68,
+              vwap_distance_pct:0.35,
+              relative_strength_15m_spread_pct:0.72,
+              relative_strength_5m_spread_pct:0.44
+            }
+          }
+        },
+        reason_codes:['HISTORICAL_CANDIDATE_DETECTED']
+      };
+    }
+  });
+  const row=replay.steps[0];
+  assert.equal(row.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(row.signal_metrics.return_1m_pct,0.18);
+  assert.equal(row.signal_metrics.return_3m_pct,0.43);
+  assert.equal(row.signal_metrics.bb_expansion_ratio,1.4);
+  assert.equal(row.signal_metrics.atr_ratio,1.25);
+  assert.equal(row.signal_metrics.efficiency_ratio,0.68);
+  assert.equal(row.signal_metrics.vwap_distance_pct,0.35);
+  assert.equal(row.market_evidence.relative_strength_vs_market_pct,0.72);
+  assert.equal(row.profile_metrics.bollinger_ratio,1.4);
+  assert.equal(row.market_evidence.liquidity_quality,null);
+  assert.equal(row.profile_orderbook_historical_available,null,
+    'no order-book group and no explicit archive claim means unknown, not available');
+});
+
+test('historical replay preserves grouped Whale, Kahir and Rotation-Lag analysis evidence',()=>{
+  const rows=candles(300);
+  const source=rows[210];
+  const run=(symbol,alert,limits=[])=>runHistoricalReplay({
+    symbol,oneMinuteCandles:rows,aggTrades:syntheticTrades(rows),
+    startTime:source.openTime,endTime:source.closeTime,
+    outcomeHorizonMs:0,tradeCoverageComplete:true,allowCandleOnlyFallback:true,
+    evaluate:()=>({
+      accepted:false,candidate_detected:true,candidate_mode:symbol+'_CANDIDATE_SHADOW',
+      candidate_eligible:true,alert,
+      notificationGate:{eligible:null,failures:limits}
+    })
+  }).steps[0];
+
+  const whale=run('WHALEUSDT',{
+    symbol:'WHALEUSDT',radar:'WHALE_ACCUMULATION_RADAR',eligible:true,data_quality:90,
+    analysis:{
+      eligible:false,score:82,confirmation_count:9,confirmation_total:16,
+      large_prints:{score:88,largeCount:6,largeBuyRatio:0.71,largeNotionalRatio:0.18,repeatBuyScore:79},
+      candle_flow:{volumeRatio:2.1,takerBuyRatio:0.64,absorptionScore:74,higherLowScore:68},
+      orderbook:{spreadBps:null,nearBid:0,nearAsk:0,nearImbalance:0,midImbalance:0,totalNear:0},
+      orderbook_persistence:{score:50,has_previous:false},
+      price_context:{price:1.2,price_change_24h:1.4,five_minute_move_pct:0.25,quiet_24h:true,not_extended:true},
+      support_score:65,stability_score:79
+    }
+  },['HISTORICAL_ORDERBOOK_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']);
+  assert.equal(whale.profile_metrics_source,'alert.profile_analysis.groups');
+  assert.equal(whale.signal_metrics.volume_ratio,2.1);
+  assert.equal(whale.signal_metrics.taker_buy_ratio_1m_3m,0.64);
+  assert.equal(whale.signal_metrics.independent_confirmations,9);
+  assert.equal(whale.signal_metrics.flash_score,null,
+    'large-print score must not be mislabeled as the Strong Move flash score');
+  assert.equal(whale.signal_metrics.flash_confirmations,null,
+    'large print count must not be mislabeled as flash confirmations');
+  assert.equal(whale.signal_metrics.large_print_score,88);
+  assert.equal(whale.signal_metrics.large_print_count,6);
+  assert.equal(whale.signal_metrics.large_print_buy_ratio,0.71);
+  assert.equal(whale.signal_metrics.large_print_notional_ratio,0.18);
+  assert.equal(whale.signal_metrics.absorption_score,74);
+  assert.equal(whale.signal_metrics.support_score,65);
+  assert.equal(whale.profile_metric_groups.large_prints.largeBuyRatio,0.71);
+  assert.equal(whale.profile_metric_groups.candle_flow.absorptionScore,74);
+  assert.equal(whale.profile_orderbook_historical_available,false);
+  assert.ok(whale.profile_evidence_limitations.includes('HISTORICAL_ORDERBOOK_UNAVAILABLE'));
+  assert.equal(whale.market_evidence.liquidity_quality,null);
+
+  const kahir=run('KAHIRUSDT',{
+    symbol:'KAHIRUSDT',radar:'KAHIR_RADAR',eligible:true,data_quality:90,
+    kahir_analysis:{
+      eligible:true,score:84,confirmation_count:7,
+      metrics:{
+        one_minute_return_pct:0.24,five_minute_return_pct:0.61,
+        one_minute_z:2.1,five_minute_z:1.8,volume_ratio:1.9,trade_ratio:1.5,
+        atr_ratio:1.2,efficiency:0.63,range_acceptance_pct:76,
+        persistence_score:82,self_acceleration_pct:0.27,
+        relative_acceleration_bps:4.2,market_velocity_bps:1.1
+      },
+      algorithms:{PARTICIPATION_REGIME:{volume_ratio:1.9,trade_ratio:1.5}}
+    }
+  });
+  assert.equal(kahir.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(kahir.signal_metrics.return_1m_pct,0.24);
+  assert.equal(kahir.signal_metrics.return_5m_pct,0.61);
+  assert.equal(kahir.signal_metrics.efficiency_ratio,0.63);
+  assert.equal(kahir.signal_metrics.range_acceptance_pct,76);
+  assert.equal(kahir.signal_metrics.persistence_score,82);
+  assert.equal(kahir.signal_metrics.relative_acceleration_bps,4.2);
+  assert.equal(kahir.profile_metric_groups.algorithms.PARTICIPATION_REGIME.volume_ratio,1.9);
+
+  const rotation=run('ROTUSDT',{
+    symbol:'ROTUSDT',radar:'ROTATION_LAG_RADAR',eligible:true,data_quality:90,
+    rotation:{
+      eligible:true,watch_eligible:false,score:79,confirmations:5,
+      metrics:{
+        return_15m:0.3,return_30m:0.85,return_60m:1.2,return_2h:1.8,
+        market_return_15m:0.1,relative_30m_pct:0.5,relative_2h_pct:0.9,
+        volume_ratio:1.7,trade_ratio:1.4,taker_buy_ratio:0.66,taker_buy_delta:0.12,
+        range_ratio:0.7,vwap_distance_pct:0.3,close_location_pct:82,
+        value_acceptance_score:75,path_persistence:84,resilience_score:79
+      },
+      component_scores:{lag:81,resilience:79,silent_volume:72}
+    }
+  });
+  assert.equal(rotation.profile_metrics_source,'alert.profile_analysis.metrics');
+  assert.equal(rotation.signal_metrics.return_15m_pct,0.3);
+  assert.equal(rotation.signal_metrics.return_3m_pct,null);
+  assert.equal(rotation.signal_metrics.taker_buy_ratio_1m_3m,0.66);
+  assert.equal(rotation.market_evidence.relative_strength_vs_market_pct,0.5);
+  assert.equal(rotation.profile_metric_groups.component_scores.lag,81);
+});
+
 test('CLI replay window count excludes the next candle that has not closed',()=>{
   const start=Date.UTC(2024,10,6,0,0,0,0);
   const nextOpen=Date.UTC(2024,10,6,6,0,0,0);
