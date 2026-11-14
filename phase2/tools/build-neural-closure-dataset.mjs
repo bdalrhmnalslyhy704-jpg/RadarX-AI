@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,unlink} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
-import {gzipSync} from 'node:zlib';
+import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
   NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
@@ -206,21 +206,6 @@ async function fetchKlines(symbol,interval,startTime,endTime,intervalMs,serverTi
 }
 const num=value=>value===null||value===undefined||value===''?null:Number(value);
 
-async function writeRawArchive(symbol,interval,rawRows,archiveDir){
-  const rawBytes=Buffer.from(JSON.stringify({
-    schema:'BINANCE_SPOT_RAW_KLINE_ARCHIVE_V1',symbol,interval,rows:rawRows
-  }));
-  const compressed=gzipSync(rawBytes,{level:9});
-  const filename=symbol+'.'+interval+'.json.gz';
-  await writeFile(join(archiveDir,filename),compressed);
-  return {
-    file:filename,raw_sha256:sha256(rawBytes),
-    compressed_sha256:sha256(compressed),
-    raw_bytes:rawBytes.length,compressed_bytes:compressed.length,
-    row_count:rawRows.length
-  };
-}
-
 function liquidityUniverse(exchangeInfo,tickers,{minimumQuoteVolume,maxSymbols}){
   const tickerMap=new Map(tickers.map(item=>[String(item.symbol),item]));
   const allowed=exchangeInfo.symbols.filter(item=>
@@ -274,15 +259,14 @@ async function main(){
   const rejectedCounts={};
   const pageCounts={};
   let btcFifteenMinute=null;
-  let btcFifteenMinuteRaw=null;
 
-  // Fetch BTC's 15m feature context first; it is reused unchanged for every pair.
+  // Fetch, archive and release BTC's raw 15m rows immediately. Only the parsed
+  // closed-candle context remains resident for reuse across the symbol universe.
   {
     const btc=await fetchKlines('BTCUSDT','15m',
       schedule.fifteen_minute_start_open_at,
       schedule.fifteen_minute_end_open_at,15*60_000,serverTimeAtStart);
     btcFifteenMinute=btc.candles;
-    btcFifteenMinuteRaw=btc.rawRows;
     const coverage=verifyNeuralClosureRawCoverage({
       minuteCandles:[],fiveMinuteCandles:[],
       fifteenMinuteCandles:btcFifteenMinute,
@@ -295,29 +279,58 @@ async function main(){
     });
     if(!coverage.checks.fifteen_minute.valid)
       throw new Error('BTC_15M_FEATURE_ARCHIVE_INCOMPLETE:'+coverage.checks.fifteen_minute.reason);
-    const archive=await writeRawArchive('BTCUSDT','15m',btc.rawRows,archiveDir);
+    const archive=await writeRawSpotKlineArchive({
+      symbol:'BTCUSDT',interval:'15m',rawRows:btc.rawRows,archiveDir
+    });
     rawArchiveRecords.push({symbol:'BTCUSDT',interval:'15m',...archive});
     pageCounts.BTCUSDT_15m=btc.request_pages;
+    btc.rawRows=null;
   }
 
   let includedSymbolCount=0;
   for(const asset of universe.selected){
-    // Scope every candle and raw-row array to one symbol. The explicit GC in
-    // finally runs only after those references leave scope, including on
-    // coverage rejection or any early continue.
+    // Archive each interval as soon as it is fetched, then release its raw
+    // Binance rows before requesting the next interval. Pending archives are
+    // removed if candle coverage or valid-event support later rejects a symbol.
+    const pendingArchives=[];
     try{
     const symbol=asset.symbol;
     const minute=await fetchKlines(symbol,'1m',
       schedule.one_minute_start_open_at,schedule.one_minute_end_open_at,
       60_000,serverTimeAtStart);
+    pendingArchives.push({
+      symbol,interval:'1m',
+      ...await writeRawSpotKlineArchive({
+        symbol,interval:'1m',rawRows:minute.rawRows,archiveDir
+      })
+    });
+    minute.rawRows=null;
+
     const five=await fetchKlines(symbol,'5m',
       schedule.five_minute_start_open_at,schedule.five_minute_end_open_at,
       5*60_000,serverTimeAtStart);
+    pendingArchives.push({
+      symbol,interval:'5m',
+      ...await writeRawSpotKlineArchive({
+        symbol,interval:'5m',rawRows:five.rawRows,archiveDir
+      })
+    });
+    five.rawRows=null;
+
     const fifteen=symbol==='BTCUSDT'
-      ?{rawRows:btcFifteenMinuteRaw,candles:btcFifteenMinute,request_pages:0}
+      ?{rawRows:null,candles:btcFifteenMinute,request_pages:0}
       :await fetchKlines(symbol,'15m',
         schedule.fifteen_minute_start_open_at,schedule.fifteen_minute_end_open_at,
         15*60_000,serverTimeAtStart);
+    if(symbol!=='BTCUSDT'){
+      pendingArchives.push({
+        symbol,interval:'15m',
+        ...await writeRawSpotKlineArchive({
+          symbol,interval:'15m',rawRows:fifteen.rawRows,archiveDir
+        })
+      });
+      fifteen.rawRows=null;
+    }
     const coverage=verifyNeuralClosureRawCoverage({
       minuteCandles:minute.candles,fiveMinuteCandles:five.candles,
       fifteenMinuteCandles:fifteen.candles,
@@ -374,13 +387,11 @@ async function main(){
       valid_events:symbolRows.length,rejected_events:symbolRejected,
       coverage:coverage.checks
     });
-    for(const [interval,result] of [
-      ['1m',minute],['5m',five],...(symbol==='BTCUSDT'?[]:[['15m',fifteen]])
-    ]){
-      const archive=await writeRawArchive(symbol,interval,result.rawRows,archiveDir);
-      rawArchiveRecords.push({symbol,interval,...archive});
-      pageCounts[symbol+'_'+interval]=result.request_pages;
-    }
+    rawArchiveRecords.push(...pendingArchives);
+    pendingArchives.length=0;
+    pageCounts[symbol+'_1m']=minute.request_pages;
+    pageCounts[symbol+'_5m']=five.request_pages;
+    if(symbol!=='BTCUSDT')pageCounts[symbol+'_15m']=fifteen.request_pages;
     includedSymbolCount++;
     const memory=process.memoryUsage();
     console.log(JSON.stringify({
@@ -392,12 +403,19 @@ async function main(){
       external_mb:Math.round(memory.external/1024/1024)
     }));
     }finally{
+      // If any fetch, coverage or event-support gate failed, discard every
+      // partial interval archive. A symbol enters the dataset and its manifest
+      // only after the complete three-interval audit passes.
+      if(pendingArchives.length){
+        await Promise.all(pendingArchives.map(item=>
+          unlink(join(archiveDir,item.file)).catch(()=>{})
+        ));
+      }
       // The symbol-local candle arrays are now unreachable before collection.
       if(global.gc)global.gc();
     }
   }
 
-  btcFifteenMinuteRaw=null;
   btcFifteenMinute=null;
   const included=symbolSummaries.filter(item=>item.status==='INCLUDED');
   if(included.length<args.minSymbols)
