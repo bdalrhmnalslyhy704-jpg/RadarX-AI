@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -8,6 +9,13 @@ import {
 import {validateFourHourRows,NEURAL_CLOSURE_HORIZON_MS} from '../core/neural-closure-contracts.mjs';
 
 const FIFTEEN=15*60_000,FIVE=5*60_000,MINUTE=60_000;
+
+test('dataset runner imports the canonical 4h horizon before writing target metadata',async()=>{
+  const source=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
+  assert.match(source,/import\\s*\\{[\\s\\S]*NEURAL_CLOSURE_HORIZON_MS[\\s\\S]*\\}\\s*from\\s*['"]\\.\\.\\/core\\/neural-closure-contracts\\.mjs['"]/);
+  assert.match(source,/horizon_ms:\\s*NEURAL_CLOSURE_HORIZON_MS/);
+  assert.equal(NEURAL_CLOSURE_HORIZON_MS,4*60*60_000);
+});
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
   const close=base+step;
   const high=close*1.002,low=close*0.998;
