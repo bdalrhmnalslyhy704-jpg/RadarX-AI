@@ -12,8 +12,9 @@ const FIFTEEN=15*60_000,FIVE=5*60_000,MINUTE=60_000;
 
 test('dataset runner imports the canonical 4h horizon before writing target metadata',async()=>{
   const source=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
-  assert.match(source,/import\\s*\\{[\\s\\S]*NEURAL_CLOSURE_HORIZON_MS[\\s\\S]*\\}\\s*from\\s*['"]\\.\\.\\/core\\/neural-closure-contracts\\.mjs['"]/);
-  assert.match(source,/horizon_ms:\\s*NEURAL_CLOSURE_HORIZON_MS/);
+  assert.ok(source.includes('NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT'));
+  assert.ok(source.includes("from '../core/neural-closure-contracts.mjs'"));
+  assert.ok(source.includes('horizon_ms:NEURAL_CLOSURE_HORIZON_MS'));
   assert.equal(NEURAL_CLOSURE_HORIZON_MS,4*60*60_000);
 });
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
