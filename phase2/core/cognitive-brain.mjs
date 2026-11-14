@@ -1554,13 +1554,20 @@ export function isValidCognitiveMlpFit(fit){
 
 
 /** Read-only inference for the selected V5 member on the fixed 4h first-touch cohort. */
+export function predictFourHourCognitiveChallengerProbability(features,fitOrModelState){
+  const fit=fitOrModelState?.fit??fitOrModelState;
+  if(!fit||typeof fit!=='object')return null;
+  const probability=predictFromFit(features,fit);
+  return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+}
+
 export function predictFourHourCognitiveMlpProbability(features,fitOrModelState){
   const fit=fitOrModelState?.fit??fitOrModelState;
   if(fit?.kind!=='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'||
     !Number.isInteger(fit.selected_member_index)||
     fit.selected_member_index<0||
     !Number.isFinite(Number(fit.selected_residual_scale)))return null;
-  return predictFromFit(features,fit);
+  return predictFourHourCognitiveChallengerProbability(features,fit);
 }
 
 function predictFromFit(features, fit, residualScale=1) {
@@ -2813,6 +2820,25 @@ export function buildCognitiveLearningProfile(samples = [], {
         probability_calibrator:neuralFit.probability_calibrator??null
       })
     }):null;
+  const hybridResearchArtifact=sourceCommitSha&&hybridFit
+    ?createVersionedModelArtifact({
+      modelName:'RADARX_MLP_GBDT_HYBRID_FIRST_TOUCH_4H',
+      modelFamily:'MLP_GBDT_HYBRID',
+      modelVersion:'MLP_GBDT_HYBRID_4H_V1',
+      sourceCommitSha,
+      targetDefinition:modelTargetDefinition,
+      targetSemantics:modelTargetSemantics,
+      featureSchemaId:activeFeatureSchema,
+      featureNames:[...activeFeatureNames],
+      featureIndexMap:Object.fromEntries(activeFeatureNames.map((name,index)=>[name,index])),
+      normalization:{mean:activeFeatureNames.map(()=>0),std:activeFeatureNames.map(()=>1)},
+      modelState:researchArtifactSafeValue({
+        fit:hybridFit,
+        feature_schema:activeFeatureSchema,
+        feature_names:[...activeFeatureNames],
+        normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1'
+      })
+    }):null;
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
     feature_schema:activeFeatureSchema,
@@ -3160,8 +3186,10 @@ export function buildCognitiveLearningProfile(samples = [], {
         ? 'RANKING_EVIDENCE_READY_BUT_NESTED_VALIDATION_NOT_PASSED'
         : 'INSUFFICIENT_MATURED_OUTCOMES_OR_FACTOR_COVERAGE_AFTER_PURGING',
     _fit: selectedFit,
-    research_artifacts:neuralResearchArtifact
-      ?{COGNITIVE_MLP_V5:neuralResearchArtifact}:{}
+    research_artifacts:{
+      ...(neuralResearchArtifact?{COGNITIVE_MLP_V5:neuralResearchArtifact}:{}),
+      ...(hybridResearchArtifact?{MLP_GBDT_HYBRID:hybridResearchArtifact}:{})
+    }
   };
 }
 
