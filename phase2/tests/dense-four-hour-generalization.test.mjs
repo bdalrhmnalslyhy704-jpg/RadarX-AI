@@ -5,7 +5,7 @@ import {
   NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,
   NEURAL_CLOSURE_OUTCOME_SOURCE,
-  NEURAL_CLOSURE_HORIZON_MS
+  NEURAL_CLOSURE_HORIZON_MS,splitFourHourRows
 } from '../core/neural-closure-contracts.mjs';
 import {
   DENSE_FOUR_HOUR_SCHEMA,
@@ -133,7 +133,14 @@ test('Dense 4h accepts only the same audited first-touch cohort used by V5 and T
 test('Dense 4h uses chronological 60/20/20 partitions with full-day purge and maturity guards',()=>{
   const prepared=validateAndPrepareDense4hRows(makeCohort());
   const split=splitDense4hChronologically(prepared.rows);
+  const shared=splitFourHourRows(prepared.rows);
   assert.equal(split.status,'READY');
+  for(const name of ['train','validation','holdout']){
+    const denseIds=split[name].map(row=>row.id).sort();
+    const sharedIds=shared[name].map(row=>row.id).sort();
+    assert.deepEqual(denseIds,sharedIds,
+      'Dense and shared fixed-SHA partitions must contain identical row IDs for '+name);
+  }
   assert.ok(split.train.length>=450);
   assert.ok(split.validation.length>=130);
   assert.ok(split.holdout.length>=140);
