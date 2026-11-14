@@ -1333,7 +1333,7 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     first_touch:{
-      resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+59_999,
+      resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+60_000,
       path_resolution:'1M',observed_candles:240,
       raw_klines_sha256:'b'.repeat(64),
       baseline_price:100,take_profit_price:103,stop_loss_price:98,
@@ -1368,6 +1368,10 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
   const badBarrier={...row,first_touch:{...row.first_touch,take_profit_price:104}};
   assert.throws(()=>buildFourHourCognitiveLearningProfile([badBarrier]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  const badExitCandle={...row,first_touch:{...row.first_touch,
+    exit_candle:{...row.first_touch.exit_candle,high:102.9}}};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badExitCandle]),
     /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
   assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
     modelTargetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
