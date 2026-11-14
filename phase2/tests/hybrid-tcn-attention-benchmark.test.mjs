@@ -915,7 +915,7 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
         observed_candles:240,raw_klines_sha256:'a'.repeat(64)
       },
       first_touch:{
-        resolution,first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
+        resolution,first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+1,
         path_resolution:'1M',observed_candles:240,
         raw_klines_sha256:'a'.repeat(64),
         baseline_price:100,take_profit_price:103,stop_loss_price:98,
