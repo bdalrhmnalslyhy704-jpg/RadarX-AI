@@ -281,10 +281,10 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     // denominators are zero or its buy-flow ratios are invalid. That is an
     // optional microstructure failure, not a reason to discard valid 15m/BTC
     // context. Downgrade only this step to an explicit zero-filled mask.
-    const microMetricsValid=>(microAvailable&&microBaseVolume>0&&microBaseTrades>0&&
+    const microMetricsValid=microAvailable&&microBaseVolume>0&&microBaseTrades>0&&
       microBaseRange>0&&microBaseBuyShare>=0&&microBaseBuyShare<=1&&
       microBuyShare>=0&&microBuyShare<=1&&microCurrentVolume>0&&
-      microCurrentTrades>0&&microCurrentRange>0);
+      microCurrentTrades>0&&microCurrentRange>0;
     if(microAvailable&&!microMetricsValid){
       microAvailable=false;
       microBase.length=0;
