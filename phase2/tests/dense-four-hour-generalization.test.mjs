@@ -76,7 +76,10 @@ function makeAuditedRow(day,index){
     };
   });
   const label=buildFourHourFirstTouchOutcome({
-    id:symbol+':'+at,symbol,baselineAt:at,baselinePrice:100,candles
+    id:symbol+':'+at,symbol,baselineAt:at,baselinePrice:100,candles,
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol,
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000}
   });
   assert.equal(label.outcome,outcome);
   return {
