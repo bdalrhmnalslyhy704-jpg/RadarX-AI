@@ -2534,9 +2534,11 @@ function fitRegimeLocalTemporalTcn({
 
 function regimeOfSequence(sequence){
   const last=Array.isArray(sequence)?sequence[TEMPORAL_SEQUENCE_STEPS-1]:null;
-  const btc24h=finite(last?.[19]);
-  if(btc24h===null)return null;
-  return btc24h>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
+  // Channel 19 is the explicit 12-bar (3h) BTC return, not the old
+  // order-book availability mask. Its sign defines the risk regime.
+  const btcTrend3h=finite(last?.[19]);
+  if(btcTrend3h===null)return null;
+  return btcTrend3h>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
 }
 
 export function buildTemporalNeuralProfile(samples = [], {
