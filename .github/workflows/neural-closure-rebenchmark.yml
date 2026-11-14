@@ -36,9 +36,9 @@ jobs:
       - name: Download the original 180-day collector artifact
         uses: actions/download-artifact@v4
         with:
-          name: radarx-build224-neural-closure-dataset-f8fc881ae6680434cd9c74602ca67eff17dc44fb
+          name: radarx-build224-neural-closure-dataset-9e3428ccc3418129669115fb1ef4fe776fe9863f
           repository: ${{ github.repository }}
-          run-id: 43612945901
+          run-id: 43615816264
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: artifacts/source-run-73
       - name: Verify the archived dataset and corrected evaluator
@@ -46,7 +46,23 @@ jobs:
           test -s artifacts/source-run-73/dataset.json
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
-          node -e "const d=require('./artifacts/source-run-73/dataset.json'); if(!Array.isArray(d.rows)||d.rows.length<600) process.exit(2); console.log(JSON.stringify({schema:d.schema,rows:d.rows.length,dataset_sha256:d.dataset_sha256,source_commit_sha:d.source_commit_sha,universe:d.universe?.symbols?.length,scope_warning:d.universe?.survivorship_bias_warning}));"
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          const d = JSON.parse(await readFile('artifacts/source-run-73/dataset.json', 'utf8'));
+          const errors = [];
+          if (d.source_commit_sha !== '9e3428ccc3418129669115fb1ef4fe776fe9863f') errors.push('SOURCE_SHA_MISMATCH');
+          if (!Array.isArray(d.rows) || d.rows.length < 600) errors.push('DATASET_ROWS_BELOW_600');
+          if (Number(d.counts?.included_symbols) < 25) errors.push('INCLUDED_SYMBOLS_BELOW_25');
+          if (Number(d.universe?.minimum_quote_volume_24h_usdt) !== 750000) errors.push('LIQUIDITY_FLOOR_MISMATCH');
+          if (d.universe?.survivorship_bias_warning !== true) errors.push('SURVIVORSHIP_SCOPE_WARNING_MISSING');
+          if (Number(d.target?.take_profit_pct) !== 3 || Number(d.target?.stop_loss_pct) !== 2) errors.push('TARGET_BARRIER_MISMATCH');
+          if (Number(d.target?.horizon_ms) !== 14400000) errors.push('TARGET_HORIZON_MISMATCH');
+          if (!/^[a-f0-9]{64}$/.test(String(d.dataset_sha256))) errors.push('DATASET_SHA_INVALID');
+          if (errors.length) throw new Error(errors.join(','));
+          console.log(JSON.stringify({schema:d.schema,rows:d.rows.length,dataset_sha256:d.dataset_sha256,
+            source_commit_sha:d.source_commit_sha,included_symbols:d.counts.included_symbols,
+            scope_warning:d.universe.survivorship_bias_warning,target:d.target}));
+          NODE
       - name: Train and benchmark with equal calibration parity
         env:
           NODE_OPTIONS: --max-old-space-size=3072
