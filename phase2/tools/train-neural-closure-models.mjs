@@ -38,7 +38,7 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V1';
+const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V2';
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -303,7 +303,8 @@ async function main(){
       training_samples:cognitiveProfile.neural_network?.training_samples??0,
       selection_logistic_brier:cognitiveProfile.neural_network?.internal_selection_logistic_brier??null,
       selection_required_margin:cognitiveProfile.neural_network?.internal_selection_required_margin??null,
-      best_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+      best_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
+      inner_selection_diagnostics:cognitiveProfile.neural_network?.inner_selection_diagnostics??null,
       member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[],
       validation_comparison:cognitiveProfile.neural_network?.validation_comparison??null,
       holdout_comparison:cognitiveProfile.neural_network?.holdout_comparison??null
@@ -335,7 +336,7 @@ async function main(){
   }else unavailable.COGNITIVE_MLP_V5={
     reason:cognitiveProfile.neural_network?.status??'NO_INNER_SELECTED_MLP_ARTIFACT',
     probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
-    best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+    best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
     member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[]
   };
 
@@ -380,7 +381,8 @@ async function main(){
       diagnostic_member_index:specialist.diagnostic_member_index??null,
       diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
       selection_scores:specialist.member_selection_scores??[],
-      selection_logistic_brier:specialist.selection_logistic_brier??null,
+      selection_logistic_brier:specialist.member_selection_logistic_brier??null,
+      selection_logistic_ranking_metrics:specialist.member_selection_logistic_ranking_metrics??null,
       validation_passed:specialist.validation_passed===true,
       holdout_passed:specialist.holdout_passed===true
     }]))
