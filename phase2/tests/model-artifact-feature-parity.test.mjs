@@ -4,7 +4,7 @@ import {createVersionedModelArtifact,verifyVersionedModelArtifact}
   from '../core/model-artifact-guardian.mjs';
 import {buildFeatureSchemaFingerprint,createFeatureParityGuardian,FeatureParityError}
   from '../core/feature-parity-guardian.mjs';
-import {NEURAL_CLOSURE_TARGET_DEFINITION} from '../core/neural-closure-contracts.mjs';
+import {NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS} from '../core/neural-closure-contracts.mjs';
 
 function artifact(){
   return createVersionedModelArtifact({
@@ -44,10 +44,13 @@ test('versioned artifact embeds exact feature mapping and tamper-evident weights
     expectedSourceCommitSha:'c'.repeat(40)
   });
   assert.equal(verified.valid,true);
+  assert.equal(manifest.target_semantics,NEURAL_CLOSURE_TARGET_SEMANTICS);
   assert.deepEqual(verified.model_state,{projection:[[0.1,0.2],[0.3,0.4]],bias:[0.01,0.02]});
   const changed={...manifest,weights_base64:manifest.weights_base64.slice(0,-4)+'AAAA'};
   assert.equal(verifyVersionedModelArtifact(changed).valid,false);
   const wrongTarget={...manifest,target_definition:'OTHER'};
+  const wrongSemantics={...manifest,target_semantics:'LEGACY_CLOSE_ONLY'};
+  assert.equal(verifyVersionedModelArtifact(wrongSemantics).reason,'MODEL_ARTIFACT_TARGET_SEMANTICS_MISMATCH');
   assert.equal(verifyVersionedModelArtifact(wrongTarget).reason,
     'MODEL_ARTIFACT_TARGET_MISMATCH');
 });
