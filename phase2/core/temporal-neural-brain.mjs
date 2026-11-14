@@ -1280,7 +1280,7 @@ export function applyTemporalSpectralNormalization(model,{
   const projection=projectMatrixSpectralNorm(model.projectionWeights,cap,iterations);
   const pointwise=(model.pointWeights||[]).map(matrix=>
     projectMatrixSpectralNorm(matrix,cap,iterations));
-  let maximumDepthNorm=0,depthScaledCount=0;
+  let maximumDepthNormBefore=0,maximumDepthNormAfter=0,depthScaledCount=0;
   for(const layer of model.depthWeights||[]){
     if(!Array.isArray(layer)||!layer.length)throw new TypeError('TEMPORAL_DEPTH_KERNEL_INVALID');
     const channels=layer[0].length;
@@ -1288,30 +1288,37 @@ export function applyTemporalSpectralNormalization(model,{
       const values=layer.map(tap=>Number(tap[channel]));
       if(values.some(value=>!Number.isFinite(value)))throw new TypeError('TEMPORAL_DEPTH_KERNEL_NON_FINITE');
       const current=Math.sqrt(values.reduce((sum,value)=>sum+value*value,0));
-      maximumDepthNorm=Math.max(maximumDepthNorm,current);
+      maximumDepthNormBefore=Math.max(maximumDepthNormBefore,current);
       if(current>cap){
-        const scale=cap/current;
+        const scale=(cap*0.999999)/current;
         for(const tap of layer)tap[channel]*=scale;
         depthScaledCount++;
       }
+      const after=Math.sqrt(layer.reduce((sum,tap)=>sum+Number(tap[channel])**2,0));
+      maximumDepthNormAfter=Math.max(maximumDepthNormAfter,after);
     }
   }
-  const outputNorm=vectorL2Norm(model.outputWeights);
+  const outputNormBefore=vectorL2Norm(model.outputWeights);
   let outputScaled=false;
-  if(outputNorm>cap){
-    const scale=cap/outputNorm;
+  if(outputNormBefore>cap){
+    const scale=(cap*0.999999)/outputNormBefore;
     model.outputWeights=model.outputWeights.map(value=>value*scale);
     outputScaled=true;
   }
+  const outputNormAfter=vectorL2Norm(model.outputWeights);
   return {
-    cap,iterations,projection,
-    pointwise,maximum_depth_channel_norm_before:maximumDepthNorm,
+    cap,iterations,
+    projection:{...projection,after:projectMatrixSpectralNorm(model.projectionWeights,cap*1.000001,iterations).after},
+    pointwise,
+    maximum_depth_channel_norm_before:maximumDepthNormBefore,
+    maximum_depth_channel_norm_after:maximumDepthNormAfter,
     depth_channels_scaled:depthScaledCount,
-    output_l2_norm_before:outputNorm,
+    output_l2_norm_before:outputNormBefore,
+    output_l2_norm_after:outputNormAfter,
     output_scaled:outputScaled,
     passed:projection.after<=cap+1e-8&&
       pointwise.every(item=>item.after<=cap+1e-8)&&
-      maximumDepthNorm<=cap+1e-8&&outputNorm<=cap+1e-8
+      maximumDepthNormAfter<=cap+1e-8&&outputNormAfter<=cap+1e-8
   };
 }
 
