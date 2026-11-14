@@ -906,9 +906,17 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
       maturity_ms:NEURAL_CLOSURE_HORIZON_MS,
       outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
       outcome,target:outcome==='UP'?1:0,
+      source_audit:{
+        exchange:'BINANCE',market:'SPOT',interval:'1m',
+        transport:'BINANCE_PUBLIC_REST',symbol:'PAIR'+String(index).padStart(3,'0')+'USDT',
+        received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000,
+        observed_candles:240,raw_klines_sha256:'a'.repeat(64)
+      },
       first_touch:{
         resolution,first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
-        path_resolution:'1M',observed_candles:240
+        path_resolution:'1M',observed_candles:240,
+        raw_klines_sha256:'a'.repeat(64),
+        baseline_price:100,take_profit_price:103,stop_loss_price:98
       },
       sequence:makeSequence(outcome==='UP'?1:-1,index),
       sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
@@ -952,7 +960,7 @@ test('hybrid TCN trains only on the canonical Binance 1m first-touch 4h labels w
       if(minute===0&&index%2===0){high=103.2;close=103.1;}
       if(minute===0&&index%2===1){low=97.8;close=97.9;}
       return {open_time:openTime,close_time:openTime+59_999,
-        is_closed:true,open,high,low,close};
+        is_closed:true,source:'BINANCE_PUBLIC_REST',open,high,low,close};
     });
     const label=buildFourHourFirstTouchOutcome({
       id:'HYBRID-4H-FIRST-TOUCH-'+index,
