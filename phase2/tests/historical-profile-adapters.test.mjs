@@ -64,7 +64,6 @@ test('partial-evidence historical adapters return explicit limitations without c
   const expectations={
     EARLY_MOVE_RADAR:'HISTORICAL_ORDERBOOK_UNAVAILABLE',
     LIQUIDITY_ABSORPTION_RADAR:'HISTORICAL_ORDERBOOK_UNAVAILABLE',
-    FALCON_EYE_RADAR:'HISTORICAL_FUTURES_SNAPSHOTS_UNAVAILABLE',
     COIN_HUNTER_RADAR:'HISTORICAL_LEADER_COHORT_UNAVAILABLE',
     WHALE_ACCUMULATION_RADAR:'HISTORICAL_ORDERBOOK_UNAVAILABLE'
   };
@@ -77,6 +76,11 @@ test('partial-evidence historical adapters return explicit limitations without c
     assert.ok(result.extraGateFailures.includes('LIVE_PUSH_GATE_NOT_SIMULATED'),profile+' does not claim push delivery');
     assert.notEqual(result.analysis.real_order_execution,true,profile+' never enables live execution');
   }
+  const falcon=evaluateHistoricalProfileAdapter('FALCON_EYE_RADAR',input);
+  assert.ok(falcon,'Falcon Eye adapter must exist');
+  assert.deepEqual(falcon.extraGateFailures,['LIVE_PUSH_GATE_NOT_SIMULATED']);
+  assert.equal(falcon.analysis.spot_only,true);
+  assert.equal(falcon.analysis.derivatives.status,'DISABLED_BY_SPOT_ONLY_POLICY');
 });
 
 test('historical pre-move proxy records strong buyer flow before positive price confirmation without claiming an entry',()=>{
