@@ -54,7 +54,6 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
 });
 
 function FOUR_HOURS(){return 4*60*60_000;}
-function MINUTE(){return 60_000;}
 
 test('raw coverage gate rejects a missing or duplicate candle rather than filling the gap',()=>{
   const at=Date.UTC(2026,0,1,0,14,59,999);
