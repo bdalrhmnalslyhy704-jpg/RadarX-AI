@@ -22,7 +22,11 @@ import {
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
 
-import { NEURAL_CLOSURE_TARGET_DEFINITION, NEURAL_CLOSURE_TARGET_SEMANTICS, NEURAL_CLOSURE_OUTCOME_SOURCE, NEURAL_CLOSURE_HORIZON_MS } from '../core/neural-closure-contracts.mjs';
+import {
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT
+} from '../core/neural-closure-contracts.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
@@ -1315,6 +1319,8 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     closed_candle_baseline:true,
     historical_baseline:false,
     training_eligible:true,
+    execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+    realized_return_pct:3,
     market:'BINANCE_SPOT_USDT',
     source_audit:{
       exchange:'BINANCE',market:'SPOT',interval:'1m',
@@ -1330,7 +1336,8 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
       resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+59_999,
       path_resolution:'1M',observed_candles:240,
       raw_klines_sha256:'b'.repeat(64),
-      baseline_price:100,take_profit_price:103,stop_loss_price:98
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:103,exit_price_source:'BARRIER'
     },
     temporal_sequence:Array.from({length:24},(_,time)=>
       Array.from({length:29},(_,channel)=>channel===28?0.65:
