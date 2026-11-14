@@ -440,10 +440,27 @@ export function validateFourHourRows(inputRows, {
   return rows;
 }
 
+function timestampBounds(rows) {
+  let firstAt=Infinity,lastAt=-Infinity;
+  for(const row of rows){
+    const at=Number(row?.at);
+    if(!Number.isFinite(at))
+      throw new Error('NEURAL_CLOSURE_TIMESTAMP_BOUND_NON_FINITE');
+    if(at<firstAt)firstAt=at;
+    if(at>lastAt)lastAt=at;
+  }
+  return {
+    first_at:rows.length?firstAt:null,
+    last_at:rows.length?lastAt:null
+  };
+}
+
 /**
  * UTC-day partitioning uses nominal 60/20/20 calendar-day boundaries and
  * removes one complete UTC day between each adjacent partition. Every model
  * consumes these exact row identities; same-day symbols are never split.
+ * Timestamp bounds are reduced in one pass to avoid argument-stack overflow
+ * and temporary arrays when the fixed-SHA cohort grows.
  */
 export function splitFourHourRows(rows) {
   if (!Array.isArray(rows) || rows.length < 1)
@@ -478,10 +495,11 @@ export function splitFourHourRows(rows) {
   const a=identities(train),b=identities(validation),c=identities(holdout);
   if ([...a].some(id=>b.has(id)||c.has(id)) || [...b].some(id=>c.has(id)))
     throw new Error('NEURAL_CLOSURE_PARTITION_IDENTITY_OVERLAP');
-  const firstAt = values => values.length ? Math.min(...values.map(row=>row.at)) : null;
-  const lastAt = values => values.length ? Math.max(...values.map(row=>row.at)) : null;
-  if (!(lastAt(train)<firstAt(validation)-NEURAL_CLOSURE_PURGE_MS) ||
-      !(lastAt(validation)<firstAt(holdout)-NEURAL_CLOSURE_PURGE_MS))
+  const trainBounds=timestampBounds(train);
+  const validationBounds=timestampBounds(validation);
+  const holdoutBounds=timestampBounds(holdout);
+  if (!(trainBounds.last_at<validationBounds.first_at-NEURAL_CLOSURE_PURGE_MS) ||
+      !(validationBounds.last_at<holdoutBounds.first_at-NEURAL_CLOSURE_PURGE_MS))
     throw new Error('NEURAL_CLOSURE_ONE_DAY_PURGE_NOT_ENFORCED');
   return {
     schema:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
@@ -499,8 +517,8 @@ export function splitFourHourRows(rows) {
     counts:{train:train.length,validation:validation.length,holdout:holdout.length,
       purged:purged.length,total:rows.length},
     boundaries:{
-      train_last_at:lastAt(train),validation_first_at:firstAt(validation),
-      validation_last_at:lastAt(validation),holdout_first_at:firstAt(holdout)
+      train_last_at:trainBounds.last_at,validation_first_at:validationBounds.first_at,
+      validation_last_at:validationBounds.last_at,holdout_first_at:holdoutBounds.first_at
     }
   };
 }
@@ -637,9 +655,9 @@ function chronologicalValidationBlocks(rows) {
   const purged=rows.filter(row=>purgeDays.has(dayOf(row)));
   const check=rows.filter(row=>checkDays.has(dayOf(row)));
   if(fit.length&&check.length){
-    const lastFit=Math.max(...fit.map(row=>row.at));
-    const firstCheck=Math.min(...check.map(row=>row.at));
-    if(!(lastFit<firstCheck-NEURAL_CLOSURE_PURGE_MS))
+    const fitBounds=timestampBounds(fit);
+    const checkBounds=timestampBounds(check);
+    if(!(fitBounds.last_at<checkBounds.first_at-NEURAL_CLOSURE_PURGE_MS))
       throw new Error('NEURAL_CLOSURE_CALIBRATION_ONE_DAY_PURGE_NOT_ENFORCED');
   }
   return {fit,purged,check,days:{fit:fitDaysList,purge:purgeDaysList,check:checkDaysList}};
