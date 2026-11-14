@@ -59,7 +59,7 @@ test('runtime feature guardian accepts only the exact closed 1m feature schema a
   const result=guardian.validate(live,{trainingReferenceValues:[1,2,1]});
   assert.equal(result.valid,true);
   assert.deepEqual(result.normalized_values,[0,0.5,2]);
-  const predicted=guardian.predict(live,values=>({probability:values[0]/2}),{trainingReferenceValues:[1,2,1]});
+  const predicted=guardian.predict(live,values=>({probability:values[1]}),{trainingReferenceValues:[1,2,1]});
   assert.equal(predicted.probability,0.5);
   assert.equal(guardian.getDiagnostics().accepted,2);
   assert.equal(guardian.getDiagnostics().rejected,0);
