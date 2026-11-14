@@ -72,7 +72,7 @@ function makeAuditedRow(day,index){
     if(outcome==='DOWN'&&minute===4){low=97.5;close=97.8;}
     return {
       open_time:openTime,close_time:openTime+59_999,
-      is_closed:true,open:100,high,low,close
+      is_closed:true,source:'BINANCE_PUBLIC_REST',open:100,high,low,close
     };
   });
   const label=buildFourHourFirstTouchOutcome({
