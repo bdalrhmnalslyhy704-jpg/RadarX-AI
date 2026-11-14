@@ -654,8 +654,6 @@ async function main(){
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
 
-  const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
-    'temporal_channel_'+String(index).padStart(2,'0'));
   if(attentionInferenceRegimes.length>0&&missingAttentionRegimes.length===0){
     const v11State={
       schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1',
