@@ -22,7 +22,7 @@ import {
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
 
-import { NEURAL_CLOSURE_TARGET_DEFINITION, NEURAL_CLOSURE_OUTCOME_SOURCE, NEURAL_CLOSURE_HORIZON_MS } from '../core/neural-closure-contracts.mjs';
+import { NEURAL_CLOSURE_TARGET_DEFINITION, NEURAL_CLOSURE_TARGET_SEMANTICS, NEURAL_CLOSURE_OUTCOME_SOURCE, NEURAL_CLOSURE_HORIZON_MS } from '../core/neural-closure-contracts.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
@@ -1318,6 +1318,7 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     outcome:'UP',
     outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     first_touch:{
       resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+59_999,
       path_resolution:'1M',observed_candles:240
@@ -1332,8 +1333,7 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
   assert.equal(profile.resolved_samples,1);
   assert.equal(profile.outcome_counts.up,1);
   assert.equal(profile.neural_network.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
-  assert.equal(profile.neural_network.target_semantics,
-    'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_4H_1M_V1');
+  assert.equal(profile.neural_network.target_semantics,NEURAL_CLOSURE_TARGET_SEMANTICS);
   assert.equal(profile.temporal_network.resolved_samples,1);
   assert.equal(profile.temporal_network.outcome_contract_kind,'FIRST_TOUCH_4H_1M');
   assert.equal(profile.temporal_network.temporal_label_resolution,
@@ -1342,11 +1342,15 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
     'one audited row is valid intake but insufficient for training or model selection');
 
   const badCount={...row,first_touch:{...row.first_touch,observed_candles:239}};
-  const rejectedCount=buildFourHourCognitiveLearningProfile([badCount]);
-  assert.equal(rejectedCount.resolved_samples,0);
-  assert.equal(rejectedCount.temporal_network.resolved_samples,0);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badCount]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
   const badSource={...row,outcome_source:'HISTORICAL_CLOSED_CANDLE'};
-  const rejectedSource=buildFourHourCognitiveLearningProfile([badSource]);
-  assert.equal(rejectedSource.resolved_samples,0);
-  assert.equal(rejectedSource.temporal_network.resolved_samples,0);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badSource]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
+    modelTargetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
+  }),/FOUR_HOUR_COGNITIVE_CONTRACT_OVERRIDE_FORBIDDEN/);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
+    temporalOptions:{sequenceIntervalMs:60_000}
+  }),/FOUR_HOUR_COGNITIVE_TEMPORAL_CONTRACT_OVERRIDE_FORBIDDEN/);
 });
