@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
 import {
   focalAsymmetricBrierLoss,NEURAL_CLOSURE_TARGET_DEFINITION,
-  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_HORIZON_MS
+  NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_HORIZON_MS
 } from './neural-closure-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
@@ -721,6 +722,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       exitReason==='HORIZON_END'?'FLAT':null;
     const firstTouchTarget=firstTouchOutcome==='UP'?1:0;
     const fourHourContract=targetDefinition===NEURAL_CLOSURE_TARGET_DEFINITION;
+    const fourHourSemanticsValid=!fourHourContract||
+      raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS;
     const touch=raw.first_touch;
     const expectedTouchResolution=firstTouchOutcome==='UP'?'TAKE_PROFIT_FIRST':
       firstTouchOutcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
@@ -767,7 +770,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M',
           NEURAL_CLOSURE_OUTCOME_SOURCE].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
-        !fourHourTouchValid ||
+        !fourHourTouchValid ||!fourHourSemanticsValid ||
         !['UP','DOWN','FLAT'].includes(firstTouchOutcome) ||
         (raw.target!==undefined&&Number(raw.target)!==firstTouchTarget) ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
