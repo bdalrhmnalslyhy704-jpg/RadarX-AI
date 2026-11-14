@@ -284,6 +284,14 @@ export function validateFourHourRows(inputRows, {
       ?Number(firstTouch.first_touch_at)!==resolvedAt
       :Number(firstTouch.first_touch_at)<=at||Number(firstTouch.first_touch_at)>resolvedAt)
       throw new Error('NEURAL_CLOSURE_ROW_FIRST_TOUCH_TIME_INVALID:'+index);
+    const baselinePrice=number(firstTouch.baseline_price);
+    const takeProfitPrice=number(firstTouch.take_profit_price);
+    const stopLossPrice=number(firstTouch.stop_loss_price);
+    if(baselinePrice===null||baselinePrice<=0||
+      takeProfitPrice===null||stopLossPrice===null||
+      Math.abs(takeProfitPrice/baselinePrice-1.03)>1e-10||
+      Math.abs(stopLossPrice/baselinePrice-0.98)>1e-10)
+      throw new Error('NEURAL_CLOSURE_ROW_EXIT_BARRIER_INVALID:'+index);
     if(Number(firstTouch.observed_candles)!==240)
       throw new Error('NEURAL_CLOSURE_ROW_ONE_MINUTE_COVERAGE_INVALID:'+index);
     const target = source.outcome === 'UP' ? 1 : 0;
@@ -586,10 +594,37 @@ function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{purgedRows
   };
 }
 
+/**
+ * Gross realized return follows the first-touch execution contract:
+ * take-profit/stop-loss exits occur at their recorded barrier prices;
+ * only rows that reach the horizon without either barrier use the final close.
+ */
+export function realizedExecutionGrossReturnPct(row) {
+  const firstTouch=row?.first_touch;
+  const baseline=number(firstTouch?.baseline_price);
+  if(baseline===null||baseline<=0)return null;
+  if(firstTouch?.resolution==='TAKE_PROFIT_FIRST') {
+    const exitPrice=number(firstTouch.take_profit_price);
+    return exitPrice!==null&&exitPrice>0?(exitPrice/baseline-1)*100:null;
+  }
+  if(firstTouch?.resolution==='STOP_LOSS_FIRST') {
+    const exitPrice=number(firstTouch.stop_loss_price);
+    return exitPrice!==null&&exitPrice>0?(exitPrice/baseline-1)*100:null;
+  }
+  if(firstTouch?.resolution==='HORIZON_END')
+    return finite(row?.realized_return_pct)?Number(row.realized_return_pct):null;
+  return null;
+}
+
+export function realizedExecutionNetReturnPct(row,roundTripCostBps=30) {
+  if(!finite(roundTripCostBps)||Number(roundTripCostBps)<0)
+    throw new TypeError('NEURAL_CLOSURE_ROUND_TRIP_COST_INVALID');
+  const gross=realizedExecutionGrossReturnPct(row);
+  return finite(gross)?gross-Number(roundTripCostBps)/100:null;
+}
+
 function realizedNetReturns(rows,roundTripCostBps) {
-  const costPct=Number(roundTripCostBps)/100;
-  return rows.map(row=>finite(row.realized_return_pct)
-    ?Number(row.realized_return_pct)-costPct:null);
+  return rows.map(row=>realizedExecutionNetReturnPct(row,roundTripCostBps));
 }
 function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
   const selected=[];
@@ -848,6 +883,12 @@ export function runNeuralClosureBenchmark({
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,
+      realized_return_contract:{
+        take_profit_first:'EXIT_AT_RECORDED_TAKE_PROFIT_PRICE',
+        stop_loss_first:'EXIT_AT_RECORDED_STOP_LOSS_PRICE',
+        horizon_end:'EXIT_AT_FINAL_CLOSED_4H_CLOSE',
+        round_trip_cost_applied_once:true
+      },
       minimum_positive_class_support_per_calibration_block:minimumClassSupport,
       required_brier_improvement:requiredBrierImprovement,
       minimum_holdout_trades:minimumHoldoutTrades,
