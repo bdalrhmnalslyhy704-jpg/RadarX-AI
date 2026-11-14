@@ -278,13 +278,20 @@ test('event-driven Spot portfolio caps overlapping exposure and marks MAE before
     return {
       id:'OVERLAP:'+index,
       symbol:'OVERLAP'+String(index).padStart(3,'0')+'USDT',
-      at,
+      at,outcome:'DOWN',
       resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
-      realized_return_pct:-2.3,
+      realized_return_pct:-20,
       execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
-      first_touch:{first_touch_at:exitAt},
-      max_adverse_excursion_pct:-9,
-      max_adverse_excursion_at:at+30*60_000,
+      first_touch:{
+        resolution:'STOP_LOSS_FIRST',first_touch_at:exitAt,
+        baseline_price:100,take_profit_price:103,stop_loss_price:98,
+        exit_price:80,exit_price_source:'OPEN_GAP',
+        exit_candle:{open_time:exitAt,close_time:exitAt+59_999,
+          open:80,high:80.5,low:79,close:80.2,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'}
+      },
+      max_adverse_excursion_pct:-20,
+      max_adverse_excursion_at:exitAt,
       max_favorable_excursion_pct:0.2,
       max_favorable_excursion_at:at+60*60_000
     };
@@ -298,8 +305,8 @@ test('event-driven Spot portfolio caps overlapping exposure and marks MAE before
   assert.equal(result.max_concurrent_positions,30);
   assert.equal(result.return_data_status,'COMPLETE');
   assert.equal(result.position_fraction_pct,100/30);
-  assertClose(result.net_pnl_pct,-2.6);
-  assertClose(result.max_drawdown_pct,9);
+  assertClose(result.net_pnl_pct,-20.3);
+  assertClose(result.max_drawdown_pct,20.3);
   assert.equal(result.portfolio_simulation.method,
     'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1');
   assert.equal(NEURAL_CLOSURE_PORTFOLIO_POLICY.same_timestamp_exit_before_entry,true);
