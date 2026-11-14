@@ -20,7 +20,8 @@ import {
 } from '../core/cognitive-brain.mjs';
 import {
   buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
-  TEMPORAL_SEQUENCE_CHANNELS
+  predictTemporalAttentionResearchOutput,
+  TEMPORAL_SEQUENCE_CHANNELS,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE
 } from '../core/temporal-neural-brain.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -278,7 +279,10 @@ async function main(){
       minimumHoldoutSamples:80,
       liveHoldoutSamples:100,
       epochs:Math.max(4,Math.min(10,args.epochs)),
-      enableTemporalBoostedTree:true
+      enableTemporalBoostedTree:true,
+      enableRegimeLocalTcnAttention:true,
+      regimeLocalTcnAttentionMaxTrainingSamples:4096,
+      regimeLocalTcnAttentionEpochs:Math.max(4,Math.min(8,args.epochs))
     }
   });
   const cognitiveArtifacts=cognitiveProfile.research_artifacts||{};
@@ -400,19 +404,37 @@ async function main(){
       holdout_passed:specialist.holdout_passed===true
     }]))
   };
+  const attentionProfile=temporalProfile?.regime_local_tcn_attention_challenger;
+  const attentionSpecialists=attentionProfile?.regime_specialists??{};
+  const attentionInferenceRegimes=Object.keys(attentionSpecialists).filter(regime=>
+    attentionSpecialists[regime]?.research_inference?.schema===
+      'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1');
+  const requiredHoldoutRegimes=[...new Set(eventRows.map(row=>
+    Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
+  const missingAttentionRegimes=requiredHoldoutRegimes.filter(regime=>
+    !attentionInferenceRegimes.includes(regime));
   qualificationByModel.TCN_V11={
-    passed:false,
-    reason:'TCN_V11_LEARNED_QUERY_ATTENTION_ARTIFACT_NOT_EXPORTED',
-    diagnostic_only:true
+    passed:attentionProfile?.selected_for_research===true,
+    reason:attentionProfile?.status??'ATTENTION_TCN_NOT_TRAINED',
+    diagnostic_only:attentionProfile?.selected_for_research!==true
   };
   training.model_internal_diagnostics.TCN_V11={
-    status:'NOT_EVALUATED',
-    architecture:'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11',
-    reason:'The fixed-SHA trainer does not yet export the separately fitted regime-local attention weights and predictions',
-    probability_ready:false
-  };
-  unavailable.TCN_V11={
-    reason:'TCN_V11_LEARNED_QUERY_ATTENTION_ARTIFACT_NOT_EXPORTED'
+    status:attentionProfile?.status??'NOT_TRAINED',
+    architecture:attentionProfile?.architecture??TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    temporal_pooling:attentionProfile?.temporal_pooling??null,
+    training_samples:attentionProfile?.training_samples??0,
+    supported_regimes:attentionProfile?.supported_regimes??[],
+    validation_selected_regimes:attentionProfile?.validation_selected_regimes??[],
+    selected_regimes:attentionProfile?.selected_regimes??[],
+    research_out_of_sample_validated:attentionProfile?.research_out_of_sample_validated===true,
+    validation:attentionProfile?.validation??null,
+    validation_logistic:attentionProfile?.validation_logistic??null,
+    holdout:attentionProfile?.holdout??null,
+    holdout_logistic:attentionProfile?.holdout_logistic??null,
+    holdout_comparison:attentionProfile?.holdout_comparison??null,
+    exported_inference_regimes:attentionInferenceRegimes,
+    required_external_holdout_regimes:requiredHoldoutRegimes,
+    missing_external_holdout_regimes:missingAttentionRegimes
   };
   if(temporalProfile?._research_fit){
     const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
@@ -456,7 +478,7 @@ async function main(){
           selected_regimes:temporalProfile.selected_regimes??[],
           holdout_passed:temporalProfile.holdout_passed===true
         };
-      }else unavailable.TCN_V11={
+      }else unavailable.TCN_V8={
       reason:scored.reason,
       diagnostic_regimes:training.model_internal_diagnostics.TCN_V8.regime_specialists
     };
@@ -464,6 +486,83 @@ async function main(){
   }else unavailable.TCN_V8={
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
+
+  const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
+    'temporal_channel_'+String(index).padStart(2,'0'));
+  if(attentionInferenceRegimes.length>0&&missingAttentionRegimes.length===0){
+    const v11State={
+      schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1',
+      architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+      temporal_pooling:attentionProfile.temporal_pooling,
+      input_shape:[24,TEMPORAL_SEQUENCE_CHANNELS],
+      inference_scope:'INDEPENDENT_BTC_REGIME_SELECTED_OR_INNER_DIAGNOSTIC_ATTENTION_MEMBER',
+      regime_specialists:Object.fromEntries(attentionInferenceRegimes.map(regime=>[
+        regime,attentionSpecialists[regime].research_inference
+      ])),
+      supported_regimes:attentionProfile.supported_regimes??[],
+      validation_selected_regimes:attentionProfile.validation_selected_regimes??[],
+      selected_regimes:attentionProfile.selected_regimes??[]
+    };
+    const attentionArtifact=makeArtifact({
+      name:'RADARX_TCN_V11_LEARNED_QUERY_ATTENTION_FIRST_TOUCH_4H',
+      family:'TCN_V11',version:'TCN_V11_LEARNED_QUERY_ATTENTION_FIRST_TOUCH_4H_V1',
+      sourceCommitSha,featureSchemaId:'RADARX_TEMPORAL_TCN_ATTENTION_SEQUENCE_24X29_V1',
+      featureNames:temporalNames,
+      normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
+      modelState:v11State
+    });
+    const verified=verifyVersionedModelArtifact(attentionArtifact,{
+      expectedSourceCommitSha:sourceCommitSha
+    });
+    if(verified.valid){
+      const attentionModes={};
+      const scored=predictionAttempt(eventRows,row=>{
+        const output=predictTemporalAttentionResearchOutput(
+          row.temporal_sequence,attentionProfile,{allowDiagnostic:true}
+        );
+        if(output?.mode)
+          attentionModes[output.mode]=(attentionModes[output.mode]||0)+1;
+        return output?.probability??null;
+      },{
+        sourceCommitSha,artifactSha256:attentionArtifact.artifact_sha256,
+        modelName:'TCN_V11'
+      });
+      if(scored.valid){
+        modelArtifactsByModel.TCN_V11=attentionArtifact;
+        predictionsByModel.TCN_V11=scored.rows;
+        trainingArtifacts.TCN_V11={
+          artifact_sha256:attentionArtifact.artifact_sha256,
+          architecture:attentionProfile.architecture,
+          temporal_pooling:attentionProfile.temporal_pooling,
+          inference_regimes:attentionInferenceRegimes,
+          research_output_modes:attentionModes,
+          status:attentionProfile.status,
+          selected_for_research:attentionProfile.selected_for_research===true,
+          out_of_sample_validated:attentionProfile.research_out_of_sample_validated===true,
+          diagnostic_only:attentionProfile.research_out_of_sample_validated!==true,
+          validation_brier:attentionProfile.validation?.model_brier_score??null,
+          validation_logistic_brier:attentionProfile.validation_logistic?.model_brier_score??null,
+          holdout_brier:attentionProfile.holdout?.model_brier_score??null,
+          holdout_logistic_brier:attentionProfile.holdout_logistic?.model_brier_score??null
+        };
+      }else unavailable.TCN_V11={
+        reason:'TCN_V11_EXTERNAL_PREDICTION_UNAVAILABLE:'+scored.reason,
+        inference_regimes:attentionInferenceRegimes
+      };
+    }else unavailable.TCN_V11={
+      reason:'TCN_V11_ARTIFACT_VERIFICATION_FAILED:'+verified.reason
+    };
+  }else{
+    unavailable.TCN_V11={
+      reason:missingAttentionRegimes.length
+        ?'TCN_V11_MISSING_REGIME_INFERENCE_STATE:'+missingAttentionRegimes.join(',')
+        :'TCN_V11_NO_NONZERO_ATTENTION_RESIDUAL_SELECTED',
+      trained:attentionProfile?.trained===true,
+      status:attentionProfile?.status??'ATTENTION_TCN_NOT_TRAINED',
+      inference_regimes:attentionInferenceRegimes,
+      required_external_holdout_regimes:requiredHoldoutRegimes
+    };
+  }
 
   // Hybrid TCN+Attention: train only on the shared train partition.
   let hybridFit=null;
