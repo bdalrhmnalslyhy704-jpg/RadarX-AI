@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildFourHourFirstTouchOutcome,
   NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS
@@ -936,4 +937,62 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
   assert.throws(()=>trainHybridTcnAttention(wrongSource,{
     epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
   }),/AT_LEAST_20_TRAINING_ROWS/);
+});
+
+
+test('hybrid TCN trains only on the canonical Binance 1m first-touch 4h labels with closed 15m features',()=>{
+  const start=Date.UTC(2026,3,1,0,0,0);
+  const rows=Array.from({length:20},(_,index)=>{
+    const at=start+index*6*60*60*1000;
+    const candles=Array.from({length:240},(_,minute)=>{
+      const openTime=at+1+minute*60_000;
+      let open=100,high=102,low=99,close=100.4;
+      if(minute===0&&index%2===0){high=103.2;close=103.1;}
+      if(minute===0&&index%2===1){low=97.8;close=97.9;}
+      return {open_time:openTime,close_time:openTime+59_999,
+        is_closed:true,open,high,low,close};
+    });
+    const label=buildFourHourFirstTouchOutcome({
+      id:'HYBRID-4H-FIRST-TOUCH-'+index,
+      symbol:'FOURHOUR'+String(index).padStart(3,'0')+'USDT',
+      baselineAt:at,baselinePrice:100,candles
+    });
+    const sequence=makeSequence(index%2===0?1:-1,index);
+    return {
+      ...label,market:'BINANCE_SPOT_USDT',
+      market_regime:['BULL_TREND','BEAR_TREND','SIDEWAYS'][index%3],
+      historical_window_id:['bull-window','bear-window','sideways-window'][index%3],
+      temporal_sequence:sequence,
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*FIFTEEN_MINUTES),
+      gross_return_pct:label.realized_return_pct,
+      max_adverse_excursion_pct:index%2===0?-0.5:-2.5,
+      max_adverse_excursion_at:at+2*60_000,
+      max_favorable_excursion_pct:index%2===0?3.2:0.5,
+      max_favorable_excursion_at:at+3*60_000,
+      classic_score:index%2===0?0.7:0.3,
+      kama_efficiency_ratio:0.35,
+      volatility_zscore:0.5,
+      btc_trend_return_pct:0.8
+    };
+  });
+  assert.ok(rows.every(row=>row.training_eligible===true&&
+    row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
+    row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+    row.horizon_ms===NEURAL_CLOSURE_HORIZON_MS));
+  const trained=trainHybridTcnAttention(rows,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  });
+  assert.equal(trained.training_samples,20);
+  assert.ok(trained.objective_trace.length===1);
+  assert.equal(trained.training_objective,
+    'CUMULATIVE_EQUITY_SHARPE_WITH_FOCAL_ASYMMETRIC_BRIER_AND_TARGET_LABEL_RANKING_V5');
+  const corrupted=rows.map(row=>({...row}));
+  corrupted[19].first_touch={...corrupted[19].first_touch,observed_candles:239};
+  assert.throws(()=>trainHybridTcnAttention(corrupted,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS/);
+  assert.throws(()=>trainHybridTcnAttention(rows,{
+    epochs:1,targetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
+  }),/UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION/);
 });
