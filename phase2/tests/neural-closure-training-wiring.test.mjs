@@ -4,6 +4,8 @@ import {readFile} from 'node:fs/promises';
 
 const trainerUrl=new URL('../tools/train-neural-closure-models.mjs',import.meta.url);
 const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url);
+const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
+const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
@@ -74,11 +76,19 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/target:row\.target/);
   assert.match(trainer,/resolved_at:row\.resolved_at/);
   assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
-  assert.match(trainer,/row\.at>=fitCut\+lstmHorizonMs/);
-  assert.match(trainer,/row\.at>=selectionCut\+lstmHorizonMs/);
-  assert.match(trainer,/latestResolved\(calibrationRows\)<externalValidationStart/);
+  assert.match(trainer,/splitFourHourTcnLstmTrainingRows\(/);
+  assert.match(trainer,/validationRowsForLstm=split\.validation\.map/);
+  assert.match(trainer,/internalSplit\.status==='READY'/);
   assert.match(trainer,/selectTcnLstmHybridHyperparameters\(trainingRows,selectionRows/);
   assert.match(trainer,/fitTcnLstmHybridCalibration\(\s*calibrationRows/);
+  assert.match(trainer,/predictTcnLstmHybridCalibratedProbability/);
+  const lstmModule=await readFile(lstmModuleUrl,'utf8');
+  assert.match(lstmModule,/export function splitFourHourTcnLstmTrainingRows/);
+  assert.match(lstmModule,/EXTERNAL_VALIDATION_LABEL_READ/);
+  assert.match(lstmModule,/OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION/);
+  const lstmTests=await readFile(lstmTestUrl,'utf8');
+  assert.match(lstmTests,/four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train/);
+  assert.match(lstmTests,/four-hour TCN-LSTM splitter rejects non-four-hour labels/);
   assert.match(trainer,/modelName:'TCN_LSTM_HYBRID'/);
   assert.match(trainer,/modelArtifactsByModel\.TCN_LSTM_HYBRID=artifact/);
   assert.match(trainer,/predictionsByModel\.TCN_LSTM_HYBRID=scored\.rows/);
