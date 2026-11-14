@@ -10,7 +10,7 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  runNeuralClosureBenchmark,sha256Canonical
+  runNeuralClosureBenchmark,sha256Canonical,sha256CanonicalArray
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -208,20 +208,25 @@ async function main(){
   const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
   if(!/^[a-f0-9]{40}$/.test(sourceCommitSha))
     throw new Error('MODEL_SOURCE_COMMIT_SHA_REQUIRED');
-  const inputBytes=await readFile(inputPath);
+  let inputBytes=await readFile(inputPath);
   const inputFileSha256=sha256(inputBytes);
-  const input=JSON.parse(inputBytes.toString('utf8'));
+  let input=JSON.parse(inputBytes.toString('utf8'));
   if(input?.schema!==NEURAL_CLOSURE_DATASET_SCHEMA||!Array.isArray(input.rows))
     throw new Error('NEURAL_CLOSURE_DATASET_SCHEMA_INVALID');
   const rows=validateFourHourRows(input.rows);
-  const datasetSha=sha256Canonical(rows.map(row=>({
+  // Release the original parsed row tree and the source byte buffer. The
+  // validator retains only canonical fields; duplicate sequence aliases are
+  // intentionally dropped before the original rows become unreachable.
+  input.rows=null;
+  inputBytes=null;
+  const datasetSha=sha256CanonicalArray(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
     realized_return_pct:row.realized_return_pct
-  })));
+  }));
   if(datasetSha!==input.dataset_sha256)
     throw new Error('NEURAL_CLOSURE_DATASET_CANONICAL_SHA_MISMATCH');
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_DATASET_BELOW_600_ROWS');
