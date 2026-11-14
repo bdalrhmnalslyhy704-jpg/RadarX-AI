@@ -120,6 +120,10 @@ test('Dense 4h accepts only the same audited first-touch cohort used by V5 and T
   const badBarrier={...rows[0],first_touch:{...rows[0].first_touch,take_profit_price:104}};
   assert.throws(()=>validateAndPrepareDense4hRows([badBarrier]),
     /FIRST_TOUCH_EXIT_BARRIER_INVALID/);
+  const badExitCandle={...rows[0],first_touch:{...rows[0].first_touch,
+    exit_candle:{...rows[0].first_touch.exit_candle,high:102.9}}};
+  assert.throws(()=>validateAndPrepareDense4hRows([badExitCandle]),
+    /FIRST_TOUCH_EXECUTION_PRICE_INVALID/);
   const badSequence={...rows[0],temporal_sequence_timestamps:
     [...rows[0].temporal_sequence_timestamps.slice(1),rows[0].at]};
   assert.throws(()=>validateAndPrepareDense4hRows([badSequence]),
