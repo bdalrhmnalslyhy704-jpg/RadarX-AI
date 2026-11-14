@@ -438,18 +438,28 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     // Select the best checkpoint and early-stop monitor using deterministic,
     // no-dropout TRAINING predictions only. This avoids choosing a checkpoint
     // because of a lucky stochastic dropout mask. Validation/holdout remain unseen.
-    let monitorObjective=0;
+    let monitorObjective=0,monitorBrier=0;
     for(let i=0;i<n;i++){
       const probability=forwardProjection(X[i],model,anchor,0,null).probability;
-      monitorObjective+=(probability-Y[i])**2;
+      monitorBrier+=(probability-Y[i])**2;
+      if(lossObjective==='FOCAL_ASYMMETRIC_BRIER'){
+        monitorObjective+=focalAsymmetricBrierLoss(probability,Y[i],{
+          gammaPositive,gammaNegative,
+          positiveWeight:focalClassWeights.positiveWeight,
+          negativeWeight:focalClassWeights.negativeWeight
+        }).loss;
+      }else monitorObjective+=(probability-Y[i])**2;
     }
-    const monitorBrier=monitorObjective/n;
-    if(!Number.isFinite(monitorBrier))throw new Error('DENSE24_PROJECTION_TRAIN_MONITOR_NON_FINITE');
-    if(monitorBrier<bestObjective-1e-9){
-      bestObjective=monitorBrier;bestEpoch=epoch;wait=0;best=cloneModel(model);
+    monitorBrier/=n;
+    monitorObjective/=n;
+    if(!Number.isFinite(monitorObjective)||!Number.isFinite(monitorBrier))
+      throw new Error('DENSE24_PROJECTION_TRAIN_MONITOR_NON_FINITE');
+    if(monitorObjective<bestObjective-1e-9){
+      bestObjective=monitorObjective;bestEpoch=epoch;wait=0;best=cloneModel(model);
     }else wait++;
-    history.push({epoch,training_brier:Number(monitorBrier.toFixed(8)),
-      dropout_training_brier:Number(objectiveMean.toFixed(8)),
+    history.push({epoch,training_objective:Number(monitorObjective.toFixed(8)),
+      training_brier:Number(monitorBrier.toFixed(8)),
+      dropout_training_objective:Number(objectiveMean.toFixed(8)),
       gradient_l2_norm:Number(gradNorm.toFixed(8)),learning_rate:Number(lr.toFixed(8)),
       dropout:pDrop,l2:reg});
     if(epoch>=minEpochs&&wait>=patience){stoppedEarly=true;break;}
@@ -477,7 +487,8 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     training_rows:n,training_positives:Y.filter(y=>y===1).length,
     training_negatives:Y.filter(y=>y===0).length,
     epochs_completed:history.length,best_epoch:bestEpoch,
-    best_training_brier:Number(bestObjective.toFixed(8)),
+    best_training_objective:Number(bestObjective.toFixed(8)),
+    best_training_brier:lossObjective==='BRIER'?Number(bestObjective.toFixed(8)):null,
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     normalization:'PER_SAMPLE_LAYER_NORM_TRAINED_ON_TRAIN_ROWS_ONLY',
     dropout_mode:'TRAIN_ONLY_DETERMINISTIC_INVERTED_DROPOUT',
