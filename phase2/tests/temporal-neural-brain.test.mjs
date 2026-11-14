@@ -1093,6 +1093,16 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
       assert.ok(output&&Number.isFinite(output.probability)&&
         output.probability>=0&&output.probability<=1,
         'exported V11 state must generate a finite probability');
+      const persistedArtifactProfile=JSON.parse(JSON.stringify({
+        regime_specialists:{[regime]:{research_inference:state}}
+      }));
+      const persistedOutput=predictTemporalAttentionResearchOutput(
+        row.temporal_sequence,persistedArtifactProfile,{allowDiagnostic:true}
+      );
+      assert.ok(persistedOutput&&Number.isFinite(persistedOutput.probability),
+        'serialized model artifact must reload through the same inference contract');
+      assert.ok(Math.abs(persistedOutput.probability-output.probability)<1e-12,
+        'artifact reload must preserve the exact attention probability');
       if(state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER'){
         assert.equal(predictTemporalAttentionResearchOutput(
           row.temporal_sequence,attention
