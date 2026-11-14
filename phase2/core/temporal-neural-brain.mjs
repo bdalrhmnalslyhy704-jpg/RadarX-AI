@@ -1010,13 +1010,14 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
 export function auditTemporalGradientNumerics(
   sequence,
   target=1,
-  {epsilon=1e-5,tolerance=2e-7,baseRate=0.37}={}
+  {epsilon=1e-5,tolerance=2e-7,attentionTolerance=1e-10,baseRate=0.37}={}
 ) {
   if(!validSequence(sequence))throw new TypeError('TEMPORAL_GRADIENT_AUDIT_SEQUENCE_INVALID');
   if(target!==0&&target!==1)throw new TypeError('TEMPORAL_GRADIENT_AUDIT_TARGET_INVALID');
-  const step=Number(epsilon),allowed=Number(tolerance);
+  const step=Number(epsilon),allowed=Number(tolerance),attentionAllowed=Number(attentionTolerance);
   if(!Number.isFinite(step)||step<=0||step>1e-2||
-    !Number.isFinite(allowed)||allowed<=0||allowed>1e-2)
+    !Number.isFinite(allowed)||allowed<=0||allowed>1e-2||
+    !Number.isFinite(attentionAllowed)||attentionAllowed<=0||attentionAllowed>1e-2)
     throw new TypeError('TEMPORAL_GRADIENT_AUDIT_NUMERIC_OPTIONS_INVALID');
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
@@ -1055,8 +1056,12 @@ export function auditTemporalGradientNumerics(
     const activePaths=[...paths];
     for(const index of outputIndices)activePaths.push(['outputWeights',[index]]);
     if(mode===TEMPORAL_ATTENTION_POOLING_MODE){
-      activePaths.push(['attentionQuery',[0]],['attentionPositionBiases',[0]],
-        ['attentionPositionBiases',[TEMPORAL_SEQUENCE_STEPS-1]]);
+      // V11 has 16 learned query coordinates and 24 independently trainable
+      // relative-position biases. Audit every parameter, not boundary samples.
+      for(let index=0;index<TEMPORAL_LATENT_CHANNELS;index++)
+        activePaths.push(['attentionQuery',[index]]);
+      for(let index=0;index<TEMPORAL_SEQUENCE_STEPS;index++)
+        activePaths.push(['attentionPositionBiases',[index]]);
     }
     for(const objective of objectives){
       const cache=forward(sequence,model,1,baselineFeatures);
@@ -1080,7 +1085,10 @@ export function auditTemporalGradientNumerics(
         const absoluteError=Math.abs(numerical-analyticalValue);
         const relativeError=absoluteError/Math.max(1e-10,
           Math.abs(numerical),Math.abs(analyticalValue));
-        const threshold=allowed+2e-4*Math.max(Math.abs(numerical),Math.abs(analyticalValue));
+        const isAttentionParameter=mode===TEMPORAL_ATTENTION_POOLING_MODE&&
+          (key==='attentionQuery'||key==='attentionPositionBiases');
+        const threshold=isAttentionParameter?attentionAllowed:
+          allowed+2e-4*Math.max(Math.abs(numerical),Math.abs(analyticalValue));
         const passed=Number.isFinite(numerical)&&Number.isFinite(analyticalValue)&&
           absoluteError<=threshold;
         checked++;if(!passed)failed++;
@@ -1091,22 +1099,48 @@ export function auditTemporalGradientNumerics(
           absolute_error:Number(absoluteError.toExponential(6)),
           relative_error:Number(relativeError.toExponential(6)),passed});
       }
+      const attentionDetails=details.filter(item=>
+        item.parameter==='attentionQuery'||item.parameter==='attentionPositionBiases');
+      const attentionFailures=attentionDetails.filter(item=>!item.passed).length;
+      const attentionMaxAbsoluteError=attentionDetails.length
+        ?Math.max(...attentionDetails.map(item=>Number(item.absolute_error))):0;
       results.push({
         pooling_mode:mode,objective,checked_parameters:checked,
         failed_parameters:failed,maximum_absolute_error:maximumAbsoluteError,
-        maximum_relative_error:maximumRelativeError,passed:failed===0,details
+        maximum_relative_error:maximumRelativeError,
+        attention_parameter_derivatives_checked:attentionDetails.length,
+        attention_failed_derivatives:attentionFailures,
+        attention_maximum_absolute_error:attentionMaxAbsoluteError,
+        attention_tolerance:mode===TEMPORAL_ATTENTION_POOLING_MODE?attentionAllowed:null,
+        passed:failed===0,details
       });
     }
   }
+  const attentionResults=results.filter(row=>row.pooling_mode===TEMPORAL_ATTENTION_POOLING_MODE);
+  const attentionChecked=attentionResults.reduce((sum,row)=>sum+row.attention_parameter_derivatives_checked,0);
+  const attentionFailed=attentionResults.reduce((sum,row)=>sum+row.attention_failed_derivatives,0);
+  const attentionMaximumAbsoluteError=Math.max(0,...attentionResults.map(row=>row.attention_maximum_absolute_error));
   return {
-    schema:'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1',
+    schema:'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2',
     diagnostic_only:true,training_behavior_changed:false,
     input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
     pooling_modes:modes,objectives,
     checked_parameter_derivatives:results.reduce((sum,row)=>sum+row.checked_parameters,0),
     failed_parameter_derivatives:results.reduce((sum,row)=>sum+row.failed_parameters,0),
+    attention_audit:{
+      parameters_per_objective:TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS,
+      unique_attention_parameters:TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS,
+      objectives_checked:objectives.length,
+      checked_parameter_derivatives:attentionChecked,
+      failed_parameter_derivatives:attentionFailed,
+      maximum_absolute_error:attentionMaximumAbsoluteError,
+      absolute_error_tolerance:attentionAllowed,
+      passed:attentionChecked===(TEMPORAL_LATENT_CHANNELS+TEMPORAL_SEQUENCE_STEPS)*objectives.length&&
+        attentionFailed===0&&attentionMaximumAbsoluteError<attentionAllowed
+    },
     maximum_absolute_error:Math.max(...results.map(row=>row.maximum_absolute_error)),
-    passed:results.every(row=>row.passed),results
+    passed:results.every(row=>row.passed)&&attentionFailed===0&&attentionMaximumAbsoluteError<attentionAllowed,
+    results
   };
 }
 
