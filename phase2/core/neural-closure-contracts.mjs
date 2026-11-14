@@ -970,7 +970,16 @@ export function runNeuralClosureBenchmark({
     throw new Error('NEURAL_CLOSURE_EMPTY_SPLIT');
   const trainCounts=classCounts(split.train.map(row=>row.target));
   const validationCounts=classCounts(split.validation.map(row=>row.target));
-  const holdoutCounts=classCounts(split.holdout.map(row=>row.target));
+  // Do not derive holdout labels, portfolio outcomes or performance metrics
+  // until a challenger passes both its inner qualification and outer
+  // validation Brier gate against Logistic.
+  let holdoutCounts=null;
+  const holdoutAccess={
+    opened:false,
+    gate:'INNER_QUALIFICATION_AND_OUTER_VALIDATION_BRIER_VS_LOGISTIC',
+    reason:'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES',
+    opened_for_models:[]
+  };
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
   const eventRows=[...split.validation,...split.holdout];
   const requiredIds=eventRows.map(row=>row.id);
@@ -1020,6 +1029,7 @@ export function runNeuralClosureBenchmark({
       };
       continue;
     }
+
     const rawMap=verified.map;
     verifiedPredictions.set(modelName,rawMap);
     const calibration=modelName==='LOGISTIC_REGRESSION'
@@ -1034,31 +1044,91 @@ export function runNeuralClosureBenchmark({
     const calibratedValidation=probabilitiesFor(validationRows,rawMap,
       calibration.selected_calibrator);
     const validationLabels=validationRows.map(row=>row.target);
+    const validationSupport=classCounts(validationLabels);
+    const validationBrier=brier(calibratedValidation,validationLabels);
     const thresholdSelection=selectThreshold(validationRows,calibratedValidation,
       roundTripCostBps);
-    const holdoutProbabilities=probabilitiesFor(split.holdout,rawMap,
-      calibration.selected_calibrator);
     const metricWeights={
       positiveWeight:trainingWeights.positiveWeight,
       negativeWeight:trainingWeights.negativeWeight,
       gammaPositive:1,gammaNegative:2
     };
-    const metrics=holdoutMetrics(split.holdout,holdoutProbabilities,
-      thresholdSelection.threshold,roundTripCostBps,metricWeights);
-    models[modelName]={
-      status:'EVALUATED',
+    const baseValidation={
+      sample_count:validationRows.length,
+      positive_count:validationSupport.positive,
+      negative_count:validationSupport.negative,
+      raw_brier_score:brier(rawValidation,validationLabels),
+      calibrated_brier_score:validationBrier,
+      threshold_selection:thresholdSelection.status,
+      selected_threshold:thresholdSelection.threshold
+    };
+
+    if(modelName==='LOGISTIC_REGRESSION'){
+      models[modelName]={
+        status:'VALIDATION_EVALUATED',
+        model_artifact_sha256:null,
+        calibration,
+        validation:baseValidation,
+        holdout:{
+          evaluated:false,sample_count:split.holdout.length,
+          brier_score:null,trade_count:0,net_pnl_pct:null,
+          max_drawdown_pct:null,return_data_status:'NOT_EVALUATED',
+          reason:'HOLDOUT_LOCKED_UNTIL_A_NEURAL_CANDIDATE_PASSES_VALIDATION'
+        },
+        training_loss_contract:{
+          name:'LOGISTIC_BASELINE_RAW_PROPER_SCORING',
+          weights_derived_from:'TRAINING_PARTITION_ONLY',
+          ...metricWeights
+        }
+      };
+      continue;
+    }
+
+    const baselineValidationBrier=models.LOGISTIC_REGRESSION.validation?.calibrated_brier_score??null;
+    const improvement=finite(baselineValidationBrier)&&finite(validationBrier)
+      ?baselineValidationBrier-validationBrier:null;
+    const qualification=qualificationByModel?.[modelName]??{
+      passed:true,reason:'NO_ADDITIONAL_INNER_QUALIFICATION_CONFIGURED'
+    };
+    const validationGates={
+      inner_selection_qualified:qualification.passed===true,
+      calibration_class_support:calibration.support_ready===true,
+      minimum_validation_positive_support:validationSupport.positive>=minimumClassSupport,
+      minimum_validation_negative_support:validationSupport.negative>=minimumClassSupport,
+      brier_improvement_vs_logistic:finite(improvement)&&improvement>requiredBrierImprovement,
+      validation_threshold_selected:finite(thresholdSelection.threshold)
+    };
+    const validationPassed=Object.values(validationGates).every(Boolean);
+    const validationReason=!validationGates.inner_selection_qualified
+      ?'INNER_SELECTION_NOT_QUALIFIED'
+      :!validationGates.calibration_class_support
+        ?'CALIBRATION_CLASS_SUPPORT_NOT_MET'
+        :!validationGates.minimum_validation_positive_support||
+          !validationGates.minimum_validation_negative_support
+          ?'OUTER_VALIDATION_CLASS_SUPPORT_NOT_MET'
+          :!validationGates.brier_improvement_vs_logistic
+            ?'OUTER_VALIDATION_DID_NOT_BEAT_LOGISTIC_BY_REQUIRED_MARGIN'
+            :!validationGates.validation_threshold_selected
+              ?'OUTER_VALIDATION_THRESHOLD_NOT_SELECTED':null;
+    const validationGate={
+      passed:validationPassed,
+      baseline_logistic_brier:baselineValidationBrier,
+      candidate_validation_brier:validationBrier,
+      brier_improvement_vs_logistic:improvement,
+      required_brier_improvement:requiredBrierImprovement,
+      inner_qualification:{
+        passed:qualification.passed===true,
+        reason:qualification.reason??null,
+        diagnostic_only:qualification.diagnostic_only===true
+      },
+      gates:Object.fromEntries(Object.entries(validationGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      reason:validationReason
+    };
+    const baseModel={
       model_artifact_sha256:artifactSha256,
       calibration,
-      validation:{
-        sample_count:validationRows.length,
-        positive_count:classCounts(validationLabels).positive,
-        negative_count:classCounts(validationLabels).negative,
-        raw_brier_score:brier(rawValidation,validationLabels),
-        calibrated_brier_score:brier(calibratedValidation,validationLabels),
-        threshold_selection:thresholdSelection.status,
-        selected_threshold:thresholdSelection.threshold
-      },
-      holdout:metrics,
+      validation:{...baseValidation,outer_validation_gate:validationGate},
       training_loss_contract:{
         name:'FOCAL_ASYMMETRIC_BRIER',
         gamma_positive:1,gamma_negative:2,
@@ -1066,13 +1136,64 @@ export function runNeuralClosureBenchmark({
         weights_derived_from:'TRAINING_PARTITION_ONLY'
       }
     };
+    if(!validationPassed){
+      models[modelName]={
+        status:'VALIDATION_EVALUATED_HOLDOUT_LOCKED',
+        ...baseModel,
+        holdout:{
+          evaluated:false,sample_count:split.holdout.length,
+          brier_score:null,trade_count:0,net_pnl_pct:null,
+          max_drawdown_pct:null,return_data_status:'NOT_EVALUATED',
+          reason:validationReason??'OUTER_VALIDATION_GATE_FAILED'
+        }
+      };
+      continue;
+    }
+
+    // The holdout is opened only after the candidate has passed the inner
+    // selection gate, calibration support and outer validation Brier margin.
+    // Logistic is scored on that same holdout exactly once as the reference.
+    if(!holdoutAccess.opened){
+      holdoutCounts=classCounts(split.holdout.map(row=>row.target));
+      const logisticMap=verifiedPredictions.get('LOGISTIC_REGRESSION');
+      const logisticProbabilities=probabilitiesFor(split.holdout,logisticMap);
+      const logisticThreshold=models.LOGISTIC_REGRESSION.validation.selected_threshold;
+      const logisticMetrics=holdoutMetrics(split.holdout,logisticProbabilities,
+        logisticThreshold,roundTripCostBps,metricWeights);
+      models.LOGISTIC_REGRESSION={
+        ...models.LOGISTIC_REGRESSION,
+        status:'EVALUATED',
+        holdout:logisticMetrics
+      };
+      holdoutAccess.opened=true;
+      holdoutAccess.reason='INNER_AND_OUTER_VALIDATION_GATES_PASSED';
+    }
+    const holdoutProbabilities=probabilitiesFor(split.holdout,rawMap,
+      calibration.selected_calibrator);
+    const metrics=holdoutMetrics(split.holdout,holdoutProbabilities,
+      thresholdSelection.threshold,roundTripCostBps,metricWeights);
+    models[modelName]={
+      status:'EVALUATED',
+      ...baseModel,
+      holdout:metrics
+    };
+    holdoutAccess.opened_for_models.push(modelName);
   }
   const baseline=models.LOGISTIC_REGRESSION;
   for(const modelName of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=models[modelName];
+    if(model.status==='VALIDATION_EVALUATED_HOLDOUT_LOCKED'){
+      model.acceptance={
+        status:'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',
+        passed:false,
+        reason:model.holdout.reason,
+        validation_gate:model.validation.outer_validation_gate
+      };
+      continue;
+    }
     if(model.status!=='EVALUATED'||baseline?.status!=='EVALUATED'){
       model.acceptance={status:'NOT_EVALUATED',passed:false,
-        reason:'SAME_COHORT_MODEL_OR_LOGISTIC_PREDICTIONS_MISSING'};
+        reason:model.reason??'SAME_COHORT_MODEL_OR_LOGISTIC_PREDICTIONS_MISSING'};
       continue;
     }
     const candidate=model.holdout,anchor=baseline.holdout;
@@ -1152,9 +1273,11 @@ export function runNeuralClosureBenchmark({
       boundaries:split.boundaries,
       train_support:trainCounts,validation_support:validationCounts,
       holdout_support:holdoutCounts,
+      holdout_support_opened:holdoutAccess.opened,
       calibration_fit_rows:calibrationBlocks.fit.length,
       calibration_check_rows:calibrationBlocks.check.length
     },
+    holdout_access:holdoutAccess,
     policy:{
       round_trip_cost_bps:roundTripCostBps,
       portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY,
