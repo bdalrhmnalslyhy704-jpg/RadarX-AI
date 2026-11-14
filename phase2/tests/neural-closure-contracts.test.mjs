@@ -8,6 +8,7 @@ import {
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
+  simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
   runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
@@ -39,6 +40,10 @@ function makeRows({days=20,rowsPerDay=400}={}){
       training_eligible:true,closed_candle_baseline:true,
       outcome,target:positive?1:0,
       realized_return_pct:positive?3.4:outcome==='DOWN'?-2.3:0.08,
+      max_adverse_excursion_pct:positive?-1.2:outcome==='DOWN'?-2.8:-0.9,
+      max_adverse_excursion_at:at+(outcome==='FLAT'?60*60_000:1),
+      max_favorable_excursion_pct:positive?3.4:outcome==='DOWN'?0.7:0.8,
+      max_favorable_excursion_at:at+(outcome==='FLAT'?90*60_000:1),
       first_touch:{
         resolution:positive?'TAKE_PROFIT_FIRST':outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END',
         first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+1,
@@ -265,6 +270,40 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
   }]),/EXIT_BARRIER_INVALID/);
 });
 
+
+test('event-driven Spot portfolio caps overlapping exposure and marks MAE before exits',()=>{
+  const rows=Array.from({length:40},(_,index)=>{
+    const at=BASE;
+    const exitAt=at+3*60*60_000;
+    return {
+      id:'OVERLAP:'+index,
+      symbol:'OVERLAP'+String(index).padStart(3,'0')+'USDT',
+      at,
+      resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
+      realized_return_pct:-2.3,
+      execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+      first_touch:{first_touch_at:exitAt},
+      max_adverse_excursion_pct:-9,
+      max_adverse_excursion_at:at+30*60_000,
+      max_favorable_excursion_pct:0.2,
+      max_favorable_excursion_at:at+60*60_000
+    };
+  });
+  const result=simulateFirstTouchPaperPortfolio(rows,Array(40).fill(0.95),{
+    threshold:0.5,roundTripCostBps:30,maxConcurrentPositions:30,initialEquity:100
+  });
+  assert.equal(result.signal_count,40);
+  assert.equal(result.trade_count,30);
+  assert.equal(result.skipped_capacity,10);
+  assert.equal(result.max_concurrent_positions,30);
+  assert.equal(result.return_data_status,'COMPLETE');
+  assert.equal(result.position_fraction_pct,100/30);
+  assertClose(result.net_pnl_pct,-2.6);
+  assertClose(result.max_drawdown_pct,9);
+  assert.equal(result.portfolio_simulation.method,
+    'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1');
+  assert.equal(NEURAL_CLOSURE_PORTFOLIO_POLICY.same_timestamp_exit_before_entry,true);
+});
 
 test('fixed-SHA evaluator compares identical event identities and refuses false superiority',()=>{
   const rows=makeRows(),sourceCommitSha='a'.repeat(40);
