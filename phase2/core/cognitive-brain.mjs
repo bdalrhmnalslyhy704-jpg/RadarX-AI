@@ -4,7 +4,9 @@ import {
   fitTemperatureScaler,fitPlattScaler,
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_OUTCOME_SOURCE,
-  NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
 } from './neural-closure-contracts.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
@@ -3184,6 +3186,8 @@ export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
       row.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&
       row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
       Number(row.horizon_ms)===NEURAL_CLOSURE_HORIZON_MS&&
+      row.execution_return_contract===NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT&&
+      isValidFourHourFirstTouchExecution(touch,row.outcome,row.realized_return_pct)&&
       at!==null&&resolvedAt===at+NEURAL_CLOSURE_HORIZON_MS&&
       ['UP','DOWN','FLAT'].includes(row.outcome)&&
       touch?.path_resolution==='1M'&&touch.resolution===expectedResolution&&
