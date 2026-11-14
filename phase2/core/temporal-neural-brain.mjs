@@ -12,6 +12,8 @@
 export const TEMPORAL_TARGET_DEFINITION =
   'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2';
 export const TEMPORAL_SEQUENCE_STEPS = 24;
+export const TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS=15*60*1000;
+export const TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT='FIRST_TOUCH_4H_1M';
 export const TEMPORAL_SEQUENCE_CHANNELS=29;
 export const TEMPORAL_POOLED_BASELINE_FEATURE_COUNT=TEMPORAL_SEQUENCE_CHANNELS*2;
 export const TEMPORAL_LATENT_CHANNELS=16;
@@ -62,7 +64,11 @@ const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
-import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
+import {
+  focalAsymmetricBrierLoss,deriveTrainingClassWeights,
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+} from './neural-closure-contracts.mjs';
 import {performance} from 'node:perf_hooks';
 import {
   validateTemporalSequenceAlignment,
@@ -128,17 +134,32 @@ function cleanRows(samples, {
   outcomeHorizonMs = HORIZON_MS,
   allowedOutcomeSources = null,
   outcomeContractKind = 'FIRST_PASSAGE',
-  requireSequenceTimestamps = false
+  requireSequenceTimestamps = false,
+  sequenceIntervalMs = TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS
 } = {}) {
   const horizonMs = Math.max(1, Math.trunc(Number(outcomeHorizonMs) || HORIZON_MS));
   const allowedSources = Array.isArray(allowedOutcomeSources)
     ? new Set(allowedOutcomeSources.map(String)) : null;
   const seen = new Set();
-  const validOutcomeContract=row=>outcomeContractKind==='FIRST_PASSAGE'
-    ?row?.first_passage?.path_resolution==='15M'&&row.first_passage.outcome===row.outcome
-    :row?.outcome_contract?.kind===outcomeContractKind&&
+  const validOutcomeContract=row=>{
+    if(outcomeContractKind==='FIRST_PASSAGE')
+      return row?.first_passage?.path_resolution==='15M'&&
+        row.first_passage.outcome===row.outcome;
+    if(outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT){
+      const touch=row?.first_touch;
+      const expected=row?.outcome==='UP'?'TAKE_PROFIT_FIRST':
+        row?.outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
+      const touchAt=finite(touch?.first_touch_at);
+      const at=finite(row?.at),resolved=finite(row?.resolved_at);
+      return touch?.path_resolution==='1M'&&
+        touch.resolution===expected&&Number(touch?.observed_candles)===240&&
+        touchAt!==null&&at!==null&&resolved!==null&&
+        (row.outcome==='FLAT'?touchAt===resolved:touchAt>at&&touchAt<=resolved);
+    }
+    return row?.outcome_contract?.kind===outcomeContractKind&&
       row.outcome_contract.path_resolution==='15M'&&
       row.outcome_contract.outcome===row.outcome;
+  };
   return (Array.isArray(samples) ? samples : []).filter(row => {
     if (!row || row.training_eligible !== true ||
         (row.closed_candle_baseline !== true && row.historical_baseline !== true) ||
@@ -146,9 +167,11 @@ function cleanRows(samples, {
         !validOutcomeContract(row) ||
         !['UP', 'DOWN', 'FLAT'].includes(row.outcome) ||
         !(allowedSources ? allowedSources.has(String(row.outcome_source || '')) :
-          row.outcome_source === (row.historical_baseline === true
-            ? 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
-            : 'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1')) ||
+          row.outcome_source === (outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
+            ?NEURAL_CLOSURE_OUTCOME_SOURCE
+            :row.historical_baseline === true
+              ? 'HISTORICAL_CLOSED_CANDLE_FIRST_PASSAGE_V1'
+              : 'CLOSED_CANDLE_4H_FIRST_PASSAGE_V1')) ||
         !validSequence(row.temporal_sequence)) return false;
     const at = finite(row.at), resolvedAt = finite(row.resolved_at), horizon = finite(row.horizon_ms);
     const symbol = String(row.symbol || '').trim().toUpperCase();
@@ -162,8 +185,11 @@ function cleanRows(samples, {
       temporal_sequence:row.temporal_sequence,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps,
       feature_information_cutoff_at:row.feature_information_cutoff_at??at,
+      expectedSteps:TEMPORAL_SEQUENCE_STEPS,
+      expectedChannels:TEMPORAL_SEQUENCE_CHANNELS,
+      intervalMs:Number(sequenceIntervalMs),
       requireSequenceTimestamps,
-      binaryMaskChannels:requireSequenceTimestamps?[28]:[]
+      binaryMaskChannels:[]
     });
     if(!alignment.valid)return false;
     seen.add(id); seen.add(baseline);
@@ -2502,6 +2528,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   allowedOutcomeSources=null,
   outcomeContractKind='FIRST_PASSAGE',
   requireSequenceTimestamps=false,
+  sequenceIntervalMs=TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS,
   enableAsymmetricDirectionalRankingLoss=false,
   directionalRankingLossConfig={},
   enableRegimeLocalTcn=false,
@@ -2520,8 +2547,10 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
+  const temporalLabelResolution=outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
+    ?'1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES':'15M_ONLY';
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,
-    outcomeContractKind,requireSequenceTimestamps});
+    outcomeContractKind,requireSequenceTimestamps,sequenceIntervalMs});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const uniqueTimes=[...new Set(rows.map(row=>row.at))].sort((a,b)=>a-b);
   const rowsByTime=new Map();
@@ -2579,7 +2608,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
     status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
-    architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,temporal_label_resolution:'15M_ONLY',
+    architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,temporal_label_resolution:temporalLabelResolution,
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
     regime_specialist_count:2,
@@ -4061,6 +4090,31 @@ export function buildTemporalNeuralProfile(samples = [], {
     _fit:probabilityReady?fitted:null,
     _baseline_fit:pooledBaseline
   };
+}
+
+/**
+ * Strict four-hour safe-opportunity training entry point for the shared V8–V11
+ * TCN family. It pins labels to the audited Binance Spot 1m first-touch contract
+ * while retaining the versioned 24x29 closed 15m input feature sequence.
+ */
+export function buildFourHourTemporalNeuralProfile(samples=[],options={}){
+  const fixed={
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    outcomeContractKind:TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT,
+    requireSequenceTimestamps:true,
+    sequenceIntervalMs:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  };
+  for(const [key,value] of Object.entries(fixed)){
+    if(options[key]!==undefined){
+      const actual=Array.isArray(value)?JSON.stringify(options[key]):options[key];
+      const expected=Array.isArray(value)?JSON.stringify(value):value;
+      if(actual!==expected)
+        throw new Error('FOUR_HOUR_TEMPORAL_CONTRACT_OVERRIDE_FORBIDDEN:'+key);
+    }
+  }
+  return buildTemporalNeuralProfile(samples,{...options,...fixed});
 }
 
 export function predictTemporalProbability(sequence,profile={}){
