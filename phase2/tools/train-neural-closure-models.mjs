@@ -236,12 +236,33 @@ async function main(){
   };
   const eventRows=[...split.validation,...split.holdout];
   if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
+  const selectedSymbols=Array.isArray(input.universe?.symbols)
+    ?input.universe.symbols.map(item=>String(item?.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const includedSymbols=Array.isArray(input.universe?.symbol_results)
+    ?input.universe.symbol_results.filter(item=>item?.status==='INCLUDED')
+      .map(item=>String(item.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const datasetScope={
+    market_data_source:input.data_quality?.source??null,
+    market_data_endpoint:input.market_data_endpoint??null,
+    universe_selection:input.universe?.selection??null,
+    minimum_quote_volume_24h_usdt:input.universe?.minimum_quote_volume_24h_usdt??null,
+    selected_symbol_count:selectedSymbols.length,
+    included_symbol_count:includedSymbols.length,
+    selected_symbols:selectedSymbols,
+    included_symbols:includedSymbols,
+    survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
+    historical_delisted_asset_coverage:false,
+    interpretation:'CONDITIONAL_ON_CURRENTLY_TRADING_SPOT_PAIRS_AND_CURRENT_24H_LIQUIDITY'
+  };
   const training={
     model_source_commit_sha:sourceCommitSha,
     dataset_source_commit_sha:input.source_commit_sha??null,
     dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
+    dataset_scope:datasetScope,
     partition_class_support:supports
   };
 
@@ -566,6 +587,7 @@ async function main(){
       row_count:rows.length
     },
     training,
+    dataset_scope:datasetScope,
     model_artifacts:trainingArtifacts,
     unavailable_models:unavailable,
     benchmark,
@@ -592,6 +614,7 @@ async function main(){
     dataset_sha256:datasetSha,
     fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
     training_artifacts:Object.keys(trainingArtifacts),
+    dataset_scope:datasetScope,
     unavailable_models:unavailable,
     model_comparison:evaluated,
     production_touched:false,paper_trading:true,real_order_execution:false
