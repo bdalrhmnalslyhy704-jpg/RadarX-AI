@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/neural-closure-4h-20261114
+      - research/neural-closure-horizon-binding-fix-20261114
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
