@@ -473,8 +473,14 @@ test('four-hour TCN-LSTM splitter rejects non-four-hour labels and outer boundar
     horizonMs:4*60*60*1000
   });
   assert.equal(rejected.status,'ABSTAIN_FOUR_HOUR_LABEL_MATURITY_MISMATCH');
-  const leaked=external.map((row,index)=>index===0
-    ?{...row,at:rows.at(-1).at+60_000,resolved_at:rows.at(-1).at+4*60*60*1000}:row);
+  const leaked=external.map((row,index)=>{
+    if(index!==0)return row;
+    const shiftedAt=rows.at(-1).at+60_000;
+    return {
+      ...row,at:shiftedAt,resolved_at:shiftedAt+4*60*60*1000,
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps.map(value=>value+60_000)
+    };
+  });
   const leakage=splitFourHourTcnLstmTrainingRows(rows,leaked,{
     horizonMs:4*60*60*1000
   });
