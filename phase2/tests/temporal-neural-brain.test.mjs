@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
+import {buildFourHourFirstTouchOutcome,NEURAL_CLOSURE_TARGET_DEFINITION} from '../core/neural-closure-contracts.mjs';
 import {
   TEMPORAL_TARGET_DEFINITION,
+  TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS,
+  buildFourHourTemporalNeuralProfile,
   TEMPORAL_MODEL_ARCHITECTURE,
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
@@ -1341,4 +1344,57 @@ test('KAMA ATR dropout and spectral normalization bound every trainable TCN laye
   assert.ok(spectral.pointwise.every(item=>item.after<=1.5+1e-8));
   assert.ok(spectral.maximum_depth_channel_norm_after<=1.5+1e-8);
   assert.ok(spectral.output_l2_norm_after<=1.5+1e-8);
+});
+
+
+test('four-hour V8–V11 training entry accepts only audited 1m first-touch outcomes with closed 15m feature cadence',()=>{
+  const at=Date.UTC(2026,3,1,0,14,59)+999;
+  const candles=Array.from({length:240},(_,index)=>{
+    const openTime=at+1+index*60_000;
+    return {open_time:openTime,close_time:openTime+59_999,
+      is_closed:true,open:100,high:102,low:99,close:100.5};
+  });
+  const label=buildFourHourFirstTouchOutcome({
+    id:'TCN-4H-FIRST-TOUCH-001',symbol:'ETHUSDT',
+    baselineAt:at,baselinePrice:100,candles,
+    marketContext:{kama_efficiency_ratio:0.7,atr_pct:0.25,atr_baseline_pct:0.2}
+  });
+  assert.equal(label.training_eligible,true);
+  assert.equal(label.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(label.outcome,'FLAT');
+  const sequence=sequenceFor(false,91);
+  const timestamps=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,index)=>
+    at-(TEMPORAL_SEQUENCE_STEPS-1-index)*TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS);
+  const row={
+    ...label,
+    temporal_sequence:sequence,
+    temporal_sequence_timestamps:timestamps,
+    feature_information_cutoff_at:at
+  };
+  const profile=buildFourHourTemporalNeuralProfile([row]);
+  assert.equal(profile.resolved_samples,1);
+  assert.equal(profile.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(profile.outcome_contract_kind,'FIRST_TOUCH_4H_1M');
+  assert.equal(profile.temporal_label_resolution,'1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES');
+  assert.equal(profile.sequence_steps,24);
+  assert.equal(profile.sequence_channels,29);
+  assert.equal(profile.trained,false);
+  const badSequenceTimestamps=[...timestamps];
+  badSequenceTimestamps[23]++;
+  const rejected=buildFourHourTemporalNeuralProfile([{
+    ...row,temporal_sequence_timestamps:badSequenceTimestamps
+  }]);
+  assert.equal(rejected.resolved_samples,0,
+    'a feature timestamp not ending exactly at the baseline must never enter training');
+  assert.throws(()=>buildFourHourTemporalNeuralProfile([row],{
+    targetDefinition:TEMPORAL_TARGET_DEFINITION
+  }),/CONTRACT_OVERRIDE_FORBIDDEN/);
+  const postTouchGap=candles.map(candle=>({...candle}));
+  postTouchGap[200].open_time+=60_000;
+  const invalidLabel=buildFourHourFirstTouchOutcome({
+    id:'TCN-4H-FIRST-TOUCH-GAP',symbol:'BTCUSDT',
+    baselineAt:at,baselinePrice:100,candles:postTouchGap
+  });
+  assert.equal(invalidLabel.training_eligible,false,
+    'the complete 240-minute path must be timestamp-audited even after an early touch');
 });
