@@ -8,11 +8,13 @@ on:
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
       - 'phase2/core/feature-parity-guardian.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/hybrid-memory-regression.test.mjs'
   pull_request:
@@ -62,12 +64,15 @@ jobs:
           node --check phase2/core/feature-parity-guardian.mjs
           node --check phase2/core/neural-shadow-observation.mjs
           node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
           node --check phase2/tools/neural-closure-benchmark.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
       - name: Test checksummed model artifacts and fail-closed feature parity
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
+      - name: Test Cognitive MLP V5 focal training, calibration and shared cohort contracts
+        run: node --test --test-timeout=180000 phase2/tests/cognitive-brain.test.mjs
       - name: Test TCN V11 gradients, spectral constraints and dynamic dropout
         run: node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
       - name: Test 14-day paper-only shadow observation ledger
