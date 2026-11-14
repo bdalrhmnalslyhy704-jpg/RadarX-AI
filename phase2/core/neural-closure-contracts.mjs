@@ -46,6 +46,74 @@ export function sha256Canonical(value) {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
+/**
+ * Resolve the exact +3% before -2% label from 240 consecutive completed
+ * Binance Spot one-minute candles. If both barriers fall inside the same
+ * candle, OHLC cannot determine which was first and the row is rejected.
+ */
+export function buildFourHourFirstTouchOutcome({
+  id,symbol,baselineAt,baselinePrice,candles,
+  featureInformationCutoffAt=baselineAt
+}={}){
+  const fail=(reason,extra={})=>({training_eligible:false,status:'REJECTED',
+    reason,id:id??null,symbol:symbol??null,...extra});
+  if(typeof id!=='string'||!id.trim()||typeof symbol!=='string'||!symbol.trim())
+    return fail('IDENTITY_MISSING');
+  if(!finite(baselineAt)||!finite(baselinePrice)||Number(baselinePrice)<=0||
+    Number(featureInformationCutoffAt)!==Number(baselineAt))
+    return fail('BASELINE_OR_FEATURE_CUTOFF_INVALID');
+  const at=Number(baselineAt),price=Number(baselinePrice);
+  if(at%60_000!==0)return fail('BASELINE_NOT_ON_ONE_MINUTE_BOUNDARY');
+  if(!Array.isArray(candles)||candles.length!==240)
+    return fail('EXACT_240_CLOSED_ONE_MINUTE_CANDLES_REQUIRED');
+  const takePrice=price*1.03,stopPrice=price*0.98;
+  let outcome='FLAT',resolution='HORIZON_END',firstTouchAt=at+NEURAL_CLOSURE_HORIZON_MS;
+  let ambiguous=false;
+  for(let index=0;index<240;index++){
+    const candle=candles[index];
+    const expectedOpen=at+(index+1)*60_000;
+    const open=number(candle?.open_time??candle?.openTime);
+    const close=number(candle?.close_time??candle?.closeTime);
+    const high=number(candle?.high),low=number(candle?.low);
+    if(candle?.is_closed!==true||open!==expectedOpen||close!==expectedOpen+59_999||
+      high===null||low===null||high<low||low<=0)
+      return fail('ONE_MINUTE_CANDLE_GAP_OPEN_OR_INVALID:'+index);
+    const hitTake=high>=takePrice,hitStop=low<=stopPrice;
+    if(hitTake&&hitStop){
+      ambiguous=true;break;
+    }
+    if(hitTake){
+      outcome='UP';resolution='TAKE_PROFIT_FIRST';firstTouchAt=expectedOpen+59_999;break;
+    }
+    if(hitStop){
+      outcome='DOWN';resolution='STOP_LOSS_FIRST';firstTouchAt=expectedOpen+59_999;break;
+    }
+  }
+  if(ambiguous)return fail('AMBIGUOUS_BOTH_BARRIERS_TOUCHED_IN_ONE_MINUTE_CANDLE',{
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS
+  });
+  const finalClose=number(candles.at(-1)?.close);
+  if(finalClose===null||finalClose<=0)return fail('FINAL_ONE_MINUTE_CLOSE_INVALID');
+  const resolvedAt=at+NEURAL_CLOSURE_HORIZON_MS;
+  return {
+    id,symbol:String(symbol).trim().toUpperCase(),
+    at,resolved_at:resolvedAt,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    feature_information_cutoff_at:at,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    outcome,target:outcome==='UP'?1:0,
+    first_touch:{
+      resolution,first_touch_at:firstTouchAt,path_resolution:'1M',
+      observed_candles:240,baseline_price:price,
+      take_profit_price:takePrice,stop_loss_price:stopPrice
+    },
+    realized_return_pct:(finalClose/price-1)*100,
+    training_eligible:true,status:'RESOLVED'
+  };
+}
+
 function classCounts(labels) {
   let positive = 0, negative = 0;
   for (const label of labels) {
@@ -143,6 +211,18 @@ export function validateFourHourRows(inputRows, {
       throw new Error('NEURAL_CLOSURE_ROW_TARGET_OR_SOURCE_MISMATCH:' + index);
     if (!['UP','DOWN','FLAT'].includes(source.outcome))
       throw new Error('NEURAL_CLOSURE_ROW_OUTCOME_INVALID:' + index);
+    const firstTouch=source.first_touch;
+    const expectedResolution=source.outcome==='UP'?'TAKE_PROFIT_FIRST':
+      source.outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
+    if(!firstTouch||firstTouch.path_resolution!=='1M'||
+      firstTouch.resolution!==expectedResolution||!finite(firstTouch.first_touch_at))
+      throw new Error('NEURAL_CLOSURE_ROW_FIRST_TOUCH_AUDIT_INVALID:'+index);
+    if(source.outcome==='FLAT'
+      ?Number(firstTouch.first_touch_at)!==resolvedAt
+      :Number(firstTouch.first_touch_at)<=at||Number(firstTouch.first_touch_at)>resolvedAt)
+      throw new Error('NEURAL_CLOSURE_ROW_FIRST_TOUCH_TIME_INVALID:'+index);
+    if(Number(firstTouch.observed_candles)!==240)
+      throw new Error('NEURAL_CLOSURE_ROW_ONE_MINUTE_COVERAGE_INVALID:'+index);
     const target = source.outcome === 'UP' ? 1 : 0;
     if (source.target !== undefined && Number(source.target) !== target)
       throw new Error('NEURAL_CLOSURE_ROW_TARGET_LABEL_MISMATCH:' + index);
