@@ -11,8 +11,8 @@ test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention ch
     'the trainer must use the dedicated V11 attention predictor');
   assert.match(trainer,/enableRegimeLocalTcnAttention:true/,
     'the four-hour fixed-SHA workflow must actually train attention specialists');
-  assert.match(trainer,/regimeLocalTcnAttentionMaxTrainingSamples:4096/,
-    'the V11 training budget must remain explicit and bounded');
+  assert.match(trainer,/regimeLocalTcnAttentionMaxTrainingSamples:2048/,
+    'the V11 training budget must remain explicit and bounded alongside V9/V10');
   assert.match(trainer,/TEMPORAL_ATTENTION_MODEL_ARCHITECTURE/,
     'the saved model identity must use the V11 attention architecture');
 });
