@@ -976,14 +976,16 @@ export function runNeuralClosureBenchmark({
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
   const eventRows=[...split.validation,...split.holdout];
   const requiredIds=eventRows.map(row=>row.id);
-  const datasetSha=sha256Canonical(rows.map(row=>({
+  // Stream the exact canonical JSON array into SHA-256. Materializing a
+  // second full copy of every 24x29 sequence can exhaust the research runner.
+  const datasetSha=sha256CanonicalArray(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     target_definition:row.target_definition,outcome_source:row.outcome_source,
     outcome:row.outcome,target:row.target,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     realized_return_pct:row.realized_return_pct??null,
     features:row.features??null,temporal_sequence:row.temporal_sequence??null
-  })));
+  }));
   const calibrationBlocks=chronologicalValidationBlocks(split.validation);
   const modelNames=['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES];
   const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
