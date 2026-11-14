@@ -103,9 +103,9 @@ test('V5 ensemble trains every MLP member with Focal-Asymmetric Brier and train-
     }));
   assert.deepEqual(neural.member_training_objectives,
     ['FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER']);
-  assert.ok(neural.member_training_diagnostics.length===3&&
-    neural.member_training_diagnostics.every(member=>
-    member.training_objective==='FOCAL_ASYMMETRIC_BRIER'&&
+  assert.ok(neural.member_training_profiles.length===3&&
+    neural.member_training_profiles.every(member=>
+    member.trainingObjective==='FOCAL_ASYMMETRIC_BRIER'&&
     member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
     Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
     Number.isFinite(member.focal_asymmetric_brier.negative_weight)));
