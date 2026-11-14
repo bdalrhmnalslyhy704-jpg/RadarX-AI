@@ -31,7 +31,7 @@ export async function writeJsonObjectWithArrayStreaming(
   let closed=false;
   try{
     await handle.writeFile(
-      header.slice(0,-1)+',\\n  '+JSON.stringify(arrayKey)+': [\\n',
+      header.slice(0,-1)+',\n  '+JSON.stringify(arrayKey)+': [\n',
       'utf8'
     );
     let batch='';
@@ -40,7 +40,7 @@ export async function writeJsonObjectWithArrayStreaming(
       const serialized=JSON.stringify(rows[index]);
       if(typeof serialized!=='string')
         throw new TypeError('NEURAL_STREAM_ROW_NOT_SERIALIZABLE:'+index);
-      const fragment=(index===0?'':',\\n')+'    '+serialized;
+      const fragment=(index===0?'':',\n')+'    '+serialized;
       if(batch.length>0&&batch.length+fragment.length>maximumBatchCharacters){
         await handle.writeFile(batch,'utf8');
         batch='';
@@ -52,7 +52,7 @@ export async function writeJsonObjectWithArrayStreaming(
       }
     }
     if(batch)await handle.writeFile(batch,'utf8');
-    await handle.writeFile('\\n  ]\\n}\\n','utf8');
+    await handle.writeFile('\n  ]\n}\n','utf8');
     await handle.sync();
     await handle.close();
     closed=true;
