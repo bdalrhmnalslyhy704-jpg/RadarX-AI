@@ -42,6 +42,30 @@ test('TCN V11 inner qualification requires BOTH BTC risk regimes to pass inner v
   assert.match(trainer,/diagnostic_only:!attentionInnerQualified/);
 });
 
+test('fixed-SHA trainer exports V9 ordered-pyramid and V10 multiscale as separate benchmark families',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/enableRegimeLocalTcnPyramid:true/);
+  assert.match(trainer,/enableRegimeLocalTcnMultiscale:true/);
+  assert.match(trainer,/predictTemporalVariantResearchOutput/);
+  assert.match(trainer,/family:'TCN_V9'/);
+  assert.match(trainer,/family:'TCN_V10'/);
+  assert.match(trainer,/expectedPooling:TEMPORAL_ORDERED_POOLING_MODE/);
+  assert.match(trainer,/expectedPooling:TEMPORAL_MULTISCALE_POOLING_MODE/);
+  assert.match(trainer,/modelName:family/);
+  assert.match(trainer,/predictionsByModel\[family\]=scored\.rows/);
+  assert.match(trainer,/bothRegimesSelected/);
+  assert.match(trainer,/INNER_SELECTED_TCN_VARIANT_MEMBER/);
+});
+
+test('TCN V9 and V10 families are no longer silently left without fixed-SHA predictions',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const families=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(families,/'TCN_V9'/);
+  assert.match(families,/'TCN_V10'/);
+  assert.match(trainer,/exportTemporalPoolingVariant\(\{[\s\S]*?family:'TCN_V9'/);
+  assert.match(trainer,/exportTemporalPoolingVariant\(\{[\s\S]*?family:'TCN_V10'/);
+});
+
 test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/modelName:'TCN_V8'/);
