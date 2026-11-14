@@ -53,6 +53,24 @@ export function sha256Canonical(value) {
 }
 
 /**
+ * Hash a canonical JSON array one item at a time. This is byte-for-byte
+ * equivalent to sha256Canonical(items.map(project)) without materializing one
+ * giant stableValue tree or JSON string in memory.
+ */
+export function sha256CanonicalArray(items, project = value => value) {
+  if (!Array.isArray(items) || typeof project !== 'function')
+    throw new TypeError('NEURAL_CLOSURE_CANONICAL_ARRAY_ARGUMENTS_INVALID');
+  const hash = createHash('sha256');
+  hash.update('[');
+  for (let index = 0; index < items.length; index++) {
+    if (index) hash.update(',');
+    hash.update(canonicalJson(project(items[index], index)));
+  }
+  hash.update(']');
+  return hash.digest('hex');
+}
+
+/**
  * Validate the price actually available at the first-touch exit.
  * Intrabar touches fill at the barrier; opening gaps fill at the candle open;
  * horizon-end rows fill at the final closed-candle close.
@@ -408,6 +426,11 @@ export function validateFourHourRows(inputRows, {
       feature_information_cutoff_at: cutoff,
       target, outcome: source.outcome
     };
+    // V2 datasets included backwards-compatibility aliases that duplicated the
+    // full temporal tensor. The validated contract only consumes the canonical
+    // temporal_sequence fields, so drop the unused aliases after the shallow copy.
+    delete row.sequence;
+    delete row.sequence_timestamps;
     if (row.realized_return_pct !== undefined &&
         !finite(row.realized_return_pct))
       throw new Error('NEURAL_CLOSURE_REALIZED_RETURN_NON_FINITE:' + id);
