@@ -1,7 +1,9 @@
 import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
-  fitTemperatureScaler,fitPlattScaler
+  fitTemperatureScaler,fitPlattScaler,
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
 } from './neural-closure-contracts.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
@@ -1905,6 +1907,67 @@ function evaluateHoldout(rows, fit, comparisonMargin = 0.002) {
  * used for model selection. Labels whose four-hour outcome crosses either
  * boundary are purged from the earlier block.
  */
+/**
+ * Canonical Build 224 MLP V5 intake for the strict four-hour first-touch task.
+ * Rejects any row without a complete Binance 1m first-touch trace before the
+ * row enters MLP fitting, TCN shared-split construction, selection or scoring.
+ */
+export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
+  const targetSemantics='FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_4H_1M_V1';
+  const sourceRows=Array.isArray(samples)?samples:[];
+  const validated=[];
+  for(let index=0;index<sourceRows.length;index++){
+    const row=sourceRows[index];
+    const touch=row?.first_touch;
+    const outcome=row?.outcome;
+    const expected=outcome==='UP'?'TAKE_PROFIT_FIRST':
+      outcome==='DOWN'?'STOP_LOSS_FIRST':outcome==='FLAT'?'HORIZON_END':null;
+    const at=finite(row?.at),resolved=finite(row?.resolved_at);
+    const touchAt=finite(touch?.first_touch_at);
+    const isTimeValid=outcome==='FLAT'
+      ?touchAt!==null&&resolved!==null&&touchAt===resolved
+      :touchAt!==null&&at!==null&&resolved!==null&&touchAt>at&&touchAt<=resolved;
+    const valid=row?.training_eligible===true&&row?.closed_candle_baseline===true&&
+      row?.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
+      row?.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+      ['UP','DOWN','FLAT'].includes(outcome)&&
+      touch?.path_resolution==='1M'&&touch?.resolution===expected&&
+      Number(touch?.observed_candles)===240&&isTimeValid&&
+      at!==null&&resolved!==null&&resolved-at===NEURAL_CLOSURE_HORIZON_MS&&
+      Number(row?.horizon_ms)===NEURAL_CLOSURE_HORIZON_MS&&
+      Number(row?.feature_information_cutoff_at??row?.at)===at&&
+      row?.features&&typeof row.features==='object'&&!Array.isArray(row.features)&&
+      Array.isArray(row.temporal_sequence)&&row.temporal_sequence.length===24&&
+      Array.isArray(row.temporal_sequence_timestamps)&&
+      row.temporal_sequence_timestamps.length===24;
+    if(!valid)continue;
+    validated.push({
+      ...row,
+      target_semantics:targetSemantics,
+      target_definition:NEURAL_CLOSURE_TARGET_DEFINITION
+    });
+  }
+  const temporalOptions={
+    ...(options.temporalOptions||{}),
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    outcomeContractKind:'FIRST_TOUCH_4H_1M',
+    requireSequenceTimestamps:true,
+    sequenceIntervalMs:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  };
+  return buildCognitiveLearningProfile(validated,{
+    ...options,
+    temporalSamples:validated,
+    temporalOptions,
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    modelTargetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    modelTargetSemantics:targetSemantics,
+    allowResolutionLag:false,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE]
+  });
+}
+
 export function buildCognitiveLearningProfile(samples = [], {
   minTrainingSamples = 60, minimumBucket = 8,
   minimumValidationSamples = 20, minimumHoldoutSamples = 20,
