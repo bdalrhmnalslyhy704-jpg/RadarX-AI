@@ -621,6 +621,24 @@ function chronologicalValidationBlocks(rows) {
   }
   return {fit,purged,check,days:{fit:fitDaysList,purge:purgeDaysList,check:checkDaysList}};
 }
+/** Public, deterministic split of the validation partition for disjoint
+ * probability calibration fit/check. The same exact day identities are used
+ * by dataset preflight and the fixed-SHA evaluator.
+ */
+export function buildNeuralClosureCalibrationBlocks(rows){
+  if(!Array.isArray(rows)||!rows.length)
+    throw new TypeError('NEURAL_CLOSURE_CALIBRATION_ROWS_REQUIRED');
+  const blocks=chronologicalValidationBlocks(rows);
+  return {
+    ...blocks,
+    support:{
+      fit:classCounts(blocks.fit.map(row=>row.target)),
+      purge:classCounts(blocks.purged.map(row=>row.target)),
+      check:classCounts(blocks.check.map(row=>row.target))
+    }
+  };
+}
+
 function predictionMap(predictions,modelName,requiredIds,{
   sourceCommitSha,targetDefinition,targetSemantics,artifactSha256=null
 }={}) {
@@ -916,7 +934,8 @@ export function runNeuralClosureBenchmark({
   minimumHoldoutTrades=100,
   minimumWinRatePct=55,
   maximumDrawdownPct=8,
-  requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN
+  requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN,
+  qualificationByModel={}
 }={}) {
   if(!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha||'')))
     throw new Error('NEURAL_CLOSURE_FULL_SOURCE_SHA_REQUIRED');
@@ -1037,6 +1056,9 @@ export function runNeuralClosureBenchmark({
     }
     const candidate=model.holdout,anchor=baseline.holdout;
     const improvement=anchor.brier_score-candidate.brier_score;
+    const qualification=qualificationByModel?.[modelName]??{
+      passed:true,reason:'NO_ADDITIONAL_INNER_QUALIFICATION_CONFIGURED'
+    };
     const gates={
       minimum_holdout_positive_support:holdoutCounts.positive>=minimumClassSupport,
       calibration_class_support:model.calibration.support_ready===true,
@@ -1049,11 +1071,17 @@ export function runNeuralClosureBenchmark({
         candidate.net_pnl_pct>anchor.net_pnl_pct,
       no_higher_drawdown_than_logistic:finite(candidate.max_drawdown_pct)&&
         finite(anchor.max_drawdown_pct)&&candidate.max_drawdown_pct<=anchor.max_drawdown_pct,
-      return_data_complete:candidate.return_data_status==='COMPLETE'
+      return_data_complete:candidate.return_data_status==='COMPLETE',
+      inner_selection_qualified:qualification.passed===true
     };
     model.acceptance={
       status:Object.values(gates).every(Boolean)?'PASS':'FAIL',
       passed:Object.values(gates).every(Boolean),
+      inner_qualification:{
+        passed:qualification.passed===true,
+        reason:qualification.reason??null,
+        diagnostic_only:qualification.diagnostic_only===true
+      },
       brier_improvement:improvement,required_brier_improvement:requiredBrierImprovement,
       gates:Object.fromEntries(Object.entries(gates).map(([key,value])=>[key,value?'PASS':'FAIL']))
     };
@@ -1064,9 +1092,11 @@ export function runNeuralClosureBenchmark({
       :null
   ])));
   const modelArtifactMatrixSha=sha256Canonical(verifiedArtifactShaByModel);
+  const qualificationMatrixSha=sha256Canonical(qualificationByModel);
   const fixedBenchmarkSha=sha256Canonical({
     source_commit_sha:String(sourceCommitSha).toLowerCase(),
     dataset_sha256:datasetSha,row_count:rows.length,
+    qualification_matrix_sha256:qualificationMatrixSha,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     split_schema:split.schema,purge_ms:NEURAL_CLOSURE_PURGE_MS,
     model_artifacts_sha256:modelArtifactMatrixSha,
@@ -1081,6 +1111,7 @@ export function runNeuralClosureBenchmark({
       dataset_sha256:datasetSha,
       fixed_benchmark_sha256:fixedBenchmarkSha,
       model_artifacts_sha256:modelArtifactMatrixSha,
+      qualification_matrix_sha256:qualificationMatrixSha,
       prediction_matrix_sha256:predictionMatrixSha,
       verified_model_artifacts:Object.keys(verifiedArtifactShaByModel).length,
       row_count:rows.length,
