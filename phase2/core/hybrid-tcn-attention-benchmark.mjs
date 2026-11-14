@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
-import {focalAsymmetricBrierLoss} from './neural-closure-contracts.mjs';
+import {
+  focalAsymmetricBrierLoss,NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_HORIZON_MS
+} from './neural-closure-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
   'log_return_1',
@@ -717,6 +720,20 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       exitReason==='STOP_LOSS'?'DOWN':
       exitReason==='HORIZON_END'?'FLAT':null;
     const firstTouchTarget=firstTouchOutcome==='UP'?1:0;
+    const fourHourContract=targetDefinition===NEURAL_CLOSURE_TARGET_DEFINITION;
+    const touch=raw.first_touch;
+    const expectedTouchResolution=firstTouchOutcome==='UP'?'TAKE_PROFIT_FIRST':
+      firstTouchOutcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
+    const fourHourTouchValid=!fourHourContract||
+      (outcomeSource===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+       touch?.path_resolution==='1M'&&touch.resolution===expectedTouchResolution&&
+       Number(touch?.observed_candles)===240&&
+       finite(touch?.first_touch_at)!==null&&
+       (firstTouchOutcome==='FLAT'
+         ?Number(touch.first_touch_at)===Number(raw.resolved_at)
+         :Number(touch.first_touch_at)>Number(raw.at)&&
+          Number(touch.first_touch_at)<=Number(raw.resolved_at))&&
+       maturityMs===NEURAL_CLOSURE_HORIZON_MS);
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
@@ -746,8 +763,10 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     if (!temporalAlignment.valid ||
         !id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
-        !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
+        !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M',
+          NEURAL_CLOSURE_OUTCOME_SOURCE].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
+        !fourHourTouchValid ||
         !['UP','DOWN','FLAT'].includes(firstTouchOutcome) ||
         (raw.target!==undefined&&Number(raw.target)!==firstTouchTarget) ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
@@ -1265,7 +1284,6 @@ export function profitDrawdownObjective(probabilities, rows, {
   for (const pair of pairs) {
     if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
-    const positive = netReturnPct(pair.row, cost) > 0;
     const focal = focalAsymmetricBrierLoss(probability,pair.row.target,{
       gammaPositive,gammaNegative,positiveWeight,negativeWeight
     });
@@ -1283,7 +1301,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     const key = String(pair.row.at);
     if (!byDecisionTime.has(key)) byDecisionTime.set(key, { positive: [], negative: [] });
     const group = byDecisionTime.get(key);
-    (netReturnPct(pair.row, cost) > 0 ? group.positive : group.negative).push(pair);
+    const isPositive=pair.row.target===1;
+    (isPositive ? group.positive : group.negative).push(pair);
   }
   const rankingPairs = [];
   for (const group of byDecisionTime.values()) {
@@ -1371,9 +1390,10 @@ export function profitDrawdownObjective(probabilities, rows, {
 
 export function trainHybridTcnAttention(trainingRows, {
   epochs = 8, learningRate = 0.003, l2 = 0.001,
-  seed = 17, objectiveOptions = {}
+  seed = 17, objectiveOptions = {},
+  targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
-  const rows = normalizeBenchmarkRows(trainingRows);
+  const rows = normalizeBenchmarkRows(trainingRows,targetDefinition);
   if (rows.length < 20) throw new Error('HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS');
   const normalization = fitHybridFeatureNormalization(rows);
   const normalizedRows = rows.map(row => ({
@@ -1869,10 +1889,10 @@ export function runFixedShaBenchmark(inputRows, {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
     throw new Error('FIXED_BENCHMARK_REQUIRES_FULL_SOURCE_COMMIT_SHA');
   }
-  if(String(targetDefinition)!==DEFAULT_TARGET_DEFINITION) {
+  if(![DEFAULT_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_DEFINITION].includes(String(targetDefinition))) {
     throw new Error('UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION');
   }
-  const rows = normalizeBenchmarkRows(inputRows,DEFAULT_TARGET_DEFINITION);
+  const rows = normalizeBenchmarkRows(inputRows,String(targetDefinition));
   const outcomeSources=[...new Set(rows.map(row=>row.outcome_source))];
   if(outcomeSources.length>1)throw new Error('FIXED_BENCHMARK_MUST_USE_ONE_CLOSED_SPOT_OUTCOME_SOURCE');
   const datasetSha = sha256Canonical(rows);
@@ -1948,7 +1968,7 @@ export function runFixedShaBenchmark(inputRows, {
     enforceMarketGates: true
   };
   for (const fold of walkForward.folds) {
-    const fitted = trainHybridTcnAttention(fold.train, { epochs });
+    const fitted = trainHybridTcnAttention(fold.train, { epochs,targetDefinition:String(targetDefinition) });
     const validationNeural = new Map(fold.validation.map(row =>
       [row.id, predictHybridTcnAttention(row.sequence, fitted).probability]));
     const validationClassic = new Map(fold.validation.map(row => [row.id, row.classic_score]));
@@ -2065,7 +2085,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_FOCAL_ASYMMETRIC_BRIER_AND_TARGET_LABEL_RANKING_V5',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,
