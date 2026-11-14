@@ -200,7 +200,8 @@ function cleanRows(samples, {
     at: Number(row.at),
     resolved_at: Number(row.resolved_at),
     outcome: row.outcome,
-    target: targetOf(row),
+    target:outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
+      ?(row.outcome==='UP'?1:0):targetOf(row),
     sequence: row.temporal_sequence.map(step => step.map(Number)),
     market_context:{
       kama_efficiency_ratio:row.market_context?.kama_efficiency_ratio??row.kama_efficiency_ratio??null,
