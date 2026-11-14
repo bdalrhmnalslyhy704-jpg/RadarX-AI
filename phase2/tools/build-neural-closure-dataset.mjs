@@ -27,7 +27,7 @@ const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 function parseArgs(argv){
-  const result={days:90,maxSymbols:20,minSymbols:19,
+  const result={days:180,maxSymbols:30,minSymbols:25,
     minQuoteVolumeUsdt:750_000,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
