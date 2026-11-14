@@ -40,15 +40,15 @@ jobs:
           repository: ${{ github.repository }}
           run-id: 43615816264
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: artifacts/source-run-73
+          path: artifacts/source-run-74
       - name: Verify the archived dataset and corrected evaluator
         run: |
-          test -s artifacts/source-run-73/dataset.json
+          test -s artifacts/source-run-74/dataset.json
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
-          const d = JSON.parse(await readFile('artifacts/source-run-73/dataset.json', 'utf8'));
+          const d = JSON.parse(await readFile('artifacts/source-run-74/dataset.json', 'utf8'));
           const errors = [];
           if (d.source_commit_sha !== '9e3428ccc3418129669115fb1ef4fe776fe9863f') errors.push('SOURCE_SHA_MISMATCH');
           if (!Array.isArray(d.rows) || d.rows.length < 600) errors.push('DATASET_ROWS_BELOW_600');
@@ -69,7 +69,7 @@ jobs:
         run: |
           mkdir -p artifacts/rebenchmark
           node --expose-gc phase2/tools/train-neural-closure-models.mjs \
-            --input artifacts/source-run-73/dataset.json \
+            --input artifacts/source-run-74/dataset.json \
             --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
             --epochs 8 \
             --denseEpochs 36 \
