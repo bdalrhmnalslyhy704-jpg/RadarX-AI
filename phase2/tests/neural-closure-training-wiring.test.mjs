@@ -84,7 +84,7 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/predictTcnLstmHybridCalibratedProbability/);
   const lstmModule=await readFile(lstmModuleUrl,'utf8');
   assert.match(lstmModule,/export function splitFourHourTcnLstmTrainingRows/);
-  assert.match(lstmModule,/EXTERNAL_VALIDATION_LABEL_READ/);
+  assert.match(lstmModule,/external_validation_labels_read:false/);
   assert.match(lstmModule,/OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION/);
   const lstmTests=await readFile(lstmTestUrl,'utf8');
   assert.match(lstmTests,/four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train/);
