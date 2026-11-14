@@ -14,23 +14,43 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-35,Math.min(35,value))));
 
 async function appendRecord(ledgerPath,record){
-  const path=resolve(String(ledgerPath||''));
-  if(path===resolve('.'))throw new TypeError('NEURAL_SHADOW_LEDGER_PATH_REQUIRED');
+  if(typeof ledgerPath!=='string'||!ledgerPath.trim())
+    throw new TypeError('NEURAL_SHADOW_LEDGER_PATH_REQUIRED');
+  const path=resolve(ledgerPath);
+  const existing=await readLedger(path);
+  const previous=existing.at(-1)?.event_sha256||'0'.repeat(64);
+  const unsigned={...record,previous_event_sha256:previous};
+  const chained={...unsigned,event_sha256:sha256Canonical(unsigned)};
   await mkdir(dirname(path),{recursive:true});
-  await appendFile(path,canonicalJson(record)+'\n',{encoding:'utf8',flag:'a'});
+  await appendFile(path,canonicalJson(chained)+'\\n',{encoding:'utf8',flag:'a'});
 }
 async function readLedger(ledgerPath){
+  if(typeof ledgerPath!=='string'||!ledgerPath.trim())
+    throw new TypeError('NEURAL_SHADOW_LEDGER_PATH_REQUIRED');
   let raw;
   try{raw=await readFile(resolve(ledgerPath),'utf8');}
   catch(error){if(error?.code==='ENOENT')return [];throw error;}
   const events=[];
-  for(const [index,line] of raw.split(/\r?\n/).entries()){
+  let previous='0'.repeat(64);
+  for(const [index,line] of raw.split(/\\r?\\n/).entries()){
     if(!line.trim())continue;
-    try{events.push(JSON.parse(line));}
-    catch{throw new Error('NEURAL_SHADOW_LEDGER_CORRUPT_LINE:'+String(index+1));}
+    try{
+      const event=JSON.parse(line);
+      const declared=String(event.event_sha256||'');
+      if(event.previous_event_sha256!==previous)
+        throw new Error('HASH_CHAIN_PREVIOUS_SHA_MISMATCH');
+      const unsigned={...event};delete unsigned.event_sha256;
+      if(sha256Canonical(unsigned)!==declared)
+        throw new Error('HASH_CHAIN_EVENT_SHA_MISMATCH');
+      previous=declared;events.push(event);
+    }catch(error){
+      throw new Error('NEURAL_SHADOW_LEDGER_CORRUPT_LINE:'+String(index+1)+':'+
+        String(error?.message||error));
+    }
   }
   return events;
 }
+
 function assertSafeSession(session){
   if(!session||session.schema!=='RADARX_PAPER_ONLY_NEURAL_SHADOW_SESSION_V1')
     throw new TypeError('NEURAL_SHADOW_SESSION_INVALID');
@@ -98,7 +118,7 @@ export async function startNeuralShadowObservation(session,{ledgerPath}={}){
 }
 
 export async function recordNeuralShadowPrediction(session,guardian,packet,{
-  ledgerPath,now=Date.now()
+  ledgerPath,now=Date.now(),predictor
 }={}){
   assertSafeSession(session);assertInsideSession(session,now);
   if(!guardian||typeof guardian.predict!=='function')
@@ -108,7 +128,7 @@ export async function recordNeuralShadowPrediction(session,guardian,packet,{
   const symbol=String(packet.symbol||'').trim().toUpperCase();
   const eventId=String(packet.event_id||'').trim();
   if(!symbol||!eventId)throw new TypeError('NEURAL_SHADOW_EVENT_ID_OR_SYMBOL_MISSING');
-  const prediction=guardian.predict(packet,packet.model_predictor);
+  const prediction=guardian.predict(packet,predictor);
   if(!finite(prediction.probability)||prediction.probability<0||prediction.probability>1)
     throw new Error('NEURAL_SHADOW_PREDICTION_INVALID');
   const decisionAt=Number(prediction.decision_at);
