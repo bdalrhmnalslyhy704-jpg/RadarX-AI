@@ -12,6 +12,7 @@ on:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/core/dense-generalization-projection.mjs'
+      - 'phase2/tools/dense-4h-benchmark.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
@@ -73,6 +74,7 @@ jobs:
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
           node --check phase2/core/dense-generalization-projection.mjs
+          node --check phase2/tools/dense-4h-benchmark.mjs
           node --check phase2/tools/neural-closure-benchmark.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
