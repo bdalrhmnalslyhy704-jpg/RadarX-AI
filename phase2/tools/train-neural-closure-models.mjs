@@ -20,8 +20,11 @@ import {
 } from '../core/cognitive-brain.mjs';
 import {
   buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
-  predictTemporalAttentionResearchOutput,
-  TEMPORAL_SEQUENCE_CHANNELS,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE
+  predictTemporalAttentionResearchOutput,predictTemporalVariantResearchOutput,
+  TEMPORAL_SEQUENCE_CHANNELS,TEMPORAL_SEQUENCE_STEPS,
+  TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+  TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+  TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE
 } from '../core/temporal-neural-brain.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -280,9 +283,17 @@ async function main(){
       liveHoldoutSamples:100,
       epochs:Math.max(4,Math.min(10,args.epochs)),
       enableTemporalBoostedTree:true,
+      // Independent pooling variants share the exact purged train/selection/
+      // calibration/validation/holdout boundaries but keep separate weights.
+      enableRegimeLocalTcnPyramid:true,
+      regimeLocalTcnPyramidMaxTrainingSamples:2048,
+      regimeLocalTcnPyramidEpochs:Math.max(4,Math.min(6,args.epochs)),
+      enableRegimeLocalTcnMultiscale:true,
+      regimeLocalTcnMultiscaleMaxTrainingSamples:2048,
+      regimeLocalTcnMultiscaleEpochs:Math.max(4,Math.min(6,args.epochs)),
       enableRegimeLocalTcnAttention:true,
-      regimeLocalTcnAttentionMaxTrainingSamples:4096,
-      regimeLocalTcnAttentionEpochs:Math.max(4,Math.min(8,args.epochs))
+      regimeLocalTcnAttentionMaxTrainingSamples:2048,
+      regimeLocalTcnAttentionEpochs:Math.max(4,Math.min(6,args.epochs))
     }
   });
   const cognitiveArtifacts=cognitiveProfile.research_artifacts||{};
@@ -448,9 +459,153 @@ async function main(){
     required_external_holdout_regimes:requiredHoldoutRegimes,
     missing_external_holdout_regimes:missingAttentionRegimes
   };
+  const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
+    'temporal_channel_'+String(index).padStart(2,'0'));
+
+  // V9 ordered-pyramid and V10 full-receptive-field multiscale are separate
+  // model families. Each artifact contains only its regime-local fitted state,
+  // never training/selection/validation/holdout rows.
+  function exportTemporalPoolingVariant({
+    family,name,version,profile,expectedPooling,architecture,modelKind,featureSchemaId
+  }){
+    const specialists=profile?.regime_specialists??{};
+    const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
+    const inferenceRegimes=regimes.filter(regime=>
+      specialists[regime]?.research_inference?.schema===
+        'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'&&
+      specialists[regime]?.research_inference?.temporal_pooling===expectedPooling);
+    const requiredExternalRegimes=[...new Set(eventRows.map(row=>
+      Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
+    const missingRegimes=requiredExternalRegimes.filter(regime=>
+      !inferenceRegimes.includes(regime));
+    const bothRegimesSelected=regimes.every(regime=>{
+      const expert=specialists[regime]??{};
+      const state=expert.research_inference;
+      return profile?.supported_regimes?.includes(regime)&&
+        profile?.validation_selected_regimes?.includes(regime)&&
+        profile?.selected_regimes?.includes(regime)&&
+        expert.validation_passed===true&&expert.holdout_passed===true&&
+        state?.inference_mode==='INNER_SELECTED_TCN_VARIANT_MEMBER'&&
+        state?.temporal_pooling===expectedPooling&&
+        Number(state?.residual_scale)>0;
+    });
+    qualificationByModel[family]={
+      passed:bothRegimesSelected,
+      reason:bothRegimesSelected
+        ?'BOTH_BTC_REGIMES_PASSED_INNER_VALIDATION_AND_UNTOUCHED_HOLDOUT'
+        :'BOTH_BTC_REGIMES_HAVE_NOT_PASSED_INNER_VALIDATION_AND_HOLDOUT',
+      diagnostic_only:!bothRegimesSelected
+    };
+    training.model_internal_diagnostics[family]={
+      status:profile?.status??'VARIANT_PROFILE_NOT_AVAILABLE',
+      architecture:profile?.architecture??architecture,
+      model_kind:profile?.model_kind??modelKind,
+      temporal_pooling:profile?.temporal_pooling??expectedPooling,
+      training_sample_budget:profile?.training_sample_budget??2048,
+      training_samples:profile?.training_samples??0,
+      output_features:profile?.output_features??null,
+      trainable_parameter_count:profile?.trainable_parameter_count??null,
+      supported_regimes:profile?.supported_regimes??[],
+      validation_selected_regimes:profile?.validation_selected_regimes??[],
+      selected_regimes:profile?.selected_regimes??[],
+      exported_inference_regimes:inferenceRegimes,
+      required_external_holdout_regimes:requiredExternalRegimes,
+      missing_external_holdout_regimes:missingRegimes,
+      validation:profile?.validation??null,
+      validation_logistic:profile?.validation_logistic??null,
+      holdout:profile?.holdout??null,
+      holdout_logistic:profile?.holdout_logistic??null,
+      both_btc_regimes_inner_qualified:bothRegimesSelected
+    };
+    if(inferenceRegimes.length===0||missingRegimes.length>0){
+      unavailable[family]={
+        reason:'TEMPORAL_VARIANT_MISSING_REGIME_INFERENCE_STATE',
+        inference_regimes:inferenceRegimes,
+        missing_regimes:missingRegimes
+      };
+      return;
+    }
+    const variantState={
+      schema:'RADARX_BUILD224_TEMPORAL_TCN_VARIANT_ARTIFACT_V1',
+      family,architecture,model_kind:modelKind,
+      temporal_pooling:expectedPooling,
+      input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
+      output_features:profile.output_features,
+      trainable_parameter_count:profile.trainable_parameter_count,
+      regime_specialists:Object.fromEntries(inferenceRegimes.map(regime=>[
+        regime,{research_inference:specialists[regime].research_inference}
+      ])),
+      supported_regimes:profile.supported_regimes??[],
+      validation_selected_regimes:profile.validation_selected_regimes??[],
+      selected_regimes:profile.selected_regimes??[]
+    };
+    const artifact=makeArtifact({
+      name,family,version,sourceCommitSha,
+      featureSchemaId,featureNames:temporalNames,
+      normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
+      modelState:variantState
+    });
+    const verified=verifyVersionedModelArtifact(artifact,{
+      expectedSourceCommitSha:sourceCommitSha
+    });
+    if(!verified.valid){
+      unavailable[family]={reason:'TEMPORAL_VARIANT_ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
+      return;
+    }
+    const outputModes={};
+    const scored=predictionAttempt(eventRows,row=>{
+      const output=predictTemporalVariantResearchOutput(
+        row.temporal_sequence,variantState,{
+          allowDiagnostic:true,expectedPoolingMode:expectedPooling
+        }
+      );
+      if(output?.mode)outputModes[output.mode]=(outputModes[output.mode]||0)+1;
+      return output?.probability??null;
+    },{
+      sourceCommitSha,artifactSha256:artifact.artifact_sha256,modelName:family
+    });
+    if(!scored.valid){
+      unavailable[family]={reason:scored.reason,diagnostic_only:!bothRegimesSelected};
+      return;
+    }
+    modelArtifactsByModel[family]=artifact;
+    predictionsByModel[family]=scored.rows;
+    trainingArtifacts[family]={
+      artifact_sha256:artifact.artifact_sha256,
+      architecture,temporal_pooling:expectedPooling,
+      inference_regimes:inferenceRegimes,
+      research_output_modes:outputModes,
+      status:profile.status,
+      both_btc_regimes_inner_qualified:bothRegimesSelected,
+      out_of_sample_validated:profile.research_out_of_sample_validated===true,
+      diagnostic_only:!bothRegimesSelected,
+      validation_brier:profile.validation?.model_brier_score??null,
+      validation_logistic_brier:profile.validation_logistic?.model_brier_score??null,
+      holdout_brier:profile.holdout?.model_brier_score??null,
+      holdout_logistic_brier:profile.holdout_logistic?.model_brier_score??null
+    };
+  }
+
+  exportTemporalPoolingVariant({
+    family:'TCN_V9',name:'RADARX_TCN_V9_ORDERED_PYRAMID_FIRST_TOUCH_4H',
+    version:'TCN_V9_ORDERED_PYRAMID_4H_V1',
+    profile:temporalProfile?.regime_local_tcn_pyramid_challenger,
+    expectedPooling:TEMPORAL_ORDERED_POOLING_MODE,
+    architecture:TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+    modelKind:'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1',
+    featureSchemaId:'RADARX_TEMPORAL_TCN_V9_ORDERED_24X29_V1'
+  });
+  exportTemporalPoolingVariant({
+    family:'TCN_V10',name:'RADARX_TCN_V10_MULTISCALE_FIRST_TOUCH_4H',
+    version:'TCN_V10_MULTISCALE_4H_V1',
+    profile:temporalProfile?.regime_local_tcn_multiscale_challenger,
+    expectedPooling:TEMPORAL_MULTISCALE_POOLING_MODE,
+    architecture:TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+    modelKind:'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1',
+    featureSchemaId:'RADARX_TEMPORAL_TCN_V10_MULTISCALE_24X29_V1'
+  });
+
   if(temporalProfile?._research_fit){
-    const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
-      'temporal_channel_'+String(index).padStart(2,'0'));
     const tcnArtifact=makeArtifact({
       name:'RADARX_TCN_V8_FIRST_TOUCH_4H',
       family:'TCN_V8',version:'TCN_V8_FIRST_TOUCH_4H_V2',
