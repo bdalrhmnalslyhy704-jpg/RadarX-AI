@@ -184,7 +184,7 @@ test('fixed-SHA calibration fit and check blocks retain independent 50/50 class 
 });
 
 test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
-  const rows=validateFourHourRows(makeRows({days:20,rowsPerDay:400}));
+  const rows=validateFourHourRows(makeRows({days:20,rowsPerDay:100}));
   const split=splitFourHourRows(rows);
   const blocks=buildNeuralClosureCalibrationBlocks(split.validation);
   assert.ok(blocks.support.fit.positive<50||blocks.support.check.positive<50||
