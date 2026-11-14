@@ -698,29 +698,45 @@ function probabilitiesFor(rows,map,calibrator=null) {
     return calibrator?applyProbabilityCalibrator(rawLogit,calibrator):p;
   });
 }
-function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{purgedRows=[],calibrationDays=null}={}) {
+export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
+  purgedRows=[],calibrationDays=null
+}={}){
   const fitLabels=fitRows.map(row=>row.target);
   const fitLogits=probabilitiesFor(fitRows,rawMap).map(logit);
-  const rawCheck=probabilitiesFor(checkRows,rawMap);
   const checkLabels=checkRows.map(row=>row.target);
+  const rawCheck=probabilitiesFor(checkRows,rawMap);
   const rawCheckBrier=brier(rawCheck,checkLabels);
-  const temperature=fitTemperatureScaler(fitLogits,fitLabels,{
-    minimumPositives,minimumNegatives:minimumPositives});
-  const platt=fitPlattScaler(fitLogits,fitLabels,{
-    minimumPositives,minimumNegatives:minimumPositives});
-  const candidates=[{calibrator:null,method:'RAW',brier:rawCheckBrier},
-    ...[temperature,platt].filter(item=>item.fitted).map(calibrator=>({
-      calibrator,method:calibrator.method,
-      brier:brier(probabilitiesFor(checkRows,rawMap,calibrator),checkLabels)
-    }))].filter(item=>finite(item.brier));
-  candidates.sort((a,b)=>a.brier-b.brier||a.method.localeCompare(b.method));
-  const best=candidates[0]||{calibrator:null,method:'RAW',brier:null};
-  const supportReady=temperature.fitted&&platt.fitted;
+
+  // Calibration algorithm is predeclared: Platt is fitted only on the
+  // calibration-fit block. The check block is a sealed evaluation block and
+  // must never be used to choose between RAW / temperature / Platt.
+  const temperature={
+    method:'TEMPERATURE_SCALING',status:'NOT_FIT_PREDECLARED_PLATT_ONLY',
+    fitted:false,accepted:false,fit_partition:'NOT_USED'
+  };
+  const fittedPlatt=fitPlattScaler(fitLogits,fitLabels,{
+    minimumPositives,minimumNegatives:minimumPositives
+  });
+  const platt={...fittedPlatt,fit_partition:'CALIBRATION_FIT_ONLY'};
+  const selectedCalibrator=platt.fitted===true&&platt.accepted===true
+    ?platt:null;
+  const selectedMethod=selectedCalibrator
+    ?'PLATT_SCALING_FIT_ONLY':'RAW_PLATT_NOT_ACCEPTED';
+  const selectedCheckProbabilities=probabilitiesFor(
+    checkRows,rawMap,selectedCalibrator
+  );
+  const selectedCheckBrier=brier(selectedCheckProbabilities,checkLabels);
+  const supportReady=platt.fitted===true;
   return {
     status:supportReady?'EVALUATED':'INSUFFICIENT_CLASS_SUPPORT',
-    selected_method:best.method,selected_calibrator:best.calibrator,
-    raw_check_brier:rawCheckBrier,selected_check_brier:best.brier,
-    improvement:rawCheckBrier!==null&&best.brier!==null?rawCheckBrier-best.brier:null,
+    selected_method:selectedMethod,
+    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
+    selected_calibrator:selectedCalibrator,
+    raw_check_brier:rawCheckBrier,
+    selected_check_brier:selectedCheckBrier,
+    check_block_used_for_calibrator_selection:false,
+    improvement:rawCheckBrier!==null&&selectedCheckBrier!==null
+      ?rawCheckBrier-selectedCheckBrier:null,
     temperature,platt,
     calibration_fit_support:classCounts(fitLabels),
     calibration_check_support:classCounts(checkLabels),
