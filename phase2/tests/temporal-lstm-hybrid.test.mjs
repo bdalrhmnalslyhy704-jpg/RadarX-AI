@@ -15,6 +15,7 @@ import {
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
+  splitFourHourTcnLstmTrainingRows,
   selectTcnLstmHybridHyperparameters,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
@@ -418,4 +419,64 @@ test('exported Platt fitting accepts only supplied calibration rows and reports 
   );
   assert.equal(unsupported.fitted,false);
   assert.equal(unsupported.reason,'TCN_LSTM_CALIBRATION_SUPPORT_BELOW_MINIMUM');
+});
+
+
+test('four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train and purges every 4h boundary',()=>{
+  const fourHourRows=makeRows(0,120,'outer-train').map(row=>({
+    ...row,resolved_at:row.at+4*60*60*1000
+  }));
+  const external=makeRows(125,12,'outer-validation').map(row=>{
+    const value={
+      id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.at+4*60*60*1000,
+      sequence:row.sequence,temporal_sequence_timestamps:row.temporal_sequence_timestamps
+    };
+    Object.defineProperty(value,'target',{
+      enumerable:true,get(){throw new Error('EXTERNAL_VALIDATION_LABEL_READ_DURING_INTERNAL_SPLIT');}
+    });
+    return value;
+  });
+  const result=splitFourHourTcnLstmTrainingRows(fourHourRows,external,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(result.status,'READY');
+  assert.equal(result.schema,'RADARX_TCN_LSTM_FOUR_HOUR_PURGED_INNER_SPLIT_V1');
+  assert.equal(result.external_validation_labels_read,false);
+  assert.equal(result.chronology_valid,true);
+  assert.equal(result.identities_valid,true);
+  const {training,selection,calibration}=result.partitions;
+  assert.ok(training.length>=20&&selection.length>=20&&calibration.length>=20);
+  assert.ok(Math.max(...training.map(row=>row.resolved_at))<
+    Math.min(...selection.map(row=>row.at)));
+  assert.ok(Math.max(...selection.map(row=>row.resolved_at))<
+    Math.min(...calibration.map(row=>row.at)));
+  assert.ok(Math.max(...calibration.map(row=>row.resolved_at))<
+    Math.min(...external.map(row=>row.at)));
+  const outerTrainIds=new Set(fourHourRows.map(row=>row.id));
+  for(const row of [...training,...selection,...calibration])
+    assert.ok(outerTrainIds.has(row.id),'inner partition row must originate from outer train');
+  assert.equal(new Set([...training,...selection,...calibration].map(row=>row.id)).size,
+    training.length+selection.length+calibration.length);
+});
+
+test('four-hour TCN-LSTM splitter rejects non-four-hour labels and outer boundary leakage',()=>{
+  const rows=makeRows(0,120,'outer-train').map(row=>({
+    ...row,resolved_at:row.at+4*60*60*1000
+  }));
+  const external=makeRows(125,12,'outer-validation').map(row=>({
+    id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.at+4*60*60*1000,
+    sequence:row.sequence,temporal_sequence_timestamps:row.temporal_sequence_timestamps
+  }));
+  const wrongHorizon=rows.map((row,index)=>index===0
+    ?{...row,resolved_at:row.at+24*60*60*1000}:row);
+  const rejected=splitFourHourTcnLstmTrainingRows(wrongHorizon,external,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(rejected.status,'ABSTAIN_FOUR_HOUR_LABEL_MATURITY_MISMATCH');
+  const leaked=external.map((row,index)=>index===0
+    ?{...row,at:rows.at(-1).at+60_000,resolved_at:rows.at(-1).at+4*60*60*1000}:row);
+  const leakage=splitFourHourTcnLstmTrainingRows(rows,leaked,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(leakage.status,'ABSTAIN_OUTER_TRAIN_VALIDATION_PURGE_FAILED');
 });
