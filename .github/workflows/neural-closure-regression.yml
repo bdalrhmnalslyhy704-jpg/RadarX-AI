@@ -5,6 +5,7 @@ on:
     branches:
       - research/neural-closure-4h-20261114
     paths:
+      - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
       - 'phase2/core/feature-parity-guardian.mjs'
@@ -25,6 +26,7 @@ on:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
     paths:
+      - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
       - 'phase2/core/feature-parity-guardian.mjs'
