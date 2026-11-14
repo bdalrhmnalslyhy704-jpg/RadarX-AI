@@ -6,6 +6,7 @@ export const NEURAL_CLOSURE_HORIZON_MS = 4 * 60 * 60 * 1000;
 export const NEURAL_CLOSURE_PURGE_MS = 24 * 60 * 60 * 1000;
 export const NEURAL_CLOSURE_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_1M_FIRST_TOUCH_4H_V1';
+export const NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS = 15 * 60 * 1000;
 export const NEURAL_CLOSURE_MIN_CLASS_SUPPORT = 50;
 export const NEURAL_CLOSURE_BRIER_MARGIN = 0.003;
 export const NEURAL_CLOSURE_MODEL_FAMILIES = Object.freeze([
@@ -53,7 +54,7 @@ export function sha256Canonical(value) {
  */
 export function buildFourHourFirstTouchOutcome({
   id,symbol,baselineAt,baselinePrice,candles,
-  featureInformationCutoffAt=baselineAt
+  featureInformationCutoffAt=baselineAt,marketContext={}
 }={}){
   const fail=(reason,extra={})=>({training_eligible:false,status:'REJECTED',
     reason,id:id??null,symbol:symbol??null,...extra});
@@ -63,30 +64,41 @@ export function buildFourHourFirstTouchOutcome({
     Number(featureInformationCutoffAt)!==Number(baselineAt))
     return fail('BASELINE_OR_FEATURE_CUTOFF_INVALID');
   const at=Number(baselineAt),price=Number(baselinePrice);
-  if(at%60_000!==0)return fail('BASELINE_NOT_ON_ONE_MINUTE_BOUNDARY');
+  if(!Number.isInteger(at))return fail('BASELINE_TIMESTAMP_MUST_BE_INTEGER_MILLISECONDS');
   if(!Array.isArray(candles)||candles.length!==240)
     return fail('EXACT_240_CLOSED_ONE_MINUTE_CANDLES_REQUIRED');
   const takePrice=price*1.03,stopPrice=price*0.98;
   let outcome='FLAT',resolution='HORIZON_END',firstTouchAt=at+NEURAL_CLOSURE_HORIZON_MS;
   let ambiguous=false;
+  // Binance closed klines end at open_time + 59,999 ms. The first
+  // post-decision minute therefore opens one millisecond after the prior
+  // closed-candle cutoff; 240 consecutive bars then end exactly at +4h.
   for(let index=0;index<240;index++){
     const candle=candles[index];
-    const expectedOpen=at+(index+1)*60_000;
-    const open=number(candle?.open_time??candle?.openTime);
-    const close=number(candle?.close_time??candle?.closeTime);
-    const high=number(candle?.high),low=number(candle?.low);
-    if(candle?.is_closed!==true||open!==expectedOpen||close!==expectedOpen+59_999||
-      high===null||low===null||high<low||low<=0)
+    const expectedOpen=at+1+index*60_000;
+    const openTime=number(candle?.open_time??candle?.openTime);
+    const closeTime=number(candle?.close_time??candle?.closeTime);
+    const open=number(candle?.open),high=number(candle?.high);
+    const low=number(candle?.low),close=number(candle?.close);
+    if(candle?.is_closed!==true||openTime!==expectedOpen||
+      closeTime!==expectedOpen+59_999||open===null||high===null||
+      low===null||close===null||open<=0||low<=0||close<=0||
+      high<low||high<Math.max(open,close)||low>Math.min(open,close))
       return fail('ONE_MINUTE_CANDLE_GAP_OPEN_OR_INVALID:'+index);
+  }
+  for(let index=0;index<240;index++){
+    const candle=candles[index];
+    const expectedOpen=at+1+index*60_000;
+    const high=Number(candle.high),low=Number(candle.low);
     const hitTake=high>=takePrice,hitStop=low<=stopPrice;
-    if(hitTake&&hitStop){
-      ambiguous=true;break;
-    }
+    if(hitTake&&hitStop){ambiguous=true;break;}
     if(hitTake){
-      outcome='UP';resolution='TAKE_PROFIT_FIRST';firstTouchAt=expectedOpen+59_999;break;
+      outcome='UP';resolution='TAKE_PROFIT_FIRST';
+      firstTouchAt=expectedOpen+59_999;break;
     }
     if(hitStop){
-      outcome='DOWN';resolution='STOP_LOSS_FIRST';firstTouchAt=expectedOpen+59_999;break;
+      outcome='DOWN';resolution='STOP_LOSS_FIRST';
+      firstTouchAt=expectedOpen+59_999;break;
     }
   }
   if(ambiguous)return fail('AMBIGUOUS_BOTH_BARRIERS_TOUCHED_IN_ONE_MINUTE_CANDLE',{
@@ -110,6 +122,12 @@ export function buildFourHourFirstTouchOutcome({
       take_profit_price:takePrice,stop_loss_price:stopPrice
     },
     realized_return_pct:(finalClose/price-1)*100,
+    market_context:marketContext&&typeof marketContext==='object'?{
+      kama_efficiency_ratio:marketContext.kama_efficiency_ratio??null,
+      atr_pct:marketContext.atr_pct??null,
+      atr_baseline_pct:marketContext.atr_baseline_pct??null
+    }:null,
+    closed_candle_baseline:true,
     training_eligible:true,status:'RESOLVED'
   };
 }
