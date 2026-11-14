@@ -381,9 +381,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.anchor_trust_radius,0);
     assert.equal(profile.neural_network.max_anchor_skip_delta,0);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
-    assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
+    assert.equal(profile.neural_network.training_objective, 'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1');
     assert.equal(profile.neural_network.training_strategy,
-      'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE');
+      'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -423,12 +423,12 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok([0, 0.1, 0.25, 0.5, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
     assert.deepEqual(profile.neural_network.member_training_objectives,[
-      'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-      'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      'FOCAL_ASYMMETRIC_BRIER',
+      'FOCAL_ASYMMETRIC_BRIER',
+      'FOCAL_ASYMMETRIC_BRIER'
     ]);
     assert.equal(profile.neural_network.member_training_profiles[2].positiveClassWeighting,
-      'SQRT_INVERSE_PREVALENCE');
+      'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
     assert.ok(profile.neural_network.internal_selection_logistic_brier>=0);
     assert.ok(profile.neural_network.member_selection_brier_scores.every(row=>
       typeof row.beats_same_window_logistic==='boolean'));
