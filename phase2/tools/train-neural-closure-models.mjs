@@ -225,6 +225,9 @@ async function main(){
   if(datasetSha!==input.dataset_sha256)
     throw new Error('NEURAL_CLOSURE_DATASET_CANONICAL_SHA_MISMATCH');
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_DATASET_BELOW_600_ROWS');
+  if(rows.some(row=>!Array.isArray(row.temporal_feature_names)||
+    row.temporal_feature_names[19]!=='btc_trend_return_12bar'))
+    throw new Error('TEMPORAL_SEQUENCE_CHANNEL_19_MUST_BE_BTC_TREND_RETURN_12BAR');
   const split=splitFourHourRows(rows);
   const supports={
     train:assertMinimumClassSupport('train',split.train),
@@ -325,8 +328,8 @@ async function main(){
       'temporal_channel_'+String(index).padStart(2,'0'));
     const tcnArtifact=makeArtifact({
       name:'RADARX_TCN_V11_FIRST_TOUCH_4H',
-      family:'TCN_V11',version:'TCN_V11_FIRST_TOUCH_4H_V1',
-      sourceCommitSha,featureSchemaId:'RADARX_TEMPORAL_TCN_SEQUENCE_24X29_V1',
+      family:'TCN_V11',version:'TCN_V11_FIRST_TOUCH_4H_V2',
+      sourceCommitSha,featureSchemaId:'RADARX_TEMPORAL_TCN_SEQUENCE_24X29_V2',
       featureNames:temporalNames,
       normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
       modelState:{fit:temporalProfile._research_fit,
