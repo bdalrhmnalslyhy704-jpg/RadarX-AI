@@ -125,6 +125,7 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
     'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available',
+    'btc_trend_return_12bar',
     'short_return_acceleration', 'three_bar_momentum_reversal', 'fast_slow_mean_spread',
     'higher_low_reclaim', 'prior_high_reclaim'
   ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
@@ -147,7 +148,9 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
   assert.ok(built.sequence.at(-1)[11] > 0, 'aggregate trade buy imbalance should be represented');
   assert.ok(built.sequence.at(-1)[12] > 0, 'bid depth imbalance should be represented');
-  assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
+  assert.ok(Math.abs(built.sequence.at(-1)[19] -
+    Math.max(-4,Math.min(4,built.btc_trend_return_pct/4))) < 1e-6,
+    'channel 19 must encode the observed 12-bar BTC trend, not book availability');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
   assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
   const sparse = buildHybridSequence({
