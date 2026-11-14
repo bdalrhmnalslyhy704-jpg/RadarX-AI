@@ -38,7 +38,7 @@ function makeRows({days=20,rowsPerDay=400}={}){
       realized_return_pct:positive?3.4:outcome==='DOWN'?-2.3:0.08,
       first_touch:{
         resolution:positive?'TAKE_PROFIT_FIRST':outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END',
-        first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
+        first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+1,
         path_resolution:'1M',observed_candles:240,raw_klines_sha256:'a'.repeat(64),
         baseline_price:100,take_profit_price:103,stop_loss_price:98,
         exit_price:positive?103.4:outcome==='DOWN'?97.7:100.08,
