@@ -76,7 +76,7 @@ test('14-day observation records only paper predictions and matured 4h outcomes'
     assert.equal(completed.status,'COMPLETE_REVIEW_REQUIRED');
     assert.equal(completed.predictions,1);
     assert.equal(completed.matured_outcomes,1);
-    assert.equal(completed.brier_score,0.09);
+    assert.ok(Math.abs(completed.brier_score-0.09)<1e-12);
     assert.equal(completed.promotion_ready,false);
     assert.equal(completed.policy.live_orders_sent,0);
     assert.equal(completed.policy.real_order_execution,false);
