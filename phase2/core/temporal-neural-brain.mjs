@@ -2550,6 +2550,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
   const temporalLabelResolution=outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
     ?'1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES':'15M_ONLY';
+  const waitingStatus=outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
+    ?'WAITING_FOR_FOUR_HOUR_FIRST_TOUCH_SAMPLES':'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES';
   const rows=cleanRows(samples,{targetDefinition,outcomeHorizonMs:horizonMs,allowedOutcomeSources,
     outcomeContractKind,requireSequenceTimestamps,sequenceIntervalMs});
   const regimes=['BTC_RISK_ON','BTC_RISK_OFF'];
@@ -2608,7 +2610,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   const trainingEndIndex=uniqueTimes.length-holdoutCount-validationCount;
   const enoughSplit=trainingEndIndex>0;
   if(!enoughSplit)return{
-    status:'WAITING_FOR_TEMPORAL_FIRST_PASSAGE_SAMPLES',
+    status:waitingStatus,
     architecture,target_definition:targetDefinition,outcome_contract_kind:outcomeContractKind,temporal_label_resolution:temporalLabelResolution,
     sequence_steps:TEMPORAL_SEQUENCE_STEPS,sequence_channels:TEMPORAL_SEQUENCE_CHANNELS,
     ensemble_members:0,ensemble_members_required:SEEDS.length,
