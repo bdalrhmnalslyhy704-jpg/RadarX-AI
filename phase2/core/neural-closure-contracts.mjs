@@ -118,6 +118,7 @@ export function buildFourHourFirstTouchOutcome({
     at,resolved_at:resolvedAt,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
     feature_information_cutoff_at:at,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
     outcome,target:outcome==='UP'?1:0,
     first_touch:{
