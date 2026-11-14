@@ -76,6 +76,40 @@ test('MLP V5 training loop consumes the asymmetric same-time ranking objective',
     'the MLP ranking objective diagnostics must remain finite');
 });
 
+test('V5 ensemble trains every MLP member with Focal-Asymmetric Brier and train-only class weights',()=>{
+  const rows=Array.from({length:60*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    const at=BASE_TIME+group*8*60*60*1000;
+    const up=within%5===0;
+    return {
+      ...sample(index,up?'UP':'DOWN'),
+      id:'MLP-FOCAL:'+group+':'+within,
+      symbol:'FOCAL'+String(within).padStart(3,'0')+'USDT',
+      at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome:up?'UP':'DOWN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'
+    };
+  });
+  const profile=buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:60,minimumValidationSamples:20,minimumHoldoutSamples:20,
+    minimumNeuralSelectionSamples:20,minimumNeuralSelectionPositiveSamples:6,
+    minimumNeuralSelectionNegativeSamples:6,minNeuralTrainingSamples:60,
+    maxNeuralTrainingSamples:400,neuralIterations:30,neuralTrainingHistoryFraction:1
+  });
+  const neural=profile.neural_network;
+  assert.ok(neural&&neural.member_training_profiles?.length===3,
+    'V5 should fit three deterministic MLP candidates: '+JSON.stringify({
+      status:neural?.status,fit:neural?.fit_training_samples
+    }));
+  assert.deepEqual(neural.member_training_objectives,
+    ['FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER']);
+  assert.ok(neural.members.every(member=>
+    member.training_objective==='FOCAL_ASYMMETRIC_BRIER'&&
+    member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
+    Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
+    Number.isFinite(member.focal_asymmetric_brier.negative_weight)));
+});
+
 test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
   assert.equal(COGNITIVE_FEATURE_SCHEMA,'CROSS_ASSET_EARLY_FLOW_FEATURES_V2');
   const index=Object.fromEntries(COGNITIVE_FEATURE_NAMES.map((name,i)=>[name,i]));
