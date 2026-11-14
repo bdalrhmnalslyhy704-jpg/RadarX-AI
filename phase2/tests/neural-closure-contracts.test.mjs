@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
@@ -36,16 +37,33 @@ function makeRows({days=20,rowsPerDay=400}={}){
   }
   return rows;
 }
-function makePredictions(rows){
+function makeArtifacts(sourceCommitSha){
+  return Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map((family,index)=>[
+    family,createVersionedModelArtifact({
+      modelName:family,modelFamily:family,modelVersion:'1.0.0',
+      sourceCommitSha,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      featureSchemaId:'RADARX_FOUR_HOUR_TEST_FEATURES_V1',
+      featureNames:['feature_a','feature_b'],
+      featureIndexMap:{feature_a:0,feature_b:1},
+      normalization:{mean:[0,0],std:[1,1]},
+      modelState:{weights:[index/100+0.1,0.2],bias:0}
+    })
+  ]));
+}
+function makePredictions(rows,sourceCommitSha,artifacts){
   const evaluated=rows.filter(row=>{
     const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
     return (day>=13&&day<=15)||(day>=17);
   });
-  const make=(positive,negative)=>evaluated.map(row=>({
-    id:row.id,probability:row.target?positive:negative
+  const make=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
+    id:row.id,probability:row.target?positive:negative,
+    source_commit_sha:sourceCommitSha,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    artifact_sha256:artifactSha256
   }));
-  const output={LOGISTIC_REGRESSION:make(0.72,0.24)};
-  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)output[family]=make(0.73,0.23);
+  const output={LOGISTIC_REGRESSION:make(0.72,0.24,null)};
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
+    output[family]=make(0.73,0.23,artifacts[family].artifact_sha256);
   return output;
 }
 
@@ -138,10 +156,11 @@ test('temperature and Platt scaling fit only with 50+ positive and negative supp
 });
 
 test('fixed-SHA evaluator compares identical event identities and refuses false superiority',()=>{
-  const rows=makeRows();
+  const rows=makeRows(),sourceCommitSha='a'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictionsByModel=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:makePredictions(rows),
-    sourceCommitSha:'a'.repeat(40)
+    rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
   assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
@@ -149,6 +168,10 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.integrity.row_count,8000);
   assert.match(report.integrity.dataset_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.fixed_benchmark_sha256,/^[a-f0-9]{64}$/);
+  assert.match(report.integrity.model_artifacts_sha256,/^[a-f0-9]{64}$/);
+  assert.match(report.integrity.prediction_matrix_sha256,/^[a-f0-9]{64}$/);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
+  assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
@@ -161,11 +184,12 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
 });
 
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
-  const rows=makeRows();
-  const predictions=makePredictions(rows);
+  const rows=makeRows(),sourceCommitSha='b'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
   predictions.TCN_V11=predictions.TCN_V11.slice(1);
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,sourceCommitSha:'b'.repeat(40)
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
   });
   assert.equal(report.models.TCN_V11.status,'NOT_EVALUATED');
   assert.equal(report.models.TCN_V11.acceptance.status,'NOT_EVALUATED');
@@ -217,4 +241,19 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
     id:'label-gap',symbol:'BNBUSDT',baselineAt:at,baselinePrice:100,candles:gap
   });
   assert.equal(invalid.training_eligible,false);
+});
+
+
+test('fixed-SHA evaluator refuses candidate predictions without an exact versioned model artifact',()=>{
+  const rows=makeRows(),sourceCommitSha='c'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  delete modelArtifactsByModel.TCN_V11;
+  const predictionsByModel=makePredictions(rows,sourceCommitSha,makeArtifacts(sourceCommitSha));
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
+  });
+  assert.equal(report.models.TCN_V11.status,'NOT_EVALUATED');
+  assert.equal(report.models.TCN_V11.reason,'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING');
+  assert.equal(report.models.TCN_V11.acceptance.passed,false);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length-1);
 });
