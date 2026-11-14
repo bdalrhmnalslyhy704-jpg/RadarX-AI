@@ -863,6 +863,30 @@ function zerosLike(value) {
   }
   return typeof value === 'number' ? 0 : value;
 }
+function accumulateTreeInPlace(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length)
+      throw new TypeError('HYBRID_GRADIENT_TREE_SHAPE_MISMATCH');
+    for (let index = 0; index < left.length; index++)
+      left[index] = accumulateTreeInPlace(left[index], right[index]);
+    return left;
+  }
+  if ((left && typeof left === 'object') || (right && typeof right === 'object')) {
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object')
+      throw new TypeError('HYBRID_GRADIENT_TREE_TYPE_MISMATCH');
+    const leftKeys = Object.keys(left), rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length || leftKeys.some(key => !Object.hasOwn(right, key)))
+      throw new TypeError('HYBRID_GRADIENT_TREE_KEYS_MISMATCH');
+    for (const key of leftKeys) left[key] = accumulateTreeInPlace(left[key], right[key]);
+    return left;
+  }
+  if (!Number.isFinite(left) || !Number.isFinite(right))
+    throw new TypeError('HYBRID_GRADIENT_TREE_NON_FINITE');
+  const sum = left + right;
+  if (!Number.isFinite(sum)) throw new TypeError('HYBRID_GRADIENT_ACCUMULATION_NON_FINITE');
+  return sum;
+}
+
 function addTrees(left, right) {
   if (Array.isArray(left)) return left.map((value, index) => addTrees(value, right[index]));
   if (left && typeof left === 'object') {
@@ -1361,11 +1385,19 @@ export function trainHybridTcnAttention(trainingRows, {
   const totalEpochs = Math.max(1, Math.min(50, Math.trunc(Number(epochs) || 8)));
   const trace = [];
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
-    const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
-    if(caches.some(cache=>!Number.isFinite(cache.probability)||
-        cache.probability<0||cache.probability>1||!Number.isFinite(cache.rawLogit)))
-      throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE');
-    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
+    // Retain scalar probabilities only. A full forward cache contains every
+    // time-step activation and convolution tensor; keeping one for every row
+    // caused replay #129 to exceed a 4 GiB JS heap on the 33-symbol cohort.
+    // The gradient pass below deterministically recomputes one cache at a time.
+    const probabilities = new Array(normalizedRows.length);
+    for (let index = 0; index < normalizedRows.length; index++) {
+      const prediction = forwardHybrid(normalizedRows[index].sequence, model);
+      if (!Number.isFinite(prediction.probability) || prediction.probability < 0 ||
+          prediction.probability > 1 || !Number.isFinite(prediction.rawLogit))
+        throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE:' + index);
+      probabilities[index] = prediction.probability;
+    }
+    const objective = profitDrawdownObjective(probabilities, normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
     if(!Number.isFinite(objective.loss)||
@@ -1373,11 +1405,14 @@ export function trainHybridTcnAttention(trainingRows, {
        objective.logit_gradients.length!==normalizedRows.length||
        objective.logit_gradients.some(value=>!Number.isFinite(value)))
       throw new TypeError('HYBRID_TCN_OBJECTIVE_OR_GRADIENT_NON_FINITE');
-    let gradients = zerosLike(parameters());
+    const gradients = zerosLike(parameters());
     for (let index = 0; index < normalizedRows.length; index++) {
-      const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
+      const cache = forwardHybrid(normalizedRows[index].sequence, model);
+      if (!Number.isFinite(cache.probability) || !Number.isFinite(cache.rawLogit))
+        throw new TypeError('HYBRID_TCN_BACKPROP_FORWARD_NON_FINITE:' + index);
+      const item = gradientsForHybrid(normalizedRows[index].sequence, model, cache,
         objective.logit_gradients[index]);
-      gradients = addTrees(gradients, item);
+      accumulateTreeInPlace(gradients, item);
     }
     const update = adamUpdate(parameters(), gradients, optimizer, epoch,
       clamp(Number(learningRate) || 0.003, 0.0001, 0.02), Math.max(0, Number(l2) || 0));
@@ -1399,6 +1434,12 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
+    memory_profile: {
+      forward_cache_strategy: 'SCALAR_PROBABILITY_PASS_THEN_SINGLE_ROW_RECOMPUTE',
+      maximum_simultaneous_forward_caches: 1,
+      retained_per_epoch_values: 'ONE_PROBABILITY_PER_ROW',
+      full_cache_recomputation_count_per_epoch: rows.length
+    },
     training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
     objective_trace: trace
   };
