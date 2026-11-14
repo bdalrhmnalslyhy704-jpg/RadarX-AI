@@ -784,10 +784,10 @@ export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
     };
     const adversePriority=row.outcome==='DOWN'?1:0;
     const favorablePriority=row.outcome==='DOWN'?0:1;
-    if(Number(row.max_adverse_excursion_at)<exitAt)
+    if(Number(row.max_adverse_excursion_at)<=exitAt)
       events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',
         priority:adversePriority,position,value:Number(row.max_adverse_excursion_pct)});
-    if(Number(row.max_favorable_excursion_at)<exitAt)
+    if(Number(row.max_favorable_excursion_at)<=exitAt)
       events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',
         priority:favorablePriority,position,value:Number(row.max_favorable_excursion_pct)});
     events.push({at:exitAt,type:'EXIT',priority:2,position});
