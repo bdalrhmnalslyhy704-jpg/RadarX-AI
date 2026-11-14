@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {verifyVersionedModelArtifact} from './model-artifact-guardian.mjs';
 
 export const NEURAL_CLOSURE_TARGET_DEFINITION =
   'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1';
@@ -458,7 +459,9 @@ function chronologicalValidationBlocks(rows) {
     check:rows.filter(row=>checkDays.has(Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS))
   };
 }
-function predictionMap(predictions,modelName,requiredIds) {
+function predictionMap(predictions,modelName,requiredIds,{
+  sourceCommitSha,targetDefinition,artifactSha256=null
+}={}) {
   if(!Array.isArray(predictions))
     return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
   const map=new Map();
@@ -467,6 +470,14 @@ function predictionMap(predictions,modelName,requiredIds) {
     if(!id||map.has(id)||!finite(item?.probability)||
       Number(item.probability)<0||Number(item.probability)>1)
       return {valid:false,reason:'MODEL_PREDICTION_DUPLICATE_OR_INVALID:'+modelName,map};
+    if(String(item?.source_commit_sha||'').toLowerCase()!==String(sourceCommitSha).toLowerCase())
+      return {valid:false,reason:'MODEL_PREDICTION_SOURCE_SHA_MISMATCH:'+modelName,map};
+    if(item?.target_definition!==targetDefinition)
+      return {valid:false,reason:'MODEL_PREDICTION_TARGET_DEFINITION_MISMATCH:'+modelName,map};
+    if(artifactSha256
+      ?String(item?.artifact_sha256||'').toLowerCase()!==artifactSha256
+      :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
+      return {valid:false,reason:'MODEL_PREDICTION_ARTIFACT_SHA_MISMATCH:'+modelName,map};
     map.set(id,Number(item.probability));
   }
   const missing=requiredIds.filter(id=>!map.has(id));
@@ -582,6 +593,7 @@ function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
 export function runNeuralClosureBenchmark({
   rows:inputRows,
   predictionsByModel,
+  modelArtifactsByModel,
   sourceCommitSha,
   minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   roundTripCostBps=30,
@@ -594,6 +606,8 @@ export function runNeuralClosureBenchmark({
     throw new Error('NEURAL_CLOSURE_FULL_SOURCE_SHA_REQUIRED');
   if(!predictionsByModel||typeof predictionsByModel!=='object')
     throw new TypeError('NEURAL_CLOSURE_PREDICTIONS_BY_MODEL_REQUIRED');
+  if(!modelArtifactsByModel||typeof modelArtifactsByModel!=='object')
+    throw new TypeError('NEURAL_CLOSURE_MODEL_ARTIFACTS_BY_MODEL_REQUIRED');
   const rows=validateFourHourRows(inputRows);
   const split=splitFourHourRows(rows);
   if(!split.train.length||!split.validation.length||!split.holdout.length)
@@ -612,17 +626,35 @@ export function runNeuralClosureBenchmark({
     realized_return_pct:row.realized_return_pct??null,
     features:row.features??null,temporal_sequence:row.temporal_sequence??null
   })));
-  const fixedBenchmarkSha=sha256Canonical({
-    source_commit_sha:String(sourceCommitSha).toLowerCase(),
-    dataset_sha256:datasetSha,row_count:rows.length,
-    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
-    split_schema:split.schema,purge_ms:NEURAL_CLOSURE_PURGE_MS
-  });
   const calibrationBlocks=chronologicalValidationBlocks(split.validation);
   const modelNames=['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES];
-  const models={};
+  const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
   for(const modelName of modelNames){
-    const verified=predictionMap(predictionsByModel[modelName],modelName,requiredIds);
+    let artifactSha256=null,artifactVerification=null;
+    if(modelName!=='LOGISTIC_REGRESSION'){
+      const artifact=modelArtifactsByModel[modelName];
+      if(!artifact){
+        models[modelName]={status:'NOT_EVALUATED',
+          reason:'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING'};
+        continue;
+      }
+      artifactVerification=verifyVersionedModelArtifact(artifact,{
+        expectedSourceCommitSha:String(sourceCommitSha).toLowerCase()
+      });
+      if(!artifactVerification.valid||artifact.model_family!==modelName){
+        models[modelName]={status:'NOT_EVALUATED',
+          reason:'EXACT_VERSIONED_MODEL_ARTIFACT_INVALID_OR_FAMILY_MISMATCH',
+          artifact_validation_reason:artifactVerification.reason??'MODEL_FAMILY_MISMATCH'};
+        continue;
+      }
+      artifactSha256=artifactVerification.artifact_sha256;
+      verifiedArtifactShaByModel[modelName]=artifactSha256;
+    }
+    const verified=predictionMap(predictionsByModel[modelName],modelName,requiredIds,{
+      sourceCommitSha:String(sourceCommitSha).toLowerCase(),
+      targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      artifactSha256
+    });
     if(!verified.valid){
       models[modelName]={
         status:'NOT_EVALUATED',reason:verified.reason,
@@ -632,6 +664,7 @@ export function runNeuralClosureBenchmark({
       continue;
     }
     const rawMap=verified.map;
+    verifiedPredictions.set(modelName,rawMap);
     const calibration=modelName==='LOGISTIC_REGRESSION'
       ?{status:'BASELINE_RAW',selected_method:'RAW_LOGISTIC_BASELINE',
         selected_calibrator:null,support_ready:true,
@@ -655,6 +688,7 @@ export function runNeuralClosureBenchmark({
       thresholdSelection.threshold,roundTripCostBps,metricWeights);
     models[modelName]={
       status:'EVALUATED',
+      model_artifact_sha256:artifactSha256,
       calibration,
       validation:{
         sample_count:validationRows.length,
@@ -705,6 +739,20 @@ export function runNeuralClosureBenchmark({
       gates:Object.fromEntries(Object.entries(gates).map(([key,value])=>[key,value?'PASS':'FAIL']))
     };
   }
+  const predictionMatrixSha=sha256Canonical(Object.fromEntries(modelNames.map(name=>[
+    name,verifiedPredictions.has(name)
+      ?[...verifiedPredictions.get(name).entries()].sort((a,b)=>a[0].localeCompare(b[0]))
+      :null
+  ])));
+  const modelArtifactMatrixSha=sha256Canonical(verifiedArtifactShaByModel);
+  const fixedBenchmarkSha=sha256Canonical({
+    source_commit_sha:String(sourceCommitSha).toLowerCase(),
+    dataset_sha256:datasetSha,row_count:rows.length,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    split_schema:split.schema,purge_ms:NEURAL_CLOSURE_PURGE_MS,
+    model_artifacts_sha256:modelArtifactMatrixSha,
+    prediction_matrix_sha256:predictionMatrixSha
+  });
   return {
     schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1',
     status:NEURAL_CLOSURE_MODEL_FAMILIES.some(name=>models[name]?.acceptance?.passed)
@@ -713,6 +761,9 @@ export function runNeuralClosureBenchmark({
       source_commit_sha:String(sourceCommitSha).toLowerCase(),
       dataset_sha256:datasetSha,
       fixed_benchmark_sha256:fixedBenchmarkSha,
+      model_artifacts_sha256:modelArtifactMatrixSha,
+      prediction_matrix_sha256:predictionMatrixSha,
+      verified_model_artifacts:Object.keys(verifiedArtifactShaByModel).length,
       row_count:rows.length,
       validation_plus_holdout_rows:eventRows.length,
       row_identity_sha256:sha256Canonical(requiredIds)
