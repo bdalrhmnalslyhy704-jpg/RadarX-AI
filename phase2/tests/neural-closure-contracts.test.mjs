@@ -173,16 +173,16 @@ test('fixed-SHA evaluator fails a family closed when any same-cohort prediction 
 
 
 test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
-  const at=Date.UTC(2026,2,1,0,0,0);
+  const at=Date.UTC(2026,2,1,0,0,0)+59_999;
   const makeCandles=(first)=>Array.from({length:240},(_,index)=>{
-    let high=102,low=99,close=100.5;
-    if(index===0&&first==='UP'){high=103.2;low=99;close=103.1;}
-    if(index===0&&first==='DOWN'){high=101;low=97.8;close=97.9;}
+    let open=100,high=102,low=99,close=100.5;
+    if(index===0&&first==='UP'){high=103.2;close=103.1;}
+    if(index===0&&first==='DOWN'){low=97.8;close=97.9;}
     if(index===0&&first==='AMBIGUOUS'){high=104;low=97;close=100;}
+    const openTime=at+1+index*60_000;
     return {
-      open_time:at+(index+1)*60_000,
-      close_time:at+(index+2)*60_000-1,
-      is_closed:true,high,low,close
+      open,high,low,close,open_time:openTime,
+      close_time:openTime+59_999,is_closed:true
     };
   });
   const up=buildFourHourFirstTouchOutcome({
