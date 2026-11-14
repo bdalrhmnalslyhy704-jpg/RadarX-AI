@@ -14,6 +14,7 @@ on:
       - 'phase2/tools/build-neural-closure-dataset.mjs'
       - 'phase2/core/neural-closure-json-writer.mjs'
       - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/core/binance-server-retry-policy.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'

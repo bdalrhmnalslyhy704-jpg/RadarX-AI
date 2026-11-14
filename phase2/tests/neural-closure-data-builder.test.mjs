@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
@@ -245,4 +246,19 @@ test('raw archive stream fails closed without leaving a partial gzip file',async
   }finally{
     await rm(directory,{recursive:true,force:true});
   }
+});
+
+
+test('Binance transient 5xx/408 retries are finite, exponential and never mask hard failures',()=>{
+  assert.equal(binanceServerRetryDelayMs(500,1),750);
+  assert.equal(binanceServerRetryDelayMs(502,2),1500);
+  assert.equal(binanceServerRetryDelayMs(503,3),3000);
+  assert.equal(binanceServerRetryDelayMs(504,4),null);
+  assert.equal(binanceServerRetryDelayMs(408,1),750);
+  assert.equal(binanceServerRetryDelayMs(418,1),null);
+  assert.equal(binanceServerRetryDelayMs(429,1),null);
+  assert.equal(binanceServerRetryDelayMs(451,1),null);
+  assert.equal(binanceServerRetryDelayMs(400,1),null);
+  assert.equal(binanceServerRetryDelayMs(500,1,'5'),5000);
+  assert.equal(binanceServerRetryDelayMs(500,2,'0.2'),1500);
 });

@@ -4,6 +4,7 @@ import {mkdir,writeFile,unlink} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
   NEURAL_CLOSURE_MARKET_DATA_POLICY,createNeuralClosureDecisionSchedule,
@@ -99,7 +100,7 @@ async function getJson(route,params={},weight=1){
   const url=new URL('/api/v3/'+route,BASE_URL);
   for(const [key,value] of Object.entries(params))
     if(value!==undefined&&value!==null)url.searchParams.set(key,String(value));
-  let networkAttempt=0,rateAttempt=0;
+  let networkAttempt=0,rateAttempt=0,serverAttempt=0;
   for(;;){
     await limiter.take(weight);
     let response;
@@ -133,6 +134,14 @@ async function getJson(route,params={},weight=1){
       const waitMs=Number.isFinite(retryAfter)&&retryAfter>0
         ?Math.max(1000,retryAfter*1000):Math.min(30_000,2000*rateAttempt);
       await sleep(waitMs);
+      continue;
+    }
+    const serverRetryDelay=binanceServerRetryDelayMs(
+      response.status,serverAttempt+1,response.headers.get('retry-after')
+    );
+    if(serverRetryDelay!==null){
+      serverAttempt++;
+      await sleep(serverRetryDelay);
       continue;
     }
     if(!response.ok)
