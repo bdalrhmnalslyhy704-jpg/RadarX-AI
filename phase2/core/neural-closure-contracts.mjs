@@ -782,13 +782,15 @@ export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
       row,at,exitAt,netReturn,probability:item.probability,
       capital:slotCapital,markPct:0
     };
-    events.push({at:exitAt,type:'EXIT',priority:0,position});
+    const adversePriority=row.outcome==='DOWN'?1:0;
+    const favorablePriority=row.outcome==='DOWN'?0:1;
     if(Number(row.max_adverse_excursion_at)<exitAt)
-      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',priority:1,
-        position,value:Number(row.max_adverse_excursion_pct)});
+      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',
+        priority:adversePriority,position,value:Number(row.max_adverse_excursion_pct)});
     if(Number(row.max_favorable_excursion_at)<exitAt)
-      events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',priority:2,
-        position,value:Number(row.max_favorable_excursion_pct)});
+      events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',
+        priority:favorablePriority,position,value:Number(row.max_favorable_excursion_pct)});
+    events.push({at:exitAt,type:'EXIT',priority:2,position});
     events.push({at,type:'ENTRY',priority:3,position});
   }
   events.sort((a,b)=>a.at-b.at||a.priority-b.priority||
