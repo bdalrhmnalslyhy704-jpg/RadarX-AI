@@ -61,7 +61,7 @@ jobs:
           DAYS: ${{ inputs.days || '180' }}
           MAX_SYMBOLS: ${{ inputs.max_symbols || '30' }}
         run: |
-          node --expose-gc --max-old-space-size=768 phase2/tools/build-neural-closure-dataset.mjs \
+          node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
             --days "$DAYS" \
             --maxSymbols "$MAX_SYMBOLS" \
             --minSymbols 25 \
