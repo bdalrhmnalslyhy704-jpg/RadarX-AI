@@ -15,6 +15,9 @@ on:
       - 'phase2/core/dense-generalization-projection.mjs'
       - 'phase2/tools/dense-4h-benchmark.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
@@ -34,6 +37,9 @@ on:
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/core/dense-generalization-projection.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
@@ -78,6 +84,10 @@ jobs:
           node --check phase2/core/dense-generalization-projection.mjs
           node --check phase2/tools/dense-4h-benchmark.mjs
           node --check phase2/tools/neural-closure-benchmark.mjs
+          node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/tools/build-neural-closure-dataset.mjs
+      - name: Test Binance Spot closure dataset builder and shared event features
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-data-builder.test.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
       - name: Test checksummed model artifacts and fail-closed feature parity
