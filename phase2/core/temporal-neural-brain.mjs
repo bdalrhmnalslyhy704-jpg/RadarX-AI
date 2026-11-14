@@ -4186,15 +4186,6 @@ export function predictTemporalResearchProbability(sequence,profile={}){
   const result=predictTemporalResearchOutput(sequence,profile);
   return result?.probability??null;
 }
-  if(!profile?._research_fit||!validSequence(sequence))return null;
-  const regime=regimeOfSequence(sequence);
-  if(!regime)return null;
-  const specialist=profile._research_fit.specialists_by_regime?.[regime];
-  if(!specialist||!Number.isInteger(Number(specialist.selected_member_index))||
-    Number(specialist.selected_member_index)<0)return null;
-  return predict(sequence,profile._research_fit);
-}
-
 export function predictTemporalProbability(sequence,profile={}){
   if(profile?.probability_ready!==true||!profile?._fit||!validSequence(sequence))return null;
   const regime=regimeOfSequence(sequence);
