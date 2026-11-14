@@ -265,7 +265,8 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
     const openTime=at+1+index*60_000;
     return {
       open,high,low,close,open_time:openTime,
-      close_time:openTime+59_999,is_closed:true
+      close_time:openTime+59_999,is_closed:true,
+      source:'BINANCE_PUBLIC_REST'
     };
   });
   const up=buildFourHourFirstTouchOutcome({
