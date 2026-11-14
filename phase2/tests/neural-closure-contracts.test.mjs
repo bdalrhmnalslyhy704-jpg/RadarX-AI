@@ -350,7 +350,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
-  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1');
+  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
   assert.equal(report.target.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   assert.equal(report.integrity.row_count,8000);
@@ -362,9 +362,27 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
+  // The logistic anchor must receive the same calibration opportunity as each
+  // neural challenger before their holdout Brier scores are compared.
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_fit_rows,400);
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_purged_rows,400);
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_check_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
+  assert.deepEqual(
+    report.models.LOGISTIC_REGRESSION.calibration.calibration_days,
+    report.models.TCN_V11.calibration.calibration_days
+  );
+  assert.deepEqual(report.calibration_policy,{
+    schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+    methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+    selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+    same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+    calibration_fit_rows:400,calibration_purged_rows:400,
+    calibration_check_rows:400,holdout_used_for_calibration:false
+  });
   assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
     [BASE+14*NEURAL_CLOSURE_PURGE_MS]);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
