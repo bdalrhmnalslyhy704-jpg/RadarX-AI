@@ -40,6 +40,9 @@ import {
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
   temporalParameterL2,
+  regimeAwareTemporalDropoutRate,
+  applyRegimeAwareTemporalDropout,
+  applyTemporalSpectralNormalization,
   TEMPORAL_RANKING_BUCKET_MS,
   timeGroupedRankingMetrics,
   poolOrderedTemporalSegments,
@@ -165,6 +168,12 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
   assert.equal(report.objectives.length,4);
   assert.equal(report.results.length,16);
   assert.ok(report.checked_parameter_derivatives>=100);
+  assert.equal(report.attention_audit.unique_attention_parameters,40);
+  assert.equal(report.attention_audit.objectives_checked,4);
+  assert.equal(report.attention_audit.checked_parameter_derivatives,160);
+  assert.equal(report.attention_audit.failed_parameter_derivatives,0);
+  assert.ok(report.attention_audit.maximum_absolute_error<1e-10);
+  assert.equal(report.attention_audit.passed,true);
   assert.equal(report.failed_parameter_derivatives,0,
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
   assert.equal(report.passed,true);
@@ -214,7 +223,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
     }))
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
-  assert.equal(report.measured_cases,12);
+  assert.equal(report.measured_cases,16);
   assert.equal(report.measurement_rounds,3);
   assert.equal(report.changes_training_math,false);
   assert.equal(report.all_checksums_finite,true);
