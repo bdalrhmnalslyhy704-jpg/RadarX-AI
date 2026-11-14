@@ -4111,6 +4111,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       passed:holdoutPassed
     },
     _fit:probabilityReady?fitted:null,
+    _research_fit:fitted,
     _baseline_fit:pooledBaseline
   };
 }
@@ -4138,6 +4139,18 @@ export function buildFourHourTemporalNeuralProfile(samples=[],options={}){
     }
   }
   return buildTemporalNeuralProfile(samples,{...options,...fixed});
+}
+
+/** Inference on an inner-selected TCN member for external research scoring.
+ * This does not imply the model passed the independent validation/holdout gates. */
+export function predictTemporalResearchProbability(sequence,profile={}){
+  if(!profile?._research_fit||!validSequence(sequence))return null;
+  const regime=regimeOfSequence(sequence);
+  if(!regime)return null;
+  const specialist=profile._research_fit.specialists_by_regime?.[regime];
+  if(!specialist||!Number.isInteger(Number(specialist.selected_member_index))||
+    Number(specialist.selected_member_index)<0)return null;
+  return predict(sequence,profile._research_fit);
 }
 
 export function predictTemporalProbability(sequence,profile={}){
