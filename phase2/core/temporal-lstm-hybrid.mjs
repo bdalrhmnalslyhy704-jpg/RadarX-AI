@@ -1115,8 +1115,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       passed_inner_margin: improvement > requiredImprovement
     })),
     selected_configuration: passed ? winner.name : null,
+    diagnostic_configuration: passed ? null : winner.name,
     required_inner_improvement: requiredImprovement,
     selected_fit: passed ? winner.fit : null,
+    // Preserve the best inner-selection challenger for research-only outer
+    // scoring when it misses the qualification margin. The caller must keep
+    // inner qualification false; this state can never become production-ready
+    // merely because its later validation/holdout metrics look favorable.
+    diagnostic_fit: passed ? null : winner.fit,
     validation_or_holdout_used_for_fit_or_selection: false,
     probability_ready: false,
     live_eligibility_ready: false,
