@@ -2,8 +2,9 @@ import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DE
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
   fitTemperatureScaler,fitPlattScaler,
-  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_HORIZON_MS,
-  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
 } from './neural-closure-contracts.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
@@ -3173,6 +3174,87 @@ export function buildCognitiveLearningProfile(samples = [], {
  * were known. This is the live prequential check, separate from historical
  * train/validation/test splits.
  */
+
+/**
+ * Canonical V5 + GBDT entry point for the same four-hour first-touch cohort
+ * used by the fixed-SHA evaluator. It deliberately refuses legacy close-only
+ * labels, alternate outcome sources, different horizons, or a second TCN
+ * cohort. The temporal network and tabular challengers therefore share the
+ * exact same input event identities and outcome contract.
+ */
+export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
+  if(!Array.isArray(samples))throw new TypeError('FOUR_HOUR_COGNITIVE_SAMPLES_MUST_BE_AN_ARRAY');
+  const fixed={
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    modelTargetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    modelTargetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    temporalSamples:samples
+  };
+  for(const [key,value] of Object.entries(fixed)){
+    if(options[key]!==undefined){
+      const actual=Array.isArray(value)?JSON.stringify(options[key]):options[key];
+      const expected=Array.isArray(value)?JSON.stringify(value):value;
+      if(key==='temporalSamples'?options[key]!==samples:actual!==expected)
+        throw new Error('FOUR_HOUR_COGNITIVE_CONTRACT_OVERRIDE_FORBIDDEN:'+key);
+    }
+  }
+  const temporalFixed={
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    outcomeContractKind:'FIRST_TOUCH_4H_1M',
+    requireSequenceTimestamps:true,
+    sequenceIntervalMs:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  };
+  const suppliedTemporal=options.temporalOptions||{};
+  for(const [key,value] of Object.entries(temporalFixed)){
+    if(suppliedTemporal[key]!==undefined){
+      const actual=Array.isArray(value)?JSON.stringify(suppliedTemporal[key]):suppliedTemporal[key];
+      const expected=Array.isArray(value)?JSON.stringify(value):value;
+      if(actual!==expected)
+        throw new Error('FOUR_HOUR_COGNITIVE_TEMPORAL_CONTRACT_OVERRIDE_FORBIDDEN:'+key);
+    }
+  }
+  for(let index=0;index<samples.length;index++){
+    const row=samples[index];
+    const at=finite(row?.at),resolvedAt=finite(row?.resolved_at);
+    const expectedResolution=row?.outcome==='UP'?'TAKE_PROFIT_FIRST':
+      row?.outcome==='DOWN'?'STOP_LOSS_FIRST':
+      row?.outcome==='FLAT'?'HORIZON_END':null;
+    const touch=row?.first_touch;
+    const touchAt=finite(touch?.first_touch_at);
+    const valid=Boolean(row&&row.training_eligible===true&&
+      row.closed_candle_baseline===true&&
+      row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
+      row.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&
+      row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+      Number(row.horizon_ms)===NEURAL_CLOSURE_HORIZON_MS&&
+      at!==null&&resolvedAt===at+NEURAL_CLOSURE_HORIZON_MS&&
+      ['UP','DOWN','FLAT'].includes(row.outcome)&&
+      touch?.path_resolution==='1M'&&touch.resolution===expectedResolution&&
+      Number(touch?.observed_candles)===240&&touchAt!==null&&
+      (row.outcome==='FLAT'?touchAt===resolvedAt:touchAt>at&&touchAt<=resolvedAt)&&
+      row.feature_information_cutoff_at===at&&
+      row.features&&typeof row.features==='object'&&!Array.isArray(row.features));
+    if(!valid)throw new Error('FOUR_HOUR_COGNITIVE_LABEL_INVALID:'+index);
+  }
+  const profile=buildCognitiveLearningProfile(samples,{
+    ...options,
+    ...fixed,
+    temporalOptions:{...suppliedTemporal,...temporalFixed}
+  });
+  return {
+    ...profile,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    temporal_feature_interval_ms:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS,
+    shared_four_hour_first_touch_cohort:true
+  };
+}
+
 export function buildCognitivePrequentialProfile(journal = [], {
   minimumWindowSamples = 20, windowSize = 40, modelVariant = null
 } = {}) {
