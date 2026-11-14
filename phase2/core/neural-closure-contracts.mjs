@@ -263,6 +263,15 @@ export function validateFourHourRows(inputRows, {
       throw new Error('NEURAL_CLOSURE_ROW_TARGET_OR_SOURCE_MISMATCH:' + index);
     if(source.training_eligible!==true||source.closed_candle_baseline!==true)
       throw new Error('NEURAL_CLOSURE_ROW_NOT_TRAINING_ELIGIBLE_CLOSED_BASELINE:'+index);
+    const sourceAudit=source.source_audit;
+    if(source.market!=='BINANCE_SPOT_USDT'||
+      sourceAudit?.exchange!=='BINANCE'||sourceAudit?.market!=='SPOT'||
+      sourceAudit?.interval!=='1m'||sourceAudit?.transport!=='BINANCE_PUBLIC_REST'||
+      String(sourceAudit?.symbol||'').toUpperCase()!==symbol||
+      Number(sourceAudit?.observed_candles)!==240||
+      !/^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))||
+      source.first_touch?.raw_klines_sha256!==sourceAudit.raw_klines_sha256)
+      throw new Error('NEURAL_CLOSURE_ROW_BINANCE_SOURCE_AUDIT_INVALID:'+index);
     if (!['UP','DOWN','FLAT'].includes(source.outcome))
       throw new Error('NEURAL_CLOSURE_ROW_OUTCOME_INVALID:' + index);
     const firstTouch=source.first_touch;
