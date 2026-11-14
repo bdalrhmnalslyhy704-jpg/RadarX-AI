@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildFourHourFirstTouchOutcome,
   NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_TARGET_SEMANTICS,
   NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS
 } from '../core/neural-closure-contracts.mjs';
@@ -265,7 +266,7 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
 
   const completedPath = Array.from({length:16},(_,index)=>({
     closeTime:at+(index+1)*FIFTEEN_MINUTES,closed:true,
-    open:10,high:index===0?10.4:10.2,low:9.99,close:index===0?10.3:10.1
+    open:10,high:index===15?10.4:10.2,low:9.99,close:index===15?10.3:10.1
   }));
   const prepared = prepareHybridBenchmarkEvent({
     id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
@@ -898,6 +899,7 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
       market:'BINANCE_SPOT_USDT',
       outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
       outcome_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
       market_regime:['BULL_TREND','BEAR_TREND','SIDEWAYS'][index%3],
       historical_window_id:['bull-window','bear-window','sideways-window'][index%3],
       at,latest_input_at:at,resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
