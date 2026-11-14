@@ -1,5 +1,8 @@
 import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
-import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
+import {
+  focalAsymmetricBrierLoss,deriveTrainingClassWeights,
+  fitTemperatureScaler,fitPlattScaler
+} from './neural-closure-contracts.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
 // contract only; it does not imply that either challenger has passed validation.
@@ -1439,9 +1442,19 @@ function applyAcceptedProbabilityCalibration(rawProbability,calibration){
   if(!Number.isFinite(rawProbability))return null;
   const raw=clamp(rawProbability,0.02,0.98);
   if(calibration?.accepted!==true)return raw;
-  const slope=clamp(Number(calibration.slope)||1,0.5,1.5);
-  const intercept=clamp(Number(calibration.intercept)||0,-0.75,0.75);
-  return clamp(logistic(slope*Math.log(raw/(1-raw))+intercept),0.02,0.98);
+  const logit=Math.log(raw/(1-raw));
+  if(calibration.method==='SLIDING_TEMPERATURE_SCALING_V1'){
+    const temperature=Number(calibration.temperature);
+    if(!Number.isFinite(temperature)||temperature<=0)return null;
+    return clamp(logistic(logit/temperature),0.02,0.98);
+  }
+  if(calibration.method==='DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2'||
+     calibration.method==='PLATT_SCALING'){
+    const slope=clamp(Number(calibration.slope)||1,0.05,20);
+    const intercept=clamp(Number(calibration.intercept)||0,-12,12);
+    return clamp(logistic(slope*logit+intercept),0.02,0.98);
+  }
+  return raw;
 }
 
 export function deriveBrierOptimalBlendWeight(
@@ -1593,72 +1606,121 @@ function predictFromFit(features, fit, residualScale=1) {
 function fitAndSelectProbabilityCalibrator(fitRows,checkRows,fit,{
   minimumFitSamples=100,minimumFitPositive=50,minimumFitNegative=50,
   minimumCheckSamples=100,minimumCheckPositive=50,minimumCheckNegative=50,
-  iterations=260,learningRate=0.035,regularization=0.55,
   improvementMargin=0.00025
 }={}){
-  const makePredictions=(rows)=> (Array.isArray(rows)?rows:[]).map(row=>({
+  const makePredictions=rows=>(Array.isArray(rows)?rows:[]).map(row=>({
     probability:predictFromFit(row.features,fit),target:row.target
-  })).filter(row=>Number.isFinite(row.probability)&&Number.isFinite(row.target));
+  })).filter(row=>Number.isFinite(row.probability)&&Number.isFinite(row.target)&&
+    (row.target===0||row.target===1));
   const fitPredictions=makePredictions(fitRows);
-  const fitPositive=fitPredictions.filter(row=>row.target>0.5).length;
-  const fitNegative=fitPredictions.filter(row=>row.target<0.5).length;
+  const fitPositive=fitPredictions.filter(row=>row.target===1).length;
+  const fitNegative=fitPredictions.length-fitPositive;
   const base={
-    method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',
+    method:'DISJOINT_TEMPERATURE_OR_PLATT_BRIER_CALIBRATION_V1',
+    candidate_methods:['SLIDING_TEMPERATURE_SCALING_V1','PLATT_SCALING'],
     fit_on:'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
     check_on:'LATER_DISJOINT_CALIBRATION_CHECK_BLOCK',
     fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
     check_samples:0,check_positive:0,check_negative:0,
-    slope:1,intercept:0,fitted:false,accepted:false,
+    minimum_fit_positive:minimumFitPositive,minimum_fit_negative:minimumFitNegative,
+    minimum_check_positive:minimumCheckPositive,minimum_check_negative:minimumCheckNegative,
+    temperature:null,slope:null,intercept:null,fitted:false,accepted:false,
+    selected_method:'RAW_UNCALIBRATED',
     raw_check_brier:null,calibrated_check_brier:null,improvement:null
   };
   if(fitPredictions.length<minimumFitSamples||fitPositive<minimumFitPositive||
-     fitNegative<minimumFitNegative){
-    return {...base,reason:'CALIBRATION_FIT_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
-  }
-  const points=fitPredictions.map(row=>{
-    const probability=clamp(row.probability,0.02,0.98);
-    return {x:Math.log(probability/(1-probability)),target:row.target};
-  });
-  let slope=1,intercept=0;
-  for(let iteration=0;iteration<iterations;iteration++){
-    let slopeGradient=0,interceptGradient=0;
-    for(const point of points){
-      const prediction=logistic(slope*point.x+intercept);
-      const error=prediction-point.target;
-      const derivative=prediction*(1-prediction);
-      slopeGradient+=2*error*derivative*point.x;
-      interceptGradient+=2*error*derivative;
-    }
-    slopeGradient=slopeGradient/points.length+regularization*(slope-1);
-    interceptGradient=interceptGradient/points.length+regularization*intercept;
-    slope=clamp(slope-learningRate*slopeGradient,0.5,1.5);
-    intercept=clamp(intercept-learningRate*interceptGradient,-0.75,0.75);
-  }
+     fitNegative<minimumFitNegative)
+    return {...base,status:'INSUFFICIENT_FIT_CLASS_SUPPORT',
+      reason:'CALIBRATION_FIT_BLOCK_REQUIRES_50_POSITIVE_AND_NEGATIVE_MINIMUM'};
   const checkPredictions=makePredictions(checkRows);
-  const checkPositive=checkPredictions.filter(row=>row.target>0.5).length;
-  const checkNegative=checkPredictions.filter(row=>row.target<0.5).length;
+  const checkPositive=checkPredictions.filter(row=>row.target===1).length;
+  const checkNegative=checkPredictions.length-checkPositive;
   const checkBase={
-    ...base,fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
-    check_samples:checkPredictions.length,check_positive:checkPositive,check_negative:checkNegative,
-    slope:Number(slope.toFixed(5)),intercept:Number(intercept.toFixed(5)),fitted:true
+    ...base,check_samples:checkPredictions.length,
+    check_positive:checkPositive,check_negative:checkNegative
   };
-  if(checkPredictions.length<minimumCheckSamples||checkPositive<minimumCheckPositive||
-     checkNegative<minimumCheckNegative){
-    return {...checkBase,reason:'CALIBRATION_CHECK_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
+  if(checkPredictions.length<minimumCheckSamples||
+     checkPositive<minimumCheckPositive||checkNegative<minimumCheckNegative)
+    return {...checkBase,status:'INSUFFICIENT_CHECK_CLASS_SUPPORT',
+      reason:'CALIBRATION_CHECK_BLOCK_REQUIRES_50_POSITIVE_AND_NEGATIVE_MINIMUM'};
+
+  const fitLogits=fitPredictions.map(row=>{
+    const probability=clamp(row.probability,1e-9,1-1e-9);
+    return Math.log(probability/(1-probability));
+  });
+  const fitLabels=fitPredictions.map(row=>row.target);
+  const temperatureFit=fitTemperatureScaler(fitLogits,fitLabels,{
+    minimumPositives:minimumFitPositive,minimumNegatives:minimumFitNegative
+  });
+  const plattFit=fitPlattScaler(fitLogits,fitLabels,{
+    minimumPositives:minimumFitPositive,minimumNegatives:minimumFitNegative
+  });
+  const checkLogits=checkPredictions.map(row=>{
+    const probability=clamp(row.probability,1e-9,1-1e-9);
+    return Math.log(probability/(1-probability));
+  });
+  const checkLabels=checkPredictions.map(row=>row.target);
+  const brier=(probabilities)=>probabilities.reduce((sum,p,index)=>
+    sum+(p-checkLabels[index])**2,0)/probabilities.length;
+  const rawBrier=brier(checkPredictions.map(row=>row.probability));
+  const candidates=[{
+    method:'RAW_UNCALIBRATED',calibrator:null,
+    brier:rawBrier
+  }];
+  if(temperatureFit.fitted&&Number.isFinite(temperatureFit.temperature)&&
+     temperatureFit.temperature>0){
+    candidates.push({
+      method:'SLIDING_TEMPERATURE_SCALING_V1',
+      calibrator:{method:'SLIDING_TEMPERATURE_SCALING_V1',
+        temperature:temperatureFit.temperature,fitted:true},
+      brier:brier(checkLogits.map(value=>logistic(value/temperatureFit.temperature)))
+    });
   }
-  const rawBrier=mean(checkPredictions.map(row=>(row.probability-row.target)**2));
-  const calibratedBrier=mean(checkPredictions.map(row=>{
-    const raw=clamp(row.probability,0.02,0.98);
-    const adjusted=logistic(slope*Math.log(raw/(1-raw))+intercept);
-    return (adjusted-row.target)**2;
-  }));
-  const improvement=rawBrier-calibratedBrier;
-  const accepted=improvement>improvementMargin;
+  if(plattFit.fitted&&Number.isFinite(plattFit.slope)&&
+     Number.isFinite(plattFit.intercept)){
+    candidates.push({
+      method:'PLATT_SCALING',
+      calibrator:{method:'PLATT_SCALING',slope:plattFit.slope,
+        intercept:plattFit.intercept,fitted:true},
+      brier:brier(checkLogits.map(value=>logistic(plattFit.slope*value+plattFit.intercept)))
+    });
+  }
+  candidates.sort((a,b)=>a.brier-b.brier||a.method.localeCompare(b.method));
+  const winner=candidates[0];
+  const improvement=rawBrier-winner.brier;
+  const accepted=winner.method!=='RAW_UNCALIBRATED'&&improvement>improvementMargin;
+  const selected=accepted?winner:{method:'RAW_UNCALIBRATED',calibrator:null,brier:rawBrier};
   return {
-    ...checkBase,accepted,raw_check_brier:Number(rawBrier.toFixed(5)),
-    calibrated_check_brier:Number(calibratedBrier.toFixed(5)),
-    improvement:Number(improvement.toFixed(5)),
-    reason:accepted?null:'CALIBRATION_DID_NOT_IMPROVE_DISJOINT_CHECK_BLOCK'
+    ...checkBase,
+    method:accepted?selected.method:'DISJOINT_TEMPERATURE_OR_PLATT_BRIER_CALIBRATION_V1',
+    status:'EVALUATED',
+    fitted:temperatureFit.fitted||plattFit.fitted,
+    accepted,
+    selected_method:selected.method,
+    temperature:selected.method==='SLIDING_TEMPERATURE_SCALING_V1'
+      ?selected.calibrator.temperature:null,
+    slope:selected.method==='PLATT_SCALING'?selected.calibrator.slope:null,
+    intercept:selected.method==='PLATT_SCALING'?selected.calibrator.intercept:null,
+    calibrator:selected.calibrator,
+    raw_check_brier:Number(rawBrier.toFixed(8)),
+    calibrated_check_brier:Number(selected.brier.toFixed(8)),
+    improvement:Number((rawBrier-selected.brier).toFixed(8)),
+    required_improvement_margin:improvementMargin,
+    temperature_fit_diagnostics:{
+      status:temperatureFit.status,temperature:temperatureFit.temperature,
+      fit_nll_before:temperatureFit.fit_nll_before,
+      fit_nll_after:temperatureFit.fit_nll_after
+    },
+    platt_fit_diagnostics:{
+      status:plattFit.status,slope:plattFit.slope,intercept:plattFit.intercept,
+      fit_nll_before:plattFit.fit_nll_before,
+      fit_nll_after:plattFit.fit_nll_after
+    },
+    candidates:candidates.map(candidate=>({
+      method:candidate.method,check_brier:Number(candidate.brier.toFixed(8)),
+      selected:candidate.method===selected.method&&accepted
+    })),
+    reason:accepted?null:'NO_CALIBRATOR_IMPROVED_DISJOINT_CHECK_BLOCK'
   };
 }
 
