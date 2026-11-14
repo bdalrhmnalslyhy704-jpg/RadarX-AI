@@ -11,12 +11,15 @@ on:
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/dense-generalization-projection.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/hybrid-memory-regression.test.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/tests/dense-four-hour-generalization.test.mjs'
   pull_request:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
@@ -26,11 +29,14 @@ on:
       - 'phase2/core/feature-parity-guardian.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/dense-generalization-projection.mjs'
       - 'phase2/tools/neural-closure-benchmark.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/hybrid-memory-regression.test.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/tests/dense-four-hour-generalization.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -66,6 +72,7 @@ jobs:
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/core/dense-generalization-projection.mjs
           node --check phase2/tools/neural-closure-benchmark.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
@@ -81,3 +88,5 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/hybrid-memory-regression.test.mjs
       - name: Test hybrid TCN benchmark contracts
         run: node --test --test-timeout=180000 phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
+      - name: Test Dense MLP 4h shared cohort, focal training and artifact gates
+        run: node --test --test-timeout=180000 phase2/tests/dense-four-hour-generalization.test.mjs
