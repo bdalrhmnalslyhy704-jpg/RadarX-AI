@@ -8,6 +8,7 @@ import {
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
   buildNeuralClosureCalibrationBlocks,
+  chooseCalibration,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
@@ -182,6 +183,30 @@ test('fixed-SHA calibration fit and check blocks retain independent 50/50 class 
   assert.equal([...purgeDays].some(day=>checkDays.has(day)),false);
   assert.ok(Math.max(...blocks.days.fit)<Math.min(...blocks.days.purge));
   assert.ok(Math.max(...blocks.days.purge)<Math.min(...blocks.days.check));
+});
+
+test('calibrator method is fixed from fit rows and cannot be selected by validation-check labels',()=>{
+  const fitRows=Array.from({length:200},(_,index)=>({
+    id:'CAL-FIT-'+index,target:index%2
+  }));
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-CHECK-'+index,target:index%2
+  }));
+  const rawMap=new Map([...fitRows,...checkRows].map(row=>[
+    row.id,row.target===1?0.70:0.30
+  ]));
+  const fitted=chooseCalibration(rawMap,fitRows,checkRows,20);
+  const flippedCheck=checkRows.map(row=>({...row,target:1-row.target}));
+  const flipped=chooseCalibration(rawMap,fitRows,flippedCheck,20);
+  assert.equal(fitted.check_block_used_for_calibrator_selection,false);
+  assert.equal(fitted.selection_scope,'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.platt.fit_partition,'CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.temperature.fitted,false);
+  assert.equal(fitted.selected_method,flipped.selected_method);
+  assert.deepEqual(fitted.selected_calibrator,flipped.selected_calibrator,
+    'changing only validation-check labels must not change fitted calibration parameters');
+  assert.notEqual(fitted.selected_check_brier,flipped.selected_check_brier,
+    'validation-check labels may change the reported evaluation score, not the fitted calibrator');
 });
 
 test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
