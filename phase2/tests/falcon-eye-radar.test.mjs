@@ -48,6 +48,27 @@ function flat(n=40,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
   });
 }
 
+function compressedBase(n=80,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
+  const origin=endAt-n*step+1;
+  return Array.from({length:n},(_,i)=>{
+    const compressed=i>=n-20;
+    const amplitude=compressed?0.0008:0.035;
+    const halfRange=compressed?0.004:0.045;
+    const close=start+Math.sin(i*1.7)*amplitude+(compressed?(i-(n-20))*0.00002:0);
+    const open=close-(compressed?0.0002:0.003);
+    const openTime=origin+i*step;
+    const volume=compressed?900:1500;
+    const tradeCount=compressed?90:150;
+    return {
+      openTime,closeTime:openTime+step-1,open,
+      high:Math.max(open,close)+halfRange,
+      low:Math.min(open,close)-halfRange,
+      close,volume,quoteVolume:close*volume,tradeCount,
+      takerBuyBaseVolume:volume*0.52,closed:true
+    };
+  });
+}
+
 test('Falcon Eye disables derivatives evidence under the Spot-only policy',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
@@ -99,7 +120,7 @@ test('Falcon Eye notification diversity reads the actual nested component scores
 test('Falcon Eye detects the OGN early setup from Spot evidence alone',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
-  const five=flat(80);
+  const five=compressedBase(80);
   const btc=flat(80,100);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
@@ -112,7 +133,7 @@ test('Falcon Eye detects the OGN early setup from Spot evidence alone',()=>{
   assert.ok(['PRE_ATTACK','IGNITION'].includes(a.stage));
   assert.ok(a.confirmation_count>=8);
   assert.ok(Number.isFinite(a.component_scores.compression));
-  assert.ok(a.component_scores.volume>=60);
+  assert.ok(a.component_scores.compression>=70);\n  assert.ok(a.component_scores.volume>=60);
   assert.ok(a.component_scores.taker>=60);
   assert.equal(a.component_scores.derivatives,null);
   assert.equal(a.derivatives.futures_available,false);
