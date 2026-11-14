@@ -1,0 +1,52 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+
+const trainerUrl=new URL('../tools/train-neural-closure-models.mjs',import.meta.url);
+const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url);
+
+test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/predictTemporalAttentionResearchOutput/,
+    'the trainer must use the dedicated V11 attention predictor');
+  assert.match(trainer,/enableRegimeLocalTcnAttention:true/,
+    'the four-hour fixed-SHA workflow must actually train attention specialists');
+  assert.match(trainer,/regimeLocalTcnAttentionMaxTrainingSamples:4096/,
+    'the V11 training budget must remain explicit and bounded');
+  assert.match(trainer,/TEMPORAL_ATTENTION_MODEL_ARCHITECTURE/,
+    'the saved model identity must use the V11 attention architecture');
+});
+
+test('TCN V11 artifact is reloadable and its predictor consumes the persisted model state shape',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1'/);
+  assert.match(trainer,/regime,\{research_inference:attentionSpecialists\[regime\]\.research_inference\}/,
+    'each serialized BTC regime must wrap research_inference exactly as the predictor expects');
+  assert.match(trainer,/row\.temporal_sequence,v11State,\{allowDiagnostic:true\}/,
+    'external scoring must exercise the same serialized state that is saved as the artifact');
+  assert.match(trainer,/modelName:'TCN_V11'/);
+  assert.match(trainer,/modelArtifactsByModel\.TCN_V11=attentionArtifact/);
+  const temporalTests=await readFile(temporalTestUrl,'utf8');
+  assert.match(temporalTests,/persistedArtifactProfile/,
+    'the neural test suite must include a JSON serialization/reload round-trip');
+  assert.match(temporalTests,/artifact reload must preserve the exact attention probability/);
+});
+
+test('TCN V11 inner qualification requires BOTH BTC risk regimes to pass inner validation and holdout',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/const expectedBtcRegimes=\['BTC_RISK_ON','BTC_RISK_OFF'\]/);
+  assert.match(trainer,/expectedBtcRegimes\.every\(regime=>\{/);
+  assert.match(trainer,/specialist\.validation_passed===true&&specialist\.holdout_passed===true/);
+  assert.match(trainer,/state\?\.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'/);
+  assert.match(trainer,/passed:attentionInnerQualified/);
+  assert.match(trainer,/diagnostic_only:!attentionInnerQualified/);
+});
+
+test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/modelName:'TCN_V8'/);
+  assert.match(trainer,/unavailable\.TCN_V8=/);
+  assert.match(trainer,/modelName:'TCN_V11'/);
+  assert.match(trainer,/unavailable\.TCN_V11=/);
+  assert.doesNotMatch(trainer,/unavailable\.TCN_V11=\{\s*reason:scored\.reason,\s*diagnostic_regimes:training\.model_internal_diagnostics\.TCN_V8/);
+});
