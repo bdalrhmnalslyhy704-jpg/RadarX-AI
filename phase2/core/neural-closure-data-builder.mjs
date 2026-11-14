@@ -254,6 +254,7 @@ function excursionMetrics(minuteCandles,firstTouch,baselinePrice) {
   const exitOpenAt=candleOpenTime(exitCandle);
   const exitCloseAt=candleCloseTime(exitCandle);
   const exitAt=num(firstTouch?.first_touch_at);
+  const source=firstTouch?.exit_price_source;
   if(exitOpenAt===null||exitCloseAt===null||exitAt===null)return null;
   const executed=minuteCandles.filter(candle=>candleOpenTime(candle)<=exitOpenAt);
   const prior=executed.filter(candle=>candleOpenTime(candle)<exitOpenAt);
@@ -264,19 +265,26 @@ function excursionMetrics(minuteCandles,firstTouch,baselinePrice) {
     highs.push({price:num(candle.high),at:candleCloseTime(candle)});
   }
   if(resolution==='TAKE_PROFIT_FIRST'){
-    lows.push({price:num(exitCandle.low),at:exitCloseAt});
+    // An opening-gap fill exits at the open. Nothing later in that minute
+    // belongs to the position; an intrabar barrier touch uses the candle's
+    // complete OHLC conservatively at the first-touch timestamp.
+    if(source==='BARRIER')
+      lows.push({price:num(exitCandle.low),at:exitAt});
     highs.push({price:num(firstTouch.exit_price),at:exitAt});
   }else if(resolution==='STOP_LOSS_FIRST'){
     lows.push({price:num(firstTouch.exit_price),at:exitAt});
-    highs.push({price:num(exitCandle.open),at:exitOpenAt});
+    if(source==='BARRIER')
+      highs.push({price:num(exitCandle.high),at:exitAt});
+    else
+      highs.push({price:num(exitCandle.open),at:exitOpenAt});
   }else if(resolution==='HORIZON_END'){
     for(const candle of executed){
       lows.push({price:num(candle.low),at:candleCloseTime(candle)});
       highs.push({price:num(candle.high),at:candleCloseTime(candle)});
     }
   }else return null;
-  const validLows=lows.filter(item=>finite(item.price)&&finite(item.at));
-  const validHighs=highs.filter(item=>finite(item.price)&&finite(item.at));
+  const validLows=lows.filter(item=>finite(item.price)&&finite(item.at)&&item.at<=exitAt);
+  const validHighs=highs.filter(item=>finite(item.price)&&finite(item.at)&&item.at<=exitAt);
   if(!validLows.length||!validHighs.length)return null;
   const adverse=validLows.reduce((worst,item)=>item.price<worst.price?item:worst);
   const favourable=validHighs.reduce((best,item)=>item.price>best.price?item:best);
