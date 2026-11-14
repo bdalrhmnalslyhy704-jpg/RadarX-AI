@@ -60,6 +60,7 @@ jobs:
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/core/model-artifact-guardian.mjs
           node --check phase2/core/feature-parity-guardian.mjs
+          node --check phase2/core/neural-shadow-observation.mjs
           node --check phase2/core/temporal-neural-brain.mjs
           node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
           node --check phase2/tools/neural-closure-benchmark.mjs
@@ -69,6 +70,8 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Test TCN V11 gradients, spectral constraints and dynamic dropout
         run: node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
+      - name: Test 14-day paper-only shadow observation ledger
+        run: node --test --test-timeout=180000 phase2/tests/neural-shadow-observation.test.mjs
       - name: Test hybrid TCN forward-cache memory regression
         run: node --test --test-timeout=180000 phase2/tests/hybrid-memory-regression.test.mjs
       - name: Test hybrid TCN benchmark contracts
