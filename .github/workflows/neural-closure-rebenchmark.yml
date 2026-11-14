@@ -12,7 +12,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: build224-neural-closure-parity-rebenchmark-\${{ github.ref }}
+  group: build224-neural-closure-parity-rebenchmark-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
       - name: Checkout exact corrected evaluator SHA
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -37,9 +37,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: radarx-build224-neural-closure-dataset-f8fc881ae6680434cd9c74602ca67eff17dc44fb
-          repository: \${{ github.repository }}
+          repository: ${{ github.repository }}
           run-id: 43612945901
-          github-token: \${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: artifacts/source-run-73
       - name: Verify the archived dataset and corrected evaluator
         run: |
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-build224-neural-closure-parity-rebenchmark-\${{ github.sha }}
+          name: radarx-build224-neural-closure-parity-rebenchmark-${{ github.sha }}
           path: artifacts/rebenchmark/
           if-no-files-found: ignore
           retention-days: 30
