@@ -330,7 +330,7 @@ export function historicalProfileRequirements(profile, config = CONFIG) {
     case 'FALCON_EYE_RADAR':
       base = {oneMinute: 70, fiveMinute: 30};
       Object.assign(frames, {'BTCUSDT:1m': 70, 'BTCUSDT:5m': 30});
-      unavailableEvidence.push('HISTORICAL_FUTURES_SNAPSHOTS_UNAVAILABLE','HISTORICAL_LIQUIDATIONS_UNAVAILABLE','HISTORICAL_ORDERBOOK_UNAVAILABLE');
+      // Spot-only: historical derivatives, liquidations and order-book archives are not required.
       break;
     case 'COIN_HUNTER_RADAR':
       Object.assign(frames, {'15m': 24, '1h': 50, 'BTCUSDT:1h': 25});
@@ -422,7 +422,7 @@ function profileSnapshot(profile){
     ROTATION_LAG_RADAR:{mode:'CANDLE_ONLY_CANDIDATE_SHADOW',requires:['closed symbol/BTC/ETH 15m and 1h candles'],historical_book_required:true},
     EARLY_MOVE_RADAR:{mode:'PRE_MOVE_CONTEXT_CANDLE_SHADOW',requires:['closed 15m candles','BTC 15m benchmark','derived closed hourly context'],historical_book_required:true},
     LIQUIDITY_ABSORPTION_RADAR:{mode:'MICROSTRUCTURE_CANDLE_SHADOW',requires:['at least 60 closed 1m and 24 closed 5m candles','historical order book for full alert gating'],historical_book_required:true},
-    FALCON_EYE_RADAR:{mode:'FALCON_CANDLE_SHADOW',requires:['closed 1m/5m and BTC 1m/5m candles','historical futures snapshots and liquidations for full alert gating'],historical_book_required:false},
+    FALCON_EYE_RADAR:{mode:'FALCON_SPOT_CANDLE_SHADOW',requires:['closed 1m/5m Spot candles','closed BTC 1m/5m Spot benchmark candles'],historical_book_required:false,spot_only:true},
     COIN_HUNTER_RADAR:{mode:'COIN_HUNTER_PATTERN_SHADOW',requires:['closed 15m/1h candles','historical leader cohort for production-equivalent similarity'],historical_book_required:false},
     WHALE_ACCUMULATION_RADAR:{mode:'WHALE_MICROSTRUCTURE_SHADOW',requires:['closed 1m/5m candles','complete aggregate trade history','historical order-book snapshots'],historical_book_required:true},
     PROFESSOR_RADAR:{mode:'EXTERNAL_FEED_ARCHIVE_REQUIRED',requires:['time-stamped historical news archive','time-stamped historical public stream/transcript archive','historical deep-scan outcomes'],historical_book_required:false}

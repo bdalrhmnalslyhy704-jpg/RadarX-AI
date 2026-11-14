@@ -203,6 +203,12 @@ assert.ok(replayFixture.includes('length: 623') && replayFixture.includes('repla
   'the replay fixture must generate more than 500 ordered events and expose outage/reconnect counters');
 
 
+assert.match(service, /getRunningServices\(Integer\.MAX_VALUE\)/,
+  'restart recovery must require Android to report the actual ServiceRecord, not only a cached process');
+assert.match(service, /RadarXBackgroundMonitorService\.class\.getName\(\)/,
+  'the registered service must match the exact RadarX background monitor component');
+assert.match(service, /BACKGROUND_IS_RUNNING_FALSE_SERVICE_RECORD_ABSENT/,
+  'the cached-process/not-running-service case must be observable during lifecycle diagnosis');
 assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
 assert.match(service, /getPackageName\(\)\s*\+\s*":radar_background"/,

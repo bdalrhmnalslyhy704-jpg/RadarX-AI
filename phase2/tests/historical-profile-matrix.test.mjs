@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {HISTORICAL_DETECTOR_PROFILES} from '../tools/historical-replay.mjs';
+import {HISTORICAL_DETECTOR_PROFILES,historicalProfileRequirements} from '../tools/historical-replay.mjs';
 
 const script=resolve(dirname(fileURLToPath(import.meta.url)),'../tools/historical-profile-matrix.mjs');
 
@@ -57,4 +57,13 @@ test('profile-matrix refuses unknown radar names',()=>{
   });
   assert.notEqual(run.status,0);
   assert.match(run.stderr,/UNSUPPORTED_HISTORICAL_PROFILES/);
+});
+
+
+test('Falcon Eye historical contract is Spot-only and requires no derivatives archives',()=>{
+  const required=historicalProfileRequirements('FALCON_EYE_RADAR');
+  assert.deepEqual(required.base,{oneMinute:70,fiveMinute:30});
+  assert.deepEqual(required.frames,{'BTCUSDT:1m':70,'BTCUSDT:5m':30});
+  assert.deepEqual(required.unavailableEvidence,[]);
+  assert.deepEqual(required.externalEvidence,[]);
 });

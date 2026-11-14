@@ -128,7 +128,8 @@ function categoryHitsOf(alert){
     const scores=alert?.falcon_eye?.component_scores||{};
     return ['quietness','compression','momentum','volume','trades','taker','structure',
       'resistance','relative_strength','derivatives','breakout','atr','range']
-      .filter(key=>num(scores[key],0)>=70).length;
+      .filter(key=>scores[key]!==null&&scores[key]!==undefined&&scores[key]!==''&&
+        Number.isFinite(Number(scores[key]))&&Number(scores[key])>=70).length;
   }
   if(r==='KAHIR_RADAR'){
     const a=alert?.kahir_analysis||alert?.analysis||{};

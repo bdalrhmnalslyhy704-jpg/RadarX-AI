@@ -1574,13 +1574,38 @@ public final class RadarXBackgroundMonitorService extends Service {
         long age = System.currentTimeMillis() - heartbeat;
         if (heartbeat <= 0L || age < 0L || age >= HEARTBEAT_STALE_MS) return false;
 
-        // SharedPreferences survive a force-stop, but the separate foreground-service
-        // process does not. A fresh heartbeat alone therefore must not suppress restart.
+        // SharedPreferences survive a force-stop, and Android may keep the isolated
+        // process cached after stopSelf() removes its ServiceRecord. A process-only
+        // check therefore mistakes an empty cached process for an active monitor and
+        // can suppress the restart requested by MainActivity.onNewIntent().
         ActivityManager manager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
         if (manager == null) return false;
+        String expectedProcess = context.getPackageName() + ":radar_background";
+        String expectedService = RadarXBackgroundMonitorService.class.getName();
+
+        // getRunningServices() remains available to the owning app for its own
+        // services on Android 8+. Require the actual ServiceRecord, not just a PID
+        // left behind by Android's process cache.
+        List<ActivityManager.RunningServiceInfo> services =
+            manager.getRunningServices(Integer.MAX_VALUE);
+        if (services == null) return false;
+        boolean serviceRegistered = false;
+        for (ActivityManager.RunningServiceInfo running : services) {
+            if (running != null && running.service != null &&
+                    context.getPackageName().equals(running.service.getPackageName()) &&
+                    expectedService.equals(running.service.getClassName())) {
+                serviceRegistered = true;
+                break;
+            }
+        }
+        if (!serviceRegistered) {
+            Log.d(TAG, "BACKGROUND_IS_RUNNING_FALSE_SERVICE_RECORD_ABSENT");
+            return false;
+        }
+
+        // The ServiceRecord alone is not sufficient if the process is already dying.
         List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
         if (processes == null) return false;
-        String expectedProcess = context.getPackageName() + ":radar_background";
         for (ActivityManager.RunningAppProcessInfo process : processes) {
             if (process != null && expectedProcess.equals(process.processName)) return true;
         }

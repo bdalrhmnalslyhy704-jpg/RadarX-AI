@@ -48,23 +48,54 @@ function flat(n=40,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
   });
 }
 
-test('Falcon Eye does not treat explicit null futures metrics as available zero-valued data',()=>{
+function compressedBase(n=80,start=100,step=300_000,endAt=1_800_000_000_000+240*60_000){
+  const origin=endAt-n*step+1;
+  return Array.from({length:n},(_,i)=>{
+    const compressed=i>=n-20;
+    const amplitude=compressed?0.0008:0.035;
+    const halfRange=compressed?0.004:0.045;
+    const close=start+Math.sin(i*1.7)*amplitude+(compressed?(i-(n-20))*0.00002:0);
+    const open=close-(compressed?0.0002:0.003);
+    const openTime=origin+i*step;
+    const volume=compressed?900:1500;
+    const tradeCount=compressed?90:150;
+    return {
+      openTime,closeTime:openTime+step-1,open,
+      high:Math.max(open,close)+halfRange,
+      low:Math.min(open,close)-halfRange,
+      close,volume,quoteVolume:close*volume,tradeCount,
+      takerBuyBaseVolume:volume*0.52,closed:true
+    };
+  });
+}
+
+test('Falcon Eye disables derivatives evidence under the Spot-only policy',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
   const five=flat(80);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'NODATAUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
     oneMinute:one,fiveMinute:five,
-    futures:{quoteVolume:null,openInterest:null,fundingRate:null},
-    previousFutures:{openInterest:null},
+    futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-0.004},
+    previousFutures:{openInterest:1_000_000},
+    liquidations:[{time:now-1000,price:'101',origQty:'1000',side:'BUY'}],
     now
   });
+  assert.equal(a.spot_only,true);
+  assert.equal(a.derivatives_data_requested,false);
+  assert.equal(a.derivatives.status,'DISABLED_BY_SPOT_ONLY_POLICY');
   assert.equal(a.derivatives.futures_available,false);
   assert.equal(a.derivatives.futures_quote_volume,null);
   assert.equal(a.derivatives.open_interest,null);
   assert.equal(a.derivatives.funding_rate,null);
+  assert.equal(a.component_scores.derivatives,null);
+  assert.equal(a.metrics.futures_spot_volume_ratio,null);
+  assert.equal(a.metrics.oi_change_pct,null);
   assert.equal(a.metrics.funding_rate,null);
-  assert.equal(a.reasons.includes('Funding سلبي: ضغط شورت قابل للانقلاب'),false);
+  assert.equal(a.liquidations.status,'DISABLED_BY_SPOT_ONLY_POLICY');
+  assert.equal(a.liquidations.total_notional,null);
+  assert.equal(a.source,'Binance Public REST (Spot only)');
+  assert.equal(a.reasons.some(x=>/Funding|Open Interest|العقود|تصفية/.test(x)),false);
 });
 
 test('Falcon Eye notification diversity reads the actual nested component scores',()=>{
@@ -86,31 +117,47 @@ test('Falcon Eye notification diversity reads the actual nested component scores
   assert.equal(result.failures.includes('CATEGORY_DIVERSITY_LOW'),false);
 });
 
-test('Falcon Eye turns the OGN fingerprint into an early, multi-factor setup',()=>{
+test('Falcon Eye detects the OGN early setup from Spot evidence alone',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
-  const five=flat(80);
+  // The preceding 30-minute window is deliberately noisier, followed by the
+  // existing compressed / quiet-base setup and its small, high-participation lift.
+  for(let i=50;i<80;i++){
+    const close=100+i*0.004+Math.sin(i*1.7)*0.36;
+    one[i].open=close-0.005;
+    one[i].close=close;
+    one[i].high=close+0.06;
+    one[i].low=close-0.06;
+  }
+  const five=compressedBase(80);
   const btc=flat(80,100);
+  for(let i=five.length-4;i<five.length;i++){
+    const previous=Number(five[i-1].close);
+    const close=previous*1.0025;
+    five[i].open=previous;
+    five[i].close=close;
+    five[i].high=close+0.02;
+    five[i].low=previous-0.02;
+  }
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
-    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
-    futures:{quoteVolume:25_000_000,openInterest:1_030_000,fundingRate:-0.004},
-    previousFutures:{openInterest:1_000_000},
-    liquidations:[{time:now-10_000,price:'101',origQty:'1000',side:'BUY'}],
-    now
+    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,now
   });
   assert.equal(a.closed_candles_only,true);
+  assert.equal(a.spot_only,true);
   assert.equal(a.not_chasing,true);
-  assert.equal(a.eligible,true);
+  assert.equal(a.eligible,true,JSON.stringify({score:a.score,stage:a.stage,pre_expansion_stage:a.pre_expansion_stage,confirmation_count:a.confirmation_count,not_chasing:a.not_chasing,anti_chase_penalty:a.anti_chase_penalty,component_scores:a.component_scores,metrics:a.metrics,activity_shock:a.activity_shock}));
   assert.ok(['PRE_ATTACK','IGNITION'].includes(a.stage));
   assert.ok(a.confirmation_count>=8);
   assert.ok(Number.isFinite(a.component_scores.compression));
+  assert.ok(a.component_scores.compression>=70);
   assert.ok(a.component_scores.volume>=60);
   assert.ok(a.component_scores.taker>=60);
-  assert.ok(a.component_scores.derivatives>=70);
-  assert.ok(a.metrics.futures_spot_volume_ratio>=8);
-  assert.ok(a.metrics.oi_change_pct>2);
-  assert.ok(a.metrics.funding_rate<0);
+  assert.equal(a.component_scores.derivatives,null);
+  assert.equal(a.derivatives.futures_available,false);
+  assert.equal(a.metrics.futures_spot_volume_ratio,null);
+  assert.equal(a.metrics.open_interest,null);
+  assert.equal(a.metrics.funding_rate,null);
 });
 
 test('Falcon Eye rejects stale closed candles and marks data quality unavailable',()=>{
@@ -159,10 +206,7 @@ test('Falcon Eye vetoes OGN-style post-explosion chasing',()=>{
   const btc=flat(40,100);
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:14,quoteVolume24h:5_000_000},
-    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,
-    futures:{quoteVolume:70_000_000,openInterest:2_000_000,fundingRate:-0.008},
-    previousFutures:{openInterest:1_950_000},
-    now
+    oneMinute:one,fiveMinute:five,btcFiveMinute:btc,now
   });
   assert.equal(a.eligible,false);
   assert.equal(a.not_chasing,false);
@@ -198,6 +242,8 @@ test('Falcon Eye health reports scanner state using the injected clock',()=>{
   assert.equal(health.last_scan_at,null);
   assert.equal(health.scans,0);
   assert.equal(health.last_error,null);
+  assert.equal(health.spot_only,true);
+  assert.equal(health.derivatives_data_requested,false);
 });
 
 
@@ -315,4 +361,30 @@ test('Falcon Eye patrol rotates toward symbols not selected in the last cycle',(
   assert.equal(first.length,8);
   assert.equal(second.length,8);
   assert.equal(second.some(x=>first.some(y=>y.symbol===x.symbol)),false);
+});
+
+
+test('Falcon Eye never calls an injected Futures client while scanning a Spot symbol',async()=>{
+  const now=1_800_000_000_000+240*60_000;
+  const one=risingBase();
+  const five=flat(80);
+  let futuresRequests=0;
+  const radar=new FalconEyeRadar({
+    rest:{
+      klines:async(_symbol,interval)=>({candles:interval==='1m'?one:five}),
+      request:async()=>({data:[]})
+    },
+    futuresRest:{request:async()=>{futuresRequests++;throw new Error('FUTURES_MUST_NOT_BE_CALLED');}},
+    store:{appendFalconEyeAlert:async()=>{},readFalconEyeAlerts:async()=>[]},
+    clock:()=>now,logger:{warn(){}}
+  });
+  const result=await radar.scanRow({
+    symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,
+    quoteVolume24h:2_500_000,tradeCount24h:20_000
+  },{five:flat(80,100),one:one});
+  assert.equal(futuresRequests,0);
+  assert.equal(radar.futuresRest,null);
+  assert.equal(radar.health().spot_only,true);
+  assert.equal(radar.health().derivatives_data_requested,false);
+  assert.equal(result.falcon_eye.spot_only,true);
 });
