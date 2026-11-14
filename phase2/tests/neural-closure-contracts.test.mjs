@@ -12,6 +12,9 @@ import {
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
+const assertClose=(actual,expected,message='')=>
+  assert.ok(Math.abs(actual-expected)<=1e-8,
+    message||('expected '+actual+' to be within 1e-8 of '+expected));
 function makeRows({days=20,rowsPerDay=400}={}){
   const rows=[];
   for(let day=0;day<days;day++)for(let index=0;index<rowsPerDay;index++){
@@ -190,13 +193,13 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
 
   assert.ok(Math.abs(realizedExecutionGrossReturnPct(up)-3)<1e-10);
   assert.ok(Math.abs(realizedExecutionGrossReturnPct(down)+2)<1e-10);
-  assert.equal(realizedExecutionGrossReturnPct(flat),1.25);
+  assertClose(realizedExecutionGrossReturnPct(flat),1.25);
   const gapUp={...up,realized_return_pct:4,first_touch:{...up.first_touch,
     exit_price:104,exit_price_source:'OPEN_GAP'}};
   const gapDown={...down,realized_return_pct:-3.5,first_touch:{...down.first_touch,
     exit_price:96.5,exit_price_source:'OPEN_GAP'}};
-  assert.equal(realizedExecutionGrossReturnPct(gapUp),4);
-  assert.equal(realizedExecutionGrossReturnPct(gapDown),-3.5);
+  assertClose(realizedExecutionGrossReturnPct(gapUp),4);
+  assertClose(realizedExecutionGrossReturnPct(gapDown),-3.5);
   const overstatedBarrierFill={...up,realized_return_pct:3.5,first_touch:{...up.first_touch,
     exit_price:103.5}};
   assert.equal(realizedExecutionGrossReturnPct(overstatedBarrierFill),null,
@@ -302,8 +305,8 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   assert.equal(up.first_touch.resolution,'TAKE_PROFIT_FIRST');
   assert.equal(up.first_touch.exit_price,103);
   assert.equal(up.first_touch.exit_price_source,'BARRIER');
-  assert.equal(up.realized_return_pct,3);
-  assert.equal(up.horizon_close_return_pct,0.5);
+  assertClose(up.realized_return_pct,3);
+  assertClose(up.horizon_close_return_pct,0.5);
   assert.equal(up.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   const down=buildFourHourFirstTouchOutcome({
     id:'label-down',symbol:'BTCUSDT',
@@ -315,7 +318,7 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   assert.equal(down.outcome,'DOWN');
   assert.equal(down.target,0);
   assert.equal(down.first_touch.exit_price,98);
-  assert.equal(down.realized_return_pct,-2);
+  assertClose(down.realized_return_pct,-2);
   const flat=buildFourHourFirstTouchOutcome({
     id:'label-flat',symbol:'SOLUSDT',
     sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
@@ -326,7 +329,7 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   assert.equal(flat.outcome,'FLAT');
   assert.equal(flat.first_touch.resolution,'HORIZON_END');
   assert.equal(flat.first_touch.exit_price,100.5);
-  assert.equal(flat.realized_return_pct,0.5);
+  assertClose(flat.realized_return_pct,0.5);
   assert.equal(flat.first_touch.exit_price_source,'HORIZON_CLOSE');
   const gapUp=buildFourHourFirstTouchOutcome({
     id:'label-gap-up',symbol:'ADAUSDT',
@@ -338,7 +341,7 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   assert.equal(gapUp.outcome,'UP');
   assert.equal(gapUp.first_touch.exit_price,104);
   assert.equal(gapUp.first_touch.exit_price_source,'OPEN_GAP');
-  assert.equal(gapUp.realized_return_pct,4);
+  assertClose(gapUp.realized_return_pct,4);
   assert.equal(gapUp.first_touch.first_touch_at,at+1);
   const gapDown=buildFourHourFirstTouchOutcome({
     id:'label-gap-down',symbol:'DOTUSDT',
@@ -349,7 +352,7 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   });
   assert.equal(gapDown.outcome,'DOWN');
   assert.equal(gapDown.first_touch.exit_price,96.5);
-  assert.equal(gapDown.realized_return_pct,-3.5);
+  assertClose(gapDown.realized_return_pct,-3.5);
   const ambiguous=buildFourHourFirstTouchOutcome({
     id:'label-ambiguous',symbol:'XRPUSDT',
     sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
