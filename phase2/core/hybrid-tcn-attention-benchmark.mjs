@@ -27,7 +27,7 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'realized_volatility_short',
   'adaptive_volatility_ratio',
   'relative_btc_return',
-  'order_book_available',
+  'btc_trend_return_12bar',
   'agg_trade_available',
   'volume_profile_trade_level_available',
   'relative_btc_available',
@@ -481,7 +481,7 @@ export function buildHybridSequence({
       shortVol * 100,
       adaptiveVol,
       relativeBtc * 100,
-      depth ? 1 : 0,
+      btcTrendReturnPct === null ? 0 : clamp(btcTrendReturnPct / 4, -4, 4),
       aggImbalance === null ? 0 : 1,
       volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
       priorBenchmarkMatches ? 1 : 0,
@@ -1979,8 +1979,8 @@ export function runFixedShaBenchmark(inputRows, {
       ? round(rows.filter(row =>
         row.sequence.filter(step => step[22] === 1).length / row.sequence.length >= 0.8
       ).length / rows.length * 100, 4) : 0,
-    depth_availability_pct: rows.length
-      ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
+    btc_trend_directional_pct: rows.length
+      ? round(rows.filter(row => Math.abs(Number(row.sequence.at(-1)?.[19]) || 0) > 1e-6).length / rows.length * 100, 4) : 0
   };
   if (!marketRegimeCoverageComplete) return {
     status:'INSUFFICIENT_MARKET_REGIME_COVERAGE',
