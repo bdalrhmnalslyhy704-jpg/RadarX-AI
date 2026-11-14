@@ -1,0 +1,75 @@
+name: Build 224 Neural Closure — 4h fixed-SHA and runtime guards
+
+on:
+  push:
+    branches:
+      - research/neural-closure-4h-20261114
+    paths:
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/core/feature-parity-guardian.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/tools/neural-closure-benchmark.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/hybrid-memory-regression.test.mjs'
+  pull_request:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/core/feature-parity-guardian.mjs'
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/tools/neural-closure-benchmark.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/hybrid-memory-regression.test.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-neural-closure-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    name: Fixed target, gradients, memory, artifacts and parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check closure and model runtime modules
+        run: |
+          node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/core/model-artifact-guardian.mjs
+          node --check phase2/core/feature-parity-guardian.mjs
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/tools/neural-closure-benchmark.mjs
+      - name: Test focal-asymmetric Brier, calibration support and purged splits
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
+      - name: Test checksummed model artifacts and fail-closed feature parity
+        run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
+      - name: Test TCN V11 gradients, spectral constraints and dynamic dropout
+        run: node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
+      - name: Test hybrid TCN forward-cache memory regression
+        run: node --test --test-timeout=180000 phase2/tests/hybrid-memory-regression.test.mjs
+      - name: Test hybrid TCN benchmark contracts
+        run: node --test --test-timeout=180000 phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
