@@ -133,7 +133,8 @@ test('Falcon Eye detects the OGN early setup from Spot evidence alone',()=>{
   assert.ok(['PRE_ATTACK','IGNITION'].includes(a.stage));
   assert.ok(a.confirmation_count>=8);
   assert.ok(Number.isFinite(a.component_scores.compression));
-  assert.ok(a.component_scores.compression>=70);\n  assert.ok(a.component_scores.volume>=60);
+  assert.ok(a.component_scores.compression>=70);
+  assert.ok(a.component_scores.volume>=60);
   assert.ok(a.component_scores.taker>=60);
   assert.equal(a.component_scores.derivatives,null);
   assert.equal(a.derivatives.futures_available,false);
