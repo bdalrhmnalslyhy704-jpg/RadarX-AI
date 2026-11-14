@@ -1283,3 +1283,29 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
 });
+
+
+test('V11 central differences cover all 40 attention parameters at absolute error below 1e-10',()=>{
+  const sequence=sequenceFor(true,37);
+  const report=auditTemporalGradientNumerics(sequence,1,{
+    epsilon:1e-5,tolerance:2e-7,attentionTolerance:1e-10
+  });
+  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2');
+  assert.equal(report.attention_audit.unique_attention_parameters,40);
+  assert.equal(report.attention_audit.parameters_per_objective,40);
+  assert.equal(report.attention_audit.objectives_checked,3);
+  assert.equal(report.attention_audit.checked_parameter_derivatives,120);
+  assert.equal(report.attention_audit.failed_parameter_derivatives,0);
+  assert.ok(report.attention_audit.maximum_absolute_error<1e-10,
+    JSON.stringify(report.attention_audit));
+  assert.equal(report.attention_audit.passed,true);
+  const v11=report.results.filter(row=>row.pooling_mode===TEMPORAL_ATTENTION_POOLING_MODE);
+  assert.equal(v11.length,3);
+  for(const row of v11){
+    assert.equal(row.attention_parameter_derivatives_checked,40);
+    assert.equal(row.attention_failed_derivatives,0);
+    assert.ok(row.attention_maximum_absolute_error<1e-10);
+    assert.equal(row.details.filter(item=>
+      item.parameter==='attentionQuery'||item.parameter==='attentionPositionBiases').length,40);
+  }
+});
