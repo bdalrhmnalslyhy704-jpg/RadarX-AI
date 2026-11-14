@@ -351,7 +351,7 @@ async function main(){
         training_samples:cognitiveProfile.neural_network?.training_samples??0,
         selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
         selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null,
-        best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null
+        best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null
       };
     }else unavailable.COGNITIVE_MLP_V5={reason:scored.reason};
   }else unavailable.COGNITIVE_MLP_V5={
