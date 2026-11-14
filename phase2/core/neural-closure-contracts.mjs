@@ -477,7 +477,7 @@ function chronologicalValidationBlocks(rows) {
   return {fit,purged,check,days:{fit:fitDaysList,purge:purgeDaysList,check:checkDaysList}};
 }
 function predictionMap(predictions,modelName,requiredIds,{
-  sourceCommitSha,targetDefinition,artifactSha256=null
+  sourceCommitSha,targetDefinition,targetSemantics,artifactSha256=null
 }={}) {
   if(!Array.isArray(predictions))
     return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
@@ -491,6 +491,8 @@ function predictionMap(predictions,modelName,requiredIds,{
       return {valid:false,reason:'MODEL_PREDICTION_SOURCE_SHA_MISMATCH:'+modelName,map};
     if(item?.target_definition!==targetDefinition)
       return {valid:false,reason:'MODEL_PREDICTION_TARGET_DEFINITION_MISMATCH:'+modelName,map};
+    if(item?.target_semantics!==targetSemantics)
+      return {valid:false,reason:'MODEL_PREDICTION_TARGET_SEMANTICS_MISMATCH:'+modelName,map};
     if(artifactSha256
       ?String(item?.artifact_sha256||'').toLowerCase()!==artifactSha256
       :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
@@ -673,6 +675,7 @@ export function runNeuralClosureBenchmark({
     const verified=predictionMap(predictionsByModel[modelName],modelName,requiredIds,{
       sourceCommitSha:String(sourceCommitSha).toLowerCase(),
       targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
       artifactSha256
     });
     if(!verified.valid){
@@ -792,6 +795,7 @@ export function runNeuralClosureBenchmark({
     },
     target:{
       definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
       upside_pct:3,downside_pct:-2,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
       source:NEURAL_CLOSURE_OUTCOME_SOURCE,
       decision_features_must_be_closed:true
