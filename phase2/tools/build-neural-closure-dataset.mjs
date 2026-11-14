@@ -391,7 +391,8 @@ async function main(){
     calibration_check:calibrationBlocks.support.check,
     calibration_purged:calibrationBlocks.support.purge
   };
-  for(const [name,counts] of Object.entries(classSupport)){
+  for(const name of ['train','validation','holdout']){
+    const counts=classSupport[name];
     if(counts.positive<NEURAL_CLOSURE_MIN_CLASS_SUPPORT||
       counts.negative<NEURAL_CLOSURE_MIN_CLASS_SUPPORT)
       throw new Error('NEURAL_CLOSURE_CLASS_SUPPORT_BELOW_50:'+name+':'+
