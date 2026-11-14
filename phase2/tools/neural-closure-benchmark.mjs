@@ -30,6 +30,7 @@ try{
   report=runNeuralClosureBenchmark({
     rows:input.rows,
     predictionsByModel:input.predictions_by_model,
+    modelArtifactsByModel:input.model_artifacts_by_model,
     sourceCommitSha,
     minimumClassSupport:args['minimum-class-support']
       ?Number(args['minimum-class-support']):undefined,
