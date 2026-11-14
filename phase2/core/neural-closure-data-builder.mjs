@@ -1,13 +1,14 @@
 import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
-  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,buildFourHourFirstTouchOutcome
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,buildFourHourFirstTouchOutcome,
+  sha256Canonical
 } from './neural-closure-contracts.mjs';
 import {
   buildHybridSequence,HYBRID_CANDLE_INTERVAL_MS
 } from './hybrid-tcn-attention-benchmark.mjs';
 import {
-  buildCognitiveFeatureVector,COGNITIVE_FEATURE_SCHEMA
+  buildCognitiveFeatureVector,COGNITIVE_FEATURE_SCHEMA,COGNITIVE_FEATURE_NAMES
 } from './cognitive-brain.mjs';
 
 const MINUTE_MS=60_000;
@@ -162,6 +163,16 @@ export function buildNeuralClosureFeatureSnapshot({
   const btc3h=pct(num(latestBtc.close),num(btcWindow.at(-13)?.close));
   const relativeStrength=symbol3h!==null&&btc3h!==null?symbol3h-btc3h:null;
   const recent15m=pct(latestClose,num(previous.close));
+  const atrSeries=symbolWindow.slice(-14).map(row=>{
+    const close=num(row.close),high=num(row.high),low=num(row.low);
+    return close>0?(high-low)/close*100:null;
+  }).filter(finite);
+  const atrBaselineSeries=symbolWindow.slice(-24,-14).map(row=>{
+    const close=num(row.close),high=num(row.high),low=num(row.low);
+    return close>0?(high-low)/close*100:null;
+  }).filter(finite);
+  const atrPct=mean(atrSeries);
+  const atrBaselinePct=mean(atrBaselineSeries);
   const shortVol=std(symbolReturns.slice(-4));
   const baseVol=std(symbolReturns.slice(0,-4));
   const compressionRatio=shortVol!==null&&baseVol!==null&&baseVol>1e-10
@@ -224,11 +235,13 @@ export function buildNeuralClosureFeatureSnapshot({
     temporal_sequence_timestamps:sequenceResult.sequence_timestamps,
     latest_input_at:sequenceResult.latest_input_at,
     kama_efficiency_ratio:sequenceResult.kama_efficiency_ratio,
+    atr_pct:atrPct,atr_baseline_pct:atrBaselinePct,
     volatility_zscore:sequenceResult.volatility_zscore,
     btc_trend_return_pct:sequenceResult.btc_trend_return_pct,
     market_regime:btcRegime,classic_score:clamp(classicScore,0.01,0.99),
     feature_schema:COGNITIVE_FEATURE_SCHEMA,
-    feature_names:[...sequenceResult.feature_names],
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    temporal_feature_names:[...sequenceResult.feature_names],
     micro_data_source:'BINANCE_SPOT_PUBLIC_5M_KLINE_TAKER_BUY_VOLUME',
     micro_availability_mask:features.micro_5m_available?1:0,
     order_book_available:false,aggregate_trade_available:false,
@@ -239,28 +252,39 @@ export function buildNeuralClosureFeatureSnapshot({
 function excursionMetrics(minuteCandles,firstTouch,baselinePrice) {
   const exitCandle=firstTouch?.exit_candle;
   const exitOpenAt=candleOpenTime(exitCandle);
-  if(exitOpenAt===null)return null;
+  const exitCloseAt=candleCloseTime(exitCandle);
+  const exitAt=num(firstTouch?.first_touch_at);
+  if(exitOpenAt===null||exitCloseAt===null||exitAt===null)return null;
   const executed=minuteCandles.filter(candle=>candleOpenTime(candle)<=exitOpenAt);
   const prior=executed.filter(candle=>candleOpenTime(candle)<exitOpenAt);
   const resolution=firstTouch.resolution;
-  let adverse=[],favourable=[];
-  if(resolution==='TAKE_PROFIT_FIRST'){
-    adverse=[...prior.map(row=>num(row.low)),num(exitCandle.low)].filter(finite);
-    favourable=[num(firstTouch.exit_price)];
-  }else if(resolution==='STOP_LOSS_FIRST'){
-    adverse=[...prior.map(row=>num(row.low)),num(firstTouch.exit_price)].filter(finite);
-    favourable=[...prior.map(row=>num(row.high)),num(exitCandle.open)].filter(finite);
-  }else{
-    adverse=executed.map(row=>num(row.low)).filter(finite);
-    favourable=executed.map(row=>num(row.high)).filter(finite);
+  const lows=[],highs=[];
+  for(const candle of prior){
+    lows.push({price:num(candle.low),at:candleCloseTime(candle)});
+    highs.push({price:num(candle.high),at:candleCloseTime(candle)});
   }
-  if(!adverse.length||!favourable.length)return null;
-  const adversePrice=Math.min(...adverse),favourablePrice=Math.max(...favourable);
+  if(resolution==='TAKE_PROFIT_FIRST'){
+    lows.push({price:num(exitCandle.low),at:exitCloseAt});
+    highs.push({price:num(firstTouch.exit_price),at:exitAt});
+  }else if(resolution==='STOP_LOSS_FIRST'){
+    lows.push({price:num(firstTouch.exit_price),at:exitAt});
+    highs.push({price:num(exitCandle.open),at:exitOpenAt});
+  }else if(resolution==='HORIZON_END'){
+    for(const candle of executed){
+      lows.push({price:num(candle.low),at:candleCloseTime(candle)});
+      highs.push({price:num(candle.high),at:candleCloseTime(candle)});
+    }
+  }else return null;
+  const validLows=lows.filter(item=>finite(item.price)&&finite(item.at));
+  const validHighs=highs.filter(item=>finite(item.price)&&finite(item.at));
+  if(!validLows.length||!validHighs.length)return null;
+  const adverse=validLows.reduce((worst,item)=>item.price<worst.price?item:worst);
+  const favourable=validHighs.reduce((best,item)=>item.price>best.price?item:best);
   return {
-    max_adverse_excursion_pct:(adversePrice/baselinePrice-1)*100,
-    max_adverse_excursion_at:exitOpenAt,
-    max_favorable_excursion_pct:Math.max(0,(favourablePrice/baselinePrice-1)*100),
-    max_favorable_excursion_at:exitOpenAt
+    max_adverse_excursion_pct:(adverse.price/baselinePrice-1)*100,
+    max_adverse_excursion_at:adverse.at,
+    max_favorable_excursion_pct:Math.max(0,(favourable.price/baselinePrice-1)*100),
+    max_favorable_excursion_at:favourable.at
   };
 }
 
@@ -291,8 +315,8 @@ export function buildNeuralClosureEventRow({
     candles:future,featureInformationCutoffAt:at,
     marketContext:{
       kama_efficiency_ratio:feature.kama_efficiency_ratio,
-      atr_pct:feature.volatility_zscore,
-      atr_baseline_pct:feature.btc_trend_return_pct
+      atr_pct:feature.atr_pct,
+      atr_baseline_pct:feature.atr_baseline_pct
     },
     sourceEvidence:{
       exchange:'BINANCE',market:'SPOT',interval:'1m',
@@ -316,8 +340,12 @@ export function buildNeuralClosureEventRow({
       sequence_timestamps:feature.temporal_sequence_timestamps,
       feature_schema:feature.feature_schema,
       feature_names:[...feature.feature_names],
+      temporal_feature_names:[...feature.temporal_feature_names],
       latest_input_at:at,
-      feature_snapshot_sha:null,
+      feature_snapshot_sha:sha256Canonical({
+        features:feature.features,temporal_sequence:feature.temporal_sequence,
+        temporal_sequence_timestamps:feature.temporal_sequence_timestamps
+      }),
       market_regime:feature.market_regime,
       historical_window_id:historicalWindowId,
       outcome_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
@@ -329,7 +357,9 @@ export function buildNeuralClosureEventRow({
       max_favorable_excursion_pct:excursions.max_favorable_excursion_pct,
       max_favorable_excursion_at:excursions.max_favorable_excursion_at,
       classic_score:feature.classic_score,
+      classic_score_method:'CLOSED_CANDLE_EVIDENCE_WEIGHTS_V1',
       kama_efficiency_ratio:feature.kama_efficiency_ratio,
+      atr_pct:feature.atr_pct,atr_baseline_pct:feature.atr_baseline_pct,
       volatility_zscore:feature.volatility_zscore,
       btc_trend_return_pct:feature.btc_trend_return_pct,
       quote_volume_24h:finite(quoteVolume24h)?Number(quoteVolume24h):null,
