@@ -1309,3 +1309,36 @@ test('V11 central differences cover all 40 attention parameters at absolute erro
       item.parameter==='attentionQuery'||item.parameter==='attentionPositionBiases').length,40);
   }
 });
+
+
+test('KAMA ATR dropout and spectral normalization bound every trainable TCN layer',()=>{
+  const context={kama_efficiency_ratio:0.2,atr_pct:0.8,atr_baseline_pct:0.4};
+  const dropoutProfile=regimeAwareTemporalDropoutRate(context);
+  assert.equal(dropoutProfile.enabled,true);
+  assert.ok(dropoutProfile.dropout_rate>=0.04&&dropoutProfile.dropout_rate<=0.25);
+  assert.equal(regimeAwareTemporalDropoutRate({}).enabled,false);
+  const sequence=sequenceFor(true,9);
+  const dropped=applyRegimeAwareTemporalDropout(sequence,context,{seed:77});
+  const repeated=applyRegimeAwareTemporalDropout(sequence,context,{seed:77});
+  assert.equal(dropped.applied,true);
+  assert.deepEqual(dropped.sequence,repeated.sequence,
+    'same row/epoch seed must generate the same training-only dropout mask');
+  assert.ok(dropped.dropped_channels>0);
+  for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++)
+    assert.equal(dropped.sequence[time][TEMPORAL_SEQUENCE_CHANNELS-1],
+      sequence[time][TEMPORAL_SEQUENCE_CHANNELS-1],
+      'the explicit availability mask channel must never be dropped');
+
+  const model={
+    projectionWeights:[[4,0],[0,2]],
+    pointWeights:[[[3,0],[0,2]]],
+    depthWeights:[[[3,4],[3,0]]],
+    outputWeights:[4,3]
+  };
+  const spectral=applyTemporalSpectralNormalization(model,{cap:1.5,iterations:24});
+  assert.equal(spectral.passed,true,JSON.stringify(spectral));
+  assert.ok(spectral.projection.after<=1.5+1e-8);
+  assert.ok(spectral.pointwise.every(item=>item.after<=1.5+1e-8));
+  assert.ok(spectral.maximum_depth_channel_norm_after<=1.5+1e-8);
+  assert.ok(spectral.output_l2_norm_after<=1.5+1e-8);
+});
