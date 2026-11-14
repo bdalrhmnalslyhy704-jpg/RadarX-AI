@@ -1486,7 +1486,7 @@ export function trainHybridTcnAttention(trainingRows, {
       retained_per_epoch_values: 'ONE_PROBABILITY_PER_ROW',
       full_cache_recomputation_count_per_epoch: rows.length
     },
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_KAMA_V5',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6',
     objective_trace: trace
   };
 }
@@ -2105,7 +2105,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_FOCAL_ASYMMETRIC_BRIER_AND_TARGET_LABEL_RANKING_V5',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,
