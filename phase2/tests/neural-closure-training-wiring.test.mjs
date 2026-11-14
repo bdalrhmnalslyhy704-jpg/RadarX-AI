@@ -78,7 +78,7 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/row\.at>=selectionCut\+lstmHorizonMs/);
   assert.match(trainer,/latestResolved\(calibrationRows\)<externalValidationStart/);
   assert.match(trainer,/selectTcnLstmHybridHyperparameters\(trainingRows,selectionRows/);
-  assert.match(trainer,/fitTcnLstmHybridCalibration\(calibrationRows/);
+  assert.match(trainer,/fitTcnLstmHybridCalibration\(\s*calibrationRows/);
   assert.match(trainer,/modelName:'TCN_LSTM_HYBRID'/);
   assert.match(trainer,/modelArtifactsByModel\.TCN_LSTM_HYBRID=artifact/);
   assert.match(trainer,/predictionsByModel\.TCN_LSTM_HYBRID=scored\.rows/);
