@@ -920,7 +920,20 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
         raw_klines_sha256:'a'.repeat(64),
         baseline_price:100,take_profit_price:103,stop_loss_price:98,
         exit_price:outcome==='UP'?103.1:outcome==='DOWN'?97.9:100.05,
-        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP'
+        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP',
+        exit_candle:outcome==='FLAT'?{
+          open_time:at+1+239*60_000,close_time:at+NEURAL_CLOSURE_HORIZON_MS,
+          open:100.03,high:100.1,low:100.02,close:100.05,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:outcome==='UP'?{
+          open_time:at+1,close_time:at+60_000,
+          open:103.1,high:103.3,low:103,close:103.2,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:{
+          open_time:at+1,close_time:at+60_000,
+          open:97.9,high:98,low:97.7,close:97.8,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }
       },
       sequence:makeSequence(outcome==='UP'?1:-1,index),
       sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
