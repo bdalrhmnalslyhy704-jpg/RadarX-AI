@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
+import {focalAsymmetricBrierLoss} from './neural-closure-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
   'log_return_1',
@@ -1248,23 +1249,11 @@ export function profitDrawdownObjective(probabilities, rows, {
     if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
     const positive = netReturnPct(pair.row, cost) > 0;
-    const gamma = positive ? gammaPositive : gammaNegative;
-    const classWeight = positive ? positiveWeight : negativeWeight;
-    let focalLoss, derivativeProbability;
-    if (positive) {
-      const missProbability = 1 - probability;
-      focalLoss = -classWeight * (missProbability ** gamma) * Math.log(probability);
-      const modulationDerivative = gamma > 0 ? gamma * (missProbability ** (gamma - 1)) : 0;
-      derivativeProbability = classWeight * modulationDerivative * Math.log(probability) -
-        classWeight * (missProbability ** gamma) / probability;
-    } else {
-      focalLoss = -classWeight * (probability ** gamma) * Math.log(1 - probability);
-      const modulationDerivative = gamma > 0 ? gamma * (probability ** (gamma - 1)) : 0;
-      derivativeProbability = -classWeight * modulationDerivative * Math.log(1 - probability) +
-        classWeight * (probability ** gamma) / (1 - probability);
-    }
-    focalLossSum += focalLoss;
-    focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / focalDenominator;
+    const focal = focalAsymmetricBrierLoss(probability,positive?1:0,{
+      gammaPositive,gammaNegative,positiveWeight,negativeWeight
+    });
+    focalLossSum += focal.loss;
+    focalLogitGradients[pair.index] = focal.logitGradient / focalDenominator;
   }
   const asymmetricFocalLoss = focalSampleCount ? focalLossSum / focalDenominator : 0;
   // Same-timestamp pairwise ranking: the scanner's task is to rank stronger
@@ -1440,7 +1429,7 @@ export function trainHybridTcnAttention(trainingRows, {
       retained_per_epoch_values: 'ONE_PROBABILITY_PER_ROW',
       full_cache_recomputation_count_per_epoch: rows.length
     },
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_KAMA_V5',
     objective_trace: trace
   };
 }
