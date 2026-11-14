@@ -1408,6 +1408,12 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   }]);
   assert.equal(badBarrier.resolved_samples,0,
     'a mismatched +3% exit barrier must never enter TCN training');
+  const badExitCandle=buildFourHourTemporalNeuralProfile([{
+    ...row,first_touch:{...row.first_touch,
+      exit_candle:{...row.first_touch.exit_candle,high:102.9}}
+  }]);
+  assert.equal(badExitCandle.resolved_samples,0,
+    'a first-touch event must be supported by the recorded exit candle OHLC');
   const badSourceAudit=buildFourHourTemporalNeuralProfile([{
     ...row,source_audit:{...row.source_audit,raw_klines_sha256:'c'.repeat(64)}
   }]);
