@@ -8,6 +8,7 @@ import {
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
   isValidFourHourFirstTouchExecution
 } from './neural-closure-contracts.mjs';
+import {createVersionedModelArtifact} from './model-artifact-guardian.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
 // contract only; it does not imply that either challenger has passed validation.
@@ -1536,6 +1537,17 @@ export function isValidCognitiveMlpFit(fit){
   }catch{return false;}
 }
 
+
+/** Read-only inference for the selected V5 member on the fixed 4h first-touch cohort. */
+export function predictFourHourCognitiveMlpProbability(features,fitOrModelState){
+  const fit=fitOrModelState?.fit??fitOrModelState;
+  if(fit?.kind!=='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'||
+    !Number.isInteger(fit.selected_member_index)||
+    fit.selected_member_index<0||
+    !Number.isFinite(Number(fit.selected_residual_scale)))return null;
+  return predictFromFit(features,fit);
+}
+
 function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
     return applyAcceptedProbabilityCalibration(
@@ -1944,7 +1956,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   factorizationLearningRate=null,
   factorizationL2=null,
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
-  maxResolvedSamples = 0
+  maxResolvedSamples = 0,
+  sourceCommitSha = null
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
   const activeFeatureNames=featureNamesForSchema(featureSchema);
@@ -2760,6 +2773,31 @@ export function buildCognitiveLearningProfile(samples = [], {
     ? Number((globalValidation.model_brier_score - recentValidation.model_brier_score).toFixed(5))
     : null;
 
+  const neuralResearchArtifact=sourceCommitSha&&neuralFit&&
+    Number.isInteger(neuralFit.selected_member_index)&&neuralFit.selected_member_index>=0
+    ?createVersionedModelArtifact({
+      modelName:'RADARX_COGNITIVE_MLP_V5_FIRST_TOUCH_4H',
+      modelFamily:'COGNITIVE_MLP_V5',
+      modelVersion:'V5_4H_FIRST_TOUCH_V1',
+      sourceCommitSha,
+      targetDefinition:modelTargetDefinition,
+      targetSemantics:modelTargetSemantics,
+      featureSchemaId:activeFeatureSchema,
+      featureNames:[...activeFeatureNames],
+      featureIndexMap:Object.fromEntries(activeFeatureNames.map((name,index)=>[name,index])),
+      normalization:{
+        mean:activeFeatureNames.map(()=>0),
+        std:activeFeatureNames.map(()=>1)
+      },
+      modelState:{
+        fit:neuralFit,
+        feature_schema:activeFeatureSchema,
+        feature_names:[...activeFeatureNames],
+        normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1',
+        selection_residual_scale:neuralFit.selected_residual_scale,
+        probability_calibrator:neuralFit.probability_calibrator??null
+      }
+    }):null;
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
     feature_schema:activeFeatureSchema,
@@ -3106,7 +3144,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       : rankingReady
         ? 'RANKING_EVIDENCE_READY_BUT_NESTED_VALIDATION_NOT_PASSED'
         : 'INSUFFICIENT_MATURED_OUTCOMES_OR_FACTOR_COVERAGE_AFTER_PURGING',
-    _fit: selectedFit
+    _fit: selectedFit,
+    research_artifacts:neuralResearchArtifact
+      ?{COGNITIVE_MLP_V5:neuralResearchArtifact}:{}
   };
 }
 
