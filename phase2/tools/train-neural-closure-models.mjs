@@ -369,8 +369,8 @@ async function main(){
     const normalization=hybridFit.normalization;
     const hybridArtifact=makeArtifact({
       name:'RADARX_HYBRID_TCN_ATTENTION_FIRST_TOUCH_4H',
-      family:'HYBRID_TCN_ATTENTION',version:'HYBRID_TCN_ATTENTION_4H_V1',
-      sourceCommitSha,featureSchemaId:'RADARX_HYBRID_TCN_ATTENTION_SEQUENCE_24X29_V1',
+      family:'HYBRID_TCN_ATTENTION',version:'HYBRID_TCN_ATTENTION_4H_V2',
+      sourceCommitSha,featureSchemaId:'RADARX_HYBRID_TCN_ATTENTION_SEQUENCE_24X29_V2',
       featureNames:[...HYBRID_FEATURE_NAMES],
       normalization:{mean:normalization.means,std:normalization.standard_deviations},
       modelState:{fitted:hybridFit}
