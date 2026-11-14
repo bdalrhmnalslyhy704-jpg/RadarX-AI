@@ -36,7 +36,7 @@ const pct=(current,previous)=>current>0&&previous>0?(current/previous-1)*100:nul
 const log2=value=>Math.log(Math.max(0.05,value))/Math.LN2;
 
 export const NEURAL_CLOSURE_DATASET_SCHEMA=
-  'RADARX_BUILD224_BINANCE_SPOT_4H_FIRST_TOUCH_DATASET_V1';
+  'RADARX_BUILD224_BINANCE_SPOT_4H_FIRST_TOUCH_DATASET_V2';
 export const NEURAL_CLOSURE_DATASET_INTERVALS=Object.freeze({
   label:'1m',micro:'5m',features:'15m'
 });
