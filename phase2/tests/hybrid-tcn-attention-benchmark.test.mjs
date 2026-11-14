@@ -957,7 +957,11 @@ test('hybrid TCN trains only on the canonical Binance 1m first-touch 4h labels w
     const label=buildFourHourFirstTouchOutcome({
       id:'HYBRID-4H-FIRST-TOUCH-'+index,
       symbol:'FOURHOUR'+String(index).padStart(3,'0')+'USDT',
-      baselineAt:at,baselinePrice:100,candles
+      baselineAt:at,baselinePrice:100,candles,
+      sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+        transport:'BINANCE_PUBLIC_REST',
+        symbol:'FOURHOUR'+String(index).padStart(3,'0')+'USDT',
+        received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000}
     });
     const sequence=makeSequence(index%2===0?1:-1,index);
     return {
