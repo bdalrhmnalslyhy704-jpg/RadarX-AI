@@ -41,12 +41,15 @@ on:
 permissions:
   contents: read
 
+# Push/manual collection is serialized per source branch. PR events are kept
+# as visible checks but do not start a second full Binance REST collection.
 concurrency:
-  group: build224-neural-closure-dataset-${{ github.ref }}-${{ github.sha }}
+  group: build224-neural-closure-dataset-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   collect:
+    if: github.event_name != 'pull_request'
     name: Collect, archive and validate real Binance Spot candles
     runs-on: ubuntu-latest
     timeout-minutes: 120
