@@ -20,6 +20,11 @@ function makeRows({days=20,rowsPerDay=400}={}){
     rows.push({
       id:'D'+day+':E'+index,
       symbol:'S'+String(index).padStart(4,'0')+'USDT',
+      market:'BINANCE_SPOT_USDT',
+      source_audit:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+        transport:'BINANCE_PUBLIC_REST',symbol:'S'+String(index).padStart(4,'0')+'USDT',
+        received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000,
+        observed_candles:240,raw_klines_sha256:'a'.repeat(64)},
       at,resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
       horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
       feature_information_cutoff_at:at,
@@ -32,7 +37,7 @@ function makeRows({days=20,rowsPerDay=400}={}){
       first_touch:{
         resolution:positive?'TAKE_PROFIT_FIRST':outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END',
         first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
-        path_resolution:'1M',observed_candles:240
+        path_resolution:'1M',observed_candles:240,raw_klines_sha256:'a'.repeat(64)
       },
       features:[index/rowsPerDay,day/30]
     });
