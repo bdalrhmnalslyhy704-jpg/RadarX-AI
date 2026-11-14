@@ -1413,6 +1413,8 @@ export function trainHybridTcnAttention(trainingRows, {
   seed = 17, objectiveOptions = {},
   targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
+  if(![DEFAULT_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_DEFINITION].includes(targetDefinition))
+    throw new Error('UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION');
   const rows = normalizeBenchmarkRows(trainingRows,targetDefinition);
   if (rows.length < 20) throw new Error('HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS');
   const normalization = fitHybridFeatureNormalization(rows);
