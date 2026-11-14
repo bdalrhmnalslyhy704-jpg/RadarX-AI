@@ -782,7 +782,7 @@ export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
       row,at,exitAt,netReturn,probability:item.probability,
       capital:slotCapital,markPct:0
     };
-    events.push({at,type:'EXIT',priority:0,position});
+    events.push({at:exitAt,type:'EXIT',priority:0,position});
     if(Number(row.max_adverse_excursion_at)<exitAt)
       events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',priority:1,
         position,value:Number(row.max_adverse_excursion_pct)});
