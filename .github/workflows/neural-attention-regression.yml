@@ -1,0 +1,46 @@
+name: RadarX TCN V11 attention regression
+
+on:
+  push:
+    branches:
+      - research/neural-closure-streaming-writer-20261114
+    paths:
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - '.github/workflows/neural-attention-regression.yml'
+  pull_request:
+    paths:
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - '.github/workflows/neural-attention-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tcn-v11-regression:
+    name: Verify V11 training, artifact reload and two-regime gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout candidate SHA
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check the V11 implementation
+        run: |
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+      - name: Verify V11 fixed-SHA wiring
+        run: node --test phase2/tests/neural-closure-training-wiring.test.mjs
+      - name: Verify temporal training and exact artifact inference round-trip
+        run: node --test phase2/tests/temporal-neural-brain.test.mjs
