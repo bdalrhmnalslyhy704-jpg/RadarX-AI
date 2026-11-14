@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
 import {
-  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
   NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
@@ -24,7 +24,9 @@ function makeRows({days=20,rowsPerDay=400}={}){
       horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
       feature_information_cutoff_at:at,
       target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
       outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+      training_eligible:true,closed_candle_baseline:true,
       outcome,target:positive?1:0,
       realized_return_pct:positive?3.4:outcome==='DOWN'?-2.3:0.08,
       first_touch:{
@@ -59,6 +61,7 @@ function makePredictions(rows,sourceCommitSha,artifacts){
     id:row.id,probability:row.target?positive:negative,
     source_commit_sha:sourceCommitSha,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     artifact_sha256:artifactSha256
   }));
   const output={LOGISTIC_REGRESSION:make(0.72,0.24,null)};
