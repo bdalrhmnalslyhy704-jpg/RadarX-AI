@@ -239,7 +239,7 @@ test('raw archive stream fails closed without leaving a partial gzip file',async
   try{
     await assert.rejects(writeRawSpotKlineArchive({
       symbol:'ETHUSDT',interval:'1m',archiveDir:directory,
-      rawRows:[['valid'],[undefined]]
+      rawRows:[['valid'],[1n]]
     }));
     assert.deepEqual(await readdir(directory),[]);
   }finally{
