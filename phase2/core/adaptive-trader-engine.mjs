@@ -276,10 +276,20 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
        !(btcDayVolatility>0)||!Number.isFinite(btcDrawdownFromDayHigh)||
        !assetDayContiguous||!Number.isFinite(assetReturn4h)||!Number.isFinite(assetReturn24h)||
        !Number.isFinite(assetRelativeReturn24h)||!(assetDayVolatility>0)||
-       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0)||
-       (microAvailable&&(!(microBaseVolume>0)||!(microBaseTrades>0)||!(microBaseRange>0)||
-        !(microBaseBuyShare>=0&&microBaseBuyShare<=1)||!(microBuyShare>=0&&microBuyShare<=1)||
-        !(microCurrentVolume>0)||!(microCurrentTrades>0)||!(microCurrentRange>0))))return null;
+       !(assetDayVolumeBase>0)||!(assetDayTradesBase>0))return null;
+    // A complete 5m window can still be unusable when its volume/trade
+    // denominators are zero or its buy-flow ratios are invalid. That is an
+    // optional microstructure failure, not a reason to discard valid 15m/BTC
+    // context. Downgrade only this step to an explicit zero-filled mask.
+    const microMetricsValid=>(microAvailable&&microBaseVolume>0&&microBaseTrades>0&&
+      microBaseRange>0&&microBaseBuyShare>=0&&microBaseBuyShare<=1&&
+      microBuyShare>=0&&microBuyShare<=1&&microCurrentVolume>0&&
+      microCurrentTrades>0&&microCurrentRange>0);
+    if(microAvailable&&!microMetricsValid){
+      microAvailable=false;
+      microBase.length=0;
+      microCurrent.length=0;
+    }
     const assetReturn=(current.close/previous.close-1)*100;
     const btcReturn=(btcCurrent.close/btcPrevious.close-1)*100;
     const relativeReturn=assetReturn-btcReturn;
@@ -479,6 +489,8 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
   const btcOneHourReturnPct = btcContiguous && btcLast && btcEvaluationNow-btcLast.closeTime<=POLICY.maxCandleAgeMs
     ? pct(btcLast.close,btcCandles[btcCandles.length-5].close) : null;
   const temporalSequence=buildTemporalSequence(candles,btcCandles,fastCandles);
+  const temporalSequenceMicroMaskedSteps=Array.isArray(temporalSequence)
+    ?temporalSequence.reduce((count,step)=>count+(Number(step?.[28])===0?1:0),0):null;
   const relativeStrengthVsBtcPct = oneHourReturnPct!==null&&btcOneHourReturnPct!==null
     ? Number((oneHourReturnPct-btcOneHourReturnPct).toFixed(3)) : null;
 
@@ -547,6 +559,7 @@ export function scoreAdaptiveTraderCandidate({ symbol, ticker, klines, fastKline
     candle_close_price: current.close,
     candle_age_ms: candleAgeMs,
     temporal_sequence: temporalSequence,
+    temporal_sequence_micro_masked_steps:temporalSequenceMicroMaskedSteps,
     temporal_sequence_steps: temporalSequence?.length || 0,
     temporal_sequence_channels: temporalSequence?.[0]?.length || 0,
     score,
