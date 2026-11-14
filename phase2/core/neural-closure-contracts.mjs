@@ -941,10 +941,12 @@ export function runNeuralClosureBenchmark({
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,
+      execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
       realized_return_contract:{
-        take_profit_first:'EXIT_AT_RECORDED_TAKE_PROFIT_PRICE',
-        stop_loss_first:'EXIT_AT_RECORDED_STOP_LOSS_PRICE',
-        horizon_end:'EXIT_AT_FINAL_CLOSED_4H_CLOSE',
+        take_profit_first:'FIRST_TOUCH_BARRIER_OR_GAP_OPEN_FILL',
+        stop_loss_first:'FIRST_TOUCH_BARRIER_OR_GAP_OPEN_FILL',
+        horizon_end:'FINAL_CLOSED_4H_CLOSE_FILL',
+        horizon_close_return_retained_separately:true,
         round_trip_cost_applied_once:true
       },
       minimum_positive_class_support_per_calibration_block:minimumClassSupport,
