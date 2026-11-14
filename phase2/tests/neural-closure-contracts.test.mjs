@@ -174,6 +174,11 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
+  assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
+  assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
+  assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
+  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
+    [BASE+14*NEURAL_CLOSURE_PURGE_MS]);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     assert.equal(report.models[family].status,'EVALUATED');
     assert.equal(report.models[family].holdout.sample_count,1200);
