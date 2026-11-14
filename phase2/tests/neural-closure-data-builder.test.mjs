@@ -59,7 +59,7 @@ test('raw coverage gate rejects a missing or duplicate candle rather than fillin
   const at=Date.UTC(2026,0,1,0,14,59,999);
   const schedule={
     one_minute_start_open_at:at+1,
-    one_minute_end_open_at:at+FOUR_HOURS()-MINUTE()+1,
+    one_minute_end_open_at:at+FOUR_HOURS()-MINUTE+1,
     five_minute_start_open_at:at-24*FIVE+1,
     five_minute_end_open_at:at-FIVE+1,
     fifteen_minute_start_open_at:at-24*FIFTEEN+1,
