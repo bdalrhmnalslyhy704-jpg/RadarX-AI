@@ -29,6 +29,7 @@ on:
   pull_request:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
+      - research/neural-closure-4h-20261114
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
