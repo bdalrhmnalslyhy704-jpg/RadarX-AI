@@ -855,6 +855,7 @@ export function runDense4hGeneralizationBenchmark(prepared,split,{
     feature_schema:COGNITIVE_FEATURE_SCHEMA,
     feature_names:[...COGNITIVE_FEATURE_NAMES],
     dataset_identity_sha256:prepared.identity_feature_sha256,
+    source_file_sha256:prepared.source_file_sha256??null,
     row_count:prepared.row_count,
     split:{
       requested_proportions:split.boundaries.requested_proportions,
