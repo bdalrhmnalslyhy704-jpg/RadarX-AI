@@ -155,12 +155,12 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
       checked:row.checked_parameters,maximum_absolute_error:row.maximum_absolute_error,
       failed:row.failed_parameters}))
   }));
-  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
+  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2');
   assert.equal(report.input_shape[0],24);
   assert.equal(report.input_shape[1],29);
   assert.equal(report.pooling_modes.length,4);
-  assert.equal(report.objectives.length,3);
-  assert.equal(report.results.length,12);
+  assert.equal(report.objectives.length,4);
+  assert.equal(report.results.length,16);
   assert.ok(report.checked_parameter_derivatives>=100);
   assert.equal(report.failed_parameter_derivatives,0,
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
@@ -181,7 +181,7 @@ test('reused TCN training workspace is numerically equivalent to allocation-base
     passed:report.passed
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
-  assert.equal(report.result_cases,24);
+  assert.equal(report.result_cases,32);
   assert.ok(report.results.every(row=>
     row.output_values_compared>0&&row.gradient_values_compared>0));
   assert.ok(report.maximum_output_absolute_error<=1e-12,
@@ -632,7 +632,7 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.gradient_buffer_scope,TEMPORAL_GRADIENT_BUFFER_SCOPE);
   assert.equal(profile.gradient_buffer_scope,'TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1',
     'per-sample backprop must reuse only the trainable gradient buffers and exclude frozen/model metadata arrays');
-  assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
+  assert.equal(profile.training_objective,'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.regime_model_training_samples,profile.training_samples);
@@ -641,10 +641,10 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.1,0.25,0.5,1]);
   assert.equal(profile.member_training_profiles.length,3);
-  assert.equal(profile.member_training_profiles[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[1].trainingObjective,'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[2].trainingObjective,'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(profile.member_training_profiles[0].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[1].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[2].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   assert.ok(profile.member_training_profiles.every(row=>
     Number.isFinite(Number(row.latentChannels))&&Number.isFinite(Number(row.trainableParameters))),
     'all members retain the fixed causal TCN architecture contract');
@@ -751,12 +751,12 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
       epoch.mean_weighted_training_objective_loss>=0&&
       epoch.averaged_gradient_l2_norm>=0));
   }
-  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   const regimeMembers=profile.member_training_profiles_by_regime.BTC_RISK_ON;
-  assert.equal(regimeMembers[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[1].trainingObjective,'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[2].trainingObjective,'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(regimeMembers[0].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[1].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[2].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   assert.equal(expert.baseline_anchor_source,'SHARED_POOLED_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.shared_training_samples);
   assert.ok(expert.shared_training_samples>=160);
