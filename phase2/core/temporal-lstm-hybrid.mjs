@@ -134,6 +134,123 @@ function validateRow(row, index, requireTarget = true) {
   return true;
 }
 
+/**
+ * Create disjoint TCN-LSTM inner partitions strictly inside an already
+ * validated outer training cohort. External validation rows are inspected
+ * for sequence/timestamp shape and the first timestamp only; their labels are
+ * never read. The four-hour label-maturity purge is applied at all boundaries.
+ */
+export function splitFourHourTcnLstmTrainingRows(outerTrainingRows,externalValidationRows,{
+  horizonMs=4*60*60*1000,trainingFraction=0.62,selectionFraction=0.82,
+  minimumUniqueDays=20,minimumPartitionRows=20
+}={}){
+  if(!Array.isArray(outerTrainingRows)||!Array.isArray(externalValidationRows)||
+    !finite(horizonMs)||horizonMs<=0||
+    !finite(trainingFraction)||!finite(selectionFraction)||
+    trainingFraction<=0.5||selectionFraction<=trainingFraction||selectionFraction>=0.95||
+    !Number.isInteger(minimumUniqueDays)||minimumUniqueDays<10||
+    !Number.isInteger(minimumPartitionRows)||minimumPartitionRows<20)
+    throw new TypeError('TCN_LSTM_FOUR_HOUR_PARTITION_CONFIGURATION_INVALID');
+  outerTrainingRows.forEach((row,index)=>validateRow(row,index,true));
+  externalValidationRows.forEach((row,index)=>validateRow(row,index,false));
+  const trainingIds=outerTrainingRows.map(sampleIdentity);
+  const externalIds=externalValidationRows.map(sampleIdentity);
+  if(new Set(trainingIds).size!==trainingIds.length||
+    new Set(externalIds).size!==externalIds.length)
+    throw new TypeError('TCN_LSTM_FOUR_HOUR_PARTITION_DUPLICATE_IDENTITY');
+  const trainingIdSet=new Set(trainingIds);
+  if(externalIds.some(id=>trainingIdSet.has(id)))
+    throw new TypeError('TCN_LSTM_FOUR_HOUR_PARTITION_OUTER_IDENTITY_OVERLAP');
+  const outerTrainingMaxResolvedAt=Math.max(...outerTrainingRows.map(row=>row.resolved_at));
+  const externalValidationStartAt=Math.min(...externalValidationRows.map(row=>row.at));
+  if(!(outerTrainingMaxResolvedAt<externalValidationStartAt))
+    return {
+      status:'ABSTAIN_OUTER_TRAIN_VALIDATION_PURGE_FAILED',
+      reason:'OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION',
+      outer_training_max_resolved_at:outerTrainingMaxResolvedAt,
+      external_validation_start_at:externalValidationStartAt,
+      partitions:{training:[],selection:[],calibration:[]}
+    };
+  if(outerTrainingRows.some(row=>row.resolved_at-row.at!==horizonMs))
+    return {
+      status:'ABSTAIN_FOUR_HOUR_LABEL_MATURITY_MISMATCH',
+      reason:'OUTER_TRAIN_ROWS_DO_NOT_MATCH_EXACT_FOUR_HOUR_MATURITY',
+      partitions:{training:[],selection:[],calibration:[]}
+    };
+  const rows=[...outerTrainingRows].sort((a,b)=>a.at-b.at||
+    String(a.symbol||'').localeCompare(String(b.symbol||''))||
+    sampleIdentity(a).localeCompare(sampleIdentity(b)));
+  const days=[...new Set(rows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
+    .sort((a,b)=>a-b);
+  if(days.length<minimumUniqueDays)
+    return {
+      status:'ABSTAIN_INTERNAL_UNIQUE_DAY_SUPPORT_TOO_SMALL',
+      reason:'FOUR_HOUR_LSTM_INTERNAL_UNIQUE_DAY_SUPPORT_TOO_SMALL',
+      unique_training_days:days.length,required_unique_training_days:minimumUniqueDays,
+      partitions:{training:[],selection:[],calibration:[]}
+    };
+  const fitCut=days[Math.floor(days.length*trainingFraction)];
+  const selectionCut=days[Math.floor(days.length*selectionFraction)];
+  const training=rows.filter(row=>row.at<fitCut&&row.resolved_at<fitCut);
+  const selection=rows.filter(row=>
+    row.at>=fitCut+horizonMs&&row.at<selectionCut&&row.resolved_at<selectionCut);
+  const calibration=rows.filter(row=>
+    row.at>=selectionCut+horizonMs&&row.resolved_at<externalValidationStartAt);
+  const maxResolved=part=>part.length?Math.max(...part.map(row=>row.resolved_at)):null;
+  const minAt=part=>part.length?Math.min(...part.map(row=>row.at)):null;
+  const support=part=>{
+    const positive=part.filter(row=>row.target===1).length;
+    return {rows:part.length,positive,negative:part.length-positive};
+  };
+  const partitions={training,selection,calibration};
+  const supportByPartition=Object.fromEntries(Object.entries(partitions).map(([name,part])=>
+    [name,support(part)]));
+  const boundariesValid=training.length>0&&selection.length>0&&calibration.length>0&&
+    maxResolved(training)<minAt(selection)&&
+    maxResolved(selection)<minAt(calibration)&&
+    maxResolved(calibration)<externalValidationStartAt;
+  const supportValid=Object.values(supportByPartition).every(item=>
+    item.rows>=minimumPartitionRows&&item.positive>=2&&item.negative>=2);
+  const allIds=[...training,...selection,...calibration].map(sampleIdentity);
+  const identitiesValid=new Set(allIds).size===allIds.length&&
+    allIds.every(id=>trainingIdSet.has(id));
+  if(!boundariesValid||!supportValid||!identitiesValid)
+    return {
+      status:'ABSTAIN_INTERNAL_PURGE_OR_CLASS_SUPPORT_FAILED',
+      reason:!boundariesValid?'INTERNAL_FOUR_HOUR_MATURITY_PURGE_FAILED':
+        !supportValid?'INTERNAL_LSTM_PARTITION_CLASS_SUPPORT_FAILED':
+        'INTERNAL_LSTM_PARTITION_IDENTITY_FAILED',
+      unique_training_days:days.length,
+      split_boundaries:{fit_cut_at:fitCut,selection_cut_at:selectionCut,
+        external_validation_start_at:externalValidationStartAt,
+        training_max_resolved_at:maxResolved(training),
+        selection_max_resolved_at:maxResolved(selection),
+        calibration_max_resolved_at:maxResolved(calibration)},
+      support:supportByPartition,
+      chronology_valid:boundariesValid,
+      identities_valid:identitiesValid,
+      partitions
+    };
+  return {
+    status:'READY',
+    schema:'RADARX_TCN_LSTM_FOUR_HOUR_PURGED_INNER_SPLIT_V1',
+    horizon_ms:horizonMs,
+    unique_training_days:days.length,
+    split_boundaries:{
+      fit_cut_at:fitCut,selection_cut_at:selectionCut,
+      external_validation_start_at:externalValidationStartAt,
+      training_max_resolved_at:maxResolved(training),
+      selection_max_resolved_at:maxResolved(selection),
+      calibration_max_resolved_at:maxResolved(calibration)
+    },
+    support:supportByPartition,
+    chronology_valid:true,
+    identities_valid:true,
+    external_validation_labels_read:false,
+    partitions
+  };
+}
+
 function mean(values) {
   if (!values.length) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
