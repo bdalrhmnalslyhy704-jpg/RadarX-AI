@@ -487,3 +487,27 @@ test('four-hour TCN-LSTM splitter rejects non-four-hour labels and outer boundar
   });
   assert.equal(leakage.status,'ABSTAIN_OUTER_TRAIN_VALIDATION_PURGE_FAILED');
 });
+
+
+test('failed inner TCN-LSTM selection preserves a diagnostic-only fit without qualifying it',()=>{
+  const training=makeRows(0,40,'diagnostic-train');
+  const selection=makeRows(41,20,'diagnostic-selection');
+  const result=selectTcnLstmHybridHyperparameters(training,selection,{
+    candidates:[
+      {name:'DIAGNOSTIC_A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'DIAGNOSTIC_B',learningRate:0.0025,l2:0.0015,dropout:0.1,epochs:1}
+    ],
+    requiredImprovement:10,
+    seed:229,
+    maxTrainingSamples:40
+  });
+  assert.equal(result.status,'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY');
+  assert.equal(result.selected_fit,null);
+  assert.ok(result.diagnostic_fit&&result.diagnostic_fit.model,
+    'best inner candidate remains available solely for sealed outer diagnostics');
+  assert.ok(result.diagnostic_configuration);
+  assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+});
