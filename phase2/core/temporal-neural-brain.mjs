@@ -1777,16 +1777,26 @@ function fitSelectionProbabilityCalibrator(rows, predictFn, {
   };
 }
 
-function exportTemporalInferenceMember(model){
-  if(!model||model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)return null;
+function exportTemporalInferenceMember(model,expectedPoolingMode=null){
+  if(!model)return null;
+  const poolingMode=String(expectedPoolingMode||model.temporal_pooling||'');
+  const supportedPoolingModes=new Set([
+    TEMPORAL_ORDERED_POOLING_MODE,
+    TEMPORAL_MULTISCALE_POOLING_MODE,
+    TEMPORAL_ATTENTION_POOLING_MODE
+  ]);
+  if(!supportedPoolingModes.has(poolingMode)||model.temporal_pooling!==poolingMode)return null;
   const copy1=values=>Array.isArray(values)?values.map(Number):null;
   const copy2=values=>Array.isArray(values)?values.map(copy1):null;
   const copy3=values=>Array.isArray(values)?values.map(copy2):null;
   if(!copy2(model.projectionWeights)||!copy1(model.projectionBiases)||
     !copy3(model.depthWeights)||!copy3(model.pointWeights)||!copy2(model.biases)||
     !copy1(model.outputWeights)||!copy1(model.skipWeights)||
-    !copy1(model.attentionQuery)||!copy1(model.attentionPositionBiases)||
     !Number.isFinite(Number(model.outputBias)))return null;
+  const attentionWeightsReady=poolingMode!==TEMPORAL_ATTENTION_POOLING_MODE||
+    (copy1(model.attentionQuery)?.length===TEMPORAL_LATENT_CHANNELS&&
+     copy1(model.attentionPositionBiases)?.length===TEMPORAL_SEQUENCE_STEPS);
+  if(!attentionWeightsReady)return null;
   return {
     projectionWeights:copy2(model.projectionWeights),
     projectionBiases:copy1(model.projectionBiases),
@@ -1797,10 +1807,12 @@ function exportTemporalInferenceMember(model){
     skipWeights:copy1(model.skipWeights),
     outputBias:Number(model.outputBias),
     baseline_by_regime:null,
-    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    temporal_pooling:poolingMode,
     dilations:Array.isArray(model.dilations)?model.dilations.map(Number):[...DILATIONS],
-    attentionQuery:copy1(model.attentionQuery),
-    attentionPositionBiases:copy1(model.attentionPositionBiases)
+    attentionQuery:poolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?copy1(model.attentionQuery):null,
+    attentionPositionBiases:poolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+      ?copy1(model.attentionPositionBiases):null
   };
 }
 
@@ -2546,17 +2558,26 @@ function fitRegimeLocalTemporalTcn({
     // Export only a model state that contains a non-zero neural residual.
     // A zero residual is exactly the logistic anchor and must not be presented
     // as an attention-network prediction in an external model comparison.
-    research_inference:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE&&
-      (selected!==null||(diagnostic!==null&&diagnostic.residual_scale>0))
+    research_inference:(
+      temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE||
+      temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE||
+      temporalPoolingMode===TEMPORAL_MULTISCALE_POOLING_MODE
+    )&&(selected!==null||(diagnostic!==null&&diagnostic.residual_scale>0))
       ?{
-        schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+        schema:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
+          ?'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'
+          :'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1',
         regime,temporal_pooling:temporalPoolingMode,
         architecture:fitted.architecture,
-        inference_mode:selected?'INNER_SELECTED_TCN_ATTENTION_MEMBER':
-          'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+        model_kind:base.model_kind,
+        inference_mode:selected
+          ?'INNER_SELECTED_TCN_VARIANT_MEMBER'
+          :'INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER',
         member_index:selected?.index??diagnostic.index,
         residual_scale:selected?.residual_scale??diagnostic.residual_scale,
-        model:exportTemporalInferenceMember(fitted.members[selected?.index??diagnostic.index]),
+        model:exportTemporalInferenceMember(
+          fitted.members[selected?.index??diagnostic.index],temporalPoolingMode
+        ),
         probability_calibrator:calibrator,
         selected_member_index:selected?.index??null,
         selected_residual_scale:selected?.residual_scale??null,
@@ -4263,6 +4284,43 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
     probability,mode:state.inference_mode,regime,
     member_index:Number(state.member_index),residual_scale:residualScale
   }:null;
+}
+
+/**
+ * Generic inference for separately trained ordered-pyramid V9 and multiscale
+ * V10 specialists. Each BTC regime carries its own exported member, pooling
+ * contract, calibrator and residual scale; no shared or logistic fallback is
+ * silently substituted for a missing neural specialist.
+ */
+export function predictTemporalVariantResearchOutput(sequence,profile={},{
+  allowDiagnostic=false,expectedPoolingMode=null
+}={}){
+  if(!validSequence(sequence))return null;
+  const regime=regimeOfSequence(sequence);
+  if(!regime)return null;
+  const state=profile?.regime_specialists?.[regime]?.research_inference;
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
+    ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
+    (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
+    !state.model||state.model.temporal_pooling!==state.temporal_pooling||
+    typeof state.architecture!=='string')return null;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return null;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_VARIANT_MEMBER')return null;
+  const residualScale=finite(state.residual_scale);
+  if(residualScale===null||residualScale<=0)return null;
+  const raw=forward(sequence,state.model,residualScale).probability;
+  const probability=calibratedProbability(raw,state.probability_calibrator);
+  return Number.isFinite(probability)?{
+    probability,mode:state.inference_mode,regime,
+    pooling_mode:state.temporal_pooling,architecture:state.architecture,
+    member_index:Number(state.member_index),residual_scale:residualScale
+  }:null;
+}
+
+export function predictTemporalVariantProbability(sequence,profile={},options={}){
+  const result=predictTemporalVariantResearchOutput(sequence,profile,options);
+  return result?.probability??null;
 }
 
 export function predictTemporalAttentionProbability(sequence,profile={}){
