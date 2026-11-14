@@ -106,6 +106,7 @@ export function buildFourHourFirstTouchOutcome({
   }
   if(ambiguous)return fail('AMBIGUOUS_BOTH_BARRIERS_TOUCHED_IN_ONE_MINUTE_CANDLE',{
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
     horizon_ms:NEURAL_CLOSURE_HORIZON_MS
   });
