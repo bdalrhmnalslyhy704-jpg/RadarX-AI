@@ -716,6 +716,13 @@ export function validateAndPrepareDense4hRows(samples){
       Number(source.target)!==(outcome==='UP'?1:0))
       fail('BINARY_TARGET_SEMANTICS_INVALID');
     const touch=source.first_touch;
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const exitBarriersValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
     const sourceAudit=source?.source_audit;
     const sourceAuditValid=source?.market==='BINANCE_SPOT_USDT'&&
       sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
@@ -726,6 +733,7 @@ export function validateAndPrepareDense4hRows(samples){
       source?.first_touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
 
     if(!sourceAuditValid)fail('BINANCE_SPOT_REST_SOURCE_AUDIT_INVALID');
+    if(!exitBarriersValid)fail('FIRST_TOUCH_EXIT_BARRIER_INVALID');
     if(touch?.path_resolution!=='1M'||touch.resolution!==expectedResolution||
       Number(touch.observed_candles)!==240||firstTouchAt===null||
       (outcome==='FLAT'?firstTouchAt!==resolvedAt:
