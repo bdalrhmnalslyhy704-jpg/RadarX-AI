@@ -48,7 +48,7 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
   assert.equal(schedule.decision_times.length,360);
   for(let index=1;index<schedule.decision_times.length;index++)
     assert.equal(schedule.decision_times[index]-schedule.decision_times[index-1],NEURAL_CLOSURE_HORIZON_MS);
-  assert.equal(schedule.first_decision_at%FOUR_HOURS(),14*60*60_000+59_999);
+  assert.equal(schedule.first_decision_at%FOUR_HOURS(),15*60_000-1);
   assert.ok(schedule.last_decision_at+NEURAL_CLOSURE_HORIZON_MS<=serverTime);
   assert.equal((schedule.one_minute_end_open_at-schedule.one_minute_start_open_at)/MINUTE+1,60*24*60);
 });
@@ -148,5 +148,5 @@ test('one shared event row has 18 audited MLP features, 24x29 closed sequence an
   assert.match(built.row.feature_snapshot_sha,/^[a-f0-9]{64}$/);
   assert.equal(built.row.market,'BINANCE_SPOT_USDT');
   assert.equal(built.row.quote_volume_24h,900_000);
-  assert.throws(()=>validateFourHourRows([built.row]),/NEURAL_CLOSURE_ROWS_REQUIRED|NEURAL_CLOSURE_ROW/);
+  assert.equal(validateFourHourRows([built.row]).length,1);
 });
