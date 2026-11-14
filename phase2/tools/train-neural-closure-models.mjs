@@ -413,10 +413,22 @@ async function main(){
     Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
   const missingAttentionRegimes=requiredHoldoutRegimes.filter(regime=>
     !attentionInferenceRegimes.includes(regime));
+  const expectedBtcRegimes=['BTC_RISK_ON','BTC_RISK_OFF'];
+  const attentionInnerQualified=expectedBtcRegimes.every(regime=>{
+    const specialist=attentionSpecialists[regime]??{};
+    const state=specialist.research_inference;
+    return attentionProfile?.supported_regimes?.includes(regime)&&
+      attentionProfile?.selected_regimes?.includes(regime)&&
+      specialist.validation_passed===true&&specialist.holdout_passed===true&&
+      state?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'&&
+      Number(state.residual_scale)>0;
+  });
   qualificationByModel.TCN_V11={
-    passed:attentionProfile?.selected_for_research===true,
-    reason:attentionProfile?.status??'ATTENTION_TCN_NOT_TRAINED',
-    diagnostic_only:attentionProfile?.selected_for_research!==true
+    passed:attentionInnerQualified,
+    reason:attentionInnerQualified
+      ?'BOTH_BTC_REGIMES_PASSED_INNER_VALIDATION_AND_UNTOUCHED_HOLDOUT'
+      :'BOTH_BTC_REGIMES_HAVE_NOT_PASSED_INNER_VALIDATION_AND_HOLDOUT',
+    diagnostic_only:!attentionInnerQualified
   };
   training.model_internal_diagnostics.TCN_V11={
     status:attentionProfile?.status??'NOT_TRAINED',
@@ -497,7 +509,7 @@ async function main(){
       input_shape:[24,TEMPORAL_SEQUENCE_CHANNELS],
       inference_scope:'INDEPENDENT_BTC_REGIME_SELECTED_OR_INNER_DIAGNOSTIC_ATTENTION_MEMBER',
       regime_specialists:Object.fromEntries(attentionInferenceRegimes.map(regime=>[
-        regime,attentionSpecialists[regime].research_inference
+        regime,{research_inference:attentionSpecialists[regime].research_inference}
       ])),
       supported_regimes:attentionProfile.supported_regimes??[],
       validation_selected_regimes:attentionProfile.validation_selected_regimes??[],
@@ -518,7 +530,7 @@ async function main(){
       const attentionModes={};
       const scored=predictionAttempt(eventRows,row=>{
         const output=predictTemporalAttentionResearchOutput(
-          row.temporal_sequence,attentionProfile,{allowDiagnostic:true}
+          row.temporal_sequence,v11State,{allowDiagnostic:true}
         );
         if(output?.mode)
           attentionModes[output.mode]=(attentionModes[output.mode]||0)+1;
@@ -539,7 +551,8 @@ async function main(){
           status:attentionProfile.status,
           selected_for_research:attentionProfile.selected_for_research===true,
           out_of_sample_validated:attentionProfile.research_out_of_sample_validated===true,
-          diagnostic_only:attentionProfile.research_out_of_sample_validated!==true,
+          both_btc_regimes_inner_qualified:attentionInnerQualified,
+          diagnostic_only:!attentionInnerQualified,
           validation_brier:attentionProfile.validation?.model_brier_score??null,
           validation_logistic_brier:attentionProfile.validation_logistic?.model_brier_score??null,
           holdout_brier:attentionProfile.holdout?.model_brier_score??null,
