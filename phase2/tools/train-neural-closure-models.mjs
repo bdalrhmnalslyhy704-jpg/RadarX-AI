@@ -812,7 +812,7 @@ async function main(){
             {name:'4H_LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:4}
           ]
         });
-        const selectedFit=selection.selected_fit??null;
+        const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
         const calibrator=selectedFit?fitTcnLstmHybridCalibration(
           calibrationRows,
           sequence=>predictTcnLstmHybridProbability(sequence,selectedFit),
@@ -837,6 +837,8 @@ async function main(){
           internal_split_boundaries:internalSplit.split_boundaries??null,
           max_training_samples:2048,
           effective_training_rows:selection.effective_training_rows??null,
+          diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
+          diagnostic_configuration:selection.diagnostic_configuration??null,
           required_inner_brier_improvement:0.00025,
           selection_status:selection.status,
           baseline_selection_brier:selection.baseline?.selection_brier??null,
@@ -857,7 +859,7 @@ async function main(){
               :'FOUR_HOUR_LSTM_CALIBRATION_SUPPORT_NOT_MET',
           diagnostic_only:!innerQualified
         };
-        if(innerQualified){
+        if(selectedFit!==null&&calibrator.fitted===true){
           const artifact=makeArtifact({
             name:'RADARX_TCN_LSTM_HYBRID_FIRST_TOUCH_4H',
             family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V1',
@@ -902,11 +904,16 @@ async function main(){
             logistic_selection_brier:selection.baseline?.selection_brier??null,
             internal_calibrator:calibrator.method,
             scored_external_rows:eventRows.length,
-            diagnostic_only:true
+            inference_mode:innerQualified?'INNER_SELECTED':'INNER_BEST_DIAGNOSTIC_ONLY',
+            inner_selection_qualified:innerQualified,
+            diagnostic_only:!innerQualified
           };
         }else{
           unavailable.TCN_LSTM_HYBRID={
-            reason:qualificationByModel.TCN_LSTM_HYBRID.reason,
+            reason:selectedFit===null
+              ?'NO_SELECTED_OR_DIAGNOSTIC_TCN_LSTM_FIT'
+              :'TCN_LSTM_INTERNAL_CALIBRATION_SUPPORT_NOT_MET',
+            inner_qualification_passed:innerQualified,
             selection_status:selection.status,
             candidates:selection.candidates??[],
             calibration:calibrator
