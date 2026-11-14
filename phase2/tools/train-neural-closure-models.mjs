@@ -10,7 +10,7 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  runNeuralClosureBenchmark,sha256Canonical
+  runNeuralClosureBenchmark,sha256CanonicalArrayMapped
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -208,22 +208,30 @@ async function main(){
   const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
   if(!/^[a-f0-9]{40}$/.test(sourceCommitSha))
     throw new Error('MODEL_SOURCE_COMMIT_SHA_REQUIRED');
-  const inputBytes=await readFile(inputPath);
+  let inputBytes=await readFile(inputPath);
   const inputFileSha256=sha256(inputBytes);
-  const input=JSON.parse(inputBytes.toString('utf8'));
+  let input=JSON.parse(inputBytes.toString('utf8'));
   if(input?.schema!==NEURAL_CLOSURE_DATASET_SCHEMA||!Array.isArray(input.rows))
     throw new Error('NEURAL_CLOSURE_DATASET_SCHEMA_INVALID');
+  const datasetSourceCommitSha=input.source_commit_sha??null;
   const rows=validateFourHourRows(input.rows);
-  const datasetSha=sha256Canonical(rows.map(row=>({
+  const datasetSha=sha256CanonicalArrayMapped(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
     realized_return_pct:row.realized_return_pct
-  })));
+  }));
   if(datasetSha!==input.dataset_sha256)
     throw new Error('NEURAL_CLOSURE_DATASET_CANONICAL_SHA_MISMATCH');
+  // Validation creates the immutable row envelope used by every trainer. Drop
+  // the parsed source document and original bytes before feature preparation,
+  // so one full Buffer and one row-envelope array do not live beside the models.
+  input.rows=null;
+  input=null;
+  inputBytes=null;
+  if(global.gc)global.gc();
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_DATASET_BELOW_600_ROWS');
   if(rows.some(row=>!Array.isArray(row.temporal_feature_names)||
     row.temporal_feature_names[19]!=='btc_trend_return_12bar'))
@@ -238,7 +246,7 @@ async function main(){
   if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
   const training={
     model_source_commit_sha:sourceCommitSha,
-    dataset_source_commit_sha:input.source_commit_sha??null,
+    dataset_source_commit_sha:datasetSourceCommitSha,
     dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
@@ -558,7 +566,7 @@ async function main(){
     status:benchmark.status,
     integrity:{
       model_source_commit_sha:sourceCommitSha,
-      dataset_source_commit_sha:input.source_commit_sha??null,
+      dataset_source_commit_sha:datasetSourceCommitSha,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
       row_count:rows.length
