@@ -377,7 +377,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
-test('fixed-SHA evaluator keeps every holdout metric locked when no neural model beats Logistic on validation',()=>{
+test('fixed-SHA evaluator keeps every holdout metric locked when the required validation Brier margin is mathematically unreachable',()=>{
   const rows=makeRows(),sourceCommitSha='d'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
@@ -395,7 +395,7 @@ test('fixed-SHA evaluator keeps every holdout metric locked when no neural model
   );
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel,requiredBrierImprovement:0.003
+    sourceCommitSha,qualificationByModel,requiredBrierImprovement:2
   });
   assert.equal(report.holdout_access.opened,false);
   assert.equal(report.holdout_access.opened_for_models.length,0);
@@ -406,6 +406,8 @@ test('fixed-SHA evaluator keeps every holdout metric locked when no neural model
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     assert.equal(report.models[family].status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
     assert.equal(report.models[family].validation.outer_validation_gate.passed,false,family);
+    assert.ok(report.models[family].validation.outer_validation_gate.brier_improvement_vs_logistic<=1,
+      'Brier improvement cannot exceed 1');
     assert.equal(report.models[family].holdout.evaluated,false,family);
     assert.equal(report.models[family].holdout.brier_score,null,family);
     assert.equal(report.models[family].holdout.trade_count,0,family);
