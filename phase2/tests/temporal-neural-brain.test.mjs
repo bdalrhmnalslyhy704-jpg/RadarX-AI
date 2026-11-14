@@ -55,6 +55,7 @@ import {
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalAttentionResearchOutput,
+  predictTemporalVariantResearchOutput,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
 
@@ -1132,6 +1133,30 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     assert.equal(expert.output_features,64);
     assert.equal(expert.trainable_parameter_count,1456);
     assert.equal(expert.model_architecture,TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE);
+    const orderedState=expert.research_inference;
+    const orderedRow=rows.find(item=>regimeOfTestSequence(item.sequence)===regime);
+    assert.ok(orderedRow,'ordered pooling regression fixture must include each BTC regime');
+    if(orderedState){
+      assert.equal(orderedState.schema,'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1');
+      assert.equal(orderedState.temporal_pooling,TEMPORAL_ORDERED_POOLING_MODE);
+      assert.equal(orderedState.model.temporal_pooling,TEMPORAL_ORDERED_POOLING_MODE);
+      const orderedProfile={regime_specialists:{[regime]:{research_inference:orderedState}}};
+      const output=predictTemporalVariantResearchOutput(orderedRow.sequence,orderedProfile,{
+        allowDiagnostic:true,expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+      });
+      assert.ok(output&&Number.isFinite(output.probability)&&
+        output.probability>=0&&output.probability<=1);
+      const reloaded=JSON.parse(JSON.stringify(orderedProfile));
+      const roundTrip=predictTemporalVariantResearchOutput(orderedRow.sequence,reloaded,{
+        allowDiagnostic:true,expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+      });
+      assert.ok(roundTrip&&Math.abs(roundTrip.probability-output.probability)<1e-12,
+        'V9 serialized artifact inference must be numerically identical');
+    }else{
+      assert.equal(predictTemporalVariantResearchOutput(orderedRow.sequence,{
+        regime_specialists:{[regime]:{research_inference:null}}
+      },{allowDiagnostic:true,expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE}),null);
+    }
     assert.ok(expert.member_training_profiles.every(row=>
       row.temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE&&row.trainableParameters===1456));
     assert.equal(expert.chronology_valid,true);
@@ -1153,6 +1178,30 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     assert.equal(expert.output_features,192);
     assert.equal(expert.trainable_parameter_count,1888);
     assert.equal(expert.model_architecture,TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE);
+    const multiscaleState=expert.research_inference;
+    const multiscaleRow=rows.find(item=>regimeOfTestSequence(item.sequence)===regime);
+    assert.ok(multiscaleRow,'multiscale regression fixture must include each BTC regime');
+    if(multiscaleState){
+      assert.equal(multiscaleState.schema,'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1');
+      assert.equal(multiscaleState.temporal_pooling,TEMPORAL_MULTISCALE_POOLING_MODE);
+      assert.equal(multiscaleState.model.temporal_pooling,TEMPORAL_MULTISCALE_POOLING_MODE);
+      const multiscaleProfile={regime_specialists:{[regime]:{research_inference:multiscaleState}}};
+      const output=predictTemporalVariantResearchOutput(multiscaleRow.sequence,multiscaleProfile,{
+        allowDiagnostic:true,expectedPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE
+      });
+      assert.ok(output&&Number.isFinite(output.probability)&&
+        output.probability>=0&&output.probability<=1);
+      const reloaded=JSON.parse(JSON.stringify(multiscaleProfile));
+      const roundTrip=predictTemporalVariantResearchOutput(multiscaleRow.sequence,reloaded,{
+        allowDiagnostic:true,expectedPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE
+      });
+      assert.ok(roundTrip&&Math.abs(roundTrip.probability-output.probability)<1e-12,
+        'V10 serialized artifact inference must be numerically identical');
+    }else{
+      assert.equal(predictTemporalVariantResearchOutput(multiscaleRow.sequence,{
+        regime_specialists:{[regime]:{research_inference:null}}
+      },{allowDiagnostic:true,expectedPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE}),null);
+    }
     assert.equal(expert.model_training_strategy,
       'INDEPENDENT_BTC_REGIME_TCN_FULL_RF31_MEAN_ENDPOINT_SLOPE_POOLING_V1');
     assert.ok(expert.member_training_profiles.every(row=>
