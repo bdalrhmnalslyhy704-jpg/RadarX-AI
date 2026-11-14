@@ -66,6 +66,37 @@ test('TCN V9 and V10 families are no longer silently left without fixed-SHA pred
   assert.match(trainer,/exportTemporalPoolingVariant\(\{[\s\S]*?family:'TCN_V10'/);
 });
 
+test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on split.train only',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/TCN_LSTM_HYBRID_SCHEMA/);
+  assert.match(trainer,/const lstmRows=split\.train\.map/);
+  assert.match(trainer,/sequence:row\.temporal_sequence/);
+  assert.match(trainer,/target:row\.target/);
+  assert.match(trainer,/resolved_at:row\.resolved_at/);
+  assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
+  assert.match(trainer,/row\.at>=fitCut\+lstmHorizonMs/);
+  assert.match(trainer,/row\.at>=selectionCut\+lstmHorizonMs/);
+  assert.match(trainer,/latestResolved\(calibrationRows\)<externalValidationStart/);
+  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(trainingRows,selectionRows/);
+  assert.match(trainer,/fitTcnLstmHybridCalibration\(calibrationRows/);
+  assert.match(trainer,/modelName:'TCN_LSTM_HYBRID'/);
+  assert.match(trainer,/modelArtifactsByModel\.TCN_LSTM_HYBRID=artifact/);
+  assert.match(trainer,/predictionsByModel\.TCN_LSTM_HYBRID=scored\.rows/);
+  assert.doesNotMatch(trainer,/benchmarkTcnLstmHybridChronological/,
+    'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
+});
+
+test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the shared Brier benchmark',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(trainer,/passed:innerQualified/);
+  assert.match(trainer,/diagnostic_only:!innerQualified/);
+  assert.match(trainer,/probability_ready:false,live_eligibility_ready:false/);
+  assert.match(trainer,/runNeuralClosureBenchmark\(\{[\s\S]*qualificationByModel/);
+  const contract=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(contract,/'TCN_LSTM_HYBRID'/);
+});
+
 test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/modelName:'TCN_V8'/);
