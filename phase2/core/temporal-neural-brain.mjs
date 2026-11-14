@@ -1263,7 +1263,7 @@ function spectralMatrixNorm(matrix,iterations=12){
 function projectMatrixSpectralNorm(matrix,cap,iterations){
   const before=spectralMatrixNorm(matrix,iterations);
   if(before>cap){
-    const scale=cap/before;
+    const scale=(cap*0.999999)/before;
     for(let row=0;row<matrix.length;row++)
       for(let column=0;column<matrix[row].length;column++)
         matrix[row][column]*=scale;
@@ -1308,7 +1308,7 @@ export function applyTemporalSpectralNormalization(model,{
   const outputNormAfter=vectorL2Norm(model.outputWeights);
   return {
     cap,iterations,
-    projection:{...projection,after:projectMatrixSpectralNorm(model.projectionWeights,cap*1.000001,iterations).after},
+    projection,
     pointwise,
     maximum_depth_channel_norm_before:maximumDepthNormBefore,
     maximum_depth_channel_norm_after:maximumDepthNormAfter,
