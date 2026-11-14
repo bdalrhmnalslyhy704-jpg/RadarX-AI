@@ -716,6 +716,16 @@ export function validateAndPrepareDense4hRows(samples){
       Number(source.target)!==(outcome==='UP'?1:0))
       fail('BINARY_TARGET_SEMANTICS_INVALID');
     const touch=source.first_touch;
+    const sourceAudit=source?.source_audit;
+    const sourceAuditValid=source?.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(source?.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      source?.first_touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
+
+    if(!sourceAuditValid)fail('BINANCE_SPOT_REST_SOURCE_AUDIT_INVALID');
     if(touch?.path_resolution!=='1M'||touch.resolution!==expectedResolution||
       Number(touch.observed_candles)!==240||firstTouchAt===null||
       (outcome==='FLAT'?firstTouchAt!==resolvedAt:
