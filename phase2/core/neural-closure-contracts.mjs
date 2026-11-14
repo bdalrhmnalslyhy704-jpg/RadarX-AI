@@ -70,7 +70,7 @@ export function buildFourHourFirstTouchOutcome({
     sourceEvidence.market!=='SPOT'||sourceEvidence.interval!=='1m'||
     sourceEvidence.transport!=='BINANCE_PUBLIC_REST'||
     String(sourceEvidence.symbol||'').toUpperCase()!==normalizedSymbol||
-    !finite(sourceEvidence.received_at))
+    !finite(sourceEvidence.received_at)||Number(sourceEvidence.received_at)<Number(baselineAt)+NEURAL_CLOSURE_HORIZON_MS)
     return fail('BINANCE_SPOT_REST_1M_SOURCE_EVIDENCE_REQUIRED');
   if(!finite(baselineAt)||!finite(baselinePrice)||Number(baselinePrice)<=0||
     Number(featureInformationCutoffAt)!==Number(baselineAt))
@@ -93,7 +93,7 @@ export function buildFourHourFirstTouchOutcome({
     const open=number(candle?.open),high=number(candle?.high);
     const low=number(candle?.low),close=number(candle?.close);
     if((candle?.is_closed!==true&&candle?.closed!==true)||
-      (candle?.source!==undefined&&candle.source!=='BINANCE_PUBLIC_REST')||openTime!==expectedOpen||
+      candle?.source!=='BINANCE_PUBLIC_REST'||openTime!==expectedOpen||
       closeTime!==expectedOpen+59_999||open===null||high===null||
       low===null||close===null||open<=0||low<=0||close<=0||
       high<low||high<Math.max(open,close)||low>Math.min(open,close))
@@ -135,7 +135,7 @@ export function buildFourHourFirstTouchOutcome({
   const rawKlinesSha256=createHash('sha256')
     .update(JSON.stringify(canonicalPath)).digest('hex');
   return {
-    id,symbol:normalizedSymbol,
+    id,symbol:normalizedSymbol,market:'BINANCE_SPOT_USDT',
     at,resolved_at:resolvedAt,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
     feature_information_cutoff_at:at,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
