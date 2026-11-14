@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCognitiveLearningProfile,
+  buildFourHourCognitiveLearningProfile,
   buildCognitivePrequentialProfile,
   assessCognitiveCandidate,
   applyCognitiveRankAdjustment,
@@ -20,6 +21,8 @@ import {
   auditNeuralOneBatchOverfit,
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
+
+import { NEURAL_CLOSURE_TARGET_DEFINITION, NEURAL_CLOSURE_OUTCOME_SOURCE, NEURAL_CLOSURE_HORIZON_MS } from '../core/neural-closure-contracts.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
@@ -1296,4 +1299,54 @@ test('cognitive directional ranking keeps missing scores at the bottom without d
   assert.equal(metrics.missing_score_samples,2);
   assert.equal(metrics.top_10_pct.sample_count,1);
   assert.equal(metrics.top_10_pct.positive_samples,0);
+});
+
+
+test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch event contract as TCN',()=>{
+  const interval=15*60*1000;
+  const at=Math.ceil(BASE_TIME/interval)*interval;
+  const row={
+    ...sample(701,'UP'),
+    id:'MLP-4H-FIRST-TOUCH-VALID',
+    symbol:'VALIDPAIRUSDT',
+    at,resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    feature_information_cutoff_at:at,
+    closed_candle_baseline:true,
+    historical_baseline:false,
+    training_eligible:true,
+    outcome:'UP',
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    first_touch:{
+      resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+59_999,
+      path_resolution:'1M',observed_candles:240
+    },
+    temporal_sequence:Array.from({length:24},(_,time)=>
+      Array.from({length:29},(_,channel)=>channel===28?0.65:
+        Math.sin((time+1)*(channel+1)*0.07)*0.35)),
+    temporal_sequence_timestamps:Array.from({length:24},(_,index)=>
+      at-(23-index)*interval)
+  };
+  const profile=buildFourHourCognitiveLearningProfile([row]);
+  assert.equal(profile.resolved_samples,1);
+  assert.equal(profile.outcome_counts.up,1);
+  assert.equal(profile.neural_network.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(profile.neural_network.target_semantics,
+    'FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_4H_1M_V1');
+  assert.equal(profile.temporal_network.resolved_samples,1);
+  assert.equal(profile.temporal_network.outcome_contract_kind,'FIRST_TOUCH_4H_1M');
+  assert.equal(profile.temporal_network.temporal_label_resolution,
+    '1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES');
+  assert.equal(profile.neural_network.probability_ready,false,
+    'one audited row is valid intake but insufficient for training or model selection');
+
+  const badCount={...row,first_touch:{...row.first_touch,observed_candles:239}};
+  const rejectedCount=buildFourHourCognitiveLearningProfile([badCount]);
+  assert.equal(rejectedCount.resolved_samples,0);
+  assert.equal(rejectedCount.temporal_network.resolved_samples,0);
+  const badSource={...row,outcome_source:'HISTORICAL_CLOSED_CANDLE'};
+  const rejectedSource=buildFourHourCognitiveLearningProfile([badSource]);
+  assert.equal(rejectedSource.resolved_samples,0);
+  assert.equal(rejectedSource.temporal_network.resolved_samples,0);
 });
