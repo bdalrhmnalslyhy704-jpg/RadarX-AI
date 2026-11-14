@@ -970,7 +970,11 @@ function fitNeuralNetworkModel(training, {
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...featureNames],feature_schema:featureSchema,
     training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
-    positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    positive_class_weighting:isFocalObjective
+      ?'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'
+      :usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    focal_positive_weight:focalWeights.positiveWeight,
+    focal_negative_weight:focalWeights.negativeWeight,
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
     requested_iterations:steps,
@@ -1342,15 +1346,18 @@ function fitNeuralEnsemble(training, options = {}) {
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:1,focalGammaNegative:2},
+      focalGammaPositive:1,focalGammaNegative:2,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:0.5,focalGammaNegative:2},
+      focalGammaPositive:0.5,focalGammaNegative:2,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:1.5,focalGammaNegative:2.5}
+      focalGammaPositive:1.5,focalGammaNegative:2.5,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -1402,8 +1409,8 @@ function fitNeuralEnsemble(training, options = {}) {
     })),
     training_strategy:factorizationMemberIndex>=0
       ?'RESIDUAL_MLP_PLUS_LOW_RANK_FACTOR_CROSS_V1_SAME_WINDOW_LOGISTIC_ANCHOR'
-      :'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
-    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V7',
+      :'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE',
+    training_objective:'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
