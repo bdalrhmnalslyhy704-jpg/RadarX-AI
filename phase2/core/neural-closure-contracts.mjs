@@ -22,6 +22,7 @@ export const NEURAL_CLOSURE_MODEL_FAMILIES = Object.freeze([
   'TCN_V9',
   'TCN_V10',
   'TCN_V11',
+  'TCN_LSTM_HYBRID',
   'HYBRID_TCN_ATTENTION',
   'DENSE_MLP',
   'MLP_GBDT_HYBRID'
