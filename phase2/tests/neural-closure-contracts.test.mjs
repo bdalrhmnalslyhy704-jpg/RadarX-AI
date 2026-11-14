@@ -7,6 +7,7 @@ import {
   NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
+  realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
@@ -37,7 +38,8 @@ function makeRows({days=20,rowsPerDay=400}={}){
       first_touch:{
         resolution:positive?'TAKE_PROFIT_FIRST':outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END',
         first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
-        path_resolution:'1M',observed_candles:240,raw_klines_sha256:'a'.repeat(64)
+        path_resolution:'1M',observed_candles:240,raw_klines_sha256:'a'.repeat(64),
+        baseline_price:100,take_profit_price:103,stop_loss_price:98
       },
       features:[index/rowsPerDay,day/30]
     });
@@ -161,6 +163,50 @@ test('temperature and Platt scaling fit only with 50+ positive and negative supp
   assert.ok(applyProbabilityCalibrator(0.8,temperature)>0.5);
   assert.ok(applyProbabilityCalibrator(0.8,platt)>0.5);
   assert.throws(()=>applyProbabilityCalibrator(NaN,platt),/LOGIT_NON_FINITE/);
+});
+
+test('realized PnL exits at the first touched barrier, not the later four-hour close',()=>{
+  const up={
+    outcome:'UP',realized_return_pct:-9,
+    first_touch:{resolution:'TAKE_PROFIT_FIRST',baseline_price:100,
+      take_profit_price:103,stop_loss_price:98}
+  };
+  const down={
+    outcome:'DOWN',realized_return_pct:8,
+    first_touch:{resolution:'STOP_LOSS_FIRST',baseline_price:100,
+      take_profit_price:103,stop_loss_price:98}
+  };
+  const flat={
+    outcome:'FLAT',realized_return_pct:1.25,
+    first_touch:{resolution:'HORIZON_END',baseline_price:100,
+      take_profit_price:103,stop_loss_price:98}
+  };
+
+  assert.ok(Math.abs(realizedExecutionGrossReturnPct(up)-3)<1e-10);
+  assert.ok(Math.abs(realizedExecutionGrossReturnPct(down)+2)<1e-10);
+  assert.equal(realizedExecutionGrossReturnPct(flat),1.25);
+  assert.ok(Math.abs(realizedExecutionNetReturnPct(up,30)-2.7)<1e-10);
+  assert.ok(Math.abs(realizedExecutionNetReturnPct(down,30)+2.3)<1e-10);
+  assert.ok(Math.abs(realizedExecutionNetReturnPct(flat,30)-0.95)<1e-10);
+
+  const malformed={...up,first_touch:{...up.first_touch,take_profit_price:104}};
+  assert.throws(()=>validateFourHourRows([{
+    id:'BAD:1',symbol:'ETHUSDT',market:'BINANCE_SPOT_USDT',
+    source_audit:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'ETHUSDT',
+      received_at:BASE+NEURAL_CLOSURE_HORIZON_MS+60_000,
+      observed_candles:240,raw_klines_sha256:'a'.repeat(64)},
+    at:BASE,resolved_at:BASE+NEURAL_CLOSURE_HORIZON_MS,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,feature_information_cutoff_at:BASE,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    training_eligible:true,closed_candle_baseline:true,
+    outcome:'UP',target:1,realized_return_pct:-9,
+    first_touch:{...malformed.first_touch,first_touch_at:BASE+60_000,
+      path_resolution:'1M',observed_candles:240,
+      raw_klines_sha256:'a'.repeat(64)}
+  }]),/EXIT_BARRIER_INVALID/);
 });
 
 test('fixed-SHA evaluator compares identical event identities and refuses false superiority',()=>{
