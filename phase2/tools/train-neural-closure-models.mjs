@@ -27,6 +27,11 @@ import {
   TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE
 } from '../core/temporal-neural-brain.mjs';
 import {
+  TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,
+  selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
+  predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability
+} from '../core/temporal-lstm-hybrid.mjs';
+import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
 } from '../core/hybrid-tcn-attention-benchmark.mjs';
 import {
@@ -727,6 +732,195 @@ async function main(){
       status:attentionProfile?.status??'ATTENTION_TCN_NOT_TRAINED',
       inference_regimes:attentionInferenceRegimes,
       required_external_holdout_regimes:requiredHoldoutRegimes
+    };
+  }
+
+  // TCN -> LSTM -> temporal attention on the SAME 4h first-touch
+  // cohort. Its private fitting/selection/calibration slices are drawn only
+  // from the outer training partition and purged by the 4h label horizon.
+  // Outer validation and untouched holdout are never passed to this trainer.
+  try{
+    const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS;
+    const lstmRows=split.train.map(row=>({
+      id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
+      target:row.target,sequence:row.temporal_sequence,
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps
+    })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+    const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
+      .sort((a,b)=>a-b);
+    const externalValidationStart=split.validation.length
+      ?Math.min(...split.validation.map(row=>row.at)):null;
+    if(lstmDays.length<20||externalValidationStart===null){
+      unavailable.TCN_LSTM_HYBRID={
+        reason:'FOUR_HOUR_LSTM_INTERNAL_CHRONOLOGY_SUPPORT_TOO_SMALL',
+        unique_training_days:lstmDays.length
+      };
+      qualificationByModel.TCN_LSTM_HYBRID={
+        passed:false,reason:'FOUR_HOUR_LSTM_INTERNAL_CHRONOLOGY_SUPPORT_TOO_SMALL',
+        diagnostic_only:true
+      };
+      training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+        status:'NOT_TRAINED',unique_training_days:lstmDays.length,
+        required_unique_training_days:20
+      };
+    }else{
+      const fitCut=lstmDays[Math.floor(lstmDays.length*0.62)];
+      const selectionCut=lstmDays[Math.floor(lstmDays.length*0.82)];
+      const trainingRows=lstmRows.filter(row=>row.at<fitCut&&row.resolved_at<fitCut);
+      const selectionRows=lstmRows.filter(row=>
+        row.at>=fitCut+lstmHorizonMs&&row.at<selectionCut&&row.resolved_at<selectionCut);
+      const calibrationRows=lstmRows.filter(row=>
+        row.at>=selectionCut+lstmHorizonMs&&row.resolved_at<externalValidationStart);
+      const latestResolved=rows=>rows.length?Math.max(...rows.map(row=>row.resolved_at)):null;
+      const firstAt=rows=>rows.length?Math.min(...rows.map(row=>row.at)):null;
+      const internalChronologyValid=trainingRows.length>0&&selectionRows.length>0&&
+        calibrationRows.length>0&&
+        latestResolved(trainingRows)<firstAt(selectionRows)&&
+        latestResolved(selectionRows)<firstAt(calibrationRows)&&
+        latestResolved(calibrationRows)<externalValidationStart;
+      const internalSupport={
+        training:{rows:trainingRows.length,positive:trainingRows.filter(row=>row.target===1).length,
+          negative:trainingRows.filter(row=>row.target===0).length},
+        selection:{rows:selectionRows.length,positive:selectionRows.filter(row=>row.target===1).length,
+          negative:selectionRows.filter(row=>row.target===0).length},
+        calibration:{rows:calibrationRows.length,positive:calibrationRows.filter(row=>row.target===1).length,
+          negative:calibrationRows.filter(row=>row.target===0).length}
+      };
+      if(!internalChronologyValid){
+        unavailable.TCN_LSTM_HYBRID={
+          reason:'FOUR_HOUR_LSTM_INTERNAL_PURGE_OR_SUPPORT_FAILED',
+          chronology_valid:false,partition_support:internalSupport
+        };
+        qualificationByModel.TCN_LSTM_HYBRID={
+          passed:false,reason:'FOUR_HOUR_LSTM_INTERNAL_PURGE_OR_SUPPORT_FAILED',
+          diagnostic_only:true
+        };
+        training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+          status:'ABSTAIN_INTERNAL_PARTITIONS_INVALID',
+          chronology_valid:false,partition_support:internalSupport,
+          validation_or_holdout_rows_seen_by_fit:0
+        };
+      }else{
+        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
+          requiredImprovement:0.00025,
+          maxTrainingSamples:2048,
+          seed:22429,
+          candidates:[
+            {name:'4H_LR_0015_L2_0005_DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:4},
+            {name:'4H_LR_0025_L2_0015_DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:4},
+            {name:'4H_LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:4}
+          ]
+        });
+        const selectedFit=selection.selected_fit??null;
+        const calibrator=selectedFit?fitTcnLstmHybridCalibration(
+          calibrationRows,
+          sequence=>predictTcnLstmHybridProbability(sequence,selectedFit),
+          {minimumSamples:30,minimumPositive:8,minimumNegative:8,
+            iterations:500,learningRate:0.03,regularization:0.05}
+        ):{fitted:false,reason:'INNER_SELECTION_DID_NOT_QUALIFY'};
+        const innerQualified=selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'&&
+          selectedFit!==null&&calibrator.fitted===true;
+        training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+          status:innerQualified?'INNER_SELECTION_AND_CALIBRATION_QUALIFIED':
+            selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'
+              ?'ABSTAIN_CALIBRATION_SUPPORT_FAILED':selection.status,
+          architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
+          schema:TCN_LSTM_HYBRID_SCHEMA,
+          input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
+          training_partition:'FIXED_SHA_OUTER_TRAIN_ONLY',
+          internal_partitions:{training:trainingRows.length,selection:selectionRows.length,
+            calibration:calibrationRows.length},
+          internal_support:internalSupport,
+          chronology_valid:internalChronologyValid,
+          max_training_samples:2048,
+          effective_training_rows:selection.effective_training_rows??null,
+          required_inner_brier_improvement:0.00025,
+          selection_status:selection.status,
+          baseline_selection_brier:selection.baseline?.selection_brier??null,
+          candidates:selection.candidates??[],
+          selected_configuration:selection.selected_configuration??null,
+          calibration:{fitted:calibrator.fitted===true,method:calibrator.method??null,
+            samples:calibrator.samples??0,positive:calibrator.positive??0,
+            negative:calibrator.negative??0,reason:calibrator.reason??null},
+          validation_or_holdout_rows_seen_by_fit:0,
+          probability_ready:false,live_eligibility_ready:false
+        };
+        qualificationByModel.TCN_LSTM_HYBRID={
+          passed:innerQualified,
+          reason:innerQualified
+            ?'FOUR_HOUR_LSTM_INNER_SELECTION_AND_CALIBRATION_PASSED'
+            :selection.status!=='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'
+              ?'FOUR_HOUR_LSTM_INNER_LOGISTIC_SUPERIORITY_NOT_PROVEN'
+              :'FOUR_HOUR_LSTM_CALIBRATION_SUPPORT_NOT_MET',
+          diagnostic_only:!innerQualified
+        };
+        if(innerQualified){
+          const artifact=makeArtifact({
+            name:'RADARX_TCN_LSTM_HYBRID_FIRST_TOUCH_4H',
+            family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V1',
+            sourceCommitSha,
+            featureSchemaId:'RADARX_TEMPORAL_TCN_LSTM_ATTENTION_SEQUENCE_24X29_V1',
+            featureNames:temporalNames,
+            normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
+            modelState:{
+              schema:'RADARX_TCN_LSTM_FOUR_HOUR_MODEL_STATE_V1',
+              architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
+              input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
+              fit:selectedFit,calibrator,
+              target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+              outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+              fit_partition:'FIXED_SHA_OUTER_TRAIN_INTERNAL_TRAIN_ONLY'
+            }
+          });
+          const verified=verifyVersionedModelArtifact(artifact,{expectedSourceCommitSha:sourceCommitSha});
+          if(!verified.valid)throw new Error('TCN_LSTM_4H_ARTIFACT_INVALID:'+verified.reason);
+          const scored=predictionAttempt(eventRows,row=>
+            predictTcnLstmHybridCalibratedProbability(
+              row.temporal_sequence,selectedFit,calibrator
+            ),{
+              sourceCommitSha,artifactSha256:artifact.artifact_sha256,
+              modelName:'TCN_LSTM_HYBRID'
+            });
+          if(!scored.valid)throw new Error('TCN_LSTM_4H_EXTERNAL_PREDICTION_FAILED:'+scored.reason);
+          modelArtifactsByModel.TCN_LSTM_HYBRID=artifact;
+          predictionsByModel.TCN_LSTM_HYBRID=scored.rows;
+          trainingArtifacts.TCN_LSTM_HYBRID={
+            artifact_sha256:artifact.artifact_sha256,
+            schema:TCN_LSTM_HYBRID_SCHEMA,
+            architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
+            input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
+            internal_training_rows:trainingRows.length,
+            internal_selection_rows:selectionRows.length,
+            internal_calibration_rows:calibrationRows.length,
+            effective_training_rows:selection.effective_training_rows,
+            selected_configuration:selection.selected_configuration,
+            selection_brier:selection.candidates.find(row=>
+              row.name===selection.selected_configuration)?.selection_brier??null,
+            logistic_selection_brier:selection.baseline?.selection_brier??null,
+            internal_calibrator:calibrator.method,
+            scored_external_rows:eventRows.length,
+            diagnostic_only:true
+          };
+        }else{
+          unavailable.TCN_LSTM_HYBRID={
+            reason:qualificationByModel.TCN_LSTM_HYBRID.reason,
+            selection_status:selection.status,
+            candidates:selection.candidates??[],
+            calibration:calibrator
+          };
+        }
+      }
+    }
+  }catch(error){
+    qualificationByModel.TCN_LSTM_HYBRID={
+      passed:false,reason:String(error?.message||error),diagnostic_only:true
+    };
+    unavailable.TCN_LSTM_HYBRID={
+      reason:String(error?.message||error),training_rows:split.train.length
+    };
+    training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+      status:'TRAINING_OR_ARTIFACT_FAILED_CLOSED',
+      reason:String(error?.message||error)
     };
   }
 
