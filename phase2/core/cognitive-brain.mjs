@@ -1389,7 +1389,8 @@ function fitNeuralEnsemble(training, options = {}) {
     iterations:members[index]?.training_diagnostics?.epochs_completed??profile.iterations,
     best_epoch:members[index]?.training_diagnostics?.best_epoch??null,
     best_training_objective:members[index]?.training_diagnostics?.best_training_objective??null,
-    early_stopping:members[index]?.training_diagnostics?.early_stopping??null
+    early_stopping:members[index]?.training_diagnostics?.early_stopping??null,
+    focal_asymmetric_brier:members[index]?.focal_asymmetric_brier??null
   }));
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
@@ -1405,6 +1406,8 @@ function fitNeuralEnsemble(training, options = {}) {
     member_training_profiles:completedMemberProfiles,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,seed:memberSeeds[index],
+      training_objective:member?.training_objective??memberProfiles[index]?.trainingObjective??null,
+      focal_asymmetric_brier:member?.focal_asymmetric_brier??null,
       ...(member?.training_diagnostics||{})
     })),
     training_strategy:factorizationMemberIndex>=0
@@ -1966,8 +1969,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
-        training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+        training_strategy:'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE',
+        training_objective:'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
         target_definition:modelTargetDefinition,
         target_semantics:modelTargetSemantics,
         output_initialization_scale:clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
@@ -2753,8 +2756,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       training_strategy:neuralFit?.training_strategy||
         (neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
           ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
-          :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6'),
-      training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+          :'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE'),
+      training_objective:neuralFit?.training_objective||'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
       target_definition:modelTargetDefinition,
       target_semantics:modelTargetSemantics,
       output_initialization_scale:neuralFit?.output_initialization_scale??clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
@@ -2780,6 +2783,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
       selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
+      member_training_profiles:neuralFit?.member_training_profiles??[],
+      member_training_objectives:neuralFit?.member_training_objectives??[],
+      member_training_diagnostics:neuralFit?.member_training_diagnostics??[],
       ensemble_members_required:neuralFit?.seeds?.length??NEURAL_POLICY.ensembleSeeds.length,
       factorization_member_enabled:Number.isInteger(neuralFit?.factorization_member_index)&&
         neuralFit.factorization_member_index>=0,
