@@ -205,6 +205,21 @@ function factorValues(features = {}) {
   return Object.fromEntries(FACTORS.map(factor => [factor.key, Boolean(factor.test(features || {}))]));
 }
 
+function researchArtifactSafeValue(value,path='model_state'){
+  if(Array.isArray(value))return value.map((item,index)=>
+    item===undefined?null:researchArtifactSafeValue(item,path+'['+index+']'));
+  if(value&&typeof value==='object'){
+    return Object.fromEntries(Object.entries(value)
+      .filter(([,child])=>child!==undefined)
+      .map(([key,child])=>[key,researchArtifactSafeValue(child,path+'.'+key)]));
+  }
+  if(typeof value==='number'&&!Number.isFinite(value))
+    throw new TypeError('COGNITIVE_RESEARCH_ARTIFACT_NON_FINITE:'+path);
+  if(typeof value==='function'||typeof value==='symbol'||typeof value==='bigint')
+    throw new TypeError('COGNITIVE_RESEARCH_ARTIFACT_NON_SERIALIZABLE:'+path);
+  return value;
+}
+
 function normalizedFeatures(features = {}, featureSchema=COGNITIVE_FEATURE_SCHEMA) {
   const f = features || {};
   const volRaw = finite(f.volume_ratio);
@@ -2789,14 +2804,14 @@ export function buildCognitiveLearningProfile(samples = [], {
         mean:activeFeatureNames.map(()=>0),
         std:activeFeatureNames.map(()=>1)
       },
-      modelState:{
+      modelState:researchArtifactSafeValue({
         fit:neuralFit,
         feature_schema:activeFeatureSchema,
         feature_names:[...activeFeatureNames],
         normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1',
         selection_residual_scale:neuralFit.selected_residual_scale,
         probability_calibrator:neuralFit.probability_calibrator??null
-      }
+      })
     }):null;
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
