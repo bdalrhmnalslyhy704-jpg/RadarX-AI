@@ -249,17 +249,21 @@ export function buildNeuralClosureFeatureSnapshot({
   };
 }
 
-function excursionMetrics(minuteCandles,firstTouch,baselinePrice) {
+function excursionMetrics(minuteCandles,firstTouch,baselinePrice,decisionAt) {
   const exitCandle=firstTouch?.exit_candle;
   const exitOpenAt=candleOpenTime(exitCandle);
   const exitCloseAt=candleCloseTime(exitCandle);
   const exitAt=num(firstTouch?.first_touch_at);
   const source=firstTouch?.exit_price_source;
-  if(exitOpenAt===null||exitCloseAt===null||exitAt===null)return null;
+  if(exitOpenAt===null||exitCloseAt===null||exitAt===null||
+    !finite(decisionAt)||decisionAt>=exitAt)return null;
   const executed=minuteCandles.filter(candle=>candleOpenTime(candle)<=exitOpenAt);
   const prior=executed.filter(candle=>candleOpenTime(candle)<exitOpenAt);
   const resolution=firstTouch.resolution;
-  const lows=[],highs=[];
+  // The decision/entry price is the zero-excursion reference. This also
+  // keeps a first-minute opening gap auditable without inventing prior bars.
+  const lows=[{price:baselinePrice,at:decisionAt}],
+    highs=[{price:baselinePrice,at:decisionAt}];
   for(const candle of prior){
     lows.push({price:num(candle.low),at:candleCloseTime(candle)});
     highs.push({price:num(candle.high),at:candleCloseTime(candle)});
@@ -333,7 +337,7 @@ export function buildNeuralClosureEventRow({
   });
   if(label.training_eligible!==true)
     return {ready:false,reason:label.reason||'FIRST_TOUCH_LABEL_REJECTED'};
-  const excursions=excursionMetrics(future,label.first_touch,num(baseCandle.close));
+  const excursions=excursionMetrics(future,label.first_touch,num(baseCandle.close),at);
   if(!excursions)return {ready:false,reason:'FIRST_TOUCH_EXCURSION_METRICS_UNAVAILABLE'};
   const closeAt=new Date(at).toISOString();
   const historicalWindowId='utc-'+closeAt.slice(0,10).replaceAll('-','');
