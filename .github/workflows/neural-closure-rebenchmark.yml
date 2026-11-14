@@ -36,23 +36,23 @@ jobs:
       - name: Download the original 180-day collector artifact
         uses: actions/download-artifact@v4
         with:
-          name: radarx-build224-neural-closure-dataset-9e3428ccc3418129669115fb1ef4fe776fe9863f
+          name: radarx-build224-neural-closure-dataset-c1013eed7829ee5a73dbdc1eff70785866996d54
           repository: ${{ github.repository }}
-          run-id: 43615816264
+          run-id: 43617240336
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: artifacts/source-run-74
+          path: artifacts/source-run-75
       - name: Verify the archived dataset and corrected evaluator
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: |
-          test -s artifacts/source-run-74/dataset.json
+          test -s artifacts/source-run-75/dataset.json
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
-          const d = JSON.parse(await readFile('artifacts/source-run-74/dataset.json', 'utf8'));
+          const d = JSON.parse(await readFile('artifacts/source-run-75/dataset.json', 'utf8'));
           const errors = [];
-          if (d.source_commit_sha !== '9e3428ccc3418129669115fb1ef4fe776fe9863f') errors.push('SOURCE_SHA_MISMATCH');
+          if (d.source_commit_sha !== 'c1013eed7829ee5a73dbdc1eff70785866996d54') errors.push('SOURCE_SHA_MISMATCH');
           if (!Array.isArray(d.rows) || d.rows.length < 600) errors.push('DATASET_ROWS_BELOW_600');
           if (Number(d.counts?.included_symbols) < 25) errors.push('INCLUDED_SYMBOLS_BELOW_25');
           if (Number(d.universe?.minimum_quote_volume_24h_usdt) !== 750000) errors.push('LIQUIDITY_FLOOR_MISMATCH');
@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p artifacts/rebenchmark
           node --expose-gc phase2/tools/train-neural-closure-models.mjs \
-            --input artifacts/source-run-74/dataset.json \
+            --input artifacts/source-run-75/dataset.json \
             --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
             --epochs 8 \
             --denseEpochs 36 \
