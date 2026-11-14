@@ -4145,7 +4145,47 @@ export function buildFourHourTemporalNeuralProfile(samples=[],options={}){
 
 /** Inference on an inner-selected TCN member for external research scoring.
  * This does not imply the model passed the independent validation/holdout gates. */
+/** Score the internally selected candidate, or the best diagnostic member
+ * from the inner selection block when no candidate clears the logistic margin.
+ * Diagnostic output is research-only and never changes probability_ready.
+ */
+export function predictTemporalResearchOutput(sequence,profile={},{
+  allowDiagnostic=false
+}={}){
+  const fitted=profile?._research_fit;
+  if(!fitted||!validSequence(sequence))return null;
+  const regime=regimeOfSequence(sequence);
+  if(!regime)return null;
+  const specialist=fitted.specialists_by_regime?.[regime];
+  if(!specialist||!Array.isArray(specialist.members))return null;
+  const selectedIndex=Number(specialist.selected_member_index);
+  if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
+    selectedIndex<specialist.members.length){
+    const probability=predict(sequence,fitted);
+    return Number.isFinite(probability)?{
+      probability,mode:'INNER_SELECTED_TCN_MEMBER',regime,
+      member_index:selectedIndex,
+      residual_scale:Number(specialist.selected_residual_scale)
+    }:null;
+  }
+  if(!allowDiagnostic)return null;
+  const diagnosticIndex=Number(specialist.diagnostic_member_index);
+  const diagnosticScale=finite(specialist.diagnostic_residual_scale);
+  if(!Number.isInteger(diagnosticIndex)||diagnosticIndex<0||
+    diagnosticIndex>=specialist.members.length||
+    diagnosticScale===null||diagnosticScale<=0)return null;
+  const raw=forward(sequence,specialist.members[diagnosticIndex],diagnosticScale).probability;
+  const probability=calibratedProbability(raw,specialist.probability_calibrator);
+  return Number.isFinite(probability)?{
+    probability,mode:'INNER_BEST_DIAGNOSTIC_TCN_MEMBER',regime,
+    member_index:diagnosticIndex,residual_scale:diagnosticScale
+  }:null;
+}
+
 export function predictTemporalResearchProbability(sequence,profile={}){
+  const result=predictTemporalResearchOutput(sequence,profile);
+  return result?.probability??null;
+}
   if(!profile?._research_fit||!validSequence(sequence))return null;
   const regime=regimeOfSequence(sequence);
   if(!regime)return null;
