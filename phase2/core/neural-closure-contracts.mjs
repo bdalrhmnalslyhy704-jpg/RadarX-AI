@@ -68,21 +68,43 @@ export function isValidFourHourFirstTouchExecution(firstTouch,outcome,realizedRe
     Math.abs(stop/baseline-0.98)>1e-10)return false;
   const resolution=firstTouch?.resolution;
   const source=firstTouch?.exit_price_source;
+  const candle=firstTouch?.exit_candle;
+  const candleOpenTime=number(candle?.open_time);
+  const candleCloseTime=number(candle?.close_time);
+  const candleOpen=number(candle?.open);
+  const candleHigh=number(candle?.high);
+  const candleLow=number(candle?.low);
+  const candleClose=number(candle?.close);
+  const firstTouchAt=number(firstTouch?.first_touch_at);
+  const candleEvidenceValid=candle?.source==='BINANCE_PUBLIC_REST'&&
+    candle?.is_closed===true&&candleOpenTime!==null&&candleCloseTime===candleOpenTime+59_999&&
+    candleOpen!==null&&candleHigh!==null&&candleLow!==null&&candleClose!==null&&
+    candleOpen>0&&candleLow>0&&candleClose>0&&
+    candleHigh>=Math.max(candleOpen,candleClose,candleLow)&&
+    candleLow<=Math.min(candleOpen,candleClose);
+  if(!candleEvidenceValid||firstTouchAt===null)return false;
   const expected=outcome==='UP'?'TAKE_PROFIT_FIRST':
     outcome==='DOWN'?'STOP_LOSS_FIRST':
     outcome==='FLAT'?'HORIZON_END':null;
   if(resolution!==expected)return false;
   const tolerance=Math.max(1e-8,Math.abs(exit)*1e-10);
   if(outcome==='UP'){
-    if(source==='BARRIER'&&Math.abs(exit-take)>tolerance)return false;
-    if(source==='OPEN_GAP'&&exit+ tolerance<take)return false;
+    if(source==='BARRIER'&&(Math.abs(exit-take)>tolerance||
+      candleOpen>=take||candleHigh<take||candleLow<=stop||
+      firstTouchAt!==candleCloseTime))return false;
+    if(source==='OPEN_GAP'&&(exit+ tolerance<take||
+      Math.abs(exit-candleOpen)>tolerance||firstTouchAt!==candleOpenTime))return false;
     if(!['BARRIER','OPEN_GAP'].includes(source))return false;
   }else if(outcome==='DOWN'){
-    if(source==='BARRIER'&&Math.abs(exit-stop)>tolerance)return false;
-    if(source==='OPEN_GAP'&&exit-tolerance>stop)return false;
+    if(source==='BARRIER'&&(Math.abs(exit-stop)>tolerance||
+      candleOpen<=stop||candleLow>stop||candleHigh>=take||
+      firstTouchAt!==candleCloseTime))return false;
+    if(source==='OPEN_GAP'&&(exit-tolerance>stop||
+      Math.abs(exit-candleOpen)>tolerance||firstTouchAt!==candleOpenTime))return false;
     if(!['BARRIER','OPEN_GAP'].includes(source))return false;
   }else if(outcome==='FLAT'){
-    if(source!=='HORIZON_CLOSE')return false;
+    if(source!=='HORIZON_CLOSE'||Math.abs(exit-candleClose)>tolerance||
+      firstTouchAt!==candleCloseTime)return false;
   }else return false;
   const expectedReturn=(exit/baseline-1)*100;
   return Math.abs(realized-expectedReturn)<=1e-8;
@@ -120,7 +142,15 @@ export function buildFourHourFirstTouchOutcome({
     return fail('EXACT_240_CLOSED_ONE_MINUTE_CANDLES_REQUIRED');
   const takePrice=price*1.03,stopPrice=price*0.98;
   let outcome='FLAT',resolution='HORIZON_END',firstTouchAt=at+NEURAL_CLOSURE_HORIZON_MS;
-  let exitPrice=null,exitPriceSource=null;
+  let exitPrice=null,exitPriceSource=null,exitCandleEvidence=null;
+  const snapshotExitCandle=candle=>({
+    open_time:number(candle?.open_time??candle?.openTime),
+    close_time:number(candle?.close_time??candle?.closeTime),
+    open:number(candle?.open),high:number(candle?.high),
+    low:number(candle?.low),close:number(candle?.close),
+    is_closed:candle?.is_closed===true||candle?.closed===true,
+    source:candle?.source
+  });
   let ambiguous=false;
   // Binance closed klines end at open_time + 59,999 ms. The first
   // post-decision minute therefore opens one millisecond after the prior
@@ -147,21 +177,25 @@ export function buildFourHourFirstTouchOutcome({
     // the more favorable nominal threshold.
     if(open>=takePrice){
       outcome='UP';resolution='TAKE_PROFIT_FIRST';
-      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';break;
+      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';
+      exitCandleEvidence=snapshotExitCandle(candle);break;
     }
     if(open<=stopPrice){
       outcome='DOWN';resolution='STOP_LOSS_FIRST';
-      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';break;
+      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';
+      exitCandleEvidence=snapshotExitCandle(candle);break;
     }
     const hitTake=high>=takePrice,hitStop=low<=stopPrice;
     if(hitTake&&hitStop){ambiguous=true;break;}
     if(hitTake){
       outcome='UP';resolution='TAKE_PROFIT_FIRST';
-      firstTouchAt=expectedOpen+59_999;exitPrice=takePrice;exitPriceSource='BARRIER';break;
+      firstTouchAt=expectedOpen+59_999;exitPrice=takePrice;exitPriceSource='BARRIER';
+      exitCandleEvidence=snapshotExitCandle(candle);break;
     }
     if(hitStop){
       outcome='DOWN';resolution='STOP_LOSS_FIRST';
-      firstTouchAt=expectedOpen+59_999;exitPrice=stopPrice;exitPriceSource='BARRIER';break;
+      firstTouchAt=expectedOpen+59_999;exitPrice=stopPrice;exitPriceSource='BARRIER';
+      exitCandleEvidence=snapshotExitCandle(candle);break;
     }
   }
   if(ambiguous)return fail('AMBIGUOUS_BOTH_BARRIERS_TOUCHED_IN_ONE_MINUTE_CANDLE',{
@@ -175,6 +209,7 @@ export function buildFourHourFirstTouchOutcome({
   if(outcome==='FLAT'){
     exitPrice=finalClose;
     exitPriceSource='HORIZON_CLOSE';
+    exitCandleEvidence=snapshotExitCandle(candles.at(-1));
   }
   if(!finite(exitPrice)||Number(exitPrice)<=0||!exitPriceSource)
     return fail('FIRST_TOUCH_EXECUTION_PRICE_INVALID');
@@ -211,7 +246,8 @@ export function buildFourHourFirstTouchOutcome({
       resolution,first_touch_at:firstTouchAt,path_resolution:'1M',
       observed_candles:240,raw_klines_sha256:rawKlinesSha256,baseline_price:price,
       take_profit_price:takePrice,stop_loss_price:stopPrice,
-      exit_price:Number(exitPrice),exit_price_source:exitPriceSource
+      exit_price:Number(exitPrice),exit_price_source:exitPriceSource,
+      exit_candle:exitCandleEvidence
     },
     execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:realizedReturnPct,
