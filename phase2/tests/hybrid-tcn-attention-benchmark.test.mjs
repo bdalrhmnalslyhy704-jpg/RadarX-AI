@@ -546,7 +546,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_KAMA_V5');
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6');
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
@@ -988,7 +988,7 @@ test('hybrid TCN trains only on the canonical Binance 1m first-touch 4h labels w
   assert.equal(trained.training_samples,20);
   assert.ok(trained.objective_trace.length===1);
   assert.equal(trained.training_objective,
-    'CUMULATIVE_EQUITY_SHARPE_WITH_FOCAL_ASYMMETRIC_BRIER_AND_TARGET_LABEL_RANKING_V5');
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6');
   const corrupted=rows.map(row=>({...row}));
   corrupted[19].first_touch={...corrupted[19].first_touch,observed_candles:239};
   assert.throws(()=>trainHybridTcnAttention(corrupted,{
