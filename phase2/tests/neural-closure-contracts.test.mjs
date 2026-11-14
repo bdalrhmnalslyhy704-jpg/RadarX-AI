@@ -212,7 +212,7 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   });
   assert.equal(ambiguous.training_eligible,false);
   assert.match(ambiguous.reason,/AMBIGUOUS/);
-  const gap=makeCandles('UP');gap[18]={...gap[18],open_time:gap[18].open_time+60_000};
+  const gap=makeCandles('FLAT');gap[0]={...gap[0],open_time:gap[0].open_time+60_000};
   const invalid=buildFourHourFirstTouchOutcome({
     id:'label-gap',symbol:'BNBUSDT',baselineAt:at,baselinePrice:100,candles:gap
   });
