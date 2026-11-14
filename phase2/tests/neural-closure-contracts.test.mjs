@@ -377,6 +377,44 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('fixed-SHA evaluator keeps every holdout metric locked when no neural model beats Logistic on validation',()=>{
+  const rows=makeRows(),sourceCommitSha='d'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const logisticById=new Map(predictions.LOGISTIC_REGRESSION.map(row=>[row.id,row.probability]));
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    predictions[family]=predictions[family].map(row=>({
+      ...row,probability:logisticById.get(row.id),
+      artifact_sha256:modelArtifactsByModel[family].artifact_sha256
+    }));
+  }
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel,requiredBrierImprovement:0.003
+  });
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opened_for_models.length,0);
+  assert.equal(report.split.holdout_support_opened,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.brier_score,null);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    assert.equal(report.models[family].status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(report.models[family].validation.outer_validation_gate.passed,false,family);
+    assert.equal(report.models[family].holdout.evaluated,false,family);
+    assert.equal(report.models[family].holdout.brier_score,null,family);
+    assert.equal(report.models[family].holdout.trade_count,0,family);
+    assert.equal(report.models[family].acceptance.status,
+      'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
+  }
+  assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
+});
+
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
   const rows=makeRows(),sourceCommitSha='b'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
