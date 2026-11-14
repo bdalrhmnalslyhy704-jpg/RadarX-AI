@@ -7,18 +7,22 @@ on:
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
       - '.github/workflows/neural-attention-regression.yml'
   pull_request:
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
       - '.github/workflows/neural-attention-regression.yml'
 
@@ -49,5 +53,7 @@ jobs:
         run: node --test phase2/tests/neural-closure-training-wiring.test.mjs
       - name: Verify recurrent TCN-LSTM gradients, calibration and chronology contracts
         run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs
+      - name: Verify fixed-SHA benchmark and holdout lock protocol
+        run: node --test phase2/tests/neural-closure-contracts.test.mjs
       - name: Verify temporal training and exact artifact inference round-trip
         run: node --test phase2/tests/temporal-neural-brain.test.mjs
