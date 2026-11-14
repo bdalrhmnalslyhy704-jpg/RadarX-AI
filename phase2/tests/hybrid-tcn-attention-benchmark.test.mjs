@@ -5,7 +5,8 @@ import {
   NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,
   NEURAL_CLOSURE_OUTCOME_SOURCE,
-  NEURAL_CLOSURE_HORIZON_MS
+  NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT
 } from '../core/neural-closure-contracts.mjs';
 import {
   HYBRID_FEATURE_NAMES,
@@ -897,6 +898,7 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
       id:'HYBRID-4H-'+index,
       symbol:'PAIR'+String(index).padStart(3,'0')+'USDT',
       market:'BINANCE_SPOT_USDT',
+      execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
       outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
       outcome_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
       target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
@@ -916,7 +918,9 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
         resolution,first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+59_999,
         path_resolution:'1M',observed_candles:240,
         raw_klines_sha256:'a'.repeat(64),
-        baseline_price:100,take_profit_price:103,stop_loss_price:98
+        baseline_price:100,take_profit_price:103,stop_loss_price:98,
+        exit_price:outcome==='UP'?103.1:outcome==='DOWN'?97.9:100.05,
+        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP'
       },
       sequence:makeSequence(outcome==='UP'?1:-1,index),
       sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
