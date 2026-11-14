@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
-import {buildFourHourFirstTouchOutcome,NEURAL_CLOSURE_TARGET_DEFINITION} from '../core/neural-closure-contracts.mjs';
+import {
+  buildFourHourFirstTouchOutcome,
+  NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_HORIZON_MS
+} from '../core/neural-closure-contracts.mjs';
 import {
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS,
