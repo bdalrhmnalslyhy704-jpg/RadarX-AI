@@ -965,6 +965,12 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
   assert.throws(()=>trainHybridTcnAttention(badBarrier,{
     epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
   }),/AT_LEAST_20_TRAINING_ROWS/);
+  const badExitCandle=rows.map(row=>({...row,first_touch:{
+    ...row.first_touch,exit_candle:{...row.first_touch.exit_candle,high:102.9}
+  }}));
+  assert.throws(()=>trainHybridTcnAttention(badExitCandle,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/AT_LEAST_20_TRAINING_ROWS/);
   const wrongSource=rows.map(row=>({...row,outcome_source:'BINANCE_SPOT_CLOSED_15M'}));
   assert.throws(()=>trainHybridTcnAttention(wrongSource,{
     epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
