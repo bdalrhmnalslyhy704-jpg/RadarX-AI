@@ -120,8 +120,25 @@ test('Falcon Eye notification diversity reads the actual nested component scores
 test('Falcon Eye detects the OGN early setup from Spot evidence alone',()=>{
   const now=1_800_000_000_000+240*60_000;
   const one=risingBase();
+  // The preceding 30-minute window is deliberately noisier, followed by the
+  // existing compressed / quiet-base setup and its small, high-participation lift.
+  for(let i=50;i<80;i++){
+    const close=100+i*0.004+Math.sin(i*1.7)*0.36;
+    one[i].open=close-0.005;
+    one[i].close=close;
+    one[i].high=close+0.06;
+    one[i].low=close-0.06;
+  }
   const five=compressedBase(80);
   const btc=flat(80,100);
+  for(let i=five.length-4;i<five.length;i++){
+    const previous=Number(five[i-1].close);
+    const close=previous*1.0025;
+    five[i].open=previous;
+    five[i].close=close;
+    five[i].high=close+0.02;
+    five[i].low=previous-0.02;
+  }
   const a=buildFalconEyeAnalysis({
     ticker:{symbol:'OGNUSDT',lastPrice:one.at(-1).close,priceChange24h:2.8,quoteVolume24h:2_500_000},
     oneMinute:one,fiveMinute:five,btcFiveMinute:btc,now
