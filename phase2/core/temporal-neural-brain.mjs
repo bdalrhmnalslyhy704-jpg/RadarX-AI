@@ -175,6 +175,11 @@ function cleanRows(samples, {
     outcome: row.outcome,
     target: targetOf(row),
     sequence: row.temporal_sequence.map(step => step.map(Number)),
+    market_context:{
+      kama_efficiency_ratio:row.market_context?.kama_efficiency_ratio??row.kama_efficiency_ratio??null,
+      atr_pct:row.market_context?.atr_pct??row.atr_pct??null,
+      atr_baseline_pct:row.market_context?.atr_baseline_pct??row.atr_baseline_pct??null
+    },
     temporal_sequence_timestamps:Array.isArray(row.temporal_sequence_timestamps)
       ?row.temporal_sequence_timestamps.map(Number):null
   })).sort((a, b) => a.at - b.at || a.symbol.localeCompare(b.symbol));
@@ -1182,6 +1187,134 @@ function cloneTemporalTree(value){
   return value;
 }
 
+export function regimeAwareTemporalDropoutRate(marketContext,{
+  baseRate=0.04,maxRate=0.25
+}={}){
+  const kama=finite(marketContext?.kama_efficiency_ratio);
+  const atr=finite(marketContext?.atr_pct);
+  const baseline=finite(marketContext?.atr_baseline_pct);
+  if(kama===null||kama<0||kama>1||atr===null||atr<=0||baseline===null||baseline<=0)
+    return {enabled:false,reason:'MARKET_KAMA_OR_ATR_CONTEXT_MISSING',dropout_rate:0};
+  if(!Number.isFinite(baseRate)||!Number.isFinite(maxRate)||
+    baseRate<0||maxRate<baseRate||maxRate>=1)
+    throw new TypeError('TEMPORAL_REGIME_DROPOUT_CONFIGURATION_INVALID');
+  const relativeAtr=atr/baseline;
+  const volatilityComponent=0.06*clamp(relativeAtr-1,0,3)/3;
+  const efficiencyComponent=0.06*(1-kama);
+  const dropoutRate=clamp(baseRate+volatilityComponent+efficiencyComponent,baseRate,maxRate);
+  return {enabled:true,reason:'KAMA_ATR_REGIME_AWARE_TRAIN_ONLY',
+    dropout_rate:dropoutRate,relative_atr:relativeAtr,
+    kama_efficiency_ratio:kama};
+}
+function deterministicUnit(seed){
+  let value=(Math.trunc(Number(seed)||1)>>>0)||1;
+  value^=value>>>16;value=Math.imul(value,0x7feb352d);
+  value^=value>>>15;value=Math.imul(value,0x846ca68b);
+  value^=value>>>16;
+  return (value>>>0)/4294967296;
+}
+export function applyRegimeAwareTemporalDropout(sequence,marketContext,{
+  seed=1,baseRate=0.04,maxRate=0.25,maskChannel=TEMPORAL_SEQUENCE_CHANNELS-1
+}={}){
+  if(!validSequence(sequence))throw new TypeError('TEMPORAL_REGIME_DROPOUT_SEQUENCE_INVALID');
+  const profile=regimeAwareTemporalDropoutRate(marketContext,{baseRate,maxRate});
+  if(!profile.enabled)return {sequence,applied:false,...profile,dropped_channels:0};
+  if(!Number.isInteger(maskChannel)||maskChannel<0||maskChannel>=TEMPORAL_SEQUENCE_CHANNELS)
+    throw new TypeError('TEMPORAL_REGIME_DROPOUT_MASK_CHANNEL_INVALID');
+  const output=sequence.map(row=>row.slice());
+  let dropped=0;
+  for(let channel=0;channel<TEMPORAL_SEQUENCE_CHANNELS;channel++){
+    if(channel===maskChannel)continue;
+    if(deterministicUnit(Number(seed)+channel*104729)<profile.dropout_rate){
+      for(let time=0;time<output.length;time++)output[time][channel]=0;
+      dropped++;
+    }
+  }
+  if(dropped>=TEMPORAL_SEQUENCE_CHANNELS-(maskChannel>=0?1:0))
+    throw new Error('TEMPORAL_REGIME_DROPOUT_REMOVED_ALL_FEATURE_CHANNELS');
+  return {sequence:output,applied:true,...profile,dropped_channels:dropped};
+}
+
+function spectralMatrixNorm(matrix,iterations=12){
+  if(!Array.isArray(matrix)||!matrix.length||!Array.isArray(matrix[0])||
+    !matrix[0].length||matrix.some(row=>!Array.isArray(row)||
+      row.length!==matrix[0].length||row.some(value=>!Number.isFinite(value))))
+    throw new TypeError('TEMPORAL_SPECTRAL_MATRIX_INVALID');
+  const columns=matrix[0].length;
+  let right=Array(columns).fill(1/Math.sqrt(columns));
+  let left=[];
+  const norm=vector=>Math.sqrt(vector.reduce((sum,value)=>sum+value*value,0));
+  for(let iteration=0;iteration<iterations;iteration++){
+    left=matrix.map(row=>row.reduce((sum,value,index)=>sum+value*right[index],0));
+    const leftNorm=norm(left);
+    if(leftNorm<=1e-15)return 0;
+    left=left.map(value=>value/leftNorm);
+    const next=Array(columns).fill(0);
+    for(let row=0;row<matrix.length;row++)
+      for(let column=0;column<columns;column++)
+        next[column]+=matrix[row][column]*left[row];
+    const nextNorm=norm(next);
+    if(nextNorm<=1e-15)return 0;
+    right=next.map(value=>value/nextNorm);
+  }
+  const projected=matrix.map(row=>row.reduce((sum,value,index)=>sum+value*right[index],0));
+  return norm(projected);
+}
+function projectMatrixSpectralNorm(matrix,cap,iterations){
+  const before=spectralMatrixNorm(matrix,iterations);
+  if(before>cap){
+    const scale=cap/before;
+    for(let row=0;row<matrix.length;row++)
+      for(let column=0;column<matrix[row].length;column++)
+        matrix[row][column]*=scale;
+  }
+  const after=spectralMatrixNorm(matrix,iterations);
+  return {before,after,scaled:before>cap};
+}
+export function applyTemporalSpectralNormalization(model,{
+  cap=1.5,iterations=12
+}={}){
+  if(!model||typeof model!=='object'||!Number.isFinite(cap)||cap<=0||
+    !Number.isInteger(iterations)||iterations<2)
+    throw new TypeError('TEMPORAL_SPECTRAL_NORMALIZATION_OPTIONS_INVALID');
+  const projection=projectMatrixSpectralNorm(model.projectionWeights,cap,iterations);
+  const pointwise=(model.pointWeights||[]).map(matrix=>
+    projectMatrixSpectralNorm(matrix,cap,iterations));
+  let maximumDepthNorm=0,depthScaledCount=0;
+  for(const layer of model.depthWeights||[]){
+    if(!Array.isArray(layer)||!layer.length)throw new TypeError('TEMPORAL_DEPTH_KERNEL_INVALID');
+    const channels=layer[0].length;
+    for(let channel=0;channel<channels;channel++){
+      const values=layer.map(tap=>Number(tap[channel]));
+      if(values.some(value=>!Number.isFinite(value)))throw new TypeError('TEMPORAL_DEPTH_KERNEL_NON_FINITE');
+      const current=Math.sqrt(values.reduce((sum,value)=>sum+value*value,0));
+      maximumDepthNorm=Math.max(maximumDepthNorm,current);
+      if(current>cap){
+        const scale=cap/current;
+        for(const tap of layer)tap[channel]*=scale;
+        depthScaledCount++;
+      }
+    }
+  }
+  const outputNorm=vectorL2Norm(model.outputWeights);
+  let outputScaled=false;
+  if(outputNorm>cap){
+    const scale=cap/outputNorm;
+    model.outputWeights=model.outputWeights.map(value=>value*scale);
+    outputScaled=true;
+  }
+  return {
+    cap,iterations,projection,
+    pointwise,maximum_depth_channel_norm_before:maximumDepthNorm,
+    depth_channels_scaled:depthScaledCount,
+    output_l2_norm_before:outputNorm,
+    output_scaled:outputScaled,
+    passed:projection.after<=cap+1e-8&&
+      pointwise.every(item=>item.after<=cap+1e-8)&&
+      maximumDepthNorm<=cap+1e-8&&outputNorm<=cap+1e-8
+  };
+}
+
 function fitMember(rows, seed, {
   epochs = 10, learningRate = 0.006, l2 = 0.012,
   baseRate = 0.5, baselineFit = null, baselineByRegime = null,
@@ -1190,7 +1323,12 @@ function fitMember(rows, seed, {
   temporalPoolingMode='LAST_12_MEAN_V1',
   attentionPositionBiasL2Multiplier=1,
   enableAsymmetricDirectionalRankingLoss=false,
-  directionalRankingLossConfig={}
+  directionalRankingLossConfig={},
+  regimeAwareDropout=true,
+  requireRegimeAwareDropout=false,
+  dropoutBaseRate=0.04,
+  dropoutMaximumRate=0.25,
+  spectralNormCap=1.5
 } = {}) {
   if(!Array.isArray(rows)||rows.length===0)
     throw new TypeError('TEMPORAL_TRAINING_ROWS_EMPTY');
@@ -1217,6 +1355,11 @@ function fitMember(rows, seed, {
   model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
     ?baselineByRegime:null;
   model.training_objective=trainingObjective;
+  const dropoutDiagnostics={enabled:regimeAwareDropout===true,applied_rows:0,
+    disabled_rows:0,mean_dropout_rate:0,strict_context_required:requireRegimeAwareDropout===true};
+  if(requireRegimeAwareDropout&&rows.some(row=>
+    !regimeAwareTemporalDropoutRate(row.market_context).enabled))
+    throw new Error('TEMPORAL_REGIME_DROPOUT_REQUIRED_CONTEXT_MISSING');
   const trainableParameters=()=>({
     projectionWeights:model.projectionWeights,projectionBiases:model.projectionBiases,
     depthWeights:model.depthWeights,pointWeights:model.pointWeights,
@@ -1238,13 +1381,27 @@ function fitMember(rows, seed, {
   const checkpointMinDelta=1e-8;
   let bestTrainingObjective=Number.POSITIVE_INFINITY,bestEpoch=0;
   let epochsWithoutImprovement=0,bestCheckpoint=null,stoppedEarly=false;
+  let dropoutRateSum=0,dropoutRateObservations=0;
+  let lastSpectralDiagnostics=null;
   for (let epoch = 1; epoch <= effectiveEpochs; epoch++) {
+    const epochSequences=rows.map((row,rowIndex)=>{
+      if(regimeAwareDropout!==true)return row.sequence;
+      const result=applyRegimeAwareTemporalDropout(row.sequence,row.market_context,{
+        seed:seed*1000003+epoch*1009+rowIndex,
+        baseRate:dropoutBaseRate,maxRate:dropoutMaximumRate
+      });
+      if(result.applied){
+        dropoutDiagnostics.applied_rows++;
+        dropoutRateSum+=result.dropout_rate;dropoutRateObservations++;
+      }else dropoutDiagnostics.disabled_rows++;
+      return result.sequence;
+    });
     const gradient = zerosLike(trainableParameters());
     let weightedObjectiveLoss=0,positiveObjectiveLoss=0,negativeObjectiveLoss=0;
     let directionalLoss=null;
     if(enableAsymmetricDirectionalRankingLoss){
-      const currentLogits=rows.map(row=>{
-        const probability=forwardWithWorkspace(row.sequence,model,1,
+      const currentLogits=rows.map((row,rowIndex)=>{
+        const probability=forwardWithWorkspace(epochSequences[rowIndex],model,1,
           row._pooled_baseline_features,trainingWorkspace).probability;
         if(!Number.isFinite(probability))throw new TypeError('TEMPORAL_RANKING_FORWARD_NON_FINITE');
         const p=clamp(probability,1e-12,1-1e-12);
@@ -1275,13 +1432,14 @@ function fitMember(rows, seed, {
     }
     for (let rowIndex=0;rowIndex<rows.length;rowIndex++) {
       const row=rows[rowIndex];
-      const cache = forwardWithWorkspace(row.sequence,model,1,
+      const sequence=epochSequences[rowIndex];
+      const cache = forwardWithWorkspace(sequence,model,1,
         row._pooled_baseline_features,trainingWorkspace);
       if(!Number.isFinite(cache.probability))
         throw new TypeError('TEMPORAL_FORWARD_NON_FINITE_PROBABILITY');
       const gradientOverride=directionalLoss
         ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight:null;
-      const itemGradient = gradientsFor(row.sequence,row.target,model,cache,
+      const itemGradient = gradientsFor(sequence,row.target,model,cache,
         trainingObjective,rowGradientScratch,trainingWorkspace,gradientOverride);
       if(!isFiniteTemporalTree(itemGradient))
         throw new TypeError('TEMPORAL_BACKPROP_NON_FINITE_GRADIENT');
@@ -1327,6 +1485,11 @@ function fitMember(rows, seed, {
     // Only convolutional trainable parameters are replaced. The pooled logistic
     // weights and intercept remain frozen as a stable, training-only anchor.
     Object.assign(model, step.parameters);
+    lastSpectralDiagnostics=applyTemporalSpectralNormalization(model,{
+      cap:spectralNormCap,iterations:12
+    });
+    if(!lastSpectralDiagnostics.passed)
+      throw new TypeError('TEMPORAL_SPECTRAL_NORM_PROJECTION_FAILED');
     optimizer = step.state;
     epochHistory.push({
       epoch,
@@ -1354,6 +1517,13 @@ function fitMember(rows, seed, {
   }
   if(!bestCheckpoint)throw new Error('TEMPORAL_BEST_CHECKPOINT_MISSING');
   Object.assign(model,cloneTemporalTree(bestCheckpoint));
+  lastSpectralDiagnostics=applyTemporalSpectralNormalization(model,{
+    cap:spectralNormCap,iterations:12
+  });
+  if(!lastSpectralDiagnostics.passed)
+    throw new TypeError('TEMPORAL_FINAL_SPECTRAL_NORM_PROJECTION_FAILED');
+  dropoutDiagnostics.mean_dropout_rate=dropoutRateObservations
+    ?dropoutRateSum/dropoutRateObservations:0;
   model.training_diagnostics={
     schema:'TCN_PER_EPOCH_TRAINING_SIGNAL_DIAGNOSTICS_V1',
     diagnostic_only:true,
@@ -1374,6 +1544,13 @@ function fitMember(rows, seed, {
     learning_rate_start:baseLearningRate,
     learning_rate_end:baseLearningRate*0.1,
     training_workspace:'REUSED_FORWARD_BACKWARD_TENSORS_AND_POOL_ROUTES_V1',
+    regularization:{
+      spectral_normalization:'POWER_ITERATION_PROJECTED_SPECTRAL_NORM_V1',
+      spectral_norm_cap:spectralNormCap,
+      final_spectral_diagnostics:lastSpectralDiagnostics,
+      regime_aware_dropout:'KAMA_ATR_VOLATILITY_SCALED_TRAIN_ONLY_V1',
+      dropout:dropoutDiagnostics
+    },
     training_sample_profile:model.training_sample_profile,
     objective:trainingObjective,
     epoch_history:epochHistory
