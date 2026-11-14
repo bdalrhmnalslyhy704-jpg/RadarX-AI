@@ -170,6 +170,12 @@ async function getExchangeInfo(){
 
 async function fetchKlines(symbol,interval,startTime,endTime,intervalMs,serverTime){
   const rawRows=[];
+  const expectedCandles=Math.floor((endTime-startTime)/intervalMs)+1;
+  if(!Number.isInteger(expectedCandles)||expectedCandles<1)
+    throw new Error('BINANCE_KLINE_EXPECTED_CANDLE_WINDOW_INVALID:'+symbol+':'+interval);
+  // Derive the page ceiling from the requested inclusive window. A fixed
+  // 250-page cap incorrectly rejected a valid 180-day 1m archive (260 pages).
+  const maximumPages=Math.ceil(expectedCandles/KLINE_LIMIT)+1;
   let cursor=startTime,requests=0;
   while(cursor<=endTime){
     const {payload}=await getJson('klines',{
@@ -188,7 +194,9 @@ async function fetchKlines(symbol,interval,startTime,endTime,intervalMs,serverTi
       throw new Error('BINANCE_KLINE_PAGINATION_STALLED:'+symbol+':'+interval);
     cursor=lastOpen+intervalMs;
     requests++;
-    if(requests>250)throw new Error('BINANCE_KLINE_PAGE_LIMIT_EXCEEDED:'+symbol+':'+interval);
+    if(requests>maximumPages)
+      throw new Error('BINANCE_KLINE_PAGE_LIMIT_EXCEEDED:'+symbol+':'+interval+
+        ':requested='+expectedCandles+':pages='+requests+':maximum='+maximumPages);
     if(payload.length<KLINE_LIMIT)break;
   }
   const candles=rawRows.map(row=>parseBinanceSpotKline(row,{serverTime,intervalMs}))
