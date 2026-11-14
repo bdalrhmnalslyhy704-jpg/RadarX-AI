@@ -162,8 +162,8 @@ jobs:
             --enable-factorization-machine true --factorization-rank 16 \
             --factorization-iterations 120 --factorization-learning-rate 0.008 \
             --factorization-l2 0.06 --asymmetric-directional-ranking-loss true \
-            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 4 \
-            --tcn-lstm-max-training-samples 512 --tcn-lstm-bootstrap-iterations 400
+            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
+            --tcn-lstm-max-training-samples 4096 --tcn-lstm-bootstrap-iterations 400
       - name: Build strict head-to-head Brier matrix
         if: always()
         run: |

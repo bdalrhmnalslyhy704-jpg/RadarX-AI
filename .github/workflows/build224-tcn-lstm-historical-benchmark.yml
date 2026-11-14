@@ -83,8 +83,8 @@ jobs:
             --target 5 --label-mode safe_opportunity --horizon-hours 24 \
             --liquidity-lane STANDARD_750K_PLUS \
             --tcn-only true --skip-temporal true \
-            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 4 \
-            --tcn-lstm-max-training-samples 512 \
+            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
+            --tcn-lstm-max-training-samples 4096 \
             --tcn-lstm-bootstrap-iterations 400
       - name: Publish TCN-LSTM versus same-window Logistic evidence
         if: always()

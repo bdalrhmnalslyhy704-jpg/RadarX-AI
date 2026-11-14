@@ -18,7 +18,9 @@ import {
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
-  createTcnLstmHybridModelForAudit
+  createTcnLstmHybridModelForAudit,
+  effectiveTcnLstmTrainingSampleBudget,
+  TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
 
 const DAY=86400000;
@@ -381,4 +383,15 @@ test('five-partition evaluator rejects leakage, overlapping identities and unres
 
 test('TCN receptive field covers all two-tap causal dilations',()=>{
   assert.equal(TCN_LSTM_RECEPTIVE_FIELD,15);
+});
+
+
+test('recurrent training budget uses up to 4,096 available training rows without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,1200),1200);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
 });

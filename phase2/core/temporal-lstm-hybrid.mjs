@@ -48,6 +48,25 @@ const LOGIT_LIMIT = 30;
 const SOFTMAX_LIMIT = 40;
 const BASELINE_FEATURES = TCN_LSTM_INPUT_CHANNELS * 2;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * Controlled research budget for the recurrent challenger. This cap changes
+ * only the recent training window; selection, calibration, validation and
+ * untouched holdout partitions remain disjoint and unchanged.
+ */
+export const TCN_LSTM_MAX_TRAINING_SAMPLES = 4096;
+export function effectiveTcnLstmTrainingSampleBudget(
+  requested=TCN_LSTM_MAX_TRAINING_SAMPLES,
+  available=TCN_LSTM_MAX_TRAINING_SAMPLES
+){
+  const desired=finite(requested)&&requested>0
+    ?Math.trunc(requested):TCN_LSTM_MAX_TRAINING_SAMPLES;
+  const capacity=finite(available)&&available>=0
+    ?Math.trunc(available):TCN_LSTM_MAX_TRAINING_SAMPLES;
+  return Math.max(0,Math.min(
+    TCN_LSTM_MAX_TRAINING_SAMPLES,desired,capacity
+  ));
+}
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -LOGIT_LIMIT, LOGIT_LIMIT)));
 const tanh = Math.tanh;
@@ -708,7 +727,7 @@ function evaluateBrier(rows, model, anchor) {
 
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
-  batchSize = 32, seed = 29, maxTrainingSamples = 2048,
+  batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   baselineFit = null, earlyStoppingPatience = 5
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
@@ -897,7 +916,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   ],
   requiredImprovement = 0.00025,
   seed = 29,
-  maxTrainingSamples = 2048
+  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -905,8 +924,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     throw new TypeError('TCN_LSTM_HYPERPARAMETER_GRID_INVALID');
   if (!finite(requiredImprovement) || requiredImprovement < 0)
     throw new TypeError('TCN_LSTM_SELECTION_MARGIN_INVALID');
+  const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
+    maxTrainingSamples,trainingRows.length
+  );
   const effectiveTrainingRows = [...trainingRows].sort((a, b) => a.at - b.at)
-    .slice(-Math.min(maxTrainingSamples, trainingRows.length));
+    .slice(-effectiveTrainingBudget);
   const trainAt = effectiveTrainingRows.map(row => row.at);
   const trainResolved = effectiveTrainingRows.map(row => row.resolved_at);
   const selectionAt = selectionRows.map(row => row.at);
@@ -961,6 +983,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
     training_support: trainSupport,
     selection_support: selectionSupport,
+    effective_training_budget:effectiveTrainingBudget,
+    effective_training_rows:effectiveTrainingRows.length,
     baseline: {
       kind: anchor.kind,
       training_rows: anchor.training_rows,
@@ -1046,7 +1070,7 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   outcomeHorizonMs = DAY_MS,
   requiredTargetDefinition = null,
   requiredOutcomeSource = null,
-  maxTrainingSamples = 2048,
+  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   bootstrapIterations = 400,
   seed = 29,
   candidates = [
@@ -1466,7 +1490,7 @@ export function evaluateTcnLstmHybridGeneralization({
   trainingRows = [], selectionRows = [], calibrationRows = [],
   validationRows = [], holdoutRows = [],
   candidates, requiredInnerImprovement = 0.00025, requiredOuterImprovement = 0.003,
-  maxTrainingSamples = 2048, bootstrapIterations = 500, seed = 29
+  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES, bootstrapIterations = 500, seed = 29
 } = {}) {
   const partitionSummary = validateChronologicalPartitions([
     trainingRows, selectionRows, calibrationRows, validationRows, holdoutRows

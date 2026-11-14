@@ -1,6 +1,6 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
-import {benchmarkTcnLstmHybridChronological} from './temporal-lstm-hybrid.mjs';
+import {benchmarkTcnLstmHybridChronological,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES} from './temporal-lstm-hybrid.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -134,8 +134,10 @@ function benchmarkDailyTcnLstm(rows,targetDefinition,outcomeSource,horizonHours,
     outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
     requiredTargetDefinition:targetDefinition,
     requiredOutcomeSource:outcomeSource,
-    maxTrainingSamples:Math.max(80,Math.min(1024,
-      Math.trunc(options.temporalTcnLstmMaxTrainingSamples||512))),
+    maxTrainingSamples:effectiveTcnLstmTrainingSampleBudget(
+      options.temporalTcnLstmMaxTrainingSamples||TCN_LSTM_MAX_TRAINING_SAMPLES,
+      tcnLstmRows.length
+    ),
     bootstrapIterations:Math.max(200,Math.min(2000,
       Math.trunc(options.temporalTcnLstmBootstrapIterations||400))),
     seed:Math.trunc(options.temporalTcnLstmSeed||37),
