@@ -1,4 +1,5 @@
 import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
+import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
 // contract only; it does not imply that either challenger has passed validation.
@@ -629,7 +630,9 @@ function fitNeuralNetworkModel(training, {
   anchorAdaptation = 'FROZEN',
   outputInitializationScale = 0.015,
   enableAsymmetricDirectionalRankingLoss = false,
-  directionalRankingLossConfig = {}
+  directionalRankingLossConfig = {},
+  focalGammaPositive = 1,
+  focalGammaNegative = 2
 } = {}) {
   const sourceRows=Array.isArray(training)?training:[];
   const featureNames=[...(sourceRows[0]?.feature_names||FEATURE_NAMES)];
@@ -644,10 +647,22 @@ function fitNeuralNetworkModel(training, {
   if(!rawRows.length)return null;
   const positiveSamples=rawRows.filter(row=>row.target>0.5).length;
   const negativeSamples=rawRows.length-positiveSamples;
-  const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
+  const isFocalObjective=trainingObjective==='FOCAL_ASYMMETRIC_BRIER';
+  if(isFocalObjective&&rawRows.some(row=>row.target!==0&&row.target!==1))
+    throw new TypeError('NEURAL_FOCAL_ASYMMETRIC_BRIER_REQUIRES_BINARY_TARGETS');
+  const usePositiveClassWeighting=!isFocalObjective&&positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
   const positiveSampleWeight=usePositiveClassWeighting&&positiveSamples>0
     ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
-  const rows=rawRows.map(row=>({...row,sample_weight:row.target>0.5?positiveSampleWeight:1}));
+  const focalClassWeights=isFocalObjective
+    ?deriveTrainingClassWeights(rawRows.map(row=>row.target))
+    :{positiveWeight:1,negativeWeight:1};
+  const focalWeights={
+    positiveWeight:focalClassWeights.positiveWeight,
+    negativeWeight:focalClassWeights.negativeWeight,
+    gammaPositive:focalGammaPositive,gammaNegative:focalGammaNegative
+  };
+  const rows=rawRows.map(row=>({...row,sample_weight:isFocalObjective?1:
+    row.target>0.5?positiveSampleWeight:1}));
   const totalSampleWeight=rows.reduce((sum,row)=>sum+row.sample_weight,0);
 
   const inputSize=featureCount;
@@ -790,10 +805,12 @@ function fitNeuralNetworkModel(training, {
       const brierLoss=(safeProbability-row.target)**2;
       const logLoss=-(row.target*Math.log(safeProbability)+
         (1-row.target)*Math.log(1-safeProbability));
-      const objectiveLoss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-        ?logLoss
-        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-          ?0.5*brierLoss+0.5*logLoss:brierLoss;
+      const objectiveLoss=trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+        ?focalAsymmetricBrierLoss(safeProbability,row.target,focalWeights).loss
+        :trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+          ?logLoss
+          :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+            ?0.5*brierLoss+0.5*logLoss:brierLoss;
       if(!directionalLoss)weightedObjectiveLoss+=objectiveLoss*row.sample_weight;
       // Optimize the proper-score objective by default. The optional ranking
       // path supplies an exact derivative of its composite objective w.r.t. logit.
@@ -801,11 +818,13 @@ function fitNeuralNetworkModel(training, {
       const logLossGradient=probability-row.target;
       const error=directionalLoss
         ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight
-        :(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-          ?logLossGradient
-          :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-            ?0.5*brierGradient+0.5*logLossGradient
-            :brierGradient)*row.sample_weight;
+        :trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+          ?focalAsymmetricBrierLoss(safeProbability,row.target,focalWeights).logitGradient
+          :(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+            ?logLossGradient
+            :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+              ?0.5*brierGradient+0.5*logLossGradient
+              :brierGradient)*row.sample_weight;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -1273,7 +1292,13 @@ export function fitFactorizationMachineModel(training,{
     training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
     positive_class_weighting:useWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveWeight.toFixed(5)),
-    training_objective:trainingObjective,iterations:epochHistory.length,
+    training_objective:trainingObjective,
+    focal_asymmetric_brier:isFocalObjective?{
+      gamma_positive:focalGammaPositive,gamma_negative:focalGammaNegative,
+      positive_weight:focalWeights.positiveWeight,negative_weight:focalWeights.negativeWeight,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY'
+    }:null,
+    iterations:epochHistory.length,
     requested_iterations:steps,l2:regularization,
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
@@ -1316,14 +1341,16 @@ function fitNeuralEnsemble(training, options = {}) {
   const memberProfiles=[
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       outputInitializationScale,
-      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE')},
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:1,focalGammaNegative:2},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       outputInitializationScale,
-      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE')},
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:0.5,focalGammaNegative:2},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       outputInitializationScale,
-      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
-      positiveClassWeighting:'SQRT_INVERSE_PREVALENCE'}
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:1.5,focalGammaNegative:2.5}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -1554,8 +1581,8 @@ function predictFromFit(features, fit, residualScale=1) {
 
 
 function fitAndSelectProbabilityCalibrator(fitRows,checkRows,fit,{
-  minimumFitSamples=30,minimumFitPositive=6,minimumFitNegative=6,
-  minimumCheckSamples=20,minimumCheckPositive=3,minimumCheckNegative=3,
+  minimumFitSamples=100,minimumFitPositive=50,minimumFitNegative=50,
+  minimumCheckSamples=100,minimumCheckPositive=50,minimumCheckNegative=50,
   iterations=260,learningRate=0.035,regularization=0.55,
   improvementMargin=0.00025
 }={}){
