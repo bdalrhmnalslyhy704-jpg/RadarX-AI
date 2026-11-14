@@ -711,7 +711,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const symbol = String(raw.symbol ?? '').trim().toUpperCase();
     const market = String(raw.market ?? '').trim().toUpperCase();
     const outcomeSource = String(raw.outcome_source ?? '').trim().toUpperCase();
-    const rowTargetDefinition=String(raw.outcome_definition??'').trim();
+    const rowTargetDefinition=String(raw.outcome_definition??raw.target_definition??'').trim();
     const marketRegime=String(raw.market_regime??'').trim().toUpperCase();
     const historicalWindowId=String(raw.historical_window_id??'').trim();
     const exitReason=String(raw.outcome_exit_reason??'').trim().toUpperCase();
@@ -735,18 +735,19 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
           Number(touch.first_touch_at)<=Number(raw.resolved_at))&&
        maturityMs===NEURAL_CLOSURE_HORIZON_MS);
     const at = finite(raw.at);
-    const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
-    const maturityMs = finite(raw.maturity_ms);
-    const outcomeHorizonMs = finite(raw.outcome_horizon_ms);
-    const gross = finite(raw.gross_return_pct);
+    const latestInputAt = finite(raw.latest_input_at??raw.feature_information_cutoff_at);
+    const maturityMs = finite(raw.maturity_ms)??(
+      at!==null&&resolvedAt!==null?resolvedAt-at:null);
+    const outcomeHorizonMs = finite(raw.outcome_horizon_ms??raw.horizon_ms);
+    const gross = finite(raw.gross_return_pct??raw.realized_return_pct);
     const adverse = finite(raw.max_adverse_excursion_pct);
     const adverseAt = finite(raw.max_adverse_excursion_at);
     const favourable = finite(raw.max_favorable_excursion_pct);
     const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
-    const sequence = raw.sequence;
-    const sequenceTimestamps=raw.sequence_timestamps;
+    const sequence = raw.sequence??raw.temporal_sequence;
+    const sequenceTimestamps=raw.sequence_timestamps??raw.temporal_sequence_timestamps;
     const expectedSequenceIntervalMs=outcomeSource==='BINANCE_SPOT_CLOSED_1M_REPLAY'
       ?HYBRID_REPLAY_CANDLE_INTERVAL_MS:HYBRID_CANDLE_INTERVAL_MS;
     const temporalAlignment=validateTemporalSequenceAlignment({
