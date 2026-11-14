@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/neural-closure-archive-guardian.mjs'
+      - 'phase2/tests/neural-closure-archive-guardian.test.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
       - 'phase2/core/feature-parity-guardian.mjs'
       - 'phase2/core/cognitive-brain.mjs'
@@ -33,6 +35,8 @@ on:
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/neural-closure-archive-guardian.mjs'
+      - 'phase2/tests/neural-closure-archive-guardian.test.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
       - 'phase2/core/feature-parity-guardian.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
@@ -78,6 +82,7 @@ jobs:
       - name: Syntax-check closure and model runtime modules
         run: |
           node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/core/neural-closure-archive-guardian.mjs
           node --check phase2/core/model-artifact-guardian.mjs
           node --check phase2/core/feature-parity-guardian.mjs
           node --check phase2/core/neural-shadow-observation.mjs
@@ -92,6 +97,8 @@ jobs:
           node --check phase2/tools/train-neural-closure-models.mjs
       - name: Test Binance Spot closure dataset builder and shared event features
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-data-builder.test.mjs
+      - name: Test Binance raw archive integrity and fail-closed verification
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-archive-guardian.test.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
       - name: Test checksummed model artifacts and fail-closed feature parity
