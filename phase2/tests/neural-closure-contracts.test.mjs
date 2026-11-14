@@ -520,3 +520,17 @@ test('streaming canonical array digest is byte-identical to the reference canoni
   assert.throws(()=>sha256CanonicalArrayMapped({},row=>row),/CANONICAL_ROWS_REQUIRED/);
   assert.throws(()=>sha256CanonicalArrayMapped(rows,null),/ROW_MAPPER_REQUIRED/);
 });
+
+
+test('mapped canonical array hashing matches canonical full-array hashing without mapped-array allocation',()=>{
+  const rows=[
+    {id:'A',features:{z:2,a:1},temporal_sequence:[[0,1],[2,3]]},
+    {id:'B',features:{a:4,z:3},temporal_sequence:[[4,5],[6,7]]}
+  ];
+  const mapRow=row=>({
+    id:row.id,features:row.features,temporal_sequence:row.temporal_sequence
+  });
+  const mapped=sha256CanonicalArrayMapped(rows,mapRow);
+  const materialized=sha256Canonical(rows.map(mapRow));
+  assert.equal(mapped,materialized);
+});
