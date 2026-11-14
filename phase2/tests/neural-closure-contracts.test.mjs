@@ -189,6 +189,47 @@ test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()
     split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
 });
 
+test('large purged partitions keep timestamp bounds safe beyond the argument limit',()=>{
+  const rows=[];
+  const rowsPerDay=40_000;
+  for(let day=0;day<8;day++){
+    for(let index=0;index<rowsPerDay;index++){
+      rows.push({
+        id:'L'+day+':'+index,
+        at:BASE+day*NEURAL_CLOSURE_PURGE_MS+index*1_000,
+        target:index%2
+      });
+    }
+  }
+  const split=splitFourHourRows(rows);
+  assert.equal(split.counts.total,320_000);
+  assert.equal(split.counts.train,160_000);
+  assert.equal(split.counts.validation,40_000);
+  assert.equal(split.counts.holdout,40_000);
+  assert.ok(split.boundaries.train_last_at<
+    split.boundaries.validation_first_at-NEURAL_CLOSURE_PURGE_MS);
+  assert.ok(split.boundaries.validation_last_at<
+    split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
+});
+
+test('large calibration blocks compute timestamp bounds without argument expansion',()=>{
+  const rows=Array.from({length:200_000},(_,index)=>({
+    id:'CAL:'+index,
+    at:BASE+index*400,
+    target:index%2
+  }));
+  rows.push(
+    {id:'CAL:PURGE',at:BASE+NEURAL_CLOSURE_PURGE_MS,target:0},
+    {id:'CAL:CHECK',at:BASE+2*NEURAL_CLOSURE_PURGE_MS,target:1}
+  );
+  const blocks=buildNeuralClosureCalibrationBlocks(rows);
+  assert.equal(blocks.fit.length,200_000);
+  assert.equal(blocks.purged.length,1);
+  assert.equal(blocks.check.length,1);
+  assert.ok(blocks.days.fit.at(-1)<blocks.days.purge[0]);
+  assert.ok(blocks.days.purge[0]<blocks.days.check[0]);
+});
+
 test('fixed-SHA calibration fit and check blocks retain independent 50/50 class support',()=>{
   const rows=validateFourHourRows(makeRows({days:40,rowsPerDay:600}));
   const split=splitFourHourRows(rows);
