@@ -717,38 +717,164 @@ export function realizedExecutionNetReturnPct(row,roundTripCostBps=30) {
   return finite(gross)?gross-Number(roundTripCostBps)/100:null;
 }
 
-function realizedNetReturns(rows,roundTripCostBps) {
-  return rows.map(row=>realizedExecutionNetReturnPct(row,roundTripCostBps));
-}
-function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
+export const NEURAL_CLOSURE_PORTFOLIO_POLICY=Object.freeze({
+  method:'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1',
+  max_concurrent_positions:30,
+  position_fraction_of_initial_equity:1/30,
+  entry_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING',
+  exit_time:'FIRST_TOUCH_AT_OR_HORIZON_CLOSE_AT',
+  mark_to_market:'OBSERVED_MAX_ADVERSE_AND_FAVORABLE_EXCURSIONS',
+  same_timestamp_exit_before_entry:true
+});
+
+/**
+ * Event-driven long-only Spot portfolio. Each trade uses one fixed equal slot
+ * of initial equity; overlapping positions cannot reuse the same capital.
+ * MAE/MFE events mark open positions before their actual first-touch exit.
+ */
+export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
+  threshold=0.55,roundTripCostBps=30,maxConcurrentPositions=30,
+  initialEquity=100
+}={}){
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||rows.length!==probabilities.length)
+    throw new TypeError('NEURAL_CLOSURE_PORTFOLIO_ROWS_AND_PROBABILITIES_REQUIRED');
+  if(!finite(roundTripCostBps)||Number(roundTripCostBps)<0)
+    throw new TypeError('NEURAL_CLOSURE_ROUND_TRIP_COST_INVALID');
+  const maxOpen=Math.max(1,Math.min(100,Math.trunc(Number(maxConcurrentPositions)||30)));
+  const equityStart=Math.max(1,Number(initialEquity)||100);
+  const slotCapital=equityStart/maxOpen;
   const selected=[];
-  for(let index=0;index<rows.length;index++)
-    if(probabilities[index]>=threshold)selected.push(index);
-  const netReturns=realizedNetReturns(selected.map(index=>rows[index]),roundTripCostBps);
-  const returnsReady=netReturns.length>0&&netReturns.every(finite);
-  if(!returnsReady){
-    return {trade_count:selected.length,threshold,
-      win_rate_pct:null,net_pnl_pct:null,max_drawdown_pct:null,
-      sharpe_per_trade:null,return_data_status:'NOT_AVAILABLE_OR_INCOMPLETE'};
+  for(let index=0;index<rows.length;index++){
+    const probability=number(probabilities[index]);
+    if(probability===null||probability<0||probability>1)
+      throw new TypeError('NEURAL_CLOSURE_PORTFOLIO_PROBABILITY_INVALID:'+index);
+    if(probability>=threshold)selected.push({row:rows[index],probability,index});
   }
-  let equity=1,peak=1,maxDrawdown=0,sum=0,sumSquares=0,wins=0;
-  for(const value of netReturns){
-    if(value<=-100)throw new Error('NEURAL_CLOSURE_RETURN_AT_OR_BELOW_MINUS_100_PERCENT');
-    equity*=1+value/100;peak=Math.max(peak,equity);
-    maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak*100);
-    sum+=value;sumSquares+=value*value;if(value>0)wins++;
-  }
-  const mean=sum/netReturns.length;
-  const variance=Math.max(0,sumSquares/netReturns.length-mean*mean);
-  const sd=Math.sqrt(variance);
-  return {
-    trade_count:selected.length,threshold,
-    win_rate_pct:100*wins/netReturns.length,
-    net_pnl_pct:(equity-1)*100,max_drawdown_pct:maxDrawdown,
-    sharpe_per_trade:sd>0?mean/sd:null,
-    return_data_status:'COMPLETE',
-    average_net_return_pct:mean
+  const invalid=selected.find(item=>{
+    const row=item.row;
+    const at=number(row?.at);
+    const exitAt=number(row?.first_touch?.first_touch_at);
+    const gross=realizedExecutionGrossReturnPct(row);
+    const mae=number(row?.max_adverse_excursion_pct);
+    const maeAt=number(row?.max_adverse_excursion_at);
+    const mfe=number(row?.max_favorable_excursion_pct);
+    const mfeAt=number(row?.max_favorable_excursion_at);
+    return at===null||exitAt===null||exitAt<=at||gross===null||
+      mae===null||maeAt===null||maeAt<at||maeAt>exitAt||
+      mfe===null||mfeAt===null||mfeAt<at||mfeAt>exitAt;
+  });
+  if(invalid)return {
+    signal_count:selected.length,trade_count:0,threshold,
+    win_rate_pct:null,net_pnl_pct:null,max_drawdown_pct:null,
+    sharpe_per_trade:null,return_data_status:'NOT_AVAILABLE_OR_INCOMPLETE',
+    failure_id:String(invalid.row?.id??invalid.index)
   };
+  const events=[];
+  for(const item of selected){
+    const row=item.row;
+    const at=Number(row.at),exitAt=Number(row.first_touch.first_touch_at);
+    const netReturn=realizedExecutionNetReturnPct(row,roundTripCostBps);
+    if(!finite(netReturn)||netReturn<=-100)
+      throw new Error('NEURAL_CLOSURE_RETURN_AT_OR_BELOW_MINUS_100_PERCENT');
+    const position={
+      id:String(row.id??item.index),
+      symbol:String(row.symbol??'').toUpperCase(),
+      row,at,exitAt,netReturn,probability:item.probability,
+      capital:slotCapital,markPct:0
+    };
+    events.push({at,type:'EXIT',priority:0,position});
+    if(Number(row.max_adverse_excursion_at)<exitAt)
+      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',priority:1,
+        position,value:Number(row.max_adverse_excursion_pct)});
+    if(Number(row.max_favorable_excursion_at)<exitAt)
+      events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',priority:2,
+        position,value:Number(row.max_favorable_excursion_pct)});
+    events.push({at,type:'ENTRY',priority:3,position});
+  }
+  events.sort((a,b)=>a.at-b.at||a.priority-b.priority||
+    (a.type==='ENTRY'&&b.type==='ENTRY'
+      ?b.position.probability-a.position.probability||
+        a.position.symbol.localeCompare(b.position.symbol)
+      :a.position.id.localeCompare(b.position.id)));
+  let cash=equityStart,peakEquity=equityStart,maxDrawdown=0;
+  const open=new Map(),openSymbols=new Set(),executedReturns=[],holdingMinutes=[];
+  let skippedCapacity=0,skippedSameSymbol=0,skippedInsufficientCash=0;
+  let maximumConcurrent=0;
+  const markedEquity=()=>cash+[...open.values()].reduce((sum,position)=>
+    sum+position.capital*(1+position.markPct/100),0);
+  const markDrawdown=()=>{
+    const equity=markedEquity();
+    peakEquity=Math.max(peakEquity,equity);
+    if(peakEquity>0)maxDrawdown=Math.max(maxDrawdown,(peakEquity-equity)/peakEquity*100);
+  };
+  for(const event of events){
+    const position=event.position;
+    if(event.type==='ENTRY'){
+      if(openSymbols.has(position.symbol)){skippedSameSymbol++;continue;}
+      if(open.size>=maxOpen){skippedCapacity++;continue;}
+      if(cash+1e-10<slotCapital){skippedInsufficientCash++;continue;}
+      cash-=slotCapital;
+      open.set(position.id,position);openSymbols.add(position.symbol);
+      maximumConcurrent=Math.max(maximumConcurrent,open.size);
+      markDrawdown();
+      continue;
+    }
+    if(!open.has(position.id))continue;
+    if(event.type==='MAE'){
+      position.markPct=Math.min(position.markPct,event.value);
+      markDrawdown();
+      continue;
+    }
+    if(event.type==='MFE'){
+      position.markPct=Math.max(position.markPct,event.value);
+      markDrawdown();
+      continue;
+    }
+    if(event.type==='EXIT'){
+      position.markPct=position.netReturn;
+      cash+=position.capital*(1+position.netReturn/100);
+      open.delete(position.id);openSymbols.delete(position.symbol);
+      executedReturns.push(position.netReturn);
+      holdingMinutes.push((position.exitAt-position.at)/60_000);
+      markDrawdown();
+    }
+  }
+  if(open.size!==0)return {
+    signal_count:selected.length,trade_count:executedReturns.length,threshold,
+    win_rate_pct:null,net_pnl_pct:null,max_drawdown_pct:maxDrawdown,
+    sharpe_per_trade:null,return_data_status:'OPEN_POSITIONS_REMAIN',
+    open_positions:open.size
+  };
+  const wins=executedReturns.filter(value=>value>0).length;
+  const mean=executedReturns.length
+    ?executedReturns.reduce((sum,value)=>sum+value,0)/executedReturns.length:null;
+  const variance=executedReturns.length
+    ?executedReturns.reduce((sum,value)=>sum+(value-mean)**2,0)/executedReturns.length:null;
+  const sd=variance===null?null:Math.sqrt(variance);
+  return {
+    signal_count:selected.length,trade_count:executedReturns.length,threshold,
+    win_rate_pct:executedReturns.length?100*wins/executedReturns.length:null,
+    net_pnl_pct:(cash/equityStart-1)*100,max_drawdown_pct:maxDrawdown,
+    sharpe_per_trade:sd>0?mean/sd:null,
+    average_net_return_pct:mean,
+    average_holding_minutes:holdingMinutes.length
+      ?holdingMinutes.reduce((sum,value)=>sum+value,0)/holdingMinutes.length:null,
+    max_concurrent_positions:maximumConcurrent,
+    skipped_capacity:skippedCapacity,
+    skipped_same_symbol:skippedSameSymbol,
+    skipped_insufficient_cash:skippedInsufficientCash,
+    position_fraction_pct:100/maxOpen,
+    return_data_status:'COMPLETE',
+    portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY
+  };
+}
+
+function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
+  return simulateFirstTouchPaperPortfolio(rows,probabilities,{
+    threshold,roundTripCostBps,
+    maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+    initialEquity:100
+  });
 }
 function selectThreshold(rows,probabilities,roundTripCostBps,minimumTrades=20) {
   const grid=[0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
