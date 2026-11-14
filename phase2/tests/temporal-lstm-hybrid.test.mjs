@@ -14,6 +14,7 @@ import {
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridCalibratedProbability,
+  fitTcnLstmHybridCalibration,
   selectTcnLstmHybridHyperparameters,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
@@ -394,4 +395,27 @@ test('recurrent training budget uses up to 4,096 available training rows without
   assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),4096);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
+});
+
+
+test('exported Platt fitting accepts only supplied calibration rows and reports its fit boundary',()=>{
+  const calibrationRows=makeRows(500,60,'four-hour-calibration');
+  const calibrator=fitTcnLstmHybridCalibration(
+    calibrationRows,
+    sequence=>sequence[0][0]>=0?0.72:0.28,
+    {minimumSamples:30,minimumPositive:8,minimumNegative:8,iterations:120}
+  );
+  assert.equal(calibrator.fitted,true);
+  assert.equal(calibrator.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+  assert.equal(calibrator.samples,60);
+  assert.equal(calibrator.positive,30);
+  assert.equal(calibrator.negative,30);
+  assert.ok(Number.isFinite(calibrator.slope));
+  assert.ok(Number.isFinite(calibrator.intercept));
+  const unsupported=fitTcnLstmHybridCalibration(
+    makeRows(700,20,'thin-calibration'),
+    sequence=>sequence[0][0]>=0?0.72:0.28
+  );
+  assert.equal(unsupported.fitted,false);
+  assert.equal(unsupported.reason,'TCN_LSTM_CALIBRATION_SUPPORT_BELOW_MINIMUM');
 });
