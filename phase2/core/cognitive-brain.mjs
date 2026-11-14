@@ -1346,17 +1346,17 @@ function fitNeuralEnsemble(training, options = {}) {
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:1,focalGammaNegative:2,
+      focalGammaPositive:0.5,focalGammaNegative:0.5,
       positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:0.5,focalGammaNegative:2,
+      focalGammaPositive:1,focalGammaNegative:0.5,
       positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
-      focalGammaPositive:1.5,focalGammaNegative:2.5,
+      focalGammaPositive:0.5,focalGammaNegative:1,
       positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
