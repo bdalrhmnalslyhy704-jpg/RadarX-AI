@@ -53,6 +53,26 @@ export function sha256Canonical(value) {
 }
 
 /**
+ * Hash a mapped array without materializing the mapped array or its complete
+ * canonical JSON representation. Each item is serialized independently, so
+ * large temporal tensors never require a single multi-gigabyte JS string.
+ */
+export function sha256CanonicalArrayMapped(rows,mapRow) {
+  if(!Array.isArray(rows))
+    throw new TypeError('NEURAL_CLOSURE_CANONICAL_ROWS_REQUIRED');
+  if(typeof mapRow!=='function')
+    throw new TypeError('NEURAL_CLOSURE_CANONICAL_ROW_MAPPER_REQUIRED');
+  const hash=createHash('sha256');
+  hash.update('[');
+  for(let index=0;index<rows.length;index++){
+    if(index>0)hash.update(',');
+    hash.update(canonicalJson(mapRow(rows[index])));
+  }
+  hash.update(']');
+  return hash.digest('hex');
+}
+
+/**
  * Validate the price actually available at the first-touch exit.
  * Intrabar touches fill at the barrier; opening gaps fill at the candle open;
  * horizon-end rows fill at the final closed-candle close.

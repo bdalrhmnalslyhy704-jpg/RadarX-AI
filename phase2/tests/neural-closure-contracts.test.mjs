@@ -4,6 +4,7 @@ import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs'
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
+  sha256Canonical,sha256CanonicalArrayMapped,
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
   buildNeuralClosureCalibrationBlocks,
@@ -498,4 +499,24 @@ test('fixed-SHA evaluator refuses candidate predictions without an exact version
   assert.equal(report.models.TCN_V11.reason,'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING');
   assert.equal(report.models.TCN_V11.acceptance.passed,false);
   assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length-1);
+});
+
+
+test('streaming canonical array digest is byte-identical to the reference canonical JSON digest',()=>{
+  const rows=[
+    {z:3,a:{y:[1,2,3],b:'first'},values:[[0.1,0.2],[0.3,0.4]]},
+    {b:true,a:{c:null,a:'second'},values:[[1,2,3],[4,5,6]]},
+    {id:'last',nested:{z:9,m:4,a:1}}
+  ];
+  const mapRow=row=>({id:row.id??null,features:row.values??null,source:row});
+  assert.equal(
+    sha256CanonicalArrayMapped(rows,mapRow),
+    sha256Canonical(rows.map(mapRow))
+  );
+  assert.equal(
+    sha256CanonicalArrayMapped([],row=>row),
+    sha256Canonical([])
+  );
+  assert.throws(()=>sha256CanonicalArrayMapped({},row=>row),/CANONICAL_ROWS_REQUIRED/);
+  assert.throws(()=>sha256CanonicalArrayMapped(rows,null),/ROW_MAPPER_REQUIRED/);
 });

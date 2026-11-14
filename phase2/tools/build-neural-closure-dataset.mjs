@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import {createHash} from 'node:crypto';
-import {readFile,mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
+import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {gzipSync} from 'node:zlib';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
@@ -11,7 +12,7 @@ import {
 import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  buildNeuralClosureCalibrationBlocks,sha256Canonical
+  buildNeuralClosureCalibrationBlocks,sha256CanonicalArrayMapped
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE_URL='https://data-api.binance.vision';
@@ -439,14 +440,14 @@ async function main(){
   const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
   if(sourceCommitSha&&!/^[a-f0-9]{40}$/.test(sourceCommitSha))
     throw new Error('GITHUB_SOURCE_COMMIT_SHA_INVALID');
-  const datasetSha=sha256Canonical(validated.map(row=>({
+  const datasetSha=sha256CanonicalArrayMapped(validated,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
     realized_return_pct:row.realized_return_pct
-  })));
+  }));
   const finalServerTime=await getServerTime();
   const counts={
     rows:validated.length,
@@ -503,14 +504,13 @@ async function main(){
       counts:split.counts,
       class_support:classSupport
     },
-    rows:validated,
     policy:{
       ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
       paper_trading:true,real_order_execution:false
     },
     models_expected:[...NEURAL_CLOSURE_MODEL_FAMILIES]
   };
-  await writeFile(outputPath,JSON.stringify(output,null,2)+'\n',{flag:'w'});
+  await writeJsonObjectWithArrayStreaming(outputPath,{...output,rows:validated},'rows');
   const summary={
     status:'DATASET_READY_FOR_MODEL_TRAINING',
     output:outputPath,dataset_sha256:datasetSha,

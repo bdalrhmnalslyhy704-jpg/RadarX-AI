@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp,readFile,readdir,rm,stat} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
   createNeuralClosureDecisionSchedule,buildNeuralClosureFeatureSnapshot,
@@ -148,4 +152,45 @@ test('one shared event row has 18 audited MLP features, 24x29 closed sequence an
   assert.equal(built.row.market,'BINANCE_SPOT_USDT');
   assert.equal(built.row.quote_volume_24h,900_000);
   assert.equal(validateFourHourRows([built.row]).length,1);
+});
+
+
+test('large neural dataset JSON is written row-by-row with valid atomic output',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-neural-stream-'));
+  const output=join(directory,'dataset.json');
+  const rows=Array.from({length:420},(_,index)=>({
+    id:'SAMPLE:'+index,
+    temporal_sequence:Array.from({length:24},(_,step)=>
+      Array.from({length:29},(_,channel)=>Number(((index+step+channel)%97/97).toFixed(6))))
+  }));
+  try{
+    await writeJsonObjectWithArrayStreaming(output,{
+      schema:'RADARX_STREAMING_TEST_V1',
+      count:rows.length,
+      target:{horizon_hours:4}
+    },'rows',rows);
+    const parsed=JSON.parse(await readFile(output,'utf8'));
+    assert.equal(parsed.schema,'RADARX_STREAMING_TEST_V1');
+    assert.equal(parsed.count,rows.length);
+    assert.equal(parsed.rows.length,rows.length);
+    assert.deepEqual(parsed.rows[0],rows[0]);
+    assert.deepEqual(parsed.rows.at(-1),rows.at(-1));
+    assert.ok((await stat(output)).size>1_000_000);
+    assert.deepEqual(await readdir(directory),['dataset.json']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('failed row serialization never leaves a partial dataset at the destination',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-neural-stream-fail-'));
+  const output=join(directory,'dataset.json');
+  try{
+    await assert.rejects(
+      writeJsonObjectWithArrayStreaming(output,{schema:'INVALID_V1'},'rows',[{id:'ok'},{value:1n}])
+    );
+    assert.deepEqual(await readdir(directory),[]);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
 });
