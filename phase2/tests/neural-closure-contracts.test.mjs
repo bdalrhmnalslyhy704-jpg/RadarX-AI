@@ -33,7 +33,7 @@ function makeRows({days=20,rowsPerDay=400}={}){
 }
 function makePredictions(rows){
   const evaluated=rows.filter(row=>{
-    const day=Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS);
+    const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
     return (day>=13&&day<=15)||(day>=17);
   });
   const make=(positive,negative)=>evaluated.map(row=>({
