@@ -14,12 +14,12 @@ import {
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
-  predictFourHourCognitiveMlpProbability,
+  predictFourHourCognitiveResearchProbability,
   predictFourHourCognitiveChallengerProbability,
   COGNITIVE_FEATURE_SCHEMA,COGNITIVE_FEATURE_NAMES
 } from '../core/cognitive-brain.mjs';
 import {
-  buildFourHourTemporalNeuralProfile,predictTemporalResearchProbability,
+  buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
   TEMPORAL_SEQUENCE_CHANNELS
 } from '../core/temporal-neural-brain.mjs';
 import {
@@ -276,12 +276,45 @@ async function main(){
   training.cognitive_profile_rows=split.train.length;
   training.cognitive_profile_source_partition='FIXED_SHA_TRAIN_ONLY';
   training.validation_or_holdout_rows_seen_by_cognitive_training=0;
+  const qualificationByModel={
+    COGNITIVE_MLP_V5:{
+      passed:cognitiveProfile.neural_network?.probability_ready===true,
+      reason:cognitiveProfile.neural_network?.status??'MLP_NOT_SELECTED',
+      diagnostic_only:cognitiveProfile.neural_network?.probability_ready!==true
+    },
+    MLP_GBDT_HYBRID:{
+      passed:cognitiveProfile.hybrid_model?.probability_ready===true,
+      reason:cognitiveProfile.hybrid_model?.status??'HYBRID_NOT_SELECTED',
+      diagnostic_only:cognitiveProfile.hybrid_model?.probability_ready!==true
+    },
+    HYBRID_TCN_ATTENTION:{
+      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
+      diagnostic_only:false
+    },
+    DENSE_MLP:{
+      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
+      diagnostic_only:false
+    }
+  };
+  training.model_internal_diagnostics={
+    COGNITIVE_MLP_V5:{
+      status:cognitiveProfile.neural_network?.status??null,
+      probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
+      training_samples:cognitiveProfile.neural_network?.training_samples??0,
+      selection_logistic_brier:cognitiveProfile.neural_network?.internal_selection_logistic_brier??null,
+      selection_required_margin:cognitiveProfile.neural_network?.internal_selection_required_margin??null,
+      best_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+      member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[],
+      validation_comparison:cognitiveProfile.neural_network?.validation_comparison??null,
+      holdout_comparison:cognitiveProfile.neural_network?.holdout_comparison??null
+    }
+  };
 
   const mlpArtifact=cognitiveArtifacts.COGNITIVE_MLP_V5;
   if(mlpArtifact){
     const decoded=decodeArtifactState(mlpArtifact,'COGNITIVE_MLP_V5',sourceCommitSha);
     const scored=predictionAttempt(eventRows,
-      row=>predictFourHourCognitiveMlpProbability(row.features,decoded.state.fit),{
+      row=>predictFourHourCognitiveResearchProbability(row.features,decoded.state),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'COGNITIVE_MLP_V5'
       });
     if(scored.valid){
@@ -291,14 +324,19 @@ async function main(){
         artifact_sha256:decoded.artifactSha256,
         internal_status:cognitiveProfile.neural_network?.status??null,
         probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
+        diagnostic_only:cognitiveProfile.neural_network?.probability_ready!==true,
+        research_inference:decoded.state.research_inference??null,
         training_samples:cognitiveProfile.neural_network?.training_samples??0,
         selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
-        selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null
+        selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null,
+        best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null
       };
     }else unavailable.COGNITIVE_MLP_V5={reason:scored.reason};
   }else unavailable.COGNITIVE_MLP_V5={
     reason:cognitiveProfile.neural_network?.status??'NO_INNER_SELECTED_MLP_ARTIFACT',
-    probability_ready:cognitiveProfile.neural_network?.probability_ready===true
+    probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
+    best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+    member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[]
   };
 
   const hybridMlpArtifact=cognitiveArtifacts.MLP_GBDT_HYBRID;
@@ -323,6 +361,30 @@ async function main(){
   // outer performance gate has not passed. This allows one independent report
   // to measure it rather than suppressing a weak result.
   const temporalProfile=cognitiveProfile.temporal_network;
+  qualificationByModel.TCN_V11={
+    passed:temporalProfile?.probability_ready===true,
+    reason:temporalProfile?.status??'TCN_NOT_SELECTED',
+    diagnostic_only:temporalProfile?.probability_ready!==true
+  };
+  training.model_internal_diagnostics.TCN_V11={
+    status:temporalProfile?.status??null,
+    probability_ready:temporalProfile?.probability_ready===true,
+    supported_regimes:temporalProfile?.supported_regimes??[],
+    selected_regimes:temporalProfile?.selected_regimes??[],
+    outer_holdout_passed:temporalProfile?.holdout_passed===true,
+    regime_specialists:Object.fromEntries(Object.entries(
+      temporalProfile?._research_fit?.specialists_by_regime??{}
+    ).map(([regime,specialist])=>[regime,{
+      selected_member_index:specialist.selected_member_index??null,
+      selected_residual_scale:specialist.selected_residual_scale??null,
+      diagnostic_member_index:specialist.diagnostic_member_index??null,
+      diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
+      selection_scores:specialist.member_selection_scores??[],
+      selection_logistic_brier:specialist.selection_logistic_brier??null,
+      validation_passed:specialist.validation_passed===true,
+      holdout_passed:specialist.holdout_passed===true
+    }]))
+  };
   if(temporalProfile?._research_fit){
     const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
       'temporal_channel_'+String(index).padStart(2,'0'));
@@ -340,8 +402,17 @@ async function main(){
       expectedSourceCommitSha:sourceCommitSha
     });
     if(verified.valid){
+      const researchOutputModes={};
       const scored=predictionAttempt(eventRows,
-        row=>predictTemporalResearchProbability(row.temporal_sequence,temporalProfile),{
+        row=>{
+          const output=predictTemporalResearchOutput(
+            row.temporal_sequence,temporalProfile,{allowDiagnostic:true}
+          );
+          if(output?.mode){
+            researchOutputModes[output.mode]=(researchOutputModes[output.mode]||0)+1;
+          }
+          return output?.probability??null;
+        },{
           sourceCommitSha,artifactSha256:tcnArtifact.artifact_sha256,modelName:'TCN_V11'
         });
       if(scored.valid){
@@ -350,11 +421,16 @@ async function main(){
         trainingArtifacts.TCN_V11={
           artifact_sha256:tcnArtifact.artifact_sha256,
           probability_ready:temporalProfile.probability_ready===true,
+          diagnostic_only:temporalProfile.probability_ready!==true,
+          research_output_modes:researchOutputModes,
           internal_status:temporalProfile.status??null,
           selected_regimes:temporalProfile.selected_regimes??[],
           holdout_passed:temporalProfile.holdout_passed===true
         };
-      }else unavailable.TCN_V11={reason:scored.reason};
+      }else unavailable.TCN_V11={
+      reason:scored.reason,
+      diagnostic_regimes:training.model_internal_diagnostics.TCN_V11.regime_specialists
+    };
     }else unavailable.TCN_V11={reason:'ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
   }else unavailable.TCN_V11={
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
@@ -441,8 +517,23 @@ async function main(){
     holdout_split_rows:denseSplit.holdout.length
   };
 
+  qualificationByModel.HYBRID_TCN_ATTENTION={
+    passed:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined,
+    reason:trainingArtifacts.HYBRID_TCN_ATTENTION
+      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+      :unavailable.HYBRID_TCN_ATTENTION?.reason??'HYBRID_TCN_TRAINING_UNAVAILABLE',
+    diagnostic_only:false
+  };
+  qualificationByModel.DENSE_MLP={
+    passed:trainingArtifacts.DENSE_MLP!==undefined,
+    reason:trainingArtifacts.DENSE_MLP
+      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+      :'DENSE_MLP_TRAINING_UNAVAILABLE',
+    diagnostic_only:false
+  };
   const benchmark=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha,
+    qualificationByModel,
     minimumClassSupport:NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
     roundTripCostBps:args.roundTripCostBps,
     minimumHoldoutTrades:args.minimumHoldoutTrades,
@@ -451,12 +542,16 @@ async function main(){
   });
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
+    validation_brier:model.validation?.calibrated_brier_score??null,
+    calibration_status:model.calibration?.status??null,
     brier:model.holdout?.brier_score??null,
     logistic_brier:benchmark.models.LOGISTIC_REGRESSION?.holdout?.brier_score??null,
     net_pnl_pct:model.holdout?.net_pnl_pct??null,
     max_drawdown_pct:model.holdout?.max_drawdown_pct??null,
     trades:model.holdout?.trade_count??null,
-    acceptance:model.acceptance?.status??'NOT_EVALUATED'
+    acceptance:model.acceptance?.status??'NOT_EVALUATED',
+    acceptance_gates:model.acceptance?.gates??null,
+    inner_qualification:model.acceptance?.inner_qualification??null
   }));
   const report={
     schema:MODEL_SCHEMA,
