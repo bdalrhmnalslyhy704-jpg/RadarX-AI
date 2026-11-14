@@ -143,9 +143,11 @@ test('Dense 4h uses chronological 60/20/20 partitions with full-day purge and ma
 test('Dense 4h trains with train-only focal weights and emits a checksummed paper-only artifact',()=>{
   const prepared=validateAndPrepareDense4hRows(makeCohort());
   const split=splitDense4hChronologically(prepared.rows);
+  prepared.source_file_sha256='d'.repeat(64);
   const report=runDense4hGeneralizationBenchmark(prepared,split,{
     sourceCommitSha:SOURCE_SHA,epochs:12,bootstrapIterations:100
   });
+  assert.equal(report.source_file_sha256,prepared.source_file_sha256);
   assert.equal(report.schema,DENSE_FOUR_HOUR_SCHEMA);
   assert.equal(report.source_commit_sha,SOURCE_SHA);
   assert.equal(report.training.scaler_fit_on,'TRAIN_ONLY');
