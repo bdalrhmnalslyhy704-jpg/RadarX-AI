@@ -1293,14 +1293,14 @@ test('V11 central differences cover all 40 attention parameters at absolute erro
   assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2');
   assert.equal(report.attention_audit.unique_attention_parameters,40);
   assert.equal(report.attention_audit.parameters_per_objective,40);
-  assert.equal(report.attention_audit.objectives_checked,3);
-  assert.equal(report.attention_audit.checked_parameter_derivatives,120);
+  assert.equal(report.attention_audit.objectives_checked,4);
+  assert.equal(report.attention_audit.checked_parameter_derivatives,160);
   assert.equal(report.attention_audit.failed_parameter_derivatives,0);
   assert.ok(report.attention_audit.maximum_absolute_error<1e-10,
     JSON.stringify(report.attention_audit));
   assert.equal(report.attention_audit.passed,true);
   const v11=report.results.filter(row=>row.pooling_mode===TEMPORAL_ATTENTION_POOLING_MODE);
-  assert.equal(v11.length,3);
+  assert.equal(v11.length,4);
   for(const row of v11){
     assert.equal(row.attention_parameter_derivatives_checked,40);
     assert.equal(row.attention_failed_derivatives,0);
