@@ -733,6 +733,13 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const fourHourSemanticsValid=!fourHourContract||
       (raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&sourceAuditValid);
     const touch=raw.first_touch;
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const exitBarriersValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
     const at = finite(raw.at);
     const resolvedAt = finite(raw.resolved_at);
     const latestInputAt = finite(raw.latest_input_at??raw.feature_information_cutoff_at);
@@ -741,7 +748,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const expectedTouchResolution=firstTouchOutcome==='UP'?'TAKE_PROFIT_FIRST':
       firstTouchOutcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
     const fourHourTouchValid=!fourHourContract||
-      (outcomeSource===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+      (exitBarriersValid&&outcomeSource===NEURAL_CLOSURE_OUTCOME_SOURCE&&
        touch?.path_resolution==='1M'&&touch.resolution===expectedTouchResolution&&
        Number(touch?.observed_candles)===240&&
        finite(touch?.first_touch_at)!==null&&
