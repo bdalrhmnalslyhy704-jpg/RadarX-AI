@@ -29,6 +29,7 @@ import {
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,
   selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
+  splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
@@ -764,21 +765,19 @@ async function main(){
         required_unique_training_days:20
       };
     }else{
-      const fitCut=lstmDays[Math.floor(lstmDays.length*0.62)];
-      const selectionCut=lstmDays[Math.floor(lstmDays.length*0.82)];
-      const trainingRows=lstmRows.filter(row=>row.at<fitCut&&row.resolved_at<fitCut);
-      const selectionRows=lstmRows.filter(row=>
-        row.at>=fitCut+lstmHorizonMs&&row.at<selectionCut&&row.resolved_at<selectionCut);
-      const calibrationRows=lstmRows.filter(row=>
-        row.at>=selectionCut+lstmHorizonMs&&row.resolved_at<externalValidationStart);
-      const latestResolved=rows=>rows.length?Math.max(...rows.map(row=>row.resolved_at)):null;
-      const firstAt=rows=>rows.length?Math.min(...rows.map(row=>row.at)):null;
-      const internalChronologyValid=trainingRows.length>0&&selectionRows.length>0&&
-        calibrationRows.length>0&&
-        latestResolved(trainingRows)<firstAt(selectionRows)&&
-        latestResolved(selectionRows)<firstAt(calibrationRows)&&
-        latestResolved(calibrationRows)<externalValidationStart;
-      const internalSupport={
+      const validationRowsForLstm=split.validation.map(row=>({
+        id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
+        sequence:row.temporal_sequence,
+        temporal_sequence_timestamps:row.temporal_sequence_timestamps
+      }));
+      const internalSplit=splitFourHourTcnLstmTrainingRows(
+        lstmRows,validationRowsForLstm,{horizonMs:lstmHorizonMs}
+      );
+      const trainingRows=internalSplit.partitions?.training??[];
+      const selectionRows=internalSplit.partitions?.selection??[];
+      const calibrationRows=internalSplit.partitions?.calibration??[];
+      const internalChronologyValid=internalSplit.status==='READY';
+      const internalSupport=internalSplit.support??{
         training:{rows:trainingRows.length,positive:trainingRows.filter(row=>row.target===1).length,
           negative:trainingRows.filter(row=>row.target===0).length},
         selection:{rows:selectionRows.length,positive:selectionRows.filter(row=>row.target===1).length,
@@ -798,6 +797,8 @@ async function main(){
         training.model_internal_diagnostics.TCN_LSTM_HYBRID={
           status:'ABSTAIN_INTERNAL_PARTITIONS_INVALID',
           chronology_valid:false,partition_support:internalSupport,
+          partition_diagnostics:internalSplit.split_boundaries??null,
+          partition_failure:internalSplit.reason??null,
           validation_or_holdout_rows_seen_by_fit:0
         };
       }else{
@@ -832,6 +833,8 @@ async function main(){
             calibration:calibrationRows.length},
           internal_support:internalSupport,
           chronology_valid:internalChronologyValid,
+          internal_split_schema:internalSplit.schema??null,
+          internal_split_boundaries:internalSplit.split_boundaries??null,
           max_training_samples:2048,
           effective_training_rows:selection.effective_training_rows??null,
           required_inner_brier_improvement:0.00025,
