@@ -505,7 +505,7 @@ function probabilitiesFor(rows,map,calibrator=null) {
     return calibrator?applyProbabilityCalibrator(rawLogit,calibrator):p;
   });
 }
-function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives) {
+function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{purgedRows=[],calibrationDays=null}={}) {
   const fitLabels=fitRows.map(row=>row.target);
   const fitLogits=probabilitiesFor(fitRows,rawMap).map(logit);
   const rawCheck=probabilitiesFor(checkRows,rawMap);
@@ -533,9 +533,9 @@ function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives) {
     calibration_check_support:classCounts(checkLabels),
     minimum_positive_support_per_block:minimumPositives,
     calibration_fit_rows:fitRows.length,
-    calibration_purged_rows:calibrationBlocks.purged.length,
+    calibration_purged_rows:purgedRows.length,
     calibration_check_rows:checkRows.length,
-    calibration_days:calibrationBlocks.days,
+    calibration_days:calibrationDays,
     support_ready:supportReady
   };
 }
@@ -682,7 +682,9 @@ export function runNeuralClosureBenchmark({
       ?{status:'BASELINE_RAW',selected_method:'RAW_LOGISTIC_BASELINE',
         selected_calibrator:null,support_ready:true,
         minimum_positive_support_per_block:minimumClassSupport}
-      :chooseCalibration(rawMap,calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport);
+      :chooseCalibration(rawMap,calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
+        purgedRows:calibrationBlocks.purged,calibrationDays:calibrationBlocks.days
+      });
     const validationRows=calibrationBlocks.check;
     const rawValidation=probabilitiesFor(validationRows,rawMap);
     const calibratedValidation=probabilitiesFor(validationRows,rawMap,
