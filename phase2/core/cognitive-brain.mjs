@@ -3162,9 +3162,17 @@ export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
       row?.outcome==='DOWN'?'STOP_LOSS_FIRST':
       row?.outcome==='FLAT'?'HORIZON_END':null;
     const touch=row?.first_touch;
+    const sourceAudit=row?.source_audit;
+    const sourceAuditValid=row?.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(row?.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
     const touchAt=finite(touch?.first_touch_at);
     const valid=Boolean(row&&row.training_eligible===true&&
-      row.closed_candle_baseline===true&&
+      row.closed_candle_baseline===true&&sourceAuditValid&&
       row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
       row.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&
       row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
