@@ -117,6 +117,9 @@ test('Dense 4h accepts only the same audited first-touch cohort used by V5 and T
   const badCutoff={...rows[0],feature_information_cutoff_at:rows[0].at-1};
   assert.throws(()=>validateAndPrepareDense4hRows([badCutoff]),
     /TEMPORAL_CUTOFF_OR_MATURITY_INVALID/);
+  const badBarrier={...rows[0],first_touch:{...rows[0].first_touch,take_profit_price:104}};
+  assert.throws(()=>validateAndPrepareDense4hRows([badBarrier]),
+    /FIRST_TOUCH_EXIT_BARRIER_INVALID/);
   const badSequence={...rows[0],temporal_sequence_timestamps:
     [...rows[0].temporal_sequence_timestamps.slice(1),rows[0].at]};
   assert.throws(()=>validateAndPrepareDense4hRows([badSequence]),
