@@ -3171,6 +3171,13 @@ export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
       /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
       touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
     const touchAt=finite(touch?.first_touch_at);
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const barrierPricesValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
     const valid=Boolean(row&&row.training_eligible===true&&
       row.closed_candle_baseline===true&&sourceAuditValid&&
       row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
@@ -3180,7 +3187,7 @@ export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
       at!==null&&resolvedAt===at+NEURAL_CLOSURE_HORIZON_MS&&
       ['UP','DOWN','FLAT'].includes(row.outcome)&&
       touch?.path_resolution==='1M'&&touch.resolution===expectedResolution&&
-      Number(touch?.observed_candles)===240&&touchAt!==null&&
+      Number(touch?.observed_candles)===240&&touchAt!==null&&barrierPricesValid&&
       (row.outcome==='FLAT'?touchAt===resolvedAt:touchAt>at&&touchAt<=resolvedAt)&&
       row.feature_information_cutoff_at===at&&
       row.features&&typeof row.features==='object'&&!Array.isArray(row.features));
