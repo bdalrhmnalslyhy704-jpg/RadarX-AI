@@ -1,5 +1,6 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
+import {benchmarkTcnLstmHybridChronological,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES} from './temporal-lstm-hybrid.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -101,6 +102,54 @@ function validTemporalSequence(sequence){
     sequence.every(step=>Array.isArray(step)&&step.length===TEMPORAL_SEQUENCE_CHANNELS&&
       step.every(value=>finite(value)!==null&&Math.abs(Number(value))<=4));
 }
+
+/** Attach the already-audited 24x29 sidecar to the exact daily label cohort. */
+export function buildDailyEarlyRiserTcnLstmRows(rows){
+  return (Array.isArray(rows)?rows:[])
+    .filter(row=>validTemporalSequence(row.temporal_sequence)&&
+      ['UP','DOWN','FLAT'].includes(row.outcome))
+    .map(row=>({
+      id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
+      horizon_ms:row.horizon_ms,target:row.outcome==='UP'?1:0,
+      outcome:row.outcome,outcome_source:row.outcome_source,
+      target_definition:row.target_definition,
+      sequence:row.temporal_sequence,
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps
+    }));
+}
+
+function benchmarkDailyTcnLstm(rows,targetDefinition,outcomeSource,horizonHours,options={}){
+  if(options.enableTcnLstmHybrid!==true)return {
+    status:'SKIPPED_NOT_REQUESTED',evaluated:false,trained:false,
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+  if(horizonHours!==24)return {
+    status:'SKIPPED_UNSUPPORTED_LABEL_HORIZON',evaluated:false,trained:false,
+    reason:'TCN_LSTM_RELEASE_SPLIT_POLICY_IS_24H_ONLY',
+    probability_ready:false,live_eligibility_ready:false,real_order_execution:false
+  };
+  const tcnLstmRows=buildDailyEarlyRiserTcnLstmRows(rows);
+  return benchmarkTcnLstmHybridChronological(tcnLstmRows,{
+    requiredInnerImprovement:0.00025,requiredOuterImprovement:0.003,
+    outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
+    requiredTargetDefinition:targetDefinition,
+    requiredOutcomeSource:outcomeSource,
+    maxTrainingSamples:effectiveTcnLstmTrainingSampleBudget(
+      options.temporalTcnLstmMaxTrainingSamples||TCN_LSTM_MAX_TRAINING_SAMPLES,
+      tcnLstmRows.length
+    ),
+    bootstrapIterations:Math.max(200,Math.min(2000,
+      Math.trunc(options.temporalTcnLstmBootstrapIterations||400))),
+    seed:Math.trunc(options.temporalTcnLstmSeed||37),
+    candidates:Array.isArray(options.temporalTcnLstmCandidates)
+      ?options.temporalTcnLstmCandidates:[
+        {name:'LR_0015_L2_0005_DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))},
+        {name:'LR_0025_L2_0015_DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))},
+        {name:'LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))}
+      ]
+  });
+}
+
 
 export function prepareDailyEarlyRiserCognitiveRow(sample,targetPct,options={}){
   const target=finite(targetPct);
@@ -271,6 +320,9 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
   const temporalRows=rows.filter(row=>validTemporalSequence(row.temporal_sequence));
   const targetContract=targetDefinition(target,labelMode,horizonHours);
   const modelTargetSemantics=targetSemanticsFor(labelMode);
+  const temporalTcnLstm=benchmarkDailyTcnLstm(
+    temporalRows,targetContract,selectedOutcomeSource,horizonHours,options
+  );
   const temporal=options.skipTemporal===true?{
     status:'SKIPPED_BY_EXPLICIT_RESEARCH_COMPUTE_SPLIT',trained:false,selected:false,
     probability_ready:false,live_eligibility_ready:false,
@@ -336,6 +388,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
       temporal_tcn_reason:temporal.trained===true?null:
         (temporal.status||'TEMPORAL_TCN_TRAINING_NOT_COMPLETED'),
       temporal_tcn:temporal,
+      temporal_tcn_lstm_hybrid_training_performed:temporalTcnLstm.trained===true,
+      temporal_tcn_lstm_hybrid_challenger:temporalTcnLstm,
       temporal_tree_training_performed:false,
       temporal_tree_challenger:temporalTree,
       temporal_regime_local_tcn_challenger:temporal.regime_local_tcn_challenger??null,
@@ -400,6 +454,8 @@ export function benchmarkDailyEarlyRiserTarget(samples,targetPct,options={}){
     temporal_tcn_training_performed:temporal.trained===true,
     temporal_tcn_evaluation_performed:temporalRows.length>0,
     temporal_tcn_sequence_samples:temporalRows.length,
+    temporal_tcn_lstm_hybrid_training_performed:temporalTcnLstm.trained===true,
+    temporal_tcn_lstm_hybrid_challenger:temporalTcnLstm,
     temporal_tree_training_performed:temporalTree.trained===true,
     temporal_tree_challenger:{
       status:temporalTree.status??'NOT_EVALUATED',

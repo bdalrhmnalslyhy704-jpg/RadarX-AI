@@ -1,0 +1,62 @@
+name: Build 224 TCN LSTM Recurrent Gradient and Safety Verification
+
+on:
+  push:
+    branches:
+      - research/build224-tcn-lstm-attention-challenger-20261113
+    paths:
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - 'phase2/tools/neural-hybrid-oos-matrix.mjs'
+      - 'phase2/tests/neural-hybrid-oos-matrix.test.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
+      - '.github/workflows/build224-tcn-lstm-hybrid.yml'
+  pull_request:
+    branches:
+      - research/build224-neural-validation-stream-fix-20261113
+    paths:
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
+      - '.github/workflows/neural-hybrid-oos-benchmark.yml'
+      - '.github/workflows/build224-tcn-lstm-hybrid.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-lstm-hybrid
+  cancel-in-progress: false
+
+jobs:
+  recurrent-neural:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check TCN-LSTM architecture and regression suite
+        run: |
+          node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/tests/temporal-lstm-hybrid.test.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
+          node --check phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+          node --check phase2/tools/neural-hybrid-oos-matrix.mjs
+          node --check phase2/tests/neural-hybrid-oos-matrix.test.mjs
+      - name: Run recurrent BPTT finite differences, training, purged selection and stress tests
+        run: node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
+      - name: Verify same-cohort daily 24h TCN-LSTM integration
+        run: node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
+      - name: Verify recurrent family Brier matrix and locked holdout semantics
+        run: node --test --test-timeout=180000 phase2/tests/neural-hybrid-oos-matrix.test.mjs

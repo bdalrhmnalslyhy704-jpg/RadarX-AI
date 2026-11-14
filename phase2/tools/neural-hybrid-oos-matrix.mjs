@@ -66,6 +66,33 @@ function aggregateRegimes(model,stage,logisticStage){
   };
 }
 function innerGate(model){
+  const recurrentSelection=model?.inner_selection_diagnostics;
+  if (Array.isArray(recurrentSelection?.candidates)) {
+    const chosen = recurrentSelection.candidates.find(row =>
+      row.name === recurrentSelection.selected_configuration
+    ) || [...recurrentSelection.candidates].sort((a,b)=>
+      Number(a.selection_brier)-Number(b.selection_brier)
+    )[0] || null;
+    const logistic = firstFinite(recurrentSelection.baseline?.selection_brier);
+    const candidate = firstFinite(chosen?.selection_brier);
+    const improvement = candidate!==null&&logistic!==null?logistic-candidate:null;
+    const passed = recurrentSelection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' &&
+      Boolean(recurrentSelection.selected_configuration) &&
+      chosen?.passed_inner_margin===true &&
+      improvement!==null&&improvement>INNER_MARGIN;
+    return {
+      evaluated:candidate!==null&&logistic!==null,
+      model_brier:candidate,logistic_brier:logistic,improvement,
+      required_margin:INNER_MARGIN,passed,
+      selected_configuration:recurrentSelection.selected_configuration??null,
+      candidates:recurrentSelection.candidates.map(row=>({
+        name:row.name,model_brier:number(row.selection_brier),
+        logistic_brier:number(row.logistic_selection_brier),
+        improvement:number(row.improvement),
+        passed:row.passed_inner_margin===true
+      }))
+    };
+  }
   const diagnostics=model?.inner_selection_diagnostics;
   if(diagnostics){
     const candidate=diagnostics.best_candidate||{};
@@ -138,6 +165,24 @@ function innerGate(model){
     improvement:null,required_margin:INNER_MARGIN,passed:false,
     reason:'INNER_SELECTION_BRIER_NOT_EXPOSED'};
 }
+function pairForRecurrent(metric){
+  const model=metric?.model||{};
+  const baseline=metric?.baseline||{};
+  const modelBrier=firstFinite(model.brier);
+  const logisticBrier=firstFinite(baseline.brier);
+  const evaluated=metric?.evaluated===true&&modelBrier!==null&&logisticBrier!==null;
+  const improvement=evaluated?logisticBrier-modelBrier:null;
+  const requiredMargin=firstFinite(metric?.required_brier_improvement,OUTER_MARGIN);
+  return {
+    evaluated,sample_count:number(metric?.sample_count??model.rows),
+    model_brier:modelBrier,logistic_brier:logisticBrier,
+    improvement,required_margin:requiredMargin,
+    paired_bootstrap_95ci:metric?.paired_bootstrap_95ci??null,
+    asymmetric_risk_brier_model:number(model.asymmetric_risk_brier),
+    asymmetric_risk_brier_logistic:number(baseline.asymmetric_risk_brier),
+    passed:evaluated&&metric?.passed===true&&improvement>requiredMargin
+  };
+}
 function addRow(rows,{target,family,variant,model,selection,validation,holdout,sourceSha,sourceRun}){
   const selected=model?.selected===true||model?.selected_for_research===true||
     model?.status==='OUT_OF_SAMPLE_VALIDATED'||model?.status==='TEMPORAL_TCN_OUT_OF_SAMPLE_VALIDATED_RESEARCH_ONLY';
@@ -189,6 +234,7 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
     const gbdt=root.boosted_tree_model||{};
     const hybrid=root.hybrid_model||{};
     const tcn=root.temporal_tcn||{};
+    const tcnLstm=root.temporal_tcn_lstm_hybrid_challenger||{};
     const variants=[
       {
         family:'MLP_V5',variant:'RESIDUAL_MLP_ENSEMBLE',
@@ -243,6 +289,16 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
       addRow(rows,{target,family,variant,model,selection,validation,holdout,sourceSha,sourceRun});
     }
     for(const item of variants)addRow(rows,{target,...item,sourceSha,sourceRun});
+    if(root.temporal_tcn_lstm_hybrid_challenger){
+      const validation=pairForRecurrent(tcnLstm.validation);
+      const holdout=pairForRecurrent(tcnLstm.holdout);
+      addRow(rows,{
+        target,family:'HYBRID_TCN_LSTM_ATTENTION',
+        variant:'CAUSAL_TCN_LSTM_LOCKED_DROPOUT_QUERY_ATTENTION',
+        model:tcnLstm,selection:innerGate(tcnLstm),validation,holdout,
+        sourceSha,sourceRun
+      });
+    }
     const hybridTcn=unwrapHybridTcnReport(hybridTcnReport,target);
     if(hybridTcn){
       const validation=pairFor({
@@ -293,7 +349,8 @@ export function buildBrierMatrixReport(dailyReport,{hybridTcnReport=null,denseRe
     {family:'MLP_V5',members:['MLP_V5']},
     {family:'TCN_V8_TO_V11',members:['TCN_V8','TCN_V9','TCN_V10','TCN_V11']},
     {family:'HYBRID_MLP_GBDT',members:['HYBRID_MLP_GBDT']},
-    {family:'HYBRID_TCN_ATTENTION',members:['HYBRID_TCN_ATTENTION']}
+    {family:'HYBRID_TCN_ATTENTION',members:['HYBRID_TCN_ATTENTION']},
+    {family:'HYBRID_TCN_LSTM_ATTENTION',members:['HYBRID_TCN_LSTM_ATTENTION']}
   ];
   const familySummary=coreFamilies.map(group=>{
     const familyRows=rows.filter(row=>group.members.includes(row.family));

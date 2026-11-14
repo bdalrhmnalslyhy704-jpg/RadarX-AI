@@ -7,10 +7,14 @@ on:
     paths:
       - 'research/TRIGGER_NEURAL_HYBRID_OOS_BENCHMARK.txt'
       - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - '.github/workflows/neural-hybrid-oos-benchmark.yml'
   pull_request:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
+      - research/build224-neural-validation-stream-fix-20261113
     paths:
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
@@ -21,6 +25,11 @@ on:
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tools/neural-hybrid-oos-matrix.mjs'
       - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/daily-early-riser-neural-benchmark.test.mjs'
       - 'phase2/tests/daily-early-riser-census-artifact-validation.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
@@ -128,12 +137,15 @@ jobs:
           node --check phase2/core/neural-safety-contracts.mjs
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/core/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
           node --check phase2/tools/neural-hybrid-oos-matrix.mjs
           node --test --test-timeout=180000 phase2/tests/neural-safety-contracts.test.mjs
           node --test --test-timeout=180000 phase2/tests/neural-hybrid-oos-matrix.test.mjs
           node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
           node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
+          node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
       - name: Train all tabular and temporal challengers on the same 24h safe +5% cohort
         env:
           RADARX_CENSUS_SOURCE_RUN_ID: ${{ needs.resolve-census.outputs.run_id }}
@@ -149,7 +161,9 @@ jobs:
             --neural-training-history-fraction 1.0 --neural-iterations 120 \
             --enable-factorization-machine true --factorization-rank 16 \
             --factorization-iterations 120 --factorization-learning-rate 0.008 \
-            --factorization-l2 0.06 --asymmetric-directional-ranking-loss true
+            --factorization-l2 0.06 --asymmetric-directional-ranking-loss true \
+            --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
+            --tcn-lstm-max-training-samples 4096 --tcn-lstm-bootstrap-iterations 400
       - name: Build strict head-to-head Brier matrix
         if: always()
         run: |
