@@ -10,8 +10,11 @@ on:
       - research/daily-early-riser-mlp-recency-v2-20261111
       - research/daily-early-riser-tcn-grad-accum-20261111
       - research/daily-early-riser-tcn-v10-multiscale-20261112
+      - research/daily-tcn-invalid-micro-mask-20261114
     paths:
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
+      - 'phase2/core/adaptive-trader-engine.mjs'
+      - 'phase2/core/daily-early-riser-census.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
