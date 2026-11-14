@@ -151,7 +151,23 @@ function cleanRows(samples, {
         row?.outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
       const touchAt=finite(touch?.first_touch_at);
       const at=finite(row?.at),resolved=finite(row?.resolved_at);
-      return touch?.path_resolution==='1M'&&
+      const baselinePrice=finite(touch?.baseline_price);
+      const takeProfitPrice=finite(touch?.take_profit_price);
+      const stopLossPrice=finite(touch?.stop_loss_price);
+      const exitBarriersValid=baselinePrice!==null&&baselinePrice>0&&
+        takeProfitPrice!==null&&stopLossPrice!==null&&
+        Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+        Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
+      const sourceAudit=row?.source_audit;
+      const sourceAuditValid=row?.market==='BINANCE_SPOT_USDT'&&
+        sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+        sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+        String(sourceAudit?.symbol||'').toUpperCase()===String(row?.symbol||'').toUpperCase()&&
+        Number(sourceAudit?.observed_candles)===240&&
+        /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+        touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
+      return sourceAuditValid&&exitBarriersValid&&
+        touch?.path_resolution==='1M'&&
         touch.resolution===expected&&Number(touch?.observed_candles)===240&&
         touchAt!==null&&at!==null&&resolved!==null&&
         (row.outcome==='FLAT'?touchAt===resolved:touchAt>at&&touchAt<=resolved);
