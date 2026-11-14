@@ -299,7 +299,12 @@ async function main(){
     pageCounts.BTCUSDT_15m=btc.request_pages;
   }
 
+  let includedSymbolCount=0;
   for(const asset of universe.selected){
+    // Scope every candle and raw-row array to one symbol. The explicit GC in
+    // finally runs only after those references leave scope, including on
+    // coverage rejection or any early continue.
+    try{
     const symbol=asset.symbol;
     const minute=await fetchKlines(symbol,'1m',
       schedule.one_minute_start_open_at,schedule.one_minute_end_open_at,
@@ -375,16 +380,33 @@ async function main(){
       rawArchiveRecords.push({symbol,interval,...archive});
       pageCounts[symbol+'_'+interval]=result.request_pages;
     }
-    // Release the per-symbol raw candle arrays before the next symbol fetch.
-    if(global.gc)global.gc();
+    includedSymbolCount++;
+    const memory=process.memoryUsage();
+    console.log(JSON.stringify({
+      event:'NEURAL_CLOSURE_SYMBOL_PROGRESS',
+      symbol,included:true,validated_symbols:includedSymbolCount,
+      requested_symbols:universe.selected.length,cohort_rows:rows.length,
+      heap_used_mb:Math.round(memory.heapUsed/1024/1024),
+      rss_mb:Math.round(memory.rss/1024/1024),
+      external_mb:Math.round(memory.external/1024/1024)
+    }));
+    }finally{
+      // The symbol-local candle arrays are now unreachable before collection.
+      if(global.gc)global.gc();
+    }
   }
 
+  btcFifteenMinuteRaw=null;
+  btcFifteenMinute=null;
   const included=symbolSummaries.filter(item=>item.status==='INCLUDED');
   if(included.length<args.minSymbols)
     throw new Error('VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM:'+included.length);
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_COHORT_BELOW_600_ROWS:'+rows.length);
 
   const validated=validateFourHourRows(rows);
+  // Validation clones only row envelopes; release the prevalidated envelopes
+  // before split/hash/output allocations while preserving shared feature data.
+  rows.length=0;
   const split=splitFourHourRows(validated);
   const countClasses=part=>{
     const positives=part.filter(row=>row.target===1).length;
