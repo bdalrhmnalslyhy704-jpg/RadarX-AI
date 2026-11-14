@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {canonicalJson,NEURAL_CLOSURE_TARGET_DEFINITION} from './neural-closure-contracts.mjs';
+import {canonicalJson,NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS} from './neural-closure-contracts.mjs';
 
 const SHA256=/^[a-f0-9]{64}$/i;
 const COMMIT=/^[a-f0-9]{40}$/i;
@@ -37,6 +37,7 @@ function normalizeFeatureMap(featureNames,featureIndexMap){
 export function createVersionedModelArtifact({
   modelName,modelFamily,modelVersion,sourceCommitSha,
   targetDefinition=NEURAL_CLOSURE_TARGET_DEFINITION,
+  targetSemantics=NEURAL_CLOSURE_TARGET_SEMANTICS,
   featureSchemaId,featureNames,featureIndexMap,
   normalization,modelState,trainingReportSha256,createdAt=new Date().toISOString()
 }={}){
@@ -48,6 +49,8 @@ export function createVersionedModelArtifact({
     throw new TypeError('MODEL_ARTIFACT_SOURCE_COMMIT_SHA_INVALID');
   if(targetDefinition!==NEURAL_CLOSURE_TARGET_DEFINITION)
     throw new Error('MODEL_ARTIFACT_TARGET_DEFINITION_MISMATCH');
+  if(targetSemantics!==NEURAL_CLOSURE_TARGET_SEMANTICS)
+    throw new Error('MODEL_ARTIFACT_TARGET_SEMANTICS_MISMATCH');
   if(typeof featureSchemaId!=='string'||!featureSchemaId.trim())
     throw new TypeError('MODEL_ARTIFACT_FEATURE_SCHEMA_REQUIRED');
   const indexMap=normalizeFeatureMap(featureNames,featureIndexMap);
@@ -69,7 +72,7 @@ export function createVersionedModelArtifact({
     schema:'RADARX_VERSIONED_NEURAL_MODEL_ARTIFACT_V1',
     model_name:modelName,model_family:modelFamily,model_version:modelVersion,
     source_commit_sha:String(sourceCommitSha).toLowerCase(),
-    target_definition:targetDefinition,feature_schema_id:featureSchemaId,
+    target_definition:targetDefinition,target_semantics:targetSemantics,feature_schema_id:featureSchemaId,
     feature_names:[...featureNames],feature_index_map:indexMap,
     normalization:{mean:normalization.mean.map(Number),std:normalization.std.map(Number)},
     model_state_format:'CANONICAL_JSON_UTF8',
@@ -86,6 +89,7 @@ export function createVersionedModelArtifact({
 
 export function verifyVersionedModelArtifact(artifact,{
   expectedTargetDefinition=NEURAL_CLOSURE_TARGET_DEFINITION,
+  expectedTargetSemantics=NEURAL_CLOSURE_TARGET_SEMANTICS,
   expectedSourceCommitSha=null
 }={}){
   const fail=reason=>({valid:false,reason});
@@ -93,6 +97,8 @@ export function verifyVersionedModelArtifact(artifact,{
     return fail('MODEL_ARTIFACT_SCHEMA_INVALID');
   if(artifact.target_definition!==expectedTargetDefinition)
     return fail('MODEL_ARTIFACT_TARGET_MISMATCH');
+  if(artifact.target_semantics!==expectedTargetSemantics)
+    return fail('MODEL_ARTIFACT_TARGET_SEMANTICS_MISMATCH');
   if(!COMMIT.test(String(artifact.source_commit_sha||'')))
     return fail('MODEL_ARTIFACT_SOURCE_SHA_INVALID');
   if(expectedSourceCommitSha&&artifact.source_commit_sha!==String(expectedSourceCommitSha).toLowerCase())
@@ -117,7 +123,8 @@ export function verifyVersionedModelArtifact(artifact,{
       return fail('MODEL_ARTIFACT_MANIFEST_SHA256_MISMATCH');
     return {valid:true,model_name:artifact.model_name,model_family:artifact.model_family,
       model_version:artifact.model_version,source_commit_sha:artifact.source_commit_sha,
-      target_definition:artifact.target_definition,feature_count:artifact.feature_names.length,
+      target_definition:artifact.target_definition,target_semantics:artifact.target_semantics,
+      feature_count:artifact.feature_names.length,
       weights_sha256:artifact.weights_sha256,artifact_sha256:artifact.artifact_sha256,
       model_state:state};
   }catch(error){
