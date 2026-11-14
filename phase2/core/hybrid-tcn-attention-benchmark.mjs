@@ -660,6 +660,12 @@ export function prepareHybridBenchmarkEvent({
     entryPrice, decisionAt: at, futureCandles, horizonMs: 4 * 60 * 60 * 1000
   });
   if (outcome.resolved !== true) return { ready: false, reason: outcome.reason, outcome };
+  if(outcome.exit_reason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY')
+    return {ready:false,reason:'AMBIGUOUS_FIRST_TOUCH_WITHIN_ONE_CANDLE',outcome};
+  const firstTouchOutcome=outcome.exit_reason==='TAKE_PROFIT'?'UP':
+    outcome.exit_reason==='STOP_LOSS'?'DOWN':
+    outcome.exit_reason==='HORIZON_END'?'FLAT':null;
+  if(!firstTouchOutcome)return {ready:false,reason:'FIRST_TOUCH_OUTCOME_NOT_RECOGNIZED',outcome};
   return {
     ready: true,
     row: {
@@ -682,6 +688,8 @@ export function prepareHybridBenchmarkEvent({
       volatility_zscore: features.volatility_zscore,
       btc_trend_return_pct: features.btc_trend_return_pct,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
+      outcome:firstTouchOutcome,
+      target:firstTouchOutcome==='UP'?1:0,
       sequence: features.sequence,
       sequence_timestamps:features.sequence_timestamps,
       feature_information_cutoff_at:features.feature_information_cutoff_at,
@@ -703,6 +711,12 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const rowTargetDefinition=String(raw.outcome_definition??'').trim();
     const marketRegime=String(raw.market_regime??'').trim().toUpperCase();
     const historicalWindowId=String(raw.historical_window_id??'').trim();
+    const exitReason=String(raw.outcome_exit_reason??'').trim().toUpperCase();
+    const firstTouchOutcome=['UP','DOWN','FLAT'].includes(raw.outcome)?raw.outcome:
+      exitReason==='TAKE_PROFIT'?'UP':
+      exitReason==='STOP_LOSS'?'DOWN':
+      exitReason==='HORIZON_END'?'FLAT':null;
+    const firstTouchTarget=firstTouchOutcome==='UP'?1:0;
     const at = finite(raw.at);
     const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
@@ -734,6 +748,8 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         market !== 'BINANCE_SPOT_USDT' ||
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
+        !['UP','DOWN','FLAT'].includes(firstTouchOutcome) ||
+        (raw.target!==undefined&&Number(raw.target)!==firstTouchTarget) ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
         !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
         at === null || latestInputAt === null || latestInputAt !== at ||
@@ -768,6 +784,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       volatility_zscore: volatilityZScore,
       btc_trend_return_pct: btcTrendReturnPct,
       outcome_definition:rowTargetDefinition,
+      outcome:firstTouchOutcome,target:firstTouchTarget,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
     });
@@ -1249,7 +1266,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
     const positive = netReturnPct(pair.row, cost) > 0;
-    const focal = focalAsymmetricBrierLoss(probability,positive?1:0,{
+    const focal = focalAsymmetricBrierLoss(probability,pair.row.target,{
       gammaPositive,gammaNegative,positiveWeight,negativeWeight
     });
     focalLossSum += focal.loss;
