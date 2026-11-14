@@ -10,7 +10,8 @@ import {
 } from '../core/neural-closure-data-builder.mjs';
 import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
-  NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,sha256Canonical
+  NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
+  buildNeuralClosureCalibrationBlocks,sha256Canonical
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE_URL='https://data-api.binance.vision';
@@ -26,7 +27,7 @@ const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 function parseArgs(argv){
-  const result={days:60,maxSymbols:20,minSymbols:10,
+  const result={days:90,maxSymbols:20,minSymbols:19,
     minQuoteVolumeUsdt:750_000,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -381,16 +382,27 @@ async function main(){
     const positives=part.filter(row=>row.target===1).length;
     return {rows:part.length,positive:positives,negative:part.length-positives};
   };
+  const calibrationBlocks=buildNeuralClosureCalibrationBlocks(split.validation);
   const classSupport={
     train:countClasses(split.train),
     validation:countClasses(split.validation),
-    holdout:countClasses(split.holdout)
+    holdout:countClasses(split.holdout),
+    calibration_fit:calibrationBlocks.support.fit,
+    calibration_check:calibrationBlocks.support.check,
+    calibration_purged:calibrationBlocks.support.purge
   };
   for(const [name,counts] of Object.entries(classSupport)){
     if(counts.positive<NEURAL_CLOSURE_MIN_CLASS_SUPPORT||
       counts.negative<NEURAL_CLOSURE_MIN_CLASS_SUPPORT)
       throw new Error('NEURAL_CLOSURE_CLASS_SUPPORT_BELOW_50:'+name+':'+
         counts.positive+':'+counts.negative);
+  }
+  for(const name of ['fit','check']){
+    const support=calibrationBlocks.support[name];
+    if(support.positive<NEURAL_CLOSURE_MIN_CLASS_SUPPORT||
+      support.negative<NEURAL_CLOSURE_MIN_CLASS_SUPPORT)
+      throw new Error('NEURAL_CLOSURE_CALIBRATION_BLOCK_SUPPORT_BELOW_50:'+
+        name+':'+support.positive+':'+support.negative);
   }
 
   const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
