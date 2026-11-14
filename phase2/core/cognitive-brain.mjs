@@ -978,6 +978,12 @@ function fitNeuralNetworkModel(training, {
       :usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     focal_positive_weight:focalWeights.positiveWeight,
     focal_negative_weight:focalWeights.negativeWeight,
+    focal_asymmetric_brier:isFocalObjective?{
+      gamma_positive:focalGammaPositive,gamma_negative:focalGammaNegative,
+      positive_weight:focalWeights.positiveWeight,negative_weight:focalWeights.negativeWeight,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY',
+      class_weight_logit_prior_correction:Math.log(focalWeights.positiveWeight/focalWeights.negativeWeight)
+    }:null,
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
     requested_iterations:steps,
@@ -1576,6 +1582,13 @@ function predictFromFit(features, fit, residualScale=1) {
     const scale=clamp(finite(fit.residual_scale)??finite(residualScale)??1,0,1);
     for(let j=0;j<hidden2.length;j++)output+=scale*(Number(fit.output_weights[j])||0)*hidden2[j];
     for(let i=0;i<vector.length;i++)output+=vector[i]*(Number(fit.skip_weights[i])||0);
+    // Class-weighted focal Brier shifts the raw optimum away from the event
+    // prior. Undo the exact prior-weight logit offset before comparing raw
+    // member probabilities or fitting any later disjoint calibrator.
+    const focal=fit.focal_asymmetric_brier;
+    if(focal?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
+      Number.isFinite(focal.class_weight_logit_correction))
+      output-=focal.class_weight_logit_correction;
     return clamp(logistic(output),0.02,0.98);
   }
   if(fit?.kind==='NEURAL_MLP_V1'){
