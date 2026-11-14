@@ -273,6 +273,7 @@ async function main(){
     neuralTrainingHistoryFraction:1,
     temporalOptions:{
       minTrainingSamples:240,
+      maxTrainingSamples:4096,
       minimumValidationSamples:80,
       minimumHoldoutSamples:80,
       liveHoldoutSamples:100,
@@ -369,12 +370,18 @@ async function main(){
   // outer performance gate has not passed. This allows one independent report
   // to measure it rather than suppressing a weak result.
   const temporalProfile=cognitiveProfile.temporal_network;
-  qualificationByModel.TCN_V11={
+  // The shared profile currently implements the V8 dilated-residual TCN.
+  // Keep its family identity exact; V11 is the separate learned-query-attention
+  // challenger and must not inherit a V8 artifact or prediction stream.
+  qualificationByModel.TCN_V8={
     passed:temporalProfile?.probability_ready===true,
-    reason:temporalProfile?.status??'TCN_NOT_SELECTED',
+    reason:temporalProfile?.status??'TCN_V8_NOT_SELECTED',
     diagnostic_only:temporalProfile?.probability_ready!==true
   };
-  training.model_internal_diagnostics.TCN_V11={
+  training.model_internal_diagnostics.TCN_V8={
+    architecture:temporalProfile?.architecture??null,
+    temporal_pooling:temporalProfile?.temporal_pooling??null,
+    requested_max_training_samples:4096,
     status:temporalProfile?.status??null,
     probability_ready:temporalProfile?.probability_ready===true,
     supported_regimes:temporalProfile?.supported_regimes??[],
@@ -393,18 +400,32 @@ async function main(){
       holdout_passed:specialist.holdout_passed===true
     }]))
   };
+  qualificationByModel.TCN_V11={
+    passed:false,
+    reason:'TCN_V11_LEARNED_QUERY_ATTENTION_ARTIFACT_NOT_EXPORTED',
+    diagnostic_only:true
+  };
+  training.model_internal_diagnostics.TCN_V11={
+    status:'NOT_EVALUATED',
+    architecture:'TCN_24x29_TO16_LATENT_DILATED_RESIDUAL_LEARNED_QUERY_TIME_ATTENTION_V11',
+    reason:'The fixed-SHA trainer does not yet export the separately fitted regime-local attention weights and predictions',
+    probability_ready:false
+  };
+  unavailable.TCN_V11={
+    reason:'TCN_V11_LEARNED_QUERY_ATTENTION_ARTIFACT_NOT_EXPORTED'
+  };
   if(temporalProfile?._research_fit){
     const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
       'temporal_channel_'+String(index).padStart(2,'0'));
     const tcnArtifact=makeArtifact({
-      name:'RADARX_TCN_V11_FIRST_TOUCH_4H',
-      family:'TCN_V11',version:'TCN_V11_FIRST_TOUCH_4H_V2',
+      name:'RADARX_TCN_V8_FIRST_TOUCH_4H',
+      family:'TCN_V8',version:'TCN_V8_FIRST_TOUCH_4H_V2',
       sourceCommitSha,featureSchemaId:'RADARX_TEMPORAL_TCN_SEQUENCE_24X29_V2',
       featureNames:temporalNames,
       normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
       modelState:{fit:temporalProfile._research_fit,
         selected_regimes:temporalProfile.selected_regimes??[],
-        model_architecture:temporalProfile.model_architecture??null}
+        model_architecture:temporalProfile.architecture??null}
     });
     const verified=verifyVersionedModelArtifact(tcnArtifact,{
       expectedSourceCommitSha:sourceCommitSha
@@ -421,12 +442,12 @@ async function main(){
           }
           return output?.probability??null;
         },{
-          sourceCommitSha,artifactSha256:tcnArtifact.artifact_sha256,modelName:'TCN_V11'
+          sourceCommitSha,artifactSha256:tcnArtifact.artifact_sha256,modelName:'TCN_V8'
         });
       if(scored.valid){
-        modelArtifactsByModel.TCN_V11=tcnArtifact;
-        predictionsByModel.TCN_V11=scored.rows;
-        trainingArtifacts.TCN_V11={
+        modelArtifactsByModel.TCN_V8=tcnArtifact;
+        predictionsByModel.TCN_V8=scored.rows;
+        trainingArtifacts.TCN_V8={
           artifact_sha256:tcnArtifact.artifact_sha256,
           probability_ready:temporalProfile.probability_ready===true,
           diagnostic_only:temporalProfile.probability_ready!==true,
@@ -437,10 +458,10 @@ async function main(){
         };
       }else unavailable.TCN_V11={
       reason:scored.reason,
-      diagnostic_regimes:training.model_internal_diagnostics.TCN_V11.regime_specialists
+      diagnostic_regimes:training.model_internal_diagnostics.TCN_V8.regime_specialists
     };
-    }else unavailable.TCN_V11={reason:'ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
-  }else unavailable.TCN_V11={
+    }else unavailable.TCN_V8={reason:'ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
+  }else unavailable.TCN_V8={
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
 
