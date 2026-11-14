@@ -725,6 +725,11 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const fourHourSemanticsValid=!fourHourContract||
       raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS;
     const touch=raw.first_touch;
+    const at = finite(raw.at);
+    const resolvedAt = finite(raw.resolved_at);
+    const latestInputAt = finite(raw.latest_input_at??raw.feature_information_cutoff_at);
+    const maturityMs = finite(raw.maturity_ms)??(
+      at!==null&&resolvedAt!==null?resolvedAt-at:null);
     const expectedTouchResolution=firstTouchOutcome==='UP'?'TAKE_PROFIT_FIRST':
       firstTouchOutcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
     const fourHourTouchValid=!fourHourContract||
@@ -733,15 +738,10 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
        Number(touch?.observed_candles)===240&&
        finite(touch?.first_touch_at)!==null&&
        (firstTouchOutcome==='FLAT'
-         ?Number(touch.first_touch_at)===Number(raw.resolved_at)
-         :Number(touch.first_touch_at)>Number(raw.at)&&
-          Number(touch.first_touch_at)<=Number(raw.resolved_at))&&
+         ?Number(touch.first_touch_at)===resolvedAt
+         :Number(touch.first_touch_at)>at&&
+          Number(touch.first_touch_at)<=resolvedAt)&&
        maturityMs===NEURAL_CLOSURE_HORIZON_MS);
-    const at = finite(raw.at);
-    const resolvedAt = finite(raw.resolved_at);
-    const latestInputAt = finite(raw.latest_input_at??raw.feature_information_cutoff_at);
-    const maturityMs = finite(raw.maturity_ms)??(
-      at!==null&&resolvedAt!==null?resolvedAt-at:null);
     const outcomeHorizonMs = finite(raw.outcome_horizon_ms??raw.horizon_ms);
     const gross = finite(raw.gross_return_pct??raw.realized_return_pct);
     const adverse = finite(raw.max_adverse_excursion_pct);
@@ -1199,8 +1199,24 @@ export function profitDrawdownObjective(probabilities, rows, {
   const cost = Math.max(0, Number(roundTripCostBps) || 0);
   const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.01, 1);
   const temp = clamp(Number(temperature) || 0.10, 0.02, 0.5);
+  const binaryTargetForRow=row=>{
+    const explicit=finite(row?.target);
+    if(explicit!==null){
+      if(explicit!==0&&explicit!==1)
+        throw new TypeError('HYBRID_OBJECTIVE_TARGET_MUST_BE_BINARY');
+      return explicit;
+    }
+    if(row?.outcome==='UP')return 1;
+    if(row?.outcome==='DOWN'||row?.outcome==='FLAT')return 0;
+    // Backwards-compatible diagnostic fixtures without labels use the
+    // realized net-return sign. Canonical first-touch rows always carry an
+    // explicit binary target and never reach this fallback.
+    return netReturnPct(row,roundTripCostBps)>0?1:0;
+  };
+  const binaryTargets=rows.map(binaryTargetForRow);
   const pairs = rows.map((row, index) => ({
-    row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
+    row, target:binaryTargets[index],
+    probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
   const positions = Array(rows.length).fill(0);
   const orderedReturns = Array(rows.length).fill(0);
@@ -1288,7 +1304,7 @@ export function profitDrawdownObjective(probabilities, rows, {
   for (const pair of pairs) {
     if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
-    const focal = focalAsymmetricBrierLoss(probability,pair.row.target,{
+    const focal = focalAsymmetricBrierLoss(probability,pair.target,{
       gammaPositive,gammaNegative,positiveWeight,negativeWeight
     });
     focalLossSum += focal.loss;
@@ -1305,7 +1321,7 @@ export function profitDrawdownObjective(probabilities, rows, {
     const key = String(pair.row.at);
     if (!byDecisionTime.has(key)) byDecisionTime.set(key, { positive: [], negative: [] });
     const group = byDecisionTime.get(key);
-    const isPositive=pair.row.target===1;
+    const isPositive=pair.target===1;
     (isPositive ? group.positive : group.negative).push(pair);
   }
   const rankingPairs = [];
