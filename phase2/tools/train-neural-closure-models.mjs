@@ -178,6 +178,11 @@ function predictionRows(rows,predictor,{sourceCommitSha,targetDefinition=NEURAL_
   return result;
 }
 
+function predictionAttempt(rows,predictor,options){
+  try{return {valid:true,rows:predictionRows(rows,predictor,options),reason:null};}
+  catch(error){return {valid:false,rows:null,reason:String(error?.message||error)};}
+}
+
 function makeArtifact({name,family,version,sourceCommitSha,featureSchemaId,
   featureNames,normalization,modelState}){
   return createVersionedModelArtifact({
@@ -269,19 +274,22 @@ async function main(){
   const mlpArtifact=cognitiveArtifacts.COGNITIVE_MLP_V5;
   if(mlpArtifact){
     const decoded=decodeArtifactState(mlpArtifact,'COGNITIVE_MLP_V5',sourceCommitSha);
-    modelArtifactsByModel.COGNITIVE_MLP_V5=mlpArtifact;
-    predictionsByModel.COGNITIVE_MLP_V5=predictionRows(eventRows,
+    const scored=predictionAttempt(eventRows,
       row=>predictFourHourCognitiveMlpProbability(row.features,decoded.state.fit),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'COGNITIVE_MLP_V5'
       });
-    trainingArtifacts.COGNITIVE_MLP_V5={
-      artifact_sha256:decoded.artifactSha256,
-      internal_status:cognitiveProfile.neural_network?.status??null,
-      probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
-      training_samples:cognitiveProfile.neural_network?.training_samples??0,
-      selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
-      selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null
-    };
+    if(scored.valid){
+      modelArtifactsByModel.COGNITIVE_MLP_V5=mlpArtifact;
+      predictionsByModel.COGNITIVE_MLP_V5=scored.rows;
+      trainingArtifacts.COGNITIVE_MLP_V5={
+        artifact_sha256:decoded.artifactSha256,
+        internal_status:cognitiveProfile.neural_network?.status??null,
+        probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
+        training_samples:cognitiveProfile.neural_network?.training_samples??0,
+        selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
+        selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null
+      };
+    }else unavailable.COGNITIVE_MLP_V5={reason:scored.reason};
   }else unavailable.COGNITIVE_MLP_V5={
     reason:cognitiveProfile.neural_network?.status??'NO_INNER_SELECTED_MLP_ARTIFACT',
     probability_ready:cognitiveProfile.neural_network?.probability_ready===true
@@ -290,14 +298,17 @@ async function main(){
   const hybridMlpArtifact=cognitiveArtifacts.MLP_GBDT_HYBRID;
   if(hybridMlpArtifact){
     const decoded=decodeArtifactState(hybridMlpArtifact,'MLP_GBDT_HYBRID',sourceCommitSha);
-    modelArtifactsByModel.MLP_GBDT_HYBRID=hybridMlpArtifact;
-    predictionsByModel.MLP_GBDT_HYBRID=predictionRows(eventRows,
+    const scored=predictionAttempt(eventRows,
       row=>predictFourHourCognitiveChallengerProbability(row.features,decoded.state.fit),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'MLP_GBDT_HYBRID'
       });
-    trainingArtifacts.MLP_GBDT_HYBRID={artifact_sha256:decoded.artifactSha256,
-      internal_status:cognitiveProfile.hybrid_model?.status??null,
-      boosted_weight:cognitiveProfile.hybrid_model?.boosted_weight??null};
+    if(scored.valid){
+      modelArtifactsByModel.MLP_GBDT_HYBRID=hybridMlpArtifact;
+      predictionsByModel.MLP_GBDT_HYBRID=scored.rows;
+      trainingArtifacts.MLP_GBDT_HYBRID={artifact_sha256:decoded.artifactSha256,
+        internal_status:cognitiveProfile.hybrid_model?.status??null,
+        boosted_weight:cognitiveProfile.hybrid_model?.boosted_weight??null};
+    }else unavailable.MLP_GBDT_HYBRID={reason:scored.reason};
   }else unavailable.MLP_GBDT_HYBRID={
     reason:cognitiveProfile.hybrid_model?.status??'NO_INNER_SELECTED_GBDT_MLP_BLEND'
   };
@@ -323,18 +334,21 @@ async function main(){
       expectedSourceCommitSha:sourceCommitSha
     });
     if(verified.valid){
-      modelArtifactsByModel.TCN_V11=tcnArtifact;
-      predictionsByModel.TCN_V11=predictionRows(eventRows,
+      const scored=predictionAttempt(eventRows,
         row=>predictTemporalResearchProbability(row.temporal_sequence,temporalProfile),{
           sourceCommitSha,artifactSha256:tcnArtifact.artifact_sha256,modelName:'TCN_V11'
         });
-      trainingArtifacts.TCN_V11={
-        artifact_sha256:tcnArtifact.artifact_sha256,
-        probability_ready:temporalProfile.probability_ready===true,
-        internal_status:temporalProfile.status??null,
-        selected_regimes:temporalProfile.selected_regimes??[],
-        holdout_passed:temporalProfile.holdout_passed===true
-      };
+      if(scored.valid){
+        modelArtifactsByModel.TCN_V11=tcnArtifact;
+        predictionsByModel.TCN_V11=scored.rows;
+        trainingArtifacts.TCN_V11={
+          artifact_sha256:tcnArtifact.artifact_sha256,
+          probability_ready:temporalProfile.probability_ready===true,
+          internal_status:temporalProfile.status??null,
+          selected_regimes:temporalProfile.selected_regimes??[],
+          holdout_passed:temporalProfile.holdout_passed===true
+        };
+      }else unavailable.TCN_V11={reason:scored.reason};
     }else unavailable.TCN_V11={reason:'ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
   }else unavailable.TCN_V11={
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
