@@ -408,7 +408,6 @@ async function main(){
       diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
       selection_scores:specialist.member_selection_scores??[],
       selection_logistic_brier:specialist.member_selection_logistic_brier??null,
-      selection_logistic_ranking_metrics:specialist.member_selection_logistic_ranking_metrics??null,
       validation_passed:specialist.validation_passed===true,
       holdout_passed:specialist.holdout_passed===true
     }]))
