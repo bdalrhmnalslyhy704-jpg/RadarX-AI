@@ -57,12 +57,21 @@ export function sha256Canonical(value) {
  */
 export function buildFourHourFirstTouchOutcome({
   id,symbol,baselineAt,baselinePrice,candles,
-  featureInformationCutoffAt=baselineAt,marketContext={}
+  featureInformationCutoffAt=baselineAt,marketContext={},sourceEvidence
 }={}){
   const fail=(reason,extra={})=>({training_eligible:false,status:'REJECTED',
     reason,id:id??null,symbol:symbol??null,...extra});
   if(typeof id!=='string'||!id.trim()||typeof symbol!=='string'||!symbol.trim())
     return fail('IDENTITY_MISSING');
+  const normalizedSymbol=String(symbol).trim().toUpperCase();
+  if(!/^[A-Z0-9]{1,26}USDT$/.test(normalizedSymbol))
+    return fail('BINANCE_SPOT_USDT_SYMBOL_REQUIRED');
+  if(!sourceEvidence||sourceEvidence.exchange!=='BINANCE'||
+    sourceEvidence.market!=='SPOT'||sourceEvidence.interval!=='1m'||
+    sourceEvidence.transport!=='BINANCE_PUBLIC_REST'||
+    String(sourceEvidence.symbol||'').toUpperCase()!==normalizedSymbol||
+    !finite(sourceEvidence.received_at))
+    return fail('BINANCE_SPOT_REST_1M_SOURCE_EVIDENCE_REQUIRED');
   if(!finite(baselineAt)||!finite(baselinePrice)||Number(baselinePrice)<=0||
     Number(featureInformationCutoffAt)!==Number(baselineAt))
     return fail('BASELINE_OR_FEATURE_CUTOFF_INVALID');
@@ -83,7 +92,8 @@ export function buildFourHourFirstTouchOutcome({
     const closeTime=number(candle?.close_time??candle?.closeTime);
     const open=number(candle?.open),high=number(candle?.high);
     const low=number(candle?.low),close=number(candle?.close);
-    if(candle?.is_closed!==true||openTime!==expectedOpen||
+    if((candle?.is_closed!==true&&candle?.closed!==true)||
+      (candle?.source!==undefined&&candle.source!=='BINANCE_PUBLIC_REST')||openTime!==expectedOpen||
       closeTime!==expectedOpen+59_999||open===null||high===null||
       low===null||close===null||open<=0||low<=0||close<=0||
       high<low||high<Math.max(open,close)||low>Math.min(open,close))
@@ -113,17 +123,35 @@ export function buildFourHourFirstTouchOutcome({
   const finalClose=number(candles.at(-1)?.close);
   if(finalClose===null||finalClose<=0)return fail('FINAL_ONE_MINUTE_CLOSE_INVALID');
   const resolvedAt=at+NEURAL_CLOSURE_HORIZON_MS;
+  const canonicalPath=candles.map(candle=>({
+    open_time:number(candle?.open_time??candle?.openTime),
+    close_time:number(candle?.close_time??candle?.closeTime),
+    open:number(candle?.open),high:number(candle?.high),
+    low:number(candle?.low),close:number(candle?.close),
+    volume:finite(candle?.volume)?Number(candle.volume):null,
+    quote_volume:finite(candle?.quoteVolume??candle?.quote_volume)
+      ?Number(candle.quoteVolume??candle.quote_volume):null
+  }));
+  const rawKlinesSha256=createHash('sha256')
+    .update(JSON.stringify(canonicalPath)).digest('hex');
   return {
-    id,symbol:String(symbol).trim().toUpperCase(),
+    id,symbol:normalizedSymbol,
     at,resolved_at:resolvedAt,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
     feature_information_cutoff_at:at,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    source_audit:{
+      exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:normalizedSymbol,
+      received_at:Number(sourceEvidence.received_at),
+      observed_candles:240,raw_klines_sha256:rawKlinesSha256,
+      path_digest_algorithm:'SHA256_CANONICAL_240_CLOSED_KLINES_V1'
+    },
     outcome,target:outcome==='UP'?1:0,
     first_touch:{
       resolution,first_touch_at:firstTouchAt,path_resolution:'1M',
-      observed_candles:240,baseline_price:price,
+      observed_candles:240,raw_klines_sha256:rawKlinesSha256,baseline_price:price,
       take_profit_price:takePrice,stop_loss_price:stopPrice
     },
     realized_return_pct:(finalClose/price-1)*100,
