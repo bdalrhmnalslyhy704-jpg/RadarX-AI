@@ -230,8 +230,11 @@ export function validateFourHourRows(inputRows, {
         cutoff !== at)
       throw new Error('NEURAL_CLOSURE_ROW_TIME_OR_CUTOFF_INVALID:' + index);
     if (source.target_definition !== targetDefinition ||
+        source.target_semantics !== NEURAL_CLOSURE_TARGET_SEMANTICS ||
         source.outcome_source !== outcomeSource)
       throw new Error('NEURAL_CLOSURE_ROW_TARGET_OR_SOURCE_MISMATCH:' + index);
+    if(source.training_eligible!==true||source.closed_candle_baseline!==true)
+      throw new Error('NEURAL_CLOSURE_ROW_NOT_TRAINING_ELIGIBLE_CLOSED_BASELINE:'+index);
     if (!['UP','DOWN','FLAT'].includes(source.outcome))
       throw new Error('NEURAL_CLOSURE_ROW_OUTCOME_INVALID:' + index);
     const firstTouch=source.first_touch;
