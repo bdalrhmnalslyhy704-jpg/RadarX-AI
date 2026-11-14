@@ -3,7 +3,8 @@ import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
 import {
   focalAsymmetricBrierLoss,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
-  NEURAL_CLOSURE_HORIZON_MS
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
 } from './neural-closure-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
@@ -759,6 +760,9 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
        maturityMs===NEURAL_CLOSURE_HORIZON_MS);
     const outcomeHorizonMs = finite(raw.outcome_horizon_ms??raw.horizon_ms);
     const gross = finite(raw.gross_return_pct??raw.realized_return_pct);
+    const gapAwareExecutionValid=!fourHourContract||
+      (raw.execution_return_contract===NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT&&
+       isValidFourHourFirstTouchExecution(touch,firstTouchOutcome,gross));
     const adverse = finite(raw.max_adverse_excursion_pct);
     const adverseAt = finite(raw.max_adverse_excursion_at);
     const favourable = finite(raw.max_favorable_excursion_pct);
@@ -785,7 +789,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
         !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M',
           NEURAL_CLOSURE_OUTCOME_SOURCE].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
-        !fourHourTouchValid ||!fourHourSemanticsValid ||
+        !fourHourTouchValid ||!fourHourSemanticsValid ||!gapAwareExecutionValid ||
         !['UP','DOWN','FLAT'].includes(firstTouchOutcome) ||
         (raw.target!==undefined&&Number(raw.target)!==firstTouchTarget) ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
