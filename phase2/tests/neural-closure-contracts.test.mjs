@@ -6,6 +6,7 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
+  buildNeuralClosureCalibrationBlocks,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
@@ -158,6 +159,36 @@ test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()
     split.boundaries.validation_first_at-NEURAL_CLOSURE_PURGE_MS);
   assert.ok(split.boundaries.validation_last_at<
     split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
+});
+
+test('fixed-SHA calibration fit and check blocks retain independent 50/50 class support',()=>{
+  const rows=validateFourHourRows(makeRows({days:40,rowsPerDay:600}));
+  const split=splitFourHourRows(rows);
+  const blocks=buildNeuralClosureCalibrationBlocks(split.validation);
+  assert.ok(blocks.fit.length>0);
+  assert.ok(blocks.purged.length>0);
+  assert.ok(blocks.check.length>0);
+  for(const name of ['fit','check']){
+    assert.ok(blocks.support[name].positive>=50,
+      name+' positive calibration support must remain at least 50');
+    assert.ok(blocks.support[name].negative>=50,
+      name+' negative calibration support must remain at least 50');
+  }
+  const fitDays=new Set(blocks.days.fit);
+  const purgeDays=new Set(blocks.days.purge);
+  const checkDays=new Set(blocks.days.check);
+  assert.equal([...fitDays].some(day=>purgeDays.has(day)||checkDays.has(day)),false);
+  assert.equal([...purgeDays].some(day=>checkDays.has(day)),false);
+  assert.ok(Math.max(...blocks.days.fit)<Math.min(...blocks.days.purge));
+  assert.ok(Math.max(...blocks.days.purge)<Math.min(...blocks.days.check));
+});
+
+test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
+  const rows=validateFourHourRows(makeRows({days:20,rowsPerDay:400}));
+  const split=splitFourHourRows(rows);
+  const blocks=buildNeuralClosureCalibrationBlocks(split.validation);
+  assert.ok(blocks.support.fit.positive<50||blocks.support.check.positive<50||
+    blocks.support.fit.negative<50||blocks.support.check.negative<50);
 });
 
 test('temperature and Platt calibration fail closed below 50 positive or negative samples',()=>{
