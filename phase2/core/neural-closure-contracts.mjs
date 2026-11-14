@@ -450,14 +450,24 @@ function focalMean(probabilities,labels,weights) {
 function chronologicalValidationBlocks(rows) {
   const days=[...new Set(rows.map(row=>Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS)*
     NEURAL_CLOSURE_PURGE_MS))].sort((a,b)=>a-b);
-  if(days.length<2)return {fit:[],check:[]};
+  if(days.length<3)return {fit:[],purged:[],check:[],days:{fit:[],purge:[],check:[]}};
   const midpoint=Math.max(1,Math.floor(days.length/2));
-  const fitDays=new Set(days.slice(0,midpoint));
-  const checkDays=new Set(days.slice(midpoint));
-  return {
-    fit:rows.filter(row=>fitDays.has(Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS)),
-    check:rows.filter(row=>checkDays.has(Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS))
-  };
+  const fitDaysList=days.slice(0,midpoint);
+  const purgeDaysList=days.slice(midpoint,midpoint+1);
+  const checkDaysList=days.slice(midpoint+1);
+  const fitDays=new Set(fitDaysList),purgeDays=new Set(purgeDaysList),
+    checkDays=new Set(checkDaysList);
+  const dayOf=row=>Math.floor(row.at/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS;
+  const fit=rows.filter(row=>fitDays.has(dayOf(row)));
+  const purged=rows.filter(row=>purgeDays.has(dayOf(row)));
+  const check=rows.filter(row=>checkDays.has(dayOf(row)));
+  if(fit.length&&check.length){
+    const lastFit=Math.max(...fit.map(row=>row.at));
+    const firstCheck=Math.min(...check.map(row=>row.at));
+    if(!(lastFit<firstCheck-NEURAL_CLOSURE_PURGE_MS))
+      throw new Error('NEURAL_CLOSURE_CALIBRATION_ONE_DAY_PURGE_NOT_ENFORCED');
+  }
+  return {fit,purged,check,days:{fit:fitDaysList,purge:purgeDaysList,check:checkDaysList}};
 }
 function predictionMap(predictions,modelName,requiredIds,{
   sourceCommitSha,targetDefinition,artifactSha256=null
@@ -522,7 +532,10 @@ function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives) {
     calibration_fit_support:classCounts(fitLabels),
     calibration_check_support:classCounts(checkLabels),
     minimum_positive_support_per_block:minimumPositives,
-    calibration_fit_rows:fitRows.length,calibration_check_rows:checkRows.length,
+    calibration_fit_rows:fitRows.length,
+    calibration_purged_rows:calibrationBlocks.purged.length,
+    calibration_check_rows:checkRows.length,
+    calibration_days:calibrationBlocks.days,
     support_ready:supportReady
   };
 }
