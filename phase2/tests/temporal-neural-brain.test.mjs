@@ -1366,6 +1366,9 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   const label=buildFourHourFirstTouchOutcome({
     id:'TCN-4H-FIRST-TOUCH-001',symbol:'ETHUSDT',
     baselineAt:at,baselinePrice:100,candles,
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'ETHUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},
     marketContext:{kama_efficiency_ratio:0.7,atr_pct:0.25,atr_baseline_pct:0.2}
   });
   assert.equal(label.training_eligible,true);
@@ -1402,7 +1405,10 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   postTouchGap[200].open_time+=60_000;
   const invalidLabel=buildFourHourFirstTouchOutcome({
     id:'TCN-4H-FIRST-TOUCH-GAP',symbol:'BTCUSDT',
-    baselineAt:at,baselinePrice:100,candles:postTouchGap
+    baselineAt:at,baselinePrice:100,candles:postTouchGap,
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'BTCUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000}
   });
   assert.equal(invalidLabel.training_eligible,false,
     'the complete 240-minute path must be timestamp-audited even after an early touch');
