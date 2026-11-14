@@ -12,6 +12,8 @@ export const NEURAL_CLOSURE_OUTCOME_SOURCE =
 export const NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS = 15 * 60 * 1000;
 export const NEURAL_CLOSURE_MIN_CLASS_SUPPORT = 50;
 export const NEURAL_CLOSURE_BRIER_MARGIN = 0.003;
+export const NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT =
+  'FIRST_TOUCH_PRICE_WITH_OPEN_GAP_AWARE_EXITS_V1';
 export const NEURAL_CLOSURE_MODEL_FAMILIES = Object.freeze([
   'COGNITIVE_MLP_V5',
   'TCN_V6',
@@ -51,9 +53,46 @@ export function sha256Canonical(value) {
 }
 
 /**
+ * Validate the price actually available at the first-touch exit.
+ * Intrabar touches fill at the barrier; opening gaps fill at the candle open;
+ * horizon-end rows fill at the final closed-candle close.
+ */
+export function isValidFourHourFirstTouchExecution(firstTouch,outcome,realizedReturnPct) {
+  const baseline=number(firstTouch?.baseline_price);
+  const take=number(firstTouch?.take_profit_price);
+  const stop=number(firstTouch?.stop_loss_price);
+  const exit=number(firstTouch?.exit_price);
+  const realized=number(realizedReturnPct);
+  if(baseline===null||baseline<=0||take===null||stop===null||exit===null||exit<=0||
+    realized===null||Math.abs(take/baseline-1.03)>1e-10||
+    Math.abs(stop/baseline-0.98)>1e-10)return false;
+  const resolution=firstTouch?.resolution;
+  const source=firstTouch?.exit_price_source;
+  const expected=outcome==='UP'?'TAKE_PROFIT_FIRST':
+    outcome==='DOWN'?'STOP_LOSS_FIRST':
+    outcome==='FLAT'?'HORIZON_END':null;
+  if(resolution!==expected)return false;
+  const tolerance=Math.max(1e-8,Math.abs(exit)*1e-10);
+  if(outcome==='UP'){
+    if(source==='BARRIER'&&Math.abs(exit-take)>tolerance)return false;
+    if(source==='OPEN_GAP'&&exit+ tolerance<take)return false;
+    if(!['BARRIER','OPEN_GAP'].includes(source))return false;
+  }else if(outcome==='DOWN'){
+    if(source==='BARRIER'&&Math.abs(exit-stop)>tolerance)return false;
+    if(source==='OPEN_GAP'&&exit-tolerance>stop)return false;
+    if(!['BARRIER','OPEN_GAP'].includes(source))return false;
+  }else if(outcome==='FLAT'){
+    if(source!=='HORIZON_CLOSE')return false;
+  }else return false;
+  const expectedReturn=(exit/baseline-1)*100;
+  return Math.abs(realized-expectedReturn)<=1e-8;
+}
+
+/**
  * Resolve the exact +3% before -2% label from 240 consecutive completed
  * Binance Spot one-minute candles. If both barriers fall inside the same
  * candle, OHLC cannot determine which was first and the row is rejected.
+ * Opening gaps exit at the observable open, not the nominal barrier price.
  */
 export function buildFourHourFirstTouchOutcome({
   id,symbol,baselineAt,baselinePrice,candles,
@@ -81,6 +120,7 @@ export function buildFourHourFirstTouchOutcome({
     return fail('EXACT_240_CLOSED_ONE_MINUTE_CANDLES_REQUIRED');
   const takePrice=price*1.03,stopPrice=price*0.98;
   let outcome='FLAT',resolution='HORIZON_END',firstTouchAt=at+NEURAL_CLOSURE_HORIZON_MS;
+  let exitPrice=null,exitPriceSource=null;
   let ambiguous=false;
   // Binance closed klines end at open_time + 59,999 ms. The first
   // post-decision minute therefore opens one millisecond after the prior
@@ -102,16 +142,26 @@ export function buildFourHourFirstTouchOutcome({
   for(let index=0;index<240;index++){
     const candle=candles[index];
     const expectedOpen=at+1+index*60_000;
-    const high=Number(candle.high),low=Number(candle.low);
+    const open=Number(candle.open),high=Number(candle.high),low=Number(candle.low);
+    // A gap through a barrier is executable at the observed open, not at
+    // the more favorable nominal threshold.
+    if(open>=takePrice){
+      outcome='UP';resolution='TAKE_PROFIT_FIRST';
+      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';break;
+    }
+    if(open<=stopPrice){
+      outcome='DOWN';resolution='STOP_LOSS_FIRST';
+      firstTouchAt=expectedOpen;exitPrice=open;exitPriceSource='OPEN_GAP';break;
+    }
     const hitTake=high>=takePrice,hitStop=low<=stopPrice;
     if(hitTake&&hitStop){ambiguous=true;break;}
     if(hitTake){
       outcome='UP';resolution='TAKE_PROFIT_FIRST';
-      firstTouchAt=expectedOpen+59_999;break;
+      firstTouchAt=expectedOpen+59_999;exitPrice=takePrice;exitPriceSource='BARRIER';break;
     }
     if(hitStop){
       outcome='DOWN';resolution='STOP_LOSS_FIRST';
-      firstTouchAt=expectedOpen+59_999;break;
+      firstTouchAt=expectedOpen+59_999;exitPrice=stopPrice;exitPriceSource='BARRIER';break;
     }
   }
   if(ambiguous)return fail('AMBIGUOUS_BOTH_BARRIERS_TOUCHED_IN_ONE_MINUTE_CANDLE',{
@@ -122,6 +172,14 @@ export function buildFourHourFirstTouchOutcome({
   });
   const finalClose=number(candles.at(-1)?.close);
   if(finalClose===null||finalClose<=0)return fail('FINAL_ONE_MINUTE_CLOSE_INVALID');
+  if(outcome==='FLAT'){
+    exitPrice=finalClose;
+    exitPriceSource='HORIZON_CLOSE';
+  }
+  if(!finite(exitPrice)||Number(exitPrice)<=0||!exitPriceSource)
+    return fail('FIRST_TOUCH_EXECUTION_PRICE_INVALID');
+  const realizedReturnPct=(Number(exitPrice)/price-1)*100;
+  const horizonCloseReturnPct=(finalClose/price-1)*100;
   const resolvedAt=at+NEURAL_CLOSURE_HORIZON_MS;
   const canonicalPath=candles.map(candle=>({
     open_time:number(candle?.open_time??candle?.openTime),
@@ -152,9 +210,12 @@ export function buildFourHourFirstTouchOutcome({
     first_touch:{
       resolution,first_touch_at:firstTouchAt,path_resolution:'1M',
       observed_candles:240,raw_klines_sha256:rawKlinesSha256,baseline_price:price,
-      take_profit_price:takePrice,stop_loss_price:stopPrice
+      take_profit_price:takePrice,stop_loss_price:stopPrice,
+      exit_price:Number(exitPrice),exit_price_source:exitPriceSource
     },
-    realized_return_pct:(finalClose/price-1)*100,
+    execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+    realized_return_pct:realizedReturnPct,
+    horizon_close_return_pct:horizonCloseReturnPct,
     market_context:marketContext&&typeof marketContext==='object'?{
       kama_efficiency_ratio:marketContext.kama_efficiency_ratio??null,
       atr_pct:marketContext.atr_pct??null,
@@ -292,6 +353,9 @@ export function validateFourHourRows(inputRows, {
       Math.abs(takeProfitPrice/baselinePrice-1.03)>1e-10||
       Math.abs(stopLossPrice/baselinePrice-0.98)>1e-10)
       throw new Error('NEURAL_CLOSURE_ROW_EXIT_BARRIER_INVALID:'+index);
+    if(source.execution_return_contract!==NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT||
+      !isValidFourHourFirstTouchExecution(firstTouch,source.outcome,source.realized_return_pct))
+      throw new Error('NEURAL_CLOSURE_ROW_EXECUTION_EXIT_INVALID:'+index);
     if(Number(firstTouch.observed_candles)!==240)
       throw new Error('NEURAL_CLOSURE_ROW_ONE_MINUTE_COVERAGE_INVALID:'+index);
     const target = source.outcome === 'UP' ? 1 : 0;
@@ -601,19 +665,13 @@ function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{purgedRows
  */
 export function realizedExecutionGrossReturnPct(row) {
   const firstTouch=row?.first_touch;
-  const baseline=number(firstTouch?.baseline_price);
-  if(baseline===null||baseline<=0)return null;
-  if(firstTouch?.resolution==='TAKE_PROFIT_FIRST') {
-    const exitPrice=number(firstTouch.take_profit_price);
-    return exitPrice!==null&&exitPrice>0?(exitPrice/baseline-1)*100:null;
-  }
-  if(firstTouch?.resolution==='STOP_LOSS_FIRST') {
-    const exitPrice=number(firstTouch.stop_loss_price);
-    return exitPrice!==null&&exitPrice>0?(exitPrice/baseline-1)*100:null;
-  }
-  if(firstTouch?.resolution==='HORIZON_END')
-    return finite(row?.realized_return_pct)?Number(row.realized_return_pct):null;
-  return null;
+  if(row?.execution_return_contract!==NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT||
+    !isValidFourHourFirstTouchExecution(firstTouch,row?.outcome,row?.realized_return_pct))
+    return null;
+  const baseline=number(firstTouch.baseline_price);
+  const exitPrice=number(firstTouch.exit_price);
+  return baseline!==null&&baseline>0&&exitPrice!==null
+    ?(exitPrice/baseline-1)*100:null;
 }
 
 export function realizedExecutionNetReturnPct(row,roundTripCostBps=30) {
