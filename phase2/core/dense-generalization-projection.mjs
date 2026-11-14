@@ -11,7 +11,8 @@ import {
   deriveTrainingClassWeights,focalAsymmetricBrierLoss,
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
-  NEURAL_CLOSURE_OUTCOME_SOURCE
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
 } from './neural-closure-contracts.mjs';
 import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
 import {createVersionedModelArtifact} from './model-artifact-guardian.mjs';
@@ -734,6 +735,9 @@ export function validateAndPrepareDense4hRows(samples){
 
     if(!sourceAuditValid)fail('BINANCE_SPOT_REST_SOURCE_AUDIT_INVALID');
     if(!exitBarriersValid)fail('FIRST_TOUCH_EXIT_BARRIER_INVALID');
+    if(source.execution_return_contract!==NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT||
+      !isValidFourHourFirstTouchExecution(touch,outcome,source.realized_return_pct))
+      fail('FIRST_TOUCH_EXECUTION_PRICE_INVALID');
     if(touch?.path_resolution!=='1M'||touch.resolution!==expectedResolution||
       Number(touch.observed_candles)!==240||firstTouchAt===null||
       (outcome==='FLAT'?firstTouchAt!==resolvedAt:
