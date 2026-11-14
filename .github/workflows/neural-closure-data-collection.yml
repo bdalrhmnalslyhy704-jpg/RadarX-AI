@@ -1,0 +1,87 @@
+name: Build 224 Neural Closure — Binance Spot Research Dataset
+
+on:
+  push:
+    branches:
+      - research/neural-closure-4h-20261114
+    paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
+  pull_request:
+    branches:
+      - research/daily-early-riser-mlp-budget-20261113
+    paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Closed history days (minimum 60)'
+        required: true
+        default: '60'
+        type: string
+      max_symbols:
+        description: 'Maximum USDT Spot symbols (10–30)'
+        required: true
+        default: '20'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-neural-closure-dataset-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect, archive and validate real Binance Spot candles
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify the collector has no generated or synthetic market data
+        run: |
+          node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/tools/build-neural-closure-dataset.mjs
+          node --test phase2/tests/neural-closure-data-builder.test.mjs
+      - name: Build a 60-day first-touch cohort from the official public Spot API
+        env:
+          DAYS: ${{ inputs.days || '60' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '20' }}
+        run: |
+          node --expose-gc --max-old-space-size=768 phase2/tools/build-neural-closure-dataset.mjs \
+            --days "$DAYS" \
+            --maxSymbols "$MAX_SYMBOLS" \
+            --minSymbols 10 \
+            --minQuoteVolumeUsdt 750000 \
+            --output artifacts/neural-closure/dataset.json \
+            --archiveDir artifacts/neural-closure/raw
+      - name: Upload dataset and original-candle archives
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-${{ github.sha }}
+          path: artifacts/neural-closure/
+          if-no-files-found: ignore
+          retention-days: 30
