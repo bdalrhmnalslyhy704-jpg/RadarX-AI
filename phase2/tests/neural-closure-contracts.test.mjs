@@ -223,7 +223,10 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
     };
   });
   const up=buildFourHourFirstTouchOutcome({
-    id:'label-up',symbol:'ETHUSDT',baselineAt:at,baselinePrice:100,
+    id:'label-up',symbol:'ETHUSDT',
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'ETHUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},baselineAt:at,baselinePrice:100,
     candles:makeCandles('UP')
   });
   assert.equal(up.training_eligible,true);
@@ -232,26 +235,38 @@ test('four-hour +3/-2 target resolves from exactly 240 closed 1m candles',()=>{
   assert.equal(up.first_touch.resolution,'TAKE_PROFIT_FIRST');
   assert.equal(up.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   const down=buildFourHourFirstTouchOutcome({
-    id:'label-down',symbol:'BTCUSDT',baselineAt:at,baselinePrice:100,
+    id:'label-down',symbol:'BTCUSDT',
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'BTCUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},baselineAt:at,baselinePrice:100,
     candles:makeCandles('DOWN')
   });
   assert.equal(down.outcome,'DOWN');
   assert.equal(down.target,0);
   const flat=buildFourHourFirstTouchOutcome({
-    id:'label-flat',symbol:'SOLUSDT',baselineAt:at,baselinePrice:100,
+    id:'label-flat',symbol:'SOLUSDT',
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'SOLUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},baselineAt:at,baselinePrice:100,
     candles:makeCandles('FLAT')
   });
   assert.equal(flat.outcome,'FLAT');
   assert.equal(flat.first_touch.resolution,'HORIZON_END');
   const ambiguous=buildFourHourFirstTouchOutcome({
-    id:'label-ambiguous',symbol:'XRPUSDT',baselineAt:at,baselinePrice:100,
+    id:'label-ambiguous',symbol:'XRPUSDT',
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'XRPUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},baselineAt:at,baselinePrice:100,
     candles:makeCandles('AMBIGUOUS')
   });
   assert.equal(ambiguous.training_eligible,false);
   assert.match(ambiguous.reason,/AMBIGUOUS/);
   const gap=makeCandles('FLAT');gap[0]={...gap[0],open_time:gap[0].open_time+60_000};
   const invalid=buildFourHourFirstTouchOutcome({
-    id:'label-gap',symbol:'BNBUSDT',baselineAt:at,baselinePrice:100,candles:gap
+    id:'label-gap',symbol:'BNBUSDT',
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'BNBUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},baselineAt:at,baselinePrice:100,candles:gap
   });
   assert.equal(invalid.training_eligible,false);
 });
