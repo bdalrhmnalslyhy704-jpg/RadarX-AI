@@ -9,8 +9,8 @@ import {
   parseBinanceSpotKline,verifyNeuralClosureRawCoverage,buildNeuralClosureEventRow
 } from '../core/neural-closure-data-builder.mjs';
 import {
-  NEURAL_CLOSURE_MIN_CLASS_SUPPORT,NEURAL_CLOSURE_MODEL_FAMILIES,
-  validateFourHourRows,splitFourHourRows,sha256Canonical
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
+  NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,sha256Canonical
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE_URL='https://data-api.binance.vision';
