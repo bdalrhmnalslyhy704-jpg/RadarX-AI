@@ -1403,6 +1403,16 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   }]);
   assert.equal(rejected.resolved_samples,0,
     'a feature timestamp not ending exactly at the baseline must never enter training');
+  const badBarrier=buildFourHourTemporalNeuralProfile([{
+    ...row,first_touch:{...row.first_touch,take_profit_price:104}
+  }]);
+  assert.equal(badBarrier.resolved_samples,0,
+    'a mismatched +3% exit barrier must never enter TCN training');
+  const badSourceAudit=buildFourHourTemporalNeuralProfile([{
+    ...row,source_audit:{...row.source_audit,raw_klines_sha256:'c'.repeat(64)}
+  }]);
+  assert.equal(badSourceAudit.resolved_samples,0,
+    'source and candle-path SHA-256 digests must match exactly');
   assert.throws(()=>buildFourHourTemporalNeuralProfile([row],{
     targetDefinition:TEMPORAL_TARGET_DEFINITION
   }),/CONTRACT_OVERRIDE_FORBIDDEN/);
