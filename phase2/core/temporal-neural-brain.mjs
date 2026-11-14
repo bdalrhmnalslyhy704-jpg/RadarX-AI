@@ -1777,6 +1777,33 @@ function fitSelectionProbabilityCalibrator(rows, predictFn, {
   };
 }
 
+function exportTemporalInferenceMember(model){
+  if(!model||model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)return null;
+  const copy1=values=>Array.isArray(values)?values.map(Number):null;
+  const copy2=values=>Array.isArray(values)?values.map(copy1):null;
+  const copy3=values=>Array.isArray(values)?values.map(copy2):null;
+  if(!copy2(model.projectionWeights)||!copy1(model.projectionBiases)||
+    !copy3(model.depthWeights)||!copy3(model.pointWeights)||!copy2(model.biases)||
+    !copy1(model.outputWeights)||!copy1(model.skipWeights)||
+    !copy1(model.attentionQuery)||!copy1(model.attentionPositionBiases)||
+    !Number.isFinite(Number(model.outputBias)))return null;
+  return {
+    projectionWeights:copy2(model.projectionWeights),
+    projectionBiases:copy1(model.projectionBiases),
+    depthWeights:copy3(model.depthWeights),
+    pointWeights:copy3(model.pointWeights),
+    biases:copy2(model.biases),
+    outputWeights:copy1(model.outputWeights),
+    skipWeights:copy1(model.skipWeights),
+    outputBias:Number(model.outputBias),
+    baseline_by_regime:null,
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    dilations:Array.isArray(model.dilations)?model.dilations.map(Number):[...DILATIONS],
+    attentionQuery:copy1(model.attentionQuery),
+    attentionPositionBiases:copy1(model.attentionPositionBiases)
+  };
+}
+
 function predict(sequence, fitted) {
   if(!validSequence(sequence)||!fitted)return null;
   const regime=regimeOfSequence(sequence);
@@ -2516,6 +2543,30 @@ function fitRegimeLocalTemporalTcn({
       selected:Boolean(selected&&row.index===selected.index&&row.residual_scale===selected.residual_scale)
     })),
     selection_passed:Boolean(selected),
+    // Export only a model state that contains a non-zero neural residual.
+    // A zero residual is exactly the logistic anchor and must not be presented
+    // as an attention-network prediction in an external model comparison.
+    research_inference:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE&&
+      (selected!==null||(diagnostic!==null&&diagnostic.residual_scale>0))
+      ?{
+        schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+        regime,temporal_pooling:temporalPoolingMode,
+        architecture:fitted.architecture,
+        inference_mode:selected?'INNER_SELECTED_TCN_ATTENTION_MEMBER':
+          'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+        member_index:selected?.index??diagnostic.index,
+        residual_scale:selected?.residual_scale??diagnostic.residual_scale,
+        model:exportTemporalInferenceMember(fitted.members[selected?.index??diagnostic.index]),
+        probability_calibrator:calibrator,
+        selected_member_index:selected?.index??null,
+        selected_residual_scale:selected?.residual_scale??null,
+        diagnostic_member_index:diagnostic?.index??null,
+        diagnostic_residual_scale:diagnostic?.residual_scale??0,
+        selection_passed:Boolean(selected),
+        validation_passed:validationPassed,
+        holdout_passed:holdoutPassed,
+        fit_partition:'FIXED_SHA_REGIME_LOCAL_TRAIN_ONLY'
+      }:null,
     probability_calibration:calibrator,
     logistic_probability_calibration:logisticCalibrator,
     validation:validationModel,validation_logistic:validationLogistic,
@@ -4180,6 +4231,43 @@ export function predictTemporalResearchOutput(sequence,profile={},{
     probability,mode:'INNER_BEST_DIAGNOSTIC_TCN_MEMBER',regime,
     member_index:diagnosticIndex,residual_scale:diagnosticScale
   }:null;
+}
+
+/**
+ * Research inference for the separately fitted V11 learned-query attention
+ * challenger. It reads only the per-regime exported attention member and the
+ * inner-selection calibrator; a zero-residual/logistic-only diagnostic is
+ * never exposed as a neural prediction.
+ */
+export function predictTemporalAttentionResearchOutput(sequence,profile={},{
+  allowDiagnostic=false
+}={}){
+  if(!validSequence(sequence))return null;
+  const regime=regimeOfSequence(sequence);
+  if(!regime)return null;
+  const specialist=profile?.regime_specialists?.[regime];
+  const state=specialist?.research_inference;
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
+    state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
+    state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
+    !state.model||state.model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)
+    return null;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return null;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_ATTENTION_MEMBER')return null;
+  const residualScale=finite(state.residual_scale);
+  if(residualScale===null||residualScale<=0)return null;
+  const raw=forward(sequence,state.model,residualScale).probability;
+  const probability=calibratedProbability(raw,state.probability_calibrator);
+  return Number.isFinite(probability)?{
+    probability,mode:state.inference_mode,regime,
+    member_index:Number(state.member_index),residual_scale:residualScale
+  }:null;
+}
+
+export function predictTemporalAttentionProbability(sequence,profile={}){
+  const result=predictTemporalAttentionResearchOutput(sequence,profile);
+  return result?.probability??null;
 }
 
 export function predictTemporalResearchProbability(sequence,profile={}){
