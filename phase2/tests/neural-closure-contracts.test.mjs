@@ -437,13 +437,19 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_fit_rows,400);
   assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_purged_rows,400);
   assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_check_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
-  assert.deepEqual(
-    report.models.LOGISTIC_REGRESSION.calibration.calibration_days,
-    report.models.TCN_V11.calibration.calibration_days
-  );
+  const baselineCalibration=report.models.LOGISTIC_REGRESSION.calibration;
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const calibration=report.models[family].calibration;
+    assert.equal(calibration.status,'EVALUATED',family+' calibration must be evaluated');
+    assert.equal(calibration.calibration_fit_rows,
+      baselineCalibration.calibration_fit_rows,family+' fit-row count must match Logistic');
+    assert.equal(calibration.calibration_purged_rows,
+      baselineCalibration.calibration_purged_rows,family+' purge-row count must match Logistic');
+    assert.equal(calibration.calibration_check_rows,
+      baselineCalibration.calibration_check_rows,family+' check-row count must match Logistic');
+    assert.deepEqual(calibration.calibration_days,
+      baselineCalibration.calibration_days,family+' must use identical UTC-day identities');
+  }
   assert.deepEqual(report.calibration_policy,{
     schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
     methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
