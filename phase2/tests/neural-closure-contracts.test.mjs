@@ -292,7 +292,7 @@ test('event-driven Spot portfolio caps overlapping exposure and marks MAE before
       },
       max_adverse_excursion_pct:-20,
       max_adverse_excursion_at:exitAt,
-      max_favorable_excursion_pct:0.2,
+      max_favorable_excursion_pct:0,
       max_favorable_excursion_at:at+60*60_000
     };
   });
