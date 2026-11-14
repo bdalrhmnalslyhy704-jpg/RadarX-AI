@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildFourHourFirstTouchOutcome,
+  NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT
+} from '../core/neural-closure-contracts.mjs';
+import {
   HYBRID_FEATURE_NAMES,
   HYBRID_SEQUENCE_CHANNELS,
   HYBRID_SEQUENCE_STEPS,
@@ -61,6 +69,8 @@ function makeRows(count = 700) {
       sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
         at-(HYBRID_SEQUENCE_STEPS-1-step)*FIFTEEN_MINUTES),
       gross_return_pct: positive ? 3 : -2,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,
+      outcome_exit_reason:positive?'TAKE_PROFIT':'STOP_LOSS',
       max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       max_adverse_excursion_at: at + FIFTEEN_MINUTES,
       max_favorable_excursion_pct: positive ? 2.8 : 0.8,
@@ -115,6 +125,7 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
     'taker_buy_imbalance', 'agg_trade_imbalance', 'depth_imbalance',
     'volume_profile_poc_distance', 'volume_profile_value_area_position',
     'volume_profile_trade_level_available', 'adaptive_volatility_ratio', 'relative_btc_available',
+    'btc_trend_return_12bar',
     'short_return_acceleration', 'three_bar_momentum_reversal', 'fast_slow_mean_spread',
     'higher_low_reclaim', 'prior_high_reclaim'
   ]) assert.ok(HYBRID_FEATURE_NAMES.includes(name), name);
@@ -137,7 +148,9 @@ test('hybrid feature contract includes order flow, depth, volume profile, adapti
   assert.ok(built.sequence.at(-1)[10] > 0, 'taker buying pressure should be represented');
   assert.ok(built.sequence.at(-1)[11] > 0, 'aggregate trade buy imbalance should be represented');
   assert.ok(built.sequence.at(-1)[12] > 0, 'bid depth imbalance should be represented');
-  assert.equal(built.sequence.at(-1)[19], 1, 'book feature availability mask should be set');
+  assert.ok(Math.abs(built.sequence.at(-1)[19] -
+    Math.max(-4,Math.min(4,built.btc_trend_return_pct/4))) < 1e-6,
+    'channel 19 must encode the observed 12-bar BTC trend, not book availability');
   assert.equal(built.sequence.at(-1)[20], 1, 'aggregate trade availability mask should be set');
   assert.equal(built.sequence.at(-1)[21], 1, 'trade-level volume profile mask should be set');
   const sparse = buildHybridSequence({
@@ -255,10 +268,10 @@ test('benchmark event adapter rejects immature forward paths and emits only clos
   assert.equal(incomplete.ready, false);
   assert.equal(incomplete.reason, 'INCOMPLETE_FORWARD_HORIZON');
 
-  const completedPath = [{
-    closeTime: at + FOUR_HOURS, closed: true,
-    open: 10, high: 10.4, low: 9.99, close: 10.2
-  }];
+  const completedPath = Array.from({length:16},(_,index)=>({
+    closeTime:at+(index+1)*FIFTEEN_MINUTES,closed:true,
+    open:10,high:index===15?10.4:10.2,low:9.99,close:index===15?10.3:10.1
+  }));
   const prepared = prepareHybridBenchmarkEvent({
     id: 'prepared', symbol: 'ETHUSDT', decisionAt: at,
     candles, benchmarkCandles: candles, entryPrice: 10, classicScore: 0.7, futureCandles: completedPath
@@ -537,7 +550,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4');
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6');
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
@@ -874,4 +887,157 @@ test('fixed-SHA benchmark refuses a dataset missing any observed BTC regime', ()
 test('benchmark refuses a partial source SHA instead of inventing a fixed reference', () => {
   assert.throws(() => runFixedShaBenchmark([], { sourceCommitSha: 'abc123' }),
     /FULL_SOURCE_COMMIT_SHA/);
+});
+
+
+test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m feature tensors',()=>{
+  const start=Date.UTC(2026,4,1);
+  const rows=Array.from({length:20},(_,index)=>{
+    const at=start+index*8*60*60*1000;
+    const outcome=index%3===0?'FLAT':index%2===0?'UP':'DOWN';
+    const resolution=outcome==='UP'?'TAKE_PROFIT_FIRST':
+      outcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
+    return {
+      id:'HYBRID-4H-'+index,
+      symbol:'PAIR'+String(index).padStart(3,'0')+'USDT',
+      market:'BINANCE_SPOT_USDT',
+      execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+      outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+      outcome_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+      market_regime:['BULL_TREND','BEAR_TREND','SIDEWAYS'][index%3],
+      historical_window_id:['bull-window','bear-window','sideways-window'][index%3],
+      at,latest_input_at:at,resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
+      maturity_ms:NEURAL_CLOSURE_HORIZON_MS,
+      outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+      outcome,target:outcome==='UP'?1:0,
+      source_audit:{
+        exchange:'BINANCE',market:'SPOT',interval:'1m',
+        transport:'BINANCE_PUBLIC_REST',symbol:'PAIR'+String(index).padStart(3,'0')+'USDT',
+        received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000,
+        observed_candles:240,raw_klines_sha256:'a'.repeat(64)
+      },
+      first_touch:{
+        resolution,first_touch_at:outcome==='FLAT'?at+NEURAL_CLOSURE_HORIZON_MS:at+1,
+        path_resolution:'1M',observed_candles:240,
+        raw_klines_sha256:'a'.repeat(64),
+        baseline_price:100,take_profit_price:103,stop_loss_price:98,
+        exit_price:outcome==='UP'?103.1:outcome==='DOWN'?97.9:100.05,
+        exit_price_source:outcome==='FLAT'?'HORIZON_CLOSE':'OPEN_GAP',
+        exit_candle:outcome==='FLAT'?{
+          open_time:at+1+239*60_000,close_time:at+NEURAL_CLOSURE_HORIZON_MS,
+          open:100.03,high:100.1,low:100.02,close:100.05,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:outcome==='UP'?{
+          open_time:at+1,close_time:at+60_000,
+          open:103.1,high:103.3,low:103,close:103.2,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }:{
+          open_time:at+1,close_time:at+60_000,
+          open:97.9,high:98,low:97.7,close:97.8,
+          is_closed:true,source:'BINANCE_PUBLIC_REST'
+        }
+      },
+      sequence:makeSequence(outcome==='UP'?1:-1,index),
+      sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
+        at-(HYBRID_SEQUENCE_STEPS-1-step)*FIFTEEN_MINUTES),
+      gross_return_pct:outcome==='UP'?3.1:outcome==='DOWN'?-2.1:0.05,
+      max_adverse_excursion_pct:outcome==='UP'?-0.8:outcome==='DOWN'?-2.2:-0.4,
+      max_adverse_excursion_at:at+FIFTEEN_MINUTES,
+      max_favorable_excursion_pct:outcome==='UP'?3.2:0.7,
+      max_favorable_excursion_at:at+2*FIFTEEN_MINUTES,
+      classic_score:outcome==='UP'?0.7:0.3,
+      kama_efficiency_ratio:0.35,
+      volatility_zscore:0.6,
+      btc_trend_return_pct:0.4
+    };
+  });
+  const fitted=trainHybridTcnAttention(rows,{
+    epochs:2,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  });
+  assert.equal(fitted.training_samples,20);
+  assert.match(fitted.training_objective,/FOCAL_ASYMMETRIC_BRIER/);
+  assert.equal(fitted.memory_profile.maximum_simultaneous_forward_caches,1);
+  const corrupted=rows.map(row=>({...row,first_touch:{...row.first_touch}}));
+  corrupted[0].first_touch.observed_candles=239;
+  assert.throws(()=>trainHybridTcnAttention(corrupted,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/AT_LEAST_20_TRAINING_ROWS/);
+  const badBarrier=rows.map(row=>({...row,first_touch:{...row.first_touch}}));
+  badBarrier[0].first_touch.take_profit_price=104;
+  assert.throws(()=>trainHybridTcnAttention(badBarrier,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/AT_LEAST_20_TRAINING_ROWS/);
+  const badExitCandle=rows.map(row=>({...row,first_touch:{
+    ...row.first_touch,exit_candle:{...row.first_touch.exit_candle,high:102.9}
+  }}));
+  assert.throws(()=>trainHybridTcnAttention(badExitCandle,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/AT_LEAST_20_TRAINING_ROWS/);
+  const wrongSource=rows.map(row=>({...row,outcome_source:'BINANCE_SPOT_CLOSED_15M'}));
+  assert.throws(()=>trainHybridTcnAttention(wrongSource,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/AT_LEAST_20_TRAINING_ROWS/);
+});
+
+
+test('hybrid TCN trains only on the canonical Binance 1m first-touch 4h labels with closed 15m features',()=>{
+  const start=Date.UTC(2026,3,1,0,0,0);
+  const rows=Array.from({length:20},(_,index)=>{
+    const at=start+index*6*60*60*1000;
+    const candles=Array.from({length:240},(_,minute)=>{
+      const openTime=at+1+minute*60_000;
+      let open=100,high=102,low=99,close=100.4;
+      if(minute===0&&index%2===0){high=103.2;close=103.1;}
+      if(minute===0&&index%2===1){low=97.8;close=97.9;}
+      return {open_time:openTime,close_time:openTime+59_999,
+        is_closed:true,source:'BINANCE_PUBLIC_REST',open,high,low,close};
+    });
+    const label=buildFourHourFirstTouchOutcome({
+      id:'HYBRID-4H-FIRST-TOUCH-'+index,
+      symbol:'FOURHOUR'+String(index).padStart(3,'0')+'USDT',
+      baselineAt:at,baselinePrice:100,candles,
+      sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+        transport:'BINANCE_PUBLIC_REST',
+        symbol:'FOURHOUR'+String(index).padStart(3,'0')+'USDT',
+        received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000}
+    });
+    const sequence=makeSequence(index%2===0?1:-1,index);
+    return {
+      ...label,market:'BINANCE_SPOT_USDT',
+      market_regime:['BULL_TREND','BEAR_TREND','SIDEWAYS'][index%3],
+      historical_window_id:['bull-window','bear-window','sideways-window'][index%3],
+      temporal_sequence:sequence,
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*FIFTEEN_MINUTES),
+      gross_return_pct:label.realized_return_pct,
+      max_adverse_excursion_pct:index%2===0?-0.5:-2.5,
+      max_adverse_excursion_at:at+2*60_000,
+      max_favorable_excursion_pct:index%2===0?3.2:0.5,
+      max_favorable_excursion_at:at+3*60_000,
+      classic_score:index%2===0?0.7:0.3,
+      kama_efficiency_ratio:0.35,
+      volatility_zscore:0.5,
+      btc_trend_return_pct:0.8
+    };
+  });
+  assert.ok(rows.every(row=>row.training_eligible===true&&
+    row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
+    row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+    row.horizon_ms===NEURAL_CLOSURE_HORIZON_MS));
+  const trained=trainHybridTcnAttention(rows,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  });
+  assert.equal(trained.training_samples,20);
+  assert.ok(trained.objective_trace.length===1);
+  assert.equal(trained.training_objective,
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6');
+  const corrupted=rows.map(row=>({...row}));
+  corrupted[19].first_touch={...corrupted[19].first_touch,observed_candles:239};
+  assert.throws(()=>trainHybridTcnAttention(corrupted,{
+    epochs:1,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+  }),/HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS/);
+  assert.throws(()=>trainHybridTcnAttention(rows,{
+    epochs:1,targetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
+  }),/UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION/);
 });

@@ -1,0 +1,91 @@
+name: Build 224 Neural Closure — Binance Spot Research Dataset
+
+on:
+  push:
+    branches:
+      - research/neural-closure-4h-20261114
+    paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Closed history days (60–180; default 180)'
+        required: true
+        default: '180'
+        type: string
+      max_symbols:
+        description: 'Maximum USDT Spot symbols (10–30; default 30)'
+        required: true
+        default: '30'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-neural-closure-dataset-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  collect:
+    name: Collect, archive and validate real Binance Spot candles
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify the collector has no generated or synthetic market data
+        run: |
+          node --check phase2/core/neural-closure-data-builder.mjs
+          node --check phase2/tools/build-neural-closure-dataset.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+          node --test phase2/tests/neural-closure-data-builder.test.mjs
+      - name: Build a 180-day first-touch cohort from the official public Spot API
+        env:
+          DAYS: ${{ inputs.days || '180' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '30' }}
+        run: |
+          node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
+            --days "$DAYS" \
+            --maxSymbols "$MAX_SYMBOLS" \
+            --minSymbols 25 \
+            --minQuoteVolumeUsdt 750000 \
+            --output artifacts/neural-closure/dataset.json \
+            --archiveDir artifacts/neural-closure/raw
+      - name: Train neural challengers on one fixed-SHA first-touch cohort
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \
+            --input artifacts/neural-closure/dataset.json \
+            --output artifacts/neural-closure/fixed-sha-neural-benchmark.json \
+            --epochs 8 \
+            --denseEpochs 36 \
+            --minimumHoldoutTrades 100 \
+            --minimumWinRatePct 55 \
+            --maximumDrawdownPct 8 \
+            --roundTripCostBps 30
+      - name: Upload dataset, raw candles, trained models and fixed-SHA report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-${{ github.sha }}
+          path: artifacts/neural-closure/
+          if-no-files-found: ignore
+          retention-days: 30

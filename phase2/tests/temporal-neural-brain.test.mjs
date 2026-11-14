@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {buildCognitiveLearningProfile} from '../core/cognitive-brain.mjs';
 import {
+  buildFourHourFirstTouchOutcome,
+  NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_HORIZON_MS
+} from '../core/neural-closure-contracts.mjs';
+import {
   TEMPORAL_TARGET_DEFINITION,
+  TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS,
+  buildFourHourTemporalNeuralProfile,
   TEMPORAL_MODEL_ARCHITECTURE,
   temporalBinaryTarget,
   TEMPORAL_SEQUENCE_STEPS,
@@ -37,6 +44,9 @@ import {
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT,
   temporalParameterL2,
+  regimeAwareTemporalDropoutRate,
+  applyRegimeAwareTemporalDropout,
+  applyTemporalSpectralNormalization,
   TEMPORAL_RANKING_BUCKET_MS,
   timeGroupedRankingMetrics,
   poolOrderedTemporalSegments,
@@ -155,13 +165,19 @@ test('V8, V9 and V10 analytical gradients match central finite differences for a
       checked:row.checked_parameters,maximum_absolute_error:row.maximum_absolute_error,
       failed:row.failed_parameters}))
   }));
-  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V1');
+  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2');
   assert.equal(report.input_shape[0],24);
   assert.equal(report.input_shape[1],29);
   assert.equal(report.pooling_modes.length,4);
-  assert.equal(report.objectives.length,3);
-  assert.equal(report.results.length,12);
+  assert.equal(report.objectives.length,4);
+  assert.equal(report.results.length,16);
   assert.ok(report.checked_parameter_derivatives>=100);
+  assert.equal(report.attention_audit.unique_attention_parameters,40);
+  assert.equal(report.attention_audit.objectives_checked,4);
+  assert.equal(report.attention_audit.checked_parameter_derivatives,160);
+  assert.equal(report.attention_audit.failed_parameter_derivatives,0);
+  assert.ok(report.attention_audit.maximum_absolute_error<1e-10);
+  assert.equal(report.attention_audit.passed,true);
   assert.equal(report.failed_parameter_derivatives,0,
     JSON.stringify(report.results.filter(row=>!row.passed),null,2));
   assert.equal(report.passed,true);
@@ -181,7 +197,7 @@ test('reused TCN training workspace is numerically equivalent to allocation-base
     passed:report.passed
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_REUSED_WORKSPACE_EQUIVALENCE_AUDIT_V1');
-  assert.equal(report.result_cases,24);
+  assert.equal(report.result_cases,32);
   assert.ok(report.results.every(row=>
     row.output_values_compared>0&&row.gradient_values_compared>0));
   assert.ok(report.maximum_output_absolute_error<=1e-12,
@@ -211,7 +227,7 @@ test('reusable TCN workspace throughput is measured against the allocation-based
     }))
   }));
   assert.equal(report.schema,'TEMPORAL_TCN_WORKSPACE_THROUGHPUT_BENCHMARK_V1');
-  assert.equal(report.measured_cases,12);
+  assert.equal(report.measured_cases,16);
   assert.equal(report.measurement_rounds,3);
   assert.equal(report.changes_training_math,false);
   assert.equal(report.all_checksums_finite,true);
@@ -632,19 +648,19 @@ test('temporal network trains only on valid tensors and keeps chronological vali
   assert.equal(profile.gradient_buffer_scope,TEMPORAL_GRADIENT_BUFFER_SCOPE);
   assert.equal(profile.gradient_buffer_scope,'TRAINABLE_PARAMETERS_ONLY_REUSED_ROW_SCRATCH_V1',
     'per-sample backprop must reuse only the trainable gradient buffers and exclude frozen/model metadata arrays');
-  assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
+  assert.equal(profile.training_objective,'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_selection_method,'SHARED_POOLED_CHRONOLOGICAL_MEMBER_AND_RESIDUAL_SCALE_SELECTION_BRIER');
   assert.equal(profile.regime_model_training_samples,profile.training_samples);
   assert.equal(profile.baseline_anchor,'SHARED_POOLED_TRAINING_ONLY_LOGISTIC_FROZEN');
   assert.equal(profile.residual_scale_selection,'SHARED_POOLED_SELECTION_BLOCK_BRIER_GRID_V1');
-  assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
+  assert.equal(profile.training_objective,'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.deepEqual(profile.candidate_residual_scales,[0,0.1,0.25,0.5,1]);
   assert.equal(profile.member_training_profiles.length,3);
-  assert.equal(profile.member_training_profiles[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[1].trainingObjective,'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[2].trainingObjective,'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE');
-  assert.equal(profile.member_training_profiles[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(profile.member_training_profiles[0].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[1].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[2].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.member_training_profiles[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   assert.ok(profile.member_training_profiles.every(row=>
     Number.isFinite(Number(row.latentChannels))&&Number.isFinite(Number(row.trainableParameters))),
     'all members retain the fixed causal TCN architecture contract');
@@ -724,7 +740,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   const expert=profile.regime_specialists.BTC_RISK_ON;
   assert.equal(expert.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES');
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
-  assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
+  assert.equal(profile.training_objective,'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON.length,3);
   assert.equal(profile.member_training_diagnostics.length,3);
@@ -751,12 +767,12 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
       epoch.mean_weighted_training_objective_loss>=0&&
       epoch.averaged_gradient_l2_norm>=0));
   }
-  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(profile.member_training_profiles_by_regime.BTC_RISK_ON[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   const regimeMembers=profile.member_training_profiles_by_regime.BTC_RISK_ON;
-  assert.equal(regimeMembers[0].trainingObjective,'UNWEIGHTED_BRIER_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[1].trainingObjective,'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[2].trainingObjective,'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE');
-  assert.equal(regimeMembers[2].positiveClassWeighting,'SQRT_INVERSE_PREVALENCE');
+  assert.equal(regimeMembers[0].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[1].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[2].trainingObjective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(regimeMembers[2].positiveClassWeighting,'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
   assert.equal(expert.baseline_anchor_source,'SHARED_POOLED_TRAINING_ONLY');
   assert.equal(expert.baseline_anchor_training_samples,expert.shared_training_samples);
   assert.ok(expert.shared_training_samples>=160);
@@ -788,7 +804,7 @@ test('one shared TCN passes independent outer gates in each supported BTC regime
   assert.ok(Number.isFinite(profile.holdout.pooled_logistic_brier_score));
   assert.equal(profile.calibration_fit_scope,'SHARED_POOLED_CALIBRATION_BLOCK_ONLY');
   assert.equal(profile.training_strategy,'SHARED_POOLED_TCN_TRAIN_ONLY_SELECTION_CALIBRATION_V1');
-  assert.equal(profile.training_objective,'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
+  assert.equal(profile.training_objective,'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1');
   assert.equal(profile.model_scope,'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES_AND_POOLED_LOGISTIC_ANCHOR');
   assert.equal(typeof expert.member_selection_logistic_brier,'number');
   assert.ok(expert.member_selection_scores.every(row=>
@@ -1282,4 +1298,139 @@ test('TCN excludes mixed-resolution 5m first-passage labels from the 15m trainin
     'the model must reject any first-passage sample built at a different candle resolution');
   assert.equal(profile.temporal_label_resolution,'15M_ONLY');
   assert.equal(profile.probability_ready,false);
+});
+
+
+test('V11 central differences cover all 40 attention parameters at absolute error below 1e-10',()=>{
+  const sequence=sequenceFor(true,37);
+  const report=auditTemporalGradientNumerics(sequence,1,{
+    epsilon:1e-5,tolerance:2e-7,attentionTolerance:1e-10
+  });
+  assert.equal(report.schema,'TEMPORAL_TCN_ANALYTICAL_VS_CENTRAL_DIFFERENCE_GRADIENT_AUDIT_V2');
+  assert.equal(report.attention_audit.unique_attention_parameters,40);
+  assert.equal(report.attention_audit.parameters_per_objective,40);
+  assert.equal(report.attention_audit.objectives_checked,4);
+  assert.equal(report.attention_audit.checked_parameter_derivatives,160);
+  assert.equal(report.attention_audit.failed_parameter_derivatives,0);
+  assert.ok(report.attention_audit.maximum_absolute_error<1e-10,
+    JSON.stringify(report.attention_audit));
+  assert.equal(report.attention_audit.passed,true);
+  const v11=report.results.filter(row=>row.pooling_mode===TEMPORAL_ATTENTION_POOLING_MODE);
+  assert.equal(v11.length,4);
+  for(const row of v11){
+    assert.equal(row.attention_parameter_derivatives_checked,40);
+    assert.equal(row.attention_failed_derivatives,0);
+    assert.ok(row.attention_maximum_absolute_error<1e-10);
+    assert.equal(row.details.filter(item=>
+      item.parameter==='attentionQuery'||item.parameter==='attentionPositionBiases').length,40);
+  }
+});
+
+
+test('KAMA ATR dropout and spectral normalization bound every trainable TCN layer',()=>{
+  const context={kama_efficiency_ratio:0.2,atr_pct:0.8,atr_baseline_pct:0.4};
+  const dropoutProfile=regimeAwareTemporalDropoutRate(context);
+  assert.equal(dropoutProfile.enabled,true);
+  assert.ok(dropoutProfile.dropout_rate>=0.04&&dropoutProfile.dropout_rate<=0.25);
+  assert.equal(regimeAwareTemporalDropoutRate({}).enabled,false);
+  const sequence=sequenceFor(true,9);
+  const dropped=applyRegimeAwareTemporalDropout(sequence,context,{seed:77});
+  const repeated=applyRegimeAwareTemporalDropout(sequence,context,{seed:77});
+  assert.equal(dropped.applied,true);
+  assert.deepEqual(dropped.sequence,repeated.sequence,
+    'same row/epoch seed must generate the same training-only dropout mask');
+  assert.ok(dropped.dropped_channels>0);
+  for(let time=0;time<TEMPORAL_SEQUENCE_STEPS;time++)
+    assert.equal(dropped.sequence[time][TEMPORAL_SEQUENCE_CHANNELS-1],
+      sequence[time][TEMPORAL_SEQUENCE_CHANNELS-1],
+      'the explicit availability mask channel must never be dropped');
+
+  const model={
+    projectionWeights:[[4,0],[0,2]],
+    pointWeights:[[[3,0],[0,2]]],
+    depthWeights:[[[3,4],[3,0]]],
+    outputWeights:[4,3]
+  };
+  const spectral=applyTemporalSpectralNormalization(model,{cap:1.5,iterations:24});
+  assert.equal(spectral.passed,true,JSON.stringify(spectral));
+  assert.ok(spectral.projection.after<=1.5+1e-8);
+  assert.ok(spectral.pointwise.every(item=>item.after<=1.5+1e-8));
+  assert.ok(spectral.maximum_depth_channel_norm_after<=1.5+1e-8);
+  assert.ok(spectral.output_l2_norm_after<=1.5+1e-8);
+});
+
+
+test('four-hour V8–V11 training entry accepts only audited 1m first-touch outcomes with closed 15m feature cadence',()=>{
+  const at=Date.UTC(2026,3,1,0,14,59)+999;
+  const candles=Array.from({length:240},(_,index)=>{
+    const openTime=at+1+index*60_000;
+    return {open_time:openTime,close_time:openTime+59_999,
+      is_closed:true,source:'BINANCE_PUBLIC_REST',
+      open:100,high:102,low:99,close:100.5};
+  });
+  const label=buildFourHourFirstTouchOutcome({
+    id:'TCN-4H-FIRST-TOUCH-001',symbol:'ETHUSDT',
+    baselineAt:at,baselinePrice:100,candles,
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'ETHUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000},
+    marketContext:{kama_efficiency_ratio:0.7,atr_pct:0.25,atr_baseline_pct:0.2}
+  });
+  assert.equal(label.training_eligible,true);
+  assert.equal(label.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(label.outcome,'FLAT');
+  const sequence=sequenceFor(false,91);
+  const timestamps=Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,index)=>
+    at-(TEMPORAL_SEQUENCE_STEPS-1-index)*TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS);
+  const row={
+    ...label,
+    temporal_sequence:sequence,
+    temporal_sequence_timestamps:timestamps,
+    feature_information_cutoff_at:at
+  };
+  const profile=buildFourHourTemporalNeuralProfile([row]);
+  assert.equal(profile.resolved_samples,1);
+  assert.equal(profile.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(profile.outcome_contract_kind,'FIRST_TOUCH_4H_1M');
+  assert.equal(profile.temporal_label_resolution,'1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES');
+  assert.equal(profile.sequence_steps,24);
+  assert.equal(profile.sequence_channels,29);
+  assert.equal(profile.trained,false);
+  const badSequenceTimestamps=[...timestamps];
+  badSequenceTimestamps[23]++;
+  const rejected=buildFourHourTemporalNeuralProfile([{
+    ...row,temporal_sequence_timestamps:badSequenceTimestamps
+  }]);
+  assert.equal(rejected.resolved_samples,0,
+    'a feature timestamp not ending exactly at the baseline must never enter training');
+  const badBarrier=buildFourHourTemporalNeuralProfile([{
+    ...row,first_touch:{...row.first_touch,take_profit_price:104}
+  }]);
+  assert.equal(badBarrier.resolved_samples,0,
+    'a mismatched +3% exit barrier must never enter TCN training');
+  const badExitCandle=buildFourHourTemporalNeuralProfile([{
+    ...row,first_touch:{...row.first_touch,
+      exit_candle:{...row.first_touch.exit_candle,close:row.first_touch.exit_price+0.25}}
+  }]);
+  assert.equal(badExitCandle.resolved_samples,0,
+    'a first-touch event must be supported by the recorded exit candle OHLC');
+  const badSourceAudit=buildFourHourTemporalNeuralProfile([{
+    ...row,source_audit:{...row.source_audit,raw_klines_sha256:'c'.repeat(64)}
+  }]);
+  assert.equal(badSourceAudit.resolved_samples,0,
+    'source and candle-path SHA-256 digests must match exactly');
+  assert.throws(()=>buildFourHourTemporalNeuralProfile([row],{
+    targetDefinition:TEMPORAL_TARGET_DEFINITION
+  }),/CONTRACT_OVERRIDE_FORBIDDEN/);
+  const postTouchGap=candles.map(candle=>({...candle}));
+  postTouchGap[200].open_time+=60_000;
+  const invalidLabel=buildFourHourFirstTouchOutcome({
+    id:'TCN-4H-FIRST-TOUCH-GAP',symbol:'BTCUSDT',
+    baselineAt:at,baselinePrice:100,candles:postTouchGap,
+    sourceEvidence:{exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'BTCUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000}
+  });
+  assert.equal(invalidLabel.training_eligible,false,
+    'the complete 240-minute path must be timestamp-audited even after an early touch');
 });

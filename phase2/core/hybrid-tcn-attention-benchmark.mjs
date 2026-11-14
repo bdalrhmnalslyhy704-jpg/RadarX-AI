@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
+import {
+  focalAsymmetricBrierLoss,NEURAL_CLOSURE_TARGET_DEFINITION,
+  NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
+} from './neural-closure-contracts.mjs';
 
 export const HYBRID_FEATURE_NAMES = Object.freeze([
   'log_return_1',
@@ -21,7 +27,7 @@ export const HYBRID_FEATURE_NAMES = Object.freeze([
   'realized_volatility_short',
   'adaptive_volatility_ratio',
   'relative_btc_return',
-  'order_book_available',
+  'btc_trend_return_12bar',
   'agg_trade_available',
   'volume_profile_trade_level_available',
   'relative_btc_available',
@@ -40,7 +46,7 @@ export const HYBRID_REPLAY_CANDLE_INTERVAL_MS = 60 * 1000;
 export const HYBRID_OUTCOME_HORIZON_MS = 4 * 60 * 60 * 1000;
 export const HYBRID_TCN_RECEPTIVE_FIELD = 1 + (3 - 1) * (1 + 2 + 4 + 8);
 export const HYBRID_TCN_ARCHITECTURE =
-  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_CUMULATIVE_SHARPE_V4';
+  'CAUSAL_TCN_24x29_DILATIONS_1_2_4_8_KERNEL3_RECEPTIVE_FIELD31_KAMA_ER_VOLATILITY_Z_GATE_BTC_COUNTERTREND_CUMULATIVE_SHARPE_V5';
 
 const HIDDEN = 12;
 const DILATIONS = Object.freeze([1, 2, 4, 8]);
@@ -63,7 +69,7 @@ export const HYBRID_TCN_CONFIGURATION = Object.freeze({
   minimum_kama_efficiency_ratio: 0.20,
   minimum_volatility_zscore: 0,
   btc_countertrend_penalty: 'EXPONENTIAL_0_12_PER_NEGATIVE_1PCT_12_BAR_BTC_RETURN',
-  training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_BTC_COUNTERTREND_PENALTY_V4'
+  training_objective: 'CUMULATIVE_EQUITY_SHARPE_WITH_BTC_COUNTERTREND_PENALTY_V5'
 });
 const EPS = 1e-8;
 const DEFAULT_COST_BPS = 30; // 10 bps fee + 5 bps slippage on each side.
@@ -475,7 +481,7 @@ export function buildHybridSequence({
       shortVol * 100,
       adaptiveVol,
       relativeBtc * 100,
-      depth ? 1 : 0,
+      btcTrendReturnPct === null ? 0 : clamp(btcTrendReturnPct / 4, -4, 4),
       aggImbalance === null ? 0 : 1,
       volumeProfile.source === 'AGG_TRADE_PRICE_LEVELS' ? 1 : 0,
       priorBenchmarkMatches ? 1 : 0,
@@ -659,6 +665,12 @@ export function prepareHybridBenchmarkEvent({
     entryPrice, decisionAt: at, futureCandles, horizonMs: 4 * 60 * 60 * 1000
   });
   if (outcome.resolved !== true) return { ready: false, reason: outcome.reason, outcome };
+  if(outcome.exit_reason==='STOP_FIRST_SAME_CANDLE_AMBIGUITY')
+    return {ready:false,reason:'AMBIGUOUS_FIRST_TOUCH_WITHIN_ONE_CANDLE',outcome};
+  const firstTouchOutcome=outcome.exit_reason==='TAKE_PROFIT'?'UP':
+    outcome.exit_reason==='STOP_LOSS'?'DOWN':
+    outcome.exit_reason==='HORIZON_END'?'FLAT':null;
+  if(!firstTouchOutcome)return {ready:false,reason:'FIRST_TOUCH_OUTCOME_NOT_RECOGNIZED',outcome};
   return {
     ready: true,
     row: {
@@ -681,6 +693,8 @@ export function prepareHybridBenchmarkEvent({
       volatility_zscore: features.volatility_zscore,
       btc_trend_return_pct: features.btc_trend_return_pct,
       outcome_definition: DEFAULT_TARGET_DEFINITION,
+      outcome:firstTouchOutcome,
+      target:firstTouchOutcome==='UP'?1:0,
       sequence: features.sequence,
       sequence_timestamps:features.sequence_timestamps,
       feature_information_cutoff_at:features.feature_information_cutoff_at,
@@ -699,22 +713,63 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     const symbol = String(raw.symbol ?? '').trim().toUpperCase();
     const market = String(raw.market ?? '').trim().toUpperCase();
     const outcomeSource = String(raw.outcome_source ?? '').trim().toUpperCase();
-    const rowTargetDefinition=String(raw.outcome_definition??'').trim();
+    const rowTargetDefinition=String(raw.outcome_definition??raw.target_definition??'').trim();
     const marketRegime=String(raw.market_regime??'').trim().toUpperCase();
     const historicalWindowId=String(raw.historical_window_id??'').trim();
+    const exitReason=String(raw.outcome_exit_reason??'').trim().toUpperCase();
+    const firstTouchOutcome=['UP','DOWN','FLAT'].includes(raw.outcome)?raw.outcome:
+      exitReason==='TAKE_PROFIT'?'UP':
+      exitReason==='STOP_LOSS'?'DOWN':
+      exitReason==='HORIZON_END'?'FLAT':null;
+    const firstTouchTarget=firstTouchOutcome==='UP'?1:0;
+    const fourHourContract=targetDefinition===NEURAL_CLOSURE_TARGET_DEFINITION;
+    const sourceAudit=raw.source_audit;
+    const sourceAuditValid=raw.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(raw.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      raw.first_touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
+    const fourHourSemanticsValid=!fourHourContract||
+      (raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&sourceAuditValid);
+    const touch=raw.first_touch;
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const exitBarriersValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
     const at = finite(raw.at);
-    const latestInputAt = finite(raw.latest_input_at);
     const resolvedAt = finite(raw.resolved_at);
-    const maturityMs = finite(raw.maturity_ms);
-    const outcomeHorizonMs = finite(raw.outcome_horizon_ms);
-    const gross = finite(raw.gross_return_pct);
+    const latestInputAt = finite(raw.latest_input_at??raw.feature_information_cutoff_at);
+    const maturityMs = finite(raw.maturity_ms)??(
+      at!==null&&resolvedAt!==null?resolvedAt-at:null);
+    const expectedTouchResolution=firstTouchOutcome==='UP'?'TAKE_PROFIT_FIRST':
+      firstTouchOutcome==='DOWN'?'STOP_LOSS_FIRST':'HORIZON_END';
+    const fourHourTouchValid=!fourHourContract||
+      (exitBarriersValid&&outcomeSource===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+       touch?.path_resolution==='1M'&&touch.resolution===expectedTouchResolution&&
+       Number(touch?.observed_candles)===240&&
+       finite(touch?.first_touch_at)!==null&&
+       (firstTouchOutcome==='FLAT'
+         ?Number(touch.first_touch_at)===resolvedAt
+         :Number(touch.first_touch_at)>at&&
+          Number(touch.first_touch_at)<=resolvedAt)&&
+       maturityMs===NEURAL_CLOSURE_HORIZON_MS);
+    const outcomeHorizonMs = finite(raw.outcome_horizon_ms??raw.horizon_ms);
+    const gross = finite(raw.gross_return_pct??raw.realized_return_pct);
+    const gapAwareExecutionValid=!fourHourContract||
+      (raw.execution_return_contract===NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT&&
+       isValidFourHourFirstTouchExecution(touch,firstTouchOutcome,gross));
     const adverse = finite(raw.max_adverse_excursion_pct);
     const adverseAt = finite(raw.max_adverse_excursion_at);
     const favourable = finite(raw.max_favorable_excursion_pct);
     const favourableAt = finite(raw.max_favorable_excursion_at);
     const classic = finite(raw.classic_score);
-    const sequence = raw.sequence;
-    const sequenceTimestamps=raw.sequence_timestamps;
+    const sequence = raw.sequence??raw.temporal_sequence;
+    const sequenceTimestamps=raw.sequence_timestamps??raw.temporal_sequence_timestamps;
     const expectedSequenceIntervalMs=outcomeSource==='BINANCE_SPOT_CLOSED_1M_REPLAY'
       ?HYBRID_REPLAY_CANDLE_INTERVAL_MS:HYBRID_CANDLE_INTERVAL_MS;
     const temporalAlignment=validateTemporalSequenceAlignment({
@@ -731,8 +786,12 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
     if (!temporalAlignment.valid ||
         !id || !/^[A-Z0-9]{1,26}USDT$/.test(symbol) ||
         market !== 'BINANCE_SPOT_USDT' ||
-        !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M'].includes(outcomeSource) ||
+        !['BINANCE_SPOT_CLOSED_1M_REPLAY','BINANCE_SPOT_CLOSED_15M',
+          NEURAL_CLOSURE_OUTCOME_SOURCE].includes(outcomeSource) ||
         rowTargetDefinition!==targetDefinition ||
+        !fourHourTouchValid ||!fourHourSemanticsValid ||!gapAwareExecutionValid ||
+        !['UP','DOWN','FLAT'].includes(firstTouchOutcome) ||
+        (raw.target!==undefined&&Number(raw.target)!==firstTouchTarget) ||
         !REQUIRED_MARKET_REGIMES.includes(marketRegime) ||
         !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(historicalWindowId) ||
         at === null || latestInputAt === null || latestInputAt !== at ||
@@ -767,6 +826,7 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       volatility_zscore: volatilityZScore,
       btc_trend_return_pct: btcTrendReturnPct,
       outcome_definition:rowTargetDefinition,
+      outcome:firstTouchOutcome,target:firstTouchTarget,
       sequence: sequence.map(step => step.map(Number)),
       feature_snapshot_sha: typeof raw.feature_snapshot_sha === 'string' ? raw.feature_snapshot_sha : null
     });
@@ -863,6 +923,30 @@ function zerosLike(value) {
   }
   return typeof value === 'number' ? 0 : value;
 }
+function accumulateTreeInPlace(left, right) {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length)
+      throw new TypeError('HYBRID_GRADIENT_TREE_SHAPE_MISMATCH');
+    for (let index = 0; index < left.length; index++)
+      left[index] = accumulateTreeInPlace(left[index], right[index]);
+    return left;
+  }
+  if ((left && typeof left === 'object') || (right && typeof right === 'object')) {
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object')
+      throw new TypeError('HYBRID_GRADIENT_TREE_TYPE_MISMATCH');
+    const leftKeys = Object.keys(left), rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length || leftKeys.some(key => !Object.hasOwn(right, key)))
+      throw new TypeError('HYBRID_GRADIENT_TREE_KEYS_MISMATCH');
+    for (const key of leftKeys) left[key] = accumulateTreeInPlace(left[key], right[key]);
+    return left;
+  }
+  if (!Number.isFinite(left) || !Number.isFinite(right))
+    throw new TypeError('HYBRID_GRADIENT_TREE_NON_FINITE');
+  const sum = left + right;
+  if (!Number.isFinite(sum)) throw new TypeError('HYBRID_GRADIENT_ACCUMULATION_NON_FINITE');
+  return sum;
+}
+
 function addTrees(left, right) {
   if (Array.isArray(left)) return left.map((value, index) => addTrees(value, right[index]));
   if (left && typeof left === 'object') {
@@ -1134,8 +1218,24 @@ export function profitDrawdownObjective(probabilities, rows, {
   const cost = Math.max(0, Number(roundTripCostBps) || 0);
   const size = clamp(Number(positionFraction) || DEFAULT_POSITION_FRACTION, 0.01, 1);
   const temp = clamp(Number(temperature) || 0.10, 0.02, 0.5);
+  const binaryTargetForRow=row=>{
+    const explicit=finite(row?.target);
+    if(explicit!==null){
+      if(explicit!==0&&explicit!==1)
+        throw new TypeError('HYBRID_OBJECTIVE_TARGET_MUST_BE_BINARY');
+      return explicit;
+    }
+    if(row?.outcome==='UP')return 1;
+    if(row?.outcome==='DOWN'||row?.outcome==='FLAT')return 0;
+    // Backwards-compatible diagnostic fixtures without labels use the
+    // realized net-return sign. Canonical first-touch rows always carry an
+    // explicit binary target and never reach this fallback.
+    return netReturnPct(row,roundTripCostBps)>0?1:0;
+  };
+  const binaryTargets=rows.map(binaryTargetForRow);
   const pairs = rows.map((row, index) => ({
-    row, probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
+    row, target:binaryTargets[index],
+    probability: clamp(Number(probabilities[index]), 0.001, 0.999), index
   })).sort((a, b) => a.row.at - b.row.at || a.row.symbol.localeCompare(b.row.symbol));
   const positions = Array(rows.length).fill(0);
   const orderedReturns = Array(rows.length).fill(0);
@@ -1223,24 +1323,11 @@ export function profitDrawdownObjective(probabilities, rows, {
   for (const pair of pairs) {
     if (!focalEligible[pair.index]) continue;
     const probability = clamp(pair.probability, 0.001, 0.999);
-    const positive = netReturnPct(pair.row, cost) > 0;
-    const gamma = positive ? gammaPositive : gammaNegative;
-    const classWeight = positive ? positiveWeight : negativeWeight;
-    let focalLoss, derivativeProbability;
-    if (positive) {
-      const missProbability = 1 - probability;
-      focalLoss = -classWeight * (missProbability ** gamma) * Math.log(probability);
-      const modulationDerivative = gamma > 0 ? gamma * (missProbability ** (gamma - 1)) : 0;
-      derivativeProbability = classWeight * modulationDerivative * Math.log(probability) -
-        classWeight * (missProbability ** gamma) / probability;
-    } else {
-      focalLoss = -classWeight * (probability ** gamma) * Math.log(1 - probability);
-      const modulationDerivative = gamma > 0 ? gamma * (probability ** (gamma - 1)) : 0;
-      derivativeProbability = -classWeight * modulationDerivative * Math.log(1 - probability) +
-        classWeight * (probability ** gamma) / (1 - probability);
-    }
-    focalLossSum += focalLoss;
-    focalLogitGradients[pair.index] = derivativeProbability * probability * (1 - probability) / focalDenominator;
+    const focal = focalAsymmetricBrierLoss(probability,pair.target,{
+      gammaPositive,gammaNegative,positiveWeight,negativeWeight
+    });
+    focalLossSum += focal.loss;
+    focalLogitGradients[pair.index] = focal.logitGradient / focalDenominator;
   }
   const asymmetricFocalLoss = focalSampleCount ? focalLossSum / focalDenominator : 0;
   // Same-timestamp pairwise ranking: the scanner's task is to rank stronger
@@ -1253,7 +1340,8 @@ export function profitDrawdownObjective(probabilities, rows, {
     const key = String(pair.row.at);
     if (!byDecisionTime.has(key)) byDecisionTime.set(key, { positive: [], negative: [] });
     const group = byDecisionTime.get(key);
-    (netReturnPct(pair.row, cost) > 0 ? group.positive : group.negative).push(pair);
+    const isPositive=pair.target===1;
+    (isPositive ? group.positive : group.negative).push(pair);
   }
   const rankingPairs = [];
   for (const group of byDecisionTime.values()) {
@@ -1341,9 +1429,12 @@ export function profitDrawdownObjective(probabilities, rows, {
 
 export function trainHybridTcnAttention(trainingRows, {
   epochs = 8, learningRate = 0.003, l2 = 0.001,
-  seed = 17, objectiveOptions = {}
+  seed = 17, objectiveOptions = {},
+  targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
-  const rows = normalizeBenchmarkRows(trainingRows);
+  if(![DEFAULT_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_DEFINITION].includes(targetDefinition))
+    throw new Error('UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION');
+  const rows = normalizeBenchmarkRows(trainingRows,targetDefinition);
   if (rows.length < 20) throw new Error('HYBRID_TCN_REQUIRES_AT_LEAST_20_TRAINING_ROWS');
   const normalization = fitHybridFeatureNormalization(rows);
   const normalizedRows = rows.map(row => ({
@@ -1361,11 +1452,19 @@ export function trainHybridTcnAttention(trainingRows, {
   const totalEpochs = Math.max(1, Math.min(50, Math.trunc(Number(epochs) || 8)));
   const trace = [];
   for (let epoch = 1; epoch <= totalEpochs; epoch++) {
-    const caches = normalizedRows.map(row => forwardHybrid(row.sequence, model));
-    if(caches.some(cache=>!Number.isFinite(cache.probability)||
-        cache.probability<0||cache.probability>1||!Number.isFinite(cache.rawLogit)))
-      throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE');
-    const objective = profitDrawdownObjective(caches.map(cache => cache.probability), normalizedRows, {
+    // Retain scalar probabilities only. A full forward cache contains every
+    // time-step activation and convolution tensor; keeping one for every row
+    // caused replay #129 to exceed a 4 GiB JS heap on the 33-symbol cohort.
+    // The gradient pass below deterministically recomputes one cache at a time.
+    const probabilities = new Array(normalizedRows.length);
+    for (let index = 0; index < normalizedRows.length; index++) {
+      const prediction = forwardHybrid(normalizedRows[index].sequence, model);
+      if (!Number.isFinite(prediction.probability) || prediction.probability < 0 ||
+          prediction.probability > 1 || !Number.isFinite(prediction.rawLogit))
+        throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE:' + index);
+      probabilities[index] = prediction.probability;
+    }
+    const objective = profitDrawdownObjective(probabilities, normalizedRows, {
       enforceMarketGates: true, ...objectiveOptions
     });
     if(!Number.isFinite(objective.loss)||
@@ -1373,11 +1472,14 @@ export function trainHybridTcnAttention(trainingRows, {
        objective.logit_gradients.length!==normalizedRows.length||
        objective.logit_gradients.some(value=>!Number.isFinite(value)))
       throw new TypeError('HYBRID_TCN_OBJECTIVE_OR_GRADIENT_NON_FINITE');
-    let gradients = zerosLike(parameters());
+    const gradients = zerosLike(parameters());
     for (let index = 0; index < normalizedRows.length; index++) {
-      const item = gradientsForHybrid(normalizedRows[index].sequence, model, caches[index],
+      const cache = forwardHybrid(normalizedRows[index].sequence, model);
+      if (!Number.isFinite(cache.probability) || !Number.isFinite(cache.rawLogit))
+        throw new TypeError('HYBRID_TCN_BACKPROP_FORWARD_NON_FINITE:' + index);
+      const item = gradientsForHybrid(normalizedRows[index].sequence, model, cache,
         objective.logit_gradients[index]);
-      gradients = addTrees(gradients, item);
+      accumulateTreeInPlace(gradients, item);
     }
     const update = adamUpdate(parameters(), gradients, optimizer, epoch,
       clamp(Number(learningRate) || 0.003, 0.0001, 0.02), Math.max(0, Number(l2) || 0));
@@ -1399,7 +1501,13 @@ export function trainHybridTcnAttention(trainingRows, {
     trained_logit_scale: Math.exp(Math.log(4) * Math.tanh(Number(model.logitScaleRaw) || 0)),
     feature_names: [...HYBRID_FEATURE_NAMES],
     training_samples: rows.length, epochs: totalEpochs,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    memory_profile: {
+      forward_cache_strategy: 'SCALAR_PROBABILITY_PASS_THEN_SINGLE_ROW_RECOMPUTE',
+      maximum_simultaneous_forward_caches: 1,
+      retained_per_epoch_values: 'ONE_PROBABILITY_PER_ROW',
+      full_cache_recomputation_count_per_epoch: rows.length
+    },
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6',
     objective_trace: trace
   };
 }
@@ -1822,10 +1930,10 @@ export function runFixedShaBenchmark(inputRows, {
   if (!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha || ''))) {
     throw new Error('FIXED_BENCHMARK_REQUIRES_FULL_SOURCE_COMMIT_SHA');
   }
-  if(String(targetDefinition)!==DEFAULT_TARGET_DEFINITION) {
+  if(![DEFAULT_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_DEFINITION].includes(String(targetDefinition))) {
     throw new Error('UNSUPPORTED_HYBRID_BENCHMARK_TARGET_DEFINITION');
   }
-  const rows = normalizeBenchmarkRows(inputRows,DEFAULT_TARGET_DEFINITION);
+  const rows = normalizeBenchmarkRows(inputRows,String(targetDefinition));
   const outcomeSources=[...new Set(rows.map(row=>row.outcome_source))];
   if(outcomeSources.length>1)throw new Error('FIXED_BENCHMARK_MUST_USE_ONE_CLOSED_SPOT_OUTCOME_SOURCE');
   const datasetSha = sha256Canonical(rows);
@@ -1871,8 +1979,8 @@ export function runFixedShaBenchmark(inputRows, {
       ? round(rows.filter(row =>
         row.sequence.filter(step => step[22] === 1).length / row.sequence.length >= 0.8
       ).length / rows.length * 100, 4) : 0,
-    depth_availability_pct: rows.length
-      ? round(rows.filter(row => row.sequence.at(-1)?.[19] === 1).length / rows.length * 100, 4) : 0
+    btc_trend_directional_pct: rows.length
+      ? round(rows.filter(row => Math.abs(Number(row.sequence.at(-1)?.[19]) || 0) > 1e-6).length / rows.length * 100, 4) : 0
   };
   if (!marketRegimeCoverageComplete) return {
     status:'INSUFFICIENT_MARKET_REGIME_COVERAGE',
@@ -1901,7 +2009,7 @@ export function runFixedShaBenchmark(inputRows, {
     enforceMarketGates: true
   };
   for (const fold of walkForward.folds) {
-    const fitted = trainHybridTcnAttention(fold.train, { epochs });
+    const fitted = trainHybridTcnAttention(fold.train, { epochs,targetDefinition:String(targetDefinition) });
     const validationNeural = new Map(fold.validation.map(row =>
       [row.id, predictHybridTcnAttention(row.sequence, fitted).probability]));
     const validationClassic = new Map(fold.validation.map(row => [row.id, row.classic_score]));
@@ -2018,7 +2126,7 @@ export function runFixedShaBenchmark(inputRows, {
     outcome_sources: [...new Set(rows.map(row => row.outcome_source))],
     market_regimes:observedMarketRegimes,
     historical_window_count:integrity.historical_window_count,
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4',
+    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6',
     market_gate_policy: {
       kama_efficiency_ratio_period: 10,
       minimum_kama_efficiency_ratio: 0.20,

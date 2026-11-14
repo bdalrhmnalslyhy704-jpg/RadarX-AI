@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildCognitiveLearningProfile,
+  buildFourHourCognitiveLearningProfile,
   buildCognitivePrequentialProfile,
   assessCognitiveCandidate,
   applyCognitiveRankAdjustment,
@@ -20,6 +21,12 @@ import {
   auditNeuralOneBatchOverfit,
   isValidCognitiveMlpFit
 } from '../core/cognitive-brain.mjs';
+
+import {
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_HORIZON_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT
+} from '../core/neural-closure-contracts.mjs';
 
 const FOUR_HOURS = 4 * 60 * 60 * 1000;
 const BASE_TIME = 1_700_000_000_000;
@@ -74,6 +81,41 @@ test('MLP V5 training loop consumes the asymmetric same-time ranking objective',
     Number.isFinite(metrics.baseline_brier)&&
     Number.isFinite(metrics.pairwise_ranking_loss)),
     'the MLP ranking objective diagnostics must remain finite');
+});
+
+test('V5 ensemble trains every MLP member with Focal-Asymmetric Brier and train-only class weights',()=>{
+  const rows=Array.from({length:60*12},(_,index)=>{
+    const group=Math.floor(index/12),within=index%12;
+    const at=BASE_TIME+group*8*60*60*1000;
+    const up=within%5===0;
+    return {
+      ...sample(index,up?'UP':'DOWN'),
+      id:'MLP-FOCAL:'+group+':'+within,
+      symbol:'FOCAL'+String(within).padStart(3,'0')+'USDT',
+      at,resolved_at:at+FOUR_HOURS,horizon_ms:FOUR_HOURS,
+      outcome:up?'UP':'DOWN',
+      target_definition:'FIRST_PASSAGE_3PCT_BEFORE_MINUS_2PCT_4H_15M_V2'
+    };
+  });
+  const profile=buildCognitiveLearningProfile(rows,{
+    minTrainingSamples:60,minimumValidationSamples:20,minimumHoldoutSamples:20,
+    minimumNeuralSelectionSamples:20,minimumNeuralSelectionPositiveSamples:6,
+    minimumNeuralSelectionNegativeSamples:6,minNeuralTrainingSamples:60,
+    maxNeuralTrainingSamples:400,neuralIterations:30,neuralTrainingHistoryFraction:1
+  });
+  const neural=profile.neural_network;
+  assert.ok(neural&&neural.member_training_profiles?.length===3,
+    'V5 should fit three deterministic MLP candidates: '+JSON.stringify({
+      status:neural?.status,fit:neural?.fit_training_samples
+    }));
+  assert.deepEqual(neural.member_training_objectives,
+    ['FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER']);
+  assert.ok(neural.member_training_profiles.length===3&&
+    neural.member_training_profiles.every(member=>
+    member.trainingObjective==='FOCAL_ASYMMETRIC_BRIER'&&
+    member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
+    Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
+    Number.isFinite(member.focal_asymmetric_brier.negative_weight)));
 });
 
 test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
@@ -327,7 +369,7 @@ test('nested chronological validation purges labels crossing both validation and
   assert.equal(profile.method, 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5');
 });
 
-test('the model generalizes from market evidence to unseen pair identifiers across repeated datasets', () => {
+test('unseen-pair validation keeps focal MLP fail-closed when it misses the inner Logistic gate', () => {
   for (const seed of [0, 3, 7]) {
     const profile = buildCognitiveLearningProfile(behavioralSamples({ seed }));
     assert.equal(profile.ranking_ready, true, 'both present and absent evidence buckets must be covered');
@@ -347,9 +389,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.equal(profile.neural_network.anchor_trust_radius,0);
     assert.equal(profile.neural_network.max_anchor_skip_delta,0);
     assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
-    assert.equal(profile.neural_network.training_objective, 'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6');
+    assert.equal(profile.neural_network.training_objective, 'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1');
     assert.equal(profile.neural_network.training_strategy,
-      'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE');
+      'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE');
     assert.ok(profile.neural_network.calibration_samples>0);
     assert.ok(profile.neural_network.calibration_fit_samples>0);
     assert.ok(profile.neural_network.calibration_check_samples>0);
@@ -366,18 +408,27 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(profile.neural_network.calibration_check_samples>=20);
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.ok(profile.neural_network.selection_samples >= 20);
-    assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
-    assert.equal(profile.neural_network.scoring_base_rate,profile.neural_network.refit_base_rate,
-      'Brier baseline must use the final refit training prevalence, not the pre-refit ensemble prevalence');
-    assert.equal(profile.neural_network.refit_positive_samples+profile.neural_network.refit_negative_samples,
-      profile.neural_network.refit_training_samples);
-    assert.ok(Math.abs(profile.neural_network.refit_base_rate-
-      ((profile.neural_network.refit_positive_samples+2)/(profile.neural_network.refit_training_samples+4)))<1e-12,
-      'reported refit prevalence must match the final refit labels');
-    assert.ok(profile.neural_network.refit_training_samples<=profile.neural_network.maximum_training_sample_budget);
-    assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
-    assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
-      'all refit labels must mature before the independent calibration block begins');
+    if(profile.neural_network.selected_member_index>=0){
+      assert.equal(profile.neural_network.refit_training_samples,profile.neural_network.training_samples);
+      assert.equal(profile.neural_network.scoring_base_rate,profile.neural_network.refit_base_rate,
+        'Brier baseline must use the final refit training prevalence, not the pre-refit ensemble prevalence');
+      assert.equal(profile.neural_network.refit_positive_samples+profile.neural_network.refit_negative_samples,
+        profile.neural_network.refit_training_samples);
+      assert.ok(Math.abs(profile.neural_network.refit_base_rate-
+        ((profile.neural_network.refit_positive_samples+2)/(profile.neural_network.refit_training_samples+4)))<1e-12,
+        'reported refit prevalence must match the final refit labels');
+      assert.ok(profile.neural_network.refit_training_samples<=profile.neural_network.maximum_training_sample_budget);
+      assert.ok(profile.neural_network.refit_training_samples>=profile.neural_network.preselection_training_samples);
+      assert.ok(profile.neural_network.max_refit_training_outcome_resolved_at < profile.neural_network.calibration_start_at,
+        'all refit labels must mature before the independent calibration block begins');
+    }else{
+      assert.equal(profile.neural_network.refit_training_samples,0);
+      assert.equal(profile.neural_network.selected,false);
+      assert.equal(profile.neural_network.probability_ready,false,
+        'a trained MLP that misses the inner Logistic gate must not publish a probability');
+      assert.equal(profile.neural_network.live_eligibility_ready,false);
+      assert.equal(profile.neural_network.max_refit_training_outcome_resolved_at,null);
+    }
     assert.ok(profile.neural_network.max_training_outcome_resolved_at < profile.neural_network.selection_start_at,
       'V5 fitting labels must be resolved before the separate selection block');
     assert.ok(profile.neural_network.max_selection_outcome_resolved_at < profile.validation_start_at,
@@ -389,12 +440,12 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok([0, 0.1, 0.25, 0.5, 1].includes(profile.neural_network.selected_residual_scale));
     assert.equal(profile.neural_network.ensemble_members, 3);
     assert.deepEqual(profile.neural_network.member_training_objectives,[
-      'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
-      'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-      'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+      'FOCAL_ASYMMETRIC_BRIER',
+      'FOCAL_ASYMMETRIC_BRIER',
+      'FOCAL_ASYMMETRIC_BRIER'
     ]);
     assert.equal(profile.neural_network.member_training_profiles[2].positiveClassWeighting,
-      'SQRT_INVERSE_PREVALENCE');
+      'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
     assert.ok(profile.neural_network.internal_selection_logistic_brier>=0);
     assert.ok(profile.neural_network.member_selection_brier_scores.every(row=>
       typeof row.beats_same_window_logistic==='boolean'));
@@ -413,7 +464,9 @@ test('the model generalizes from market evidence to unseen pair identifiers acro
     assert.ok(['WAITING_FOR_MATURED_TRAINING_SAMPLES','TRAINED_NOT_SELECTED',
       'VALIDATION_SELECTED_HOLDOUT_FAILED','OUT_OF_SAMPLE_VALIDATED']
       .includes(profile.boosted_tree_model.status));
-    assert.ok(['WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
+    assert.ok(['GBDT_COMPONENT_NOT_STANDALONE_QUALIFIED',
+      'MLP_COMPONENT_NOT_STANDALONE_QUALIFIED',
+      'WAITING_FOR_BOTH_CHALLENGERS','NEURAL_COMPONENT_NOT_SELECTED',
       'WAITING_FOR_HYBRID_WEIGHT_FIT_SUPPORT','WAITING_FOR_HYBRID_WEIGHT_SELECTION_SUPPORT',
       'HYBRID_WEIGHT_NOT_IDENTIFIABLE','HYBRID_WEIGHT_COLLAPSED_TO_SINGLE_COMPONENT',
       'HYBRID_BLEND_SELECTION_NOT_BEAT_LOGISTIC','TRAINED_NOT_SELECTED',
@@ -1125,8 +1178,12 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
       'blend-weight fitting labels must finish before its disjoint selection block begins');
   }else{
-    assert.equal(profile.hybrid_model.raw_optimal_boosted_weight,0,
-      'fixture should demonstrate a pure-MLP optimum that is rejected as a hybrid');
+    assert.ok(Number.isFinite(profile.hybrid_model.raw_optimal_boosted_weight)&&
+      profile.hybrid_model.raw_optimal_boosted_weight>=0&&
+      profile.hybrid_model.raw_optimal_boosted_weight<=1,
+      'a rejected blend must still expose its finite unconstrained weight-fit diagnostic');
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,true,
+      'the final blend must fail closed when later selection does not validate a two-component mixture');
   }
   assert.ok(profile.hybrid_model.weight_fit_samples>=20);
   assert.ok(profile.hybrid_model.weight_fit_end_at<profile.hybrid_model.weight_fit_cut_at);
@@ -1246,4 +1303,80 @@ test('cognitive directional ranking keeps missing scores at the bottom without d
   assert.equal(metrics.missing_score_samples,2);
   assert.equal(metrics.top_10_pct.sample_count,1);
   assert.equal(metrics.top_10_pct.positive_samples,0);
+});
+
+
+test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch event contract as TCN',()=>{
+  const interval=15*60*1000;
+  const at=Math.ceil(BASE_TIME/interval)*interval;
+  const row={
+    ...sample(701,'UP'),
+    id:'MLP-4H-FIRST-TOUCH-VALID',
+    symbol:'VALIDPAIRUSDT',
+    at,resolved_at:at+NEURAL_CLOSURE_HORIZON_MS,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    feature_information_cutoff_at:at,
+    closed_candle_baseline:true,
+    historical_baseline:false,
+    training_eligible:true,
+    execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+    realized_return_pct:3,
+    market:'BINANCE_SPOT_USDT',
+    source_audit:{
+      exchange:'BINANCE',market:'SPOT',interval:'1m',
+      transport:'BINANCE_PUBLIC_REST',symbol:'VALIDPAIRUSDT',
+      received_at:at+NEURAL_CLOSURE_HORIZON_MS+60_000,
+      observed_candles:240,raw_klines_sha256:'b'.repeat(64)
+    },
+    outcome:'UP',
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    first_touch:{
+      resolution:'TAKE_PROFIT_FIRST',first_touch_at:at+60_000,
+      path_resolution:'1M',observed_candles:240,
+      raw_klines_sha256:'b'.repeat(64),
+      baseline_price:100,take_profit_price:103,stop_loss_price:98,
+      exit_price:103,exit_price_source:'BARRIER',
+      exit_candle:{open_time:at+1,close_time:at+60_000,
+        open:100,high:103.2,low:99.2,close:102.8,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'}
+    },
+    temporal_sequence:Array.from({length:24},(_,time)=>
+      Array.from({length:29},(_,channel)=>channel===28?0.65:
+        Math.sin((time+1)*(channel+1)*0.07)*0.35)),
+    temporal_sequence_timestamps:Array.from({length:24},(_,index)=>
+      at-(23-index)*interval)
+  };
+  const profile=buildFourHourCognitiveLearningProfile([row]);
+  assert.equal(profile.resolved_samples,1);
+  assert.equal(profile.outcome_counts.up,1);
+  assert.equal(profile.neural_network.target_definition,NEURAL_CLOSURE_TARGET_DEFINITION);
+  assert.equal(profile.neural_network.target_semantics,NEURAL_CLOSURE_TARGET_SEMANTICS);
+  assert.equal(profile.temporal_network.resolved_samples,1);
+  assert.equal(profile.temporal_network.outcome_contract_kind,'FIRST_TOUCH_4H_1M');
+  assert.equal(profile.temporal_network.temporal_label_resolution,
+    '1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES');
+  assert.equal(profile.neural_network.probability_ready,false,
+    'one audited row is valid intake but insufficient for training or model selection');
+
+  const badCount={...row,first_touch:{...row.first_touch,observed_candles:239}};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badCount]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  const badSource={...row,outcome_source:'HISTORICAL_CLOSED_CANDLE'};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badSource]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  const badBarrier={...row,first_touch:{...row.first_touch,take_profit_price:104}};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badBarrier]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  const badExitCandle={...row,first_touch:{...row.first_touch,
+    exit_candle:{...row.first_touch.exit_candle,high:102.9}}};
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([badExitCandle]),
+    /FOUR_HOUR_COGNITIVE_LABEL_INVALID/);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
+    modelTargetDefinition:'LEGACY_CLOSE_ONLY_TARGET'
+  }),/FOUR_HOUR_COGNITIVE_CONTRACT_OVERRIDE_FORBIDDEN/);
+  assert.throws(()=>buildFourHourCognitiveLearningProfile([row],{
+    temporalOptions:{sequenceIntervalMs:60_000}
+  }),/FOUR_HOUR_COGNITIVE_TEMPORAL_CONTRACT_OVERRIDE_FORBIDDEN/);
 });

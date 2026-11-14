@@ -1,4 +1,14 @@
 import {buildTemporalNeuralProfile,predictTemporalProbability,TEMPORAL_TARGET_DEFINITION} from './temporal-neural-brain.mjs';
+import {
+  focalAsymmetricBrierLoss,deriveTrainingClassWeights,
+  fitTemperatureScaler,fitPlattScaler,
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_OUTCOME_SOURCE,
+  NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
+} from './neural-closure-contracts.mjs';
+import {createVersionedModelArtifact} from './model-artifact-guardian.mjs';
 
 // Machine-readable identity for runtime/deployment acceptance. This is a code
 // contract only; it does not imply that either challenger has passed validation.
@@ -193,6 +203,21 @@ const asUpEventRows = rows => (Array.isArray(rows)?rows:[]).map(row=>({...row,ta
 
 function factorValues(features = {}) {
   return Object.fromEntries(FACTORS.map(factor => [factor.key, Boolean(factor.test(features || {}))]));
+}
+
+function researchArtifactSafeValue(value,path='model_state'){
+  if(Array.isArray(value))return value.map((item,index)=>
+    item===undefined?null:researchArtifactSafeValue(item,path+'['+index+']'));
+  if(value&&typeof value==='object'){
+    return Object.fromEntries(Object.entries(value)
+      .filter(([,child])=>child!==undefined)
+      .map(([key,child])=>[key,researchArtifactSafeValue(child,path+'.'+key)]));
+  }
+  if(typeof value==='number'&&!Number.isFinite(value))
+    throw new TypeError('COGNITIVE_RESEARCH_ARTIFACT_NON_FINITE:'+path);
+  if(typeof value==='function'||typeof value==='symbol'||typeof value==='bigint')
+    throw new TypeError('COGNITIVE_RESEARCH_ARTIFACT_NON_SERIALIZABLE:'+path);
+  return value;
 }
 
 function normalizedFeatures(features = {}, featureSchema=COGNITIVE_FEATURE_SCHEMA) {
@@ -629,7 +654,9 @@ function fitNeuralNetworkModel(training, {
   anchorAdaptation = 'FROZEN',
   outputInitializationScale = 0.015,
   enableAsymmetricDirectionalRankingLoss = false,
-  directionalRankingLossConfig = {}
+  directionalRankingLossConfig = {},
+  focalGammaPositive = 1,
+  focalGammaNegative = 2
 } = {}) {
   const sourceRows=Array.isArray(training)?training:[];
   const featureNames=[...(sourceRows[0]?.feature_names||FEATURE_NAMES)];
@@ -644,10 +671,22 @@ function fitNeuralNetworkModel(training, {
   if(!rawRows.length)return null;
   const positiveSamples=rawRows.filter(row=>row.target>0.5).length;
   const negativeSamples=rawRows.length-positiveSamples;
-  const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
+  const isFocalObjective=trainingObjective==='FOCAL_ASYMMETRIC_BRIER';
+  if(isFocalObjective&&rawRows.some(row=>row.target!==0&&row.target!==1))
+    throw new TypeError('NEURAL_FOCAL_ASYMMETRIC_BRIER_REQUIRES_BINARY_TARGETS');
+  const usePositiveClassWeighting=!isFocalObjective&&positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
   const positiveSampleWeight=usePositiveClassWeighting&&positiveSamples>0
     ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
-  const rows=rawRows.map(row=>({...row,sample_weight:row.target>0.5?positiveSampleWeight:1}));
+  const focalClassWeights=isFocalObjective
+    ?deriveTrainingClassWeights(rawRows.map(row=>row.target))
+    :{positiveWeight:1,negativeWeight:1};
+  const focalWeights={
+    positiveWeight:focalClassWeights.positiveWeight,
+    negativeWeight:focalClassWeights.negativeWeight,
+    gammaPositive:focalGammaPositive,gammaNegative:focalGammaNegative
+  };
+  const rows=rawRows.map(row=>({...row,sample_weight:isFocalObjective?1:
+    row.target>0.5?positiveSampleWeight:1}));
   const totalSampleWeight=rows.reduce((sum,row)=>sum+row.sample_weight,0);
 
   const inputSize=featureCount;
@@ -790,10 +829,12 @@ function fitNeuralNetworkModel(training, {
       const brierLoss=(safeProbability-row.target)**2;
       const logLoss=-(row.target*Math.log(safeProbability)+
         (1-row.target)*Math.log(1-safeProbability));
-      const objectiveLoss=trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-        ?logLoss
-        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-          ?0.5*brierLoss+0.5*logLoss:brierLoss;
+      const objectiveLoss=trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+        ?focalAsymmetricBrierLoss(safeProbability,row.target,focalWeights).loss
+        :trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+          ?logLoss
+          :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+            ?0.5*brierLoss+0.5*logLoss:brierLoss;
       if(!directionalLoss)weightedObjectiveLoss+=objectiveLoss*row.sample_weight;
       // Optimize the proper-score objective by default. The optional ranking
       // path supplies an exact derivative of its composite objective w.r.t. logit.
@@ -801,11 +842,13 @@ function fitNeuralNetworkModel(training, {
       const logLossGradient=probability-row.target;
       const error=directionalLoss
         ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight
-        :(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-          ?logLossGradient
-          :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-            ?0.5*brierGradient+0.5*logLossGradient
-            :brierGradient)*row.sample_weight;
+        :trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+          ?focalAsymmetricBrierLoss(safeProbability,row.target,focalWeights).logitGradient
+          :(trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+            ?logLossGradient
+            :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+              ?0.5*brierGradient+0.5*logLossGradient
+              :brierGradient)*row.sample_weight;
       // The same-window logistic path is a frozen anchor. Only the hidden
       // nonlinear branch is trained, so a weak residual cannot erase the
       // simpler model that already supplied the initial prediction.
@@ -951,7 +994,17 @@ function fitNeuralNetworkModel(training, {
     output_weights:outputWeights,output_bias:outputBias,skip_weights:skipWeights,
     base_rate:baseRate,feature_names:[...featureNames],feature_schema:featureSchema,
     training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
-    positive_class_weighting:usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    positive_class_weighting:isFocalObjective
+      ?'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'
+      :usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    focal_positive_weight:focalWeights.positiveWeight,
+    focal_negative_weight:focalWeights.negativeWeight,
+    focal_asymmetric_brier:isFocalObjective?{
+      gamma_positive:focalGammaPositive,gamma_negative:focalGammaNegative,
+      positive_weight:focalWeights.positiveWeight,negative_weight:focalWeights.negativeWeight,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY',
+      class_weight_logit_prior_correction:Math.log(focalWeights.positiveWeight/focalWeights.negativeWeight)
+    }:null,
     positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
     iterations:steps,l2:regularization,
     requested_iterations:steps,
@@ -1273,7 +1326,13 @@ export function fitFactorizationMachineModel(training,{
     training_samples:rows.length,positive_samples:positiveSamples,negative_samples:negativeSamples,
     positive_class_weighting:useWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
     positive_sample_weight:Number(positiveWeight.toFixed(5)),
-    training_objective:trainingObjective,iterations:epochHistory.length,
+    training_objective:trainingObjective,
+    focal_asymmetric_brier:isFocalObjective?{
+      gamma_positive:focalGammaPositive,gamma_negative:focalGammaNegative,
+      positive_weight:focalWeights.positiveWeight,negative_weight:focalWeights.negativeWeight,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY'
+    }:null,
+    iterations:epochHistory.length,
     requested_iterations:steps,l2:regularization,
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     scheduler:'COSINE_DECAY_10_PERCENT_FLOOR',
@@ -1316,14 +1375,19 @@ function fitNeuralEnsemble(training, options = {}) {
   const memberProfiles=[
     {iterations:Math.max(30,Math.ceil(baseIterations*0.6)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       outputInitializationScale,
-      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE')},
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:0.5,focalGammaNegative:0.5,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:baseIterations,learningRate:baseLearningRate,l2:baseL2,
       outputInitializationScale,
-      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE')},
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:1,focalGammaNegative:0.5,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
     {iterations:Math.min(180,Math.ceil(baseIterations*1.4)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       outputInitializationScale,
-      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
-      positiveClassWeighting:'SQRT_INVERSE_PREVALENCE'}
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:0.5,focalGammaNegative:1,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -1355,7 +1419,8 @@ function fitNeuralEnsemble(training, options = {}) {
     iterations:members[index]?.training_diagnostics?.epochs_completed??profile.iterations,
     best_epoch:members[index]?.training_diagnostics?.best_epoch??null,
     best_training_objective:members[index]?.training_diagnostics?.best_training_objective??null,
-    early_stopping:members[index]?.training_diagnostics?.early_stopping??null
+    early_stopping:members[index]?.training_diagnostics?.early_stopping??null,
+    focal_asymmetric_brier:members[index]?.focal_asymmetric_brier??null
   }));
   return {
     kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
@@ -1371,12 +1436,14 @@ function fitNeuralEnsemble(training, options = {}) {
     member_training_profiles:completedMemberProfiles,
     member_training_diagnostics:members.map((member,index)=>({
       member_index:index,seed:memberSeeds[index],
+      training_objective:member?.training_objective??memberProfiles[index]?.trainingObjective??null,
+      focal_asymmetric_brier:member?.focal_asymmetric_brier??null,
       ...(member?.training_diagnostics||{})
     })),
     training_strategy:factorizationMemberIndex>=0
       ?'RESIDUAL_MLP_PLUS_LOW_RANK_FACTOR_CROSS_V1_SAME_WINDOW_LOGISTIC_ANCHOR'
-      :'PROPER_LOSS_ENSEMBLE_RESIDUAL_MLP_VALIDATION_SHRUNK_V7_TRAIN_ONLY_CLASS_BALANCE',
-    training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V7',
+      :'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE',
+    training_objective:'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
     member_training_objectives:memberProfiles.map(profile=>profile.trainingObjective),
     residual_scale_selection:'CHRONOLOGICAL_VALIDATION_BLOCK_BRIER_GRID_V1',
     candidate_residual_scales:[...NEURAL_RESIDUAL_SCALES],
@@ -1402,9 +1469,19 @@ function applyAcceptedProbabilityCalibration(rawProbability,calibration){
   if(!Number.isFinite(rawProbability))return null;
   const raw=clamp(rawProbability,0.02,0.98);
   if(calibration?.accepted!==true)return raw;
-  const slope=clamp(Number(calibration.slope)||1,0.5,1.5);
-  const intercept=clamp(Number(calibration.intercept)||0,-0.75,0.75);
-  return clamp(logistic(slope*Math.log(raw/(1-raw))+intercept),0.02,0.98);
+  const logit=Math.log(raw/(1-raw));
+  if(calibration.method==='SLIDING_TEMPERATURE_SCALING_V1'){
+    const temperature=Number(calibration.temperature);
+    if(!Number.isFinite(temperature)||temperature<=0)return null;
+    return clamp(logistic(logit/temperature),0.02,0.98);
+  }
+  if(calibration.method==='DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2'||
+     calibration.method==='PLATT_SCALING'){
+    const slope=clamp(Number(calibration.slope)||1,0.05,20);
+    const intercept=clamp(Number(calibration.intercept)||0,-12,12);
+    return clamp(logistic(slope*logit+intercept),0.02,0.98);
+  }
+  return raw;
 }
 
 export function deriveBrierOptimalBlendWeight(
@@ -1475,6 +1552,43 @@ export function isValidCognitiveMlpFit(fit){
   }catch{return false;}
 }
 
+
+/** Read-only inference for the selected V5 member on the fixed 4h first-touch cohort. */
+export function predictFourHourCognitiveResearchProbability(features,fitOrModelState){
+  const state=fitOrModelState?.fit??fitOrModelState;
+  const fit=state?.fit??state;
+  const inference=state?.research_inference??fitOrModelState?.research_inference;
+  if(!fit||typeof fit!=='object')return null;
+  if(inference?.mode==='INNER_SELECTED_MEMBER'){
+    const probability=predictFromFit(features,fit);
+    return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+  }
+  if(inference?.mode==='INNER_BEST_DIAGNOSTIC_MEMBER'){
+    const index=Number(inference.index),scale=finite(inference.residual_scale);
+    if(!Number.isInteger(index)||index<0||index>=fit.members?.length||
+      scale===null||scale<=0)return null;
+    const probability=predictFromFit(features,fit.members[index],scale);
+    return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+  }
+  return null;
+}
+
+export function predictFourHourCognitiveChallengerProbability(features,fitOrModelState){
+  const fit=fitOrModelState?.fit??fitOrModelState;
+  if(!fit||typeof fit!=='object')return null;
+  const probability=predictFromFit(features,fit);
+  return Number.isFinite(probability)&&probability>=0&&probability<=1?probability:null;
+}
+
+export function predictFourHourCognitiveMlpProbability(features,fitOrModelState){
+  const fit=fitOrModelState?.fit??fitOrModelState;
+  if(fit?.kind!=='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'||
+    !Number.isInteger(fit.selected_member_index)||
+    fit.selected_member_index<0||
+    !Number.isFinite(Number(fit.selected_residual_scale)))return null;
+  return predictFourHourCognitiveChallengerProbability(features,fit);
+}
+
 function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
     return applyAcceptedProbabilityCalibration(
@@ -1526,6 +1640,13 @@ function predictFromFit(features, fit, residualScale=1) {
     const scale=clamp(finite(fit.residual_scale)??finite(residualScale)??1,0,1);
     for(let j=0;j<hidden2.length;j++)output+=scale*(Number(fit.output_weights[j])||0)*hidden2[j];
     for(let i=0;i<vector.length;i++)output+=vector[i]*(Number(fit.skip_weights[i])||0);
+    // Class-weighted focal Brier shifts the raw optimum away from the event
+    // prior. Undo the exact prior-weight logit offset before comparing raw
+    // member probabilities or fitting any later disjoint calibrator.
+    const focal=fit.focal_asymmetric_brier;
+    if(focal?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
+      Number.isFinite(focal.class_weight_logit_correction))
+      output-=focal.class_weight_logit_correction;
     return clamp(logistic(output),0.02,0.98);
   }
   if(fit?.kind==='NEURAL_MLP_V1'){
@@ -1554,74 +1675,123 @@ function predictFromFit(features, fit, residualScale=1) {
 
 
 function fitAndSelectProbabilityCalibrator(fitRows,checkRows,fit,{
-  minimumFitSamples=30,minimumFitPositive=6,minimumFitNegative=6,
-  minimumCheckSamples=20,minimumCheckPositive=3,minimumCheckNegative=3,
-  iterations=260,learningRate=0.035,regularization=0.55,
+  minimumFitSamples=100,minimumFitPositive=50,minimumFitNegative=50,
+  minimumCheckSamples=100,minimumCheckPositive=50,minimumCheckNegative=50,
   improvementMargin=0.00025
 }={}){
-  const makePredictions=(rows)=> (Array.isArray(rows)?rows:[]).map(row=>({
+  const makePredictions=rows=>(Array.isArray(rows)?rows:[]).map(row=>({
     probability:predictFromFit(row.features,fit),target:row.target
-  })).filter(row=>Number.isFinite(row.probability)&&Number.isFinite(row.target));
+  })).filter(row=>Number.isFinite(row.probability)&&Number.isFinite(row.target)&&
+    (row.target===0||row.target===1));
   const fitPredictions=makePredictions(fitRows);
-  const fitPositive=fitPredictions.filter(row=>row.target>0.5).length;
-  const fitNegative=fitPredictions.filter(row=>row.target<0.5).length;
+  const fitPositive=fitPredictions.filter(row=>row.target===1).length;
+  const fitNegative=fitPredictions.length-fitPositive;
   const base={
-    method:'DISJOINT_BRIER_PLATT_MODEL_CALIBRATION_V2',
+    method:'DISJOINT_TEMPERATURE_OR_PLATT_BRIER_CALIBRATION_V1',
+    candidate_methods:['SLIDING_TEMPERATURE_SCALING_V1','PLATT_SCALING'],
     fit_on:'LATE_CHRONOLOGICAL_CALIBRATION_FIT_BLOCK',
     check_on:'LATER_DISJOINT_CALIBRATION_CHECK_BLOCK',
     fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
     check_samples:0,check_positive:0,check_negative:0,
-    slope:1,intercept:0,fitted:false,accepted:false,
+    minimum_fit_positive:minimumFitPositive,minimum_fit_negative:minimumFitNegative,
+    minimum_check_positive:minimumCheckPositive,minimum_check_negative:minimumCheckNegative,
+    temperature:null,slope:null,intercept:null,fitted:false,accepted:false,
+    selected_method:'RAW_UNCALIBRATED',
     raw_check_brier:null,calibrated_check_brier:null,improvement:null
   };
   if(fitPredictions.length<minimumFitSamples||fitPositive<minimumFitPositive||
-     fitNegative<minimumFitNegative){
-    return {...base,reason:'CALIBRATION_FIT_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
-  }
-  const points=fitPredictions.map(row=>{
-    const probability=clamp(row.probability,0.02,0.98);
-    return {x:Math.log(probability/(1-probability)),target:row.target};
-  });
-  let slope=1,intercept=0;
-  for(let iteration=0;iteration<iterations;iteration++){
-    let slopeGradient=0,interceptGradient=0;
-    for(const point of points){
-      const prediction=logistic(slope*point.x+intercept);
-      const error=prediction-point.target;
-      const derivative=prediction*(1-prediction);
-      slopeGradient+=2*error*derivative*point.x;
-      interceptGradient+=2*error*derivative;
-    }
-    slopeGradient=slopeGradient/points.length+regularization*(slope-1);
-    interceptGradient=interceptGradient/points.length+regularization*intercept;
-    slope=clamp(slope-learningRate*slopeGradient,0.5,1.5);
-    intercept=clamp(intercept-learningRate*interceptGradient,-0.75,0.75);
-  }
+     fitNegative<minimumFitNegative)
+    return {...base,status:'INSUFFICIENT_FIT_CLASS_SUPPORT',
+      reason:'CALIBRATION_FIT_BLOCK_REQUIRES_50_POSITIVE_AND_NEGATIVE_MINIMUM'};
   const checkPredictions=makePredictions(checkRows);
-  const checkPositive=checkPredictions.filter(row=>row.target>0.5).length;
-  const checkNegative=checkPredictions.filter(row=>row.target<0.5).length;
+  const checkPositive=checkPredictions.filter(row=>row.target===1).length;
+  const checkNegative=checkPredictions.length-checkPositive;
   const checkBase={
-    ...base,fit_samples:fitPredictions.length,fit_positive:fitPositive,fit_negative:fitNegative,
-    check_samples:checkPredictions.length,check_positive:checkPositive,check_negative:checkNegative,
-    slope:Number(slope.toFixed(5)),intercept:Number(intercept.toFixed(5)),fitted:true
+    ...base,check_samples:checkPredictions.length,
+    check_positive:checkPositive,check_negative:checkNegative
   };
-  if(checkPredictions.length<minimumCheckSamples||checkPositive<minimumCheckPositive||
-     checkNegative<minimumCheckNegative){
-    return {...checkBase,reason:'CALIBRATION_CHECK_BLOCK_CLASS_SUPPORT_BELOW_MINIMUM'};
+  if(checkPredictions.length<minimumCheckSamples||
+     checkPositive<minimumCheckPositive||checkNegative<minimumCheckNegative)
+    return {...checkBase,status:'INSUFFICIENT_CHECK_CLASS_SUPPORT',
+      reason:'CALIBRATION_CHECK_BLOCK_REQUIRES_50_POSITIVE_AND_NEGATIVE_MINIMUM'};
+
+  const fitLogits=fitPredictions.map(row=>{
+    const probability=clamp(row.probability,1e-9,1-1e-9);
+    return Math.log(probability/(1-probability));
+  });
+  const fitLabels=fitPredictions.map(row=>row.target);
+  const temperatureFit=fitTemperatureScaler(fitLogits,fitLabels,{
+    minimumPositives:minimumFitPositive,minimumNegatives:minimumFitNegative
+  });
+  const plattFit=fitPlattScaler(fitLogits,fitLabels,{
+    minimumPositives:minimumFitPositive,minimumNegatives:minimumFitNegative
+  });
+  const checkLogits=checkPredictions.map(row=>{
+    const probability=clamp(row.probability,1e-9,1-1e-9);
+    return Math.log(probability/(1-probability));
+  });
+  const checkLabels=checkPredictions.map(row=>row.target);
+  const brier=(probabilities)=>probabilities.reduce((sum,p,index)=>
+    sum+(p-checkLabels[index])**2,0)/probabilities.length;
+  const rawBrier=brier(checkPredictions.map(row=>row.probability));
+  const candidates=[{
+    method:'RAW_UNCALIBRATED',calibrator:null,
+    brier:rawBrier
+  }];
+  if(temperatureFit.fitted&&Number.isFinite(temperatureFit.temperature)&&
+     temperatureFit.temperature>0){
+    candidates.push({
+      method:'SLIDING_TEMPERATURE_SCALING_V1',
+      calibrator:{method:'SLIDING_TEMPERATURE_SCALING_V1',
+        temperature:temperatureFit.temperature,fitted:true},
+      brier:brier(checkLogits.map(value=>logistic(value/temperatureFit.temperature)))
+    });
   }
-  const rawBrier=mean(checkPredictions.map(row=>(row.probability-row.target)**2));
-  const calibratedBrier=mean(checkPredictions.map(row=>{
-    const raw=clamp(row.probability,0.02,0.98);
-    const adjusted=logistic(slope*Math.log(raw/(1-raw))+intercept);
-    return (adjusted-row.target)**2;
-  }));
-  const improvement=rawBrier-calibratedBrier;
-  const accepted=improvement>improvementMargin;
+  if(plattFit.fitted&&Number.isFinite(plattFit.slope)&&
+     Number.isFinite(plattFit.intercept)){
+    candidates.push({
+      method:'PLATT_SCALING',
+      calibrator:{method:'PLATT_SCALING',slope:plattFit.slope,
+        intercept:plattFit.intercept,fitted:true},
+      brier:brier(checkLogits.map(value=>logistic(plattFit.slope*value+plattFit.intercept)))
+    });
+  }
+  candidates.sort((a,b)=>a.brier-b.brier||a.method.localeCompare(b.method));
+  const winner=candidates[0];
+  const improvement=rawBrier-winner.brier;
+  const accepted=winner.method!=='RAW_UNCALIBRATED'&&improvement>improvementMargin;
+  const selected=accepted?winner:{method:'RAW_UNCALIBRATED',calibrator:null,brier:rawBrier};
   return {
-    ...checkBase,accepted,raw_check_brier:Number(rawBrier.toFixed(5)),
-    calibrated_check_brier:Number(calibratedBrier.toFixed(5)),
-    improvement:Number(improvement.toFixed(5)),
-    reason:accepted?null:'CALIBRATION_DID_NOT_IMPROVE_DISJOINT_CHECK_BLOCK'
+    ...checkBase,
+    method:accepted?selected.method:'DISJOINT_TEMPERATURE_OR_PLATT_BRIER_CALIBRATION_V1',
+    status:'EVALUATED',
+    fitted:temperatureFit.fitted||plattFit.fitted,
+    accepted,
+    selected_method:selected.method,
+    temperature:selected.method==='SLIDING_TEMPERATURE_SCALING_V1'
+      ?selected.calibrator.temperature:null,
+    slope:selected.method==='PLATT_SCALING'?selected.calibrator.slope:null,
+    intercept:selected.method==='PLATT_SCALING'?selected.calibrator.intercept:null,
+    calibrator:selected.calibrator,
+    raw_check_brier:Number(rawBrier.toFixed(8)),
+    calibrated_check_brier:Number(selected.brier.toFixed(8)),
+    improvement:Number((rawBrier-selected.brier).toFixed(8)),
+    required_improvement_margin:improvementMargin,
+    temperature_fit_diagnostics:{
+      status:temperatureFit.status,temperature:temperatureFit.temperature,
+      fit_nll_before:temperatureFit.fit_nll_before,
+      fit_nll_after:temperatureFit.fit_nll_after
+    },
+    platt_fit_diagnostics:{
+      status:plattFit.status,slope:plattFit.slope,intercept:plattFit.intercept,
+      fit_nll_before:plattFit.fit_nll_before,
+      fit_nll_after:plattFit.fit_nll_after
+    },
+    candidates:candidates.map(candidate=>({
+      method:candidate.method,check_brier:Number(candidate.brier.toFixed(8)),
+      selected:candidate.method===selected.method&&accepted
+    })),
+    reason:accepted?null:'NO_CALIBRATOR_IMPROVED_DISJOINT_CHECK_BLOCK'
   };
 }
 
@@ -1827,7 +1997,8 @@ export function buildCognitiveLearningProfile(samples = [], {
   factorizationLearningRate=null,
   factorizationL2=null,
   featureSchema = COGNITIVE_FEATURE_SCHEMA,
-  maxResolvedSamples = 0
+  maxResolvedSamples = 0,
+  sourceCommitSha = null
 } = {}) {
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||MIN_OUTCOME_HORIZON_MS));
   const activeFeatureNames=featureNamesForSchema(featureSchema);
@@ -1932,8 +2103,8 @@ export function buildCognitiveLearningProfile(samples = [], {
         samples_required:NEURAL_POLICY.minTrainingSamples,training_samples: 0, trained: false, selected: false,
         probability_ready: false, live_eligibility_ready:false, iterations: neuralIterations,
         model_kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
-        training_strategy:'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6',
-        training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+        training_strategy:'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE',
+        training_objective:'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
         target_definition:modelTargetDefinition,
         target_semantics:modelTargetSemantics,
         output_initialization_scale:clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
@@ -2643,6 +2814,61 @@ export function buildCognitiveLearningProfile(samples = [], {
     ? Number((globalValidation.model_brier_score - recentValidation.model_brier_score).toFixed(5))
     : null;
 
+  const neuralResearchCandidate=neuralFit&&neuralFit.selected_member_index>=0
+    ?{index:neuralFit.selected_member_index,
+       residual_scale:neuralFit.selected_residual_scale,
+       mode:'INNER_SELECTED_MEMBER'}
+    :neuralBestMemberCandidate&&neuralFit&&neuralBestMemberCandidate.residual_scale>0
+      ?{index:neuralBestMemberCandidate.index,
+         residual_scale:neuralBestMemberCandidate.residual_scale,
+         mode:'INNER_BEST_DIAGNOSTIC_MEMBER'}
+      :null;
+  const neuralResearchArtifact=sourceCommitSha&&neuralFit&&neuralResearchCandidate
+    ?createVersionedModelArtifact({
+      modelName:'RADARX_COGNITIVE_MLP_V5_FIRST_TOUCH_4H',
+      modelFamily:'COGNITIVE_MLP_V5',
+      modelVersion:'V5_4H_FIRST_TOUCH_V1',
+      sourceCommitSha,
+      targetDefinition:modelTargetDefinition,
+      targetSemantics:modelTargetSemantics,
+      featureSchemaId:activeFeatureSchema,
+      featureNames:[...activeFeatureNames],
+      featureIndexMap:Object.fromEntries(activeFeatureNames.map((name,index)=>[name,index])),
+      normalization:{
+        mean:activeFeatureNames.map(()=>0),
+        std:activeFeatureNames.map(()=>1)
+      },
+      modelState:researchArtifactSafeValue({
+        fit:neuralFit,
+        feature_schema:activeFeatureSchema,
+        feature_names:[...activeFeatureNames],
+        normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1',
+        selection_residual_scale:neuralFit.selected_residual_scale,
+        probability_calibrator:neuralResearchCandidate.mode==='INNER_SELECTED_MEMBER'
+          ?neuralFit.probability_calibrator??null:null,
+        research_inference:neuralResearchCandidate,
+        diagnostic_only:neuralResearchCandidate.mode!=='INNER_SELECTED_MEMBER'
+      })
+    }):null;
+  const hybridResearchArtifact=sourceCommitSha&&hybridFit
+    ?createVersionedModelArtifact({
+      modelName:'RADARX_MLP_GBDT_HYBRID_FIRST_TOUCH_4H',
+      modelFamily:'MLP_GBDT_HYBRID',
+      modelVersion:'MLP_GBDT_HYBRID_4H_V1',
+      sourceCommitSha,
+      targetDefinition:modelTargetDefinition,
+      targetSemantics:modelTargetSemantics,
+      featureSchemaId:activeFeatureSchema,
+      featureNames:[...activeFeatureNames],
+      featureIndexMap:Object.fromEntries(activeFeatureNames.map((name,index)=>[name,index])),
+      normalization:{mean:activeFeatureNames.map(()=>0),std:activeFeatureNames.map(()=>1)},
+      modelState:researchArtifactSafeValue({
+        fit:hybridFit,
+        feature_schema:activeFeatureSchema,
+        feature_names:[...activeFeatureNames],
+        normalization_semantics:'DETERMINISTIC_BOUNDED_COGNITIVE_FEATURE_VECTOR_V1'
+      })
+    }):null;
   return {
     method: 'NESTED_PURGED_WALK_FORWARD_RESIDUAL_NEURAL_MODEL_V5',
     feature_schema:activeFeatureSchema,
@@ -2719,8 +2945,8 @@ export function buildCognitiveLearningProfile(samples = [], {
       training_strategy:neuralFit?.training_strategy||
         (neuralFit?.anchor_adaptation==='TRUST_REGION_TETHERED_V1'
           ?'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V7_TRUST_REGION'
-          :'UP_EVENT_BINARY_PROPER_LOSS_RESIDUAL_MLP_V6'),
-      training_objective:'MIXED_PROPER_SCORING_RULE_ENSEMBLE_BRIER_LOG_LOSS_V6',
+          :'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE'),
+      training_objective:neuralFit?.training_objective||'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1',
       target_definition:modelTargetDefinition,
       target_semantics:modelTargetSemantics,
       output_initialization_scale:neuralFit?.output_initialization_scale??clamp(Number(neuralOutputInitializationScale)||0.015,0.005,0.12),
@@ -2746,6 +2972,9 @@ export function buildCognitiveLearningProfile(samples = [], {
       max_calibration_check_outcome_resolved_at:neuralCalibrationCheck.length?Math.max(...neuralCalibrationCheck.map(row=>row.resolved_at)):null,
       selected_residual_scale:neuralFit?.selected_residual_scale??null,
       ensemble_members:neuralFit?.members?.length||0,
+      member_training_profiles:neuralFit?.member_training_profiles??[],
+      member_training_objectives:neuralFit?.member_training_objectives??[],
+      member_training_diagnostics:neuralFit?.member_training_diagnostics??[],
       ensemble_members_required:neuralFit?.seeds?.length??NEURAL_POLICY.ensembleSeeds.length,
       factorization_member_enabled:Number.isInteger(neuralFit?.factorization_member_index)&&
         neuralFit.factorization_member_index>=0,
@@ -2986,7 +3215,11 @@ export function buildCognitiveLearningProfile(samples = [], {
       : rankingReady
         ? 'RANKING_EVIDENCE_READY_BUT_NESTED_VALIDATION_NOT_PASSED'
         : 'INSUFFICIENT_MATURED_OUTCOMES_OR_FACTOR_COVERAGE_AFTER_PURGING',
-    _fit: selectedFit
+    _fit: selectedFit,
+    research_artifacts:{
+      ...(neuralResearchArtifact?{COGNITIVE_MLP_V5:neuralResearchArtifact}:{}),
+      ...(hybridResearchArtifact?{MLP_GBDT_HYBRID:hybridResearchArtifact}:{})
+    }
   };
 }
 
@@ -2995,6 +3228,104 @@ export function buildCognitiveLearningProfile(samples = [], {
  * were known. This is the live prequential check, separate from historical
  * train/validation/test splits.
  */
+
+/**
+ * Canonical V5 + GBDT entry point for the same four-hour first-touch cohort
+ * used by the fixed-SHA evaluator. It deliberately refuses legacy close-only
+ * labels, alternate outcome sources, different horizons, or a second TCN
+ * cohort. The temporal network and tabular challengers therefore share the
+ * exact same input event identities and outcome contract.
+ */
+export function buildFourHourCognitiveLearningProfile(samples=[],options={}){
+  if(!Array.isArray(samples))throw new TypeError('FOUR_HOUR_COGNITIVE_SAMPLES_MUST_BE_AN_ARRAY');
+  const fixed={
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    modelTargetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    modelTargetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    temporalSamples:samples
+  };
+  for(const [key,value] of Object.entries(fixed)){
+    if(options[key]!==undefined){
+      const actual=Array.isArray(value)?JSON.stringify(options[key]):options[key];
+      const expected=Array.isArray(value)?JSON.stringify(value):value;
+      if(key==='temporalSamples'?options[key]!==samples:actual!==expected)
+        throw new Error('FOUR_HOUR_COGNITIVE_CONTRACT_OVERRIDE_FORBIDDEN:'+key);
+    }
+  }
+  const temporalFixed={
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    outcomeHorizonMs:NEURAL_CLOSURE_HORIZON_MS,
+    allowedOutcomeSources:[NEURAL_CLOSURE_OUTCOME_SOURCE],
+    outcomeContractKind:'FIRST_TOUCH_4H_1M',
+    requireSequenceTimestamps:true,
+    sequenceIntervalMs:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  };
+  const suppliedTemporal=options.temporalOptions||{};
+  for(const [key,value] of Object.entries(temporalFixed)){
+    if(suppliedTemporal[key]!==undefined){
+      const actual=Array.isArray(value)?JSON.stringify(suppliedTemporal[key]):suppliedTemporal[key];
+      const expected=Array.isArray(value)?JSON.stringify(value):value;
+      if(actual!==expected)
+        throw new Error('FOUR_HOUR_COGNITIVE_TEMPORAL_CONTRACT_OVERRIDE_FORBIDDEN:'+key);
+    }
+  }
+  for(let index=0;index<samples.length;index++){
+    const row=samples[index];
+    const at=finite(row?.at),resolvedAt=finite(row?.resolved_at);
+    const expectedResolution=row?.outcome==='UP'?'TAKE_PROFIT_FIRST':
+      row?.outcome==='DOWN'?'STOP_LOSS_FIRST':
+      row?.outcome==='FLAT'?'HORIZON_END':null;
+    const touch=row?.first_touch;
+    const sourceAudit=row?.source_audit;
+    const sourceAuditValid=row?.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(row?.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
+    const touchAt=finite(touch?.first_touch_at);
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const barrierPricesValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
+    const valid=Boolean(row&&row.training_eligible===true&&
+      row.closed_candle_baseline===true&&sourceAuditValid&&
+      row.target_definition===NEURAL_CLOSURE_TARGET_DEFINITION&&
+      row.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&
+      row.outcome_source===NEURAL_CLOSURE_OUTCOME_SOURCE&&
+      Number(row.horizon_ms)===NEURAL_CLOSURE_HORIZON_MS&&
+      row.execution_return_contract===NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT&&
+      isValidFourHourFirstTouchExecution(touch,row.outcome,row.realized_return_pct)&&
+      at!==null&&resolvedAt===at+NEURAL_CLOSURE_HORIZON_MS&&
+      ['UP','DOWN','FLAT'].includes(row.outcome)&&
+      touch?.path_resolution==='1M'&&touch.resolution===expectedResolution&&
+      Number(touch?.observed_candles)===240&&touchAt!==null&&barrierPricesValid&&
+      (row.outcome==='FLAT'?touchAt===resolvedAt:touchAt>at&&touchAt<=resolvedAt)&&
+      row.feature_information_cutoff_at===at&&
+      row.features&&typeof row.features==='object'&&!Array.isArray(row.features));
+    if(!valid)throw new Error('FOUR_HOUR_COGNITIVE_LABEL_INVALID:'+index);
+  }
+  const profile=buildCognitiveLearningProfile(samples,{
+    ...options,
+    ...fixed,
+    temporalOptions:{...suppliedTemporal,...temporalFixed}
+  });
+  return {
+    ...profile,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    temporal_feature_interval_ms:NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS,
+    shared_four_hour_first_touch_cohort:true
+  };
+}
+
 export function buildCognitivePrequentialProfile(journal = [], {
   minimumWindowSamples = 20, windowSize = 40, modelVariant = null
 } = {}) {

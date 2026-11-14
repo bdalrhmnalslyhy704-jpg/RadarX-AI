@@ -1,10 +1,21 @@
 import {
   buildCognitiveFeatureVector,
+  COGNITIVE_FEATURE_SCHEMA,
+  COGNITIVE_FEATURE_NAMES,
   COGNITIVE_DAILY_FEATURE_SCHEMA,
   COGNITIVE_DAILY_FEATURE_NAMES
 } from './cognitive-brain.mjs';
 import {prepareDailyEarlyRiserCognitiveRow} from './daily-early-riser-neural-benchmark.mjs';
 import {createHash} from 'node:crypto';
+import {
+  deriveTrainingClassWeights,focalAsymmetricBrierLoss,
+  NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,
+  NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
+  isValidFourHourFirstTouchExecution
+} from './neural-closure-contracts.mjs';
+import {validateTemporalSequenceAlignment} from './neural-safety-contracts.mjs';
+import {createVersionedModelArtifact} from './model-artifact-guardian.mjs';
 
 export const DENSE_GENERALIZATION_SCHEMA = 'RADARX_DENSE_24H_GENERALIZATION_V1';
 export const DENSE_GENERALIZATION_DAY_MS = 24 * 60 * 60 * 1000;
@@ -309,9 +320,12 @@ export function predictDenseProjectionProbability(vector,fit) {
 }
 
 export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
-  dropout=0.15,l2=0.06,rank=6,hidden=12,epochs=36,seed=1337,learningRate=0.008
+  dropout=0.15,l2=0.06,rank=6,hidden=12,epochs=36,seed=1337,learningRate=0.008,
+  lossObjective='BRIER',focalGammaPositive=1,focalGammaNegative=2
 }={}) {
   if(!trainingRows?.length)throw new Error('DENSE24_PROJECTION_TRAINING_EMPTY');
+  if(!['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(lossObjective))
+    throw new TypeError('DENSE_PROJECTION_LOSS_OBJECTIVE_UNSUPPORTED');
   const pDrop=clamp(dropout,0,0.45),reg=clamp(l2,0.001,0.5);
   const rankSize=Math.max(2,Math.min(12,Math.trunc(rank)));
   const hiddenSize=Math.max(6,Math.min(24,Math.trunc(hidden)));
@@ -320,6 +334,10 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
   const X=trainingRows.map(row=>transformVector(row.vector,scaler));
   const Y=trainingRows.map(row=>row.target);
   const d=X[0].length,n=X.length;
+  const focalClassWeights=lossObjective==='FOCAL_ASYMMETRIC_BRIER'
+    ?deriveTrainingClassWeights(Y):null;
+  const gammaPositive=clamp(Number(focalGammaPositive)||1,0,5);
+  const gammaNegative=clamp(Number(focalGammaNegative)||2,0,5);
   const rng=mulberry32(seed);
   const model={
     W:Array.from({length:d},()=>Array.from({length:hiddenSize},()=>((rng()-0.5)*0.10))),
@@ -353,8 +371,19 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
       const mask=Array.from({length:hiddenSize},()=>rng()>=pDrop?1:0);
       const out=forwardProjection(X[i],model,anchor,pDrop,mask);
       const y=Y[i],p=clamp(out.probability,1e-8,1-1e-8);
-      objective+=(p-y)**2;
-      const dz=2*(p-y)*p*(1-p);
+      let dz;
+      if(lossObjective==='FOCAL_ASYMMETRIC_BRIER'){
+        const focal=focalAsymmetricBrierLoss(p,y,{
+          gammaPositive:gammaPositive,gammaNegative:gammaNegative,
+          positiveWeight:focalClassWeights.positiveWeight,
+          negativeWeight:focalClassWeights.negativeWeight
+        });
+        objective+=focal.loss;
+        dz=focal.logitGradient;
+      }else{
+        objective+=(p-y)**2;
+        dz=2*(p-y)*p*(1-p);
+      }
       for(let k=0;k<hiddenSize;k++)g.head[k]+=dz*out.dropped[k];
       for(let k=0;k<rankSize;k++)g.cross[k]+=dz*out.interactions[k];
 
@@ -410,18 +439,28 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     // Select the best checkpoint and early-stop monitor using deterministic,
     // no-dropout TRAINING predictions only. This avoids choosing a checkpoint
     // because of a lucky stochastic dropout mask. Validation/holdout remain unseen.
-    let monitorObjective=0;
+    let monitorObjective=0,monitorBrier=0;
     for(let i=0;i<n;i++){
       const probability=forwardProjection(X[i],model,anchor,0,null).probability;
-      monitorObjective+=(probability-Y[i])**2;
+      monitorBrier+=(probability-Y[i])**2;
+      if(lossObjective==='FOCAL_ASYMMETRIC_BRIER'){
+        monitorObjective+=focalAsymmetricBrierLoss(probability,Y[i],{
+          gammaPositive,gammaNegative,
+          positiveWeight:focalClassWeights.positiveWeight,
+          negativeWeight:focalClassWeights.negativeWeight
+        }).loss;
+      }else monitorObjective+=(probability-Y[i])**2;
     }
-    const monitorBrier=monitorObjective/n;
-    if(!Number.isFinite(monitorBrier))throw new Error('DENSE24_PROJECTION_TRAIN_MONITOR_NON_FINITE');
-    if(monitorBrier<bestObjective-1e-9){
-      bestObjective=monitorBrier;bestEpoch=epoch;wait=0;best=cloneModel(model);
+    monitorBrier/=n;
+    monitorObjective/=n;
+    if(!Number.isFinite(monitorObjective)||!Number.isFinite(monitorBrier))
+      throw new Error('DENSE24_PROJECTION_TRAIN_MONITOR_NON_FINITE');
+    if(monitorObjective<bestObjective-1e-9){
+      bestObjective=monitorObjective;bestEpoch=epoch;wait=0;best=cloneModel(model);
     }else wait++;
-    history.push({epoch,training_brier:Number(monitorBrier.toFixed(8)),
-      dropout_training_brier:Number(objectiveMean.toFixed(8)),
+    history.push({epoch,training_objective:Number(monitorObjective.toFixed(8)),
+      training_brier:Number(monitorBrier.toFixed(8)),
+      dropout_training_objective:Number(objectiveMean.toFixed(8)),
       gradient_l2_norm:Number(gradNorm.toFixed(8)),learning_rate:Number(lr.toFixed(8)),
       dropout:pDrop,l2:reg});
     if(epoch>=minEpochs&&wait>=patience){stoppedEarly=true;break;}
@@ -435,12 +474,22 @@ export function fitDenseGeneralizationProjection(trainingRows,anchor,scaler,{
     ...model.U.flat(),...model.head,...model.cross].every(Number.isFinite);
   if(!finiteParameters)throw new Error('DENSE24_PROJECTION_NON_FINITE_PARAMETER');
   return {
-    kind:'DENSE24_LAYER_NORM_LOW_RANK_PROJECTION_RESIDUAL_V1',
+    kind:'DENSE_LAYER_NORM_LOW_RANK_PROJECTION_RESIDUAL_V2',
     model,anchor,scaler,dropout:pDrop,l2:reg,rank:rankSize,hidden:hiddenSize,
+    training_objective:lossObjective,
+    focal_asymmetric_brier:focalClassWeights?{
+      gamma_positive:gammaPositive,gamma_negative:gammaNegative,
+      positive_weight:focalClassWeights.positiveWeight,
+      negative_weight:focalClassWeights.negativeWeight,
+      training_positive:focalClassWeights.training_positive,
+      training_negative:focalClassWeights.training_negative,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY'
+    }:null,
     training_rows:n,training_positives:Y.filter(y=>y===1).length,
     training_negatives:Y.filter(y=>y===0).length,
     epochs_completed:history.length,best_epoch:bestEpoch,
-    best_training_brier:Number(bestObjective.toFixed(8)),
+    best_training_objective:Number(bestObjective.toFixed(8)),
+    best_training_brier:lossObjective==='BRIER'?Number(bestObjective.toFixed(8)):null,
     optimizer:'ADAMW_DECOUPLED_WEIGHT_DECAY',
     normalization:'PER_SAMPLE_LAYER_NORM_TRAINED_ON_TRAIN_ROWS_ONLY',
     dropout_mode:'TRAIN_ONLY_DETERMINISTIC_INVERTED_DROPOUT',
@@ -617,5 +666,268 @@ export function runDenseGeneralizationBenchmark(preparedRows,split,{bootstrapIte
       no_batch_norm_running_statistics:true
     },
     status:finalGate?'RESEARCH_OOS_SUPERIORITY_PASSED':'RESEARCH_OOS_SUPERIORITY_NOT_VERIFIED'
+  };
+}
+
+
+export const DENSE_FOUR_HOUR_SCHEMA='RADARX_DENSE_4H_FIRST_TOUCH_V1';
+export const DENSE_FOUR_HOUR_MIN_ROWS_PER_SPLIT=100;
+export const DENSE_FOUR_HOUR_MIN_CLASS_PER_SPLIT=50;
+
+/**
+ * Prepare the same canonical first-touch rows consumed by Cognitive V5 and
+ * temporal TCN V8–V11. A tabular projection is derived only from decision-time
+ * features; its paired 24x29 tensor is also timestamp-checked to ensure this
+ * row really belongs to the shared neural cohort.
+ */
+export function validateAndPrepareDense4hRows(samples){
+  if(!Array.isArray(samples)||!samples.length)
+    throw new Error('DENSE4H_SAMPLES_EMPTY');
+  const ids=new Set(),events=new Set(),rows=[];
+  const rejectionCounts={};
+  for(let index=0;index<samples.length;index++){
+    const source=samples[index];
+    const fail=reason=>{
+      rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
+      throw new Error('DENSE4H_ROW_INVALID:'+index+':'+reason);
+    };
+    if(!source||typeof source!=='object')fail('ROW_INVALID');
+    const id=String(source.id??'').trim();
+    const symbol=String(source.symbol??'').trim().toUpperCase();
+    const at=finite(source.at),resolvedAt=finite(source.resolved_at);
+    const firstTouchAt=finite(source.first_touch?.first_touch_at);
+    const outcome=String(source.outcome??'').toUpperCase();
+    const expectedResolution=outcome==='UP'?'TAKE_PROFIT_FIRST':
+      outcome==='DOWN'?'STOP_LOSS_FIRST':
+      outcome==='FLAT'?'HORIZON_END':null;
+    if(!id||!/^[A-Z0-9]{1,26}USDT$/.test(symbol))fail('IDENTITY_INVALID');
+    if(ids.has(id))fail('DUPLICATE_ID');
+    if(events.has(symbol+':'+at))fail('DUPLICATE_SYMBOL_DECISION');
+    if(source.training_eligible!==true||source.closed_candle_baseline!==true)
+      fail('LABEL_NOT_TRAINING_ELIGIBLE_CLOSED_BASELINE');
+    if(source.target_definition!==NEURAL_CLOSURE_TARGET_DEFINITION||
+      source.target_semantics!==NEURAL_CLOSURE_TARGET_SEMANTICS||
+      source.outcome_source!==NEURAL_CLOSURE_OUTCOME_SOURCE||
+      Number(source.horizon_ms)!==NEURAL_CLOSURE_HORIZON_MS)
+      fail('TARGET_SOURCE_OR_HORIZON_MISMATCH');
+    if(at===null||resolvedAt!==at+NEURAL_CLOSURE_HORIZON_MS||
+      finite(source.feature_information_cutoff_at)!==at)
+      fail('TEMPORAL_CUTOFF_OR_MATURITY_INVALID');
+    if(!['UP','DOWN','FLAT'].includes(outcome)||
+      Number(source.target)!==(outcome==='UP'?1:0))
+      fail('BINARY_TARGET_SEMANTICS_INVALID');
+    const touch=source.first_touch;
+    const baselinePrice=finite(touch?.baseline_price);
+    const takeProfitPrice=finite(touch?.take_profit_price);
+    const stopLossPrice=finite(touch?.stop_loss_price);
+    const exitBarriersValid=baselinePrice!==null&&baselinePrice>0&&
+      takeProfitPrice!==null&&stopLossPrice!==null&&
+      Math.abs(takeProfitPrice/baselinePrice-1.03)<=1e-10&&
+      Math.abs(stopLossPrice/baselinePrice-0.98)<=1e-10;
+    const sourceAudit=source?.source_audit;
+    const sourceAuditValid=source?.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(source?.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      source?.first_touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
+
+    if(!sourceAuditValid)fail('BINANCE_SPOT_REST_SOURCE_AUDIT_INVALID');
+    if(!exitBarriersValid)fail('FIRST_TOUCH_EXIT_BARRIER_INVALID');
+    if(source.execution_return_contract!==NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT||
+      !isValidFourHourFirstTouchExecution(touch,outcome,source.realized_return_pct))
+      fail('FIRST_TOUCH_EXECUTION_PRICE_INVALID');
+    if(touch?.path_resolution!=='1M'||touch.resolution!==expectedResolution||
+      Number(touch.observed_candles)!==240||firstTouchAt===null||
+      (outcome==='FLAT'?firstTouchAt!==resolvedAt:
+        firstTouchAt<=at||firstTouchAt>resolvedAt))
+      fail('FIRST_TOUCH_PATH_NOT_AUDITED');
+    if(!source.features||typeof source.features!=='object'||Array.isArray(source.features))
+      fail('DECISION_FEATURES_MISSING');
+    const sequence=source.temporal_sequence;
+    const timestamps=source.temporal_sequence_timestamps;
+    const alignment=validateTemporalSequenceAlignment({
+      id,symbol,at,resolved_at:resolvedAt,horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+      temporal_sequence:sequence,temporal_sequence_timestamps:timestamps,
+      feature_information_cutoff_at:source.feature_information_cutoff_at,
+      expectedSteps:24,expectedChannels:29,intervalMs:15*60*1000,
+      requireSequenceTimestamps:true,binaryMaskChannels:[]
+    });
+    if(!alignment.valid)fail('SHARED_TCN_SEQUENCE_INVALID:'+alignment.reason);
+    const vector=buildCognitiveFeatureVector(source.features,COGNITIVE_FEATURE_SCHEMA);
+    if(vector.length!==COGNITIVE_FEATURE_NAMES.length||vector.some(value=>!Number.isFinite(value)))
+      fail('COGNITIVE_18_FEATURE_VECTOR_INVALID');
+    ids.add(id);events.add(symbol+':'+at);
+    rows.push({
+      id,symbol,at,resolved_at:resolvedAt,outcome,target:outcome==='UP'?1:0,
+      features:source.features,vector,
+      target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+      outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+      feature_information_cutoff_at:at
+    });
+  }
+  rows.sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const rawDigest=createHash('sha256').update(JSON.stringify(rows.map(row=>[
+    row.id,row.symbol,row.at,row.resolved_at,row.target,row.vector
+  ]))).digest('hex');
+  return {
+    schema:DENSE_FOUR_HOUR_SCHEMA,rows,row_count:rows.length,
+    positive_rows:rows.filter(row=>row.target===1).length,
+    negative_rows:rows.filter(row=>row.target===0).length,
+    identity_feature_sha256:rawDigest,rejection_counts:rejectionCounts,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    feature_interval_ms:15*60*1000,feature_sequence_steps:24,feature_sequence_channels:29
+  };
+}
+
+/** Strict 60/20/20 UTC-day split with a full day purged at both boundaries. */
+export function splitDense4hChronologically(rows){
+  if(!Array.isArray(rows)||rows.length<600)
+    throw new Error('DENSE4H_SPLIT_INPUT_TOO_SMALL');
+  const dayOf=at=>Math.floor(at/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS;
+  const days=[...new Set(rows.map(row=>dayOf(row.at)))].sort((a,b)=>a-b);
+  if(days.length<60)throw new Error('DENSE4H_REQUIRES_60_UNIQUE_UTC_DAYS');
+  const boundary60=days[Math.floor(days.length*0.60)];
+  const boundary80=days[Math.floor(days.length*0.80)];
+  // Match the shared fixed-SHA 60/20/20 day identities exactly: one complete
+  // UTC day is purged at each boundary, never an additional implicit day.
+  const train=rows.filter(row=>dayOf(row.at)<boundary60);
+  const validation=rows.filter(row=>dayOf(row.at)>=boundary60+NEURAL_CLOSURE_PURGE_MS&&
+    dayOf(row.at)<boundary80);
+  const holdout=rows.filter(row=>dayOf(row.at)>=boundary80+NEURAL_CLOSURE_PURGE_MS);
+  const partitions=[['train',train],['validation',validation],['holdout',holdout]];
+  for(const [name,part] of partitions){
+    if(part.length<DENSE_FOUR_HOUR_MIN_ROWS_PER_SPLIT)
+      throw new Error('DENSE4H_SPLIT_SUPPORT_TOO_SMALL:'+name+':'+part.length);
+    const positive=part.filter(row=>row.target===1).length;
+    const negative=part.length-positive;
+    if(positive<DENSE_FOUR_HOUR_MIN_CLASS_PER_SPLIT||
+      negative<DENSE_FOUR_HOUR_MIN_CLASS_PER_SPLIT)
+      throw new Error('DENSE4H_SPLIT_CLASS_SUPPORT_TOO_SMALL:'+name+':'+positive+':'+negative);
+  }
+  const maxTrainResolved=Math.max(...train.map(row=>row.resolved_at));
+  const minValidationAt=Math.min(...validation.map(row=>row.at));
+  const maxValidationResolved=Math.max(...validation.map(row=>row.resolved_at));
+  const minHoldoutAt=Math.min(...holdout.map(row=>row.at));
+  if(!(maxTrainResolved<minValidationAt&&maxValidationResolved<minHoldoutAt))
+    throw new Error('DENSE4H_LABEL_MATURITY_CROSSES_SPLIT');
+  const kept=train.length+validation.length+holdout.length;
+  const purgedRows=rows.length-kept;
+  return {
+    status:'READY',train,validation,holdout,purged_rows:purgedRows,
+    boundaries:{
+      requested_proportions:{train:0.60,validation:0.20,holdout:0.20},
+      purge_ms:NEURAL_CLOSURE_PURGE_MS,
+      train_end_exclusive:boundary60,
+      validation_start_inclusive:boundary60+NEURAL_CLOSURE_PURGE_MS,
+      validation_end_exclusive:boundary80,
+      holdout_start_inclusive:boundary80+NEURAL_CLOSURE_PURGE_MS
+    },
+    ranges:Object.fromEntries(partitions.map(([name,part])=>[name,{
+      rows:part.length,positives:part.filter(row=>row.target===1).length,
+      negatives:part.filter(row=>row.target===0).length,
+      first_at:Math.min(...part.map(row=>row.at)),
+      last_at:Math.max(...part.map(row=>row.at)),
+      max_resolved_at:Math.max(...part.map(row=>row.resolved_at))
+    }]))
+  };
+}
+
+/**
+ * Fixed-configuration Dense Projection challenger using the same first-touch
+ * target as V5/TCN. No validation or holdout labels are ever used for updates.
+ */
+export function runDense4hGeneralizationBenchmark(prepared,split,{
+  sourceCommitSha,bootstrapIterations=400,epochs=36,seed=1337
+}={}){
+  if(prepared?.schema!==DENSE_FOUR_HOUR_SCHEMA||!Array.isArray(prepared.rows))
+    throw new TypeError('DENSE4H_PREPARED_SHARED_COHORT_REQUIRED');
+  if(!split||split.status!=='READY'||!split.train||!split.validation||!split.holdout)
+    throw new TypeError('DENSE4H_PURGED_60_20_20_SPLIT_REQUIRED');
+  if(!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha??'')))
+    throw new TypeError('DENSE4H_FULL_SOURCE_COMMIT_SHA_REQUIRED');
+  const train=split.train,validation=split.validation,holdout=split.holdout;
+  const scaler=fitDenseStandardizer(train);
+  const anchor=fitDenseLogisticAnchor(train,scaler);
+  const config={
+    dropout:0.15,l2:0.06,rank:6,hidden:12,epochs,seed,learningRate:0.008,
+    lossObjective:'FOCAL_ASYMMETRIC_BRIER',
+    focalGammaPositive:1,focalGammaNegative:2
+  };
+  const fit=fitDenseGeneralizationProjection(train,anchor,scaler,config);
+  const validationResult=evaluateDenseProjectionSplit(validation,fit,anchor,{
+    bootstrapSeed:7111,bootstrapIterations
+  });
+  const holdoutResult=evaluateDenseProjectionSplit(holdout,fit,anchor,{
+    bootstrapSeed:9111,bootstrapIterations
+  });
+  const accepted=validationResult.passed===true&&holdoutResult.passed===true;
+  const coreReport={
+    schema:DENSE_FOUR_HOUR_SCHEMA,
+    source_commit_sha:String(sourceCommitSha).toLowerCase(),
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    outcome_source:NEURAL_CLOSURE_OUTCOME_SOURCE,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    feature_schema:COGNITIVE_FEATURE_SCHEMA,
+    feature_names:[...COGNITIVE_FEATURE_NAMES],
+    dataset_identity_sha256:prepared.identity_feature_sha256,
+    source_file_sha256:prepared.source_file_sha256??null,
+    row_count:prepared.row_count,
+    split:{
+      requested_proportions:split.boundaries.requested_proportions,
+      purge_ms:split.boundaries.purge_ms,purged_rows:split.purged_rows,
+      train_rows:train.length,validation_rows:validation.length,holdout_rows:holdout.length,
+      max_train_resolved_at:split.ranges.train.max_resolved_at,
+      min_validation_at:split.ranges.validation.first_at,
+      max_validation_resolved_at:split.ranges.validation.max_resolved_at,
+      min_holdout_at:split.ranges.holdout.first_at
+    },
+    training:{
+      architecture:'LAYER_NORM_DROPOUT_LOW_RANK_INTERACTION_RESIDUAL_MLP',
+      config,training_rows:train.length,
+      positive_rows:fit.training_positives,negative_rows:fit.training_negatives,
+      objective:fit.training_objective,
+      focal_asymmetric_brier:fit.focal_asymmetric_brier,
+      scaler_fit_on:'TRAIN_ONLY',logistic_anchor_fit_on:'TRAIN_ONLY',
+      gradient_updates_from_validation:false,gradient_updates_from_holdout:false,
+      early_stopping:fit.early_stopping
+    },
+    validation:validationResult,holdout:holdoutResult,
+    acceptance:{
+      validation_brier_improvement_at_least_0_003:validationResult.brier_improvement>DENSE_GENERALIZATION_OUTER_MARGIN,
+      holdout_brier_improvement_at_least_0_003:holdoutResult.brier_improvement>DENSE_GENERALIZATION_OUTER_MARGIN,
+      validation_bootstrap_ci_low_above_zero:validationResult.bootstrap_utc_day_cluster_ci95?.improvement_ci95_low>0,
+      holdout_bootstrap_ci_low_above_zero:holdoutResult.bootstrap_utc_day_cluster_ci95?.improvement_ci95_low>0,
+      validated:accepted,
+      paper_trading:true,real_order_execution:false,production_touched:false
+    },
+    status:accepted?'DENSE4H_OOS_SUPERIORITY_VERIFIED':'DENSE4H_OOS_SUPERIORITY_NOT_PROVEN'
+  };
+  const trainingReportSha256=createHash('sha256')
+    .update(JSON.stringify(coreReport)).digest('hex');
+  const artifact=createVersionedModelArtifact({
+    modelName:'RADARX_DENSE_PROJECTION_MLP_4H',
+    modelFamily:'DENSE_PROJECTION_MLP_4H',
+    modelVersion:'4H_V1',sourceCommitSha,
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    featureSchemaId:COGNITIVE_FEATURE_SCHEMA,
+    featureNames:[...COGNITIVE_FEATURE_NAMES],
+    featureIndexMap:Object.fromEntries(COGNITIVE_FEATURE_NAMES.map((name,index)=>[name,index])),
+    normalization:{mean:scaler.means,std:scaler.scales},
+    modelState:{model:fit.model,anchor,training_config:config,
+      output_initialization:fit.kind},
+    trainingReportSha256
+  });
+  return {
+    ...coreReport,training_report_sha256:trainingReportSha256,
+    model_artifact:artifact,model_artifact_sha256:artifact.artifact_sha256
   };
 }
