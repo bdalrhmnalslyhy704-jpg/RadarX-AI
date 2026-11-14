@@ -188,7 +188,7 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
   const up={
     outcome:'UP',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:3,
-    first_touch:{resolution:'TAKE_PROFIT_FIRST',first_touch_at:BASE+59_999,
+    first_touch:{resolution:'TAKE_PROFIT_FIRST',first_touch_at:BASE+60_000,
       baseline_price:100,take_profit_price:103,stop_loss_price:98,
       exit_price:103,exit_price_source:'BARRIER',
       exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
@@ -198,7 +198,7 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
   const down={
     outcome:'DOWN',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
     realized_return_pct:-2,
-    first_touch:{resolution:'STOP_LOSS_FIRST',first_touch_at:BASE+59_999,
+    first_touch:{resolution:'STOP_LOSS_FIRST',first_touch_at:BASE+60_000,
       baseline_price:100,take_profit_price:103,stop_loss_price:98,
       exit_price:98,exit_price_source:'BARRIER',
       exit_candle:{open_time:BASE+1,close_time:BASE+60_000,
@@ -236,6 +236,10 @@ test('realized PnL uses actual first-touch fills and prices opening gaps conserv
     exit_price:103.5}};
   assert.equal(realizedExecutionGrossReturnPct(overstatedBarrierFill),null,
     'a barrier fill cannot claim a price better than the actual +3% barrier');
+  const unsupportedExitCandle={...up,first_touch:{...up.first_touch,
+    exit_candle:{...up.first_touch.exit_candle,high:102.9}}};
+  assert.equal(realizedExecutionGrossReturnPct(unsupportedExitCandle),null,
+    'the recorded exit candle must actually cross the declared barrier');
   assert.ok(Math.abs(realizedExecutionNetReturnPct(up,30)-2.7)<1e-10);
   assert.ok(Math.abs(realizedExecutionNetReturnPct(down,30)+2.3)<1e-10);
   assert.ok(Math.abs(realizedExecutionNetReturnPct(flat,30)-0.95)<1e-10);
