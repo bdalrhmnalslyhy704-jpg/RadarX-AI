@@ -1337,7 +1337,10 @@ test('Cognitive MLP V5 accepts only the same audited four-hour 1m first-touch ev
       path_resolution:'1M',observed_candles:240,
       raw_klines_sha256:'b'.repeat(64),
       baseline_price:100,take_profit_price:103,stop_loss_price:98,
-      exit_price:103,exit_price_source:'BARRIER'
+      exit_price:103,exit_price_source:'BARRIER',
+      exit_candle:{open_time:at+1,close_time:at+60_000,
+        open:100,high:103.2,low:99.2,close:102.8,
+        is_closed:true,source:'BINANCE_PUBLIC_REST'}
     },
     temporal_sequence:Array.from({length:24},(_,time)=>
       Array.from({length:29},(_,channel)=>channel===28?0.65:
