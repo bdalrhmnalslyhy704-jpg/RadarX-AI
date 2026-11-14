@@ -1,0 +1,99 @@
+name: Build 224 Neural Closure — parity-corrected rebenchmark
+
+on:
+  push:
+    branches:
+      - research/neural-closure-calibration-parity-20261114
+    paths:
+      - '.github/workflows/neural-closure-rebenchmark.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: build224-neural-closure-parity-rebenchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebenchmark:
+    if: contains(github.event.head_commit.message, '[RUN-NEURAL-REBENCHMARK]')
+    name: Re-evaluate corrected models on the exact archived Binance cohort
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact corrected evaluator SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Download the original 180-day collector artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-c1013eed7829ee5a73dbdc1eff70785866996d54
+          repository: ${{ github.repository }}
+          run-id: 43617240336
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts/source-run-75
+      - name: Verify the archived dataset and corrected evaluator
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          test -s artifacts/source-run-75/dataset.json
+          node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/core/neural-closure-archive-guardian.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+          node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises';
+          import { verifyBinanceRawArchives } from './phase2/core/neural-closure-archive-guardian.mjs';
+          const d = JSON.parse(await readFile('artifacts/source-run-75/dataset.json', 'utf8'));
+          const errors = [];
+          if (d.source_commit_sha !== 'c1013eed7829ee5a73dbdc1eff70785866996d54') errors.push('SOURCE_SHA_MISMATCH');
+          if (!Array.isArray(d.rows) || d.rows.length < 600) errors.push('DATASET_ROWS_BELOW_600');
+          if (Number(d.counts?.included_symbols) < 25) errors.push('INCLUDED_SYMBOLS_BELOW_25');
+          if (Number(d.universe?.minimum_quote_volume_24h_usdt) !== 750000) errors.push('LIQUIDITY_FLOOR_MISMATCH');
+          if (d.universe?.survivorship_bias_warning !== true) errors.push('SURVIVORSHIP_SCOPE_WARNING_MISSING');
+          if (Number(d.target?.take_profit_pct) !== 3 || Number(d.target?.stop_loss_pct) !== 2) errors.push('TARGET_BARRIER_MISMATCH');
+          if (Number(d.target?.horizon_ms) !== 14400000) errors.push('TARGET_HORIZON_MISMATCH');
+          if (!/^[a-f0-9]{64}$/.test(String(d.dataset_sha256))) errors.push('DATASET_SHA_INVALID');
+          if (errors.length) throw new Error(errors.join(','));
+          const archives = d.data_quality?.raw_archive_records;
+          const archiveAudit = await verifyBinanceRawArchives({
+            archiveDirectory:'artifacts/source-run-75/raw',
+            archiveRecords:archives,
+            expectedCount:Number(d.data_quality?.raw_archive_files)
+          });
+          console.log(JSON.stringify({schema:d.schema,rows:d.rows.length,dataset_sha256:d.dataset_sha256,
+            source_commit_sha:d.source_commit_sha,included_symbols:d.counts.included_symbols,
+            raw_archives_verified:archiveAudit.verified_count,
+            raw_archive_bytes:archiveAudit.total_raw_bytes,
+            scope_warning:d.universe.survivorship_bias_warning,target:d.target}));
+          NODE
+      - name: Train and benchmark with equal calibration parity
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          mkdir -p artifacts/rebenchmark
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \
+            --input artifacts/source-run-75/dataset.json \
+            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
+            --epochs 8 \
+            --denseEpochs 36 \
+            --minimumHoldoutTrades 100 \
+            --minimumWinRatePct 55 \
+            --maximumDrawdownPct 8 \
+            --roundTripCostBps 30
+      - name: Upload parity-corrected report and model artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-parity-rebenchmark-${{ github.sha }}
+          path: artifacts/rebenchmark/
+          if-no-files-found: ignore
+          retention-days: 30

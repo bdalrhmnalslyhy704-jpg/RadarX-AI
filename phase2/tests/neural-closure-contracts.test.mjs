@@ -10,7 +10,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  runNeuralClosureBenchmark
+  runNeuralClosureBenchmark,sha256Canonical,sha256CanonicalArray
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -144,6 +144,34 @@ test('strict four-hour row validation rejects target/source/cutoff drift and dup
   assert.throws(()=>validateFourHourRows(rows.concat(rows[0])),/DUPLICATE_ID/);
 });
 
+test('row validation drops unused duplicate temporal sequence aliases without changing canonical tensor',()=>{
+  const source=makeRows({days:1,rowsPerDay:1})[0];
+  source.temporal_sequence=[[0.1,0.2],[0.3,0.4]];
+  source.temporal_sequence_timestamps=[100,200];
+  source.sequence=[[0.1,0.2],[0.3,0.4]];
+  source.sequence_timestamps=[100,200];
+  const [validated]=validateFourHourRows([source]);
+  assert.deepEqual(validated.temporal_sequence,source.temporal_sequence);
+  assert.deepEqual(validated.temporal_sequence_timestamps,source.temporal_sequence_timestamps);
+  assert.equal(Object.hasOwn(validated,'sequence'),false);
+  assert.equal(Object.hasOwn(validated,'sequence_timestamps'),false);
+});
+
+test('streamed canonical array SHA exactly matches full canonical JSON SHA',()=>{
+  const values=[
+    {z:3,a:{y:2,x:[1,2]}},
+    {b:false,a:[{q:1,p:'x'}]},
+    [1,'two',null]
+  ];
+  assert.equal(sha256CanonicalArray(values),sha256Canonical(values));
+  const project=value=>({keep:value.a??value[0],flag:value.b??null});
+  assert.equal(
+    sha256CanonicalArray(values,project),
+    sha256Canonical(values.map(project))
+  );
+  assert.equal(sha256CanonicalArray([]),sha256Canonical([]));
+});
+
 test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()=>{
   const rows=validateFourHourRows(makeRows({days:20,rowsPerDay:4}));
   const split=splitFourHourRows(rows);
@@ -159,6 +187,47 @@ test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()
     split.boundaries.validation_first_at-NEURAL_CLOSURE_PURGE_MS);
   assert.ok(split.boundaries.validation_last_at<
     split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
+});
+
+test('large purged partitions keep timestamp bounds safe beyond the argument limit',()=>{
+  const rows=[];
+  const rowsPerDay=40_000;
+  for(let day=0;day<8;day++){
+    for(let index=0;index<rowsPerDay;index++){
+      rows.push({
+        id:'L'+day+':'+index,
+        at:BASE+day*NEURAL_CLOSURE_PURGE_MS+index*1_000,
+        target:index%2
+      });
+    }
+  }
+  const split=splitFourHourRows(rows);
+  assert.equal(split.counts.total,320_000);
+  assert.equal(split.counts.train,160_000);
+  assert.equal(split.counts.validation,40_000);
+  assert.equal(split.counts.holdout,40_000);
+  assert.ok(split.boundaries.train_last_at<
+    split.boundaries.validation_first_at-NEURAL_CLOSURE_PURGE_MS);
+  assert.ok(split.boundaries.validation_last_at<
+    split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
+});
+
+test('large calibration blocks compute timestamp bounds without argument expansion',()=>{
+  const rows=Array.from({length:200_000},(_,index)=>({
+    id:'CAL:'+index,
+    at:BASE+index*400,
+    target:index%2
+  }));
+  rows.push(
+    {id:'CAL:PURGE',at:BASE+NEURAL_CLOSURE_PURGE_MS,target:0},
+    {id:'CAL:CHECK',at:BASE+2*NEURAL_CLOSURE_PURGE_MS,target:1}
+  );
+  const blocks=buildNeuralClosureCalibrationBlocks(rows);
+  assert.equal(blocks.fit.length,200_000);
+  assert.equal(blocks.purged.length,1);
+  assert.equal(blocks.check.length,1);
+  assert.ok(blocks.days.fit.at(-1)<blocks.days.purge[0]);
+  assert.ok(blocks.days.purge[0]<blocks.days.check[0]);
 });
 
 test('fixed-SHA calibration fit and check blocks retain independent 50/50 class support',()=>{
@@ -350,7 +419,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
-  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1');
+  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
   assert.equal(report.target.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   assert.equal(report.integrity.row_count,8000);
@@ -362,9 +431,33 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
-  assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
+  // The logistic anchor must receive the same calibration opportunity as each
+  // neural challenger before their holdout Brier scores are compared.
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_fit_rows,400);
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_purged_rows,400);
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.calibration_check_rows,400);
+  const baselineCalibration=report.models.LOGISTIC_REGRESSION.calibration;
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const calibration=report.models[family].calibration;
+    assert.equal(calibration.status,'EVALUATED',family+' calibration must be evaluated');
+    assert.equal(calibration.calibration_fit_rows,
+      baselineCalibration.calibration_fit_rows,family+' fit-row count must match Logistic');
+    assert.equal(calibration.calibration_purged_rows,
+      baselineCalibration.calibration_purged_rows,family+' purge-row count must match Logistic');
+    assert.equal(calibration.calibration_check_rows,
+      baselineCalibration.calibration_check_rows,family+' check-row count must match Logistic');
+    assert.deepEqual(calibration.calibration_days,
+      baselineCalibration.calibration_days,family+' must use identical UTC-day identities');
+  }
+  assert.deepEqual(report.calibration_policy,{
+    schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+    methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+    selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+    same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+    calibration_fit_rows:400,calibration_purged_rows:400,
+    calibration_check_rows:400,holdout_used_for_calibration:false
+  });
   assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
     [BASE+14*NEURAL_CLOSURE_PURGE_MS]);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){

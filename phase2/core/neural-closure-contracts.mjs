@@ -53,6 +53,24 @@ export function sha256Canonical(value) {
 }
 
 /**
+ * Hash a canonical JSON array one item at a time. This is byte-for-byte
+ * equivalent to sha256Canonical(items.map(project)) without materializing one
+ * giant stableValue tree or JSON string in memory.
+ */
+export function sha256CanonicalArray(items, project = value => value) {
+  if (!Array.isArray(items) || typeof project !== 'function')
+    throw new TypeError('NEURAL_CLOSURE_CANONICAL_ARRAY_ARGUMENTS_INVALID');
+  const hash = createHash('sha256');
+  hash.update('[');
+  for (let index = 0; index < items.length; index++) {
+    if (index) hash.update(',');
+    hash.update(canonicalJson(project(items[index], index)));
+  }
+  hash.update(']');
+  return hash.digest('hex');
+}
+
+/**
  * Validate the price actually available at the first-touch exit.
  * Intrabar touches fill at the barrier; opening gaps fill at the candle open;
  * horizon-end rows fill at the final closed-candle close.
@@ -408,6 +426,11 @@ export function validateFourHourRows(inputRows, {
       feature_information_cutoff_at: cutoff,
       target, outcome: source.outcome
     };
+    // V2 datasets included backwards-compatibility aliases that duplicated the
+    // full temporal tensor. The validated contract only consumes the canonical
+    // temporal_sequence fields, so drop the unused aliases after the shallow copy.
+    delete row.sequence;
+    delete row.sequence_timestamps;
     if (row.realized_return_pct !== undefined &&
         !finite(row.realized_return_pct))
       throw new Error('NEURAL_CLOSURE_REALIZED_RETURN_NON_FINITE:' + id);
@@ -417,10 +440,27 @@ export function validateFourHourRows(inputRows, {
   return rows;
 }
 
+function timestampBounds(rows) {
+  let firstAt=Infinity,lastAt=-Infinity;
+  for(const row of rows){
+    const at=Number(row?.at);
+    if(!Number.isFinite(at))
+      throw new Error('NEURAL_CLOSURE_TIMESTAMP_BOUND_NON_FINITE');
+    if(at<firstAt)firstAt=at;
+    if(at>lastAt)lastAt=at;
+  }
+  return {
+    first_at:rows.length?firstAt:null,
+    last_at:rows.length?lastAt:null
+  };
+}
+
 /**
  * UTC-day partitioning uses nominal 60/20/20 calendar-day boundaries and
  * removes one complete UTC day between each adjacent partition. Every model
  * consumes these exact row identities; same-day symbols are never split.
+ * Timestamp bounds are reduced in one pass to avoid argument-stack overflow
+ * and temporary arrays when the fixed-SHA cohort grows.
  */
 export function splitFourHourRows(rows) {
   if (!Array.isArray(rows) || rows.length < 1)
@@ -455,10 +495,11 @@ export function splitFourHourRows(rows) {
   const a=identities(train),b=identities(validation),c=identities(holdout);
   if ([...a].some(id=>b.has(id)||c.has(id)) || [...b].some(id=>c.has(id)))
     throw new Error('NEURAL_CLOSURE_PARTITION_IDENTITY_OVERLAP');
-  const firstAt = values => values.length ? Math.min(...values.map(row=>row.at)) : null;
-  const lastAt = values => values.length ? Math.max(...values.map(row=>row.at)) : null;
-  if (!(lastAt(train)<firstAt(validation)-NEURAL_CLOSURE_PURGE_MS) ||
-      !(lastAt(validation)<firstAt(holdout)-NEURAL_CLOSURE_PURGE_MS))
+  const trainBounds=timestampBounds(train);
+  const validationBounds=timestampBounds(validation);
+  const holdoutBounds=timestampBounds(holdout);
+  if (!(trainBounds.last_at<validationBounds.first_at-NEURAL_CLOSURE_PURGE_MS) ||
+      !(validationBounds.last_at<holdoutBounds.first_at-NEURAL_CLOSURE_PURGE_MS))
     throw new Error('NEURAL_CLOSURE_ONE_DAY_PURGE_NOT_ENFORCED');
   return {
     schema:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1',
@@ -476,8 +517,8 @@ export function splitFourHourRows(rows) {
     counts:{train:train.length,validation:validation.length,holdout:holdout.length,
       purged:purged.length,total:rows.length},
     boundaries:{
-      train_last_at:lastAt(train),validation_first_at:firstAt(validation),
-      validation_last_at:lastAt(validation),holdout_first_at:firstAt(holdout)
+      train_last_at:trainBounds.last_at,validation_first_at:validationBounds.first_at,
+      validation_last_at:validationBounds.last_at,holdout_first_at:holdoutBounds.first_at
     }
   };
 }
@@ -614,9 +655,9 @@ function chronologicalValidationBlocks(rows) {
   const purged=rows.filter(row=>purgeDays.has(dayOf(row)));
   const check=rows.filter(row=>checkDays.has(dayOf(row)));
   if(fit.length&&check.length){
-    const lastFit=Math.max(...fit.map(row=>row.at));
-    const firstCheck=Math.min(...check.map(row=>row.at));
-    if(!(lastFit<firstCheck-NEURAL_CLOSURE_PURGE_MS))
+    const fitBounds=timestampBounds(fit);
+    const checkBounds=timestampBounds(check);
+    if(!(fitBounds.last_at<checkBounds.first_at-NEURAL_CLOSURE_PURGE_MS))
       throw new Error('NEURAL_CLOSURE_CALIBRATION_ONE_DAY_PURGE_NOT_ENFORCED');
   }
   return {fit,purged,check,days:{fit:fitDaysList,purge:purgeDaysList,check:checkDaysList}};
@@ -953,14 +994,16 @@ export function runNeuralClosureBenchmark({
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
   const eventRows=[...split.validation,...split.holdout];
   const requiredIds=eventRows.map(row=>row.id);
-  const datasetSha=sha256Canonical(rows.map(row=>({
+  // Stream the exact canonical JSON array into SHA-256. Materializing a
+  // second full copy of every 24x29 sequence can exhaust the research runner.
+  const datasetSha=sha256CanonicalArray(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     target_definition:row.target_definition,outcome_source:row.outcome_source,
     outcome:row.outcome,target:row.target,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     realized_return_pct:row.realized_return_pct??null,
     features:row.features??null,temporal_sequence:row.temporal_sequence??null
-  })));
+  }));
   const calibrationBlocks=chronologicalValidationBlocks(split.validation);
   const modelNames=['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES];
   const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
@@ -1001,11 +1044,11 @@ export function runNeuralClosureBenchmark({
     }
     const rawMap=verified.map;
     verifiedPredictions.set(modelName,rawMap);
-    const calibration=modelName==='LOGISTIC_REGRESSION'
-      ?{status:'BASELINE_RAW',selected_method:'RAW_LOGISTIC_BASELINE',
-        selected_calibrator:null,support_ready:true,
-        minimum_positive_support_per_block:minimumClassSupport}
-      :chooseCalibration(rawMap,calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
+    // Calibrate the logistic anchor and every neural challenger with the
+    // exact same chronological fit/purge/check rows. Otherwise a neural model
+    // could appear to beat the baseline in Brier only because it was calibrated.
+    const calibration=chooseCalibration(rawMap,
+      calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
         purgedRows:calibrationBlocks.purged,calibrationDays:calibrationBlocks.days
       });
     const validationRows=calibrationBlocks.check;
@@ -1062,6 +1105,7 @@ export function runNeuralClosureBenchmark({
     const gates={
       minimum_holdout_positive_support:holdoutCounts.positive>=minimumClassSupport,
       calibration_class_support:model.calibration.support_ready===true,
+      baseline_calibration_class_support:baseline.calibration?.support_ready===true,
       brier_improvement:improvement>requiredBrierImprovement,
       minimum_oos_trades:candidate.trade_count>=minimumHoldoutTrades,
       minimum_net_win_rate:finite(candidate.win_rate_pct)&&candidate.win_rate_pct>=minimumWinRatePct,
@@ -1096,6 +1140,7 @@ export function runNeuralClosureBenchmark({
   const fixedBenchmarkSha=sha256Canonical({
     source_commit_sha:String(sourceCommitSha).toLowerCase(),
     dataset_sha256:datasetSha,row_count:rows.length,
+    calibration_policy_schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
     qualification_matrix_sha256:qualificationMatrixSha,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     split_schema:split.schema,purge_ms:NEURAL_CLOSURE_PURGE_MS,
@@ -1103,7 +1148,7 @@ export function runNeuralClosureBenchmark({
     prediction_matrix_sha256:predictionMatrixSha
   });
   return {
-    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1',
+    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2',
     status:NEURAL_CLOSURE_MODEL_FAMILIES.some(name=>models[name]?.acceptance?.passed)
       ?'NEURAL_SUPERIORITY_PROVEN':'NEURAL_SUPERIORITY_NOT_PROVEN',
     integrity:{
@@ -1132,7 +1177,18 @@ export function runNeuralClosureBenchmark({
       train_support:trainCounts,validation_support:validationCounts,
       holdout_support:holdoutCounts,
       calibration_fit_rows:calibrationBlocks.fit.length,
+      calibration_purged_rows:calibrationBlocks.purged.length,
       calibration_check_rows:calibrationBlocks.check.length
+    },
+    calibration_policy:{
+      schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+      methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+      selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+      same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+      calibration_fit_rows:calibrationBlocks.fit.length,
+      calibration_purged_rows:calibrationBlocks.purged.length,
+      calibration_check_rows:calibrationBlocks.check.length,
+      holdout_used_for_calibration:false
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,

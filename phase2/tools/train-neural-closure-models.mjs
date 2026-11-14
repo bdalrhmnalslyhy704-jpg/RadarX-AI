@@ -10,7 +10,7 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  runNeuralClosureBenchmark,sha256Canonical
+  runNeuralClosureBenchmark,sha256Canonical,sha256CanonicalArray
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -38,7 +38,7 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V1';
+const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V2';
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -208,20 +208,25 @@ async function main(){
   const sourceCommitSha=String(process.env.GITHUB_SHA||'').toLowerCase();
   if(!/^[a-f0-9]{40}$/.test(sourceCommitSha))
     throw new Error('MODEL_SOURCE_COMMIT_SHA_REQUIRED');
-  const inputBytes=await readFile(inputPath);
+  let inputBytes=await readFile(inputPath);
   const inputFileSha256=sha256(inputBytes);
-  const input=JSON.parse(inputBytes.toString('utf8'));
+  let input=JSON.parse(inputBytes.toString('utf8'));
   if(input?.schema!==NEURAL_CLOSURE_DATASET_SCHEMA||!Array.isArray(input.rows))
     throw new Error('NEURAL_CLOSURE_DATASET_SCHEMA_INVALID');
   const rows=validateFourHourRows(input.rows);
-  const datasetSha=sha256Canonical(rows.map(row=>({
+  // Release the original parsed row tree and the source byte buffer. The
+  // validator retains only canonical fields; duplicate sequence aliases are
+  // intentionally dropped before the original rows become unreachable.
+  input.rows=null;
+  inputBytes=null;
+  const datasetSha=sha256CanonicalArray(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
     realized_return_pct:row.realized_return_pct
-  })));
+  }));
   if(datasetSha!==input.dataset_sha256)
     throw new Error('NEURAL_CLOSURE_DATASET_CANONICAL_SHA_MISMATCH');
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_DATASET_BELOW_600_ROWS');
@@ -236,12 +241,33 @@ async function main(){
   };
   const eventRows=[...split.validation,...split.holdout];
   if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
+  const selectedSymbols=Array.isArray(input.universe?.symbols)
+    ?input.universe.symbols.map(item=>String(item?.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const includedSymbols=Array.isArray(input.universe?.symbol_results)
+    ?input.universe.symbol_results.filter(item=>item?.status==='INCLUDED')
+      .map(item=>String(item.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const datasetScope={
+    market_data_source:input.data_quality?.source??null,
+    market_data_endpoint:input.market_data_endpoint??null,
+    universe_selection:input.universe?.selection??null,
+    minimum_quote_volume_24h_usdt:input.universe?.minimum_quote_volume_24h_usdt??null,
+    selected_symbol_count:selectedSymbols.length,
+    included_symbol_count:includedSymbols.length,
+    selected_symbols:selectedSymbols,
+    included_symbols:includedSymbols,
+    survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
+    historical_delisted_asset_coverage:false,
+    interpretation:'CONDITIONAL_ON_CURRENTLY_TRADING_SPOT_PAIRS_AND_CURRENT_24H_LIQUIDITY'
+  };
   const training={
     model_source_commit_sha:sourceCommitSha,
     dataset_source_commit_sha:input.source_commit_sha??null,
     dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
+    dataset_scope:datasetScope,
     partition_class_support:supports
   };
 
@@ -303,7 +329,8 @@ async function main(){
       training_samples:cognitiveProfile.neural_network?.training_samples??0,
       selection_logistic_brier:cognitiveProfile.neural_network?.internal_selection_logistic_brier??null,
       selection_required_margin:cognitiveProfile.neural_network?.internal_selection_required_margin??null,
-      best_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+      best_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
+      inner_selection_diagnostics:cognitiveProfile.neural_network?.inner_selection_diagnostics??null,
       member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[],
       validation_comparison:cognitiveProfile.neural_network?.validation_comparison??null,
       holdout_comparison:cognitiveProfile.neural_network?.holdout_comparison??null
@@ -329,13 +356,13 @@ async function main(){
         training_samples:cognitiveProfile.neural_network?.training_samples??0,
         selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
         selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null,
-        best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null
+        best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null
       };
     }else unavailable.COGNITIVE_MLP_V5={reason:scored.reason};
   }else unavailable.COGNITIVE_MLP_V5={
     reason:cognitiveProfile.neural_network?.status??'NO_INNER_SELECTED_MLP_ARTIFACT',
     probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
-    best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+    best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
     member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[]
   };
 
@@ -380,7 +407,7 @@ async function main(){
       diagnostic_member_index:specialist.diagnostic_member_index??null,
       diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
       selection_scores:specialist.member_selection_scores??[],
-      selection_logistic_brier:specialist.selection_logistic_brier??null,
+      selection_logistic_brier:specialist.member_selection_logistic_brier??null,
       validation_passed:specialist.validation_passed===true,
       holdout_passed:specialist.holdout_passed===true
     }]))
@@ -564,6 +591,7 @@ async function main(){
       row_count:rows.length
     },
     training,
+    dataset_scope:datasetScope,
     model_artifacts:trainingArtifacts,
     unavailable_models:unavailable,
     benchmark,
@@ -590,6 +618,7 @@ async function main(){
     dataset_sha256:datasetSha,
     fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
     training_artifacts:Object.keys(trainingArtifacts),
+    dataset_scope:datasetScope,
     unavailable_models:unavailable,
     model_comparison:evaluated,
     production_touched:false,paper_trading:true,real_order_execution:false
