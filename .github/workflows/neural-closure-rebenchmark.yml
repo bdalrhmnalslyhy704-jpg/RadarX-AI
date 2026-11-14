@@ -49,9 +49,17 @@ jobs:
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
           node --input-type=module <<'NODE'
-          import { readFile } from 'node:fs/promises';
+          import { createHash } from 'node:crypto';
+          import { createReadStream } from 'node:fs';
+          import { readFile, stat } from 'node:fs/promises';
+          import { createGunzip } from 'node:zlib';
           const d = JSON.parse(await readFile('artifacts/source-run-75/dataset.json', 'utf8'));
           const errors = [];
+          const sha256Stream = async (stream) => {
+            const hash = createHash('sha256');
+            for await (const chunk of stream) hash.update(chunk);
+            return hash.digest('hex');
+          };
           if (d.source_commit_sha !== 'c1013eed7829ee5a73dbdc1eff70785866996d54') errors.push('SOURCE_SHA_MISMATCH');
           if (!Array.isArray(d.rows) || d.rows.length < 600) errors.push('DATASET_ROWS_BELOW_600');
           if (Number(d.counts?.included_symbols) < 25) errors.push('INCLUDED_SYMBOLS_BELOW_25');
@@ -60,10 +68,47 @@ jobs:
           if (Number(d.target?.take_profit_pct) !== 3 || Number(d.target?.stop_loss_pct) !== 2) errors.push('TARGET_BARRIER_MISMATCH');
           if (Number(d.target?.horizon_ms) !== 14400000) errors.push('TARGET_HORIZON_MISMATCH');
           if (!/^[a-f0-9]{64}$/.test(String(d.dataset_sha256))) errors.push('DATASET_SHA_INVALID');
+          const archives = d.data_quality?.raw_archive_records;
+          if (!Array.isArray(archives) || archives.length !== Number(d.data_quality?.raw_archive_files)) {
+            errors.push('RAW_ARCHIVE_MANIFEST_COUNT_MISMATCH');
+          } else {
+            const seen = new Set();
+            for (const record of archives) {
+              const file = String(record?.file || '');
+              if (!file || file.includes('/') || file.includes('\\\\') || seen.has(file)) {
+                errors.push('RAW_ARCHIVE_FILENAME_INVALID_OR_DUPLICATE');
+                continue;
+              }
+              seen.add(file);
+              if (!/^[a-f0-9]{64}$/.test(String(record.raw_sha256)) ||
+                  !/^[a-f0-9]{64}$/.test(String(record.compressed_sha256)) ||
+                  !Number.isInteger(Number(record.row_count)) || Number(record.row_count) < 1) {
+                errors.push('RAW_ARCHIVE_RECORD_INVALID:' + file);
+                continue;
+              }
+              const archivePath = 'artifacts/source-run-75/raw/' + file;
+              try {
+                const info = await stat(archivePath);
+                if (info.size !== Number(record.compressed_bytes)) {
+                  errors.push('RAW_ARCHIVE_SIZE_MISMATCH:' + file);
+                  continue;
+                }
+                const compressedSha = await sha256Stream(createReadStream(archivePath));
+                if (compressedSha !== record.compressed_sha256) {
+                  errors.push('RAW_ARCHIVE_COMPRESSED_SHA_MISMATCH:' + file);
+                  continue;
+                }
+                const rawSha = await sha256Stream(createReadStream(archivePath).pipe(createGunzip()));
+                if (rawSha !== record.raw_sha256) errors.push('RAW_ARCHIVE_CONTENT_SHA_MISMATCH:' + file);
+              } catch (error) {
+                errors.push('RAW_ARCHIVE_READ_OR_GZIP_FAILURE:' + file + ':' + String(error?.message || error));
+              }
+            }
+          }
           if (errors.length) throw new Error(errors.join(','));
           console.log(JSON.stringify({schema:d.schema,rows:d.rows.length,dataset_sha256:d.dataset_sha256,
             source_commit_sha:d.source_commit_sha,included_symbols:d.counts.included_symbols,
-            scope_warning:d.universe.survivorship_bias_warning,target:d.target}));
+            raw_archives_verified:archives.length,scope_warning:d.universe.survivorship_bias_warning,target:d.target}));
           NODE
       - name: Train and benchmark with equal calibration parity
         env:
