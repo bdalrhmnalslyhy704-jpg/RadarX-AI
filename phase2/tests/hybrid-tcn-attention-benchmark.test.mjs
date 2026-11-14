@@ -61,6 +61,8 @@ function makeRows(count = 700) {
       sequence_timestamps:Array.from({length:HYBRID_SEQUENCE_STEPS},(_,step)=>
         at-(HYBRID_SEQUENCE_STEPS-1-step)*FIFTEEN_MINUTES),
       gross_return_pct: positive ? 3 : -2,
+      outcome:positive?'UP':'DOWN',target:positive?1:0,
+      outcome_exit_reason:positive?'TAKE_PROFIT':'STOP_LOSS',
       max_adverse_excursion_pct: positive ? -0.4 : -2.1,
       max_adverse_excursion_at: at + FIFTEEN_MINUTES,
       max_favorable_excursion_pct: positive ? 2.8 : 0.8,
@@ -537,7 +539,7 @@ test('hybrid TCN actually uses temporal attention and returns a normalized atten
   assert.equal(fitted.receptive_field_steps, 31);
   assert.deepEqual(fitted.architecture_config, HYBRID_TCN_CONFIGURATION);
   assert.equal(fitted.training_objective,
-    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_ASYMMETRIC_FOCAL_KAMA_V4');
+    'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_KAMA_V5');
   assert.equal(fitted.activation, 'LEAKY_RELU_ALPHA_0_05');
   assert.equal(fitted.normalization.method, 'TRAIN_FOLD_CHANNEL_ZSCORE_CLIPPED_4');
   assert.equal(fitted.normalization.means.length, HYBRID_SEQUENCE_CHANNELS);
