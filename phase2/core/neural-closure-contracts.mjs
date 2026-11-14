@@ -1103,6 +1103,7 @@ export function runNeuralClosureBenchmark({
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,
+      portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY,
       execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
       realized_return_contract:{
         take_profit_first:'FIRST_TOUCH_BARRIER_OR_GAP_OPEN_FILL',
