@@ -54,8 +54,12 @@ import {
   poolLearnedTemporalAttention,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
+  predictTemporalAttentionResearchOutput,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
+
+const regimeOfTestSequence=sequence=>
+  Number(sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
 
 const FOUR_HOURS=4*60*60*1000;
 const EIGHT_HOURS=8*60*60*1000;
@@ -998,7 +1002,10 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     regimeLocalTcnPyramidEpochs:1,
     enableRegimeLocalTcnMultiscale:true,
     regimeLocalTcnMultiscaleMaxTrainingSamples:80,
-    regimeLocalTcnMultiscaleEpochs:1
+    regimeLocalTcnMultiscaleEpochs:1,
+    enableRegimeLocalTcnAttention:true,
+    regimeLocalTcnAttentionMaxTrainingSamples:80,
+    regimeLocalTcnAttentionEpochs:1
   });
   const local=profile.regime_local_tcn_challenger;
   assert.equal(local.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_V1');
@@ -1049,6 +1056,57 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     local.selected_regimes.length>0&&local.holdout.evaluated===true&&
       local.holdout_logistic.evaluated===true&&
       local.holdout.model_brier_score+0.003<local.holdout_logistic.model_brier_score);
+
+  const attention=profile.regime_local_tcn_attention_challenger;
+  assert.equal(attention.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1');
+  assert.equal(attention.architecture,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE);
+  assert.equal(attention.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
+  assert.equal(attention.output_features,TEMPORAL_LATENT_CHANNELS);
+  assert.equal(attention.trainable_parameter_count,TEMPORAL_ATTENTION_TRAINABLE_PARAMETER_COUNT);
+  assert.deepEqual(attention.supported_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  assert.equal(attention.probability_ready,false,
+    'the exported attention challenger remains research-only');
+  for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+    const expert=attention.regime_specialists[regime];
+    assert.equal(expert.trained,true,regime+' attention specialist must actually train');
+    assert.equal(expert.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
+    assert.equal(expert.model_architecture,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE);
+    assert.equal(expert.chronology_valid,true);
+    assert.ok(expert.max_training_outcome_resolved_at<expert.selection_start_at);
+    assert.ok(expert.max_selection_outcome_resolved_at<expert.calibration_start_at);
+    assert.ok(expert.max_calibration_outcome_resolved_at<expert.validation_start_at);
+    assert.ok(expert.validation_start_at<expert.holdout_start_at);
+    const state=expert.research_inference;
+    const row=rows.find(item=>regimeOfTestSequence(item.temporal_sequence)===regime);
+    assert.ok(row,'test fixture must contain the requested BTC risk regime');
+    if(state){
+      assert.equal(state.schema,'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1');
+      assert.equal(state.architecture,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE);
+      assert.equal(state.model.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
+      assert.equal(state.model.attentionQuery.length,TEMPORAL_LATENT_CHANNELS);
+      assert.equal(state.model.attentionPositionBiases.length,TEMPORAL_SEQUENCE_STEPS);
+      assert.ok(state.residual_scale>0,
+        'zero-residual logistic-only members must never be exported as neural inference');
+      const output=predictTemporalAttentionResearchOutput(
+        row.temporal_sequence,attention,{allowDiagnostic:true}
+      );
+      assert.ok(output&&Number.isFinite(output.probability)&&
+        output.probability>=0&&output.probability<=1,
+        'exported V11 state must generate a finite probability');
+      if(state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER'){
+        assert.equal(predictTemporalAttentionResearchOutput(
+          row.temporal_sequence,attention
+        ),null,'diagnostic-only attention output requires explicit research opt-in');
+      }else{
+        assert.equal(state.inference_mode,'INNER_SELECTED_TCN_ATTENTION_MEMBER');
+        assert.ok(predictTemporalAttentionResearchOutput(row.temporal_sequence,attention));
+      }
+    }else{
+      assert.equal(predictTemporalAttentionResearchOutput(
+        row.temporal_sequence,attention,{allowDiagnostic:true}
+      ),null,'unselected zero-residual attention members are not exportable probabilities');
+    }
+  }
 
   const pyramid=profile.regime_local_tcn_pyramid_challenger;
   assert.equal(pyramid.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1');
