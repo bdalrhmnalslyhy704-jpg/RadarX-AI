@@ -256,7 +256,7 @@ async function main(){
 
   // Train the Cognitive V5 MLP and the shared 24x29 TCN once on the same
   // matured first-touch cohort. The inner selection blocks remain chronological.
-  const cognitiveProfile=buildFourHourCognitiveLearningProfile(rows,{
+  const cognitiveProfile=buildFourHourCognitiveLearningProfile(split.train,{
     sourceCommitSha,
     maxNeuralTrainingSamples:6000,
     neuralTrainingHistoryFraction:1,
@@ -270,6 +270,9 @@ async function main(){
     }
   });
   const cognitiveArtifacts=cognitiveProfile.research_artifacts||{};
+  training.cognitive_profile_rows=split.train.length;
+  training.cognitive_profile_source_partition='FIXED_SHA_TRAIN_ONLY';
+  training.validation_or_holdout_rows_seen_by_cognitive_training=0;
 
   const mlpArtifact=cognitiveArtifacts.COGNITIVE_MLP_V5;
   if(mlpArtifact){
