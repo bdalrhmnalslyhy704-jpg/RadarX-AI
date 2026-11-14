@@ -192,7 +192,7 @@ export function evaluateHistoricalProfileAdapter(profile,input,{config=CONFIG}={
     return {analysis,eligible,score:analysis.score,stage,
       reasonCodes:[...(analysis.reasons||[]),...(analysis.data_quality_reasons||[]),
         ...(candleProxy&&analysis.eligible!==true?['CANDLE_ONLY_PRE_ATTACK_PROXY']:[])],
-      extraGateFailures:['HISTORICAL_FUTURES_SNAPSHOTS_UNAVAILABLE','HISTORICAL_LIQUIDATIONS_UNAVAILABLE','LIVE_PUSH_GATE_NOT_SIMULATED']};
+      extraGateFailures:['LIVE_PUSH_GATE_NOT_SIMULATED']};
   }
 
   if(detectorProfile==='COIN_HUNTER_RADAR'){

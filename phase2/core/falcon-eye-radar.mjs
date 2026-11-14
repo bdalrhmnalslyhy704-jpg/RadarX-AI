@@ -204,44 +204,18 @@ function relativeStrength(one,five,btcOne,btcFive){
   return {coin_5m:coin5,btc_5m:btc5,spread_5m:spread5,coin_15m:coin15,btc_15m:btc15,spread_15m:spread15};
 }
 
-function liquidationStats(rows,now){
-  const a=(Array.isArray(rows)?rows:[]).filter(x=>Number(x?.time)<=Number(now)&&Number(x?.price)>0&&Number(x?.origQty)>0);
-  let shortLiq=0,longLiq=0;
-  for(const x of a){
-    const n=Number(x.price)*Number(x.origQty);
-    const side=String(x.side||'').toUpperCase();
-    if(side==='BUY')shortLiq+=n; else if(side==='SELL')longLiq+=n;
-  }
-  return {available:a.length>0,count:a.length,short_liquidation_notional:shortLiq,long_liquidation_notional:longLiq,total_notional:shortLiq+longLiq};
-}
-
-function derivativesQuality(futures,previousFutures,spotQuoteVolume,liquidations){
-  const fv=finite(futures?.quoteVolume,null),oi=finite(futures?.openInterest,null),funding=finite(futures?.fundingRate,null);
-  const f2s=Number.isFinite(fv)&&spotQuoteVolume>0?fv/spotQuoteVolume:null;
-  const oiDelta=Number.isFinite(oi)&&Number.isFinite(previousFutures?.openInterest)&&previousFutures.openInterest>0
-    ?(oi-previousFutures.openInterest)/previousFutures.openInterest*100:null;
-  const fundingScore=Number.isFinite(funding)?clamp(
-    funding<=-0.006?96:
-    funding<=-0.003?90:
-    funding<=-0.0015?82:
-    funding<0?72:
-    funding<=0.001?50:
-    40
-  ):50;
-  const oiScore=Number.isFinite(oiDelta)?clamp(58+oiDelta*5):50;
-  const ratioScore=Number.isFinite(f2s)?clamp(48+Math.log10(Math.max(1,f2s))*32):50;
-  const liqScore=liquidations?.available
-    ?clamp(50+Math.min(45,liquidations.short_liquidation_notional/(Math.max(1,spotQuoteVolume))*220))
-    :50;
-  return {
-    futures_available:Boolean(Number.isFinite(fv)||Number.isFinite(oi)||Number.isFinite(funding)),
-    futures_quote_volume:fv,open_interest:oi,funding_rate:funding,futures_spot_volume_ratio:f2s,oi_change_pct:oiDelta,
-    funding_score:fundingScore,oi_score:oiScore,derivatives_volume_score:ratioScore,liquidation_score:liqScore
-  };
-}
-
+const SPOT_ONLY_DERIVATIVES=Object.freeze({
+  available:false,disabled:true,status:'DISABLED_BY_SPOT_ONLY_POLICY',
+  futures_available:false,futures_quote_volume:null,open_interest:null,funding_rate:null,
+  futures_spot_volume_ratio:null,oi_change_pct:null,
+  funding_score:null,oi_score:null,derivatives_volume_score:null,liquidation_score:null
+});
+const SPOT_ONLY_LIQUIDATIONS=Object.freeze({
+  available:false,disabled:true,status:'DISABLED_BY_SPOT_ONLY_POLICY',
+  count:null,short_liquidation_notional:null,long_liquidation_notional:null,total_notional:null
+});
 export function buildFalconEyeAnalysis({
-  ticker={},oneMinute=[],fiveMinute=[],btcOneMinute=[],btcFiveMinute=[],futures={},previousFutures=null,liquidations=[],now=Date.now(),config={}
+  ticker={},oneMinute=[],fiveMinute=[],btcOneMinute=[],btcFiveMinute=[],now=Date.now(),config={}
 }={}){
   const one=safeRows(oneMinute,now),five=safeRows(fiveMinute,now),btc1=safeRows(btcOneMinute,now),btc5=safeRows(btcFiveMinute,now);
   const activityShock=assessQuietBaseActivityShock({fiveMinute:five,ticker,now,config});
@@ -281,8 +255,8 @@ export function buildFalconEyeAnalysis({
   const vwapDistance=Number.isFinite(v)&&v>0?(lastClose-v)/v*100:null;
   const hl=higherLowScore(one);
   const rel=relativeStrength(one,five,btc1,btc5);
-  const liq=liquidationStats(liquidations,now);
-  const d=derivativesQuality(futures,previousFutures,Math.max(1,Number(ticker.quoteVolume24h)||0),liq);
+  const d=SPOT_ONLY_DERIVATIVES;
+  const liq=SPOT_ONLY_LIQUIDATIONS;
   const recentRange=avg(one.slice(-5).map(x=>Number(x.high)-Number(x.low)));
   const baseRange=median(one.slice(-35,-5).map(x=>Number(x.high)-Number(x.low)));
   const rangeRatio=Number.isFinite(recentRange)&&Number.isFinite(baseRange)&&baseRange>0?recentRange/baseRange:null;
@@ -334,23 +308,13 @@ export function buildFalconEyeAnalysis({
     (Number.isFinite(r10)?100-Math.min(100,Math.max(0,r10-0.5)*24):50)*0.26+
     (Number.isFinite(e21Distance)?100-Math.min(100,Math.abs(e21Distance)*18):50)*0.22
   );
-  const derivativeScore=clamp(
-    d.funding_score*.30+d.oi_score*.28+d.derivatives_volume_score*.22+d.liquidation_score*.20
-  );
-  const score=clamp(
-    quietScore*.13+
-    compressionScore*.10+
-    momentumScore*.10+
-    volumeScore*.10+
-    tradeScore*.07+
-    takerScore*.10+
-    structureScore*.10+
-    resistanceScore*.07+
-    relativeScore*.08+
-    derivativeScore*.15+
-    expansionScore*.05-
-    antiChasePenalty*.20
-  );
+  // Spot-only scoring redistributes the former derivatives allocation across
+  // verified Spot features. The 78/84 score gates are unchanged.
+  const spotWeightedScore=
+    quietScore*.13+compressionScore*.10+momentumScore*.10+volumeScore*.10+
+    tradeScore*.07+takerScore*.10+structureScore*.10+resistanceScore*.07+
+    relativeScore*.08+expansionScore*.05;
+  const score=clamp(spotWeightedScore/0.90-antiChasePenalty*.20);
   const confirmations=[
     quietScore>=68,
     compressionScore>=62,
@@ -361,11 +325,7 @@ export function buildFalconEyeAnalysis({
     structureScore>=68,
     resistanceScore>=70,
     relativeScore>=60,
-    derivativeScore>=62,
-    hl>=62,
-    d.futures_available,
-    Number.isFinite(d.oi_change_pct)&&d.oi_change_pct>0,
-    Number.isFinite(d.funding_rate)&&d.funding_rate<0
+    hl>=62
   ].filter(Boolean).length;
   const notChasing=antiChasePenalty<20 &&
     (!Number.isFinite(move24)||Math.abs(move24)<=8) &&
@@ -421,10 +381,6 @@ export function buildFalconEyeAnalysis({
   push(Number.isFinite(resistanceGap)&&resistanceGap<=1.4,'اقتراب من المقاومة');
   push(br.break_up,'اختراق مقاومة قصيرة');
   push(relativeScore>=65,'قوة نسبية مقابل BTC');
-  push(d.futures_spot_volume_ratio>=3,'العقود تتضخم مقارنة بالسبوت');
-  push(d.oi_change_pct>0.5,'Open Interest يرتفع مع الحركة');
-  push(d.funding_rate<0,'Funding سلبي: ضغط شورت قابل للانقلاب');
-  push(liq.short_liquidation_notional>0,'تصفية مراكز بيع ظاهرة');
   push(expansionScore>=70,'انتقال نظام التذبذب إلى توسع');
   return {
     eligible,stage,pre_expansion_stage:preExpansion.stage,pre_expansion_fingerprint:preExpansion,activity_shock:activityShock,market_regime_label:marketRegimeLabel,closed_candles_only:true,score:Number(score.toFixed(1)),
@@ -440,22 +396,23 @@ export function buildFalconEyeAnalysis({
       bollinger_width:bb.width,bollinger_ratio:bb.ratio,atr_ratio:atr.ratio,range_ratio:rangeRatio,efficiency_ratio:efficiency,
       close_location_pct:closeLocation,higher_low_score:hl,
       relative_strength_5m_spread_pct:rel.spread_5m,relative_strength_15m_spread_pct:rel.spread_15m,
-      futures_spot_volume_ratio:d.futures_spot_volume_ratio,open_interest:d.open_interest,oi_change_pct:d.oi_change_pct,
-      funding_rate:d.funding_rate,short_liquidation_notional:liq.short_liquidation_notional,long_liquidation_notional:liq.long_liquidation_notional
+      futures_spot_volume_ratio:null,open_interest:null,oi_change_pct:null,
+      funding_rate:null,short_liquidation_notional:null,long_liquidation_notional:null
     },
     component_scores:{
       quietness:quietScore,compression:compressionScore,momentum:momentumScore,volume:volumeScore,trades:tradeScore,taker:takerScore,
-      structure:structureScore,resistance:resistanceScore,relative_strength:relativeScore,derivatives:derivativeScore,
+      structure:structureScore,resistance:resistanceScore,relative_strength:relativeScore,derivatives:null,
       breakout:br.break_up?94:resistanceScore,ema:Number.isFinite(e21Distance)?clamp(75-e21Distance*16):50,
       vwap:Number.isFinite(vwapDistance)?clamp(55+vwapDistance*24):50,bollinger:compressionScore,efficiency:Number.isFinite(efficiency)?clamp(35+efficiency*85):45,
       atr:expansionScore,range:expansionScore
     },
-    derivatives:d,
-    liquidations:liq,
+    spot_only:true,derivatives_data_requested:false,
+    derivatives:{...d},
+    liquidations:{...liq},
     trigger:{min_score:78,ignition_score:84,min_confirmations:8,max_abs_24h_move_pct:8,max_10m_move_pct:3.8,max_5m_move_pct:2.5,max_ema21_distance_pct:4.2},
     alert_quality:{sniper_freshness:Number(clamp(100-antiChasePenalty*2.6).toFixed(1)),early_structure:earlyStructure,ignition:ignition,not_chasing:notChasing},
     reasons:[...new Set(reasons)].slice(0,14),
-    source:'Binance Public REST (Spot + public Futures)',
+    source:'Binance Public REST (Spot only)',
     detected_at:now,processed_at:now,paper_trading:true,real_order_execution:false,confidence_score:'UNKNOWN'
   };
 }
@@ -496,14 +453,16 @@ export class FalconEyeRadar {
     if(!rest)throw new Error('REST_CLIENT_REQUIRED');
     if(!store)throw new Error('STORE_REQUIRED');
     this.clock=typeof clock==='function'?clock:()=>Date.now();
-    this.rest=rest;this.futuresRest=futuresRest;this.store=store;this.pushManager=pushManager;this.config={
+    this.rest=rest;
+    // Kept only as a legacy constructor parameter; Spot-only policy forbids its use.
+    this.futuresRest=null;this.store=store;this.pushManager=pushManager;this.config={
       quote:'USDT',pollMs:30000,universeRefreshMs:5*60*1000,minQuoteVolume24h:750000,fastMinQuoteVolume24h:750000,
       scanBatchSize:8,pulseTopCandidates:3,quietCandidates:2,patrolBatchSize:2,deepScanMinIntervalMs:90_000,deepConcurrency:3,
       maxExtended24hMovePct:18,maxQuiet24hMovePct:8,quietMinBaseScore:55,quietMinCompressionScore:60,
       quietMinHigherLowScore:60,quietMinParticipationScore:58,quietMinBurstRatio:1.08,
       exceptionalRotationBypassSlots:2,exceptionalVolumeBurstRatio:2.2,exceptionalTradeBurstRatio:1.8,
       alertCooldownMs:45*60*1000,maxAlertsPerHour:3,minScore:78,
-      ...config
+      ...config,spotOnly:true
     };
     this.running=false;this.timer=null;this.universe=[];this.universeAt=0;this.cursor=0;
     this.lastScanAt=new Map();this.lastSelectedAt=new Map();this.lastSelectionCycleBySymbol=new Map();this.selectionCycle=0;
@@ -693,43 +652,27 @@ export class FalconEyeRadar {
       incomplete_selected:counts.incomplete,shortfall:Math.max(0,batchLimit-selected.length),selected_symbols:this.lastBatchSymbols.slice()};
     return selected;
   }
-  async futuresData(symbol){
-    if(!this.futuresRest)return {futures:{},liquidations:[]};
-    const safe=async(path)=>{try{const r=await this.futuresRest.request(path);return Array.isArray(r.data)?r.data:(r.data||null);}catch{return null;}};
-    const [ticker,oi,funding,liquidations]=await Promise.all([
-      safe('/fapi/v1/ticker/24hr?symbol='+encodeURIComponent(symbol)),
-      safe('/fapi/v1/openInterest?symbol='+encodeURIComponent(symbol)),
-      safe('/fapi/v1/fundingRate?symbol='+encodeURIComponent(symbol)+'&limit=1'),
-      safe('/fapi/v1/allForceOrders?symbol='+encodeURIComponent(symbol)+'&limit=50')
-    ]);
-    const fr=Array.isArray(funding)?funding.at(-1):funding;
-    const futuresRow=Array.isArray(ticker)?ticker[0]:ticker;
+  async futuresData(){
     return {
-      futures:{
-        quoteVolume:finite(futuresRow?.quoteVolume,null),
-        openInterest:finite(oi?.openInterest??(Array.isArray(oi)?oi.at(-1)?.openInterest:null),null),
-        fundingRate:finite(fr?.fundingRate,null)
-      },
-      liquidations:Array.isArray(liquidations)?liquidations:[]
+      status:'DISABLED_BY_SPOT_ONLY_POLICY',
+      futures:{quoteVolume:null,openInterest:null,fundingRate:null},
+      liquidations:null
     };
   }
   async scanRow(row,btcContext={}){
     const now=this.clock(),last=this.lastScanAt.get(row.symbol)||0;
     if(now-last<Math.max(10000,this.config.pollMs*0.7))return null;
     this.lastScanAt.set(row.symbol,now);
-    const [one,five,fd]=await Promise.all([
+    const [one,five]=await Promise.all([
       this.rest.klines(row.symbol,'1m',{limit:120}),
-      this.rest.klines(row.symbol,'5m',{limit:72}),
-      this.futuresData(row.symbol)
+      this.rest.klines(row.symbol,'5m',{limit:72})
     ]);
-    const previous=this.lastFutures.get(row.symbol)||null;
     const alert=buildFalconEyeAlert({
-      ticker:row,oneMinute:one.candles,fiveMinute:five.candles,btcOneMinute:btcContext.one||[],btcFiveMinute:btcContext.five||[],
-      futures:fd.futures,previousFutures:previous,liquidations:fd.liquidations
+      ticker:row,oneMinute:one.candles,fiveMinute:five.candles,
+      btcOneMinute:btcContext.one||[],btcFiveMinute:btcContext.five||[]
     },now,this.config);
     alert.market_pulse=row.market_pulse||null;
     alert.fast_lane=Boolean(row.market_pulse?.fast_trigger);
-    this.lastFutures.set(row.symbol,fd.futures);
     this.scans++;
     const gate=evaluateRadarNotificationGate(alert,{now});
     this.lastDecisionDiagnostics.evaluated++;
@@ -809,7 +752,8 @@ export class FalconEyeRadar {
       last_error:this.lastError,latest_candidates:this.latestCandidates.slice(0,10),latest_movers:this.latestMoverObservations.slice(0,10),selection:this.lastSelectionStats,
       decision_diagnostics:{...this.lastDecisionDiagnostics,top_gate_failures:Object.entries(this.gateFailureCounts).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([reason,count])=>({reason,count}))},
       active_alerts_last_hour:this.alertTimestamps.filter(t=>now-t<60*60*1000).length,
-      alert_budget_per_hour:this.config.maxAlertsPerHour,features:['OGN pre-explosion fingerprint','Quiet-base activity shock (taker buy is not mandatory)','Spot/Futures volume ratio','Open Interest','Funding squeeze context','Forced-liquidation context','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
+      alert_budget_per_hour:this.config.maxAlertsPerHour,spot_only:true,derivatives_data_requested:false,
+      features:['OGN pre-explosion fingerprint','Quiet-base activity shock (taker buy is not mandatory)','Spot quote-volume acceleration','Spot trade-count acceleration','Taker-buy pressure','Higher-Lows','Compression→Expansion','Relative Strength vs BTC','Anti-chase']
     };
   }
 }
