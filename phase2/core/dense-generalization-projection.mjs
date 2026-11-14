@@ -796,10 +796,13 @@ export function splitDense4hChronologically(rows){
   if(days.length<60)throw new Error('DENSE4H_REQUIRES_60_UNIQUE_UTC_DAYS');
   const boundary60=days[Math.floor(days.length*0.60)];
   const boundary80=days[Math.floor(days.length*0.80)];
-  const train=rows.filter(row=>row.at<boundary60-NEURAL_CLOSURE_PURGE_MS);
-  const validation=rows.filter(row=>row.at>=boundary60+NEURAL_CLOSURE_PURGE_MS&&
-    row.at<boundary80-NEURAL_CLOSURE_PURGE_MS);
-  const holdout=rows.filter(row=>row.at>=boundary80+NEURAL_CLOSURE_PURGE_MS);
+  const dayOf=at=>Math.floor(Number(at)/NEURAL_CLOSURE_PURGE_MS)*NEURAL_CLOSURE_PURGE_MS;
+  // Match the shared fixed-SHA 60/20/20 day identities exactly: one complete
+  // UTC day is purged at each boundary, never an additional implicit day.
+  const train=rows.filter(row=>dayOf(row.at)<boundary60);
+  const validation=rows.filter(row=>dayOf(row.at)>=boundary60+NEURAL_CLOSURE_PURGE_MS&&
+    dayOf(row.at)<boundary80);
+  const holdout=rows.filter(row=>dayOf(row.at)>=boundary80+NEURAL_CLOSURE_PURGE_MS);
   const partitions=[['train',train],['validation',validation],['holdout',holdout]];
   for(const [name,part] of partitions){
     if(part.length<DENSE_FOUR_HOUR_MIN_ROWS_PER_SPLIT)
