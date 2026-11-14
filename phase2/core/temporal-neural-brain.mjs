@@ -62,6 +62,7 @@ const LIVE_HOLDOUT = 150;
 const EPSILON = 1e-8;
 
 import {createHash} from 'node:crypto';
+import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
 import {performance} from 'node:perf_hooks';
 import {
   validateTemporalSequenceAlignment,
@@ -764,7 +765,8 @@ export function auditTemporalTrainingWorkspace(sequence,target=1) {
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+    'FOCAL_ASYMMETRIC_BRIER'
   ];
   const secondSequence=sequence.map((row,time)=>row.map((value,channel)=>
     value*0.71+Math.sin((time+1)*(channel+1)*0.013)*0.09));
@@ -904,7 +906,7 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   };
 }
 
-function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null, gradientLogitOverride=null) {
+function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGHTED_BRIER_PROPER_SCORING_RULE', gradients=null, workspace=null, gradientLogitOverride=null, focalWeights={}) {
   const targetGradients=gradients||zeroTrainableGradients(model);
   resetGradientBuffer(targetGradients);
   const channels=TEMPORAL_LATENT_CHANNELS;
@@ -922,10 +924,12 @@ function gradientsFor(sequence, target, model, cache, trainingObjective='UNWEIGH
   const brierGradient=2*probabilityError*cache.probability*(1-cache.probability);
   const logLossGradient=probabilityError;
   const error=gradientLogitOverride===null
-    ?trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
-      ?logLossGradient
-      :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
-        ?0.5*brierGradient+0.5*logLossGradient:brierGradient
+    ?trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+      ?focalAsymmetricBrierLoss(cache.probability,target,focalWeights).logitGradient
+      :trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+        ?logLossGradient
+        :trainingObjective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+          ?0.5*brierGradient+0.5*logLossGradient:brierGradient
     :Number(gradientLogitOverride);
   if(!Number.isFinite(error))throw new TypeError('TEMPORAL_GRADIENT_LOGIT_OVERRIDE_NON_FINITE');
   if(model.temporal_pooling===TEMPORAL_ATTENTION_POOLING_MODE){
@@ -1040,6 +1044,10 @@ export function auditTemporalGradientNumerics(
     const probability=clamp(forward(sequence,model,1,baselineFeatures).probability,1e-12,1-1e-12);
     const brier=(probability-target)**2;
     const logLoss=-(target*Math.log(probability)+(1-target)*Math.log(1-probability));
+    if(objective==='FOCAL_ASYMMETRIC_BRIER')
+      return focalAsymmetricBrierLoss(probability,target,{
+        positiveWeight:1,negativeWeight:1,gammaPositive:1,gammaNegative:2
+      }).loss;
     return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
       objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
         ?0.5*brier+0.5*logLoss:brier;
@@ -1070,7 +1078,8 @@ export function auditTemporalGradientNumerics(
     }
     for(const objective of objectives){
       const cache=forward(sequence,model,1,baselineFeatures);
-      const analytical=gradientsFor(sequence,target,model,cache,objective);
+      const analytical=gradientsFor(sequence,target,model,cache,objective,
+        null,null,null,{positiveWeight:1,negativeWeight:1,gammaPositive:1,gammaNegative:2});
       let maximumAbsoluteError=0,maximumRelativeError=0;
       let checked=0,failed=0;
       const details=[];
@@ -1165,10 +1174,12 @@ function vectorL2Norm(values){
   return Math.sqrt((Array.isArray(values)?values:[]).reduce((sum,value)=>
     sum+(Number(value)||0)**2,0));
 }
-function trainingObjectiveLoss(probability,target,objective) {
+function trainingObjectiveLoss(probability,target,objective,focalWeights={}) {
   const p=clamp(probability,1e-12,1-1e-12);
   const brier=(p-target)**2;
   const logLoss=-(target*Math.log(p)+(1-target)*Math.log(1-p));
+  if(objective==='FOCAL_ASYMMETRIC_BRIER')
+    return focalAsymmetricBrierLoss(p,target,focalWeights).loss;
   return objective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'?logLoss:
     objective==='MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
       ?0.5*brier+0.5*logLoss:brier;
@@ -1335,7 +1346,9 @@ function fitMember(rows, seed, {
   requireRegimeAwareDropout=false,
   dropoutBaseRate=0.04,
   dropoutMaximumRate=0.25,
-  spectralNormCap=1.5
+  spectralNormCap=1.5,
+  focalGammaPositive=1,
+  focalGammaNegative=2
 } = {}) {
   if(!Array.isArray(rows)||rows.length===0)
     throw new TypeError('TEMPORAL_TRAINING_ROWS_EMPTY');
@@ -1355,6 +1368,14 @@ function fitMember(rows, seed, {
   const usePositiveClassWeighting=positiveClassWeighting==='SQRT_INVERSE_PREVALENCE';
   const positiveSampleWeight=usePositiveClassWeighting&&positiveSamples>0
     ?clamp(Math.sqrt(negativeSamples/positiveSamples),1,3):1;
+  const focalClassWeights=trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+    ?deriveTrainingClassWeights(rows.map(row=>row.target))
+    :{positiveWeight:1,negativeWeight:1};
+  const focalWeights={
+    positiveWeight:focalClassWeights.positiveWeight,
+    negativeWeight:focalClassWeights.negativeWeight,
+    gammaPositive:focalGammaPositive,gammaNegative:focalGammaNegative
+  };
   const totalSampleWeight=negativeSamples+positiveSamples*positiveSampleWeight;
   model.training_sample_profile={training_samples:rows.length,positive_samples:positiveSamples,
     negative_samples:negativeSamples,positive_class_weighting:usePositiveClassWeighting
@@ -1447,11 +1468,12 @@ function fitMember(rows, seed, {
       const gradientOverride=directionalLoss
         ?directionalLoss.gradient_logits[rowIndex]*totalSampleWeight:null;
       const itemGradient = gradientsFor(sequence,row.target,model,cache,
-        trainingObjective,rowGradientScratch,trainingWorkspace,gradientOverride);
+        trainingObjective,rowGradientScratch,trainingWorkspace,gradientOverride,focalWeights);
       if(!isFiniteTemporalTree(itemGradient))
         throw new TypeError('TEMPORAL_BACKPROP_NON_FINITE_GRADIENT');
-      const sampleWeight=directionalLoss?1:(row.target>0.5?positiveSampleWeight:1);
-      const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective);
+      const sampleWeight=(directionalLoss||trainingObjective==='FOCAL_ASYMMETRIC_BRIER')
+        ?1:(row.target>0.5?positiveSampleWeight:1);
+      const rowLoss=trainingObjectiveLoss(cache.probability,row.target,trainingObjective,focalWeights);
       if(!directionalLoss)weightedObjectiveLoss+=rowLoss*sampleWeight;
       if(row.target>0.5)positiveObjectiveLoss+=rowLoss;
       else negativeObjectiveLoss+=rowLoss;
@@ -1560,6 +1582,11 @@ function fitMember(rows, seed, {
     },
     training_sample_profile:model.training_sample_profile,
     objective:trainingObjective,
+    focal_asymmetric_brier:trainingObjective==='FOCAL_ASYMMETRIC_BRIER'?{
+      gamma_positive:focalGammaPositive,gamma_negative:focalGammaNegative,
+      positive_weight:focalWeights.positiveWeight,negative_weight:focalWeights.negativeWeight,
+      weights_derived_from:'CURRENT_TRAINING_PARTITION_ONLY'
+    }:null,
     epoch_history:epochHistory
   };
   return model;
@@ -2135,16 +2162,18 @@ function fitEnsemble(rows, options = {}) {
     ?'ASYMMETRIC_DIRECTIONAL_RANKING_V1':objective;
   const memberProfiles=[
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
-      trainingObjective:objectiveFor('UNWEIGHTED_BRIER_PROPER_SCORING_RULE'),
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:1,focalGammaNegative:2,
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
-      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'),
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:0.5,focalGammaNegative:2,
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
-      trainingObjective:objectiveFor('MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'),
-      positiveClassWeighting:'SQRT_INVERSE_PREVALENCE',
+      trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
+      focalGammaPositive:1.5,focalGammaNegative:2.5,
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier}
   ];
