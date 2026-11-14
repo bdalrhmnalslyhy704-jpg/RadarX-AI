@@ -1,0 +1,71 @@
+name: Build 224 Neural Closure — parity-corrected rebenchmark
+
+on:
+  push:
+    branches:
+      - research/neural-closure-calibration-parity-20261114
+    paths:
+      - '.github/workflows/neural-closure-rebenchmark.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: build224-neural-closure-parity-rebenchmark-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebenchmark:
+    if: contains(github.event.head_commit.message, '[RUN-NEURAL-REBENCHMARK]')
+    name: Re-evaluate corrected models on the exact archived Binance cohort
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact corrected evaluator SHA
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Download the original 180-day collector artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-f8fc881ae6680434cd9c74602ca67eff17dc44fb
+          repository: \${{ github.repository }}
+          run-id: 43612945901
+          github-token: \${{ secrets.GITHUB_TOKEN }}
+          path: artifacts/source-run-73
+      - name: Verify the archived dataset and corrected evaluator
+        run: |
+          test -s artifacts/source-run-73/dataset.json
+          node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+          node -e "const d=require('./artifacts/source-run-73/dataset.json'); if(!Array.isArray(d.rows)||d.rows.length<600) process.exit(2); console.log(JSON.stringify({schema:d.schema,rows:d.rows.length,dataset_sha256:d.dataset_sha256,source_commit_sha:d.source_commit_sha,universe:d.universe?.symbols?.length,scope_warning:d.universe?.survivorship_bias_warning}));"
+      - name: Train and benchmark with equal calibration parity
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          mkdir -p artifacts/rebenchmark
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \
+            --input artifacts/source-run-73/dataset.json \
+            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
+            --epochs 8 \
+            --denseEpochs 36 \
+            --minimumHoldoutTrades 100 \
+            --minimumWinRatePct 55 \
+            --maximumDrawdownPct 8 \
+            --roundTripCostBps 30
+      - name: Upload parity-corrected report and model artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-parity-rebenchmark-\${{ github.sha }}
+          path: artifacts/rebenchmark/
+          if-no-files-found: ignore
+          retention-days: 30
