@@ -833,7 +833,8 @@ export function benchmarkTemporalTrainingWorkspace(sequence,target=1,{
   const objectives=[
     'UNWEIGHTED_BRIER_PROPER_SCORING_RULE',
     'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE',
-    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE'
+    'MIXED_BRIER_LOG_LOSS_50_50_PROPER_SCORING_RULE',
+    'FOCAL_ASYMMETRIC_BRIER'
   ];
   const baselineFeatures=pooledSequence(sequence);
   const results=[];
@@ -1378,8 +1379,13 @@ function fitMember(rows, seed, {
   };
   const totalSampleWeight=negativeSamples+positiveSamples*positiveSampleWeight;
   model.training_sample_profile={training_samples:rows.length,positive_samples:positiveSamples,
-    negative_samples:negativeSamples,positive_class_weighting:usePositiveClassWeighting
-      ?'SQRT_INVERSE_PREVALENCE':'NONE',positive_sample_weight:Number(positiveSampleWeight.toFixed(5))};
+    negative_samples:negativeSamples,
+    positive_class_weighting:trainingObjective==='FOCAL_ASYMMETRIC_BRIER'
+      ?'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'
+      :usePositiveClassWeighting?'SQRT_INVERSE_PREVALENCE':'NONE',
+    positive_sample_weight:Number(positiveSampleWeight.toFixed(5)),
+    focal_positive_weight:focalWeights.positiveWeight,
+    focal_negative_weight:focalWeights.negativeWeight};
   model.baseline_by_regime=baselineByRegime&&typeof baselineByRegime==='object'
     ?baselineByRegime:null;
   model.training_objective=trainingObjective;
@@ -2164,16 +2170,19 @@ function fitEnsemble(rows, options = {}) {
     {epochs:Math.max(1,Math.ceil(baseEpochs*0.75)),learningRate:baseLearningRate*0.9,l2:baseL2*1.5,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
       focalGammaPositive:1,focalGammaNegative:2,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:baseEpochs,learningRate:baseLearningRate,l2:baseL2,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
       focalGammaPositive:0.5,focalGammaNegative:2,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier},
     {epochs:Math.max(1,Math.ceil(baseEpochs*1.5)),learningRate:baseLearningRate*0.75,l2:baseL2*2,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
       focalGammaPositive:1.5,focalGammaNegative:2.5,
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS',
       latentChannels:TEMPORAL_LATENT_CHANNELS,trainableParameters:trainableParameterCount,temporalPoolingMode,
       attentionPositionBiasL2Multiplier}
   ];
@@ -2211,7 +2220,7 @@ function fitEnsemble(rows, options = {}) {
       ...(member.training_diagnostics||{})
     })),
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
-    training_objective:'DIVERSE_PROPER_SCORING_RULE_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
+    training_objective:'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
     training_prior_probability:baseRate
   };
