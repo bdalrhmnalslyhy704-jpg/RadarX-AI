@@ -516,6 +516,7 @@ export function buildDailyEarlyRiserHistoricalSamples({
       features:featureCandidate.features,
       temporal_sequence:featureCandidate.temporal_sequence||null,
       temporal_sequence_available:Array.isArray(featureCandidate.temporal_sequence),
+      temporal_sequence_micro_masked_steps:featureCandidate.temporal_sequence_micro_masked_steps??null,
       observation_source:'BINANCE_OFFICIAL_CLOSED_15M_BASELINE',
       feature_information_cutoff_at:baseline.closeTime,
       outcome_source:DAILY_EARLY_RISER_OUTCOME_SOURCE,
