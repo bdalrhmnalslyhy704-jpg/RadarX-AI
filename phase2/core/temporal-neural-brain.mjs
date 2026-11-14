@@ -67,7 +67,8 @@ import {createHash} from 'node:crypto';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_HORIZON_MS,
-  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS
+  NEURAL_CLOSURE_OUTCOME_SOURCE,NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS,
+  NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,isValidFourHourFirstTouchExecution
 } from './neural-closure-contracts.mjs';
 import {performance} from 'node:perf_hooks';
 import {
@@ -167,6 +168,8 @@ function cleanRows(samples, {
         /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
         touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
       return sourceAuditValid&&exitBarriersValid&&
+        row.execution_return_contract===NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT&&
+        isValidFourHourFirstTouchExecution(touch,row.outcome,row.realized_return_pct)&&
         touch?.path_resolution==='1M'&&
         touch.resolution===expected&&Number(touch?.observed_candles)===240&&
         touchAt!==null&&at!==null&&resolved!==null&&
