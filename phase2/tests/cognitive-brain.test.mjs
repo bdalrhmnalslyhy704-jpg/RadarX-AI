@@ -103,7 +103,8 @@ test('V5 ensemble trains every MLP member with Focal-Asymmetric Brier and train-
     }));
   assert.deepEqual(neural.member_training_objectives,
     ['FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER']);
-  assert.ok(neural.members.every(member=>
+  assert.ok(neural.member_training_diagnostics.length===3&&
+    neural.member_training_diagnostics.every(member=>
     member.training_objective==='FOCAL_ASYMMETRIC_BRIER'&&
     member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
     Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
@@ -1159,8 +1160,12 @@ test('Newton boosted-tree challenger learns nonlinear conjunctions without using
     assert.ok(blendCandidate.weight_fit_end_at<blendCandidate.weight_fit_selection_start_at,
       'blend-weight fitting labels must finish before its disjoint selection block begins');
   }else{
-    assert.equal(profile.hybrid_model.raw_optimal_boosted_weight,0,
-      'fixture should demonstrate a pure-MLP optimum that is rejected as a hybrid');
+    assert.ok(Number.isFinite(profile.hybrid_model.raw_optimal_boosted_weight)&&
+      profile.hybrid_model.raw_optimal_boosted_weight>=0&&
+      profile.hybrid_model.raw_optimal_boosted_weight<=1,
+      'a rejected blend must still expose its finite unconstrained weight-fit diagnostic');
+    assert.equal(profile.hybrid_model.weight_collapsed_to_single_component,true,
+      'the final blend must fail closed when later selection does not validate a two-component mixture');
   }
   assert.ok(profile.hybrid_model.weight_fit_samples>=20);
   assert.ok(profile.hybrid_model.weight_fit_end_at<profile.hybrid_model.weight_fit_cut_at);
