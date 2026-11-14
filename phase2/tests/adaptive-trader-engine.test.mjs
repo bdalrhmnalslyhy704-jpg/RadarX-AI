@@ -219,6 +219,48 @@ test('15m-only historical samples remain available to V5 but are marked ineligib
     'four-hour outcome labels remain resolved from complete closed 15m candles');
 });
 
+test('zero-volume 5m microstructure masks only the affected TCN step instead of dropping the full 24x29 sequence',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,320,15*60*1000,10,0.0001);
+  const fast=longClosedCandleFixture(now,960,5*60*1000,10,0.00003);
+  const btc=longClosedCandleFixture(now,800,15*60*1000,90_000,0.00002);
+  const targetOpen=klines.data[308][0];
+  const damagedFast={
+    ...fast,
+    data:fast.data.map(row=>{
+      if(row[0]<targetOpen||row[0]>=targetOpen+15*60*1000)return row;
+      const damaged=[...row];
+      damaged[5]=0;
+      damaged[7]=0;
+      damaged[8]=0;
+      damaged[9]=0;
+      damaged[10]=0;
+      return damaged;
+    })
+  };
+  const last=klines.data.at(-1);
+  const candidate=scoreAdaptiveTraderCandidate({
+    symbol:'MASKEDMICROUSDT',
+    ticker:{symbol:'MASKEDMICROUSDT',lastPrice:String(last[4]),
+      quoteVolume:'5000000',priceChangePercent:'1'},
+    klines:{...klines,receivedAt:now},
+    fastKlines:{...damagedFast,receivedAt:now},
+    btcKlines:{...btc,receivedAt:now},
+    now
+  });
+  assert.equal(candidate.data_valid,true);
+  assert.equal(candidate.temporal_sequence?.length,24,
+    'valid 15m/BTC history must survive an invalid optional 5m step');
+  assert.ok(candidate.temporal_sequence.every(step=>step.length===29));
+  const masked=candidate.temporal_sequence.filter(step=>step[28]===0);
+  assert.ok(masked.length>=1,'the invalid 5m window must be represented by mask=0');
+  assert.ok(masked.every(step=>step.slice(8,14).every(value=>value===0)),
+    'masked microstructure channels must be zero-filled');
+  assert.ok(candidate.temporal_sequence.some(step=>step[28]===1),
+    'valid 5m steps must retain their microstructure evidence');
+  assert.equal(candidate.temporal_sequence_micro_masked_steps,masked.length);
+});
+
 test('matured live samples are labeled only by matching baseline and four-hour closed candles',()=>{
   const now=Date.now();
   const original=longClosedCandleFixture(now,240,15*60*1000,10,0.0001);
