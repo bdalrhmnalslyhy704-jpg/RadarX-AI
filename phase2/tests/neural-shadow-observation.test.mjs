@@ -83,13 +83,13 @@ test('14-day observation records only paper predictions and matured 4h outcomes'
   }finally{await rm(ledger.folder,{recursive:true,force:true});}
 });
 
-test('observation cannot change duration, target or execution policy',()=>{
+test('observation cannot change duration, target or execution policy',async()=>{
   const manifest=modelArtifact();
   assert.throws(()=>createNeuralShadowObservationSession({
     modelArtifact:manifest,startedAt:START,observationDays:7
   }),/EXACTLY_14_DAYS/);
   const session=createNeuralShadowObservationSession({modelArtifact:manifest,startedAt:START});
-  assert.throws(()=>summarizeNeuralShadowObservation({
+  await assert.rejects(summarizeNeuralShadowObservation({
     ...session,real_order_execution:true
   },{ledgerPath:'/tmp/not-used',now:START}),/EXECUTION_POLICY_UNSAFE/);
 });
