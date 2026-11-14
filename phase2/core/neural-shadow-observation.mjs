@@ -22,7 +22,7 @@ async function appendRecord(ledgerPath,record){
   const unsigned={...record,previous_event_sha256:previous};
   const chained={...unsigned,event_sha256:sha256Canonical(unsigned)};
   await mkdir(dirname(path),{recursive:true});
-  await appendFile(path,canonicalJson(chained)+'\\n',{encoding:'utf8',flag:'a'});
+  await appendFile(path,canonicalJson(chained)+'\n',{encoding:'utf8',flag:'a'});
 }
 async function readLedger(ledgerPath){
   if(typeof ledgerPath!=='string'||!ledgerPath.trim())
@@ -32,7 +32,7 @@ async function readLedger(ledgerPath){
   catch(error){if(error?.code==='ENOENT')return [];throw error;}
   const events=[];
   let previous='0'.repeat(64);
-  for(const [index,line] of raw.split(/\\r?\\n/).entries()){
+  for(const [index,line] of raw.split(/\r?\n/).entries()){
     if(!line.trim())continue;
     try{
       const event=JSON.parse(line);
