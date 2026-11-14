@@ -1365,7 +1365,8 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   const candles=Array.from({length:240},(_,index)=>{
     const openTime=at+1+index*60_000;
     return {open_time:openTime,close_time:openTime+59_999,
-      is_closed:true,open:100,high:102,low:99,close:100.5};
+      is_closed:true,source:'BINANCE_PUBLIC_REST',
+      open:100,high:102,low:99,close:100.5};
   });
   const label=buildFourHourFirstTouchOutcome({
     id:'TCN-4H-FIRST-TOUCH-001',symbol:'ETHUSDT',
