@@ -722,8 +722,16 @@ function normalizeBenchmarkRows(inputRows, targetDefinition=DEFAULT_TARGET_DEFIN
       exitReason==='HORIZON_END'?'FLAT':null;
     const firstTouchTarget=firstTouchOutcome==='UP'?1:0;
     const fourHourContract=targetDefinition===NEURAL_CLOSURE_TARGET_DEFINITION;
+    const sourceAudit=raw.source_audit;
+    const sourceAuditValid=raw.market==='BINANCE_SPOT_USDT'&&
+      sourceAudit?.exchange==='BINANCE'&&sourceAudit?.market==='SPOT'&&
+      sourceAudit?.interval==='1m'&&sourceAudit?.transport==='BINANCE_PUBLIC_REST'&&
+      String(sourceAudit?.symbol||'').toUpperCase()===String(raw.symbol||'').toUpperCase()&&
+      Number(sourceAudit?.observed_candles)===240&&
+      /^[a-f0-9]{64}$/i.test(String(sourceAudit?.raw_klines_sha256||''))&&
+      raw.first_touch?.raw_klines_sha256===sourceAudit.raw_klines_sha256;
     const fourHourSemanticsValid=!fourHourContract||
-      raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS;
+      (raw.target_semantics===NEURAL_CLOSURE_TARGET_SEMANTICS&&sourceAuditValid);
     const touch=raw.first_touch;
     const at = finite(raw.at);
     const resolvedAt = finite(raw.resolved_at);
