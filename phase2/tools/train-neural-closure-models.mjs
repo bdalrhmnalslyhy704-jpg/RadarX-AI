@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {readFile,mkdir,writeFile,rename} from 'node:fs/promises';
-import {dirname,resolve} from 'node:path';
+import {dirname,resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
 
 import {
@@ -461,6 +461,14 @@ async function main(){
     }
   };
   await atomicJson(outputPath,report);
+  const artifactDirectory=join(dirname(outputPath),'model-artifacts');
+  for(const [family,artifact] of Object.entries(modelArtifactsByModel))
+    await atomicJson(join(artifactDirectory,family+'.json'),artifact);
+  await atomicJson(join(dirname(outputPath),'predictions.json'),{
+    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_PREDICTION_MATRIX_V1',
+    source_commit_sha:sourceCommitSha,dataset_sha256:datasetSha,
+    rows_scored:eventRows.length,predictions_by_model:predictionsByModel
+  });
   const summary={
     status:report.status,output:outputPath,
     source_commit_sha:sourceCommitSha,
