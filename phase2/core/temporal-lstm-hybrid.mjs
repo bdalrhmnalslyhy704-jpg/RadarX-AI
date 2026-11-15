@@ -725,10 +725,67 @@ function evaluateBrier(rows, model, anchor) {
   return sum / rows.length;
 }
 
+function evaluateLogisticBrier(rows, anchor) {
+  if (!rows.length) return null;
+  return rows.reduce((sum,row)=>{
+    const probability=sigmoid(predictTcnLstmLogisticLogit(row.sequence,anchor));
+    return sum+(probability-row.target)**2;
+  },0)/rows.length;
+}
+
+/**
+ * Keep epoch selection inside the training partition. The final day-sized
+ * maturity gap is purged before the internal validation block. This split is
+ * never taken from the external selection/calibration/validation/holdout sets.
+ */
+function buildPurgedInternalEarlyStoppingSplit(rows, {
+  validationFraction=0.20,
+  minimumTrainingRows=80,
+  minimumValidationRows=40
+}={}) {
+  if (!Array.isArray(rows)||rows.length<minimumTrainingRows+minimumValidationRows+1)
+    return null;
+  const ordered=[...rows].sort((a,b)=>a.at-b.at);
+  const days=[...new Set(ordered.map(row=>Math.floor(row.at/DAY_MS)*DAY_MS))]
+    .sort((a,b)=>a-b);
+  if(days.length<8)return null;
+  const fraction=clamp(Number(validationFraction),0.10,0.35);
+  const boundaryIndex=Math.max(2,Math.min(
+    days.length-2,Math.floor(days.length*(1-fraction))
+  ));
+  const boundary=days[boundaryIndex];
+  const validationStart=boundary+DAY_MS;
+  const trainingRows=ordered.filter(row=>row.at<boundary&&row.resolved_at<validationStart);
+  const validationRows=ordered.filter(row=>row.at>=validationStart);
+  const purgedRows=ordered.length-trainingRows.length-validationRows.length;
+  if(trainingRows.length<minimumTrainingRows||validationRows.length<minimumValidationRows)
+    return null;
+  const trainSupport=trainingRows.filter(row=>row.target===1).length;
+  const validationPositive=validationRows.filter(row=>row.target===1).length;
+  if(trainSupport<2||trainingRows.length-trainSupport<2||
+     validationPositive<2||validationRows.length-validationPositive<2)
+    return null;
+  const latestResolved=Math.max(...trainingRows.map(row=>row.resolved_at));
+  const firstValidationAt=Math.min(...validationRows.map(row=>row.at));
+  if(!(latestResolved<firstValidationAt))
+    throw new TypeError('TCN_LSTM_INTERNAL_EARLY_STOPPING_PURGE_VIOLATION');
+  const identities=new Set(trainingRows.map(sampleIdentity));
+  if(validationRows.some(row=>identities.has(sampleIdentity(row))))
+    throw new TypeError('TCN_LSTM_INTERNAL_EARLY_STOPPING_IDENTITY_OVERLAP');
+  return {
+    trainingRows,validationRows,purgedRows,
+    validationStartAt:firstValidationAt,
+    trainingSupport:trainingRows.length,
+    validationSupport:validationRows.length,
+    validationFraction:fraction,
+    latestTrainingResolvedAt:latestResolved
+  };
+}
+
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
-  baselineFit = null, earlyStoppingPatience = 5
+  baselineFit = null, earlyStoppingPatience = 5, earlyStoppingRows = null
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -753,6 +810,20 @@ export function trainTcnLstmHybrid(trainingRows, {
       anchor.training_fingerprint !== trainingFingerprint(rows))
     throw new TypeError('TCN_LSTM_TRAINING_ANCHOR_INVALID_OR_TRAINING_ROWS_MISMATCH');
 
+  let monitorRows=null;
+  let monitorSupport=null;
+  if(earlyStoppingRows!==null){
+    monitorSupport=assertRows(earlyStoppingRows,'EARLY_STOPPING');
+    const trainingIdentities=new Set(rows.map(sampleIdentity));
+    if(earlyStoppingRows.some(row=>trainingIdentities.has(sampleIdentity(row))))
+      throw new TypeError('TCN_LSTM_TRAINING_EARLY_STOPPING_IDENTITY_OVERLAP');
+    const latestResolved=Math.max(...rows.map(row=>row.resolved_at));
+    const firstMonitorAt=Math.min(...earlyStoppingRows.map(row=>row.at));
+    if(!(latestResolved<firstMonitorAt))
+      throw new TypeError('TCN_LSTM_TRAINING_EARLY_STOPPING_PURGE_VIOLATION');
+    monitorRows=[...earlyStoppingRows];
+  }
+
   const model = initializeModel(seed);
   let optimizer = {
     m: zerosLike(trainableParameters(model)),
@@ -762,7 +833,12 @@ export function trainTcnLstmHybrid(trainingRows, {
   const random = mulberry32(seed ^ 0xA5A5A5A5);
   const history = [];
   const initialBrier = evaluateBrier(rows, model, anchor);
-  let bestBrier = initialBrier;
+  const initialMonitorBrier=monitorRows
+    ?evaluateBrier(monitorRows,model,anchor):initialBrier;
+  const baselineMonitorBrier=monitorRows
+    ?evaluateLogisticBrier(monitorRows,anchor):null;
+  let bestBrier = initialMonitorBrier;
+  let bestTrainingBrier = initialBrier;
   let bestEpoch = 0;
   let bestModel = cloneTree(trainableParameters(model));
   let wait = 0, stoppedEarly = false;
@@ -811,8 +887,13 @@ export function trainTcnLstmHybrid(trainingRows, {
 
     const trainingBrier = evaluateBrier(rows, model, anchor);
     if (!finite(trainingBrier)) throw new TypeError('TCN_LSTM_TRAINING_BRIER_NON_FINITE');
-    if (trainingBrier < bestBrier - 1e-8) {
-      bestBrier = trainingBrier;
+    const monitorBrier=monitorRows
+      ?evaluateBrier(monitorRows,model,anchor):trainingBrier;
+    if(!finite(monitorBrier))
+      throw new TypeError('TCN_LSTM_EARLY_STOPPING_BRIER_NON_FINITE');
+    if (monitorBrier < bestBrier - 1e-8) {
+      bestBrier = monitorBrier;
+      bestTrainingBrier=trainingBrier;
       bestEpoch = epoch;
       bestModel = cloneTree(trainableParameters(model));
       wait = 0;
@@ -821,6 +902,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       epoch,
       pre_update_mean_batch_brier: Number((epochLoss / Math.max(1, seen)).toFixed(8)),
       post_update_training_brier: Number(trainingBrier.toFixed(8)),
+      post_update_validation_brier:monitorRows?Number(monitorBrier.toFixed(8)):null,
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
@@ -870,14 +952,26 @@ export function trainTcnLstmHybrid(trainingRows, {
       epochs_completed: history.length,
       best_epoch: bestEpoch,
       initial_training_brier: Number(initialBrier.toFixed(8)),
-      best_training_brier: Number(bestBrier.toFixed(8)),
-      training_brier_improvement: Number((initialBrier-bestBrier).toFixed(8)),
+      best_training_brier: Number(bestTrainingBrier.toFixed(8)),
+      training_brier_improvement: Number((initialBrier-bestTrainingBrier).toFixed(8)),
+      initial_monitor_brier:Number(initialMonitorBrier.toFixed(8)),
+      best_monitor_brier:Number(bestBrier.toFixed(8)),
+      monitor_brier_improvement:Number((initialMonitorBrier-bestBrier).toFixed(8)),
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor: 'TRAINING_PARTITION_BRIER_ONLY',
+        monitor:monitorRows?'PURGED_INTERNAL_TRAINING_PARTITION_BRIER_ONLY':'TRAINING_PARTITION_BRIER_ONLY',
         patience,
-        stopped_early: stoppedEarly
+        stopped_early: stoppedEarly,
+        validation_rows:monitorSupport?.rows??0,
+        validation_positive:monitorSupport?.positive??0,
+        validation_negative:monitorSupport?.negative??0,
+        initial_validation_brier:monitorRows?Number(initialMonitorBrier.toFixed(8)):null,
+        best_validation_brier:monitorRows?Number(bestBrier.toFixed(8)):null,
+        baseline_validation_brier:monitorRows?Number(baselineMonitorBrier.toFixed(8)):null,
+        latest_training_resolved_at:monitorRows?Math.max(...rows.map(row=>row.resolved_at)):null,
+        first_validation_at:monitorRows?Math.min(...monitorRows.map(row=>row.at)):null,
+        maturity_purge_verified:monitorRows!==null
       },
       history
     },
@@ -951,6 +1045,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const trainingBaselinePredictions=effectiveTrainingRows.map(row=>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence,anchor)));
   const trainingBaselineBrier=brierFrom(effectiveTrainingRows,trainingBaselinePredictions);
+  const internalEarlyStopping=buildPurgedInternalEarlyStoppingSplit(effectiveTrainingRows);
   const evaluated = [];
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
@@ -960,8 +1055,55 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
+    let epochProbe=null;
+    let refitEpochs=config.epochs;
+    let epochSelectionDiagnostics={
+      method:'TRAINING_ONLY_FALLBACK_INTERNAL_SPLIT_UNAVAILABLE',
+      training_rows:effectiveTrainingRows.length,
+      validation_rows:0,
+      purged_rows:0,
+      best_epoch:null,
+      validation_or_selection_or_holdout_used:false
+    };
+    if(internalEarlyStopping){
+      epochProbe=trainTcnLstmHybrid(internalEarlyStopping.trainingRows,{
+        epochs:config.epochs,
+        learningRate:config.learningRate,
+        l2:config.l2,
+        dropout:candidateDropout,
+        seed:seed+index*101,
+        maxTrainingSamples:internalEarlyStopping.trainingRows.length,
+        earlyStoppingRows:internalEarlyStopping.validationRows
+      });
+      refitEpochs=Math.max(1,epochProbe.training.best_epoch);
+      epochSelectionDiagnostics={
+        method:'PURGED_INTERNAL_TRAINING_PARTITION_EARLY_STOPPING',
+        training_rows:internalEarlyStopping.trainingRows.length,
+        validation_rows:internalEarlyStopping.validationRows.length,
+        purged_rows:internalEarlyStopping.purgedRows,
+        validation_fraction:internalEarlyStopping.validationFraction,
+        latest_training_resolved_at:internalEarlyStopping.latestTrainingResolvedAt,
+        first_validation_at:internalEarlyStopping.validationStartAt,
+        best_epoch:epochProbe.training.best_epoch,
+        refit_epochs:refitEpochs,
+        initial_validation_brier:epochProbe.training.early_stopping.initial_validation_brier,
+        best_validation_brier:epochProbe.training.early_stopping.best_validation_brier,
+        baseline_validation_brier:epochProbe.training.early_stopping.baseline_validation_brier,
+        validation_improvement_vs_logistic:
+          Number((epochProbe.training.early_stopping.baseline_validation_brier-
+            epochProbe.training.early_stopping.best_validation_brier).toFixed(8)),
+        epoch_history:epochProbe.training.history.map(item=>({
+          epoch:item.epoch,
+          post_update_training_brier:item.post_update_training_brier,
+          post_update_validation_brier:item.post_update_validation_brier,
+          maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
+          clipped_batches:item.clipped_batches
+        })),
+        validation_or_selection_or_holdout_used:false
+      };
+    }
     const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
-      epochs: config.epochs,
+      epochs:refitEpochs,
       learningRate: config.learningRate,
       l2: config.l2,
       dropout:candidateDropout,
@@ -1014,6 +1156,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
           clipped_batches:item.clipped_batches
         })),
+        epoch_selection:epochSelectionDiagnostics,
         validation_or_selection_or_holdout_used_for_fit:false
       },
       passed_inner_margin: improvement > requiredImprovement
