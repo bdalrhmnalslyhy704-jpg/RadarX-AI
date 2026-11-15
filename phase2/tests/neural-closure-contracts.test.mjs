@@ -442,6 +442,54 @@ test('fixed-SHA evaluator keeps every holdout metric locked when the required va
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const evaluated=rows.filter(row=>{
+    const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
+    return (day>=13&&day<=15)||(day>=17);
+  });
+  const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
+    id:row.id,
+    probability:row.target===1?positive:negative,
+    source_commit_sha:sourceCommitSha,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    artifact_sha256:artifactSha256
+  }));
+  // Logistic is deliberately inverted. The neural probabilities have excellent
+  // ranking/Brier relative to this baseline, but every threshold that trades
+  // selects the majority negative class; a higher threshold selects no trades.
+  predictions.LOGISTIC_REGRESSION=build(0.10,0.90,null);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
+    predictions[family]=build(0.43,0.41,modelArtifactsByModel[family].artifact_sha256);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const model=report.models[family];
+    assert.ok(model.validation.calibrated_brier_score<
+      report.models.LOGISTIC_REGRESSION.validation.calibrated_brier_score,
+    family+' should demonstrate that Brier improvement alone is not enough');
+    assert.equal(model.validation.outer_validation_gate.gates.validation_threshold_selected,'FAIL',family);
+    assert.equal(model.validation.threshold_selection,'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',family);
+    assert.equal(model.validation.selected_threshold,null,family);
+    assert.equal(model.status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(model.holdout.evaluated,false,family);
+    assert.equal(model.holdout.trade_count,0,family);
+    assert.equal(model.acceptance.status,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
+  }
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opened_for_models.length,0);
+});
+
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
   const rows=makeRows(),sourceCommitSha='b'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
