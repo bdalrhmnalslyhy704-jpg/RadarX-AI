@@ -122,6 +122,24 @@ test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the sh
   assert.match(contract,/'TCN_LSTM_HYBRID'/);
 });
 
+test('V9-V11 artifacts include a strictly qualified all-regime fallback for missing BTC specialists',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  assert.match(neural,/const pooledAcrossRegimes=regime==='ALL_REGIMES'/);
+  assert.match(neural,/filter\(row=>pooledAcrossRegimes\|\|regimeOfSequence/);
+  assert.match(neural,/pooled_fallback:pooledTcnPyramidFallback/);
+  assert.match(neural,/pooled_fallback:pooledTcnMultiscaleFallback/);
+  assert.match(neural,/pooled_fallback:pooledTcnAttentionFallback/);
+  assert.match(neural,/profile\?\.pooled_fallback\?\.research_inference/);
+  assert.match(trainer,/const pooledFallbackQualified=pooledFallback\.selection_passed===true&&/);
+  assert.match(trainer,/pooledFallback\.validation_passed===true&&pooledFallback\.holdout_passed===true/);
+  assert.match(trainer,/const attentionPooledQualified=attentionPooledFallback\.selection_passed===true&&/);
+  assert.match(trainer,/pooled_fallback:pooledState\?\{research_inference:pooledState\}:null/);
+  assert.match(trainer,/qualificationPassed=bothRegimesSelected\|\|pooledFallbackQualified/);
+  assert.match(trainer,/POOLED_ALL_REGIMES_FALLBACK_PASSED_VALIDATION_AND_HOLDOUT/);
+  assert.match(trainer,/diagnostic_only:!qualificationPassed/);
+});
+
 test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/modelName:'TCN_V8'/);
