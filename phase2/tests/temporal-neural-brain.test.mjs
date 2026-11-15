@@ -1058,7 +1058,52 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
       local.holdout_logistic.evaluated===true&&
       local.holdout.model_brier_score+0.003<local.holdout_logistic.model_brier_score);
 
+  const assertPooledFallback=(variant,poolingMode,predictor,label)=>{
+    const pooled=variant.pooled_fallback;
+    assert.ok(pooled,label+' must expose its separately trained all-regime fallback contract');
+    assert.equal(pooled.regime,'ALL_REGIMES');
+    if(pooled.trained){
+      assert.equal(pooled.chronology_valid,true,label+' pooled fit must preserve every purge boundary');
+      assert.ok(pooled.training_samples>0);
+      assert.ok(pooled.selection_samples>0);
+      assert.ok(pooled.calibration_samples>0);
+      assert.ok(pooled.validation_samples>0);
+      assert.ok(pooled.holdout_samples>0);
+    }
+    const state=pooled.research_inference;
+    const onRow=rows.find(item=>regimeOfTestSequence(item.temporal_sequence)==='BTC_RISK_ON');
+    const offRow=rows.find(item=>regimeOfTestSequence(item.temporal_sequence)==='BTC_RISK_OFF');
+    assert.ok(onRow&&offRow,label+' fallback test must cover both BTC regimes');
+    if(state){
+      assert.equal(state.regime,'ALL_REGIMES');
+      const fallbackProfile={pooled_fallback:{research_inference:state}};
+      for(const row of [onRow,offRow]){
+        const output=predictor(row.temporal_sequence,fallbackProfile,{
+          allowDiagnostic:true,expectedPoolingMode:poolingMode
+        });
+        assert.ok(output&&Number.isFinite(output.probability)&&
+          output.probability>=0&&output.probability<=1,
+          label+' pooled model must score both regimes with one fitted global state');
+        const restored=JSON.parse(JSON.stringify(fallbackProfile));
+        const roundTrip=predictor(row.temporal_sequence,restored,{
+          allowDiagnostic:true,expectedPoolingMode:poolingMode
+        });
+        assert.ok(roundTrip&&Math.abs(roundTrip.probability-output.probability)<1e-12,
+          label+' pooled artifact must survive JSON serialization and exact reload');
+      }
+    }else{
+      for(const row of [onRow,offRow]){
+        assert.equal(predictor(row.temporal_sequence,{
+          pooled_fallback:{research_inference:null}
+        },{allowDiagnostic:true,expectedPoolingMode:poolingMode}),null,
+        label+' must fail closed when neither a regime expert nor pooled state exists');
+      }
+    }
+  };
+
   const attention=profile.regime_local_tcn_attention_challenger;
+  assertPooledFallback(attention,TEMPORAL_ATTENTION_POOLING_MODE,
+    predictTemporalAttentionResearchOutput,'V11 attention');
   assert.equal(attention.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ATTENTION_READOUT_V1');
   assert.equal(attention.architecture,TEMPORAL_ATTENTION_MODEL_ARCHITECTURE);
   assert.equal(attention.temporal_pooling,TEMPORAL_ATTENTION_POOLING_MODE);
@@ -1120,6 +1165,8 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
   }
 
   const pyramid=profile.regime_local_tcn_pyramid_challenger;
+  assertPooledFallback(pyramid,TEMPORAL_ORDERED_POOLING_MODE,
+    predictTemporalVariantResearchOutput,'V9 ordered-pyramid');
   assert.equal(pyramid.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1');
   assert.equal(pyramid.temporal_pooling,TEMPORAL_ORDERED_POOLING_MODE);
   assert.equal(pyramid.pooling_segments,4);
@@ -1164,6 +1211,8 @@ test('independent regime-local TCNs train, select and calibrate only on their ow
     assert.equal(expert.probability_ready,false);
   }
   const multiscale=profile.regime_local_tcn_multiscale_challenger;
+  assertPooledFallback(multiscale,TEMPORAL_MULTISCALE_POOLING_MODE,
+    predictTemporalVariantResearchOutput,'V10 multiscale');
   assert.equal(multiscale.model_kind,'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1');
   assert.equal(multiscale.temporal_pooling,TEMPORAL_MULTISCALE_POOLING_MODE);
   assert.equal(multiscale.pooling_segments,4);
