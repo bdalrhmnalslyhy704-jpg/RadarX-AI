@@ -451,9 +451,11 @@ async function main(){
   const attentionInnerQualified=bothAttentionRegimesQualified||attentionPooledQualified;
   qualificationByModel.TCN_V11={
     passed:attentionInnerQualified,
-    reason:attentionInnerQualified
-      ?'BOTH_BTC_REGIMES_PASSED_INNER_VALIDATION_AND_UNTOUCHED_HOLDOUT'
-      :'BOTH_BTC_REGIMES_HAVE_NOT_PASSED_INNER_VALIDATION_AND_HOLDOUT',
+    reason:bothAttentionRegimesQualified
+      ?'BOTH_BTC_REGIME_SPECIALISTS_PASSED_VALIDATION_AND_HOLDOUT'
+      :attentionPooledQualified
+        ?'POOLED_ALL_REGIMES_ATTENTION_FALLBACK_PASSED_VALIDATION_AND_HOLDOUT'
+        :'NEITHER_BOTH_REGIME_SPECIALISTS_NOR_POOLED_FALLBACK_PASSED',
     diagnostic_only:!attentionInnerQualified
   };
   training.model_internal_diagnostics.TCN_V11={
@@ -586,7 +588,7 @@ async function main(){
       regime_specialists:Object.fromEntries(inferenceRegimes.map(regime=>[
         regime,{research_inference:specialists[regime].research_inference}
       ])),
-      pooled_fallback:pooledState,
+      pooled_fallback:pooledState?{research_inference:pooledState}:null,
       pooled_fallback_qualified:pooledFallbackQualified,
       supported_regimes:profile.supported_regimes??[],
       validation_selected_regimes:profile.validation_selected_regimes??[],
@@ -628,6 +630,7 @@ async function main(){
       architecture,temporal_pooling:expectedPooling,
       inference_regimes:inferenceRegimes,
       pooled_fallback_used_for_missing_regimes:Boolean(pooledState&&missingRegimes.length===0&&inferenceRegimes.length<requiredExternalRegimes.length),
+      pooled_fallback_available:Boolean(pooledState),
       pooled_fallback_qualified:pooledFallbackQualified,
       both_regime_specialists_qualified:bothRegimesSelected,
       qualification_basis:bothRegimesSelected?'BOTH_REGIME_SPECIALISTS':pooledFallbackQualified?'POOLED_ALL_REGIMES_FALLBACK':'NONE',
@@ -725,7 +728,7 @@ async function main(){
       regime_specialists:Object.fromEntries(attentionInferenceRegimes.map(regime=>[
         regime,{research_inference:attentionSpecialists[regime].research_inference}
       ])),
-      pooled_fallback:attentionPooledState,
+      pooled_fallback:attentionPooledState?{research_inference:attentionPooledState}:null,
       supported_regimes:attentionProfile.supported_regimes??[],
       validation_selected_regimes:attentionProfile.validation_selected_regimes??[],
       selected_regimes:attentionProfile.selected_regimes??[],
