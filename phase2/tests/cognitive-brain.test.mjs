@@ -104,18 +104,23 @@ test('V5 ensemble trains every MLP member with Focal-Asymmetric Brier and train-
     maxNeuralTrainingSamples:400,neuralIterations:30,neuralTrainingHistoryFraction:1
   });
   const neural=profile.neural_network;
-  assert.ok(neural&&neural.member_training_profiles?.length===3,
-    'V5 should fit three deterministic MLP candidates: '+JSON.stringify({
+  assert.ok(neural&&neural.member_training_profiles?.length===4,
+    'V5 should fit four objective-diverse MLP candidates: '+JSON.stringify({
       status:neural?.status,fit:neural?.fit_training_samples
     }));
-  assert.deepEqual(neural.member_training_objectives,
-    ['FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER']);
-  assert.ok(neural.member_training_profiles.length===3&&
-    neural.member_training_profiles.every(member=>
-    member.trainingObjective==='FOCAL_ASYMMETRIC_BRIER'&&
-    member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
-    Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
-    Number.isFinite(member.focal_asymmetric_brier.negative_weight)));
+  assert.deepEqual(neural.member_training_objectives,[
+    'FOCAL_ASYMMETRIC_BRIER','FOCAL_ASYMMETRIC_BRIER',
+    'FOCAL_ASYMMETRIC_BRIER','UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
+  ]);
+  assert.ok(neural.member_training_profiles.length===4&&
+    neural.member_training_profiles.slice(0,3).every(member=>
+      member.trainingObjective==='FOCAL_ASYMMETRIC_BRIER'&&
+      member.focal_asymmetric_brier?.weights_derived_from==='CURRENT_TRAINING_PARTITION_ONLY'&&
+      Number.isFinite(member.focal_asymmetric_brier.positive_weight)&&
+      Number.isFinite(member.focal_asymmetric_brier.negative_weight))&&
+    neural.member_training_profiles[3].trainingObjective==='UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'&&
+    neural.member_training_profiles[3].positiveClassWeighting==='NONE'&&
+    neural.member_training_profiles[3].focal_asymmetric_brier===null);
 });
 
 test('cognitive features separate early-flow divergence from momentum and missing micro data',()=>{
@@ -388,7 +393,7 @@ test('unseen-pair validation keeps focal MLP fail-closed when it misses the inne
       'legacy V5 callers must keep the original frozen logistic skip path');
     assert.equal(profile.neural_network.anchor_trust_radius,0);
     assert.equal(profile.neural_network.max_anchor_skip_delta,0);
-    assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+    assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V4');
     assert.equal(profile.neural_network.training_objective, 'FOCAL_ASYMMETRIC_BRIER_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_WEIGHTS_V1');
     assert.equal(profile.neural_network.training_strategy,
       'FOCAL_ASYMMETRIC_BRIER_RESIDUAL_MLP_VALIDATION_SHRUNK_V1_TRAIN_ONLY_CLASS_BALANCE');
@@ -438,18 +443,19 @@ test('unseen-pair validation keeps focal MLP fail-closed when it misses the inne
     assert.equal(profile.neural_network.residual_scale_selection, 'DISJOINT_CHRONOLOGICAL_SELECTION_BLOCK_BRIER_GRID_V1');
     assert.deepEqual(profile.neural_network.candidate_residual_scales, [0, 0.1, 0.25, 0.5, 1]);
     assert.ok([0, 0.1, 0.25, 0.5, 1].includes(profile.neural_network.selected_residual_scale));
-    assert.equal(profile.neural_network.ensemble_members, 3);
+    assert.equal(profile.neural_network.ensemble_members, 4);
     assert.deepEqual(profile.neural_network.member_training_objectives,[
       'FOCAL_ASYMMETRIC_BRIER',
       'FOCAL_ASYMMETRIC_BRIER',
-      'FOCAL_ASYMMETRIC_BRIER'
+      'FOCAL_ASYMMETRIC_BRIER',
+      'UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'
     ]);
     assert.equal(profile.neural_network.member_training_profiles[2].positiveClassWeighting,
       'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS');
     assert.ok(profile.neural_network.internal_selection_logistic_brier>=0);
     assert.ok(profile.neural_network.member_selection_brier_scores.every(row=>
       typeof row.beats_same_window_logistic==='boolean'));
-    assert.equal(profile.neural_network.ensemble_members_required, 3);
+    assert.equal(profile.neural_network.ensemble_members_required, 4);
     assert.equal(profile.feature_schema,COGNITIVE_FEATURE_SCHEMA);
     assert.equal(profile.neural_network.feature_schema,COGNITIVE_FEATURE_SCHEMA);
     assert.equal(profile.neural_network.input_neurons, 18);
@@ -854,7 +860,7 @@ test('the model refuses to claim learning when labels are unrelated to market ev
     'a model that memorizes alternating pair identities must not pass evidence-only validation');
   assert.equal(profile.neural_network.trained, true);
   assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
-  assert.equal(profile.neural_network.ensemble_members, 3);
+  assert.equal(profile.neural_network.ensemble_members, 4);
   assert.equal(profile.neural_network.selected, false);
   assert.equal(profile.neural_network.probability_ready, false);
   assert.equal(profile.neural_network.live_eligibility_ready, false,
