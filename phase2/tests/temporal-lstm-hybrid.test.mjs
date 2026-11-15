@@ -178,6 +178,46 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.equal(result.live_eligibility_ready,false);
 });
 
+test('hyper-parameter selection uses a purged internal training block for epoch choice then refits the full training window',()=>{
+  const training=makeRows(0,250,'nested-train');
+  const selection=makeRows(252,24,'nested-selection');
+  const result=selectTcnLstmHybridHyperparameters(training,selection,{
+    candidates:[
+      {name:'LOW',learningRate:0.0015,l2:0.0005,dropout:0,epochs:2},
+      {name:'HIGH',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:2}
+    ],
+    requiredImprovement:0.00025,seed:31,maxTrainingSamples:250
+  });
+  assert.equal(result.effective_training_rows,250);
+  assert.equal(result.candidates.length,2);
+  for(const candidate of result.candidates){
+    const diagnostics=candidate.training_diagnostics;
+    const epoch=diagnostics.epoch_selection;
+    assert.equal(epoch.method,'PURGED_INTERNAL_TRAINING_PARTITION_EARLY_STOPPING');
+    assert.ok(epoch.training_rows>=200);
+    assert.ok(epoch.validation_rows>=40);
+    assert.ok(epoch.purged_rows>=1);
+    assert.ok(epoch.latest_training_resolved_at<epoch.first_validation_at);
+    assert.ok(epoch.best_epoch>=0&&epoch.best_epoch<=2);
+    assert.ok(epoch.refit_epochs>=1&&epoch.refit_epochs<=2);
+    assert.equal(diagnostics.refit_rows,250);
+    assert.equal(diagnostics.training_rows,250);
+    assert.equal(diagnostics.validation_or_selection_or_holdout_used_for_fit,false);
+    assert.ok(Number.isFinite(epoch.validation_improvement_vs_logistic));
+  }
+  assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+});
+
+test('direct early-stopping monitor rejects overlapping or unpurged validation rows',()=>{
+  const training=makeRows(0,40,'monitor-train');
+  const overlapping=makeRows(39,20,'monitor-validation');
+  assert.throws(()=>trainTcnLstmHybrid(training,{
+    epochs:1,maxTrainingSamples:40,earlyStoppingRows:overlapping
+  }),/TCN_LSTM_TRAINING_EARLY_STOPPING_PURGE_VIOLATION/);
+});
+
 test('hyper-parameter selection rejects an unresolved split purge or identity overlap',()=>{
   const training=makeRows(0,40,'same');
   const overlapping=makeRows(39,20,'selection');
