@@ -295,6 +295,38 @@ test('5m closed candles add micro volume, trade and buy-flow evidence to the 15m
   assert.ok(result.features.return_3h_pct!==null);
 });
 
+test('degenerate but contiguous 5m candles are masked instead of dropping a valid 24x29 sequence',()=>{
+  const now=Date.now();
+  const klines=longClosedCandleFixture(now,160,15*60*1000,10,0.0001);
+  const fast=longClosedCandleFixture(now,640,5*60*1000,10,0.00003);
+  const btcKlines=longClosedCandleFixture(now,160,15*60*1000,90_000,0.00002);
+  const last15mOpen=klines.data.at(-1)[0];
+  const invalidOpens=new Set([last15mOpen,last15mOpen+5*60*1000,last15mOpen+10*60*1000]);
+  const fastData=fast.data.map(row=>{
+    if(!invalidOpens.has(row[0]))return row;
+    const copy=[...row],flat=Number(copy[4]);
+    copy[2]=flat;copy[3]=flat;copy[5]=0;copy[7]=0;copy[8]=0;copy[9]=0;copy[10]=0;
+    return copy;
+  });
+  const result=scoreAdaptiveTraderCandidate({
+    symbol:'MASKEDMICROUSDT',
+    ticker:{symbol:'MASKEDMICROUSDT',lastPrice:String(klines.data.at(-1)[4]),
+      quoteVolume:'5000000',priceChangePercent:'2'},
+    klines:{...klines,data:klines.data,receivedAt:now},
+    fastKlines:{...fast,data:fastData,receivedAt:now},
+    btcKlines:{...btcKlines,receivedAt:now},
+    now
+  });
+  assert.equal(result.data_valid,true);
+  assert.equal(result.temporal_sequence.length,24,
+    'an invalid optional 5m micro window must not discard valid 15m/BTC context');
+  assert.ok(result.temporal_sequence.at(-1).slice(8,14).every(value=>value===0));
+  assert.equal(result.temporal_sequence.at(-1)[28],0,
+    'the final channel must explicitly mark the unusable 5m window');
+  assert.equal(result.temporal_sequence.at(-2)[28],1,
+    'valid earlier micro windows remain available');
+});
+
 test('live closed-candle scoring produces a transparent candidate, never an entry signal',()=>{
   const f=marketFixture();
   const result=scoreAdaptiveTraderCandidate(f);
