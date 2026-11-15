@@ -20,7 +20,8 @@ import {
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit,
   effectiveTcnLstmTrainingSampleBudget,
-  TCN_LSTM_MAX_TRAINING_SAMPLES
+  TCN_LSTM_MAX_TRAINING_SAMPLES,
+  TCN_LSTM_REGULARIZATION_CANDIDATES
 } from '../core/temporal-lstm-hybrid.mjs';
 
 const DAY=86400000;
@@ -433,6 +434,19 @@ test('TCN receptive field covers all two-tap causal dilations',()=>{
   assert.equal(TCN_LSTM_RECEPTIVE_FIELD,15);
 });
 
+
+test('regularized TCN-LSTM candidate grid is predeclared, bounded and strictly validated',()=>{
+  assert.equal(TCN_LSTM_REGULARIZATION_CANDIDATES.length,6);
+  assert.equal(new Set(TCN_LSTM_REGULARIZATION_CANDIDATES.map(x=>x.name)).size,6);
+  for(const candidate of TCN_LSTM_REGULARIZATION_CANDIDATES){
+    assert.ok(candidate.learningRate>=0.0001&&candidate.learningRate<=0.01);
+    assert.ok(candidate.l2>=0&&candidate.l2<=0.2);
+    assert.ok(candidate.dropout>=0&&candidate.dropout<=0.40);
+    assert.equal(candidate.epochs,8);
+  }
+  assert.equal(Object.isFrozen(TCN_LSTM_REGULARIZATION_CANDIDATES),true);
+  assert.ok(TCN_LSTM_REGULARIZATION_CANDIDATES.every(Object.isFrozen));
+});
 
 test('recurrent training budget uses up to 16,384 available training rows without touching later partitions',()=>{
   assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,16384);
