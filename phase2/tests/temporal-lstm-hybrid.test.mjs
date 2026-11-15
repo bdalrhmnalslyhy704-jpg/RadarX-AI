@@ -386,12 +386,13 @@ test('TCN receptive field covers all two-tap causal dilations',()=>{
 });
 
 
-test('recurrent training budget uses up to 4,096 available training rows without touching later partitions',()=>{
-  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,36102),4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,1200),1200);
+test('recurrent training budget uses up to 16,384 available training rows without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,16384);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,36102),16384);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,1200),1200);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),8192);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(32768,36102),16384);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),16384);
 });
