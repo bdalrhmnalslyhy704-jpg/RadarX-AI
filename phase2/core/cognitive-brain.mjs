@@ -40,7 +40,7 @@ const NEURAL_POLICY = Object.freeze({
   learningRate: 0.012,
   l2: 0.04,
   selectionMargin: 0.003,
-  ensembleSeeds: Object.freeze([11, 29, 47])
+  ensembleSeeds: Object.freeze([11, 29, 47, 73])
 });
 export const COGNITIVE_CHALLENGER_BRIER_MARGIN = NEURAL_POLICY.selectionMargin;
 
@@ -1366,9 +1366,9 @@ function fitNeuralEnsemble(training, options = {}) {
   const baseLearningRate=clamp(Number(options.learningRate)||NEURAL_POLICY.learningRate,0.001,0.04);
   const baseL2=clamp(Number(options.l2)||NEURAL_POLICY.l2,0.001,0.5);
   const outputInitializationScale=clamp(Number(options.outputInitializationScale)||0.015,0.005,0.12);
-  // Keep total optimization work equal to three base schedules while reducing
-  // dependence on one epoch/regularization choice. Selection remains on the
-  // chronological validation block; the untouched holdout is never consulted.
+  // Three focal schedules plus one unweighted proper Log-Loss schedule form a
+  // predeclared objective-diverse challenger set. Selection remains on the
+  // chronological inner block; the untouched outer holdout is never consulted.
   const enabledDirectionalLoss=options.enableAsymmetricDirectionalRankingLoss===true;
   const objectiveFor=objective=>enabledDirectionalLoss
     ?'ASYMMETRIC_DIRECTIONAL_RANKING_V1':objective;
@@ -1387,7 +1387,14 @@ function fitNeuralEnsemble(training, options = {}) {
       outputInitializationScale,
       trainingObjective:objectiveFor('FOCAL_ASYMMETRIC_BRIER'),
       focalGammaPositive:0.5,focalGammaNegative:1,
-      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'}
+      positiveClassWeighting:'FOCAL_ASYMMETRIC_BRIER_TRAIN_ONLY_CLASS_WEIGHTS'},
+    // Proper Log-Loss challenger: no class reweighting or focal modulation.
+    // Its calibrated probabilities are compared using the exact same inner
+    // selection rows and the same frozen same-window Logistic anchor.
+    {iterations:baseIterations,learningRate:baseLearningRate*0.8,l2:baseL2*1.25,
+      outputInitializationScale,
+      trainingObjective:objectiveFor('UNWEIGHTED_LOG_LOSS_PROPER_SCORING_RULE'),
+      positiveClassWeighting:'NONE'}
   ];
   const members=seeds.map((seed,index)=>fitNeuralNetworkModel(training,{
     ...options,...memberProfiles[index],seed
@@ -1423,7 +1430,7 @@ function fitNeuralEnsemble(training, options = {}) {
     focal_asymmetric_brier:members[index]?.focal_asymmetric_brier??null
   }));
   return {
-    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V4',
     architecture:members[0].architecture,
     input_size:members[0].input_size,
     hidden_units:NEURAL_POLICY.hiddenUnits,
