@@ -2337,8 +2337,9 @@ function fitRegimeLocalTemporalTcn({
   minValidationSamples=12,minValidationPositive=5,minValidationNegative=20,
   minHoldoutSamples=20,minHoldoutPositive=5,minHoldoutNegative=20
 }={}){
+  const pooledAcrossRegimes=regime==='ALL_REGIMES';
   const sortRows=rows=>(Array.isArray(rows)?rows:[])
-    .filter(row=>regimeOfSequence(row?.sequence)===regime)
+    .filter(row=>pooledAcrossRegimes||regimeOfSequence(row?.sequence)===regime)
     .sort((a,b)=>a.at-b.at||String(a.symbol||'').localeCompare(String(b.symbol||'')));
   const allTraining=sortRows(trainingRows),selection=sortRows(memberSelectionRows);
   const calibration=sortRows(calibrationRows),validation=sortRows(validationRows);
@@ -2390,7 +2391,7 @@ function fitRegimeLocalTemporalTcn({
         ?'INDEPENDENT_REGIME_LOCAL_TCN_MULTISCALE_READOUT_V1':
         temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
           ?'INDEPENDENT_REGIME_LOCAL_TCN_ORDERED_PYRAMID_V1':'INDEPENDENT_REGIME_LOCAL_TCN_V1',
-    model_scope:'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
+    model_scope:pooledAcrossRegimes?'POOLED_ALL_BTC_REGIMES_TCN_WITH_MATCHED_LOGISTIC_ANCHOR_V1':'INDEPENDENT_BTC_REGIME_TCN_WITH_REGIME_LOCAL_LOGISTIC_ANCHOR',
     temporal_pooling:temporalPoolingMode,
     training_strategy:temporalPoolingMode===TEMPORAL_ATTENTION_POOLING_MODE
       ?'INDEPENDENT_BTC_REGIME_TCN_LEARNED_QUERY_TIME_ATTENTION_V1':
@@ -3568,6 +3569,86 @@ export function buildTemporalNeuralProfile(samples = [], {
     feature_importance:temporalTreeFeatureImportance,
     feature_importance_total_gain:Number(temporalTreeTotalGain.toFixed(7))
   };
+  // Global fallback specialists use both BTC regimes but retain the SAME
+  // purged outer-train, inner-selection, calibration, outer-validation and
+  // untouched-holdout blocks. They are separate model states, never a logistic
+  // fallback, and qualify only by passing the same 0.003 Brier gates.
+  const fitPooledVariantFallback=({
+    enabled,maxTrainingSamples,epochs:variantEpochs,temporalPoolingMode,
+    attentionPositionBiasL2Multiplier=1
+  })=>enabled?fitRegimeLocalTemporalTcn({
+    regime:'ALL_REGIMES',
+    trainingRows:sharedTrainingRows,
+    memberSelectionRows:pooledMemberSelectionRows,
+    calibrationRows:sharedCalibrationRows,
+    validationRows:validation,
+    holdoutRows:holdout,
+    epochs:variantEpochs,learningRate,l2,comparisonMargin,
+    maxTrainingSamples,temporalPoolingMode,
+    attentionPositionBiasL2Multiplier,
+    enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
+    minTrainingSamples:minRegimeTraining,
+    minTrainingPositive:minRegimeTrainingPositive,
+    minTrainingNegative:minRegimeNegative,
+    minSelectionSamples,minSelectionPositive,minSelectionNegative,
+    minCalibrationSamples:30,minCalibrationPositive:5,minCalibrationNegative:20,
+    minValidationSamples:minimumValidationSamples,
+    minValidationPositive:minRegimePositive,
+    minValidationNegative:minRegimeNegative,
+    minHoldoutSamples:minimumHoldoutSamples,
+    minHoldoutPositive:minRegimePositive,
+    minHoldoutNegative:minRegimeNegative
+  }):null;
+  const summarizePooledVariantFallback=result=>result?{
+    status:result.status??null,regime:'ALL_REGIMES',
+    trained:result.trained===true,
+    selection_passed:result.selection_passed===true,
+    validation_passed:result.validation_passed===true,
+    holdout_passed:result.holdout_passed===true,
+    chronology_valid:result.chronology_valid===true,
+    training_samples:result.training_samples??0,
+    selection_samples:result.selection_samples??0,
+    calibration_samples:result.calibration_samples??0,
+    validation_samples:result.validation_samples??0,
+    holdout_samples:result.holdout_samples??0,
+    training_targets:result.training_targets??null,
+    selection_targets:result.selection_targets??null,
+    calibration_targets:result.calibration_targets??null,
+    validation:result.validation??null,
+    validation_logistic:result.validation_logistic??null,
+    holdout:result.holdout??null,
+    holdout_logistic:result.holdout_logistic??null,
+    selection_best_candidate:result.selection_best_candidate??null,
+    member_selection_scores:result.member_selection_scores??[],
+    research_inference:result.research_inference??null
+  }:{status:'NOT_ENABLED',regime:'ALL_REGIMES',trained:false,
+    validation_passed:false,holdout_passed:false,research_inference:null};
+  const pooledTcnPyramidFallback=summarizePooledVariantFallback(
+    fitPooledVariantFallback({
+      enabled:enableRegimeLocalTcnPyramid,
+      maxTrainingSamples:regimeLocalTcnPyramidMaxTrainingSamples,
+      epochs:regimeLocalTcnPyramidEpochs,
+      temporalPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+    })
+  );
+  const pooledTcnMultiscaleFallback=summarizePooledVariantFallback(
+    fitPooledVariantFallback({
+      enabled:enableRegimeLocalTcnMultiscale,
+      maxTrainingSamples:regimeLocalTcnMultiscaleMaxTrainingSamples,
+      epochs:regimeLocalTcnMultiscaleEpochs,
+      temporalPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE
+    })
+  );
+  const pooledTcnAttentionFallback=summarizePooledVariantFallback(
+    fitPooledVariantFallback({
+      enabled:enableRegimeLocalTcnAttention,
+      maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
+      epochs:regimeLocalTcnAttentionEpochs,
+      temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
+      attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier
+    })
+  );
+
   const regimeLocalTcnSupportedRegimes=regimes.filter(regime=>
     regimeLocalTcnResults[regime]?.trained===true);
   const regimeLocalTcnValidationRegimes=regimes.filter(regime=>
@@ -3710,7 +3791,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         regimeLocalTcnPyramidSupportedRegimes.every(regime=>
           regimeLocalTcnPyramidSelectedRegimes.includes(regime))
     },
-    regime_specialists:regimeLocalTcnPyramidResults
+    regime_specialists:regimeLocalTcnPyramidResults,
+    pooled_fallback:pooledTcnPyramidFallback
   };
   const regimeLocalTcnMultiscaleSupportedRegimes=regimes.filter(regime=>
     regimeLocalTcnMultiscaleResults[regime]?.trained===true);
@@ -3785,7 +3867,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         regimeLocalTcnMultiscaleSupportedRegimes.every(regime=>
           regimeLocalTcnMultiscaleSelectedRegimes.includes(regime))
     },
-    regime_specialists:regimeLocalTcnMultiscaleResults
+    regime_specialists:regimeLocalTcnMultiscaleResults,
+    pooled_fallback:pooledTcnMultiscaleFallback
   };
   const attentionSupportedRegimes=regimes.filter(regime=>
     regimeLocalTcnAttentionResults[regime]?.trained===true);
@@ -3875,7 +3958,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     selected_for_research:attentionValidationRegimes.length>0,
     research_out_of_sample_validated:attentionSelectedRegimes.length>0,
     probability_ready:false,live_eligibility_ready:false,
-    regime_specialists:regimeLocalTcnAttentionResults
+    regime_specialists:regimeLocalTcnAttentionResults,
+    pooled_fallback:pooledTcnAttentionFallback
   };
   const supportedRegimes=regimes.filter(regime=>regimeResults[regime]?.supported===true);
   const validationSelectedRegimes=regimes.filter(regime=>regimeResults[regime]?.validation_passed===true);
@@ -4267,7 +4351,7 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   const regime=regimeOfSequence(sequence);
   if(!regime)return null;
   const specialist=profile?.regime_specialists?.[regime];
-  const state=specialist?.research_inference;
+  const state=specialist?.research_inference??profile?.pooled_fallback?.research_inference;
   if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
     state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
     state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
@@ -4298,7 +4382,8 @@ export function predictTemporalVariantResearchOutput(sequence,profile={},{
   if(!validSequence(sequence))return null;
   const regime=regimeOfSequence(sequence);
   if(!regime)return null;
-  const state=profile?.regime_specialists?.[regime]?.research_inference;
+  const state=profile?.regime_specialists?.[regime]?.research_inference??
+    profile?.pooled_fallback?.research_inference;
   if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
     ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
     (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
