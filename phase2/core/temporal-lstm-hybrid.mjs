@@ -257,7 +257,10 @@ function initializeModel(seed = 29) {
     lstmInputWeights, lstmRecurrentWeights, lstmBiases,
     attentionQuery: Array.from({ length: hidden }, () => (random() - 0.5) * 0.06),
     attentionPositionBiases: Array(TCN_LSTM_STEPS).fill(0),
-    outputWeights: Array.from({ length: hidden }, () => (random() - 0.5) * 0.04),
+    // A residual challenger must begin as an exact no-op over the frozen
+    // Logistic anchor. Zero initialization prevents random TCN/LSTM features
+    // from perturbing the baseline before a learned residual earns its effect.
+    outputWeights: Array(hidden).fill(0),
     // Trainable scalars are one-element arrays so optimizer/finite-difference
     // updates mutate the model object rather than a detached wrapper property.
     outputBias: [0]
@@ -1083,7 +1086,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         maxTrainingSamples:internalEarlyStopping.trainingRows.length,
         earlyStoppingRows:internalEarlyStopping.validationRows
       });
-      refitEpochs=Math.max(1,epochProbe.training.best_epoch);
+      // Never force a one-epoch full-window refit when the purged
+      // internal block selected the initialization (epoch zero). Such a fit
+      // would be unvalidated by the only permitted epoch-selection split.
+      refitEpochs=epochProbe.training.best_epoch;
       epochSelectionDiagnostics={
         method:'PURGED_INTERNAL_TRAINING_PARTITION_EARLY_STOPPING',
         training_rows:internalEarlyStopping.trainingRows.length,
@@ -1110,16 +1116,22 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         validation_or_selection_or_holdout_used:false
       };
     }
-    const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
-      epochs:refitEpochs,
-      learningRate: config.learningRate,
-      l2: config.l2,
-      dropout:candidateDropout,
-      seed: seed + index * 101,
-      maxTrainingSamples: effectiveTrainingRows.length,
-      baselineFit: anchor
-    });
-    const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
+    const fit = refitEpochs>0
+      ?trainTcnLstmHybrid(effectiveTrainingRows, {
+        epochs:refitEpochs,
+        learningRate: config.learningRate,
+        l2: config.l2,
+        dropout:candidateDropout,
+        seed: seed + index * 101,
+        maxTrainingSamples: effectiveTrainingRows.length,
+        baselineFit: anchor
+      })
+      :null;
+    // When internal early stopping selects epoch zero, score the exact frozen
+    // Logistic no-op. Do not train an arbitrary epoch on all training rows.
+    const predictions = fit
+      ?selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit))
+      :baselinePredictions;
     const score = brierFrom(selectionRows, predictions);
     evaluated.push({
       name: config.name, config: { ...config, dropout: candidateDropout },
@@ -1154,20 +1166,23 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
       improvement: Number(improvement.toFixed(8)),
       training_diagnostics: {
-        training_rows: fit.training.rows,
-        refit_rows:effectiveTrainingRows.length,
+        fit_performed:Boolean(fit),
+        fit_status:fit?'TRAINED_RESEARCH_CHALLENGER':
+          'ABSTAIN_NO_INTERNAL_EPOCH_IMPROVEMENT_EXACT_LOGISTIC_NO_OP',
+        training_rows:fit?.training.rows??0,
+        refit_rows:fit?effectiveTrainingRows.length:0,
         refit_epochs:refitEpochs,
-        initial_training_brier: fit.training.initial_training_brier,
-        best_training_brier: fit.training.best_training_brier,
-        training_brier_improvement: fit.training.training_brier_improvement,
-        best_epoch: fit.training.best_epoch,
-        epochs_completed: fit.training.epochs_completed,
-        epoch_history: fit.training.history.map(item=>({
+        initial_training_brier:fit?.training.initial_training_brier??null,
+        best_training_brier:fit?.training.best_training_brier??null,
+        training_brier_improvement:fit?.training.training_brier_improvement??null,
+        best_epoch:fit?.training.best_epoch??0,
+        epochs_completed:fit?.training.epochs_completed??0,
+        epoch_history:fit?.training.history.map(item=>({
           epoch:item.epoch,
           post_update_training_brier:item.post_update_training_brier,
           maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
           clipped_batches:item.clipped_batches
-        })),
+        }))??[],
         epoch_selection:epochSelectionDiagnostics,
         validation_or_selection_or_holdout_used_for_fit:false
       },
