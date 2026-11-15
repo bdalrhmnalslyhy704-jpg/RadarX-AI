@@ -426,12 +426,20 @@ async function main(){
   const attentionInferenceRegimes=Object.keys(attentionSpecialists).filter(regime=>
     attentionSpecialists[regime]?.research_inference?.schema===
       'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1');
+  const attentionPooledFallback=attentionProfile?.pooled_fallback??{};
+  const attentionPooledState=attentionPooledFallback.research_inference??null;
+  const attentionPooledQualified=attentionPooledFallback.selection_passed===true&&
+    attentionPooledFallback.validation_passed===true&&
+    attentionPooledFallback.holdout_passed===true&&
+    attentionPooledState?.schema==='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'&&
+    attentionPooledState?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'&&
+    Number(attentionPooledState?.residual_scale)>0;
   const requiredHoldoutRegimes=[...new Set(eventRows.map(row=>
     Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
   const missingAttentionRegimes=requiredHoldoutRegimes.filter(regime=>
-    !attentionInferenceRegimes.includes(regime));
+    !attentionInferenceRegimes.includes(regime)&&!attentionPooledState);
   const expectedBtcRegimes=['BTC_RISK_ON','BTC_RISK_OFF'];
-  const attentionInnerQualified=expectedBtcRegimes.every(regime=>{
+  const bothAttentionRegimesQualified=expectedBtcRegimes.every(regime=>{
     const specialist=attentionSpecialists[regime]??{};
     const state=specialist.research_inference;
     return attentionProfile?.supported_regimes?.includes(regime)&&
@@ -440,6 +448,7 @@ async function main(){
       state?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'&&
       Number(state.residual_scale)>0;
   });
+  const attentionInnerQualified=bothAttentionRegimesQualified||attentionPooledQualified;
   qualificationByModel.TCN_V11={
     passed:attentionInnerQualified,
     reason:attentionInnerQualified
@@ -463,7 +472,17 @@ async function main(){
     holdout_comparison:attentionProfile?.holdout_comparison??null,
     exported_inference_regimes:attentionInferenceRegimes,
     required_external_holdout_regimes:requiredHoldoutRegimes,
-    missing_external_holdout_regimes:missingAttentionRegimes
+    missing_external_holdout_regimes:missingAttentionRegimes,
+    pooled_fallback:{status:attentionPooledFallback.status??'NOT_TRAINED',
+      trained:attentionPooledFallback.trained===true,
+      selection_passed:attentionPooledFallback.selection_passed===true,
+      validation_passed:attentionPooledFallback.validation_passed===true,
+      holdout_passed:attentionPooledFallback.holdout_passed===true,
+      training_samples:attentionPooledFallback.training_samples??0,
+      selection_samples:attentionPooledFallback.selection_samples??0,
+      calibration_samples:attentionPooledFallback.calibration_samples??0},
+    pooled_fallback_qualified:attentionPooledQualified,
+    both_regime_specialists_qualified:bothAttentionRegimesQualified
   };
   const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
     'temporal_channel_'+String(index).padStart(2,'0'));
@@ -480,10 +499,18 @@ async function main(){
       specialists[regime]?.research_inference?.schema===
         'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'&&
       specialists[regime]?.research_inference?.temporal_pooling===expectedPooling);
+    const pooledFallback=profile?.pooled_fallback??{};
+    const pooledState=pooledFallback.research_inference??null;
+    const pooledFallbackQualified=pooledFallback.selection_passed===true&&
+      pooledFallback.validation_passed===true&&pooledFallback.holdout_passed===true&&
+      pooledState?.schema==='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'&&
+      pooledState?.temporal_pooling===expectedPooling&&
+      pooledState?.inference_mode==='INNER_SELECTED_TCN_VARIANT_MEMBER'&&
+      Number(pooledState?.residual_scale)>0;
     const requiredExternalRegimes=[...new Set(eventRows.map(row=>
       Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
     const missingRegimes=requiredExternalRegimes.filter(regime=>
-      !inferenceRegimes.includes(regime));
+      !inferenceRegimes.includes(regime)&&!pooledState);
     const bothRegimesSelected=regimes.every(regime=>{
       const expert=specialists[regime]??{};
       const state=expert.research_inference;
@@ -495,12 +522,15 @@ async function main(){
         state?.temporal_pooling===expectedPooling&&
         Number(state?.residual_scale)>0;
     });
+    const qualificationPassed=bothRegimesSelected||pooledFallbackQualified;
     qualificationByModel[family]={
-      passed:bothRegimesSelected,
+      passed:qualificationPassed,
       reason:bothRegimesSelected
-        ?'BOTH_BTC_REGIMES_PASSED_INNER_VALIDATION_AND_UNTOUCHED_HOLDOUT'
-        :'BOTH_BTC_REGIMES_HAVE_NOT_PASSED_INNER_VALIDATION_AND_HOLDOUT',
-      diagnostic_only:!bothRegimesSelected
+        ?'BOTH_BTC_REGIME_SPECIALISTS_PASSED_VALIDATION_AND_HOLDOUT'
+        :pooledFallbackQualified
+          ?'POOLED_ALL_REGIMES_FALLBACK_PASSED_VALIDATION_AND_HOLDOUT'
+          :'NEITHER_BOTH_REGIME_SPECIALISTS_NOR_POOLED_FALLBACK_PASSED',
+      diagnostic_only:!qualificationPassed
     };
     training.model_internal_diagnostics[family]={
       status:profile?.status??'VARIANT_PROFILE_NOT_AVAILABLE',
@@ -517,13 +547,25 @@ async function main(){
       exported_inference_regimes:inferenceRegimes,
       required_external_holdout_regimes:requiredExternalRegimes,
       missing_external_holdout_regimes:missingRegimes,
+      pooled_fallback:{
+        status:pooledFallback.status??'NOT_TRAINED',
+        trained:pooledFallback.trained===true,
+        selection_passed:pooledFallback.selection_passed===true,
+        validation_passed:pooledFallback.validation_passed===true,
+        holdout_passed:pooledFallback.holdout_passed===true,
+        training_samples:pooledFallback.training_samples??0,
+        selection_samples:pooledFallback.selection_samples??0,
+        calibration_samples:pooledFallback.calibration_samples??0
+      },
+      pooled_fallback_qualified:pooledFallbackQualified,
+      both_regime_specialists_qualified:bothRegimesSelected,
       validation:profile?.validation??null,
       validation_logistic:profile?.validation_logistic??null,
       holdout:profile?.holdout??null,
       holdout_logistic:profile?.holdout_logistic??null,
       both_btc_regimes_inner_qualified:bothRegimesSelected
     };
-    if(inferenceRegimes.length===0||missingRegimes.length>0){
+    if((inferenceRegimes.length===0&&!pooledState)||missingRegimes.length>0){
       unavailable[family]={
         reason:'TEMPORAL_VARIANT_MISSING_REGIME_INFERENCE_STATE',
         inference_regimes:inferenceRegimes,
@@ -538,9 +580,14 @@ async function main(){
       input_shape:[TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS],
       output_features:profile.output_features,
       trainable_parameter_count:profile.trainable_parameter_count,
+      inference_scope:pooledState
+        ?'REGIME_LOCAL_WITH_POOLED_ALL_REGIMES_FALLBACK'
+        :'INDEPENDENT_BTC_REGIME_SPECIALISTS',
       regime_specialists:Object.fromEntries(inferenceRegimes.map(regime=>[
         regime,{research_inference:specialists[regime].research_inference}
       ])),
+      pooled_fallback:pooledState,
+      pooled_fallback_qualified:pooledFallbackQualified,
       supported_regimes:profile.supported_regimes??[],
       validation_selected_regimes:profile.validation_selected_regimes??[],
       selected_regimes:profile.selected_regimes??[]
@@ -580,9 +627,15 @@ async function main(){
       artifact_sha256:artifact.artifact_sha256,
       architecture,temporal_pooling:expectedPooling,
       inference_regimes:inferenceRegimes,
+      pooled_fallback_used_for_missing_regimes:Boolean(pooledState&&missingRegimes.length===0&&inferenceRegimes.length<requiredExternalRegimes.length),
+      pooled_fallback_qualified:pooledFallbackQualified,
+      both_regime_specialists_qualified:bothRegimesSelected,
+      qualification_basis:bothRegimesSelected?'BOTH_REGIME_SPECIALISTS':pooledFallbackQualified?'POOLED_ALL_REGIMES_FALLBACK':'NONE',
       research_output_modes:outputModes,
       status:profile.status,
       both_btc_regimes_inner_qualified:bothRegimesSelected,
+      pooled_fallback_qualified:pooledFallbackQualified,
+      qualification_basis:bothRegimesSelected?'BOTH_REGIME_SPECIALISTS':pooledFallbackQualified?'POOLED_ALL_REGIMES_FALLBACK':'NONE',
       out_of_sample_validated:profile.research_out_of_sample_validated===true,
       diagnostic_only:!bothRegimesSelected,
       validation_brier:profile.validation?.model_brier_score??null,
@@ -660,19 +713,23 @@ async function main(){
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
 
-  if(attentionInferenceRegimes.length>0&&missingAttentionRegimes.length===0){
+  if((attentionInferenceRegimes.length>0||attentionPooledState)&&missingAttentionRegimes.length===0){
     const v11State={
       schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1',
       architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
       temporal_pooling:attentionProfile.temporal_pooling,
       input_shape:[24,TEMPORAL_SEQUENCE_CHANNELS],
-      inference_scope:'INDEPENDENT_BTC_REGIME_SELECTED_OR_INNER_DIAGNOSTIC_ATTENTION_MEMBER',
+      inference_scope:attentionPooledState
+        ?'REGIME_LOCAL_WITH_POOLED_ALL_REGIMES_FALLBACK'
+        :'INDEPENDENT_BTC_REGIME_SELECTED_OR_INNER_DIAGNOSTIC_ATTENTION_MEMBER',
       regime_specialists:Object.fromEntries(attentionInferenceRegimes.map(regime=>[
         regime,{research_inference:attentionSpecialists[regime].research_inference}
       ])),
+      pooled_fallback:attentionPooledState,
       supported_regimes:attentionProfile.supported_regimes??[],
       validation_selected_regimes:attentionProfile.validation_selected_regimes??[],
-      selected_regimes:attentionProfile.selected_regimes??[]
+      selected_regimes:attentionProfile.selected_regimes??[],
+      pooled_fallback_qualified:attentionPooledQualified
     };
     const attentionArtifact=makeArtifact({
       name:'RADARX_TCN_V11_LEARNED_QUERY_ATTENTION_FIRST_TOUCH_4H',
@@ -710,7 +767,10 @@ async function main(){
           status:attentionProfile.status,
           selected_for_research:attentionProfile.selected_for_research===true,
           out_of_sample_validated:attentionProfile.research_out_of_sample_validated===true,
-          both_btc_regimes_inner_qualified:attentionInnerQualified,
+          both_btc_regimes_inner_qualified:bothAttentionRegimesQualified,
+          pooled_fallback_qualified:attentionPooledQualified,
+          qualification_basis:bothAttentionRegimesQualified?'BOTH_REGIME_SPECIALISTS':
+            attentionPooledQualified?'POOLED_ALL_REGIMES_FALLBACK':'NONE',
           diagnostic_only:!attentionInnerQualified,
           validation_brier:attentionProfile.validation?.model_brier_score??null,
           validation_logistic_brier:attentionProfile.validation_logistic?.model_brier_score??null,
