@@ -66,6 +66,18 @@ test('TCN-LSTM attention forward pass is finite, normalized and exposes sequenti
   assert.equal(TCN_LSTM_PARAMETER_COUNT,1089);
 });
 
+test('zero-initialized residual head is an exact no-op over the frozen Logistic anchor',()=>{
+  const sequence=makeSequence(-1,17);
+  const model=createTcnLstmHybridModelForAudit(41);
+  const baselineLogit=0.37;
+  const output=inspectTcnLstmForward(sequence,model,baselineLogit);
+  assert.ok(model.outputWeights.every(value=>value===0));
+  assert.equal(model.outputBias[0],0);
+  assert.equal(output.residual_logit,0);
+  assert.equal(output.logit,baselineLogit);
+  assert.ok(Math.abs(output.probability-1/(1+Math.exp(-baselineLogit)))<1e-15);
+});
+
 test('unidirectional LSTM state for an earlier prefix is invariant to later input changes',()=>{
   const original=makeSequence(1,5);
   const changed=original.map(row=>[...row]);
@@ -200,11 +212,23 @@ test('hyper-parameter selection uses a purged internal training block for epoch 
     assert.ok(epoch.purged_rows>=1);
     assert.ok(epoch.latest_training_resolved_at<epoch.first_validation_at);
     assert.ok(epoch.best_epoch>=0&&epoch.best_epoch<=2);
-    assert.ok(epoch.refit_epochs>=1&&epoch.refit_epochs<=2);
-    assert.equal(diagnostics.refit_rows,250);
-    assert.equal(diagnostics.training_rows,250);
+    assert.equal(epoch.refit_epochs,epoch.best_epoch);
+    assert.equal(diagnostics.refit_epochs,epoch.best_epoch);
     assert.equal(diagnostics.validation_or_selection_or_holdout_used_for_fit,false);
     assert.ok(Number.isFinite(epoch.validation_improvement_vs_logistic));
+    if(epoch.best_epoch===0){
+      assert.equal(diagnostics.fit_performed,false);
+      assert.equal(diagnostics.training_rows,0);
+      assert.equal(diagnostics.refit_rows,0);
+      assert.equal(diagnostics.fit_status,
+        'ABSTAIN_NO_INTERNAL_EPOCH_IMPROVEMENT_EXACT_LOGISTIC_NO_OP');
+      assert.ok(Math.abs(candidate.selection_brier-candidate.logistic_selection_brier)<1e-12);
+    }else{
+      assert.equal(diagnostics.fit_performed,true);
+      assert.equal(diagnostics.training_rows,250);
+      assert.equal(diagnostics.refit_rows,250);
+      assert.equal(diagnostics.fit_status,'TRAINED_RESEARCH_CHALLENGER');
+    }
   }
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
