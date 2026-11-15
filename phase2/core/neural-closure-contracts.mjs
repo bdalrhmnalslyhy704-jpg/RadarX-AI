@@ -933,16 +933,34 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
     initialEquity:100
   });
 }
-function selectThreshold(rows,probabilities,roundTripCostBps,minimumTrades=20) {
+function selectThreshold(rows,probabilities,roundTripCostBps,{
+  minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
+}={}) {
   const grid=[0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
   const trials=grid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
   const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
-    item.trade_count>=minimumTrades&&finite(item.net_pnl_pct));
-  if(!ready.length)return {threshold:0.55,status:'ABSTAINED_NO_VALIDATION_RETURN_SUPPORT',trials};
+    item.trade_count>=minimumTrades&&
+    finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
+    finite(item.net_pnl_pct)&&item.net_pnl_pct>0&&
+    finite(item.max_drawdown_pct)&&item.max_drawdown_pct<=maximumDrawdownPct);
+  if(!ready.length)return {
+    threshold:null,status:'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',
+    selected:null,trials,eligible_count:0,
+    minimum_validation_trades:minimumTrades,
+    minimum_validation_win_rate_pct:minimumWinRatePct,
+    require_positive_validation_net_pnl:true,
+    maximum_validation_drawdown_pct:maximumDrawdownPct
+  };
   ready.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
-    a.max_drawdown_pct-b.max_drawdown_pct||a.trade_count-b.trade_count);
-  return {threshold:ready[0].threshold,status:'SELECTED_ON_VALIDATION_ONLY',trials,
-    selected:ready[0]};
+    a.max_drawdown_pct-b.max_drawdown_pct||b.trade_count-a.trade_count);
+  return {
+    threshold:ready[0].threshold,status:'SELECTED_ON_VALIDATION_ONLY',
+    trials,eligible_count:ready.length,selected:ready[0],
+    minimum_validation_trades:minimumTrades,
+    minimum_validation_win_rate_pct:minimumWinRatePct,
+    require_positive_validation_net_pnl:true,
+    maximum_validation_drawdown_pct:maximumDrawdownPct
+  };
 }
 function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
   const labels=rows.map(row=>row.target);
@@ -1063,7 +1081,9 @@ export function runNeuralClosureBenchmark({
     const validationSupport=classCounts(validationLabels);
     const validationBrier=brier(calibratedValidation,validationLabels);
     const thresholdSelection=selectThreshold(validationRows,calibratedValidation,
-      roundTripCostBps);
+      roundTripCostBps,{
+        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
+      });
     const metricWeights={
       positiveWeight:trainingWeights.positiveWeight,
       negativeWeight:trainingWeights.negativeWeight,
@@ -1076,7 +1096,20 @@ export function runNeuralClosureBenchmark({
       raw_brier_score:brier(rawValidation,validationLabels),
       calibrated_brier_score:validationBrier,
       threshold_selection:thresholdSelection.status,
-      selected_threshold:thresholdSelection.threshold
+      selected_threshold:thresholdSelection.threshold,
+      threshold_selection_eligible_count:thresholdSelection.eligible_count??0,
+      threshold_selection_gates:{
+        minimum_validation_trades:thresholdSelection.minimum_validation_trades??20,
+        minimum_validation_win_rate_pct:thresholdSelection.minimum_validation_win_rate_pct??minimumWinRatePct,
+        require_positive_validation_net_pnl:thresholdSelection.require_positive_validation_net_pnl===true,
+        maximum_validation_drawdown_pct:thresholdSelection.maximum_validation_drawdown_pct??maximumDrawdownPct
+      },
+      threshold_trials:thresholdSelection.trials.map(item=>({
+        threshold:item.threshold,signal_count:item.signal_count,trade_count:item.trade_count,
+        win_rate_pct:item.win_rate_pct,net_pnl_pct:item.net_pnl_pct,
+        max_drawdown_pct:item.max_drawdown_pct,return_data_status:item.return_data_status,
+        skipped_capacity:item.skipped_capacity,skipped_same_symbol:item.skipped_same_symbol
+      }))
     };
 
     if(modelName==='LOGISTIC_REGRESSION'){
@@ -1112,7 +1145,9 @@ export function runNeuralClosureBenchmark({
       minimum_validation_positive_support:validationSupport.positive>=minimumClassSupport,
       minimum_validation_negative_support:validationSupport.negative>=minimumClassSupport,
       brier_improvement_vs_logistic:finite(improvement)&&improvement>requiredBrierImprovement,
-      validation_threshold_selected:finite(thresholdSelection.threshold)
+      validation_threshold_selected:
+        thresholdSelection.status==='SELECTED_ON_VALIDATION_ONLY'&&
+        finite(thresholdSelection.threshold)&&thresholdSelection.eligible_count>0
     };
     const validationPassed=Object.values(validationGates).every(Boolean);
     const validationReason=!validationGates.inner_selection_qualified
