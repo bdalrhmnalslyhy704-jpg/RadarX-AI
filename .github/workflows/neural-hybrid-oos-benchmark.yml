@@ -41,7 +41,7 @@ permissions:
 
 concurrency:
   group: build224-unified-neural-hybrid-brier-matrix-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   resolve-census:
