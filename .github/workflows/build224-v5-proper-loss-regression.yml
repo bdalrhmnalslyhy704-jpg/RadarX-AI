@@ -1,0 +1,44 @@
+name: Build 224 V5 Proper-Scoring Ensemble Regression
+
+on:
+  push:
+    branches:
+      - research/build224-v5-proper-loss-ensemble-20261115
+    paths:
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tests/cognitive-brain.test.mjs'
+      - '.github/workflows/build224-v5-proper-loss-regression.yml'
+  pull_request:
+    paths:
+      - 'phase2/core/cognitive-brain.mjs'
+      - 'phase2/tests/cognitive-brain.test.mjs'
+      - '.github/workflows/build224-v5-proper-loss-regression.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-v5-proper-loss-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  v5-proper-scoring:
+    name: Verify V5 focal and proper Log-Loss challengers
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout candidate commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check V5 implementation and tests
+        run: |
+          node --check phase2/core/cognitive-brain.mjs
+          node --check phase2/tests/cognitive-brain.test.mjs
+      - name: Verify objective-diverse MLP ensemble and train-only chronology
+        run: node --test --test-timeout=180000 phase2/tests/cognitive-brain.test.mjs
