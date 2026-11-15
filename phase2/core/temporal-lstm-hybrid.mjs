@@ -54,7 +54,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
  * only the recent training window; selection, calibration, validation and
  * untouched holdout partitions remain disjoint and unchanged.
  */
-export const TCN_LSTM_MAX_TRAINING_SAMPLES = 4096;
+export const TCN_LSTM_MAX_TRAINING_SAMPLES = 16384;
 export function effectiveTcnLstmTrainingSampleBudget(
   requested=TCN_LSTM_MAX_TRAINING_SAMPLES,
   available=TCN_LSTM_MAX_TRAINING_SAMPLES
