@@ -91,12 +91,14 @@ function depthMetrics(d){
   const spread=mid>0?(ask-bid)/mid*100:null;
   return {bidNotional:bn,askNotional:an,imbalance:imb,spreadPct:spread};
 }
-function tradeMetrics(rows){
+export function tradeMetrics(rows){
   const a=Array.isArray(rows)?rows.slice(-100):[];
   let buy=0,sell=0;
   for(const r of a){
     const q=n(r?.q), p=n(r?.p), notional=q*p;
-    if(truthy(r?.isBuyerMaker))sell+=notional; else buy+=notional;
+    // Binance Spot GET /api/v3/aggTrades uses `m` (was the buyer maker?).
+    // Keep the normalized `isBuyerMaker` alias for callers that already map it.
+    if(truthy(r?.m ?? r?.isBuyerMaker))sell+=notional; else buy+=notional;
   }
   const total=buy+sell, buyPct=total>0?buy/total*100:50;
   return {buyNotional:buy,sellNotional:sell,buyPct,deltaPct:total>0?(buy-sell)/total*100:0};
