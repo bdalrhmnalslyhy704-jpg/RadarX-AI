@@ -180,7 +180,7 @@ test('hybrid blend uses a true two-component Brier optimum and rejects endpoint 
 
 test('hybrid fail-closed gate requires an inner-selected positive neural residual',()=>{
   const unselected={
-    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V3',
+    kind:'RESIDUAL_DEEP_MLP_ENSEMBLE_V4',
     members:[{kind:'RESIDUAL_DEEP_MLP_V2'}],
     seeds:[11],selected_member_index:-1,selected_residual_scale:0
   };
@@ -859,7 +859,7 @@ test('the model refuses to claim learning when labels are unrelated to market ev
   assert.equal(profile.probability_ready, false,
     'a model that memorizes alternating pair identities must not pass evidence-only validation');
   assert.equal(profile.neural_network.trained, true);
-  assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V3');
+  assert.equal(profile.neural_network.model_kind, 'RESIDUAL_DEEP_MLP_ENSEMBLE_V4');
   assert.equal(profile.neural_network.ensemble_members, 4);
   assert.equal(profile.neural_network.selected, false);
   assert.equal(profile.neural_network.probability_ready, false);
