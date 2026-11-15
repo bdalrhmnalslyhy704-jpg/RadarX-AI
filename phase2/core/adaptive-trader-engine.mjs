@@ -267,6 +267,19 @@ function buildTemporalSequence(candles, btcCandles, fastCandles) {
     const microBuyVolume=microAvailable?microCurrent.reduce((sum,row)=>sum+row.takerBuyQuoteVolume,0):null;
     const microTotalVolume=microAvailable?microCurrent.reduce((sum,row)=>sum+row.quoteVolume,0):null;
     const microBuyShare=microAvailable&&microTotalVolume>0?microBuyVolume/microTotalVolume:null;
+    // Contiguous 5m candles can still be unusable (zero volume/trades or a flat
+    // range). Treat that optional micro window exactly like missing 5m evidence:
+    // clear it, zero-fill its channels and set the final availability mask to 0.
+    const microContextValid=!microAvailable||(
+      microBaseVolume>0&&microBaseTrades>0&&microBaseRange>0&&
+      microBaseBuyShare>=0&&microBaseBuyShare<=1&&microBuyShare>=0&&microBuyShare<=1&&
+      microCurrentVolume>0&&microCurrentTrades>0&&microCurrentRange>0
+    );
+    if(microAvailable&&!microContextValid){
+      microAvailable=false;
+      microBase.length=0;
+      microCurrent.length=0;
+    }
     const microReturnPct=microAvailable?(microCurrent[2].close/microCurrent[0].open-1)*100:null;
     if(!(volumeBase>0)||!(tradesBase>0)||!(rangeBase>0)||
        !(buyShare>=0&&buyShare<=1)||!btcCurrent||!btcPrevious||!(btcPrevious.close>0)||
