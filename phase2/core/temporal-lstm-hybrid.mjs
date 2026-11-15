@@ -869,7 +869,9 @@ export function trainTcnLstmHybrid(trainingRows, {
       epochs_requested: epochs,
       epochs_completed: history.length,
       best_epoch: bestEpoch,
+      initial_training_brier: Number(initialBrier.toFixed(8)),
       best_training_brier: Number(bestBrier.toFixed(8)),
+      training_brier_improvement: Number((initialBrier-bestBrier).toFixed(8)),
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
@@ -946,6 +948,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
+  const trainingBaselinePredictions=effectiveTrainingRows.map(row=>
+    sigmoid(predictTcnLstmLogisticLogit(row.sequence,anchor)));
+  const trainingBaselineBrier=brierFrom(effectiveTrainingRows,trainingBaselinePredictions);
   const evaluated = [];
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
@@ -988,13 +993,29 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     baseline: {
       kind: anchor.kind,
       training_rows: anchor.training_rows,
+      training_brier: Number(trainingBaselineBrier.toFixed(8)),
       selection_brier: Number(baselineBrier.toFixed(8))
     },
-    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement }) => ({
+    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, fit }) => ({
       name, config,
       selection_brier: Number(selection_brier.toFixed(8)),
       logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
       improvement: Number(improvement.toFixed(8)),
+      training_diagnostics: {
+        training_rows: fit.training.rows,
+        initial_training_brier: fit.training.initial_training_brier,
+        best_training_brier: fit.training.best_training_brier,
+        training_brier_improvement: fit.training.training_brier_improvement,
+        best_epoch: fit.training.best_epoch,
+        epochs_completed: fit.training.epochs_completed,
+        epoch_history: fit.training.history.map(item=>({
+          epoch:item.epoch,
+          post_update_training_brier:item.post_update_training_brier,
+          maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
+          clipped_batches:item.clipped_batches
+        })),
+        validation_or_selection_or_holdout_used_for_fit:false
+      },
       passed_inner_margin: improvement > requiredImprovement
     })),
     selected_configuration: passed ? winner.name : null,
