@@ -55,6 +55,18 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
  * untouched holdout partitions remain disjoint and unchanged.
  */
 export const TCN_LSTM_MAX_TRAINING_SAMPLES = 16384;
+
+// One predeclared, regularization-focused grid for the next TCN-LSTM ablation.
+// The grid varies learning rate, decoupled weight decay and locked dropout;
+// early stopping remains selected only from a purged split inside training.
+export const TCN_LSTM_REGULARIZATION_CANDIDATES = Object.freeze([
+  Object.freeze({name:'LR_0005_L2_0050_DROP20',learningRate:0.0005,l2:0.0050,dropout:0.20,epochs:8}),
+  Object.freeze({name:'LR_0008_L2_0200_DROP20',learningRate:0.0008,l2:0.0200,dropout:0.20,epochs:8}),
+  Object.freeze({name:'LR_0010_L2_0500_DROP30',learningRate:0.0010,l2:0.0500,dropout:0.30,epochs:8}),
+  Object.freeze({name:'LR_0015_L2_0300_DROP30',learningRate:0.0015,l2:0.0300,dropout:0.30,epochs:8}),
+  Object.freeze({name:'LR_0020_L2_0500_DROP40',learningRate:0.0020,l2:0.0500,dropout:0.40,epochs:8}),
+  Object.freeze({name:'LR_0008_L2_0800_DROP10',learningRate:0.0008,l2:0.0800,dropout:0.10,epochs:8})
+]);
 export function effectiveTcnLstmTrainingSampleBudget(
   requested=TCN_LSTM_MAX_TRAINING_SAMPLES,
   available=TCN_LSTM_MAX_TRAINING_SAMPLES
@@ -1005,11 +1017,7 @@ function brierFrom(rows, probabilities) {
  * anchor is fit once on training rows and reused for every challenger config.
  */
 export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, {
-  candidates = [
-    { name: 'LR_0015_L2_0005_DROP00', learningRate: 0.0015, l2: 0.0005, dropout: 0, epochs: 6 },
-    { name: 'LR_0025_L2_0015_DROP10', learningRate: 0.0025, l2: 0.0015, dropout: 0.10, epochs: 6 },
-    { name: 'LR_0035_L2_0035_DROP20', learningRate: 0.0035, l2: 0.0035, dropout: 0.20, epochs: 6 }
-  ],
+  candidates = TCN_LSTM_REGULARIZATION_CANDIDATES,
   requiredImprovement = 0.00025,
   seed = 29,
   maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES
@@ -1241,11 +1249,7 @@ export function benchmarkTcnLstmHybridChronological(inputRows, {
   maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   bootstrapIterations = 400,
   seed = 29,
-  candidates = [
-    { name:'LR_0015_L2_0005_DROP00', learningRate:0.0015, l2:0.0005, dropout:0, epochs:6 },
-    { name:'LR_0025_L2_0015_DROP10', learningRate:0.0025, l2:0.0015, dropout:0.10, epochs:6 },
-    { name:'LR_0035_L2_0035_DROP20', learningRate:0.0035, l2:0.0035, dropout:0.20, epochs:6 }
-  ]
+  candidates = TCN_LSTM_REGULARIZATION_CANDIDATES
 } = {}) {
   const waiting = (status, reason, extra = {}) => ({
     schema:TCN_LSTM_HYBRID_SCHEMA,status,evaluated:false,reason,
