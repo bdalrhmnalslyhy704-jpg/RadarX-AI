@@ -164,6 +164,14 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.equal(result.candidates.length,2);
   assert.ok(result.candidates.every(row=>
     Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
+  assert.ok(Number.isFinite(result.baseline.training_brier));
+  assert.ok(result.candidates.every(row=>
+    Number.isFinite(row.training_diagnostics.initial_training_brier)&&
+    Number.isFinite(row.training_diagnostics.best_training_brier)&&
+    Number.isFinite(row.training_diagnostics.training_brier_improvement)&&
+    row.training_diagnostics.training_rows===40&&
+    row.training_diagnostics.epoch_history.length===2&&
+    row.training_diagnostics.validation_or_selection_or_holdout_used_for_fit===false));
   assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
