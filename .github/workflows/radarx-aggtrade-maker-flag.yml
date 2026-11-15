@@ -1,0 +1,32 @@
+name: RadarX Binance aggTrade buyer-maker regression
+
+on:
+  push:
+    branches:
+      - research/radarx-aggtrade-maker-flag-fix-20261115
+    paths:
+      - api/radarx-background.js
+      - phase2/tests/radarx-background-trade-metrics.test.mjs
+      - .github/workflows/radarx-aggtrade-maker-flag.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check the server-side radar endpoint
+        run: node --check api/radarx-background.js
+      - name: Test native Binance Spot aggregate-trade maker flag
+        run: node --test phase2/tests/radarx-background-trade-metrics.test.mjs
+      - name: Run full Phase 1 and Phase 2 regression suite
+        run: npm test
