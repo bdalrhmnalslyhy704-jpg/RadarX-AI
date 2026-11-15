@@ -1145,6 +1145,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       improvement: Number(improvement.toFixed(8)),
       training_diagnostics: {
         training_rows: fit.training.rows,
+        refit_rows:effectiveTrainingRows.length,
+        refit_epochs:refitEpochs,
         initial_training_brier: fit.training.initial_training_brier,
         best_training_brier: fit.training.best_training_brier,
         training_brier_improvement: fit.training.training_brier_improvement,
