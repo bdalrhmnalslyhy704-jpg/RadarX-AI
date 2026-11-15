@@ -1118,6 +1118,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       selection_brier: score,
       logistic_selection_brier: baselineBrier,
       improvement: baselineBrier - score,
+      refitEpochs,
+      epochSelectionDiagnostics,
       fit
     });
   }
@@ -1138,7 +1140,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       training_brier: Number(trainingBaselineBrier.toFixed(8)),
       selection_brier: Number(baselineBrier.toFixed(8))
     },
-    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, fit }) => ({
+    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, refitEpochs, epochSelectionDiagnostics, fit }) => ({
       name, config,
       selection_brier: Number(selection_brier.toFixed(8)),
       logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
