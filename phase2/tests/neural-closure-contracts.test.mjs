@@ -4,9 +4,11 @@ import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs'
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
+  sha256Canonical,sha256CanonicalArrayMapped,
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
   buildNeuralClosureCalibrationBlocks,
+  chooseCalibration,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
@@ -181,6 +183,30 @@ test('fixed-SHA calibration fit and check blocks retain independent 50/50 class 
   assert.equal([...purgeDays].some(day=>checkDays.has(day)),false);
   assert.ok(Math.max(...blocks.days.fit)<Math.min(...blocks.days.purge));
   assert.ok(Math.max(...blocks.days.purge)<Math.min(...blocks.days.check));
+});
+
+test('calibrator method is fixed from fit rows and cannot be selected by validation-check labels',()=>{
+  const fitRows=Array.from({length:200},(_,index)=>({
+    id:'CAL-FIT-'+index,target:index%2
+  }));
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-CHECK-'+index,target:index%2
+  }));
+  const rawMap=new Map([...fitRows,...checkRows].map(row=>[
+    row.id,row.target===1?0.70:0.30
+  ]));
+  const fitted=chooseCalibration(rawMap,fitRows,checkRows,20);
+  const flippedCheck=checkRows.map(row=>({...row,target:1-row.target}));
+  const flipped=chooseCalibration(rawMap,fitRows,flippedCheck,20);
+  assert.equal(fitted.check_block_used_for_calibrator_selection,false);
+  assert.equal(fitted.selection_scope,'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.platt.fit_partition,'CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.temperature.fitted,false);
+  assert.equal(fitted.selected_method,flipped.selected_method);
+  assert.deepEqual(fitted.selected_calibrator,flipped.selected_calibrator,
+    'changing only validation-check labels must not change fitted calibration parameters');
+  assert.notEqual(fitted.selected_check_brier,flipped.selected_check_brier,
+    'validation-check labels may change the reported evaluation score, not the fitted calibrator');
 });
 
 test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
@@ -376,6 +402,94 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('fixed-SHA evaluator keeps every holdout metric locked when the required validation Brier margin is mathematically unreachable',()=>{
+  const rows=makeRows(),sourceCommitSha='d'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const logisticById=new Map(predictions.LOGISTIC_REGRESSION.map(row=>[row.id,row.probability]));
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    predictions[family]=predictions[family].map(row=>({
+      ...row,probability:logisticById.get(row.id),
+      artifact_sha256:modelArtifactsByModel[family].artifact_sha256
+    }));
+  }
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel,requiredBrierImprovement:2
+  });
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opened_for_models.length,0);
+  assert.equal(report.split.holdout_support_opened,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.brier_score,null);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    assert.equal(report.models[family].status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(report.models[family].validation.outer_validation_gate.passed,false,family);
+    assert.ok(report.models[family].validation.outer_validation_gate.brier_improvement_vs_logistic<=1,
+      'Brier improvement cannot exceed 1');
+    assert.equal(report.models[family].holdout.evaluated,false,family);
+    assert.equal(report.models[family].holdout.brier_score,null,family);
+    assert.equal(report.models[family].holdout.trade_count,0,family);
+    assert.equal(report.models[family].acceptance.status,
+      'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
+  }
+  assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
+});
+
+test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const evaluated=rows.filter(row=>{
+    const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
+    return (day>=13&&day<=15)||(day>=17);
+  });
+  const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
+    id:row.id,
+    probability:row.target===1?positive:negative,
+    source_commit_sha:sourceCommitSha,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    artifact_sha256:artifactSha256
+  }));
+  // Logistic is deliberately inverted. The neural probabilities have excellent
+  // ranking/Brier relative to this baseline, but every threshold that trades
+  // selects the majority negative class; a higher threshold selects no trades.
+  predictions.LOGISTIC_REGRESSION=build(0.10,0.90,null);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
+    predictions[family]=build(0.43,0.41,modelArtifactsByModel[family].artifact_sha256);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const model=report.models[family];
+    assert.ok(model.validation.calibrated_brier_score<
+      report.models.LOGISTIC_REGRESSION.validation.calibrated_brier_score,
+    family+' should demonstrate that Brier improvement alone is not enough');
+    assert.equal(model.validation.outer_validation_gate.gates.validation_threshold_selected,'FAIL',family);
+    assert.equal(model.validation.threshold_selection,'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',family);
+    assert.equal(model.validation.selected_threshold,null,family);
+    assert.equal(model.status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(model.holdout.evaluated,false,family);
+    assert.equal(model.holdout.trade_count,0,family);
+    assert.equal(model.acceptance.status,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
+  }
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opened_for_models.length,0);
+});
+
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
   const rows=makeRows(),sourceCommitSha='b'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
@@ -498,4 +612,38 @@ test('fixed-SHA evaluator refuses candidate predictions without an exact version
   assert.equal(report.models.TCN_V11.reason,'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING');
   assert.equal(report.models.TCN_V11.acceptance.passed,false);
   assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length-1);
+});
+
+
+test('streaming canonical array digest is byte-identical to the reference canonical JSON digest',()=>{
+  const rows=[
+    {z:3,a:{y:[1,2,3],b:'first'},values:[[0.1,0.2],[0.3,0.4]]},
+    {b:true,a:{c:null,a:'second'},values:[[1,2,3],[4,5,6]]},
+    {id:'last',nested:{z:9,m:4,a:1}}
+  ];
+  const mapRow=row=>({id:row.id??null,features:row.values??null,source:row});
+  assert.equal(
+    sha256CanonicalArrayMapped(rows,mapRow),
+    sha256Canonical(rows.map(mapRow))
+  );
+  assert.equal(
+    sha256CanonicalArrayMapped([],row=>row),
+    sha256Canonical([])
+  );
+  assert.throws(()=>sha256CanonicalArrayMapped({},row=>row),/CANONICAL_ROWS_REQUIRED/);
+  assert.throws(()=>sha256CanonicalArrayMapped(rows,null),/ROW_MAPPER_REQUIRED/);
+});
+
+
+test('mapped canonical array hashing matches canonical full-array hashing without mapped-array allocation',()=>{
+  const rows=[
+    {id:'A',features:{z:2,a:1},temporal_sequence:[[0,1],[2,3]]},
+    {id:'B',features:{a:4,z:3},temporal_sequence:[[4,5],[6,7]]}
+  ];
+  const mapRow=row=>({
+    id:row.id,features:row.features,temporal_sequence:row.temporal_sequence
+  });
+  const mapped=sha256CanonicalArrayMapped(rows,mapRow);
+  const materialized=sha256Canonical(rows.map(mapRow));
+  assert.equal(mapped,materialized);
 });

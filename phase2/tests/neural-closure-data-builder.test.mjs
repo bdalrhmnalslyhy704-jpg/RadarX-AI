@@ -1,5 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtemp,readFile,readdir,rm,stat} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
+import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
+import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
   createNeuralClosureDecisionSchedule,buildNeuralClosureFeatureSnapshot,
@@ -148,4 +156,109 @@ test('one shared event row has 18 audited MLP features, 24x29 closed sequence an
   assert.equal(built.row.market,'BINANCE_SPOT_USDT');
   assert.equal(built.row.quote_volume_24h,900_000);
   assert.equal(validateFourHourRows([built.row]).length,1);
+});
+
+
+test('large neural dataset JSON is written row-by-row with valid atomic output',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-neural-stream-'));
+  const output=join(directory,'dataset.json');
+  const rows=Array.from({length:420},(_,index)=>({
+    id:'SAMPLE:'+index,
+    temporal_sequence:Array.from({length:24},(_,step)=>
+      Array.from({length:29},(_,channel)=>Number(((index+step+channel)%97/97).toFixed(6))))
+  }));
+  try{
+    await writeJsonObjectWithArrayStreaming(output,{
+      schema:'RADARX_STREAMING_TEST_V1',
+      count:rows.length,
+      target:{horizon_hours:4}
+    },'rows',rows);
+    const parsed=JSON.parse(await readFile(output,'utf8'));
+    assert.equal(parsed.schema,'RADARX_STREAMING_TEST_V1');
+    assert.equal(parsed.count,rows.length);
+    assert.equal(parsed.rows.length,rows.length);
+    assert.deepEqual(parsed.rows[0],rows[0]);
+    assert.deepEqual(parsed.rows.at(-1),rows.at(-1));
+    assert.ok((await stat(output)).size>1_000_000);
+    assert.deepEqual(await readdir(directory),['dataset.json']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('failed row serialization never leaves a partial dataset at the destination',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-neural-stream-fail-'));
+  const output=join(directory,'dataset.json');
+  try{
+    await assert.rejects(
+      writeJsonObjectWithArrayStreaming(output,{schema:'INVALID_V1'},'rows',[{id:'ok'},{value:1n}])
+    );
+    assert.deepEqual(await readdir(directory),[]);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+
+test('raw Binance Spot archives stream canonical JSON and preserve raw/compressed SHA-256 manifests',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-raw-archive-'));
+  const rows=Array.from({length:6000},(_,index)=>[
+    1_800_000_000_000+index*60_000,
+    String(100+index/1000),String(101+index/1000),
+    String(99+index/1000),String(100.5+index/1000),
+    String(1200+index),1_800_000_059_999+index*60_000,
+    String((100.5+index/1000)*(1200+index)),120+index,
+    String((1200+index)*0.56),String((100.5+index/1000)*(1200+index)*0.56),'0'
+  ]);
+  const file=join(directory,'ETHUSDT.1m.json.gz');
+  try{
+    const result=await writeRawSpotKlineArchive({
+      symbol:'ETHUSDT',interval:'1m',rawRows:rows,archiveDir:directory
+    });
+    const compressed=await readFile(file);
+    const raw=gunzipSync(compressed);
+    const parsed=JSON.parse(raw.toString('utf8'));
+    assert.equal(parsed.schema,'BINANCE_SPOT_RAW_KLINE_ARCHIVE_V1');
+    assert.equal(parsed.symbol,'ETHUSDT');
+    assert.equal(parsed.interval,'1m');
+    assert.deepEqual(parsed.rows,rows);
+    assert.equal(result.row_count,rows.length);
+    assert.equal(result.raw_bytes,raw.length);
+    assert.equal(result.compressed_bytes,compressed.length);
+    assert.equal(result.raw_sha256,createHash('sha256').update(raw).digest('hex'));
+    assert.equal(result.compressed_sha256,createHash('sha256').update(compressed).digest('hex'));
+    assert.equal(result.streaming,true);
+    assert.equal(result.atomic,true);
+    assert.deepEqual(await readdir(directory),['ETHUSDT.1m.json.gz']);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+test('raw archive stream fails closed without leaving a partial gzip file',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'radarx-raw-archive-fail-'));
+  try{
+    await assert.rejects(writeRawSpotKlineArchive({
+      symbol:'ETHUSDT',interval:'1m',archiveDir:directory,
+      rawRows:[['valid'],[1n]]
+    }));
+    assert.deepEqual(await readdir(directory),[]);
+  }finally{
+    await rm(directory,{recursive:true,force:true});
+  }
+});
+
+
+test('Binance transient 5xx/408 retries are finite, exponential and never mask hard failures',()=>{
+  assert.equal(binanceServerRetryDelayMs(500,1),750);
+  assert.equal(binanceServerRetryDelayMs(502,2),1500);
+  assert.equal(binanceServerRetryDelayMs(503,3),3000);
+  assert.equal(binanceServerRetryDelayMs(504,4),null);
+  assert.equal(binanceServerRetryDelayMs(408,1),750);
+  assert.equal(binanceServerRetryDelayMs(418,1),null);
+  assert.equal(binanceServerRetryDelayMs(429,1),null);
+  assert.equal(binanceServerRetryDelayMs(451,1),null);
+  assert.equal(binanceServerRetryDelayMs(400,1),null);
+  assert.equal(binanceServerRetryDelayMs(500,1,'5'),5000);
+  assert.equal(binanceServerRetryDelayMs(500,2,'0.2'),1500);
 });

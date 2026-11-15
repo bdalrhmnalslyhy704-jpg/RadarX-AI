@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/neural-closure-4h-20261114
+      - research/neural-closure-streaming-writer-20261114
     paths:
       - '.github/workflows/neural-closure-data-collection.yml'
       - 'phase2/core/neural-closure-data-builder.mjs'
@@ -11,6 +12,10 @@ on:
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/core/neural-closure-json-writer.mjs'
+      - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/core/binance-server-retry-policy.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
   workflow_dispatch:

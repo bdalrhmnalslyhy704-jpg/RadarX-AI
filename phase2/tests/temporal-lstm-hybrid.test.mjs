@@ -1,0 +1,513 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  TCN_LSTM_HYBRID_SCHEMA,
+  TCN_LSTM_PARAMETER_COUNT,
+  TCN_LSTM_STEPS,
+  TCN_LSTM_INPUT_CHANNELS,
+  TCN_LSTM_RECEPTIVE_FIELD,
+  buildTcnLstmAnchorFeatures,
+  fitTcnLstmLogisticAnchor,
+  inspectTcnLstmForward,
+  lossAndGradientsTcnLstmHybrid,
+  auditTcnLstmHybridGradients,
+  trainTcnLstmHybrid,
+  predictTcnLstmHybridProbability,
+  predictTcnLstmHybridCalibratedProbability,
+  fitTcnLstmHybridCalibration,
+  splitFourHourTcnLstmTrainingRows,
+  selectTcnLstmHybridHyperparameters,
+  benchmarkTcnLstmHybridChronological,
+  evaluateTcnLstmHybridGeneralization,
+  benchmarkTcnLstmHybridInference,
+  createTcnLstmHybridModelForAudit,
+  effectiveTcnLstmTrainingSampleBudget,
+  TCN_LSTM_MAX_TRAINING_SAMPLES
+} from '../core/temporal-lstm-hybrid.mjs';
+
+const DAY=86400000;
+const BASE=1_780_000_000_000;
+
+function makeSequence(direction=1,seed=0){
+  return Array.from({length:TCN_LSTM_STEPS},(_,time)=>
+    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,feature)=>{
+      const drift=direction*(feature===0?0.8:feature===7?0.35:0.08);
+      const wave=Math.sin((time+1)*(feature+1)*0.09+seed)*0.12;
+      return Math.max(-3.5,Math.min(3.5,drift+wave));
+    })
+  );
+}
+function makeRows(start,count,prefix='sample'){
+  return Array.from({length:count},(_,index)=>{
+    const absolute=start+index;
+    const target=absolute%2===0?1:0;
+    const at=BASE+absolute*DAY;
+    return {
+      id:prefix+'-'+absolute,
+      symbol:'TST'+String(absolute%4)+'USDT',
+      at,resolved_at:at+DAY,target,
+      sequence:makeSequence(target?1:-1,absolute*0.017),
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*900000)
+    };
+  });
+}
+
+test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
+  const sequence=makeSequence(1,3);
+  const model=createTcnLstmHybridModelForAudit(71);
+  const output=inspectTcnLstmForward(sequence,model,0.17);
+  assert.ok(output.probability>0&&output.probability<1);
+  assert.equal(output.lstm_hidden_sequence.length,24);
+  assert.equal(output.lstm_cell_sequence.length,24);
+  assert.equal(output.tcn_latent_sequence.length,24);
+  assert.equal(output.tcn_latent_sequence[0].length,8);
+  assert.ok(Math.abs(output.attention_weights.reduce((sum,value)=>sum+value,0)-1)<1e-12);
+  assert.ok(output.attention_weights.every(value=>Number.isFinite(value)&&value>=0));
+  assert.equal(TCN_LSTM_PARAMETER_COUNT,1089);
+});
+
+test('unidirectional LSTM state for an earlier prefix is invariant to later input changes',()=>{
+  const original=makeSequence(1,5);
+  const changed=original.map(row=>[...row]);
+  for(let time=12;time<24;time++)
+    for(let feature=0;feature<29;feature++)
+      changed[time][feature]=Math.max(-4,Math.min(4,changed[time][feature]*-1.3));
+  const model=createTcnLstmHybridModelForAudit(29);
+  const a=inspectTcnLstmForward(original,model,0.1);
+  const b=inspectTcnLstmForward(changed,model,0.1);
+  for(let time=0;time<12;time++)for(let unit=0;unit<8;unit++){
+    assert.ok(Math.abs(a.lstm_hidden_sequence[time][unit]-b.lstm_hidden_sequence[time][unit])<1e-12);
+    assert.ok(Math.abs(a.lstm_cell_sequence[time][unit]-b.lstm_cell_sequence[time][unit])<1e-12);
+  }
+});
+
+test('TCN, LSTM BPTT and temporal-attention analytic gradients match central finite differences',()=>{
+  const result=auditTcnLstmHybridGradients(makeSequence(-1,11),0,{
+    model:createTcnLstmHybridModelForAudit(13),
+    baselineLogit:0.23,
+    epsilon:1e-5
+  });
+  assert.equal(result.parameter_count,TCN_LSTM_PARAMETER_COUNT);
+  assert.equal(result.checked_parameters,TCN_LSTM_PARAMETER_COUNT);
+  assert.equal(result.passed,true,
+    'max absolute gradient error='+result.maximum_absolute_error+
+    ', max relative error='+result.maximum_relative_error+
+    ', worst parameter='+JSON.stringify(result.worst_parameter));
+  assert.ok(result.maximum_absolute_error<2e-5);
+});
+
+test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{
+  const sequence=makeSequence(1,19);
+  const scale=[0,1.25,0,1.25,1.25,0,1.25,0];
+  const model=createTcnLstmHybridModelForAudit(23);
+  const forward=inspectTcnLstmForward(sequence,model,0.12,{dropoutScale:scale});
+  assert.deepEqual(forward.input_dropout_scale,scale);
+  for(let time=0;time<TCN_LSTM_STEPS;time++){
+    for(let channel=0;channel<scale.length;channel++){
+      assert.ok(Math.abs(
+        forward.lstm_input_sequence[time][channel]-
+        forward.tcn_latent_sequence[time][channel]*scale[channel]
+      )<1e-12);
+    }
+  }
+  const audit=auditTcnLstmHybridGradients(sequence,1,{
+    model:createTcnLstmHybridModelForAudit(23),
+    baselineLogit:-0.09,
+    epsilon:1e-5,
+    dropoutScale:scale
+  });
+  assert.equal(audit.passed,true,
+    'locked-dropout max abs error='+audit.maximum_absolute_error+
+    ' worst='+JSON.stringify(audit.worst_parameter));
+});
+
+test('training-only Logistic anchor is deterministic and identity-bound to its training rows',()=>{
+  const rows=makeRows(0,40);
+  const first=fitTcnLstmLogisticAnchor(rows);
+  const second=fitTcnLstmLogisticAnchor(rows);
+  assert.equal(first.training_rows,40);
+  assert.equal(first.training_fingerprint,second.training_fingerprint);
+  assert.deepEqual(first.weights,second.weights);
+  assert.equal(first.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
+});
+
+test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and predicts probabilities',()=>{
+  const rows=makeRows(0,32);
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:2,learningRate:0.0015,l2:0.001,
+    batchSize:8,seed:101,maxTrainingSamples:32
+  });
+  assert.equal(profile.schema,TCN_LSTM_HYBRID_SCHEMA);
+  assert.equal(profile.status,'TRAINED_RESEARCH_CHALLENGER_NOT_VALIDATED');
+  assert.equal(profile.training.rows,32);
+  assert.equal(profile.training.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.training.restored_best_training_checkpoint,true);
+  assert.equal(profile.training.validation_or_selection_or_holdout_used_for_fit,false);
+  const probability=predictTcnLstmHybridProbability(rows[0].sequence,profile);
+  assert.ok(Number.isFinite(probability)&&probability>=0&&probability<=1);
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.live_eligibility_ready,false);
+});
+
+test('hyper-parameter selection uses only a purged chronological inner-selection block',()=>{
+  const training=makeRows(0,40,'train');
+  const selection=makeRows(41,20,'selection');
+  const result=selectTcnLstmHybridHyperparameters(training,selection,{
+    candidates:[
+      {name:'LOW_RATE',learningRate:0.0015,l2:0.0005,epochs:2},
+      {name:'MID_RATE',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:2}
+    ],
+    requiredImprovement:0.00025,seed:7,maxTrainingSamples:40
+  });
+  assert.equal(result.training_support.rows,40);
+  assert.equal(result.selection_support.rows,20);
+  assert.equal(result.candidates.length,2);
+  assert.ok(result.candidates.every(row=>
+    Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
+  assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
+  assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+});
+
+test('hyper-parameter selection rejects an unresolved split purge or identity overlap',()=>{
+  const training=makeRows(0,40,'same');
+  const overlapping=makeRows(39,20,'selection');
+  assert.throws(()=>selectTcnLstmHybridHyperparameters(training,overlapping,{
+    candidates:[
+      {name:'A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'B',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],maxTrainingSamples:40
+  }),/TCN_LSTM_TRAIN_SELECTION_PURGE_VIOLATION/);
+});
+
+test('volatility extremes remain finite while malformed and out-of-contract tensors fail closed',()=>{
+  const extreme=Array.from({length:24},(_,time)=>
+    Array.from({length:29},(_,feature)=>(time+feature)%2?4:-4));
+  const output=inspectTcnLstmForward(extreme,createTcnLstmHybridModelForAudit(31),25);
+  assert.ok(Number.isFinite(output.probability));
+  assert.ok(output.attention_weights.every(Number.isFinite));
+  const malformed=makeSequence();
+  malformed[7][12]=Number.NaN;
+  assert.throws(()=>inspectTcnLstmForward(malformed,createTcnLstmHybridModelForAudit()),
+    /TCN_LSTM_SEQUENCE_VALUE_INVALID/);
+  const outOfRange=makeSequence();
+  outOfRange[8][4]=4.01;
+  assert.throws(()=>inspectTcnLstmForward(outOfRange,createTcnLstmHybridModelForAudit()),
+    /TCN_LSTM_SEQUENCE_VALUE_INVALID/);
+});
+
+test('raw and fully calibrated inference paths are finite and measured without hardware claims',()=>{
+  const rows=makeRows(0,32);
+  const profile=trainTcnLstmHybrid(rows,{epochs:1,learningRate:0.0015,l2:0.001,batchSize:8});
+  const raw=benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{warmup:2,iterations:10});
+  assert.ok(raw.p50_ms>=0);
+  assert.ok(raw.p95_ms>=raw.p50_ms);
+  assert.equal(raw.calibrated,false);
+  assert.equal(raw.measured_path,'RAW_TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR');
+  assert.equal(raw.production_latency_claim,false);
+
+  const calibrator={fitted:true,slope:1.2,intercept:-0.08};
+  const probability=predictTcnLstmHybridCalibratedProbability(
+    rows[0].sequence,profile,calibrator
+  );
+  assert.ok(Number.isFinite(probability)&&probability>=0&&probability<=1);
+  const calibrated=benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{
+    warmup:2,iterations:10,modelCalibrator:calibrator
+  });
+  assert.ok(calibrated.p50_ms>=0);
+  assert.ok(calibrated.p95_ms>=calibrated.p50_ms);
+  assert.equal(calibrated.calibrated,true);
+  assert.equal(calibrated.measured_path,
+    'TCN_LSTM_FORWARD_PLUS_FROZEN_LOGISTIC_ANCHOR_PLUS_PLATT_CALIBRATION');
+  assert.equal(calibrated.production_latency_claim,false);
+  assert.throws(()=>predictTcnLstmHybridCalibratedProbability(
+    rows[0].sequence,profile,{fitted:false}
+  ),/TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED/);
+  assert.throws(()=>benchmarkTcnLstmHybridInference(rows[0].sequence,profile,{
+    warmup:2,iterations:10,modelCalibrator:{fitted:false}
+  }),/TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED/);
+});
+
+test('full TCN-LSTM benchmark uses purged time partitions and reports untouched outer Brier',()=>{
+  const rows=makeRows(0,100*4,'chronology');
+  const result=benchmarkTcnLstmHybridChronological(rows,{
+    maxTrainingSamples:80,bootstrapIterations:40,seed:17,
+    candidates:[
+      {name:'LOW',learningRate:0.0015,l2:0.0005,epochs:2},
+      {name:'MID',learningRate:0.0025,l2:0.0015,epochs:2}
+    ]
+  });
+  assert.equal(result.input_samples,rows.length);
+  assert.ok(result.partition_support.training.rows>=20);
+  assert.ok(result.partition_support.selection.rows>=20);
+  assert.ok(result.partition_support.calibration.rows>=20);
+  assert.ok(result.partition_support.validation.rows>=20);
+  assert.ok(result.partition_support.holdout.rows>=20);
+  assert.equal(result.inner_selection_diagnostics.validation_or_holdout_used_for_fit_or_selection,false);
+  const hasCalibration=result.calibration?.model?.fitted===true;
+  if(hasCalibration){
+    assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+    assert.equal(result.validation.evaluated,true);
+    assert.equal(result.holdout.evaluated,result.validation.passed);
+    assert.equal(result.validation.sample_count,result.partition_support.validation.rows);
+    if(result.validation.passed){
+      assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
+      assert.equal(result.holdout.required_brier_improvement,0.003);
+    }else{
+      assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+    }
+    assert.equal(result.validation.required_brier_improvement,0.003);
+  }else{
+    assert.ok(['ABSTAIN_INNER_SELECTION_GATE_FAILED','ABSTAIN_CALIBRATION_SUPPORT_FAILED']
+      .includes(result.status));
+    assert.equal(result.holdout.evaluated,false);
+  }
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.inference_latency.evaluated,
+    result.calibration?.model?.fitted===true);
+  assert.equal(result.zero_latency_claim,false);
+  if(result.inference_latency.evaluated){
+    assert.ok(result.inference_latency.p50_ms>=0);
+    assert.ok(result.inference_latency.p95_ms>=result.inference_latency.p50_ms);
+    assert.equal(result.inference_latency.calibrated,true);
+    assert.equal(result.inference_latency.production_latency_claim,false);
+  }
+});
+
+test('full TCN-LSTM benchmark rejects datasets with overlapping label maturity across partitions',()=>{
+  const rows=makeRows(0,100*4,'purge');
+  // Move a training outcome beyond the selection boundary while preserving its
+  // baseline identity and its temporal sequence cadence.
+  const changed=rows.map(row=>({...row}));
+  changed.find(row=>row.id==='purge-0').resolved_at=BASE+205*DAY;
+  const result=benchmarkTcnLstmHybridChronological(changed,{
+    maxTrainingSamples:80,bootstrapIterations:20
+  });
+  assert.equal(result.status,'CHRONOLOGY_OR_CLASS_SUPPORT_REJECTED');
+  assert.ok(result.purge_violations.length>0);
+});
+
+test('full TCN-LSTM benchmark fails closed for insufficient unique UTC days',()=>{
+  const rows=makeRows(0,40,'short-window');
+  const result=benchmarkTcnLstmHybridChronological(rows);
+  assert.equal(result.status,'WAITING_FOR_UNIQUE_UTC_DAY_SUPPORT');
+  assert.equal(result.probability_ready,false);
+});
+
+test('five-partition calibrated evaluation gates holdout behind external validation',()=>{
+  const training=makeRows(0,40,'train');
+  const selection=makeRows(41,20,'selection');
+  const calibration=makeRows(62,60,'calibration');
+  const validation=makeRows(123,60,'validation');
+  const holdout=makeRows(184,60,'holdout');
+  const result=evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:selection,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'LR_LOW',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'LR_MID',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],
+    requiredInnerImprovement:0,
+    maxTrainingSamples:40,bootstrapIterations:200,seed:19
+  });
+  assert.equal(result.partition_summary.training.rows,40);
+  assert.equal(result.partition_summary.calibration.rows,60);
+  assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+  assert.equal(result.validation.evaluated ?? true,true);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+  assert.equal(result.holdout.evaluated,result.validation.passed);
+  if(!result.validation.passed)
+    assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+});
+
+test('holdout outcome labels remain unread until external validation passes',()=>{
+  const rows=makeRows(0,400,'sealed-holdout');
+  const days=[...new Set(rows.map(row=>Math.floor(row.at/DAY)*DAY))].sort((a,b)=>a-b);
+  const holdoutStart=days[Math.floor(days.length*0.87)]+DAY;
+  const sealed=rows.map(row=>{
+    if(row.at<holdoutStart)return row;
+    const copy={...row};
+    delete copy.target;
+    Object.defineProperty(copy,'target',{
+      enumerable:true,configurable:false,
+      get(){throw new Error('HOLDOUT_LABEL_READ_BEFORE_EXTERNAL_VALIDATION');}
+    });
+    return copy;
+  });
+  const result=benchmarkTcnLstmHybridChronological(sealed,{
+    maxTrainingSamples:80,bootstrapIterations:200,seed:37,
+    requiredInnerImprovement:0,
+    requiredOuterImprovement:1.0,
+    candidates:[
+      {name:'DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
+      {name:'DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:1}
+    ]
+  });
+  assert.equal(result.validation.evaluated,true);
+  assert.equal(result.validation.passed,false);
+  assert.equal(result.status,'VALIDATION_NOT_PASSED_HOLDOUT_REMAINS_LOCKED');
+  assert.equal(result.holdout.evaluated,false);
+  assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+});
+
+test('five-partition evaluator rejects leakage, overlapping identities and unresolved label maturity',()=>{
+  const training=makeRows(0,40,'train');
+  const selection=makeRows(41,20,'selection');
+  const calibration=makeRows(62,60,'calibration');
+  const validation=makeRows(123,60,'validation');
+  const holdout=makeRows(184,60,'holdout');
+  const duplicated=selection.map(row=>({...row,id:training[0].id}));
+  assert.throws(()=>evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:duplicated,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'B',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],maxTrainingSamples:40
+  }),/TCN_LSTM_CROSS_PARTITION_IDENTITY_OVERLAP/);
+  const immature=selection.map((row,index)=>index===0?{...row,resolved_at:row.at}:row);
+  assert.throws(()=>evaluateTcnLstmHybridGeneralization({
+    trainingRows:training,selectionRows:immature,
+    calibrationRows:calibration,validationRows:validation,holdoutRows:holdout,
+    candidates:[
+      {name:'A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'B',learningRate:0.0025,l2:0.0015,epochs:1}
+    ],maxTrainingSamples:40
+  }),/TCN_LSTM_PARTITION_EVENT_OR_MATURITY_TIME_INVALID/);
+});
+
+test('TCN receptive field covers all two-tap causal dilations',()=>{
+  assert.equal(TCN_LSTM_RECEPTIVE_FIELD,15);
+});
+
+
+test('recurrent training budget uses up to 4,096 available training rows without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,1200),1200);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
+});
+
+
+test('exported Platt fitting accepts only supplied calibration rows and reports its fit boundary',()=>{
+  const calibrationRows=makeRows(500,60,'four-hour-calibration');
+  const calibrator=fitTcnLstmHybridCalibration(
+    calibrationRows,
+    sequence=>sequence[0][0]>=0?0.72:0.28,
+    {minimumSamples:30,minimumPositive:8,minimumNegative:8,iterations:120}
+  );
+  assert.equal(calibrator.fitted,true);
+  assert.equal(calibrator.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+  assert.equal(calibrator.samples,60);
+  assert.equal(calibrator.positive,30);
+  assert.equal(calibrator.negative,30);
+  assert.ok(Number.isFinite(calibrator.slope));
+  assert.ok(Number.isFinite(calibrator.intercept));
+  const unsupported=fitTcnLstmHybridCalibration(
+    makeRows(700,20,'thin-calibration'),
+    sequence=>sequence[0][0]>=0?0.72:0.28
+  );
+  assert.equal(unsupported.fitted,false);
+  assert.equal(unsupported.reason,'TCN_LSTM_CALIBRATION_SUPPORT_BELOW_MINIMUM');
+});
+
+
+test('four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train and purges every 4h boundary',()=>{
+  const fourHourRows=makeRows(0,120,'outer-train').map(row=>({
+    ...row,resolved_at:row.at+4*60*60*1000
+  }));
+  const external=makeRows(125,12,'outer-validation').map(row=>{
+    const value={
+      id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.at+4*60*60*1000,
+      sequence:row.sequence,temporal_sequence_timestamps:row.temporal_sequence_timestamps
+    };
+    Object.defineProperty(value,'target',{
+      enumerable:true,get(){throw new Error('EXTERNAL_VALIDATION_LABEL_READ_DURING_INTERNAL_SPLIT');}
+    });
+    return value;
+  });
+  const result=splitFourHourTcnLstmTrainingRows(fourHourRows,external,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(result.status,'READY');
+  assert.equal(result.schema,'RADARX_TCN_LSTM_FOUR_HOUR_PURGED_INNER_SPLIT_V1');
+  assert.equal(result.external_validation_labels_read,false);
+  assert.equal(result.chronology_valid,true);
+  assert.equal(result.identities_valid,true);
+  const {training,selection,calibration}=result.partitions;
+  assert.ok(training.length>=20&&selection.length>=20&&calibration.length>=20);
+  assert.ok(Math.max(...training.map(row=>row.resolved_at))<
+    Math.min(...selection.map(row=>row.at)));
+  assert.ok(Math.max(...selection.map(row=>row.resolved_at))<
+    Math.min(...calibration.map(row=>row.at)));
+  assert.ok(Math.max(...calibration.map(row=>row.resolved_at))<
+    Math.min(...external.map(row=>row.at)));
+  const outerTrainIds=new Set(fourHourRows.map(row=>row.id));
+  for(const row of [...training,...selection,...calibration])
+    assert.ok(outerTrainIds.has(row.id),'inner partition row must originate from outer train');
+  assert.equal(new Set([...training,...selection,...calibration].map(row=>row.id)).size,
+    training.length+selection.length+calibration.length);
+});
+
+test('four-hour TCN-LSTM splitter rejects non-four-hour labels and outer boundary leakage',()=>{
+  const rows=makeRows(0,120,'outer-train').map(row=>({
+    ...row,resolved_at:row.at+4*60*60*1000
+  }));
+  const external=makeRows(125,12,'outer-validation').map(row=>({
+    id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.at+4*60*60*1000,
+    sequence:row.sequence,temporal_sequence_timestamps:row.temporal_sequence_timestamps
+  }));
+  const wrongHorizon=rows.map((row,index)=>index===0
+    ?{...row,resolved_at:row.at+24*60*60*1000}:row);
+  const rejected=splitFourHourTcnLstmTrainingRows(wrongHorizon,external,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(rejected.status,'ABSTAIN_FOUR_HOUR_LABEL_MATURITY_MISMATCH');
+  const leaked=external.map((row,index)=>{
+    if(index!==0)return row;
+    const shiftedAt=rows.at(-1).at+60_000;
+    return {
+      ...row,at:shiftedAt,resolved_at:shiftedAt+4*60*60*1000,
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        shiftedAt-(23-step)*900000)
+    };
+  });
+  const leakage=splitFourHourTcnLstmTrainingRows(rows,leaked,{
+    horizonMs:4*60*60*1000
+  });
+  assert.equal(leakage.status,'ABSTAIN_OUTER_TRAIN_VALIDATION_PURGE_FAILED');
+});
+
+
+test('failed inner TCN-LSTM selection preserves a diagnostic-only fit without qualifying it',()=>{
+  const training=makeRows(0,40,'diagnostic-train');
+  const selection=makeRows(41,20,'diagnostic-selection');
+  const result=selectTcnLstmHybridHyperparameters(training,selection,{
+    candidates:[
+      {name:'DIAGNOSTIC_A',learningRate:0.0015,l2:0.0005,epochs:1},
+      {name:'DIAGNOSTIC_B',learningRate:0.0025,l2:0.0015,dropout:0.1,epochs:1}
+    ],
+    requiredImprovement:10,
+    seed:229,
+    maxTrainingSamples:40
+  });
+  assert.equal(result.status,'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY');
+  assert.equal(result.selected_fit,null);
+  assert.ok(result.diagnostic_fit&&result.diagnostic_fit.model,
+    'best inner candidate remains available solely for sealed outer diagnostics');
+  assert.ok(result.diagnostic_configuration);
+  assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
+  assert.equal(result.real_order_execution,false);
+});
