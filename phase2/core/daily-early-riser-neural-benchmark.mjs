@@ -1,6 +1,6 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
-import {benchmarkTcnLstmHybridChronological,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES} from './temporal-lstm-hybrid.mjs';
+import {benchmarkTcnLstmHybridChronological,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES,TCN_LSTM_REGULARIZATION_CANDIDATES} from './temporal-lstm-hybrid.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -142,11 +142,12 @@ function benchmarkDailyTcnLstm(rows,targetDefinition,outcomeSource,horizonHours,
       Math.trunc(options.temporalTcnLstmBootstrapIterations||400))),
     seed:Math.trunc(options.temporalTcnLstmSeed||37),
     candidates:Array.isArray(options.temporalTcnLstmCandidates)
-      ?options.temporalTcnLstmCandidates:[
-        {name:'LR_0015_L2_0005_DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))},
-        {name:'LR_0025_L2_0015_DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))},
-        {name:'LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:Math.max(1,Math.min(8,Math.trunc(options.temporalTcnLstmEpochs||4)))}
-      ]
+      ?options.temporalTcnLstmCandidates:
+        TCN_LSTM_REGULARIZATION_CANDIDATES.map(candidate=>({
+          ...candidate,
+          epochs:Math.max(1,Math.min(8,
+            Math.trunc(options.temporalTcnLstmEpochs||4)))
+        }))
   });
 }
 
