@@ -20,6 +20,7 @@ import {
 } from '../core/cognitive-brain.mjs';
 import {
   buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
+  isUsableTemporalResearchInferenceSpecialist,auditTemporalResearchInferenceCoverage,
   predictTemporalAttentionResearchOutput,isUsableTemporalAttentionResearchInferenceState,
   auditTemporalAttentionResearchInferenceCoverage,
   isUsableTemporalVariantResearchInferenceState,auditTemporalVariantResearchInferenceCoverage,
@@ -394,13 +395,22 @@ async function main(){
   // outer performance gate has not passed. This allows one independent report
   // to measure it rather than suppressing a weak result.
   const temporalProfile=cognitiveProfile.temporal_network;
-  // The shared profile currently implements the V8 dilated-residual TCN.
-  // Keep its family identity exact; V11 is the separate learned-query-attention
-  // challenger and must not inherit a V8 artifact or prediction stream.
+  // Audit V8 coverage before any row-wise external inference. A zero-residual
+  // Logistic anchor is not a usable neural specialist.
+  const requiredV8Regimes=[...new Set(eventRows.map(row=>
+    Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
+  const v8Specialists=temporalProfile?._research_fit?.specialists_by_regime??{};
+  const v8Coverage=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:requiredV8Regimes,regimeSpecialists:v8Specialists,
+    allowDiagnostic:true
+  });
+  const v8PerformanceQualified=temporalProfile?.probability_ready===true;
   qualificationByModel.TCN_V8={
-    passed:temporalProfile?.probability_ready===true,
-    reason:temporalProfile?.status??'TCN_V8_NOT_SELECTED',
-    diagnostic_only:temporalProfile?.probability_ready!==true
+    passed:v8PerformanceQualified&&v8Coverage.complete,
+    reason:!v8Coverage.complete
+      ?'TCN_V8_MISSING_REGIME_INFERENCE_STATE:'+v8Coverage.missing_regimes.join(',')
+      :temporalProfile?.status??'TCN_V8_NOT_SELECTED',
+    diagnostic_only:!v8PerformanceQualified||!v8Coverage.complete
   };
   training.model_internal_diagnostics.TCN_V8={
     architecture:temporalProfile?.architecture??null,
@@ -422,7 +432,11 @@ async function main(){
       selection_logistic_brier:specialist.selection_logistic_brier??null,
       validation_passed:specialist.validation_passed===true,
       holdout_passed:specialist.holdout_passed===true
-    }]))
+    }])),
+    exported_inference_regimes:v8Coverage.available_regimes,
+    required_external_holdout_regimes:v8Coverage.required_regimes,
+    missing_external_holdout_regimes:v8Coverage.missing_regimes,
+    inference_coverage_complete:v8Coverage.complete
   };
   const attentionProfile=temporalProfile?.regime_local_tcn_attention_challenger;
   const attentionSpecialists=attentionProfile?.regime_specialists??{};
@@ -673,7 +687,7 @@ async function main(){
     featureSchemaId:'RADARX_TEMPORAL_TCN_V10_MULTISCALE_24X29_V1'
   });
 
-  if(temporalProfile?._research_fit){
+  if(temporalProfile?._research_fit&&v8Coverage.complete){
     const tcnArtifact=makeArtifact({
       name:'RADARX_TCN_V8_FIRST_TOUCH_4H',
       family:'TCN_V8',version:'TCN_V8_FIRST_TOUCH_4H_V2',
@@ -718,6 +732,13 @@ async function main(){
       diagnostic_regimes:training.model_internal_diagnostics.TCN_V8.regime_specialists
     };
     }else unavailable.TCN_V8={reason:'ARTIFACT_VERIFICATION_FAILED:'+verified.reason};
+  }else if(temporalProfile?._research_fit){
+    unavailable.TCN_V8={
+      reason:'TCN_V8_MISSING_REGIME_INFERENCE_STATE:'+v8Coverage.missing_regimes.join(','),
+      inference_regimes:v8Coverage.available_regimes,
+      missing_regimes:v8Coverage.missing_regimes,
+      diagnostic_regimes:training.model_internal_diagnostics.TCN_V8.regime_specialists
+    };
   }else unavailable.TCN_V8={
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
