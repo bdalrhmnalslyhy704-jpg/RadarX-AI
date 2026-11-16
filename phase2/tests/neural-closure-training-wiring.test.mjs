@@ -167,6 +167,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/validation:model\.validation\?\{/,
     'the report must retain the complete validation evidence object');
+  assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
+    'the console and model-comparison summary must expose the full staged calibration diagnostics');
+  assert.match(trainer,/maxTrainingSamples:4096/,
+    'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
+  assert.match(trainer,/max_training_samples:4096/,
+    'the reported TCN-LSTM training budget must match the actual trainer configuration');
   assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
   assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
   assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);
