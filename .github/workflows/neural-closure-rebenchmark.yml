@@ -1,6 +1,7 @@
 name: Build 224 Neural Closure — parity-corrected rebenchmark
 
 # Run the frozen run-99 benchmark only after the independent nested threshold gates are green.
+# This branch adds validation-only TCN-LSTM probability-stage observability; the run remains research-only.
 
 on:
   push:
