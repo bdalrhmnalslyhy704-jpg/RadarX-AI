@@ -1003,34 +1003,6 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
     initialEquity:100
   });
 }
-function probabilityDistributionSummary(values) {
-  const sorted=(Array.isArray(values)?values:[])
-    .map(Number).filter(value=>Number.isFinite(value)&&value>=0&&value<=1)
-    .sort((a,b)=>a-b);
-  if(!sorted.length)return {
-    sample_count:0,min:null,max:null,mean:null,
-    p50:null,p75:null,p90:null,p95:null,p99:null,
-    at_or_above_threshold_counts:{}
-  };
-  const quantile=fraction=>sorted[Math.min(sorted.length-1,
-    Math.floor((sorted.length-1)*fraction))];
-  const thresholds=[0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
-  return {
-    sample_count:sorted.length,
-    min:Number(sorted[0].toFixed(8)),
-    max:Number(sorted.at(-1).toFixed(8)),
-    mean:Number((sorted.reduce((sum,value)=>sum+value,0)/sorted.length).toFixed(8)),
-    p50:Number(quantile(0.50).toFixed(8)),
-    p75:Number(quantile(0.75).toFixed(8)),
-    p90:Number(quantile(0.90).toFixed(8)),
-    p95:Number(quantile(0.95).toFixed(8)),
-    p99:Number(quantile(0.99).toFixed(8)),
-    at_or_above_threshold_counts:Object.fromEntries(thresholds.map(threshold=>[
-      threshold.toFixed(2),sorted.filter(value=>value>=threshold).length
-    ]))
-  };
-}
-
 function selectThreshold(rows,probabilities,roundTripCostBps,{
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
 }={}) {
@@ -1188,6 +1160,10 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
       calibrated:summarizeProbabilityDistribution(thresholdSelectionProbabilities)
     };
+    const outerValidationProbabilityDistribution={
+      raw:summarizeProbabilityDistribution(rawValidation),
+      calibrated:summarizeProbabilityDistribution(calibratedValidation)
+    };
     const thresholdSelection=selectThreshold(thresholdSelectionRows,
       thresholdSelectionProbabilities,roundTripCostBps,{
         minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
@@ -1225,15 +1201,7 @@ export function runNeuralClosureBenchmark({
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
       threshold_selection_negative_count:thresholdSelectionSupport.negative,
-      // Diagnostics only: expose calibrated score scale on the same earlier,
-      // disjoint threshold-selection block. This does not alter thresholds,
-      // labels, model weights, or any acceptance gate.
-      threshold_selection_probability_distribution:probabilityDistributionSummary(
-        thresholdSelectionProbabilities
-      ),
-      outer_validation_probability_distribution:probabilityDistributionSummary(
-        calibratedValidation
-      ),
+      outer_validation_probability_distribution:outerValidationProbabilityDistribution,
       threshold_selection:thresholdSelection.status,
       selected_threshold:thresholdSelection.threshold,
       threshold_selection_eligible_count:thresholdSelection.eligible_count??0,
