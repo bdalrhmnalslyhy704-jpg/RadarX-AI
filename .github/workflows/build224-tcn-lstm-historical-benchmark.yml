@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/build224-tcn-lstm-attention-challenger-20261113
+      - research/build224-tcn-lstm-order-signal-20261116
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
@@ -87,6 +88,8 @@ jobs:
             --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
             --tcn-lstm-max-training-samples 36102 \
             --tcn-lstm-bootstrap-iterations 400
+            --tcn-lstm-order-control PER_SAMPLE_SHUFFLE \\
+            --tcn-lstm-order-control-seed 20261116
       - name: Publish TCN-LSTM versus same-window Logistic evidence
         if: always()
         run: |
@@ -116,6 +119,7 @@ jobs:
             trained:model.trained,
             partition_support:model.partition_support,
             inner_selection:model.inner_selection_diagnostics,
+            temporal_order_control:model.temporal_order_control,
             calibration:model.calibration,
             validation:model.validation,
             untouched_holdout:model.holdout,
