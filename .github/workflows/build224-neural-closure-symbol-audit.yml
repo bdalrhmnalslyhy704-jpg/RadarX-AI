@@ -1,0 +1,65 @@
+name: Build 224 — Inspect Historical Closure Symbol Rejections
+
+on:
+  push:
+    branches:
+      - research/build224-neural-closure-symbol-audit-20261116
+    paths:
+      - '.github/workflows/build224-neural-closure-symbol-audit.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: build224-neural-closure-symbol-audit
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download the exact historical dataset artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-0c1bf3f509bd3da569a4e9b21c302654d8fbbf63
+          repository: bdalrhmnalslyhy704-jpg/RadarX-AI
+          run-id: 43758725648
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inspected-artifact
+      - name: Print per-symbol inclusion and rejection evidence
+        run: |
+          node --max-old-space-size=3072 --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const dataset=JSON.parse(await readFile('inspected-artifact/dataset.json','utf8'));
+          const results=dataset?.universe?.symbol_results;
+          if(!Array.isArray(results)||results.length!==dataset?.counts?.requested_symbols){
+            throw new Error('SYMBOL_RESULT_AUDIT_MISSING_OR_INCOMPLETE');
+          }
+          const rejected=results.filter(item=>item.status!=='INCLUDED');
+          const compact=items=>items.map(item=>({
+            symbol:item.symbol,
+            status:item.status,
+            quote_volume_24h_usdt:item.quote_volume_24h_usdt??null,
+            valid_events:item.valid_events??null,
+            rejected_events:item.rejected_events??null,
+            coverage:item.coverage??null
+          }));
+          console.log('[BUILD224_SYMBOL_AUDIT]'+JSON.stringify({
+            dataset_sha256:dataset.dataset_sha256,
+            source_commit_sha:dataset.source_commit_sha,
+            counts:dataset.counts,
+            included:compact(results.filter(item=>item.status==='INCLUDED')),
+            rejected:compact(rejected),
+            rejected_count:rejected.length,
+            no_synthetic_or_mock_rows:dataset.data_quality?.no_synthetic_or_mock_rows===true
+          }));
+          if(rejected.length!==dataset.counts.requested_symbols-dataset.counts.included_symbols){
+            throw new Error('REJECTED_SYMBOL_COUNT_DOES_NOT_RECONCILE');
+          }
+          NODE
