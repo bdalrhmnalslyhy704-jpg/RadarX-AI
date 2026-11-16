@@ -22,6 +22,7 @@ import {
   DAILY_EARLY_RISER_MLP_MAX_OUTPUT_INITIALIZATION_SCALE,
   summarizeDailyNeuralAnchorDiagnostics,
   prepareDailyEarlyRiserCognitiveRow,
+  buildDailyEarlyRiserTcnLstmRows,
   benchmarkDailyEarlyRiserTarget,
   benchmarkDailyEarlyRiserRegimeLocalMlp
 } from '../core/daily-early-riser-neural-benchmark.mjs';
@@ -899,4 +900,62 @@ test('daily target benchmark forwards the requested 18-feature schema without ch
   assert.equal(result.neural_network.input_neurons,18);
   assert.equal(result.target_definition,'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1');
   assert.equal(result.horizon_hours,24);
+});
+
+
+test('daily 24h benchmark attaches the same audited 24x29 cohort to the TCN-LSTM challenger',()=>{
+  const base=1_800_000_000_000;
+  const sequenceFor=(seed)=>Array.from({length:TEMPORAL_SEQUENCE_STEPS},(_,time)=>
+    Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,channel)=>{
+      const direction=seed%2===0?1:-1;
+      const wave=Math.sin((time+1)*(channel+1)*0.03+seed)*0.08;
+      return direction*(channel===0?0.45:0.06)+wave;
+    }));
+  const samples=Array.from({length:400},(_,index)=>{
+    const at=base+index*DAILY_EARLY_RISER_HORIZON_MS;
+    const sample=sampleWith({
+      at,targetPct:5,outcome:index%2===0?'UP':'DOWN',
+      resolvedAt:at+DAILY_EARLY_RISER_HORIZON_MS,
+      horizonMs:DAILY_EARLY_RISER_HORIZON_MS
+    });
+    sample.temporal_sequence=sequenceFor(index);
+    sample.temporal_sequence_timestamps=Array.from({length:24},(_,step)=>
+      at-(23-step)*15*60*1000);
+    return sample;
+  });
+  const prepared=prepareDailyEarlyRiserCognitiveRow(samples[0],5);
+  assert.ok(prepared.row);
+  const attached=buildDailyEarlyRiserTcnLstmRows([prepared.row]);
+  assert.equal(attached.length,1);
+  assert.equal(attached[0].target,1);
+  assert.equal(attached[0].sequence.length,24);
+  assert.equal(attached[0].sequence[0].length,29);
+  assert.equal(attached[0].temporal_sequence_timestamps.at(-1),attached[0].at);
+
+  const result=benchmarkDailyEarlyRiserTarget(samples,5,{
+    tcnOnly:true,skipTemporal:true,enableTcnLstmHybrid:true,
+    temporalTcnLstmMaxTrainingSamples:80,
+    temporalTcnLstmBootstrapIterations:200,
+    temporalTcnLstmCandidates:[
+      {name:'DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
+      {name:'DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:1}
+    ]
+  });
+  const challenger=result.temporal_tcn_lstm_hybrid_challenger;
+  assert.equal(result.temporal_tcn_lstm_hybrid_training_performed,
+    challenger.trained===true);
+  assert.equal(challenger.input_samples,400);
+  assert.equal(challenger.outcome_horizon_ms,DAILY_EARLY_RISER_HORIZON_MS);
+  assert.equal(challenger.target_definition,
+    'FIRST_PASSAGE_PLUS_5_PCT_BEFORE_MINUS_2_PCT_24H_15M_V1');
+  assert.equal(challenger.outcome_source,DAILY_EARLY_RISER_OUTCOME_SOURCE);
+  assert.ok(challenger.partition_support.training.rows>=20);
+  assert.ok(challenger.partition_support.selection.rows>=20);
+  assert.ok(challenger.partition_support.calibration.rows>=20);
+  assert.ok(challenger.partition_support.validation.rows>=20);
+  assert.ok(challenger.partition_support.holdout.rows>=20);
+  assert.equal(challenger.probability_ready,false);
+  assert.equal(challenger.live_eligibility_ready,false);
+  assert.equal(challenger.real_order_execution,false);
+  assert.equal(result.approval.real_order_execution,false);
 });
