@@ -402,7 +402,8 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
   for (let channel = 0; channel < hidden; channel++)
     residualHeadLogit += model.outputWeights[channel] * pooled[channel];
   const residualGateScale=tanh(model.residualGate[0]);
-  const residualLogit=residualGateScale*residualHeadLogit;
+  const rawResidualLogit=residualGateScale*residualHeadLogit;
+  const residualLogit=rawResidualLogit===0?0:rawResidualLogit;
   const logit = clamp(baselineLogit + residualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
   const probability = sigmoid(logit);
   if (![...pooled, ...attentionWeights, probability, logit].every(finite))
