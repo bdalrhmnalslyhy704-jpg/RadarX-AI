@@ -4339,10 +4339,29 @@ export function predictTemporalResearchOutput(sequence,profile={},{
 }
 
 /**
+ * A pooled V11 state may stand in for a missing regime only when it is a
+ * complete, positive-residual neural inference state. Mere object presence
+ * is not evidence of usable coverage.
+ */
+export function isUsableTemporalAttentionResearchInferenceState(state,{
+  allowDiagnostic=false
+}={}){
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
+    state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
+    state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
+    !state.model||state.model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)
+    return false;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return false;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_ATTENTION_MEMBER')return false;
+  const residualScale=finite(state.residual_scale);
+  return residualScale!==null&&residualScale>0;
+}
+
+/**
  * Research inference for the separately fitted V11 learned-query attention
- * challenger. It reads only the per-regime exported attention member and the
- * inner-selection calibrator; a zero-residual/logistic-only diagnostic is
- * never exposed as a neural prediction.
+ * challenger. It reads only a usable per-regime or pooled attention member
+ * and never substitutes a zero-residual/logistic-only diagnostic.
  */
 export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   allowDiagnostic=false
@@ -4352,16 +4371,8 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   if(!regime)return null;
   const specialist=profile?.regime_specialists?.[regime];
   const state=specialist?.research_inference??profile?.pooled_fallback?.research_inference;
-  if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
-    state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
-    state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
-    !state.model||state.model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)
-    return null;
-  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER';
-  if(diagnostic&&!allowDiagnostic)return null;
-  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_ATTENTION_MEMBER')return null;
-  const residualScale=finite(state.residual_scale);
-  if(residualScale===null||residualScale<=0)return null;
+  if(!isUsableTemporalAttentionResearchInferenceState(state,{allowDiagnostic}))return null;
+  const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
   return Number.isFinite(probability)?{
