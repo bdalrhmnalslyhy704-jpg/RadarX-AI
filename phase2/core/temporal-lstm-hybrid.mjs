@@ -1150,6 +1150,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           post_update_training_brier:item.post_update_training_brier,
           post_update_validation_brier:item.post_update_validation_brier,
           maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
+          maximum_feature_extractor_gradient_l2_norm:item.maximum_feature_extractor_gradient_l2_norm,
+          maximum_residual_gate_gradient_abs:item.maximum_residual_gate_gradient_abs,
           clipped_batches:item.clipped_batches
         })),
         validation_or_selection_or_holdout_used:false
@@ -1220,6 +1222,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           epoch:item.epoch,
           post_update_training_brier:item.post_update_training_brier,
           maximum_batch_gradient_l2_norm:item.maximum_batch_gradient_l2_norm,
+          maximum_feature_extractor_gradient_l2_norm:item.maximum_feature_extractor_gradient_l2_norm,
+          maximum_residual_gate_gradient_abs:item.maximum_residual_gate_gradient_abs,
           clipped_batches:item.clipped_batches
         }))??[],
         epoch_selection:epochSelectionDiagnostics,
