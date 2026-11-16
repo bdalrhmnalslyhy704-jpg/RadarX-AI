@@ -5,6 +5,7 @@ on:
     branches:
       - research/neural-closure-4h-20261114
       - research/build224-neural-closure-calibration-parity-20261116
+      - research/build224-neural-closure-independent-threshold-gate-20261116
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -23,6 +24,7 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/cognitive-brain.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
@@ -33,6 +35,7 @@ on:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
       - research/build224-tcn-v11-inference-coverage-20261116
+      - research/build224-neural-closure-calibration-parity-20261116
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -49,6 +52,7 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/temporal-neural-brain.test.mjs'
       - 'phase2/tests/hybrid-memory-regression.test.mjs'
@@ -102,6 +106,8 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-archive-guardian.test.mjs
       - name: Test focal-asymmetric Brier, calibration support and purged splits
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
+      - name: Test fixed-SHA trainer wiring and disjoint threshold-validation windows
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-training-wiring.test.mjs
       - name: Test checksummed model artifacts and fail-closed feature parity
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Test Cognitive MLP V5 focal training, calibration and shared cohort contracts
