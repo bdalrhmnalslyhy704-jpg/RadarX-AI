@@ -168,6 +168,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/validation:model\.validation\?\{/,
     'the report must retain the complete validation evidence object');
   assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
+  assert.match(trainer,/threshold_selection_probability_distribution:model\.validation\.threshold_selection_probability_distribution\?\?null/);
   assert.match(trainer,/threshold_selection:model\.validation\.threshold_selection\?\?null/);
   assert.match(trainer,/selected_threshold:model\.validation\.selected_threshold\?\?null/);
   assert.match(trainer,/threshold_selection_gates:model\.validation\.threshold_selection_gates\?\?null/);
