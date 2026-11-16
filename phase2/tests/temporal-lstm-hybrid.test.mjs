@@ -19,6 +19,7 @@ import {
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit,
+  createTcnLstmTemporalOrderControlRows,
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES,
   TCN_LSTM_REGULARIZATION_CANDIDATES
@@ -541,4 +542,57 @@ test('recurrent training budget can use the full 36,102-row training partition w
   assert.equal(effectiveTcnLstmTrainingSampleBudget(65536,36102),36102);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(36102,20),20);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),36102);
+});
+
+
+test('temporal-order control preserves pooled anchor features and source audit metadata',()=>{
+  const originalRows=makeRows(0,24,'order-control');
+  const originalSnapshot=JSON.stringify(originalRows);
+  const first=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261116});
+  const repeated=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261116});
+  const alternate=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261117});
+
+  assert.equal(first.audit.kind,'INDEPENDENT_PER_SAMPLE_TIMESTEP_PERMUTATION_V1');
+  assert.equal(first.audit.row_count,originalRows.length);
+  assert.equal(first.audit.permuted_rows,originalRows.length);
+  assert.equal(first.audit.source_rows_mutated,false);
+  assert.equal(first.audit.production_or_live_use_allowed,false);
+  assert.match(first.audit.permutation_sha256,/^[a-f0-9]{64}$/);
+  assert.equal(first.audit.permutation_sha256,repeated.audit.permutation_sha256);
+  assert.notEqual(first.audit.permutation_sha256,alternate.audit.permutation_sha256);
+  assert.equal(JSON.stringify(originalRows),originalSnapshot,'control must not mutate source rows');
+
+  for(let index=0;index<originalRows.length;index++){
+    const original=originalRows[index];
+    const shuffled=first.rows[index];
+    assert.equal(shuffled.id,original.id);
+    assert.equal(shuffled.symbol,original.symbol);
+    assert.equal(shuffled.at,original.at);
+    assert.equal(shuffled.resolved_at,original.resolved_at);
+    assert.equal(shuffled.target,original.target);
+    assert.deepEqual(shuffled.temporal_sequence_timestamps,
+      original.temporal_sequence_timestamps,
+      'original timestamps remain provenance metadata only');
+    assert.deepEqual(shuffled.sequence,repeated.rows[index].sequence,
+      'the same seed must reproduce the same per-sample permutation');
+    assert.notDeepEqual(shuffled.sequence,original.sequence,
+      'the sample-specific control must destroy original timestep ordering');
+    assert.equal(shuffled.sequence.length,TCN_LSTM_STEPS);
+    assert.ok(shuffled.sequence.every(step=>step.length===TCN_LSTM_INPUT_CHANNELS));
+
+    const before=buildTcnLstmAnchorFeatures(original.sequence);
+    const after=buildTcnLstmAnchorFeatures(shuffled.sequence);
+    assert.equal(before.length,TCN_LSTM_INPUT_CHANNELS*2);
+    for(let feature=0;feature<before.length;feature++)
+      assert.ok(Math.abs(before[feature]-after[feature])<=1e-12,
+        'pooled Logistic anchor feature drift at '+index+':'+feature);
+  }
+});
+
+test('temporal-order control rejects duplicate identities and invalid seeds',()=>{
+  const rows=makeRows(0,2,'order-invalid');
+  assert.throws(()=>createTcnLstmTemporalOrderControlRows(rows.concat(rows[0])),
+    /TCN_LSTM_ORDER_CONTROL_DUPLICATE_IDENTITY/);
+  assert.throws(()=>createTcnLstmTemporalOrderControlRows(rows,{seed:-1}),
+    /TCN_LSTM_ORDER_CONTROL_SEED_INVALID/);
 });
