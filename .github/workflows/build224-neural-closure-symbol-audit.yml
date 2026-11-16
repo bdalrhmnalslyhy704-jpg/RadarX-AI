@@ -63,3 +63,71 @@ jobs:
             throw new Error('REJECTED_SYMBOL_COUNT_DOES_NOT_RECONCILE');
           }
           NODE
+
+      - name: Compare rejected symbol boundaries with official Binance metadata and klines
+        run: |
+          node --max-old-space-size=1024 --input-type=module <<'NODE'
+          import {readFile} from 'node:fs/promises';
+          const base='https://data-api.binance.vision';
+          const dataset=JSON.parse(await readFile('inspected-artifact/dataset.json','utf8'));
+          const rejected=(dataset.universe.symbol_results||[]).filter(item=>
+            item.status!=='INCLUDED');
+          const intervals=[
+            ['1m',60_000,dataset.schedule.one_minute_start_open_at,dataset.schedule.one_minute_end_open_at],
+            ['5m',300_000,dataset.schedule.five_minute_start_open_at,dataset.schedule.five_minute_end_open_at],
+            ['15m',900_000,dataset.schedule.fifteen_minute_start_open_at,dataset.schedule.fifteen_minute_end_open_at]
+          ];
+          async function getJson(path,params){
+            const url=new URL('/api/v3/'+path,base);
+            for(const [key,value] of Object.entries(params))url.searchParams.set(key,String(value));
+            const response=await fetch(url,{headers:{accept:'application/json'},
+              signal:AbortSignal.timeout(12_000)});
+            if(!response.ok)return {http_status:response.status};
+            return await response.json();
+          }
+          const evidence=[];
+          for(const item of rejected){
+            const symbol=item.symbol;
+            let metadata=null;
+            try{
+              const info=await getJson('exchangeInfo',{symbol});
+              metadata=info?.symbols?.[0]??null;
+            }catch(error){metadata={error:String(error?.message||error)};}
+            const boundaryEvidence=[];
+            for(const [interval,intervalMs,start,end] of intervals){
+              let first=null,last=null;
+              try{
+                const rows=await getJson('klines',{
+                  symbol,interval,startTime:start,endTime:start+intervalMs*5,limit:10
+                });
+                if(Array.isArray(rows))first=rows[0]?.[0]??null;
+                else first={error:rows?.http_status??'INVALID_RESPONSE'};
+              }catch(error){first={error:String(error?.message||error)};}
+              try{
+                const rows=await getJson('klines',{
+                  symbol,interval,startTime:end-intervalMs*5,endTime:end,limit:10
+                });
+                if(Array.isArray(rows))last=rows.at(-1)?.[0]??null;
+                else last={error:rows?.http_status??'INVALID_RESPONSE'};
+              }catch(error){last={error:String(error?.message||error)};}
+              boundaryEvidence.push({
+                interval,expected_start_open_at:start,first_available_open_at:first,
+                start_delta_ms:typeof first==='number'?first-start:null,
+                expected_end_open_at:end,last_available_open_at:last,
+                end_delta_ms:typeof last==='number'?end-last:null
+              });
+            }
+            evidence.push({
+              symbol,status:item.status,original_coverage:item.coverage,
+              exchange_status:metadata?.status??null,
+              onboard_date:metadata?.onboardDate??null,
+              offboard_date:metadata?.offboardDate??null,
+              boundary_evidence:boundaryEvidence
+            });
+          }
+          console.log('[BUILD224_REJECTED_SYMBOL_BOUNDARIES]'+JSON.stringify({
+            source_dataset_sha256:dataset.dataset_sha256,
+            schedule:dataset.schedule,
+            evidence
+          }));
+          NODE
