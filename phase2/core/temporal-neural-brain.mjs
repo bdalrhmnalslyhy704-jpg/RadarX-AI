@@ -4410,6 +4410,54 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
 }
 
 /**
+ * V9/V10 inference state is usable only when its complete architecture,
+ * pooling and non-zero neural residual contract matches the predictor.
+ */
+export function isUsableTemporalVariantResearchInferenceState(state,{
+  allowDiagnostic=false,expectedPoolingMode=null
+}={}){
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
+    ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
+    (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
+    !state.model||state.model.temporal_pooling!==state.temporal_pooling||
+    typeof state.architecture!=='string')return false;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return false;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_VARIANT_MEMBER')return false;
+  const residualScale=finite(state.residual_scale);
+  return residualScale!==null&&residualScale>0;
+}
+
+/**
+ * Audit complete external BTC regime coverage for a V9/V10 artifact.
+ * Missing regimes are not covered by a merely present but unusable fallback.
+ */
+export function auditTemporalVariantResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},pooledFallbackState=null,
+  allowDiagnostic=false,expectedPoolingMode=null
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalVariantResearchInferenceState(
+        regimeSpecialists[regime]?.research_inference,{
+          allowDiagnostic,expectedPoolingMode
+        }));
+  const pooledFallbackUsable=isUsableTemporalVariantResearchInferenceState(
+    pooledFallbackState,{allowDiagnostic,expectedPoolingMode});
+  const missing=required.filter(regime=>
+    !available.includes(regime)&&!pooledFallbackUsable);
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    pooled_fallback_usable:pooledFallbackUsable,
+    missing_regimes:missing
+  };
+}
+
+/**
  * Generic inference for separately trained ordered-pyramid V9 and multiscale
  * V10 specialists. Each BTC regime carries its own exported member, pooling
  * contract, calibrator and residual scale; no shared or logistic fallback is
@@ -4423,16 +4471,10 @@ export function predictTemporalVariantResearchOutput(sequence,profile={},{
   if(!regime)return null;
   const state=profile?.regime_specialists?.[regime]?.research_inference??
     profile?.pooled_fallback?.research_inference;
-  if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
-    ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
-    (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
-    !state.model||state.model.temporal_pooling!==state.temporal_pooling||
-    typeof state.architecture!=='string')return null;
-  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER';
-  if(diagnostic&&!allowDiagnostic)return null;
-  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_VARIANT_MEMBER')return null;
-  const residualScale=finite(state.residual_scale);
-  if(residualScale===null||residualScale<=0)return null;
+  if(!isUsableTemporalVariantResearchInferenceState(state,{
+    allowDiagnostic,expectedPoolingMode
+  }))return null;
+  const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
   return Number.isFinite(probability)?{
