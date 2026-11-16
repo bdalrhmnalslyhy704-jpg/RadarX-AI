@@ -52,7 +52,7 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V1';
+const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V2';
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -228,6 +228,26 @@ async function main(){
   if(input?.schema!==NEURAL_CLOSURE_DATASET_SCHEMA||!Array.isArray(input.rows))
     throw new Error('NEURAL_CLOSURE_DATASET_SCHEMA_INVALID');
   const datasetSourceCommitSha=input.source_commit_sha??null;
+  const selectedSymbols=Array.isArray(input.universe?.symbols)
+    ?input.universe.symbols.map(item=>String(item?.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const includedSymbols=Array.isArray(input.universe?.symbol_results)
+    ?input.universe.symbol_results.filter(item=>item?.status==='INCLUDED')
+      .map(item=>String(item.symbol??'').toUpperCase()).filter(Boolean)
+    :[];
+  const datasetScope={
+    market_data_source:input.data_quality?.source??null,
+    market_data_endpoint:input.market_data_endpoint??null,
+    universe_selection:input.universe?.selection??null,
+    minimum_quote_volume_24h_usdt:input.universe?.minimum_quote_volume_24h_usdt??null,
+    selected_symbol_count:selectedSymbols.length,
+    included_symbol_count:includedSymbols.length,
+    selected_symbols:selectedSymbols,
+    included_symbols:includedSymbols,
+    survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
+    historical_delisted_asset_coverage:false,
+    interpretation:'CONDITIONAL_ON_CURRENTLY_TRADING_SPOT_PAIRS_AND_CURRENT_24H_LIQUIDITY'
+  };
   const rows=validateFourHourRows(input.rows);
   const datasetSha=sha256CanonicalArrayMapped(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
@@ -264,7 +284,8 @@ async function main(){
     dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
-    partition_class_support:supports
+    partition_class_support:supports,
+    dataset_scope:datasetScope
   };
 
   // Proper-scoring logistic baseline: same exact train rows, 18 decision features.
@@ -337,7 +358,7 @@ async function main(){
       training_samples:cognitiveProfile.neural_network?.training_samples??0,
       selection_logistic_brier:cognitiveProfile.neural_network?.internal_selection_logistic_brier??null,
       selection_required_margin:cognitiveProfile.neural_network?.internal_selection_required_margin??null,
-      best_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+      best_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
       member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[],
       validation_comparison:cognitiveProfile.neural_network?.validation_comparison??null,
       holdout_comparison:cognitiveProfile.neural_network?.holdout_comparison??null
@@ -363,13 +384,13 @@ async function main(){
         training_samples:cognitiveProfile.neural_network?.training_samples??0,
         selected_member_index:cognitiveProfile.neural_network?.selected_member_index??null,
         selected_residual_scale:cognitiveProfile.neural_network?.selected_residual_scale??null,
-        best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null
+        best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null
       };
     }else unavailable.COGNITIVE_MLP_V5={reason:scored.reason};
   }else unavailable.COGNITIVE_MLP_V5={
     reason:cognitiveProfile.neural_network?.status??'NO_INNER_SELECTED_MLP_ARTIFACT',
     probability_ready:cognitiveProfile.neural_network?.probability_ready===true,
-    best_inner_candidate:cognitiveProfile.neural_network?.selection_best_candidate??null,
+    best_inner_candidate:cognitiveProfile.neural_network?.inner_selection_diagnostics?.best_candidate??null,
     member_selection_scores:cognitiveProfile.neural_network?.member_selection_brier_scores??[]
   };
 
@@ -429,7 +450,7 @@ async function main(){
       diagnostic_member_index:specialist.diagnostic_member_index??null,
       diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
       selection_scores:specialist.member_selection_scores??[],
-      selection_logistic_brier:specialist.selection_logistic_brier??null,
+      selection_logistic_brier:specialist.member_selection_logistic_brier??null,
       validation_passed:specialist.validation_passed===true,
       holdout_passed:specialist.holdout_passed===true
     }])),
@@ -1131,12 +1152,26 @@ async function main(){
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
+    validation:model.validation?{
+      sample_count:model.validation.sample_count??null,
+      positive_count:model.validation.positive_count??null,
+      negative_count:model.validation.negative_count??null,
+      raw_brier_score:model.validation.raw_brier_score??null,
+      calibrated_brier_score:model.validation.calibrated_brier_score??null,
+      threshold_selection:model.validation.threshold_selection??null,
+      selected_threshold:model.validation.selected_threshold??null,
+      threshold_selection_eligible_count:model.validation.threshold_selection_eligible_count??0,
+      threshold_selection_gates:model.validation.threshold_selection_gates??null,
+      threshold_trials:model.validation.threshold_trials??[],
+      outer_validation_gate:model.validation.outer_validation_gate??null
+    }:null,
     calibration_status:model.calibration?.status??null,
     brier:model.holdout?.brier_score??null,
     logistic_brier:benchmark.models.LOGISTIC_REGRESSION?.holdout?.brier_score??null,
     net_pnl_pct:model.holdout?.net_pnl_pct??null,
     max_drawdown_pct:model.holdout?.max_drawdown_pct??null,
     trades:model.holdout?.trade_count??null,
+    holdout_lock_reason:model.holdout?.reason??null,
     acceptance:model.acceptance?.status??'NOT_EVALUATED',
     acceptance_gates:model.acceptance?.gates??null,
     inner_qualification:model.acceptance?.inner_qualification??null
@@ -1152,6 +1187,7 @@ async function main(){
       row_count:rows.length
     },
     training,
+    dataset_scope:datasetScope,
     model_artifacts:trainingArtifacts,
     unavailable_models:unavailable,
     benchmark,

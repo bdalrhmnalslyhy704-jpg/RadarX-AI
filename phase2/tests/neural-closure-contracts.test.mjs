@@ -376,7 +376,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
-  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1');
+  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
   assert.equal(report.target.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   assert.equal(report.integrity.row_count,8000);
@@ -387,17 +387,53 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
-  assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
+  assert.ok(['VALIDATION_EVALUATED','EVALUATED'].includes(report.models.LOGISTIC_REGRESSION.status),
+    'Logistic is evaluated on validation and only gets holdout metrics after a neural validation pass');
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
+  const baselineCalibration=report.models.LOGISTIC_REGRESSION.calibration;
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const calibration=report.models[family].calibration;
+    assert.equal(calibration.status,'EVALUATED',family+' calibration must be evaluated');
+    assert.equal(calibration.calibration_fit_rows,baselineCalibration.calibration_fit_rows,
+      family+' fit-row count must match Logistic');
+    assert.equal(calibration.calibration_purged_rows,baselineCalibration.calibration_purged_rows,
+      family+' purge-row count must match Logistic');
+    assert.equal(calibration.calibration_check_rows,baselineCalibration.calibration_check_rows,
+      family+' check-row count must match Logistic');
+    assert.deepEqual(calibration.calibration_days,baselineCalibration.calibration_days,
+      family+' must use identical UTC-day identities');
+  }
+  assert.deepEqual(report.calibration_policy,{
+    schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+    method:'PREDECLARED_PLATT_SCALING_WITH_RAW_FALLBACK',
+    fit_partition:'CALIBRATION_FIT_ONLY',
+    fallback:'RAW_IF_PLATT_NOT_ACCEPTED',
+    temperature_scaling:'NOT_FIT_PREDECLARED_PLATT_ONLY',
+    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
+    check_block_used_for_calibrator_selection:false,
+    same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+    calibration_fit_rows:baselineCalibration.calibration_fit_rows,
+    calibration_purged_rows:baselineCalibration.calibration_purged_rows,
+    calibration_check_rows:baselineCalibration.calibration_check_rows,
+    holdout_used_for_calibration:false
+  });
   assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
   assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
     [BASE+14*NEURAL_CLOSURE_PURGE_MS]);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
-    assert.equal(report.models[family].status,'EVALUATED');
-    assert.equal(report.models[family].holdout.sample_count,1200);
-    assert.equal(report.models[family].acceptance.passed,false,
-      'a candidate with no >0.003 Brier gain must not be promoted');
+    const model=report.models[family];
+    assert.ok(['VALIDATION_EVALUATED_HOLDOUT_LOCKED','EVALUATED'].includes(model.status),
+      family+' must be validation-scored or holdout-evaluated, never silently skipped');
+    if(model.status==='EVALUATED'){
+      assert.equal(model.holdout.sample_count,1200);
+    }else{
+      assert.equal(model.holdout.evaluated,false);
+      assert.ok(model.acceptance.status==='HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+    }
+    assert.equal(model.acceptance.passed,false,
+      'a candidate that does not clear all validation and holdout gates must not be promoted');
   }
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });

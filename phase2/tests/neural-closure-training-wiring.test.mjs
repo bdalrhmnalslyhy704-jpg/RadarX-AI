@@ -161,3 +161,18 @@ test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   assert.match(trainer,/unavailable\.TCN_V11=/);
   assert.doesNotMatch(trainer,/unavailable\.TCN_V11=\{\s*reason:scored\.reason,\s*diagnostic_regimes:training\.model_internal_diagnostics\.TCN_V8/);
 });
+
+
+test('fixed-SHA summary exposes the outer validation gate and every validation threshold trial',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/validation:model\.validation\?\{/,
+    'the report must retain the complete validation evidence object');
+  assert.match(trainer,/threshold_selection:model\.validation\.threshold_selection\?\?null/);
+  assert.match(trainer,/selected_threshold:model\.validation\.selected_threshold\?\?null/);
+  assert.match(trainer,/threshold_selection_eligible_count:model\.validation\.threshold_selection_eligible_count\?\?0/);
+  assert.match(trainer,/threshold_selection_gates:model\.validation\.threshold_selection_gates\?\?null/);
+  assert.match(trainer,/threshold_trials:model\.validation\.threshold_trials\?\?\[\]/);
+  assert.match(trainer,/outer_validation_gate:model\.validation\.outer_validation_gate\?\?null/,
+    'the exact reason for a holdout lock must be visible in the artifact summary');
+  assert.match(trainer,/holdout_lock_reason:model\.holdout\?\.reason\?\?null/);
+});
