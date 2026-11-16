@@ -4315,8 +4315,10 @@ export function predictTemporalResearchOutput(sequence,profile={},{
   const specialist=fitted.specialists_by_regime?.[regime];
   if(!specialist||!Array.isArray(specialist.members))return null;
   const selectedIndex=Number(specialist.selected_member_index);
+  const selectedScale=finite(specialist.selected_residual_scale);
   if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
-    selectedIndex<specialist.members.length){
+    selectedIndex<specialist.members.length&&
+    selectedScale!==null&&selectedScale>0){
     const probability=predict(sequence,fitted);
     return Number.isFinite(probability)?{
       probability,mode:'INNER_SELECTED_TCN_MEMBER',regime,
