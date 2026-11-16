@@ -1291,6 +1291,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRows);
+  const sequenceNormalizer=fitTcnLstmSequenceNormalizer(effectiveTrainingRows);
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
@@ -1368,6 +1369,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         seed: seed + index * 101,
         maxTrainingSamples: effectiveTrainingRows.length,
         baselineFit: anchor,
+        inputNormalization:sequenceNormalizer,
         checkpointPolicy:'FIXED_EPOCH_FINAL_STATE'
       })
       :null;
@@ -1404,6 +1406,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       training_brier: Number(trainingBaselineBrier.toFixed(8)),
       selection_brier: Number(baselineBrier.toFixed(8))
     },
+    input_normalization:sequenceNormalizer,
     candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, refitEpochs, epochSelectionDiagnostics, fit }) => ({
       name, config,
       selection_brier: Number(selection_brier.toFixed(8)),
@@ -1423,6 +1426,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         epochs_completed:fit?.training.epochs_completed??0,
         refit_checkpoint_method:fit?.training.checkpoint_selection_method??null,
         fixed_epoch_final_state_retained:fit?.training.fixed_epoch_final_state_retained??false,
+        input_normalization:fit?.input_normalization??null,
         epoch_history:fit?.training.history.map(item=>({
           epoch:item.epoch,
           post_update_training_brier:item.post_update_training_brier,
