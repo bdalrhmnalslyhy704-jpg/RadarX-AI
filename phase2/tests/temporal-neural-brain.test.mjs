@@ -55,6 +55,7 @@ import {
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
   predictTemporalAttentionResearchOutput,
+  isUsableTemporalAttentionResearchInferenceState,
   predictTemporalVariantResearchOutput,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
@@ -1599,4 +1600,50 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   });
   assert.equal(invalidLabel.training_eligible,false,
     'the complete 240-minute path must be timestamp-audited even after an early touch');
+});
+
+
+test('V11 pooled fallback covers a missing regime only with a usable positive-residual attention state',()=>{
+  const selected={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_SELECTED_TCN_ATTENTION_MEMBER',
+    residual_scale:0.25
+  };
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(selected),true);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,residual_scale:0
+  }),false,'zero-residual anchor-only state cannot cover a missing regime');
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,residual_scale:-0.1
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,model:null
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,temporal_pooling:'UNKNOWN_POOLING'
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,architecture:'UNKNOWN_ARCHITECTURE'
+  }),false);
+});
+
+test('V11 diagnostic attention state is available only to explicit research diagnostics',()=>{
+  const diagnostic={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+    residual_scale:0.1
+  };
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(diagnostic),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(diagnostic,{
+    allowDiagnostic:true
+  }),true);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...diagnostic,inference_mode:'UNKNOWN_MODE'
+  },{allowDiagnostic:true}),false);
 });
