@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - research/build224-tcn-lstm-attention-challenger-20261113
+      - research/build224-tcn-lstm-order-signal-20261116
+      - research/build224-tcn-lstm-train-only-normalization-20261116
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
@@ -14,6 +16,7 @@ on:
   pull_request:
     branches:
       - research/build224-neural-validation-stream-fix-20261113
+      - research/build224-tcn-lstm-attention-challenger-20261113
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
@@ -31,7 +34,7 @@ concurrency:
 
 jobs:
   same-cohort-historical:
-    name: Train TCN-LSTM against the frozen 24h Binance Spot cohort
+    name: Train normalized TCN-LSTM against the frozen 24h Binance Spot cohort
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -71,7 +74,7 @@ jobs:
           node --check phase2/tools/daily-early-riser-neural-benchmark.mjs
           node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
           node --test --test-timeout=180000 phase2/tests/daily-early-riser-neural-benchmark.test.mjs
-      - name: Fit the isolated TCN-LSTM challenger on the audited same 24h safe +5% cohort
+      - name: Fit the train-normalized TCN-LSTM challenger on the audited same 24h safe +5% cohort
         env:
           RADARX_CENSUS_SOURCE_RUN_ID: '43473391179'
           RADARX_CENSUS_SOURCE_COMMIT: 'cde938585d9a44cdf751db1ceb23c3f211fa32a1'
@@ -116,6 +119,7 @@ jobs:
             trained:model.trained,
             partition_support:model.partition_support,
             inner_selection:model.inner_selection_diagnostics,
+            input_normalization:model.inner_selection_diagnostics?.input_normalization??null,
             calibration:model.calibration,
             validation:model.validation,
             untouched_holdout:model.holdout,
@@ -126,14 +130,14 @@ jobs:
           };
           console.log('RADARX_TCN_LSTM_HISTORICAL_RESULT='+JSON.stringify(summary));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            '## Isolated TCN-LSTM 24h historical evidence\n\n```json\n'+
+            '## Isolated TCN-LSTM training-only input normalization evidence\n\n```json\n'+
             JSON.stringify(summary,null,2)+'\n```\n');
           NODE
       - name: Upload same-cohort TCN-LSTM report and source provenance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-build224-isolated-tcn-lstm-24h-safe5-${{ github.run_number }}
+          name: radarx-build224-isolated-tcn-lstm-train-normalized-24h-safe5-${{ github.run_number }}
           path: |
             artifacts/daily-early-riser-census.json
             artifacts/daily-early-riser-tcn-lstm-only-24h-safe5.json

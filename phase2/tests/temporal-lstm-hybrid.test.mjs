@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   TCN_LSTM_HYBRID_SCHEMA,
+  TCN_LSTM_INPUT_NORMALIZATION_SCHEMA,
   TCN_LSTM_PARAMETER_COUNT,
   TCN_LSTM_STEPS,
   TCN_LSTM_INPUT_CHANNELS,
   TCN_LSTM_RECEPTIVE_FIELD,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
+  fitTcnLstmSequenceNormalizer,
+  normalizeTcnLstmSequence,
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
   auditTcnLstmHybridGradients,
@@ -19,6 +22,7 @@ import {
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit,
+  createTcnLstmTemporalOrderControlRows,
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES,
   TCN_LSTM_REGULARIZATION_CANDIDATES
@@ -541,4 +545,145 @@ test('recurrent training budget can use the full 36,102-row training partition w
   assert.equal(effectiveTcnLstmTrainingSampleBudget(65536,36102),36102);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(36102,20),20);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),36102);
+});
+
+
+test('temporal-order control preserves pooled anchor features and source audit metadata',()=>{
+  const originalRows=makeRows(0,24,'order-control');
+  const originalSnapshot=JSON.stringify(originalRows);
+  const first=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261116});
+  const repeated=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261116});
+  const alternate=createTcnLstmTemporalOrderControlRows(originalRows,{seed:20261117});
+
+  assert.equal(first.audit.kind,'INDEPENDENT_PER_SAMPLE_TIMESTEP_PERMUTATION_V1');
+  assert.equal(first.audit.row_count,originalRows.length);
+  assert.equal(first.audit.permuted_rows,originalRows.length);
+  assert.equal(first.audit.source_rows_mutated,false);
+  assert.equal(first.audit.production_or_live_use_allowed,false);
+  assert.match(first.audit.permutation_sha256,/^[a-f0-9]{64}$/);
+  assert.equal(first.audit.permutation_sha256,repeated.audit.permutation_sha256);
+  assert.notEqual(first.audit.permutation_sha256,alternate.audit.permutation_sha256);
+  assert.equal(JSON.stringify(originalRows),originalSnapshot,'control must not mutate source rows');
+
+  for(let index=0;index<originalRows.length;index++){
+    const original=originalRows[index];
+    const shuffled=first.rows[index];
+    assert.equal(shuffled.id,original.id);
+    assert.equal(shuffled.symbol,original.symbol);
+    assert.equal(shuffled.at,original.at);
+    assert.equal(shuffled.resolved_at,original.resolved_at);
+    assert.equal(shuffled.target,original.target);
+    assert.deepEqual(shuffled.temporal_sequence_timestamps,
+      original.temporal_sequence_timestamps,
+      'original timestamps remain provenance metadata only');
+    assert.deepEqual(shuffled.sequence,repeated.rows[index].sequence,
+      'the same seed must reproduce the same per-sample permutation');
+    assert.notDeepEqual(shuffled.sequence,original.sequence,
+      'the sample-specific control must destroy original timestep ordering');
+    assert.equal(shuffled.sequence.length,TCN_LSTM_STEPS);
+    assert.ok(shuffled.sequence.every(step=>step.length===TCN_LSTM_INPUT_CHANNELS));
+
+    const before=buildTcnLstmAnchorFeatures(original.sequence);
+    const after=buildTcnLstmAnchorFeatures(shuffled.sequence);
+    assert.equal(before.length,TCN_LSTM_INPUT_CHANNELS*2);
+    for(let feature=0;feature<before.length;feature++)
+      assert.ok(Math.abs(before[feature]-after[feature])<=1e-12,
+        'pooled Logistic anchor feature drift at '+index+':'+feature);
+  }
+});
+
+test('temporal-order control rejects duplicate identities and invalid seeds',()=>{
+  const rows=makeRows(0,2,'order-invalid');
+  assert.throws(()=>createTcnLstmTemporalOrderControlRows(rows.concat(rows[0])),
+    /TCN_LSTM_ORDER_CONTROL_DUPLICATE_IDENTITY/);
+  assert.throws(()=>createTcnLstmTemporalOrderControlRows(rows,{seed:-1}),
+    /TCN_LSTM_ORDER_CONTROL_SEED_INVALID/);
+});
+
+
+test('TCN-LSTM channel standardization is fitted only from the supplied training rows',()=>{
+  const rows=makeRows(0,32,'normalizer-train');
+  const snapshot=JSON.stringify(rows);
+  const normalizer=fitTcnLstmSequenceNormalizer(rows);
+  assert.equal(normalizer.schema,TCN_LSTM_INPUT_NORMALIZATION_SCHEMA);
+  assert.equal(normalizer.method,'TRAIN_ONLY_PER_CHANNEL_POPULATION_ZSCORE_V1');
+  assert.equal(normalizer.fit_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(normalizer.training_rows,rows.length);
+  assert.equal(normalizer.timestep_count,rows.length*TCN_LSTM_STEPS);
+  assert.match(normalizer.training_fingerprint,/^[a-f0-9]{64}$/);
+  assert.equal(normalizer.means.length,TCN_LSTM_INPUT_CHANNELS);
+  assert.equal(normalizer.standard_deviations.length,TCN_LSTM_INPUT_CHANNELS);
+  assert.equal(normalizer.raw_standard_deviations.length,TCN_LSTM_INPUT_CHANNELS);
+  assert.deepEqual(JSON.stringify(rows),snapshot,'normalizer must not mutate input rows');
+
+  for(let channel=0;channel<TCN_LSTM_INPUT_CHANNELS;channel++){
+    const values=rows.flatMap(row=>normalizeTcnLstmSequence(row.sequence,normalizer)
+      .map(step=>step[channel]));
+    assert.ok(values.every(value=>Number.isFinite(value)&&Math.abs(value)<=6));
+    const average=values.reduce((sum,value)=>sum+value,0)/values.length;
+    const variance=values.reduce((sum,value)=>sum+(value-average)**2,0)/values.length;
+    assert.ok(Math.abs(average)<1e-9,'normalized channel mean drift at '+channel);
+    if(normalizer.raw_standard_deviations[channel]>=1e-3)
+      assert.ok(Math.abs(Math.sqrt(variance)-1)<1e-8,
+        'normalized channel population standard deviation drift at '+channel);
+  }
+});
+
+test('normalized TCN-LSTM forward and backprop gradients pass full finite-difference audit',()=>{
+  const rows=makeRows(0,24,'normalizer-gradient');
+  const normalizer=fitTcnLstmSequenceNormalizer(rows);
+  const audit=auditTcnLstmHybridGradients(rows[0].sequence,rows[0].target,{
+    model:createTcnLstmHybridModelForAudit(133),
+    baselineLogit:0.19,
+    epsilon:1e-5,
+    inputNormalization:normalizer
+  });
+  assert.equal(audit.checked_parameters,TCN_LSTM_PARAMETER_COUNT);
+  assert.equal(audit.passed,true,
+    'normalized gradient max error='+audit.maximum_absolute_error+
+    ', worst='+JSON.stringify(audit.worst_parameter));
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('internal early-stopping observations cannot affect the TCN-LSTM input normalizer',()=>{
+  const trainingRows=makeRows(0,40,'normalizer-outer-train');
+  const monitorRows=makeRows(42,20,'normalizer-inner-monitor').map(row=>({
+    ...row,
+    sequence:row.sequence.map(step=>step.map(value=>Math.min(3.9,value+1.4)))
+  }));
+  const expected=fitTcnLstmSequenceNormalizer(trainingRows);
+  const withMonitor=fitTcnLstmSequenceNormalizer(trainingRows.concat(monitorRows));
+  assert.notDeepEqual(expected.means,withMonitor.means,
+    'shifted monitor values must measurably alter a scaler if leaked');
+  const profile=trainTcnLstmHybrid(trainingRows,{
+    epochs:1,learningRate:0.0015,l2:0.001,dropout:0,
+    batchSize:16,seed:103,maxTrainingSamples:40,
+    earlyStoppingRows:monitorRows
+  });
+  assert.deepEqual(profile.input_normalization,expected,
+    'only outer training rows may define channel means and scales');
+  assert.equal(profile.input_normalization.fit_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.input_normalization.training_fingerprint,profile.training.training_fingerprint);
+  assert.equal(profile.training.input_normalization_fit_partition,'TRAINING_PARTITION_ONLY');
+  const anchorFeatures=buildTcnLstmAnchorFeatures(trainingRows[0].sequence);
+  const baselineLogit=profile.baseline_fit.bias+
+    anchorFeatures.reduce((sum,value,index)=>
+      sum+value*profile.baseline_fit.weights[index],0);
+  const direct=inspectTcnLstmForward(trainingRows[0].sequence,profile.model,baselineLogit,{
+    inputNormalization:profile.input_normalization
+  }).probability;
+  assert.ok(Math.abs(direct-predictTcnLstmHybridProbability(
+    trainingRows[0].sequence,profile
+  ))<1e-15);
+});
+
+test('a TCN-LSTM normalizer from another training partition is rejected',()=>{
+  const rows=makeRows(0,24,'normalizer-mismatch');
+  const normalizer=fitTcnLstmSequenceNormalizer(rows);
+  const wrong={...normalizer,training_fingerprint:'0'.repeat(64)};
+  assert.throws(()=>trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,dropout:0,
+    batchSize:8,seed:107,maxTrainingSamples:24,
+    inputNormalization:wrong
+  }),/TCN_LSTM_INPUT_NORMALIZATION_INVALID_OR_WRONG_TRAINING_FINGERPRINT/);
 });
