@@ -835,6 +835,21 @@ test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without ch
   assert.equal(diagnostics.holdout_values_used,false);
   assert.equal(diagnostics.affects_primary_probabilities,false);
   assert.equal(diagnostics.affects_threshold_selection,false);
+  const counterfactual=diagnostics.single_stage_shared_calibration_counterfactual;
+  assert.equal(counterfactual.schema,
+    'RADARX_TCN_LSTM_SINGLE_STAGE_SHARED_PLATT_COUNTERFACTUAL_V1');
+  assert.equal(counterfactual.diagnostic_only,true);
+  assert.equal(counterfactual.affects_primary_probabilities,false);
+  assert.equal(counterfactual.affects_threshold_selection,false);
+  assert.equal(counterfactual.holdout_values_used,false);
+  assert.equal(counterfactual.fit_partition,'CALIBRATION_FIT_ONLY');
+  assert.equal(counterfactual.fit_rows,model.calibration.calibration_fit_rows);
+  assert.equal(counterfactual.shared_calibrator.samples,counterfactual.fit_rows);
+  assert.equal(counterfactual.threshold_selection.labels_used_for_calibrator_fit,false);
+  assert.equal(counterfactual.outer_validation.labels_used_for_calibrator_fit,false);
+  assert.equal(counterfactual.outer_validation.evaluation_labels_used,true);
+  assert.equal(counterfactual.outer_validation.single_stage_shared_calibration.sample_count,
+    diagnostics.outer_validation.sample_count);
   for(const blockName of ['threshold_selection','outer_validation']){
     const block=diagnostics[blockName];
     assert.ok(block.sample_count>0);
@@ -878,6 +893,12 @@ test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without ch
     alteredModel.validation.probability_stage_diagnostics.threshold_selection
       .network_output_before_inner_platt,
     diagnostics.threshold_selection.network_output_before_inner_platt
+  );
+  assert.notDeepEqual(
+    alteredModel.validation.probability_stage_diagnostics
+      .single_stage_shared_calibration_counterfactual.outer_validation
+      .single_stage_shared_calibration,
+    counterfactual.outer_validation.single_stage_shared_calibration
   );
 });
 

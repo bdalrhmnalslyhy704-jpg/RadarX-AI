@@ -766,7 +766,8 @@ function collectTcnLstmPreInnerCalibrationMap(predictions,validationRows,holdout
 }
 
 function buildTcnLstmProbabilityStageDiagnostics({
-  preInner,thresholdSelectionRows,validationRows,
+  preInner,calibrationFitRows,thresholdSelectionRows,validationRows,
+  minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   innerCalibratedThresholdSelection,innerCalibratedValidation,
   sharedCalibratedThresholdSelection,sharedCalibratedValidation,
   sharedCalibrationMethod
@@ -788,6 +789,84 @@ function buildTcnLstmProbabilityStageDiagnostics({
   );
   const preThreshold=distribution(thresholdSelectionRows,preInner.map);
   const preValidation=distribution(validationRows,preInner.map);
+
+  // Counterfactual only: fit one evaluator Platt calibrator directly on the
+  // network's pre-inner scores, using the same isolated calibration-fit rows.
+  // This tests whether applying an evaluator Platt transform to an already
+  // internally-Platt-calibrated score compounds calibration error. Its outputs
+  // never replace primary predictions or participate in threshold selection.
+  const fitLabels=calibrationFitRows.map(row=>row.target);
+  const fitLogits=probabilitiesFor(calibrationFitRows,preInner.map).map(logit);
+  const directPlatt=fitPlattScaler(fitLogits,fitLabels,{
+    minimumPositives:minimumClassSupport,
+    minimumNegatives:minimumClassSupport
+  });
+  const directCalibrator=directPlatt.fitted===true&&directPlatt.accepted===true
+    ?directPlatt:null;
+  const directMethod=directCalibrator
+    ?'SINGLE_STAGE_SHARED_PLATT_ON_PRE_INNER_SCORES'
+    :'RAW_PRE_INNER_FALLBACK_PLATT_NOT_ACCEPTED';
+  const scoredBlock=(rows,probabilities)=>({
+    sample_count:rows.length,
+    positive_count:classCounts(rows.map(row=>row.target)).positive,
+    negative_count:classCounts(rows.map(row=>row.target)).negative,
+    brier_score:brier(probabilities,rows.map(row=>row.target)),
+    probability_distribution:summarizeProbabilityDistribution(probabilities)
+  });
+  const directThresholdProbabilities=probabilitiesFor(
+    thresholdSelectionRows,preInner.map,directCalibrator
+  );
+  const directValidationProbabilities=probabilitiesFor(
+    validationRows,preInner.map,directCalibrator
+  );
+  const rawThresholdProbabilities=probabilitiesFor(thresholdSelectionRows,preInner.map);
+  const rawValidationProbabilities=probabilitiesFor(validationRows,preInner.map);
+  const directCalibrationCounterfactual={
+    schema:'RADARX_TCN_LSTM_SINGLE_STAGE_SHARED_PLATT_COUNTERFACTUAL_V1',
+    diagnostic_only:true,
+    affects_primary_probabilities:false,
+    affects_threshold_selection:false,
+    holdout_values_used:false,
+    fit_partition:'CALIBRATION_FIT_ONLY',
+    fit_rows:calibrationFitRows.length,
+    fit_positive:classCounts(fitLabels).positive,
+    fit_negative:classCounts(fitLabels).negative,
+    fit_labels_used:true,
+    threshold_selection_labels_used_for_fit:false,
+    outer_validation_labels_used_for_fit:false,
+    shared_calibrator:{
+      method:'PLATT_SCALING',
+      fitted:directPlatt.fitted,
+      accepted:directPlatt.accepted,
+      status:directPlatt.status,
+      selected_path:directMethod,
+      samples:directPlatt.samples,
+      positive:directPlatt.positive,
+      negative:directPlatt.negative,
+      min_positive:directPlatt.min_positive,
+      min_negative:directPlatt.min_negative,
+      slope:directPlatt.slope,
+      intercept:directPlatt.intercept,
+      fit_nll_before:directPlatt.fit_nll_before,
+      fit_nll_after:directPlatt.fit_nll_after
+    },
+    threshold_selection:{
+      raw_network_output:scoredBlock(thresholdSelectionRows,rawThresholdProbabilities),
+      single_stage_shared_calibration:scoredBlock(
+        thresholdSelectionRows,directThresholdProbabilities
+      ),
+      evaluation_labels_used:true,
+      labels_used_for_calibrator_fit:false
+    },
+    outer_validation:{
+      raw_network_output:scoredBlock(validationRows,rawValidationProbabilities),
+      single_stage_shared_calibration:scoredBlock(
+        validationRows,directValidationProbabilities
+      ),
+      evaluation_labels_used:true,
+      labels_used_for_calibrator_fit:false
+    }
+  };
   return {
     ...base,status:'AVAILABLE',
     threshold_selection:{
@@ -803,7 +882,8 @@ function buildTcnLstmProbabilityStageDiagnostics({
       network_output_before_inner_platt:preValidation,
       inner_platt_output_before_shared_evaluator:innerCalibratedValidation,
       shared_evaluator_output_after_selected_calibration:sharedCalibratedValidation
-    }
+    },
+    single_stage_shared_calibration_counterfactual:directCalibrationCounterfactual
   };
 }
 
@@ -1250,7 +1330,9 @@ export function runNeuralClosureBenchmark({
     const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
       ?buildTcnLstmProbabilityStageDiagnostics({
         preInner:tcnLstmPreInnerCalibration,
+        calibrationFitRows:calibrationBlocks.fit,
         thresholdSelectionRows,validationRows,
+        minimumClassSupport,
         innerCalibratedThresholdSelection:
           summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
         innerCalibratedValidation:
