@@ -151,6 +151,10 @@ test('V9-V11 artifacts include a strictly qualified all-regime fallback for miss
 
 test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/auditTemporalResearchInferenceCoverage\(/);
+  assert.match(trainer,/v8Coverage\.complete/);
+  assert.match(trainer,/TCN_V8_MISSING_REGIME_INFERENCE_STATE/);
+  assert.match(trainer,/inference_coverage_complete:v8Coverage\.complete/);
   assert.match(trainer,/modelName:'TCN_V8'/);
   assert.match(trainer,/unavailable\.TCN_V8=/);
   assert.match(trainer,/modelName:'TCN_V11'/);
