@@ -6,6 +6,9 @@ on:
       - research/build224-neural-closure-calibration-parity-20261116
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
 
 permissions:
   contents: read
