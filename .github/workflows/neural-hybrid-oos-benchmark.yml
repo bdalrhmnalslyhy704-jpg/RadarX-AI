@@ -189,6 +189,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: radarx-build224-unified-neural-hybrid-oos-brier-${{ github.run_number }}
-          path: artifacts/
+          path: |
+            artifacts/daily-early-riser-census.json
+            artifacts/daily-early-riser-unified-24h-5pct-neural.json
+            artifacts/neural-hybrid-oos-matrix.json
           if-no-files-found: warn
           retention-days: 30
