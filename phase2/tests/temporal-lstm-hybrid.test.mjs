@@ -188,6 +188,23 @@ test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and p
   assert.equal(profile.live_eligibility_ready,false);
 });
 
+test('fixed-epoch full-window refit retains the final selected epoch instead of reverting to Logistic no-op',()=>{
+  const rows=makeRows(0,32,'fixed-refit');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,dropout:0,
+    batchSize:16,seed:101,maxTrainingSamples:32,
+    checkpointPolicy:'FIXED_EPOCH_FINAL_STATE'
+  });
+  assert.equal(profile.training.best_epoch,1);
+  assert.equal(profile.training.epochs_completed,1);
+  assert.equal(profile.training.checkpoint_selection_method,
+    'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION');
+  assert.equal(profile.training.fixed_epoch_final_state_retained,true);
+  assert.equal(profile.training.restored_best_training_checkpoint,false);
+  assert.notEqual(profile.model.residualGate[0],0,
+    'fixed-epoch refit must retain the residual-gate update from its final epoch');
+});
+
 test('hyper-parameter selection uses only a purged chronological inner-selection block',()=>{
   const training=makeRows(0,40,'train');
   const selection=makeRows(41,20,'selection');
@@ -254,6 +271,11 @@ test('hyper-parameter selection uses a purged internal training block for epoch 
       assert.equal(diagnostics.training_rows,250);
       assert.equal(diagnostics.refit_rows,250);
       assert.equal(diagnostics.fit_status,'TRAINED_RESEARCH_CHALLENGER');
+      assert.equal(diagnostics.best_epoch,epoch.best_epoch,
+        'the full-window refit must preserve the epoch count selected by the purged internal monitor');
+      assert.equal(diagnostics.refit_checkpoint_method,
+        'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION');
+      assert.equal(diagnostics.fixed_epoch_final_state_retained,true);
     }
   }
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
