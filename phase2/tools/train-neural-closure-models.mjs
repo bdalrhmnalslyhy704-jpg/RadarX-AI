@@ -449,8 +449,7 @@ async function main(){
     return attentionProfile?.supported_regimes?.includes(regime)&&
       attentionProfile?.selected_regimes?.includes(regime)&&
       specialist.validation_passed===true&&specialist.holdout_passed===true&&
-      state?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'&&
-      Number(state.residual_scale)>0;
+      isUsableTemporalAttentionResearchInferenceState(state);
   });
   const attentionInnerQualified=bothAttentionRegimesQualified||attentionPooledQualified;
   qualificationByModel.TCN_V11={
@@ -524,9 +523,9 @@ async function main(){
         profile?.validation_selected_regimes?.includes(regime)&&
         profile?.selected_regimes?.includes(regime)&&
         expert.validation_passed===true&&expert.holdout_passed===true&&
-        state?.inference_mode==='INNER_SELECTED_TCN_VARIANT_MEMBER'&&
-        state?.temporal_pooling===expectedPooling&&
-        Number(state?.residual_scale)>0;
+        isUsableTemporalVariantResearchInferenceState(state,{
+          expectedPoolingMode:expectedPooling
+        });
     });
     const qualificationPassed=bothRegimesSelected||pooledFallbackQualified;
     qualificationByModel[family]={
