@@ -4339,6 +4339,49 @@ export function predictTemporalResearchOutput(sequence,profile={},{
 }
 
 /**
+ * Validate whether one V8 regime specialist can emit a selected or explicitly
+ * research-diagnostic neural probability. Anchor-only/zero-residual members
+ * are not inference coverage.
+ */
+export function isUsableTemporalResearchInferenceSpecialist(specialist,{
+  allowDiagnostic=false
+}={}){
+  if(!specialist||!Array.isArray(specialist.members))return false;
+  const selectedIndex=Number(specialist.selected_member_index);
+  const selectedScale=finite(specialist.selected_residual_scale);
+  if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
+    selectedIndex<specialist.members.length&&
+    selectedScale!==null&&selectedScale>0)return true;
+  if(!allowDiagnostic)return false;
+  const diagnosticIndex=Number(specialist.diagnostic_member_index);
+  const diagnosticScale=finite(specialist.diagnostic_residual_scale);
+  return Number.isInteger(diagnosticIndex)&&diagnosticIndex>=0&&
+    diagnosticIndex<specialist.members.length&&
+    diagnosticScale!==null&&diagnosticScale>0;
+}
+
+/**
+ * Audit V8 regime coverage before creating an external prediction artifact.
+ */
+export function auditTemporalResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},allowDiagnostic=false
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalResearchInferenceSpecialist(
+        regimeSpecialists[regime],{allowDiagnostic}));
+  const missing=required.filter(regime=>!available.includes(regime));
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    missing_regimes:missing
+  };
+}
+
+/**
  * A pooled V11 state may stand in for a missing regime only when it is a
  * complete, positive-residual neural inference state. Mere object presence
  * is not evidence of usable coverage.
