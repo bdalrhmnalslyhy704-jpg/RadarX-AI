@@ -87,8 +87,8 @@ jobs:
             --tcn-only true --skip-temporal true \
             --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
             --tcn-lstm-max-training-samples 36102 \
-            --tcn-lstm-bootstrap-iterations 400
-            --tcn-lstm-order-control PER_SAMPLE_SHUFFLE \\
+            --tcn-lstm-bootstrap-iterations 400 \
+            --tcn-lstm-order-control PER_SAMPLE_SHUFFLE \
             --tcn-lstm-order-control-seed 20261116
       - name: Publish TCN-LSTM versus same-window Logistic evidence
         if: always()
