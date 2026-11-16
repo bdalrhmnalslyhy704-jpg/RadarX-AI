@@ -513,14 +513,28 @@ async function main(){
     exported_inference_regimes:attentionInferenceRegimes,
     required_external_holdout_regimes:requiredHoldoutRegimes,
     missing_external_holdout_regimes:missingAttentionRegimes,
-    pooled_fallback:{status:attentionPooledFallback.status??'NOT_TRAINED',
+    pooled_fallback:{
+      status:attentionPooledFallback.status??'NOT_TRAINED',
       trained:attentionPooledFallback.trained===true,
+      training_samples:attentionPooledFallback.training_samples??0,
+      selection_samples:attentionPooledFallback.selection_samples??0,
+      calibration_samples:attentionPooledFallback.calibration_samples??0,
+      validation_samples:attentionPooledFallback.validation_samples??0,
+      holdout_samples:attentionPooledFallback.holdout_samples??0,
+      training_targets:attentionPooledFallback.training_targets??null,
+      selection_targets:attentionPooledFallback.selection_targets??null,
       selection_passed:attentionPooledFallback.selection_passed===true,
       validation_passed:attentionPooledFallback.validation_passed===true,
       holdout_passed:attentionPooledFallback.holdout_passed===true,
-      training_samples:attentionPooledFallback.training_samples??0,
-      selection_samples:attentionPooledFallback.selection_samples??0,
-      calibration_samples:attentionPooledFallback.calibration_samples??0},
+      baseline_selection_brier:attentionPooledFallback.member_selection_logistic_brier??null,
+      best_selection_candidate:attentionPooledFallback.selection_best_candidate??null,
+      candidate_residual_scores:attentionPooledFallback.member_selection_scores??[],
+      validation:attentionPooledFallback.validation??null,
+      validation_logistic:attentionPooledFallback.validation_logistic??null,
+      holdout:attentionPooledFallback.holdout??null,
+      holdout_logistic:attentionPooledFallback.holdout_logistic??null,
+      research_inference_mode:attentionPooledState?.inference_mode??null
+    },
     pooled_fallback_qualified:attentionPooledQualified,
     both_regime_specialists_qualified:bothAttentionRegimesQualified,
     regime_specialists:Object.fromEntries(Object.entries(attentionSpecialists).map(([regime,specialist])=>[
@@ -682,11 +696,16 @@ async function main(){
           research_inference_mode:specialist.research_inference?.inference_mode??null
         }
       ])),
-      pooled_fallback_diagnostics:pooledFallback.research_inference?{
+      pooled_fallback_diagnostics:{
         status:pooledFallback.status??null,
+        trained:pooledFallback.trained===true,
         training_samples:pooledFallback.training_samples??0,
         selection_samples:pooledFallback.selection_samples??0,
         calibration_samples:pooledFallback.calibration_samples??0,
+        validation_samples:pooledFallback.validation_samples??0,
+        holdout_samples:pooledFallback.holdout_samples??0,
+        training_targets:pooledFallback.training_targets??null,
+        selection_targets:pooledFallback.selection_targets??null,
         selection_passed:pooledFallback.selection_passed===true,
         validation_passed:pooledFallback.validation_passed===true,
         holdout_passed:pooledFallback.holdout_passed===true,
@@ -696,8 +715,9 @@ async function main(){
         validation:pooledFallback.validation??null,
         validation_logistic:pooledFallback.validation_logistic??null,
         holdout:pooledFallback.holdout??null,
-        holdout_logistic:pooledFallback.holdout_logistic??null
-      }:null,
+        holdout_logistic:pooledFallback.holdout_logistic??null,
+        research_inference_mode:pooledState?.inference_mode??null
+      },
       validation:profile?.validation??null,
       validation_logistic:profile?.validation_logistic??null,
       holdout:profile?.holdout??null,

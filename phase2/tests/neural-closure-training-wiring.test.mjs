@@ -185,4 +185,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'TCN V11 must expose the same per-regime selection diagnostics');
   assert.match(trainer,/inner_diagnostics:training\.model_internal_diagnostics\?\?\{\}/,
     'workflow logs must expose the detailed internal diagnostics needed to audit failed candidate selection');
+  assert.match(trainer,/pooled_fallback_diagnostics:\{/,
+    'pooled TCN fallback scores must remain visible even when no inference state was selected');
+  assert.match(trainer,/candidate_residual_scores:pooledFallback\.member_selection_scores\?\?\[\]/);
+  assert.match(trainer,/candidate_residual_scores:attentionPooledFallback\.member_selection_scores\?\?\[\]/);
 });
