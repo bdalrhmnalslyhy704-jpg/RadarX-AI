@@ -4359,6 +4359,34 @@ export function isUsableTemporalAttentionResearchInferenceState(state,{
 }
 
 /**
+ * Report whether every externally evaluated BTC regime has an inference-ready
+ * V11 attention member or a single usable pooled fallback. Object presence
+ * alone never counts as coverage.
+ */
+export function auditTemporalAttentionResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},pooledFallbackState=null,
+  allowDiagnostic=false
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalAttentionResearchInferenceState(
+        regimeSpecialists[regime]?.research_inference,{allowDiagnostic}));
+  const pooledFallbackUsable=isUsableTemporalAttentionResearchInferenceState(
+    pooledFallbackState,{allowDiagnostic});
+  const missing=required.filter(regime=>
+    !available.includes(regime)&&!pooledFallbackUsable);
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    pooled_fallback_usable:pooledFallbackUsable,
+    missing_regimes:missing
+  };
+}
+
+/**
  * Research inference for the separately fitted V11 learned-query attention
  * challenger. It reads only a usable per-regime or pooled attention member
  * and never substitutes a zero-residual/logistic-only diagnostic.
