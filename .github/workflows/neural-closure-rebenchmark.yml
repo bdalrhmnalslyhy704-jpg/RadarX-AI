@@ -92,7 +92,7 @@ jobs:
           node --expose-gc phase2/tools/train-neural-closure-models.mjs \
             --input artifacts/source-run-99/dataset.json \
             --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v3.json \
-            --epochs 8 \
+            --epochs 24 \
             --denseEpochs 36 \
             --minimumHoldoutTrades 100 \
             --minimumWinRatePct 55 \

@@ -190,3 +190,35 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/candidate_residual_scores:pooledFallback\.member_selection_scores\?\?\[\]/);
   assert.match(trainer,/candidate_residual_scores:attentionPooledFallback\.member_selection_scores\?\?\[\]/);
 });
+
+
+test('fixed-SHA temporal challengers use extended train-only epoch budgets without relaxing validation gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-rebenchmark.yml',import.meta.url),'utf8');
+  const temporal=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+
+  // Three TCN seeds now request 18/24/36 epochs (75% / 100% / 150%
+  // profiles from the 24-epoch base) inside the immutable outer training
+  // block. Train-only checkpointing is unchanged; selection remains separate.
+  assert.match(trainer,/regimeLocalTcnPyramidEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnMultiscaleEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnAttentionEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(workflow,/--epochs 24/);
+  assert.match(workflow,/timeout-minutes: 90/);
+  assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
+  assert.match(temporal,/validation_or_holdout_used:false/);
+  assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
+
+  // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
+  // exceeds its existing 30-epoch cap or changes the inner-selection margin.
+  assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
+  assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
+  assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
+  assert.match(recurrent,/config\.epochs>30/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
+  assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
+  assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
+});

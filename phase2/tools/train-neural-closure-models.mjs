@@ -318,13 +318,13 @@ async function main(){
       // calibration/validation/holdout boundaries but keep separate weights.
       enableRegimeLocalTcnPyramid:true,
       regimeLocalTcnPyramidMaxTrainingSamples:2048,
-      regimeLocalTcnPyramidEpochs:Math.max(4,Math.min(6,args.epochs)),
+      regimeLocalTcnPyramidEpochs:Math.max(12,Math.min(24,args.epochs)),
       enableRegimeLocalTcnMultiscale:true,
       regimeLocalTcnMultiscaleMaxTrainingSamples:2048,
-      regimeLocalTcnMultiscaleEpochs:Math.max(4,Math.min(6,args.epochs)),
+      regimeLocalTcnMultiscaleEpochs:Math.max(12,Math.min(24,args.epochs)),
       enableRegimeLocalTcnAttention:true,
       regimeLocalTcnAttentionMaxTrainingSamples:2048,
-      regimeLocalTcnAttentionEpochs:Math.max(4,Math.min(6,args.epochs))
+      regimeLocalTcnAttentionEpochs:Math.max(12,Math.min(24,args.epochs))
     }
   });
   const cognitiveArtifacts=cognitiveProfile.research_artifacts||{};
@@ -1035,9 +1035,9 @@ async function main(){
           maxTrainingSamples:2048,
           seed:22429,
           candidates:[
-            {name:'4H_LR_0015_L2_0005_DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:4},
-            {name:'4H_LR_0025_L2_0015_DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:4},
-            {name:'4H_LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:4}
+            {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
+            {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
+            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
