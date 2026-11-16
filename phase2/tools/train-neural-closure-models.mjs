@@ -1035,7 +1035,7 @@ async function main(){
       }else{
         const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
           requiredImprovement:0.00025,
-          maxTrainingSamples:2048,
+          maxTrainingSamples:4096,
           seed:22429,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
@@ -1066,7 +1066,7 @@ async function main(){
           chronology_valid:internalChronologyValid,
           internal_split_schema:internalSplit.schema??null,
           internal_split_boundaries:internalSplit.split_boundaries??null,
-          max_training_samples:2048,
+          max_training_samples:4096,
           effective_training_rows:selection.effective_training_rows??null,
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
           diagnostic_configuration:selection.diagnostic_configuration??null,
@@ -1300,6 +1300,8 @@ async function main(){
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
+    probability_stage_diagnostics:
+      model.validation?.probability_stage_diagnostics??null,
     validation:model.validation?{
       sample_count:model.validation.sample_count??null,
       positive_count:model.validation.positive_count??null,

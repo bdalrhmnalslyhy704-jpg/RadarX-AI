@@ -7,6 +7,7 @@ on:
       - research/build224-neural-closure-calibration-parity-20261116
       - research/build224-neural-closure-independent-threshold-gate-20261116
       - research/build224-neural-closure-low-probability-threshold-grid-20261117
+      - research/build224-tcn-lstm-4096-training-sample-ablation-20261117
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -40,6 +41,7 @@ on:
       - research/build224-neural-closure-independent-threshold-gate-20261116
       - research/build224-tcn-lstm-pre-inner-calibration-diagnostics-20261116
       - research/build224-neural-closure-low-probability-threshold-grid-20261117
+      - research/build224-tcn-lstm-single-stage-calibration-diagnostic-20261117
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
