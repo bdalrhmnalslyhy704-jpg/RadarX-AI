@@ -20,7 +20,8 @@ import {
 } from '../core/cognitive-brain.mjs';
 import {
   buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
-  predictTemporalAttentionResearchOutput,predictTemporalVariantResearchOutput,
+  predictTemporalAttentionResearchOutput,isUsableTemporalAttentionResearchInferenceState,
+  predictTemporalVariantResearchOutput,
   TEMPORAL_SEQUENCE_CHANNELS,TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
@@ -424,20 +425,21 @@ async function main(){
   const attentionProfile=temporalProfile?.regime_local_tcn_attention_challenger;
   const attentionSpecialists=attentionProfile?.regime_specialists??{};
   const attentionInferenceRegimes=Object.keys(attentionSpecialists).filter(regime=>
-    attentionSpecialists[regime]?.research_inference?.schema===
-      'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1');
+    isUsableTemporalAttentionResearchInferenceState(
+      attentionSpecialists[regime]?.research_inference,{allowDiagnostic:true}));
   const attentionPooledFallback=attentionProfile?.pooled_fallback??{};
   const attentionPooledState=attentionPooledFallback.research_inference??null;
+  const attentionPooledStateUsable=
+    isUsableTemporalAttentionResearchInferenceState(attentionPooledState,{allowDiagnostic:true});
   const attentionPooledQualified=attentionPooledFallback.selection_passed===true&&
     attentionPooledFallback.validation_passed===true&&
     attentionPooledFallback.holdout_passed===true&&
-    attentionPooledState?.schema==='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'&&
-    attentionPooledState?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'&&
-    Number(attentionPooledState?.residual_scale)>0;
+    attentionPooledStateUsable&&
+    attentionPooledState?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER';
   const requiredHoldoutRegimes=[...new Set(eventRows.map(row=>
     Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
   const missingAttentionRegimes=requiredHoldoutRegimes.filter(regime=>
-    !attentionInferenceRegimes.includes(regime)&&!attentionPooledState);
+    !attentionInferenceRegimes.includes(regime)&&!attentionPooledStateUsable);
   const expectedBtcRegimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const bothAttentionRegimesQualified=expectedBtcRegimes.every(regime=>{
     const specialist=attentionSpecialists[regime]??{};
@@ -716,19 +718,19 @@ async function main(){
     reason:temporalProfile?.status??'TEMPORAL_RESEARCH_FIT_NOT_AVAILABLE'
   };
 
-  if((attentionInferenceRegimes.length>0||attentionPooledState)&&missingAttentionRegimes.length===0){
+  if((attentionInferenceRegimes.length>0||attentionPooledStateUsable)&&missingAttentionRegimes.length===0){
     const v11State={
       schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1',
       architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
       temporal_pooling:attentionProfile.temporal_pooling,
       input_shape:[24,TEMPORAL_SEQUENCE_CHANNELS],
-      inference_scope:attentionPooledState
+      inference_scope:attentionPooledStateUsable
         ?'REGIME_LOCAL_WITH_POOLED_ALL_REGIMES_FALLBACK'
         :'INDEPENDENT_BTC_REGIME_SELECTED_OR_INNER_DIAGNOSTIC_ATTENTION_MEMBER',
       regime_specialists:Object.fromEntries(attentionInferenceRegimes.map(regime=>[
         regime,{research_inference:attentionSpecialists[regime].research_inference}
       ])),
-      pooled_fallback:attentionPooledState?{research_inference:attentionPooledState}:null,
+      pooled_fallback:attentionPooledStateUsable?{research_inference:attentionPooledState}:null,
       supported_regimes:attentionProfile.supported_regimes??[],
       validation_selected_regimes:attentionProfile.validation_selected_regimes??[],
       selected_regimes:attentionProfile.selected_regimes??[],
