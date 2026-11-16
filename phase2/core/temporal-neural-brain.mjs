@@ -2435,7 +2435,9 @@ function fitRegimeLocalTemporalTcn({
   const baseRate=(targets.reduce((sum,value)=>sum+value,0)+2)/(targets.length+4);
   const baseline=fitLogistic(training);
   const fitted=fitEnsemble(training,{
-    epochs:Math.max(1,Math.min(8,Math.trunc(Number(epochs)||6))),
+    // Keep the inner cap aligned with the 24-epoch workflow budget. The
+    // ensemble's third member uses 1.5x (36 epochs); fitMember owns stopping.
+    epochs:Math.max(1,Math.min(24,Math.trunc(Number(epochs)||6))),
     learningRate,l2,baseRate,baselineFit:baseline,temporalPoolingMode,
     attentionPositionBiasL2Multiplier,enableAsymmetricDirectionalRankingLoss,
     directionalRankingLossConfig

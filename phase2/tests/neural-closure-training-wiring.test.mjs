@@ -213,6 +213,10 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
   assert.match(temporal,/validation_or_holdout_used:false/);
   assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
+  assert.match(temporal,/epochs:Math\.max\(1,Math\.min\(24,Math\.trunc\(Number\(epochs\)\|\|6\)\)\)/,
+    'the regime-local trainer must not clip the new 24-epoch base schedule back to eight');
+  assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
+    'the third ensemble member must retain the 1.5x epoch profile');
 
   // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
   // exceeds its existing 30-epoch cap or changes the inner-selection margin.
