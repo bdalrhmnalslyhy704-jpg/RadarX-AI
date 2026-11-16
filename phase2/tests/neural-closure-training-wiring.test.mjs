@@ -177,4 +177,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/outer_validation_gate:model\.validation\.outer_validation_gate\?\?null/,
     'the exact reason for a holdout lock must be visible in the artifact summary');
   assert.match(trainer,/holdout_lock_reason:model\.holdout\?\.reason\?\?null/);
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(specialists\)/,
+    'each V9/V10 BTC regime must expose its selection and Logistic comparison scores');
+  assert.match(trainer,/candidate_residual_scores:specialist\.member_selection_scores\?\?\[\]/,
+    'the residual-scale search must be auditable per BTC regime');
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(attentionSpecialists\)/,
+    'TCN V11 must expose the same per-regime selection diagnostics');
+  assert.match(trainer,/inner_diagnostics:training\.model_internal_diagnostics\?\?\{\}/,
+    'workflow logs must expose the detailed internal diagnostics needed to audit failed candidate selection');
 });

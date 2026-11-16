@@ -522,7 +522,46 @@ async function main(){
       selection_samples:attentionPooledFallback.selection_samples??0,
       calibration_samples:attentionPooledFallback.calibration_samples??0},
     pooled_fallback_qualified:attentionPooledQualified,
-    both_regime_specialists_qualified:bothAttentionRegimesQualified
+    both_regime_specialists_qualified:bothAttentionRegimesQualified,
+    regime_specialists:Object.fromEntries(Object.entries(attentionSpecialists).map(([regime,specialist])=>[
+      regime,{
+        status:specialist.status??null,
+        training_samples:specialist.training_samples??0,
+        available_training_samples:specialist.available_training_samples??0,
+        selection_samples:specialist.selection_samples??0,
+        calibration_samples:specialist.calibration_samples??0,
+        validation_samples:specialist.validation_samples??0,
+        holdout_samples:specialist.holdout_samples??0,
+        training_targets:specialist.training_targets??null,
+        selection_targets:specialist.selection_targets??null,
+        support_gaps:specialist.support_gaps??[],
+        chronology_valid:specialist.chronology_valid===true,
+        member_training_profiles:specialist.member_training_profiles??[],
+        member_training_diagnostics:specialist.member_training_diagnostics??[],
+        baseline_selection_brier:specialist.member_selection_logistic_brier??null,
+        best_selection_candidate:specialist.selection_best_candidate??null,
+        candidate_residual_scores:specialist.member_selection_scores??[],
+        selected_member_index:specialist.selected_member_index??null,
+        selected_residual_scale:specialist.selected_residual_scale??null,
+        diagnostic_member_index:specialist.diagnostic_member_index??null,
+        diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
+        selection_passed:specialist.selection_passed===true,
+        calibration:{
+          fitted:specialist.probability_calibration?.fitted===true,
+          method:specialist.probability_calibration?.method??null,
+          fit_on:specialist.probability_calibration?.fit_on??null,
+          samples:specialist.probability_calibration?.sample_count??0,
+          positives:specialist.probability_calibration?.positive_count??0,
+          negatives:specialist.probability_calibration?.negative_count??0,
+          reason:specialist.probability_calibration?.reason??null
+        },
+        validation:specialist.validation??null,
+        validation_logistic:specialist.validation_logistic??null,
+        holdout:specialist.holdout??null,
+        holdout_logistic:specialist.holdout_logistic??null,
+        research_inference_mode:specialist.research_inference?.inference_mode??null
+      }
+    ]))
   };
   const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
     'temporal_channel_'+String(index).padStart(2,'0'));
@@ -601,6 +640,64 @@ async function main(){
       },
       pooled_fallback_qualified:pooledFallbackQualified,
       both_regime_specialists_qualified:bothRegimesSelected,
+      // Publish a compact per-regime audit trail to the workflow summary.
+      // This is diagnostics only; it does not change candidate selection.
+      regime_specialists:Object.fromEntries(Object.entries(specialists).map(([regime,specialist])=>[
+        regime,{
+          status:specialist.status??null,
+          model_kind:specialist.model_kind??modelKind,
+          training_samples:specialist.training_samples??0,
+          available_training_samples:specialist.available_training_samples??0,
+          selection_samples:specialist.selection_samples??0,
+          calibration_samples:specialist.calibration_samples??0,
+          validation_samples:specialist.validation_samples??0,
+          holdout_samples:specialist.holdout_samples??0,
+          training_targets:specialist.training_targets??null,
+          selection_targets:specialist.selection_targets??null,
+          support_gaps:specialist.support_gaps??[],
+          chronology_valid:specialist.chronology_valid===true,
+          member_training_profiles:specialist.member_training_profiles??[],
+          member_training_diagnostics:specialist.member_training_diagnostics??[],
+          baseline_selection_brier:specialist.member_selection_logistic_brier??null,
+          best_selection_candidate:specialist.selection_best_candidate??null,
+          candidate_residual_scores:specialist.member_selection_scores??[],
+          selected_member_index:specialist.selected_member_index??null,
+          selected_residual_scale:specialist.selected_residual_scale??null,
+          diagnostic_member_index:specialist.diagnostic_member_index??null,
+          diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
+          selection_passed:specialist.selection_passed===true,
+          calibration:{
+            fitted:specialist.probability_calibration?.fitted===true,
+            method:specialist.probability_calibration?.method??null,
+            fit_on:specialist.probability_calibration?.fit_on??null,
+            samples:specialist.probability_calibration?.sample_count??0,
+            positives:specialist.probability_calibration?.positive_count??0,
+            negatives:specialist.probability_calibration?.negative_count??0,
+            reason:specialist.probability_calibration?.reason??null
+          },
+          validation:specialist.validation??null,
+          validation_logistic:specialist.validation_logistic??null,
+          holdout:specialist.holdout??null,
+          holdout_logistic:specialist.holdout_logistic??null,
+          research_inference_mode:specialist.research_inference?.inference_mode??null
+        }
+      ])),
+      pooled_fallback_diagnostics:pooledFallback.research_inference?{
+        status:pooledFallback.status??null,
+        training_samples:pooledFallback.training_samples??0,
+        selection_samples:pooledFallback.selection_samples??0,
+        calibration_samples:pooledFallback.calibration_samples??0,
+        selection_passed:pooledFallback.selection_passed===true,
+        validation_passed:pooledFallback.validation_passed===true,
+        holdout_passed:pooledFallback.holdout_passed===true,
+        baseline_selection_brier:pooledFallback.member_selection_logistic_brier??null,
+        best_selection_candidate:pooledFallback.selection_best_candidate??null,
+        candidate_residual_scores:pooledFallback.member_selection_scores??[],
+        validation:pooledFallback.validation??null,
+        validation_logistic:pooledFallback.validation_logistic??null,
+        holdout:pooledFallback.holdout??null,
+        holdout_logistic:pooledFallback.holdout_logistic??null
+      }:null,
       validation:profile?.validation??null,
       validation_logistic:profile?.validation_logistic??null,
       holdout:profile?.holdout??null,
@@ -1221,6 +1318,7 @@ async function main(){
     training_artifacts:Object.keys(trainingArtifacts),
     unavailable_models:unavailable,
     model_comparison:evaluated,
+    inner_diagnostics:training.model_internal_diagnostics??{},
     production_touched:false,paper_trading:true,real_order_execution:false
   };
   console.log(JSON.stringify(summary,null,2));
