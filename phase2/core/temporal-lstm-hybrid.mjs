@@ -817,7 +817,8 @@ function buildPurgedInternalEarlyStoppingSplit(rows, {
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
-  baselineFit = null, earlyStoppingPatience = 5, earlyStoppingRows = null
+  baselineFit = null, earlyStoppingPatience = 5, earlyStoppingRows = null,
+  checkpointPolicy = 'BEST_TRAINING_BRIER'
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -825,6 +826,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       !Number.isSafeInteger(epochs) || epochs < 1 || epochs > 80 ||
       !Number.isSafeInteger(earlyStoppingPatience) || earlyStoppingPatience < 1)
     throw new TypeError('TCN_LSTM_TRAINING_CONFIGURATION_INVALID');
+  if(!['BEST_TRAINING_BRIER','FIXED_EPOCH_FINAL_STATE'].includes(checkpointPolicy))
+    throw new TypeError('TCN_LSTM_CHECKPOINT_POLICY_INVALID');
+  if(checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'&&earlyStoppingRows!==null)
+    throw new TypeError('TCN_LSTM_FIXED_EPOCH_POLICY_CANNOT_USE_EARLY_STOPPING_ROWS');
   const rate = clamp(Number(learningRate), 0.0001, 0.01);
   const regularization = clamp(Number(l2), 0, 0.2);
   const dropoutRate = Number(dropout);
@@ -944,7 +949,16 @@ export function trainTcnLstmHybrid(trainingRows, {
       ?evaluateBrier(monitorRows,model,anchor):trainingBrier;
     if(!finite(monitorBrier))
       throw new TypeError('TCN_LSTM_EARLY_STOPPING_BRIER_NON_FINITE');
-    if (monitorBrier < bestBrier - 1e-8) {
+    if(!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'){
+      // The refit epoch count has already been selected by the purged internal
+      // monitor. Do not re-select epoch zero using the full training Brier:
+      // retain the exact final state of the preselected fixed-epoch refit.
+      bestBrier=trainingBrier;
+      bestTrainingBrier=trainingBrier;
+      bestEpoch=epoch;
+      bestModel=cloneTree(trainableParameters(model));
+      wait=0;
+    }else if (monitorBrier < bestBrier - 1e-8) {
       bestBrier = monitorBrier;
       bestTrainingBrier=trainingBrier;
       bestEpoch = epoch;
@@ -964,7 +978,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       dropout: dropoutRate,
       dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
     });
-    if (epoch >= Math.min(5, epochs) && wait >= patience) {
+    if(!( !monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE')&&
+       epoch >= Math.min(5, epochs) && wait >= patience) {
       stoppedEarly = true;
       break;
     }
@@ -1006,13 +1021,19 @@ export function trainTcnLstmHybrid(trainingRows, {
       epochs_requested: epochs,
       epochs_completed: history.length,
       best_epoch: bestEpoch,
+      checkpoint_selection_method:monitorRows
+        ?'PURGED_INTERNAL_TRAINING_MONITOR_BRIER'
+        :checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'
+          ?'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION'
+          :'TRAINING_PARTITION_BRIER',
+      fixed_epoch_final_state_retained:!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE',
       initial_training_brier: Number(initialBrier.toFixed(8)),
       best_training_brier: Number(bestTrainingBrier.toFixed(8)),
       training_brier_improvement: Number((initialBrier-bestTrainingBrier).toFixed(8)),
       initial_monitor_brier:Number(initialMonitorBrier.toFixed(8)),
       best_monitor_brier:Number(bestBrier.toFixed(8)),
       monitor_brier_improvement:Number((initialMonitorBrier-bestBrier).toFixed(8)),
-      restored_best_training_checkpoint: true,
+      restored_best_training_checkpoint:!(!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'),
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
         monitor:monitorRows?'PURGED_INTERNAL_TRAINING_PARTITION_BRIER_ONLY':'TRAINING_PARTITION_BRIER_ONLY',
@@ -1166,7 +1187,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         dropout:candidateDropout,
         seed: seed + index * 101,
         maxTrainingSamples: effectiveTrainingRows.length,
-        baselineFit: anchor
+        baselineFit: anchor,
+        checkpointPolicy:'FIXED_EPOCH_FINAL_STATE'
       })
       :null;
     // When internal early stopping selects epoch zero, score the exact frozen
@@ -1219,6 +1241,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         training_brier_improvement:fit?.training.training_brier_improvement??null,
         best_epoch:fit?.training.best_epoch??0,
         epochs_completed:fit?.training.epochs_completed??0,
+        refit_checkpoint_method:fit?.training.checkpoint_selection_method??null,
+        fixed_epoch_final_state_retained:fit?.training.fixed_epoch_final_state_retained??false,
         epoch_history:fit?.training.history.map(item=>({
           epoch:item.epoch,
           post_update_training_brier:item.post_update_training_brier,
