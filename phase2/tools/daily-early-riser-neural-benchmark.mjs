@@ -184,8 +184,8 @@ async function main(){
   const attentionOnly=String(args['attention-only']||'false')==='true';
   const enableTcnLstmHybrid=String(args['enable-tcn-lstm-hybrid']||'false')==='true';
   const tcnLstmEpochs=Math.max(1,Math.min(8,Math.trunc(Number(args['tcn-lstm-epochs']||8))));
-  const tcnLstmMaxTrainingSamples=Math.max(80,Math.min(16384,
-    Math.trunc(Number(args['tcn-lstm-max-training-samples']||16384))));
+  const tcnLstmMaxTrainingSamples=Math.max(80,Math.min(36102,
+    Math.trunc(Number(args['tcn-lstm-max-training-samples']||36102))));
   const tcnLstmBootstrapIterations=Math.max(200,Math.min(2000,
     Math.trunc(Number(args['tcn-lstm-bootstrap-iterations']||400))));
   const enableAsymmetricDirectionalRankingLoss=String(

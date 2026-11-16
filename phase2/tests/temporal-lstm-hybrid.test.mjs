@@ -532,13 +532,13 @@ test('regularized TCN-LSTM candidate grid is predeclared, bounded and strictly v
   assert.ok(TCN_LSTM_REGULARIZATION_CANDIDATES.every(Object.isFrozen));
 });
 
-test('recurrent training budget uses up to 16,384 available training rows without touching later partitions',()=>{
-  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,16384);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,36102),16384);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,1200),1200);
+test('recurrent training budget can use the full 36,102-row training partition without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,36102);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(36102,36102),36102);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(36102,1200),1200);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),8192);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(32768,36102),16384);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(16384,20),20);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),16384);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(65536,36102),36102);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(36102,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),36102);
 });
