@@ -40,7 +40,7 @@ export const TCN_LSTM_PARAMETER_COUNT =
   TCN_LSTM_HIDDEN * (4 * TCN_LSTM_HIDDEN) +
   4 * TCN_LSTM_HIDDEN +
   TCN_LSTM_HIDDEN + TCN_LSTM_STEPS +
-  TCN_LSTM_HIDDEN + 1;
+  TCN_LSTM_HIDDEN + 1 + 1; // residual gate scalar
 
 const EPSILON = 1e-12;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -257,10 +257,12 @@ function initializeModel(seed = 29) {
     lstmInputWeights, lstmRecurrentWeights, lstmBiases,
     attentionQuery: Array.from({ length: hidden }, () => (random() - 0.5) * 0.06),
     attentionPositionBiases: Array(TCN_LSTM_STEPS).fill(0),
-    // A residual challenger must begin as an exact no-op over the frozen
-    // Logistic anchor. Zero initialization prevents random TCN/LSTM features
-    // from perturbing the baseline before a learned residual earns its effect.
-    outputWeights: Array(hidden).fill(0),
+    // Keep a small, trainable readout available behind a zero residual gate.
+    // The gate makes initial predictions exactly equal to Logistic, while its
+    // own nonzero derivative lets learning open the path; once opened, gradients
+    // reach the attention, LSTM and TCN feature extractor on later batches.
+    outputWeights: Array.from({ length: hidden }, () => (random() - 0.5) * 0.04),
+    residualGate: [0],
     // Trainable scalars are one-element arrays so optimizer/finite-difference
     // updates mutate the model object rather than a detached wrapper property.
     outputBias: [0]
@@ -280,6 +282,7 @@ function trainableParameters(model) {
     attentionQuery: model.attentionQuery,
     attentionPositionBiases: model.attentionPositionBiases,
     outputWeights: model.outputWeights,
+    residualGate: model.residualGate,
     outputBias: model.outputBias
   };
 }
@@ -395,15 +398,19 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     for (let channel = 0; channel < hidden; channel++)
       pooled[channel] += attentionWeights[time] * lstmCaches[time].state[channel];
   }
-  let residualLogit = model.outputBias[0];
+  let residualHeadLogit = model.outputBias[0];
   for (let channel = 0; channel < hidden; channel++)
-    residualLogit += model.outputWeights[channel] * pooled[channel];
+    residualHeadLogit += model.outputWeights[channel] * pooled[channel];
+  const residualGateScale=tanh(model.residualGate[0]);
+  const residualLogit=residualGateScale*residualHeadLogit;
   const logit = clamp(baselineLogit + residualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
   const probability = sigmoid(logit);
   if (![...pooled, ...attentionWeights, probability, logit].every(finite))
     throw new TypeError('TCN_LSTM_FORWARD_NON_FINITE');
   return {
     probability, logit, residual_logit: residualLogit,
+    residual_head_logit:residualHeadLogit,
+    residual_gate_scale:residualGateScale,
     attention_weights: attentionWeights,
     tcn_latent_sequence: current,
     projected_sequence: projected,
@@ -411,7 +418,8 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     lstm_cell_sequence: lstmCaches.map(row => row.cell),
     lstm_input_sequence:lstmInputSequence,
     input_dropout_scale:[...inputDropoutScale],
-    cache: { projected, tcnCaches, lstmCaches, pooled, attentionWeights }
+    cache: { projected, tcnCaches, lstmCaches, pooled, attentionWeights,
+      residualHeadLogit,residualGateScale }
   };
 }
 
@@ -485,11 +493,19 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   const error = forward.probability - target;
   const logitGradient = 2 * error * forward.probability * (1 - forward.probability);
   const cache = forward.cache;
-  gradients.outputBias[0] = logitGradient;
+  // At the exact Logistic no-op, only the scalar gate receives the first
+  // update. Its derivative is nonzero because the small readout is present.
+  // Subsequent batches therefore propagate gradients through the full TCN-LSTM
+  // stack without perturbing the initial prediction.
+  gradients.residualGate[0]=logitGradient*cache.residualHeadLogit*
+    (1-cache.residualGateScale*cache.residualGateScale);
+  gradients.outputBias[0] = logitGradient*cache.residualGateScale;
   const pooledGradient = Array(hidden).fill(0);
   for (let channel = 0; channel < hidden; channel++) {
-    gradients.outputWeights[channel] = logitGradient * cache.pooled[channel];
-    pooledGradient[channel] = logitGradient * model.outputWeights[channel];
+    gradients.outputWeights[channel] =
+      logitGradient*cache.residualGateScale*cache.pooled[channel];
+    pooledGradient[channel] =
+      logitGradient*cache.residualGateScale*model.outputWeights[channel];
   }
 
   const hiddenGradients = Array.from({ length: TCN_LSTM_STEPS }, () => Array(hidden).fill(0));
@@ -866,6 +882,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       [order[index], order[swap]] = [order[swap], order[index]];
     }
     let epochLoss = 0, seen = 0, maxGradientNorm = 0, clippedBatches = 0;
+    let maxFeatureExtractorGradientNorm=0,maxResidualGateGradientAbs=0;
     const schedule = 0.1 + 0.9 * 0.5 *
       (1 + Math.cos(Math.PI * (epoch - 1) / Math.max(1, epochs - 1)));
     const epochRate = rate * schedule;
@@ -889,6 +906,26 @@ export function trainTcnLstmHybrid(trainingRows, {
       }
       let averaged = scaleTree(accumulated, 1 / indexes.length);
       if (!treeFinite(averaged)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NON_FINITE');
+      const featureExtractorGradientNorm=parameterNorm({
+        projectionWeights:averaged.projectionWeights,
+        projectionBiases:averaged.projectionBiases,
+        depthWeights:averaged.depthWeights,
+        pointWeights:averaged.pointWeights,
+        tcnBiases:averaged.tcnBiases,
+        lstmInputWeights:averaged.lstmInputWeights,
+        lstmRecurrentWeights:averaged.lstmRecurrentWeights,
+        lstmBiases:averaged.lstmBiases,
+        attentionQuery:averaged.attentionQuery,
+        attentionPositionBiases:averaged.attentionPositionBiases
+      });
+      if(!finite(featureExtractorGradientNorm))
+        throw new TypeError('TCN_LSTM_FEATURE_EXTRACTOR_GRADIENT_NORM_NON_FINITE');
+      maxFeatureExtractorGradientNorm=Math.max(
+        maxFeatureExtractorGradientNorm,featureExtractorGradientNorm
+      );
+      maxResidualGateGradientAbs=Math.max(
+        maxResidualGateGradientAbs,Math.abs(averaged.residualGate[0])
+      );
       const norm = parameterNorm(averaged);
       if (!finite(norm)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NORM_NON_FINITE');
       maxGradientNorm = Math.max(maxGradientNorm, norm);
@@ -920,6 +957,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       post_update_validation_brier:monitorRows?Number(monitorBrier.toFixed(8)):null,
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
+      maximum_feature_extractor_gradient_l2_norm:Number(maxFeatureExtractorGradientNorm.toFixed(8)),
+      maximum_residual_gate_gradient_abs:Number(maxResidualGateGradientAbs.toFixed(8)),
       clipped_batches: clippedBatches,
       dropout: dropoutRate,
       dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
