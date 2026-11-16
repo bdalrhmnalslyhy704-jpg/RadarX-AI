@@ -183,7 +183,7 @@ export function fitTcnLstmSequenceNormalizer(trainingRows) {
     timestep_count:seen,
     training_fingerprint:trainingFingerprint(trainingRows),
     means,
-    standard_deviations,
+    standard_deviations:standardDeviations,
     raw_standard_deviations:rawStandardDeviations,
     scale_floor:1e-3,
     clip_abs:6
