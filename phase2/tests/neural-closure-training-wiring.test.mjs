@@ -39,7 +39,7 @@ test('TCN V11 inner qualification requires BOTH BTC risk regimes to pass inner v
   assert.match(trainer,/const expectedBtcRegimes=\['BTC_RISK_ON','BTC_RISK_OFF'\]/);
   assert.match(trainer,/expectedBtcRegimes\.every\(regime=>\{/);
   assert.match(trainer,/specialist\.validation_passed===true&&specialist\.holdout_passed===true/);
-  assert.match(trainer,/state\?\.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
   assert.match(trainer,/passed:attentionInnerQualified/);
   assert.match(trainer,/diagnostic_only:!attentionInnerQualified/);
 });
