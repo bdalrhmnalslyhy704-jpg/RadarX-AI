@@ -91,17 +91,20 @@ function makePredictions(rows,sourceCommitSha,artifacts){
   // synthetic test fixture aligned when calibration/threshold blocks change.
   const split=splitFourHourRows(rows);
   const requiredIds=new Set([...split.validation,...split.holdout].map(row=>row.id));
+  const validationIds=new Set(split.validation.map(row=>row.id));
   const evaluated=rows.filter(row=>requiredIds.has(row.id));
-  const make=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
+  const make=(positive,negative,artifactSha256=null,modelName=null)=>evaluated.map(row=>({
     id:row.id,probability:row.target?positive:negative,
     source_commit_sha:sourceCommitSha,
     target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
-    artifact_sha256:artifactSha256
+    artifact_sha256:artifactSha256,
+    ...(modelName==='TCN_LSTM_HYBRID'&&validationIds.has(row.id)
+      ?{pre_inner_calibration_probability:row.target?0.61:0.39}:{})
   }));
   const output={LOGISTIC_REGRESSION:make(0.72,0.24,null)};
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
-    output[family]=make(0.73,0.23,artifacts[family].artifact_sha256);
+    output[family]=make(0.73,0.23,artifacts[family].artifact_sha256,family);
   return output;
 }
 
@@ -809,3 +812,97 @@ test('mapped canonical array hashing matches canonical full-array hashing withou
   const materialized=sha256Canonical(rows.map(mapRow));
   assert.equal(mapped,materialized);
 });
+
+test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without changing gates',()=>{
+  const rows=makeRows(),sourceCommitSha='1'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const model=report.models.TCN_LSTM_HYBRID;
+  const diagnostics=model.validation.probability_stage_diagnostics;
+  assert.equal(diagnostics.schema,'RADARX_TCN_LSTM_PROBABILITY_STAGE_DISTRIBUTIONS_V1');
+  assert.equal(diagnostics.status,'AVAILABLE');
+  assert.equal(diagnostics.diagnostic_only,true);
+  assert.equal(diagnostics.labels_used,false);
+  assert.equal(diagnostics.holdout_values_used,false);
+  assert.equal(diagnostics.affects_primary_probabilities,false);
+  assert.equal(diagnostics.affects_threshold_selection,false);
+  for(const blockName of ['threshold_selection','outer_validation']){
+    const block=diagnostics[blockName];
+    assert.ok(block.sample_count>0);
+    for(const stageName of [
+      'network_output_before_inner_platt',
+      'inner_platt_output_before_shared_evaluator',
+      'shared_evaluator_output_after_selected_calibration'
+    ]){
+      const stage=block[stageName];
+      assert.equal(stage.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1');
+      assert.equal(stage.status,'AVAILABLE');
+      assert.equal(stage.sample_count,block.sample_count);
+      assert.equal(stage.labels_used,false);
+      assert.equal(stage.used_to_select_threshold,false);
+    }
+  }
+  assert.equal(report.holdout_access.opened,false);
+
+  // Deliberately alter only the diagnostic side channel. Primary calibrated
+  // probabilities, Brier, frozen threshold trials and gate outcomes must not
+  // change as a result.
+  const altered=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const validationIds=new Set(splitFourHourRows(rows).validation.map(row=>row.id));
+  altered.TCN_LSTM_HYBRID=altered.TCN_LSTM_HYBRID.map(item=>
+    validationIds.has(item.id)
+      ?{...item,pre_inner_calibration_probability:item.probability>=0.5?0.99:0.01}
+      :item
+  );
+  const alteredReport=runNeuralClosureBenchmark({
+    rows,predictionsByModel:altered,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const alteredModel=alteredReport.models.TCN_LSTM_HYBRID;
+  assert.equal(alteredModel.validation.calibrated_brier_score,
+    model.validation.calibrated_brier_score);
+  assert.deepEqual(alteredModel.validation.threshold_trials,
+    model.validation.threshold_trials);
+  assert.deepEqual(alteredModel.validation.outer_validation_gate,
+    model.validation.outer_validation_gate);
+  assert.notDeepEqual(
+    alteredModel.validation.probability_stage_diagnostics.threshold_selection
+      .network_output_before_inner_platt,
+    diagnostics.threshold_selection.network_output_before_inner_platt
+  );
+});
+
+test('TCN-LSTM pre-inner diagnostic rejects any final-holdout score payload',()=>{
+  const rows=makeRows(),sourceCommitSha='2'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const holdoutId=splitFourHourRows(rows).holdout[0].id;
+  predictions.TCN_LSTM_HYBRID=predictions.TCN_LSTM_HYBRID.map(item=>
+    item.id===holdoutId
+      ?{...item,pre_inner_calibration_probability:0.77}
+      :item
+  );
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const diagnostics=report.models.TCN_LSTM_HYBRID.validation.probability_stage_diagnostics;
+  assert.equal(diagnostics.status,'REJECTED_HOLDOUT_DIAGNOSTIC_EXPOSURE');
+  assert.equal(diagnostics.holdout_values_used,false);
+  assert.equal(report.holdout_access.opened,false);
+});
+
