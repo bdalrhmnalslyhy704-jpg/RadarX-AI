@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/build224-tcn-lstm-attention-challenger-20261113
+      - research/build224-tcn-lstm-order-signal-20261116
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
@@ -14,6 +15,7 @@ on:
   pull_request:
     branches:
       - research/build224-neural-validation-stream-fix-20261113
+      - research/build224-tcn-lstm-attention-challenger-20261113
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
@@ -86,7 +88,9 @@ jobs:
             --tcn-only true --skip-temporal true \
             --enable-tcn-lstm-hybrid true --tcn-lstm-epochs 8 \
             --tcn-lstm-max-training-samples 36102 \
-            --tcn-lstm-bootstrap-iterations 400
+            --tcn-lstm-bootstrap-iterations 400 \
+            --tcn-lstm-order-control PER_SAMPLE_SHUFFLE \
+            --tcn-lstm-order-control-seed 20261116
       - name: Publish TCN-LSTM versus same-window Logistic evidence
         if: always()
         run: |
@@ -116,6 +120,7 @@ jobs:
             trained:model.trained,
             partition_support:model.partition_support,
             inner_selection:model.inner_selection_diagnostics,
+            temporal_order_control:model.temporal_order_control,
             calibration:model.calibration,
             validation:model.validation,
             untouched_holdout:model.holdout,
@@ -126,14 +131,14 @@ jobs:
           };
           console.log('RADARX_TCN_LSTM_HISTORICAL_RESULT='+JSON.stringify(summary));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            '## Isolated TCN-LSTM 24h historical evidence\n\n```json\n'+
+            '## Isolated TCN-LSTM temporal-order negative-control evidence\n\n```json\n'+
             JSON.stringify(summary,null,2)+'\n```\n');
           NODE
       - name: Upload same-cohort TCN-LSTM report and source provenance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-build224-isolated-tcn-lstm-24h-safe5-${{ github.run_number }}
+          name: radarx-build224-isolated-tcn-lstm-order-control-24h-safe5-${{ github.run_number }}
           path: |
             artifacts/daily-early-riser-census.json
             artifacts/daily-early-riser-tcn-lstm-only-24h-safe5.json
