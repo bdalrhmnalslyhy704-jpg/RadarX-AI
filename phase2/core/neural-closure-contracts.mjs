@@ -36,6 +36,49 @@ const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -35, 35)));
 const logit = value => Math.log(clamp(value, 1e-12, 1 - 1e-12) /
   (1 - clamp(value, 1e-12, 1 - 1e-12)));
 
+const ENTRY_THRESHOLD_GRID = Object.freeze([0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80]);
+
+function summarizeProbabilityDistribution(values) {
+  if(!Array.isArray(values)||values.length===0||values.some(value=>
+    !finite(value)||Number(value)<0||Number(value)>1)){
+    return {schema:'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',
+      status:'UNAVAILABLE',sample_count:Array.isArray(values)?values.length:0};
+  }
+  const sorted=values.map(Number).sort((a,b)=>a-b);
+  const quantile=fraction=>{
+    const position=(sorted.length-1)*fraction;
+    const lower=Math.floor(position),upper=Math.ceil(position);
+    const ratio=position-lower;
+    return Number((sorted[lower]*(1-ratio)+sorted[upper]*ratio).toFixed(8));
+  };
+  const mean=sorted.reduce((sum,value)=>sum+value,0)/sorted.length;
+  const variance=sorted.reduce((sum,value)=>sum+(value-mean)**2,0)/sorted.length;
+  const atOrAboveThreshold=Object.fromEntries(ENTRY_THRESHOLD_GRID.map(threshold=>{
+    let low=0,high=sorted.length;
+    while(low<high){
+      const middle=(low+high)>>1;
+      if(sorted[middle]<threshold)low=middle+1;
+      else high=middle;
+    }
+    return [threshold,sorted.length-low];
+  }));
+  return {
+    schema:'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',
+    status:'AVAILABLE',
+    sample_count:sorted.length,
+    minimum:Number(sorted[0].toFixed(8)),
+    p50:quantile(0.50),p75:quantile(0.75),p90:quantile(0.90),
+    p95:quantile(0.95),p99:quantile(0.99),
+    maximum:Number(sorted.at(-1).toFixed(8)),
+    mean:Number(mean.toFixed(8)),
+    standard_deviation:Number(Math.sqrt(variance).toFixed(8)),
+    at_or_above_threshold:atOrAboveThreshold,
+    diagnostic_only:true,
+    used_to_select_threshold:false,
+    labels_used:false
+  };
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === 'object') {
@@ -963,8 +1006,7 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
 function selectThreshold(rows,probabilities,roundTripCostBps,{
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
 }={}) {
-  const grid=[0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
-  const trials=grid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
+  const trials=ENTRY_THRESHOLD_GRID.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
   const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
     item.trade_count>=minimumTrades&&
     finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
@@ -1111,8 +1153,13 @@ export function runNeuralClosureBenchmark({
     const validationLabels=validationRows.map(row=>row.target);
     const validationSupport=classCounts(validationLabels);
     const validationBrier=brier(calibratedValidation,validationLabels);
+    const rawThresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,rawMap);
     const thresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,
       rawMap,calibration.selected_calibrator);
+    const thresholdSelectionProbabilityDistribution={
+      raw:summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
+      calibrated:summarizeProbabilityDistribution(thresholdSelectionProbabilities)
+    };
     const thresholdSelection=selectThreshold(thresholdSelectionRows,
       thresholdSelectionProbabilities,roundTripCostBps,{
         minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
@@ -1147,6 +1194,7 @@ export function runNeuralClosureBenchmark({
       raw_brier_score:brier(rawValidation,validationLabels),
       calibrated_brier_score:validationBrier,
       threshold_selection_sample_count:thresholdSelectionRows.length,
+      threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
       threshold_selection_negative_count:thresholdSelectionSupport.negative,
       threshold_selection:thresholdSelection.status,
