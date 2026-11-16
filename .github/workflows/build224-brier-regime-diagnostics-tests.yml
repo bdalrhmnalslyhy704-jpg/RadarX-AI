@@ -1,0 +1,34 @@
+name: Build 224 Brier Regime Diagnostics Regression
+
+on:
+  push:
+    branches:
+      - research/build224-brier-regime-selection-report-20261116
+    paths:
+      - 'phase2/tools/neural-hybrid-oos-matrix.mjs'
+      - 'phase2/tests/neural-hybrid-oos-matrix.test.mjs'
+      - '.github/workflows/build224-brier-regime-diagnostics-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-brier-regime-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  matrix-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax check the Brier matrix
+        run: node --check phase2/tools/neural-hybrid-oos-matrix.mjs
+      - name: Run Brier matrix regression tests
+        run: node --test --test-timeout=180000 phase2/tests/neural-hybrid-oos-matrix.test.mjs
