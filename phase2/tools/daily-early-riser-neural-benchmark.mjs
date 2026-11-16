@@ -183,6 +183,17 @@ async function main(){
   const tcnOnly=String(args['tcn-only']||'false')==='true';
   const attentionOnly=String(args['attention-only']||'false')==='true';
   const enableTcnLstmHybrid=String(args['enable-tcn-lstm-hybrid']||'false')==='true';
+  const temporalTcnLstmOrderControl=String(
+    args['tcn-lstm-order-control']||'NONE'
+  ).trim().toUpperCase();
+  const temporalTcnLstmOrderControlSeed=Number(
+    args['tcn-lstm-order-control-seed']??20261116
+  );
+  if(!['NONE','PER_SAMPLE_SHUFFLE'].includes(temporalTcnLstmOrderControl))
+    throw new Error('UNSUPPORTED_TCN_LSTM_TEMPORAL_ORDER_CONTROL');
+  if(!Number.isSafeInteger(temporalTcnLstmOrderControlSeed)||
+     temporalTcnLstmOrderControlSeed<0||temporalTcnLstmOrderControlSeed>0xffffffff)
+    throw new Error('TCN_LSTM_ORDER_CONTROL_SEED_INVALID');
   const tcnLstmEpochs=Math.max(1,Math.min(8,Math.trunc(Number(args['tcn-lstm-epochs']||8))));
   const tcnLstmMaxTrainingSamples=Math.max(80,Math.min(36102,
     Math.trunc(Number(args['tcn-lstm-max-training-samples']||36102))));
@@ -255,6 +266,8 @@ async function main(){
     tcn_lstm_epochs:tcnLstmEpochs,
     tcn_lstm_max_training_samples:tcnLstmMaxTrainingSamples,
     tcn_lstm_bootstrap_iterations:tcnLstmBootstrapIterations,
+    tcn_lstm_temporal_order_control:temporalTcnLstmOrderControl,
+    tcn_lstm_temporal_order_control_seed:temporalTcnLstmOrderControlSeed,
     neural_training_history_fraction:neuralTrainingHistoryFraction,
     asymmetric_directional_ranking_loss_enabled:enableAsymmetricDirectionalRankingLoss,
     directional_ranking_loss_config:directionalRankingLossConfig,
@@ -302,6 +315,9 @@ async function main(){
           :['Residual Deep MLP V5 ensemble',...(enableFactorizationMachine?['Low-rank Factorization-Machine pairwise residual']:[]),'Residual GBDT with frozen logistic anchor','Calibrated GBDT+MLP hybrid','Independent 24x29 daily TCN','BTC-regime learned-query temporal attention TCN V11']),
         ...(enableTcnLstmHybrid?['Causal dilated TCN→LSTM BPTT→locked input dropout→temporal attention challenger']:[])
       ],
+      temporal_order_control:temporalTcnLstmOrderControl==='PER_SAMPLE_SHUFFLE'
+        ?'Research-only negative control: independently permute the 24 feature timesteps per sample while preserving each sample\'s pooled 29-channel means and standard deviations; original timestamp arrays remain provenance metadata and are not aligned to shuffled feature steps.'
+        :'Disabled; original chronological 24x29 sequences remain unchanged.',
       comparison_margin_brier:0.003,
       tcn:'A separate daily TCN is evaluated from a SHA-256-verified 24x29 sidecar under the selected target contract and exact label horizon; the production TCN default remains unchanged at 4h',
       tcn_lstm:enableTcnLstmHybrid
@@ -380,6 +396,7 @@ async function main(){
         enableTcnLstmHybrid,temporalTcnLstmEpochs:tcnLstmEpochs,
         temporalTcnLstmMaxTrainingSamples:tcnLstmMaxTrainingSamples,
         temporalTcnLstmBootstrapIterations:tcnLstmBootstrapIterations,
+        temporalTcnLstmOrderControl,temporalTcnLstmOrderControlSeed,
         neuralTrainingHistoryFraction,neuralIterations,neuralOutputInitializationScale,
         enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
         dailyFeatureSchema,
