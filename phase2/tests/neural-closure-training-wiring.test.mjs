@@ -138,6 +138,8 @@ test('V9-V11 artifacts include a strictly qualified all-regime fallback for miss
   assert.match(trainer,/pooled_fallback:attentionPooledStateUsable\?\{research_inference:attentionPooledState\}:null/);
   assert.match(trainer,/auditTemporalAttentionResearchInferenceCoverage\(/);
   assert.match(trainer,/auditTemporalVariantResearchInferenceCoverage\(/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
+  assert.match(trainer,/isUsableTemporalVariantResearchInferenceState\(state,\{\s*expectedPoolingMode:expectedPooling\s*\}\)/);
   assert.match(trainer,/const missingRegimes=variantCoverage\.missing_regimes/);
   assert.match(trainer,/if\(\(inferenceRegimes\.length===0&&!pooledStateUsable\)\|\|missingRegimes\.length>0\)/);
   assert.match(neural,/isUsableTemporalAttentionResearchInferenceState/);
