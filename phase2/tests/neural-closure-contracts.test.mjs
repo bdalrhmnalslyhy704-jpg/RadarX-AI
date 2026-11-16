@@ -559,6 +559,48 @@ test('fixed-SHA evaluator never opens holdout when every validation entry thresh
   assert.equal(report.holdout_access.opened_for_models.length,0);
 });
 
+test('a neural candidate can pass its own execution gates when Logistic has no trade threshold',()=>{
+  const rows=makeRows(),sourceCommitSha='f'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const outerSplit=splitFourHourRows(rows);
+  const evaluated=[...outerSplit.validation,...outerSplit.holdout];
+  const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
+    id:row.id,
+    probability:row.target===1?positive:negative,
+    source_commit_sha:sourceCommitSha,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    artifact_sha256:artifactSha256
+  }));
+  // Logistic is a Brier-only reference here and intentionally emits no
+  // executable scores. The neural challenger has enough positive separation
+  // to qualify an independent paper threshold on the earlier block.
+  const predictions={LOGISTIC_REGRESSION:build(0.05,0.05,null)};
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
+    predictions[family]=build(0.85,0.05,modelArtifactsByModel[family].artifact_sha256);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,null);
+  assert.equal(report.holdout_access.opened,true);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const model=report.models[family];
+    assert.equal(model.validation.outer_validation_gate.gates.threshold_selection_qualified,'PASS',family);
+    assert.equal(model.validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,'PASS',family);
+    assert.equal(model.status,'EVALUATED',family);
+    assert.equal(model.holdout.evaluated,true,family);
+    assert.ok(model.holdout.trade_count>=100,family);
+    assert.ok(model.holdout.net_pnl_pct>0,family);
+    assert.ok(model.holdout.max_drawdown_pct<=8,family);
+  }
+});
+
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
   const rows=makeRows(),sourceCommitSha='b'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);

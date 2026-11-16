@@ -1216,8 +1216,6 @@ export function runNeuralClosureBenchmark({
       threshold_selection_qualified:
         thresholdSelection.status==='SELECTED_ON_VALIDATION_ONLY'&&
         finite(thresholdSelection.threshold)&&thresholdSelection.eligible_count>0,
-      logistic_reference_threshold_selected:
-        finite(models.LOGISTIC_REGRESSION.validation?.selected_threshold),
       outer_validation_threshold_risk_gates:validationThresholdRiskPassed
     };
     const validationPassed=Object.values(validationGates).every(Boolean);
@@ -1232,10 +1230,8 @@ export function runNeuralClosureBenchmark({
             ?'OUTER_VALIDATION_DID_NOT_BEAT_LOGISTIC_BY_REQUIRED_MARGIN'
             :!validationGates.threshold_selection_qualified
               ?'THRESHOLD_SELECTION_BLOCK_DID_NOT_QUALIFY'
-              :!validationGates.logistic_reference_threshold_selected
-                ?'LOGISTIC_REFERENCE_THRESHOLD_NOT_SELECTED'
-                :!validationGates.outer_validation_threshold_risk_gates
-                  ?'OUTER_VALIDATION_THRESHOLD_RISK_GATES_FAILED':null;
+              :!validationGates.outer_validation_threshold_risk_gates
+                ?'OUTER_VALIDATION_THRESHOLD_RISK_GATES_FAILED':null;
     const validationGate={
       passed:validationPassed,
       baseline_logistic_brier:baselineValidationBrier,
