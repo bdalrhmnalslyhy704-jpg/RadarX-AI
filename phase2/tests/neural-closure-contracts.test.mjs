@@ -516,10 +516,8 @@ test('fixed-SHA evaluator never opens holdout when every validation entry thresh
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const evaluated=rows.filter(row=>{
-    const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
-    return (day>=13&&day<=15)||(day>=17);
-  });
+  const outerSplit=splitFourHourRows(rows);
+  const evaluated=[...outerSplit.validation,...outerSplit.holdout];
   const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
     id:row.id,
     probability:row.target===1?positive:negative,
