@@ -6,6 +6,7 @@ on:
       - research/build224-tcn-lstm-attention-challenger-20261113
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/core/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tools/daily-early-riser-neural-benchmark.mjs'
       - 'phase2/tools/verify-daily-early-riser-census-artifact.mjs'
