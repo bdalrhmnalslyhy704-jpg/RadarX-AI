@@ -860,6 +860,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       throw new TypeError('TCN_LSTM_TRAINING_EARLY_STOPPING_PURGE_VIOLATION');
     monitorRows=[...earlyStoppingRows];
   }
+  const fixedEpochFinalState=
+    monitorRows===null&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE';
 
   const model = initializeModel(seed);
   let optimizer = {
@@ -949,7 +951,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       ?evaluateBrier(monitorRows,model,anchor):trainingBrier;
     if(!finite(monitorBrier))
       throw new TypeError('TCN_LSTM_EARLY_STOPPING_BRIER_NON_FINITE');
-    if(!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'){
+    if(fixedEpochFinalState){
       // The refit epoch count has already been selected by the purged internal
       // monitor. Do not re-select epoch zero using the full training Brier:
       // retain the exact final state of the preselected fixed-epoch refit.
@@ -978,7 +980,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       dropout: dropoutRate,
       dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
     });
-    if(!( !monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE')&&
+    if(!fixedEpochFinalState&&
        epoch >= Math.min(5, epochs) && wait >= patience) {
       stoppedEarly = true;
       break;
@@ -1026,17 +1028,21 @@ export function trainTcnLstmHybrid(trainingRows, {
         :checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'
           ?'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION'
           :'TRAINING_PARTITION_BRIER',
-      fixed_epoch_final_state_retained:!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE',
+      fixed_epoch_final_state_retained:fixedEpochFinalState,
       initial_training_brier: Number(initialBrier.toFixed(8)),
       best_training_brier: Number(bestTrainingBrier.toFixed(8)),
       training_brier_improvement: Number((initialBrier-bestTrainingBrier).toFixed(8)),
       initial_monitor_brier:Number(initialMonitorBrier.toFixed(8)),
       best_monitor_brier:Number(bestBrier.toFixed(8)),
       monitor_brier_improvement:Number((initialMonitorBrier-bestBrier).toFixed(8)),
-      restored_best_training_checkpoint:!(!monitorRows&&checkpointPolicy==='FIXED_EPOCH_FINAL_STATE'),
+      restored_best_training_checkpoint:!fixedEpochFinalState,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor:monitorRows?'PURGED_INTERNAL_TRAINING_PARTITION_BRIER_ONLY':'TRAINING_PARTITION_BRIER_ONLY',
+        monitor:monitorRows
+          ?'PURGED_INTERNAL_TRAINING_PARTITION_BRIER_ONLY'
+          :fixedEpochFinalState
+            ?'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION'
+            :'TRAINING_PARTITION_BRIER_ONLY',
         patience,
         stopped_early: stoppedEarly,
         validation_rows:monitorSupport?.rows??0,
