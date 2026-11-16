@@ -1118,8 +1118,27 @@ async function main(){
               modelName:'TCN_LSTM_HYBRID'
             });
           if(!scored.valid)throw new Error('TCN_LSTM_4H_EXTERNAL_PREDICTION_FAILED:'+scored.reason);
+          // Preserve the TCN-LSTM network output before its internal Platt
+          // calibration as a diagnostic-only side channel. Emit it only for
+          // the outer validation partition; never calculate or attach it for
+          // the final holdout. The primary prediction remains the existing
+          // internally calibrated probability used by the evaluator.
           modelArtifactsByModel.TCN_LSTM_HYBRID=artifact;
           predictionsByModel.TCN_LSTM_HYBRID=scored.rows;
+          const outerValidationIds=new Set(split.validation.map(row=>String(row.id)));
+          const eventRowById=new Map(eventRows.map(row=>[String(row.id),row]));
+          predictionsByModel.TCN_LSTM_HYBRID=predictionsByModel.TCN_LSTM_HYBRID.map(item=>{
+            if(!outerValidationIds.has(String(item.id)))return item;
+            const sourceRow=eventRowById.get(String(item.id));
+            if(!sourceRow)
+              throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_ROW_MISSING:'+item.id);
+            const preInnerProbability=predictTcnLstmHybridProbability(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(!finite(preInnerProbability)||preInnerProbability<0||preInnerProbability>1)
+              throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_NON_FINITE:'+item.id);
+            return {...item,pre_inner_calibration_probability:Number(preInnerProbability)};
+          });
           trainingArtifacts.TCN_LSTM_HYBRID={
             artifact_sha256:artifact.artifact_sha256,
             schema:TCN_LSTM_HYBRID_SCHEMA,
@@ -1134,6 +1153,13 @@ async function main(){
               row.name===selection.selected_configuration)?.selection_brier??null,
             logistic_selection_brier:selection.baseline?.selection_brier??null,
             internal_calibrator:calibrator.method,
+            pre_inner_calibration_diagnostic:{
+              schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
+              rows:split.validation.length,
+              source_partition:'OUTER_VALIDATION_ONLY',
+              holdout_values_included:false,
+              primary_probabilities_unchanged:true
+            },
             scored_external_rows:eventRows.length,
             inference_mode:innerQualified?'INNER_SELECTED':'INNER_BEST_DIAGNOSTIC_ONLY',
             inner_selection_qualified:innerQualified,

@@ -728,6 +728,79 @@ export function buildNeuralClosureCalibrationBlocks(rows){
   };
 }
 
+function collectTcnLstmPreInnerCalibrationMap(predictions,validationRows,holdoutRows){
+  const property='pre_inner_calibration_probability';
+  if(!Array.isArray(predictions))
+    return {status:'UNAVAILABLE',reason:'PREDICTIONS_NOT_ARRAY',map:new Map()};
+  const staged=predictions.filter(item=>
+    Object.prototype.hasOwnProperty.call(item??{},property));
+  if(!staged.length)
+    return {status:'NOT_PROVIDED',reason:'PRE_INNER_CALIBRATION_CHANNEL_MISSING',map:new Map()};
+  const holdoutIds=new Set(holdoutRows.map(row=>String(row.id)));
+  if(staged.some(item=>holdoutIds.has(String(item?.id||''))))
+    return {status:'REJECTED_HOLDOUT_DIAGNOSTIC_EXPOSURE',
+      reason:'PRE_INNER_DIAGNOSTICS_MUST_NOT_INCLUDE_FINAL_HOLDOUT_VALUES',map:new Map()};
+  const expectedIds=new Set(validationRows.map(row=>String(row.id)));
+  const map=new Map();
+  for(const item of staged){
+    const id=String(item?.id||'');
+    const value=item?.[property];
+    if(!id||!expectedIds.has(id)||map.has(id))
+      return {status:'REJECTED_INVALID_DIAGNOSTIC_ROW_SET',
+        reason:'PRE_INNER_DIAGNOSTIC_ID_INVALID_DUPLICATE_OR_OUT_OF_SCOPE',map:new Map()};
+    if(!finite(value)||Number(value)<0||Number(value)>1)
+      return {status:'REJECTED_INVALID_DIAGNOSTIC_VALUE',
+        reason:'PRE_INNER_DIAGNOSTIC_PROBABILITY_OUT_OF_RANGE',map:new Map()};
+    map.set(id,Number(value));
+  }
+  if(map.size!==expectedIds.size||[...expectedIds].some(id=>!map.has(id)))
+    return {status:'REJECTED_INCOMPLETE_VALIDATION_COVERAGE',
+      reason:'PRE_INNER_DIAGNOSTIC_MUST_COVER_EVERY_OUTER_VALIDATION_ROW',map:new Map()};
+  return {status:'AVAILABLE',reason:null,map};
+}
+
+function buildTcnLstmProbabilityStageDiagnostics({
+  preInner,thresholdSelectionRows,validationRows,
+  innerCalibratedThresholdSelection,innerCalibratedValidation,
+  sharedCalibratedThresholdSelection,sharedCalibratedValidation,
+  sharedCalibrationMethod
+}={}){
+  const base={
+    schema:'RADARX_TCN_LSTM_PROBABILITY_STAGE_DISTRIBUTIONS_V1',
+    diagnostic_only:true,
+    labels_used:false,
+    holdout_values_used:false,
+    affects_primary_probabilities:false,
+    affects_threshold_selection:false,
+    shared_evaluator_calibration_method:sharedCalibrationMethod??null
+  };
+  if(preInner?.status!=='AVAILABLE')
+    return {...base,status:preInner?.status??'NOT_PROVIDED',
+      reason:preInner?.reason??'PRE_INNER_DIAGNOSTICS_UNAVAILABLE'};
+  const distribution=(rows,map)=>summarizeProbabilityDistribution(
+    rows.map(row=>map.get(String(row.id)))
+  );
+  const preThreshold=distribution(thresholdSelectionRows,preInner.map);
+  const preValidation=distribution(validationRows,preInner.map);
+  return {
+    ...base,status:'AVAILABLE',
+    threshold_selection:{
+      sample_count:thresholdSelectionRows.length,
+      network_output_before_inner_platt:preThreshold,
+      inner_platt_output_before_shared_evaluator:
+        innerCalibratedThresholdSelection,
+      shared_evaluator_output_after_selected_calibration:
+        sharedCalibratedThresholdSelection
+    },
+    outer_validation:{
+      sample_count:validationRows.length,
+      network_output_before_inner_platt:preValidation,
+      inner_platt_output_before_shared_evaluator:innerCalibratedValidation,
+      shared_evaluator_output_after_selected_calibration:sharedCalibratedValidation
+    }
+  };
+}
+
 function predictionMap(predictions,modelName,requiredIds,{
   sourceCommitSha,targetDefinition,targetSemantics,artifactSha256=null
 }={}) {
@@ -1134,6 +1207,10 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const tcnLstmPreInnerCalibration=modelName==='TCN_LSTM_HYBRID'
+      ?collectTcnLstmPreInnerCalibrationMap(
+        predictionsByModel[modelName],split.validation,split.holdout
+      ):null;
     verifiedPredictions.set(modelName,rawMap);
     // The Logistic anchor and every neural challenger receive the same
     // chronological calibration fit/purge/check rows and the same candidate
@@ -1164,6 +1241,20 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
+    const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
+      ?buildTcnLstmProbabilityStageDiagnostics({
+        preInner:tcnLstmPreInnerCalibration,
+        thresholdSelectionRows,validationRows,
+        innerCalibratedThresholdSelection:
+          summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
+        innerCalibratedValidation:
+          summarizeProbabilityDistribution(rawValidation),
+        sharedCalibratedThresholdSelection:
+          summarizeProbabilityDistribution(thresholdSelectionProbabilities),
+        sharedCalibratedValidation:
+          summarizeProbabilityDistribution(calibratedValidation),
+        sharedCalibrationMethod:calibration.selected_method
+      }):null;
     const thresholdSelection=selectThreshold(thresholdSelectionRows,
       thresholdSelectionProbabilities,roundTripCostBps,{
         minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
@@ -1202,6 +1293,8 @@ export function runNeuralClosureBenchmark({
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
       threshold_selection_negative_count:thresholdSelectionSupport.negative,
       outer_validation_probability_distribution:outerValidationProbabilityDistribution,
+      ...(probabilityStageDiagnostics
+        ?{probability_stage_diagnostics:probabilityStageDiagnostics}:{}),
       threshold_selection:thresholdSelection.status,
       selected_threshold:thresholdSelection.threshold,
       threshold_selection_eligible_count:thresholdSelection.eligible_count??0,
