@@ -512,6 +512,40 @@ test('fixed-SHA evaluator keeps every holdout metric locked when the required va
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('entry probability distribution diagnostics expose raw and calibrated tails without selecting thresholds',()=>{
+  const rows=makeRows(),sourceCommitSha='c'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+  });
+  const expectedGrid=[0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
+  for(const family of ['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES]){
+    const diagnostic=report.models[family].validation.threshold_selection_probability_distribution;
+    assert.equal(diagnostic.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(diagnostic.calibrated.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(diagnostic.raw.status,'AVAILABLE',family);
+    assert.equal(diagnostic.calibrated.status,'AVAILABLE',family);
+    assert.equal(diagnostic.raw.sample_count,
+      report.models[family].validation.threshold_selection_sample_count,family);
+    assert.equal(diagnostic.calibrated.sample_count,
+      report.models[family].validation.threshold_selection_sample_count,family);
+    for(const series of [diagnostic.raw,diagnostic.calibrated]){
+      assert.ok(series.minimum>=0&&series.maximum<=1,family);
+      assert.ok(series.minimum<=series.p50&&series.p50<=series.p75&&
+        series.p75<=series.p90&&series.p90<=series.p95&&
+        series.p95<=series.p99&&series.p99<=series.maximum,family);
+      assert.deepEqual(Object.keys(series.at_or_above_threshold).map(Number),expectedGrid);
+      const counts=Object.values(series.at_or_above_threshold);
+      for(let index=1;index<counts.length;index++)
+        assert.ok(counts[index]<=counts[index-1],family+' threshold counts must be monotone');
+      assert.equal(series.diagnostic_only,true);
+      assert.equal(series.used_to_select_threshold,false);
+      assert.equal(series.labels_used,false);
+    }
+  }
+});
+
 test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
