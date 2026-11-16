@@ -1281,6 +1281,7 @@ async function main(){
       raw_brier_score:model.validation.raw_brier_score??null,
       calibrated_brier_score:model.validation.calibrated_brier_score??null,
       threshold_selection_sample_count:model.validation.threshold_selection_sample_count??0,
+      threshold_selection_probability_distribution:model.validation.threshold_selection_probability_distribution??null,
       threshold_selection_positive_count:model.validation.threshold_selection_positive_count??0,
       threshold_selection_negative_count:model.validation.threshold_selection_negative_count??0,
       threshold_selection:model.validation.threshold_selection??null,
