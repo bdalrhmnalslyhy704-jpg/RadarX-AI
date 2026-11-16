@@ -54,6 +54,8 @@ import {
   poolLearnedTemporalAttention,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
+  isUsableTemporalResearchInferenceSpecialist,
+  auditTemporalResearchInferenceCoverage,
   predictTemporalAttentionResearchOutput,
   isUsableTemporalAttentionResearchInferenceState,
   auditTemporalAttentionResearchInferenceCoverage,
@@ -1784,4 +1786,59 @@ test('V9/V10 variant coverage accepts only a positive-residual diagnostic fallba
   });
   assert.equal(wrongFamily.complete,false);
   assert.deepEqual(wrongFamily.missing_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+});
+
+
+test('V8 regime inference requires a valid selected member with positive neural residual',()=>{
+  const specialist={
+    members:[{weights:[0],bias:0}],
+    selected_member_index:-1,selected_residual_scale:0,
+    diagnostic_member_index:0,diagnostic_residual_scale:0
+  };
+  assert.equal(isUsableTemporalResearchInferenceSpecialist(specialist),false);
+  assert.equal(isUsableTemporalResearchInferenceSpecialist(specialist,{
+    allowDiagnostic:true
+  }),false,'zero-residual Logistic anchor is not neural inference coverage');
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,diagnostic_residual_scale:0.1
+  },{allowDiagnostic:true}),true);
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,diagnostic_residual_scale:0.1
+  }),false,'diagnostic residual is not available outside explicit research evaluation');
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,selected_member_index:0,selected_residual_scale:0.2
+  }),true);
+});
+
+test('V8 coverage audit reports missing BTC regimes before an external prediction is attempted',()=>{
+  const riskOn={
+    members:[{}],selected_member_index:-1,selected_residual_scale:0,
+    diagnostic_member_index:0,diagnostic_residual_scale:0
+  };
+  const report=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:riskOn,BTC_RISK_OFF:riskOn},
+    allowDiagnostic:true
+  });
+  assert.equal(report.complete,false);
+  assert.deepEqual(report.available_regimes,[]);
+  assert.deepEqual(report.missing_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  const researchReady=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{
+      BTC_RISK_ON:{...riskOn,diagnostic_residual_scale:0.15},
+      BTC_RISK_OFF:{...riskOn,diagnostic_residual_scale:0.12}
+    },
+    allowDiagnostic:true
+  });
+  assert.equal(researchReady.complete,true);
+  const notProduction=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{
+      BTC_RISK_ON:{...riskOn,diagnostic_residual_scale:0.15},
+      BTC_RISK_OFF:{...riskOn,diagnostic_residual_scale:0.12}
+    },
+    allowDiagnostic:false
+  });
+  assert.equal(notProduction.complete,false);
 });
