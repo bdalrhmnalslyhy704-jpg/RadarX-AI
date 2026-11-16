@@ -1,0 +1,37 @@
+name: Build 224 TCN V11 Inference Coverage Regression
+
+on:
+  push:
+    branches:
+      - research/build224-tcn-v11-inference-coverage-20261116
+    paths:
+      - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-neural-brain.test.mjs'
+      - '.github/workflows/build224-tcn-v11-inference-coverage-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-v11-inference-coverage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  inference-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax check the recurrent model and training runner
+        run: |
+          node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+      - name: Run temporal neural brain regressions
+        run: node --test --test-timeout=180000 phase2/tests/temporal-neural-brain.test.mjs
