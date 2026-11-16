@@ -39,7 +39,7 @@ test('TCN V11 inner qualification requires BOTH BTC risk regimes to pass inner v
   assert.match(trainer,/const expectedBtcRegimes=\['BTC_RISK_ON','BTC_RISK_OFF'\]/);
   assert.match(trainer,/expectedBtcRegimes\.every\(regime=>\{/);
   assert.match(trainer,/specialist\.validation_passed===true&&specialist\.holdout_passed===true/);
-  assert.match(trainer,/state\?\.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER'/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
   assert.match(trainer,/passed:attentionInnerQualified/);
   assert.match(trainer,/diagnostic_only:!attentionInnerQualified/);
 });
@@ -134,7 +134,16 @@ test('V9-V11 artifacts include a strictly qualified all-regime fallback for miss
   assert.match(trainer,/const pooledFallbackQualified=pooledFallback\.selection_passed===true&&/);
   assert.match(trainer,/pooledFallback\.validation_passed===true&&pooledFallback\.holdout_passed===true/);
   assert.match(trainer,/const attentionPooledQualified=attentionPooledFallback\.selection_passed===true&&/);
-  assert.match(trainer,/pooled_fallback:pooledState\?\{research_inference:pooledState\}:null/);
+  assert.match(trainer,/pooled_fallback:pooledStateUsable\?\{research_inference:pooledState\}:null/);
+  assert.match(trainer,/pooled_fallback:attentionPooledStateUsable\?\{research_inference:attentionPooledState\}:null/);
+  assert.match(trainer,/auditTemporalAttentionResearchInferenceCoverage\(/);
+  assert.match(trainer,/auditTemporalVariantResearchInferenceCoverage\(/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
+  assert.match(trainer,/isUsableTemporalVariantResearchInferenceState\(state,\{\s*expectedPoolingMode:expectedPooling\s*\}\)/);
+  assert.match(trainer,/const missingRegimes=variantCoverage\.missing_regimes/);
+  assert.match(trainer,/if\(\(inferenceRegimes\.length===0&&!pooledStateUsable\)\|\|missingRegimes\.length>0\)/);
+  assert.match(neural,/isUsableTemporalAttentionResearchInferenceState/);
+  assert.match(neural,/isUsableTemporalVariantResearchInferenceState/);
   assert.match(trainer,/qualificationPassed=bothRegimesSelected\|\|pooledFallbackQualified/);
   assert.match(trainer,/POOLED_ALL_REGIMES_FALLBACK_PASSED_VALIDATION_AND_HOLDOUT/);
   assert.match(trainer,/diagnostic_only:!qualificationPassed/);
@@ -142,6 +151,10 @@ test('V9-V11 artifacts include a strictly qualified all-regime fallback for miss
 
 test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/auditTemporalResearchInferenceCoverage\(/);
+  assert.match(trainer,/v8Coverage\.complete/);
+  assert.match(trainer,/TCN_V8_MISSING_REGIME_INFERENCE_STATE/);
+  assert.match(trainer,/inference_coverage_complete:v8Coverage\.complete/);
   assert.match(trainer,/modelName:'TCN_V8'/);
   assert.match(trainer,/unavailable\.TCN_V8=/);
   assert.match(trainer,/modelName:'TCN_V11'/);

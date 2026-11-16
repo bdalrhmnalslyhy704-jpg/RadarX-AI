@@ -4315,8 +4315,10 @@ export function predictTemporalResearchOutput(sequence,profile={},{
   const specialist=fitted.specialists_by_regime?.[regime];
   if(!specialist||!Array.isArray(specialist.members))return null;
   const selectedIndex=Number(specialist.selected_member_index);
+  const selectedScale=finite(specialist.selected_residual_scale);
   if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
-    selectedIndex<specialist.members.length){
+    selectedIndex<specialist.members.length&&
+    selectedScale!==null&&selectedScale>0){
     const probability=predict(sequence,fitted);
     return Number.isFinite(probability)?{
       probability,mode:'INNER_SELECTED_TCN_MEMBER',regime,
@@ -4339,10 +4341,100 @@ export function predictTemporalResearchOutput(sequence,profile={},{
 }
 
 /**
+ * Validate whether one V8 regime specialist can emit a selected or explicitly
+ * research-diagnostic neural probability. Anchor-only/zero-residual members
+ * are not inference coverage.
+ */
+export function isUsableTemporalResearchInferenceSpecialist(specialist,{
+  allowDiagnostic=false
+}={}){
+  if(!specialist||!Array.isArray(specialist.members))return false;
+  const selectedIndex=Number(specialist.selected_member_index);
+  const selectedScale=finite(specialist.selected_residual_scale);
+  if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
+    selectedIndex<specialist.members.length&&
+    selectedScale!==null&&selectedScale>0)return true;
+  if(!allowDiagnostic)return false;
+  const diagnosticIndex=Number(specialist.diagnostic_member_index);
+  const diagnosticScale=finite(specialist.diagnostic_residual_scale);
+  return Number.isInteger(diagnosticIndex)&&diagnosticIndex>=0&&
+    diagnosticIndex<specialist.members.length&&
+    diagnosticScale!==null&&diagnosticScale>0;
+}
+
+/**
+ * Audit V8 regime coverage before creating an external prediction artifact.
+ */
+export function auditTemporalResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},allowDiagnostic=false
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalResearchInferenceSpecialist(
+        regimeSpecialists[regime],{allowDiagnostic}));
+  const missing=required.filter(regime=>!available.includes(regime));
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    missing_regimes:missing
+  };
+}
+
+/**
+ * A pooled V11 state may stand in for a missing regime only when it is a
+ * complete, positive-residual neural inference state. Mere object presence
+ * is not evidence of usable coverage.
+ */
+export function isUsableTemporalAttentionResearchInferenceState(state,{
+  allowDiagnostic=false
+}={}){
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
+    state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
+    state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
+    !state.model||state.model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)
+    return false;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return false;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_ATTENTION_MEMBER')return false;
+  const residualScale=finite(state.residual_scale);
+  return residualScale!==null&&residualScale>0;
+}
+
+/**
+ * Report whether every externally evaluated BTC regime has an inference-ready
+ * V11 attention member or a single usable pooled fallback. Object presence
+ * alone never counts as coverage.
+ */
+export function auditTemporalAttentionResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},pooledFallbackState=null,
+  allowDiagnostic=false
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalAttentionResearchInferenceState(
+        regimeSpecialists[regime]?.research_inference,{allowDiagnostic}));
+  const pooledFallbackUsable=isUsableTemporalAttentionResearchInferenceState(
+    pooledFallbackState,{allowDiagnostic});
+  const missing=required.filter(regime=>
+    !available.includes(regime)&&!pooledFallbackUsable);
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    pooled_fallback_usable:pooledFallbackUsable,
+    missing_regimes:missing
+  };
+}
+
+/**
  * Research inference for the separately fitted V11 learned-query attention
- * challenger. It reads only the per-regime exported attention member and the
- * inner-selection calibrator; a zero-residual/logistic-only diagnostic is
- * never exposed as a neural prediction.
+ * challenger. It reads only a usable per-regime or pooled attention member
+ * and never substitutes a zero-residual/logistic-only diagnostic.
  */
 export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   allowDiagnostic=false
@@ -4352,22 +4444,62 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   if(!regime)return null;
   const specialist=profile?.regime_specialists?.[regime];
   const state=specialist?.research_inference??profile?.pooled_fallback?.research_inference;
-  if(state?.schema!=='RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1'||
-    state.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE||
-    state.architecture!==TEMPORAL_ATTENTION_MODEL_ARCHITECTURE||
-    !state.model||state.model.temporal_pooling!==TEMPORAL_ATTENTION_POOLING_MODE)
-    return null;
-  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER';
-  if(diagnostic&&!allowDiagnostic)return null;
-  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_ATTENTION_MEMBER')return null;
-  const residualScale=finite(state.residual_scale);
-  if(residualScale===null||residualScale<=0)return null;
+  if(!isUsableTemporalAttentionResearchInferenceState(state,{allowDiagnostic}))return null;
+  const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
   return Number.isFinite(probability)?{
     probability,mode:state.inference_mode,regime,
     member_index:Number(state.member_index),residual_scale:residualScale
   }:null;
+}
+
+/**
+ * V9/V10 inference state is usable only when its complete architecture,
+ * pooling and non-zero neural residual contract matches the predictor.
+ */
+export function isUsableTemporalVariantResearchInferenceState(state,{
+  allowDiagnostic=false,expectedPoolingMode=null
+}={}){
+  if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
+    ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
+    (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
+    !state.model||state.model.temporal_pooling!==state.temporal_pooling||
+    typeof state.architecture!=='string')return false;
+  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER';
+  if(diagnostic&&!allowDiagnostic)return false;
+  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_VARIANT_MEMBER')return false;
+  const residualScale=finite(state.residual_scale);
+  return residualScale!==null&&residualScale>0;
+}
+
+/**
+ * Audit complete external BTC regime coverage for a V9/V10 artifact.
+ * Missing regimes are not covered by a merely present but unusable fallback.
+ */
+export function auditTemporalVariantResearchInferenceCoverage({
+  requiredRegimes=[],regimeSpecialists={},pooledFallbackState=null,
+  allowDiagnostic=false,expectedPoolingMode=null
+}={}){
+  const required=[...new Set((Array.isArray(requiredRegimes)?requiredRegimes:[])
+    .filter(value=>typeof value==='string'&&value.length>0))];
+  const available=Object.keys(regimeSpecialists&&typeof regimeSpecialists==='object'
+    ?regimeSpecialists:{}).filter(regime=>
+      isUsableTemporalVariantResearchInferenceState(
+        regimeSpecialists[regime]?.research_inference,{
+          allowDiagnostic,expectedPoolingMode
+        }));
+  const pooledFallbackUsable=isUsableTemporalVariantResearchInferenceState(
+    pooledFallbackState,{allowDiagnostic,expectedPoolingMode});
+  const missing=required.filter(regime=>
+    !available.includes(regime)&&!pooledFallbackUsable);
+  return {
+    complete:missing.length===0,
+    required_regimes:required,
+    available_regimes:available,
+    pooled_fallback_usable:pooledFallbackUsable,
+    missing_regimes:missing
+  };
 }
 
 /**
@@ -4384,16 +4516,10 @@ export function predictTemporalVariantResearchOutput(sequence,profile={},{
   if(!regime)return null;
   const state=profile?.regime_specialists?.[regime]?.research_inference??
     profile?.pooled_fallback?.research_inference;
-  if(state?.schema!=='RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1'||
-    ![TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_MULTISCALE_POOLING_MODE].includes(state.temporal_pooling)||
-    (expectedPoolingMode!==null&&state.temporal_pooling!==expectedPoolingMode)||
-    !state.model||state.model.temporal_pooling!==state.temporal_pooling||
-    typeof state.architecture!=='string')return null;
-  const diagnostic=state.inference_mode==='INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER';
-  if(diagnostic&&!allowDiagnostic)return null;
-  if(!diagnostic&&state.inference_mode!=='INNER_SELECTED_TCN_VARIANT_MEMBER')return null;
-  const residualScale=finite(state.residual_scale);
-  if(residualScale===null||residualScale<=0)return null;
+  if(!isUsableTemporalVariantResearchInferenceState(state,{
+    allowDiagnostic,expectedPoolingMode
+  }))return null;
+  const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
   return Number.isFinite(probability)?{

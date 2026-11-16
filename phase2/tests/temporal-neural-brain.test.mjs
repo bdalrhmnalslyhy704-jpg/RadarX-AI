@@ -54,7 +54,13 @@ import {
   poolLearnedTemporalAttention,
   hasTemporalBrierSuperiority,
   buildTemporalNeuralProfile,
+  isUsableTemporalResearchInferenceSpecialist,
+  auditTemporalResearchInferenceCoverage,
   predictTemporalAttentionResearchOutput,
+  isUsableTemporalAttentionResearchInferenceState,
+  auditTemporalAttentionResearchInferenceCoverage,
+  isUsableTemporalVariantResearchInferenceState,
+  auditTemporalVariantResearchInferenceCoverage,
   predictTemporalVariantResearchOutput,
   predictTemporalProbability
 } from '../core/temporal-neural-brain.mjs';
@@ -1599,4 +1605,240 @@ test('four-hour V8–V11 training entry accepts only audited 1m first-touch outc
   });
   assert.equal(invalidLabel.training_eligible,false,
     'the complete 240-minute path must be timestamp-audited even after an early touch');
+});
+
+
+test('V11 pooled fallback covers a missing regime only with a usable positive-residual attention state',()=>{
+  const selected={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_SELECTED_TCN_ATTENTION_MEMBER',
+    residual_scale:0.25
+  };
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(selected),true);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,residual_scale:0
+  }),false,'zero-residual anchor-only state cannot cover a missing regime');
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,residual_scale:-0.1
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,model:null
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,temporal_pooling:'UNKNOWN_POOLING'
+  }),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...selected,architecture:'UNKNOWN_ARCHITECTURE'
+  }),false);
+});
+
+test('V11 diagnostic attention state is available only to explicit research diagnostics',()=>{
+  const diagnostic={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+    residual_scale:0.1
+  };
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(diagnostic),false);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState(diagnostic,{
+    allowDiagnostic:true
+  }),true);
+  assert.equal(isUsableTemporalAttentionResearchInferenceState({
+    ...diagnostic,inference_mode:'UNKNOWN_MODE'
+  },{allowDiagnostic:true}),false);
+});
+
+
+test('V11 coverage audit rejects an unusable zero-residual pooled fallback for the missing BTC regime',()=>{
+  const usableRiskOn={
+    research_inference:{
+      schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+      temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+      architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+      model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+      inference_mode:'INNER_SELECTED_TCN_ATTENTION_MEMBER',
+      residual_scale:0.2
+    }
+  };
+  const zeroResidualPool={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+    residual_scale:0
+  };
+  const coverage=auditTemporalAttentionResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:usableRiskOn},
+    pooledFallbackState:zeroResidualPool,allowDiagnostic:true
+  });
+  assert.equal(coverage.complete,false);
+  assert.deepEqual(coverage.available_regimes,['BTC_RISK_ON']);
+  assert.equal(coverage.pooled_fallback_usable,false);
+  assert.deepEqual(coverage.missing_regimes,['BTC_RISK_OFF']);
+});
+
+test('V11 coverage audit allows a positive-residual pooled diagnostic for a missing regime only in research mode',()=>{
+  const usableRiskOn={
+    research_inference:{
+      schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+      temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+      architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+      model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+      inference_mode:'INNER_SELECTED_TCN_ATTENTION_MEMBER',
+      residual_scale:0.2
+    }
+  };
+  const diagnosticPool={
+    schema:'RADARX_TEMPORAL_TCN_ATTENTION_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE,
+    architecture:TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ATTENTION_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_ATTENTION_MEMBER',
+    residual_scale:0.1
+  };
+  const researchCoverage=auditTemporalAttentionResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:usableRiskOn},
+    pooledFallbackState:diagnosticPool,allowDiagnostic:true
+  });
+  assert.equal(researchCoverage.complete,true);
+  assert.deepEqual(researchCoverage.missing_regimes,[]);
+  const productionCoverage=auditTemporalAttentionResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:usableRiskOn},
+    pooledFallbackState:diagnosticPool,allowDiagnostic:false
+  });
+  assert.equal(productionCoverage.complete,false);
+  assert.deepEqual(productionCoverage.missing_regimes,['BTC_RISK_OFF']);
+});
+
+
+test('V9/V10 coverage audit rejects a zero-residual pooled fallback for missing regime coverage',()=>{
+  const usableV9={
+    research_inference:{
+      schema:'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1',
+      temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE,
+      architecture:TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+      model:{temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE},
+      inference_mode:'INNER_SELECTED_TCN_VARIANT_MEMBER',
+      residual_scale:0.25
+    }
+  };
+  const zeroResidualV9={
+    schema:'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE,
+    architecture:TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_ORDERED_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER',
+    residual_scale:0
+  };
+  const coverage=auditTemporalVariantResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:usableV9},
+    pooledFallbackState:zeroResidualV9,allowDiagnostic:true,
+    expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+  });
+  assert.equal(coverage.complete,false);
+  assert.deepEqual(coverage.available_regimes,['BTC_RISK_ON']);
+  assert.equal(coverage.pooled_fallback_usable,false);
+  assert.deepEqual(coverage.missing_regimes,['BTC_RISK_OFF']);
+  assert.equal(isUsableTemporalVariantResearchInferenceState(zeroResidualV9,{
+    allowDiagnostic:true,expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+  }),false);
+});
+
+test('V9/V10 variant coverage accepts only a positive-residual diagnostic fallback for the expected pooling family',()=>{
+  const diagnosticV10={
+    schema:'RADARX_TEMPORAL_TCN_VARIANT_RESEARCH_STATE_V1',
+    temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE,
+    architecture:TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE,
+    model:{temporal_pooling:TEMPORAL_MULTISCALE_POOLING_MODE},
+    inference_mode:'INNER_BEST_DIAGNOSTIC_TCN_VARIANT_MEMBER',
+    residual_scale:0.1
+  };
+  const coverage=auditTemporalVariantResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{},
+    pooledFallbackState:diagnosticV10,allowDiagnostic:true,
+    expectedPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE
+  });
+  assert.equal(coverage.complete,true);
+  assert.deepEqual(coverage.missing_regimes,[]);
+  const notProduction=auditTemporalVariantResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{},
+    pooledFallbackState:diagnosticV10,allowDiagnostic:false,
+    expectedPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE
+  });
+  assert.equal(notProduction.complete,false);
+  const wrongFamily=auditTemporalVariantResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{},
+    pooledFallbackState:diagnosticV10,allowDiagnostic:true,
+    expectedPoolingMode:TEMPORAL_ORDERED_POOLING_MODE
+  });
+  assert.equal(wrongFamily.complete,false);
+  assert.deepEqual(wrongFamily.missing_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+});
+
+
+test('V8 regime inference requires a valid selected member with positive neural residual',()=>{
+  const specialist={
+    members:[{weights:[0],bias:0}],
+    selected_member_index:-1,selected_residual_scale:0,
+    diagnostic_member_index:0,diagnostic_residual_scale:0
+  };
+  assert.equal(isUsableTemporalResearchInferenceSpecialist(specialist),false);
+  assert.equal(isUsableTemporalResearchInferenceSpecialist(specialist,{
+    allowDiagnostic:true
+  }),false,'zero-residual Logistic anchor is not neural inference coverage');
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,diagnostic_residual_scale:0.1
+  },{allowDiagnostic:true}),true);
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,diagnostic_residual_scale:0.1
+  }),false,'diagnostic residual is not available outside explicit research evaluation');
+  assert.equal(isUsableTemporalResearchInferenceSpecialist({
+    ...specialist,selected_member_index:0,selected_residual_scale:0.2
+  }),true);
+});
+
+test('V8 coverage audit reports missing BTC regimes before an external prediction is attempted',()=>{
+  const riskOn={
+    members:[{}],selected_member_index:-1,selected_residual_scale:0,
+    diagnostic_member_index:0,diagnostic_residual_scale:0
+  };
+  const report=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{BTC_RISK_ON:riskOn,BTC_RISK_OFF:riskOn},
+    allowDiagnostic:true
+  });
+  assert.equal(report.complete,false);
+  assert.deepEqual(report.available_regimes,[]);
+  assert.deepEqual(report.missing_regimes,['BTC_RISK_ON','BTC_RISK_OFF']);
+  const researchReady=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{
+      BTC_RISK_ON:{...riskOn,diagnostic_residual_scale:0.15},
+      BTC_RISK_OFF:{...riskOn,diagnostic_residual_scale:0.12}
+    },
+    allowDiagnostic:true
+  });
+  assert.equal(researchReady.complete,true);
+  const notProduction=auditTemporalResearchInferenceCoverage({
+    requiredRegimes:['BTC_RISK_ON','BTC_RISK_OFF'],
+    regimeSpecialists:{
+      BTC_RISK_ON:{...riskOn,diagnostic_residual_scale:0.15},
+      BTC_RISK_OFF:{...riskOn,diagnostic_residual_scale:0.12}
+    },
+    allowDiagnostic:false
+  });
+  assert.equal(notProduction.complete,false);
 });
