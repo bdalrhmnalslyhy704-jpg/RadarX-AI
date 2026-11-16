@@ -36,7 +36,13 @@ const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -35, 35)));
 const logit = value => Math.log(clamp(value, 1e-12, 1 - 1e-12) /
   (1 - clamp(value, 1e-12, 1 - 1e-12)));
 
-const ENTRY_THRESHOLD_GRID = Object.freeze([0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80]);
+// Coarse predeclared sweep spans the observed calibrated score range on the
+// fixed cohort. The baseline and every challenger share this exact grid; no
+// trade/risk gate is relaxed, and selection still uses a disjoint earlier block.
+const ENTRY_THRESHOLD_GRID = Object.freeze([
+  0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,
+  0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80
+]);
 
 function summarizeProbabilityDistribution(values) {
   if(!Array.isArray(values)||values.length===0||values.some(value=>
