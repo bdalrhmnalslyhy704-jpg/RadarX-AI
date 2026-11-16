@@ -21,7 +21,7 @@ import {
 import {
   buildFourHourTemporalNeuralProfile,predictTemporalResearchOutput,
   predictTemporalAttentionResearchOutput,isUsableTemporalAttentionResearchInferenceState,
-  predictTemporalVariantResearchOutput,
+  auditTemporalAttentionResearchInferenceCoverage,predictTemporalVariantResearchOutput,
   TEMPORAL_SEQUENCE_CHANNELS,TEMPORAL_SEQUENCE_STEPS,
   TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
   TEMPORAL_ORDERED_POOLING_MODE,TEMPORAL_ORDERED_POOLING_MODEL_ARCHITECTURE,
@@ -424,22 +424,22 @@ async function main(){
   };
   const attentionProfile=temporalProfile?.regime_local_tcn_attention_challenger;
   const attentionSpecialists=attentionProfile?.regime_specialists??{};
-  const attentionInferenceRegimes=Object.keys(attentionSpecialists).filter(regime=>
-    isUsableTemporalAttentionResearchInferenceState(
-      attentionSpecialists[regime]?.research_inference,{allowDiagnostic:true}));
   const attentionPooledFallback=attentionProfile?.pooled_fallback??{};
   const attentionPooledState=attentionPooledFallback.research_inference??null;
-  const attentionPooledStateUsable=
-    isUsableTemporalAttentionResearchInferenceState(attentionPooledState,{allowDiagnostic:true});
+  const requiredHoldoutRegimes=[...new Set(eventRows.map(row=>
+    Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
+  const attentionCoverage=auditTemporalAttentionResearchInferenceCoverage({
+    requiredRegimes:requiredHoldoutRegimes,regimeSpecialists:attentionSpecialists,
+    pooledFallbackState:attentionPooledState,allowDiagnostic:true
+  });
+  const attentionInferenceRegimes=attentionCoverage.available_regimes;
+  const attentionPooledStateUsable=attentionCoverage.pooled_fallback_usable;
+  const missingAttentionRegimes=attentionCoverage.missing_regimes;
   const attentionPooledQualified=attentionPooledFallback.selection_passed===true&&
     attentionPooledFallback.validation_passed===true&&
     attentionPooledFallback.holdout_passed===true&&
     attentionPooledStateUsable&&
     attentionPooledState?.inference_mode==='INNER_SELECTED_TCN_ATTENTION_MEMBER';
-  const requiredHoldoutRegimes=[...new Set(eventRows.map(row=>
-    Number(row.temporal_sequence?.at(-1)?.[19])>=0?'BTC_RISK_ON':'BTC_RISK_OFF'))];
-  const missingAttentionRegimes=requiredHoldoutRegimes.filter(regime=>
-    !attentionInferenceRegimes.includes(regime)&&!attentionPooledStateUsable);
   const expectedBtcRegimes=['BTC_RISK_ON','BTC_RISK_OFF'];
   const bothAttentionRegimesQualified=expectedBtcRegimes.every(regime=>{
     const specialist=attentionSpecialists[regime]??{};
