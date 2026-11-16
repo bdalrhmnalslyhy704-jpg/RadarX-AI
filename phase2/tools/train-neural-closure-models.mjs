@@ -52,7 +52,7 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V2';
+const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V3';
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -1158,11 +1158,16 @@ async function main(){
       negative_count:model.validation.negative_count??null,
       raw_brier_score:model.validation.raw_brier_score??null,
       calibrated_brier_score:model.validation.calibrated_brier_score??null,
+      threshold_selection_sample_count:model.validation.threshold_selection_sample_count??0,
+      threshold_selection_positive_count:model.validation.threshold_selection_positive_count??0,
+      threshold_selection_negative_count:model.validation.threshold_selection_negative_count??0,
       threshold_selection:model.validation.threshold_selection??null,
       selected_threshold:model.validation.selected_threshold??null,
       threshold_selection_eligible_count:model.validation.threshold_selection_eligible_count??0,
       threshold_selection_gates:model.validation.threshold_selection_gates??null,
       threshold_trials:model.validation.threshold_trials??[],
+      validation_threshold_metrics:model.validation.validation_threshold_metrics??null,
+      validation_threshold_risk_gates:model.validation.validation_threshold_risk_gates??null,
       outer_validation_gate:model.validation.outer_validation_gate??null
     }:null,
     calibration_status:model.calibration?.status??null,

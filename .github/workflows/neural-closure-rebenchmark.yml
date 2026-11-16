@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/build224-neural-closure-calibration-parity-20261116
+      - research/build224-neural-closure-independent-threshold-gate-20261116
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -88,7 +89,7 @@ jobs:
           mkdir -p artifacts/rebenchmark
           node --expose-gc phase2/tools/train-neural-closure-models.mjs \
             --input artifacts/source-run-99/dataset.json \
-            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
+            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v3.json \
             --epochs 8 \
             --denseEpochs 36 \
             --minimumHoldoutTrades 100 \
