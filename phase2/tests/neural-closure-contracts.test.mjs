@@ -421,23 +421,6 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
     assert.deepEqual(report.models[family].validation.threshold_trials.map(x=>x.threshold),
       report.models.LOGISTIC_REGRESSION.validation.threshold_trials.map(x=>x.threshold),
       family+' must use the exact same predeclared threshold grid');
-    const selectionDistribution=
-      report.models[family].validation.threshold_selection_probability_distribution;
-    const outerDistribution=
-      report.models[family].validation.outer_validation_probability_distribution;
-    assert.equal(selectionDistribution.sample_count,
-      report.models[family].validation.threshold_selection_sample_count,
-      family+' selection probability diagnostics must cover every threshold-selection row');
-    assert.equal(outerDistribution.sample_count,
-      report.models[family].validation.sample_count,
-      family+' outer probability diagnostics must cover every validation row');
-    for(const distribution of [selectionDistribution,outerDistribution]){
-      assert.ok(Number.isFinite(distribution.min)&&Number.isFinite(distribution.max),family);
-      assert.ok(distribution.min>=0&&distribution.max<=1&&distribution.min<=distribution.max,family);
-      assert.ok(distribution.p50>=distribution.min&&distribution.p99<=distribution.max,family);
-      assert.deepEqual(Object.keys(distribution.at_or_above_threshold_counts),
-        ['0.40','0.45','0.50','0.55','0.60','0.65','0.70','0.75','0.80'],family);
-    }
   }
   assert.deepEqual(report.calibration_policy,{
     schema:'DISJOINT_CALIBRATION_THRESHOLD_SELECTION_OUTER_VALIDATION_V1',
@@ -547,6 +530,14 @@ test('entry probability distribution diagnostics expose raw and calibrated tails
       report.models[family].validation.threshold_selection_sample_count,family);
     assert.equal(diagnostic.calibrated.sample_count,
       report.models[family].validation.threshold_selection_sample_count,family);
+    const outerDiagnostic=
+      report.models[family].validation.outer_validation_probability_distribution;
+    assert.equal(outerDiagnostic.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(outerDiagnostic.calibrated.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(outerDiagnostic.raw.sample_count,
+      report.models[family].validation.sample_count,family);
+    assert.equal(outerDiagnostic.calibrated.sample_count,
+      report.models[family].validation.sample_count,family);
     for(const series of [diagnostic.raw,diagnostic.calibrated]){
       assert.ok(series.minimum>=0&&series.maximum<=1,family);
       assert.ok(series.minimum<=series.p50&&series.p50<=series.p75&&
