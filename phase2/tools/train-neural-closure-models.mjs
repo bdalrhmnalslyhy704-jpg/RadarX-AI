@@ -316,6 +316,9 @@ async function main(){
       enableTemporalBoostedTree:true,
       // Independent pooling variants share the exact purged train/selection/
       // calibration/validation/holdout boundaries but keep separate weights.
+      // The 24-epoch base schedules members for 18/24/36 epochs; checkpointing
+      // monitors training loss only, while the disjoint selection block decides
+      // whether any non-zero neural residual is allowed through.
       enableRegimeLocalTcnPyramid:true,
       regimeLocalTcnPyramidMaxTrainingSamples:2048,
       regimeLocalTcnPyramidEpochs:Math.max(12,Math.min(24,args.epochs)),
