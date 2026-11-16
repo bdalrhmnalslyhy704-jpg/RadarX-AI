@@ -163,7 +163,7 @@ test('nominal 60/20/20 split has a complete UTC purge day at both boundaries',()
     split.boundaries.holdout_first_at-NEURAL_CLOSURE_PURGE_MS);
 });
 
-test('fixed-SHA calibration fit and check blocks retain independent 50/50 class support',()=>{
+test('fixed-SHA calibration, threshold-selection and outer-validation blocks are independently purged',()=>{
   const rows=validateFourHourRows(makeRows({days:40,rowsPerDay:600}));
   const split=splitFourHourRows(rows);
   const blocks=buildNeuralClosureCalibrationBlocks(split.validation);
@@ -449,14 +449,18 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
   assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
     [BASE+42*NEURAL_CLOSURE_PURGE_MS]);
+  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.threshold_selection,
+    [BASE+43*NEURAL_CLOSURE_PURGE_MS,BASE+44*NEURAL_CLOSURE_PURGE_MS]);
   assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.threshold_purge,
     [BASE+45*NEURAL_CLOSURE_PURGE_MS]);
+  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.check,
+    [BASE+46*NEURAL_CLOSURE_PURGE_MS,BASE+47*NEURAL_CLOSURE_PURGE_MS]);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
     assert.ok(['VALIDATION_EVALUATED_HOLDOUT_LOCKED','EVALUATED'].includes(model.status),
       family+' must be validation-scored or holdout-evaluated, never silently skipped');
     if(model.status==='EVALUATED'){
-      assert.equal(model.holdout.sample_count,1200);
+      assert.equal(model.holdout.sample_count,2200);
     }else{
       assert.equal(model.holdout.evaluated,false);
       assert.ok(model.acceptance.status==='HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
