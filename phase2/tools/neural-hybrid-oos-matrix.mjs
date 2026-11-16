@@ -128,30 +128,68 @@ function innerGate(model){
       passed:model.shared_model_selection_passed===true&&candidate!==null&&
         logistic-candidate>INNER_MARGIN};
   }
-  if(model?.regime_specialists&&typeof model.regime_specialists==='object'){
-    const regimes=Object.values(model.regime_specialists);
-    const audits=regimes.map(regime=>{
+  const regimeSelectionSource=model?.regime_specialists&&
+    typeof model.regime_specialists==='object'
+      ?model.regime_specialists
+      :model?.regimes&&typeof model.regimes==='object'
+        ?model.regimes:null;
+  if(regimeSelectionSource){
+    const audits=Object.entries(regimeSelectionSource).map(([regimeName,regime])=>{
       const candidates=Array.isArray(regime?.member_selection_scores)
         ?regime.member_selection_scores:[];
-      const chosen=candidates.find(item=>item.selected===true)||
-        candidates.filter(item=>item.beats_same_window_logistic===true&&
-          finite(item.brier_score)).sort((a,b)=>a.brier_score-b.brier_score)[0]||null;
-      const logistic=firstFinite(regime?.member_selection_logistic_brier);
+      const selected=candidates.find(item=>item.selected===true)||null;
+      // Keep the best unselected candidate as a diagnostic score. Previously,
+      // a regime with no qualifying member returned no Brier at all, hiding the
+      // measured shortfall behind a generic "unavailable" matrix cell.
+      const best=candidates.filter(item=>finite(item?.brier_score))
+        .sort((a,b)=>Number(a.brier_score)-Number(b.brier_score))[0]||null;
+      const chosen=selected||best;
+      const logistic=firstFinite(regime?.member_selection_logistic_brier,
+        chosen?.same_window_logistic_brier_score);
       const modelScore=firstFinite(chosen?.brier_score);
-      return {model_brier:modelScore,logistic_brier:logistic,
-        passed:chosen!==null&&logistic!==null&&
-          (chosen.beats_same_window_logistic===true||logistic-modelScore>INNER_MARGIN)};
+      const improvement=modelScore!==null&&logistic!==null
+        ?logistic-modelScore:null;
+      const sampleCount=number(regime?.selection_samples);
+      const passed=selected!==null&&
+        selected.beats_same_window_logistic===true&&
+        improvement!==null&&improvement>INNER_MARGIN;
+      return {
+        regime:regimeName,evaluated:modelScore!==null&&logistic!==null,
+        model_brier:modelScore,logistic_brier:logistic,improvement,
+        sample_count:sampleCount,
+        best_member_index:chosen?.index??null,
+        best_residual_scale:number(chosen?.residual_scale),
+        selected:selected!==null,passed
+      };
     });
     const complete=audits.length>0&&audits.every(item=>
-      item.model_brier!==null&&item.logistic_brier!==null);
+      item.evaluated&&item.model_brier!==null&&item.logistic_brier!==null);
     if(complete){
-      const modelScore=audits.reduce((sum,item)=>sum+item.model_brier,0)/audits.length;
-      const logistic=audits.reduce((sum,item)=>sum+item.logistic_brier,0)/audits.length;
-      return {evaluated:true,model_brier:modelScore,logistic_brier:logistic,
-        improvement:logistic-modelScore,required_margin:INNER_MARGIN,
-        passed:audits.every(item=>item.passed)&&logistic-modelScore>INNER_MARGIN,
-        regimes:audits};
+      const weighted=(key)=>{
+        const weightedRows=audits.filter(item=>
+          item.sample_count!==null&&item.sample_count>0);
+        if(weightedRows.length===audits.length){
+          const total=weightedRows.reduce((sum,item)=>sum+item.sample_count,0);
+          return weightedRows.reduce((sum,item)=>
+            sum+item[key]*item.sample_count,0)/total;
+        }
+        return audits.reduce((sum,item)=>sum+item[key],0)/audits.length;
+      };
+      const modelScore=weighted('model_brier');
+      const logistic=weighted('logistic_brier');
+      const improvement=logistic-modelScore;
+      return {
+        evaluated:true,model_brier:modelScore,logistic_brier:logistic,
+        improvement,required_margin:INNER_MARGIN,
+        passed:audits.every(item=>item.passed)&&improvement>INNER_MARGIN,
+        reason:audits.every(item=>item.passed)?null:
+          'NO_REGIME_MEMBER_BEAT_INNER_SELECTION_LOGISTIC_BY_REQUIRED_MARGIN',
+        regimes:audits
+      };
     }
+    return {evaluated:false,model_brier:null,logistic_brier:null,
+      improvement:null,required_margin:INNER_MARGIN,passed:false,
+      reason:'REGIME_SELECTION_BRIER_EVIDENCE_INCOMPLETE',regimes:audits};
   }
   const selection=model?.selection||model?.member_selection||{};
   const modelBrier=firstFinite(selection.model_brier_score,selection.candidate_brier);
