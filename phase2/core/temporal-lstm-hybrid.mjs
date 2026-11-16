@@ -20,6 +20,8 @@ import { createHash } from 'node:crypto';
  */
 
 export const TCN_LSTM_HYBRID_SCHEMA = 'RADARX_BUILD224_TCN_LSTM_ATTENTION_V1';
+export const TCN_LSTM_INPUT_NORMALIZATION_SCHEMA =
+  'RADARX_TCN_LSTM_TRAIN_ONLY_CHANNEL_STANDARDIZATION_V1';
 export const TCN_LSTM_STEPS = 24;
 export const TCN_LSTM_INPUT_CHANNELS = 29;
 export const TCN_LSTM_HIDDEN = 8;
@@ -144,6 +146,82 @@ function validateRow(row, index, requireTarget = true) {
     }
   }
   return true;
+}
+
+export function fitTcnLstmSequenceNormalizer(trainingRows) {
+  if (!Array.isArray(trainingRows) || trainingRows.length < 20)
+    throw new TypeError('TCN_LSTM_NORMALIZATION_TRAINING_SUPPORT_TOO_SMALL');
+  trainingRows.forEach((row,index)=>validateRow(row,index));
+  const count=trainingRows.length*TCN_LSTM_STEPS;
+  const means=Array(TCN_LSTM_INPUT_CHANNELS).fill(0);
+  const m2=Array(TCN_LSTM_INPUT_CHANNELS).fill(0);
+  let seen=0;
+  // Welford's online algorithm avoids unstable sum-of-squares subtraction.
+  for(const row of trainingRows){
+    for(const step of row.sequence){
+      seen++;
+      for(let channel=0;channel<TCN_LSTM_INPUT_CHANNELS;channel++){
+        const value=step[channel];
+        const delta=value-means[channel];
+        means[channel]+=delta/seen;
+        m2[channel]+=delta*(value-means[channel]);
+      }
+    }
+  }
+  if(seen!==count||means.some(value=>!finite(value))||
+     m2.some(value=>!finite(value)||value< -1e-10))
+    throw new TypeError('TCN_LSTM_NORMALIZATION_STATISTICS_NON_FINITE');
+  const rawStandardDeviations=m2.map(value=>Math.sqrt(Math.max(0,value/count)));
+  // A 1e-3 floor prevents almost-constant availability flags from amplifying
+  // tiny numerical noise into large inputs. The final z-score is clipped at 6.
+  const standardDeviations=rawStandardDeviations.map(value=>Math.max(1e-3,value));
+  const normalizer={
+    schema:TCN_LSTM_INPUT_NORMALIZATION_SCHEMA,
+    method:'TRAIN_ONLY_PER_CHANNEL_POPULATION_ZSCORE_V1',
+    fit_partition:'TRAINING_PARTITION_ONLY',
+    training_rows:trainingRows.length,
+    timestep_count:seen,
+    training_fingerprint:trainingFingerprint(trainingRows),
+    means,
+    standard_deviations,
+    raw_standard_deviations:rawStandardDeviations,
+    scale_floor:1e-3,
+    clip_abs:6
+  };
+  validateTcnLstmSequenceNormalizer(normalizer);
+  return normalizer;
+}
+
+function validateTcnLstmSequenceNormalizer(normalizer, expectedTrainingFingerprint=null) {
+  if(!normalizer||normalizer.schema!==TCN_LSTM_INPUT_NORMALIZATION_SCHEMA||
+     normalizer.method!=='TRAIN_ONLY_PER_CHANNEL_POPULATION_ZSCORE_V1'||
+     normalizer.fit_partition!=='TRAINING_PARTITION_ONLY'||
+     !Number.isSafeInteger(normalizer.training_rows)||normalizer.training_rows<20||
+     normalizer.timestep_count!==normalizer.training_rows*TCN_LSTM_STEPS||
+     !Array.isArray(normalizer.means)||normalizer.means.length!==TCN_LSTM_INPUT_CHANNELS||
+     !Array.isArray(normalizer.standard_deviations)||
+       normalizer.standard_deviations.length!==TCN_LSTM_INPUT_CHANNELS||
+     !Array.isArray(normalizer.raw_standard_deviations)||
+       normalizer.raw_standard_deviations.length!==TCN_LSTM_INPUT_CHANNELS||
+     normalizer.means.some(value=>!finite(value))||
+     normalizer.standard_deviations.some(value=>!finite(value)||value<1e-3)||
+     normalizer.raw_standard_deviations.some(value=>!finite(value)||value<0)||
+     normalizer.scale_floor!==1e-3||normalizer.clip_abs!==6||
+     !/^[a-f0-9]{64}$/.test(String(normalizer.training_fingerprint||''))||
+     (expectedTrainingFingerprint!==null&&
+       normalizer.training_fingerprint!==expectedTrainingFingerprint))
+    throw new TypeError('TCN_LSTM_INPUT_NORMALIZATION_INVALID_OR_WRONG_TRAINING_FINGERPRINT');
+  return true;
+}
+
+export function normalizeTcnLstmSequence(sequence, normalizer) {
+  validateSequence(sequence);
+  validateTcnLstmSequenceNormalizer(normalizer);
+  return sequence.map(step=>step.map((value,channel)=>
+    clamp((value-normalizer.means[channel])/
+      normalizer.standard_deviations[channel],
+      -normalizer.clip_abs,normalizer.clip_abs)
+  ));
 }
 
 function mean(values) {
@@ -360,9 +438,11 @@ function trainableParameters(model) {
 }
 
 export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
-  dropoutScale = null
+  dropoutScale = null, inputNormalization = null
 } = {}) {
   validateSequence(sequence);
+  const modelInput=inputNormalization===null
+    ?sequence:normalizeTcnLstmSequence(sequence,inputNormalization);
   if (!finite(baselineLogit)) throw new TypeError('TCN_LSTM_BASELINE_LOGIT_NON_FINITE');
   const inputDropoutScale = dropoutScale === null
     ? Array(TCN_LSTM_HIDDEN).fill(1) : dropoutScale;
@@ -371,7 +451,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
       inputDropoutScale.some(value => !finite(value) || value < 0 || value > 2))
     throw new TypeError('TCN_LSTM_LOCKED_DROPOUT_MASK_INVALID');
   const hidden = TCN_LSTM_HIDDEN;
-  let current = sequence.map(row => Array.from({ length: hidden }, (_, output) => {
+  let current = modelInput.map(row => Array.from({ length: hidden }, (_, output) => {
     let value = model.projectionBiases[output];
     for (let input = 0; input < TCN_LSTM_INPUT_CHANNELS; input++)
       value += row[input] * model.projectionWeights[input][output];
@@ -555,11 +635,13 @@ function zeroGradients(model) {
 }
 
 export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0, {
-  dropoutScale = null
+  dropoutScale = null, inputNormalization = null
 } = {}) {
   if (target !== 0 && target !== 1)
     throw new TypeError('TCN_LSTM_TARGET_INVALID');
-  const forward = inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale});
+  const forward = inspectTcnLstmForward(sequence, model, baselineLogit, {
+    dropoutScale,inputNormalization
+  });
   const parameters = trainableParameters(model);
   const gradients = zeroGradients(model);
   const hidden = TCN_LSTM_HIDDEN;
@@ -728,12 +810,13 @@ export function auditTcnLstmHybridGradients(sequence, target, {
   model = initializeModel(29),
   baselineLogit = 0,
   epsilon = 1e-5,
-  dropoutScale = null
+  dropoutScale = null,
+  inputNormalization = null
 } = {}) {
   validateSequence(sequence);
   if (!finite(epsilon) || epsilon <= 0) throw new TypeError('TCN_LSTM_GRADIENT_EPSILON_INVALID');
   const analytic = lossAndGradientsTcnLstmHybrid(
-    sequence, target, model, baselineLogit, {dropoutScale}
+    sequence, target, model, baselineLogit, {dropoutScale,inputNormalization}
   );
   const parameters = trainableParameters(model);
   const parameterPaths = flattenPaths(parameters);
@@ -747,9 +830,13 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     const path = parameterPaths[index];
     const original = getPath(parameters, path);
     setPath(parameters, path, original + epsilon);
-    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit, {
+      dropoutScale,inputNormalization
+    }).probability - target) ** 2;
     setPath(parameters, path, original - epsilon);
-    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit, {
+      dropoutScale,inputNormalization
+    }).probability - target) ** 2;
     setPath(parameters, path, original);
     const numerical = (plus - minus) / (2 * epsilon);
     const exact = getPath(analytic.gradients, gradientPaths[index]);
@@ -819,11 +906,13 @@ function updateParameters(model, gradients, optimizer, step, learningRate, l2) {
   return model;
 }
 
-function evaluateBrier(rows, model, anchor) {
+function evaluateBrier(rows, model, anchor, inputNormalization) {
   let sum = 0;
   for (const row of rows) {
     const baselineLogit = predictTcnLstmLogisticLogit(row.sequence, anchor);
-    const probability = inspectTcnLstmForward(row.sequence, model, baselineLogit).probability;
+    const probability = inspectTcnLstmForward(row.sequence, model, baselineLogit,{
+      inputNormalization
+    }).probability;
     sum += (probability - row.target) ** 2;
   }
   return sum / rows.length;
@@ -890,7 +979,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   baselineFit = null, earlyStoppingPatience = 5, earlyStoppingRows = null,
-  checkpointPolicy = 'BEST_TRAINING_BRIER'
+  checkpointPolicy = 'BEST_TRAINING_BRIER', inputNormalization = null
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -913,6 +1002,9 @@ export function trainTcnLstmHybrid(trainingRows, {
   const rows = ordered.slice(-Math.min(maxTrainingSamples, ordered.length));
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
+  const sequenceNormalizer=inputNormalization===null
+    ?fitTcnLstmSequenceNormalizer(rows):inputNormalization;
+  validateTcnLstmSequenceNormalizer(sequenceNormalizer,trainingFingerprint(rows));
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
       anchor.training_rows !== rows.length ||
@@ -943,9 +1035,9 @@ export function trainTcnLstmHybrid(trainingRows, {
   let updateStep = 0;
   const random = mulberry32(seed ^ 0xA5A5A5A5);
   const history = [];
-  const initialBrier = evaluateBrier(rows, model, anchor);
+  const initialBrier = evaluateBrier(rows, model, anchor,sequenceNormalizer);
   const initialMonitorBrier=monitorRows
-    ?evaluateBrier(monitorRows,model,anchor):initialBrier;
+    ?evaluateBrier(monitorRows,model,anchor,sequenceNormalizer):initialBrier;
   const baselineMonitorBrier=monitorRows
     ?evaluateLogisticBrier(monitorRows,anchor):null;
   let bestBrier = initialMonitorBrier;
@@ -978,7 +1070,9 @@ export function trainTcnLstmHybrid(trainingRows, {
         const dropoutScale = Array(TCN_LSTM_HIDDEN).fill(0).map(() =>
           dropoutRate > 0 && random() < dropoutRate ? 0 : 1 / (1 - dropoutRate));
         const item = lossAndGradientsTcnLstmHybrid(
-          row.sequence, row.target, model, baselineLogit, {dropoutScale}
+          row.sequence, row.target, model, baselineLogit, {
+            dropoutScale,inputNormalization:sequenceNormalizer
+          }
         );
         epochLoss += item.loss;
         seen++;
@@ -1017,10 +1111,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       updateParameters(model, averaged, optimizer, updateStep, epochRate, regularization);
     }
 
-    const trainingBrier = evaluateBrier(rows, model, anchor);
+    const trainingBrier = evaluateBrier(rows, model, anchor,sequenceNormalizer);
     if (!finite(trainingBrier)) throw new TypeError('TCN_LSTM_TRAINING_BRIER_NON_FINITE');
     const monitorBrier=monitorRows
-      ?evaluateBrier(monitorRows,model,anchor):trainingBrier;
+      ?evaluateBrier(monitorRows,model,anchor,sequenceNormalizer):trainingBrier;
     if(!finite(monitorBrier))
       throw new TypeError('TCN_LSTM_EARLY_STOPPING_BRIER_NON_FINITE');
     if(fixedEpochFinalState){
@@ -1060,7 +1154,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   }
 
   Object.assign(model, cloneTree(bestModel));
-  const finalBrier = evaluateBrier(rows, model, anchor);
+  const finalBrier = evaluateBrier(rows, model, anchor,sequenceNormalizer);
   if (!finite(finalBrier) || !treeFinite(trainableParameters(model)))
     throw new TypeError('TCN_LSTM_FINAL_MODEL_NON_FINITE');
   return {
@@ -1078,6 +1172,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
+    input_normalization:sequenceNormalizer,
     model, baseline_fit: anchor,
     training: {
       rows: rows.length,
@@ -1086,6 +1181,11 @@ export function trainTcnLstmHybrid(trainingRows, {
       training_fingerprint: trainingFingerprint(rows),
       anchor_training_fingerprint: anchor.training_fingerprint,
       fit_boundary: 'TRAINING_PARTITION_ONLY',
+      input_normalization_schema:sequenceNormalizer.schema,
+      input_normalization_fit_partition:sequenceNormalizer.fit_partition,
+      input_normalization_training_fingerprint:sequenceNormalizer.training_fingerprint,
+      input_normalization_scale_floor:sequenceNormalizer.scale_floor,
+      input_normalization_clip_abs:sequenceNormalizer.clip_abs,
       optimizer: 'ADAMW_DECOUPLED_WEIGHT_DECAY',
       scheduler: 'COSINE_DECAY_10_PERCENT_FLOOR',
       gradient_clip_norm: 1,
@@ -1139,7 +1239,9 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
   const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
-  return inspectTcnLstmForward(sequence, profile.model, baselineLogit).probability;
+  return inspectTcnLstmForward(sequence, profile.model, baselineLogit,{
+    inputNormalization:profile.input_normalization??null
+  }).probability;
 }
 
 function splitPredictions(rows, profile) {
