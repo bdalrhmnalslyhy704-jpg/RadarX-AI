@@ -74,8 +74,8 @@ function argsMap(argv){
     }else throw new Error('UNKNOWN_ARGUMENT:'+token);
     index++;
   }
-  if(!Number.isInteger(args.epochs)||args.epochs<1||args.epochs>20)
-    throw new Error('HYBRID_EPOCHS_MUST_BE_1_TO_20');
+  if(!Number.isInteger(args.epochs)||args.epochs<1||args.epochs>24)
+    throw new Error('TEMPORAL_EPOCHS_MUST_BE_1_TO_24');
   if(!Number.isInteger(args.denseEpochs)||args.denseEpochs<10||args.denseEpochs>100)
     throw new Error('DENSE_EPOCHS_MUST_BE_10_TO_100');
   if(!Number.isInteger(args.minimumHoldoutTrades)||args.minimumHoldoutTrades<1)
@@ -1169,7 +1169,9 @@ async function main(){
   let hybridFit=null;
   try{
     hybridFit=trainHybridTcnAttention(split.train,{
-      epochs:args.epochs,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+      // Keep the separate hybrid-attention control at its original eight epochs;
+      // the extended schedule targets the regime-local TCN and recurrent challenger.
+      epochs:Math.min(8,args.epochs),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
     });
     const normalization=hybridFit.normalization;
     const hybridArtifact=makeArtifact({

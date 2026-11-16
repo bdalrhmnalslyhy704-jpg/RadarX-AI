@@ -207,6 +207,9 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/regimeLocalTcnAttentionEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
   assert.match(workflow,/--epochs 24/);
   assert.match(workflow,/timeout-minutes: 90/);
+  assert.match(trainer,/args\.epochs>24/);
+  assert.match(trainer,/TEMPORAL_EPOCHS_MUST_BE_1_TO_24/);
+  assert.match(trainer,/epochs:Math\.min\(8,args\.epochs\),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
   assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
   assert.match(temporal,/validation_or_holdout_used:false/);
   assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
