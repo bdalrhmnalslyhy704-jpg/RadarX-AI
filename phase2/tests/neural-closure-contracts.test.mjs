@@ -589,16 +589,25 @@ test('a neural candidate can pass its own execution gates when Logistic has no t
   });
   assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,null);
   assert.equal(report.holdout_access.opened,true);
+  assert.equal(report.holdout_access.execution_reference,
+    'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY');
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.execution_evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.net_pnl_pct,null);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
     assert.equal(model.validation.outer_validation_gate.gates.threshold_selection_qualified,'PASS',family);
     assert.equal(model.validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,'PASS',family);
     assert.equal(model.status,'EVALUATED',family);
-    assert.equal(model.holdout.evaluated,true,family);
+    assert.equal(model.holdout.execution_evaluated,true,family);
+    assert.ok(model.holdout.sample_count>=2000,family);
     assert.ok(model.holdout.trade_count>=100,family);
     assert.ok(model.holdout.net_pnl_pct>0,family);
     assert.ok(model.holdout.max_drawdown_pct<=8,family);
+    assert.equal(model.acceptance.execution_reference,
+      'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY',family);
+    assert.equal(model.acceptance.passed,true,family);
   }
+  assert.equal(report.status,'NEURAL_SUPERIORITY_PROVEN');
 });
 
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{

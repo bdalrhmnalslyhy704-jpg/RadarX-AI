@@ -1284,20 +1284,49 @@ export function runNeuralClosureBenchmark({
       const logisticMap=verifiedPredictions.get('LOGISTIC_REGRESSION');
       const logisticProbabilities=probabilitiesFor(split.holdout,logisticMap);
       const logisticThreshold=models.LOGISTIC_REGRESSION.validation.selected_threshold;
-      const logisticMetrics=holdoutMetrics(split.holdout,logisticProbabilities,
-        logisticThreshold,roundTripCostBps,metricWeights);
+      let logisticHoldout;
+      if(finite(logisticThreshold)){
+        logisticHoldout={
+          ...holdoutMetrics(split.holdout,logisticProbabilities,
+            logisticThreshold,roundTripCostBps,metricWeights),
+          execution_evaluated:true
+        };
+      }else{
+        // Logistic remains the Brier reference. Without its own validated
+        // threshold, it has no comparable execution policy.
+        const holdoutLabels=split.holdout.map(row=>row.target);
+        logisticHoldout={
+          sample_count:split.holdout.length,
+          positive_count:holdoutCounts.positive,
+          negative_count:holdoutCounts.negative,
+          brier_score:brier(logisticProbabilities,holdoutLabels),
+          focal_asymmetric_brier:focalMean(logisticProbabilities,holdoutLabels,metricWeights),
+          execution_evaluated:false,
+          trade_count:null,
+          net_pnl_pct:null,
+          max_drawdown_pct:null,
+          return_data_status:'NOT_EVALUATED',
+          reason:'NO_QUALIFIED_LOGISTIC_EXECUTION_THRESHOLD'
+        };
+      }
       models.LOGISTIC_REGRESSION={
         ...models.LOGISTIC_REGRESSION,
         status:'EVALUATED',
-        holdout:logisticMetrics
+        holdout:logisticHoldout
       };
       holdoutAccess.opened=true;
       holdoutAccess.reason='INNER_AND_OUTER_VALIDATION_GATES_PASSED';
+      holdoutAccess.execution_reference=finite(logisticThreshold)
+        ?'MATCHED_LOGISTIC_EXECUTION_THRESHOLD'
+        :'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY';
     }
     const holdoutProbabilities=probabilitiesFor(split.holdout,rawMap,
       calibration.selected_calibrator);
-    const metrics=holdoutMetrics(split.holdout,holdoutProbabilities,
-      thresholdSelection.threshold,roundTripCostBps,metricWeights);
+    const metrics={
+      ...holdoutMetrics(split.holdout,holdoutProbabilities,
+        thresholdSelection.threshold,roundTripCostBps,metricWeights),
+      execution_evaluated:true
+    };
     models[modelName]={
       status:'EVALUATED',
       ...baseModel,
@@ -1324,6 +1353,10 @@ export function runNeuralClosureBenchmark({
     }
     const candidate=model.holdout,anchor=baseline.holdout;
     const improvement=anchor.brier_score-candidate.brier_score;
+    const logisticExecutionComparable=baseline.validation?.selected_threshold!==null&&
+      baseline.validation?.selected_threshold!==undefined&&
+      anchor.execution_evaluated===true&&
+      finite(anchor.net_pnl_pct)&&finite(anchor.max_drawdown_pct);
     const qualification=qualificationByModel?.[modelName]??{
       passed:true,reason:'NO_ADDITIONAL_INNER_QUALIFICATION_CONFIGURED'
     };
@@ -1335,16 +1368,21 @@ export function runNeuralClosureBenchmark({
       minimum_net_win_rate:finite(candidate.win_rate_pct)&&candidate.win_rate_pct>=minimumWinRatePct,
       positive_net_pnl:finite(candidate.net_pnl_pct)&&candidate.net_pnl_pct>0,
       maximum_drawdown:finite(candidate.max_drawdown_pct)&&candidate.max_drawdown_pct<=maximumDrawdownPct,
-      beat_logistic_net_pnl:finite(candidate.net_pnl_pct)&&finite(anchor.net_pnl_pct)&&
-        candidate.net_pnl_pct>anchor.net_pnl_pct,
-      no_higher_drawdown_than_logistic:finite(candidate.max_drawdown_pct)&&
-        finite(anchor.max_drawdown_pct)&&candidate.max_drawdown_pct<=anchor.max_drawdown_pct,
+      ...(logisticExecutionComparable?{
+        beat_logistic_net_pnl:finite(candidate.net_pnl_pct)&&
+          candidate.net_pnl_pct>anchor.net_pnl_pct,
+        no_higher_drawdown_than_logistic:finite(candidate.max_drawdown_pct)&&
+          candidate.max_drawdown_pct<=anchor.max_drawdown_pct
+      }:{}),
       return_data_complete:candidate.return_data_status==='COMPLETE',
       inner_selection_qualified:qualification.passed===true
     };
     model.acceptance={
       status:Object.values(gates).every(Boolean)?'PASS':'FAIL',
       passed:Object.values(gates).every(Boolean),
+      execution_reference:logisticExecutionComparable
+        ?'MATCHED_LOGISTIC_EXECUTION_THRESHOLD'
+        :'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY',
       inner_qualification:{
         passed:qualification.passed===true,
         reason:qualification.reason??null,
