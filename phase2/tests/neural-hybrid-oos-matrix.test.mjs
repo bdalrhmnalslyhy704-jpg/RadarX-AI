@@ -256,3 +256,76 @@ test('TCN-LSTM Brier matrix keeps a locked holdout unevaluated when external val
   assert.equal(row.historical_gate_status,'HOLDOUT_BRIER_UNAVAILABLE');
   assert.equal(report.promotion_eligible,false);
 });
+
+
+test('regime-local TCN matrix reports diagnostic per-regime Brier even when no member passes selection',()=>{
+  const target=makeTarget();
+  target.temporal_regime_local_tcn_challenger={
+    selected_regimes:[],
+    regimes:{
+      BTC_RISK_ON:{
+        selection_samples:400,member_selection_logistic_brier:0.11637,
+        member_selection_scores:[
+          {index:0,residual_scale:0,brier_score:0.11637,beats_same_window_logistic:false,selected:false},
+          {index:1,residual_scale:0.2,brier_score:0.11630,beats_same_window_logistic:false,selected:false}
+        ]
+      },
+      BTC_RISK_OFF:{
+        selection_samples:600,member_selection_logistic_brier:0.17304,
+        member_selection_scores:[
+          {index:0,residual_scale:0,brier_score:0.17304,beats_same_window_logistic:false,selected:false},
+          {index:1,residual_scale:0.2,brier_score:0.17303,beats_same_window_logistic:false,selected:false}
+        ]
+      }
+    },
+    validation:{evaluated:false,sample_count:0,model_brier_score:null},
+    holdout:{evaluated:false,sample_count:0,model_brier_score:null}
+  };
+  const report=buildBrierMatrixReport({
+    input_sha256:'a'.repeat(64),
+    target_results:{'5_PCT_SAFE_OPPORTUNITY_24H':target}
+  },{requiredTargets:[5]});
+  const row=report.rows.find(item=>item.family==='TCN_V8');
+  assert.ok(row);
+  assert.equal(row.inner_selection.evaluated,true);
+  assert.equal(row.inner_selection.passed,false);
+  assert.equal(row.inner_selection.regimes.length,2);
+  assert.equal(row.inner_selection.regimes[0].best_member_index,1);
+  assert.equal(row.inner_selection.regimes[0].model_brier,0.11630);
+  assert.equal(row.inner_selection.regimes[0].logistic_brier,0.11637);
+  const expectedModel=(0.11630*400+0.17303*600)/1000;
+  const expectedLogistic=(0.11637*400+0.17304*600)/1000;
+  assert.ok(Math.abs(row.inner_selection.model_brier-expectedModel)<1e-12);
+  assert.ok(Math.abs(row.inner_selection.logistic_brier-expectedLogistic)<1e-12);
+  assert.equal(row.historical_gate_status,'VALIDATION_BRIER_UNAVAILABLE');
+  assert.equal(report.promotion_eligible,false);
+});
+
+test('regime-local TCN inner gate passes only when every regime has a selected qualifying member',()=>{
+  const target=makeTarget();
+  target.temporal_regime_local_tcn_challenger={
+    selected_for_research:true,
+    regimes:Object.fromEntries(['BTC_RISK_ON','BTC_RISK_OFF'].map(regime=>[regime,{
+      selection_samples:100,member_selection_logistic_brier:0.100,
+      member_selection_scores:[
+        {index:0,residual_scale:0.2,brier_score:0.099,
+          beats_same_window_logistic:true,selected:true}
+      ]
+    }])),
+    validation:{evaluated:true,sample_count:200,model_brier_score:0.090},
+    validation_logistic:{model_brier_score:0.094},
+    holdout:{evaluated:true,sample_count:200,model_brier_score:0.080},
+    holdout_logistic:{model_brier_score:0.084}
+  };
+  const report=buildBrierMatrixReport({
+    input_sha256:'a'.repeat(64),
+    target_results:{'5_PCT_SAFE_OPPORTUNITY_24H':target}
+  },{requiredTargets:[5]});
+  const row=report.rows.find(item=>item.family==='TCN_V8');
+  assert.ok(row);
+  assert.equal(row.inner_selection.evaluated,true);
+  assert.equal(row.inner_selection.passed,true);
+  assert.ok(Math.abs(row.inner_selection.improvement-0.001)<1e-12);
+  assert.equal(row.external_validation.passed,true);
+  assert.equal(row.untouched_final_holdout.passed,true);
+});
