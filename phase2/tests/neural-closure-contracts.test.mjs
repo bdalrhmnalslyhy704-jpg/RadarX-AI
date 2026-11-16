@@ -87,10 +87,11 @@ function makeArtifacts(sourceCommitSha){
   ]));
 }
 function makePredictions(rows,sourceCommitSha,artifacts){
-  const evaluated=rows.filter(row=>{
-    const day=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS);
-    return (day>=13&&day<=15)||(day>=17);
-  });
+  // Always derive predictions from the current outer split. This keeps the
+  // synthetic test fixture aligned when calibration/threshold blocks change.
+  const split=splitFourHourRows(rows);
+  const requiredIds=new Set([...split.validation,...split.holdout].map(row=>row.id));
+  const evaluated=rows.filter(row=>requiredIds.has(row.id));
   const make=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
     id:row.id,probability:row.target?positive:negative,
     source_commit_sha:sourceCommitSha,
