@@ -665,7 +665,10 @@ test('internal early-stopping observations cannot affect the TCN-LSTM input norm
   assert.equal(profile.input_normalization.fit_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.input_normalization.training_fingerprint,profile.training.training_fingerprint);
   assert.equal(profile.training.input_normalization_fit_partition,'TRAINING_PARTITION_ONLY');
-  const baselineLogit=profile.baseline_fit.bias;
+  const anchorFeatures=buildTcnLstmAnchorFeatures(trainingRows[0].sequence);
+  const baselineLogit=profile.baseline_fit.bias+
+    anchorFeatures.reduce((sum,value,index)=>
+      sum+value*profile.baseline_fit.weights[index],0);
   const direct=inspectTcnLstmForward(trainingRows[0].sequence,profile.model,baselineLogit,{
     inputNormalization:profile.input_normalization
   }).probability;
