@@ -166,6 +166,78 @@ export function buildTcnLstmAnchorFeatures(sequence) {
   return means.concat(variances.map(value => Math.sqrt(Math.max(0, value))));
 }
 
+/**
+ * Create a research-only negative control that destroys the order of the 24
+ * timesteps independently for each sample while preserving the exact set of
+ * 24 multichannel vectors. This is a falsification experiment only: the
+ * original timestamp vector is retained as source provenance metadata and
+ * must not be interpreted as timestamps for the shuffled feature rows.
+ *
+ * The 58-feature pooled Logistic anchor (29 means + 29 standard deviations)
+ * is invariant to this permutation up to floating-point summation tolerance.
+ */
+export function createTcnLstmTemporalOrderControlRows(inputRows, {seed=20261116}={}) {
+  if(!Array.isArray(inputRows)||inputRows.length===0)
+    throw new TypeError('TCN_LSTM_ORDER_CONTROL_ROWS_REQUIRED');
+  if(!Number.isSafeInteger(seed)||seed<0||seed>0xffffffff)
+    throw new TypeError('TCN_LSTM_ORDER_CONTROL_SEED_INVALID');
+
+  const seen=new Set();
+  const permutationHash=createHash('sha256');
+  let permutedRows=0;
+  const rows=inputRows.map((row,index)=>{
+    validateRow(row,index,false);
+    const identity=sampleIdentity(row);
+    if(seen.has(identity))
+      throw new TypeError('TCN_LSTM_ORDER_CONTROL_DUPLICATE_IDENTITY');
+    seen.add(identity);
+
+    // A stable sample-specific seed prevents a shared positional mapping from
+    // leaking an artificial common chronology into the entire cohort.
+    const digest=createHash('sha256')
+      .update(String(seed)+'\\n'+identity,'utf8').digest();
+    const sampleSeed=(digest.readUInt32LE(0)^(seed>>>0))>>>0;
+    const random=mulberry32(sampleSeed);
+    const permutation=Array.from({length:TCN_LSTM_STEPS},(_,step)=>step);
+    for(let index=permutation.length-1;index>0;index--){
+      const swap=Math.floor(random()*(index+1));
+      [permutation[index],permutation[swap]]=
+        [permutation[swap],permutation[index]];
+    }
+    if(permutation.every((value,index)=>value===index))
+      permutation.push(permutation.shift());
+
+    const originalAnchor=buildTcnLstmAnchorFeatures(row.sequence);
+    const shuffledSequence=permutation.map(step=>row.sequence[step].slice());
+    const shuffledAnchor=buildTcnLstmAnchorFeatures(shuffledSequence);
+    const anchorInvariant=originalAnchor.every((value,feature)=>
+      Math.abs(value-shuffledAnchor[feature])<=1e-12
+    );
+    if(!anchorInvariant)
+      throw new TypeError('TCN_LSTM_ORDER_CONTROL_POOLED_FEATURE_DRIFT:'+identity);
+
+    permutationHash.update(identity+'\\t'+permutation.join(',')+'\\n','utf8');
+    if(permutation.some((value,index)=>value!==index))permutedRows++;
+    return {...row,sequence:shuffledSequence};
+  });
+
+  return {
+    rows,
+    audit:{
+      kind:'INDEPENDENT_PER_SAMPLE_TIMESTEP_PERMUTATION_V1',
+      seed,
+      row_count:rows.length,
+      permuted_rows:permutedRows,
+      permutation_sha256:permutationHash.digest('hex'),
+      pooled_anchor_features:'MEANS_AND_STANDARD_DEVIATIONS_PRESERVED_WITHIN_1E-12',
+      source_timestamp_metadata:'PRESERVED_UNMODIFIED_FOR_PROVENANCE_ONLY',
+      source_rows_mutated:false,
+      production_or_live_use_allowed:false,
+      interpretation:'NEGATIVE_CONTROL_ONLY_ORDERED_SEQUENCE_SIGNAL_DESTROYED'
+    }
+  };
+}
+
 export function fitTcnLstmLogisticAnchor(rows, {
   iterations = 300, learningRate = 0.04, l2 = 0.04
 } = {}) {
