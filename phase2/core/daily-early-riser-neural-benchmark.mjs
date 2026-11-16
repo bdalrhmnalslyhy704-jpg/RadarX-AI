@@ -1,6 +1,6 @@
 import {buildCognitiveLearningProfile,COGNITIVE_DAILY_FEATURE_SCHEMA,COGNITIVE_FEATURE_SCHEMA} from './cognitive-brain.mjs';
 import {buildTemporalNeuralProfile,TEMPORAL_SEQUENCE_STEPS,TEMPORAL_SEQUENCE_CHANNELS} from './temporal-neural-brain.mjs';
-import {benchmarkTcnLstmHybridChronological,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES,TCN_LSTM_REGULARIZATION_CANDIDATES} from './temporal-lstm-hybrid.mjs';
+import {benchmarkTcnLstmHybridChronological,createTcnLstmTemporalOrderControlRows,effectiveTcnLstmTrainingSampleBudget,TCN_LSTM_MAX_TRAINING_SAMPLES,TCN_LSTM_REGULARIZATION_CANDIDATES} from './temporal-lstm-hybrid.mjs';
 import {DAILY_EARLY_RISER_SAFE_OUTCOME_SOURCE} from './daily-early-riser-census.mjs';
 
 export const DAILY_EARLY_RISER_HORIZON_MS = 24 * 60 * 60 * 1000;
@@ -128,8 +128,27 @@ function benchmarkDailyTcnLstm(rows,targetDefinition,outcomeSource,horizonHours,
     reason:'TCN_LSTM_RELEASE_SPLIT_POLICY_IS_24H_ONLY',
     probability_ready:false,live_eligibility_ready:false,real_order_execution:false
   };
-  const tcnLstmRows=buildDailyEarlyRiserTcnLstmRows(rows);
-  return benchmarkTcnLstmHybridChronological(tcnLstmRows,{
+  const originalRows=buildDailyEarlyRiserTcnLstmRows(rows);
+  const orderControl=String(options.temporalTcnLstmOrderControl||'NONE')
+    .trim().toUpperCase();
+  if(!['NONE','PER_SAMPLE_SHUFFLE'].includes(orderControl))
+    throw new Error('UNSUPPORTED_TCN_LSTM_TEMPORAL_ORDER_CONTROL');
+  let tcnLstmRows=originalRows;
+  let orderControlAudit={
+    kind:'NONE',
+    row_count:originalRows.length,
+    source_timestamps_preserved:true,
+    production_or_live_use_allowed:false
+  };
+  if(orderControl==='PER_SAMPLE_SHUFFLE'){
+    const controlled=createTcnLstmTemporalOrderControlRows(originalRows,{
+      seed:Number.isSafeInteger(options.temporalTcnLstmOrderControlSeed)
+        ?options.temporalTcnLstmOrderControlSeed:20261116
+    });
+    tcnLstmRows=controlled.rows;
+    orderControlAudit=controlled.audit;
+  }
+  const benchmark=benchmarkTcnLstmHybridChronological(tcnLstmRows,{
     requiredInnerImprovement:0.00025,requiredOuterImprovement:0.003,
     outcomeHorizonMs:DAILY_EARLY_RISER_HORIZON_MS,
     requiredTargetDefinition:targetDefinition,
@@ -149,6 +168,7 @@ function benchmarkDailyTcnLstm(rows,targetDefinition,outcomeSource,horizonHours,
             Math.trunc(options.temporalTcnLstmEpochs||4)))
         }))
   });
+  return {...benchmark,temporal_order_control:orderControlAudit};
 }
 
 
