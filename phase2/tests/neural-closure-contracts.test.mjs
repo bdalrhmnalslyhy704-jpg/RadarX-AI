@@ -376,7 +376,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
-  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1');
+  assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
   assert.equal(report.target.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
   assert.equal(report.integrity.row_count,8000);
@@ -388,6 +388,30 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
+  const baselineCalibration=report.models.LOGISTIC_REGRESSION.calibration;
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    const calibration=report.models[family].calibration;
+    assert.equal(calibration.status,'EVALUATED',family+' calibration must be evaluated');
+    assert.equal(calibration.calibration_fit_rows,baselineCalibration.calibration_fit_rows,
+      family+' fit-row count must match Logistic');
+    assert.equal(calibration.calibration_purged_rows,baselineCalibration.calibration_purged_rows,
+      family+' purge-row count must match Logistic');
+    assert.equal(calibration.calibration_check_rows,baselineCalibration.calibration_check_rows,
+      family+' check-row count must match Logistic');
+    assert.deepEqual(calibration.calibration_days,baselineCalibration.calibration_days,
+      family+' must use identical UTC-day identities');
+  }
+  assert.deepEqual(report.calibration_policy,{
+    schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+    methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+    selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+    same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+    calibration_fit_rows:baselineCalibration.calibration_fit_rows,
+    calibration_purged_rows:baselineCalibration.calibration_purged_rows,
+    calibration_check_rows:baselineCalibration.calibration_check_rows,
+    holdout_used_for_calibration:false
+  });
   assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,400);
   assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);

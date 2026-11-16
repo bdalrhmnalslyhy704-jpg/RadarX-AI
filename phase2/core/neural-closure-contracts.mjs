@@ -1066,11 +1066,11 @@ export function runNeuralClosureBenchmark({
 
     const rawMap=verified.map;
     verifiedPredictions.set(modelName,rawMap);
-    const calibration=modelName==='LOGISTIC_REGRESSION'
-      ?{status:'BASELINE_RAW',selected_method:'RAW_LOGISTIC_BASELINE',
-        selected_calibrator:null,support_ready:true,
-        minimum_positive_support_per_block:minimumClassSupport}
-      :chooseCalibration(rawMap,calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
+    // The Logistic anchor and every neural challenger receive the same
+    // chronological calibration fit/purge/check rows and the same candidate
+    // calibrators. This prevents raw-vs-calibrated Brier comparisons.
+    const calibration=chooseCalibration(rawMap,
+      calibrationBlocks.fit,calibrationBlocks.check,minimumClassSupport,{
         purgedRows:calibrationBlocks.purged,calibrationDays:calibrationBlocks.days
       });
     const validationRows=calibrationBlocks.check;
@@ -1296,7 +1296,7 @@ export function runNeuralClosureBenchmark({
     prediction_matrix_sha256:predictionMatrixSha
   });
   return {
-    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V1',
+    schema:'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V2',
     status:NEURAL_CLOSURE_MODEL_FAMILIES.some(name=>models[name]?.acceptance?.passed)
       ?'NEURAL_SUPERIORITY_PROVEN':'NEURAL_SUPERIORITY_NOT_PROVEN',
     integrity:{
@@ -1329,6 +1329,16 @@ export function runNeuralClosureBenchmark({
       calibration_check_rows:calibrationBlocks.check.length
     },
     holdout_access:holdoutAccess,
+    calibration_policy:{
+      schema:'SAME_FIT_PURGE_CHECK_FOR_ALL_MODELS_V1',
+      methods:['RAW','TEMPERATURE_SCALING','PLATT_SCALING'],
+      selection:'MINIMUM_BRIER_ON_CALIBRATION_CHECK_ONLY',
+      same_fit_purge_check_rows_for_logistic_and_neural_models:true,
+      calibration_fit_rows:calibrationBlocks.fit.length,
+      calibration_purged_rows:calibrationBlocks.purged.length,
+      calibration_check_rows:calibrationBlocks.check.length,
+      holdout_used_for_calibration:false
+    },
     policy:{
       round_trip_cost_bps:roundTripCostBps,
       portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY,
