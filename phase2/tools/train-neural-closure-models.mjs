@@ -1152,12 +1152,26 @@ async function main(){
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
+    validation:model.validation?{
+      sample_count:model.validation.sample_count??null,
+      positive_count:model.validation.positive_count??null,
+      negative_count:model.validation.negative_count??null,
+      raw_brier_score:model.validation.raw_brier_score??null,
+      calibrated_brier_score:model.validation.calibrated_brier_score??null,
+      threshold_selection:model.validation.threshold_selection??null,
+      selected_threshold:model.validation.selected_threshold??null,
+      threshold_selection_eligible_count:model.validation.threshold_selection_eligible_count??0,
+      threshold_selection_gates:model.validation.threshold_selection_gates??null,
+      threshold_trials:model.validation.threshold_trials??[],
+      outer_validation_gate:model.validation.outer_validation_gate??null
+    }:null,
     calibration_status:model.calibration?.status??null,
     brier:model.holdout?.brier_score??null,
     logistic_brier:benchmark.models.LOGISTIC_REGRESSION?.holdout?.brier_score??null,
     net_pnl_pct:model.holdout?.net_pnl_pct??null,
     max_drawdown_pct:model.holdout?.max_drawdown_pct??null,
     trades:model.holdout?.trade_count??null,
+    holdout_lock_reason:model.holdout?.reason??null,
     acceptance:model.acceptance?.status??'NOT_EVALUATED',
     acceptance_gates:model.acceptance?.gates??null,
     inner_qualification:model.acceptance?.inner_qualification??null

@@ -9,6 +9,7 @@ on:
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
 
 permissions:
   contents: read
@@ -52,6 +53,7 @@ jobs:
           node --check phase2/core/neural-closure-contracts.mjs
           node --check phase2/core/neural-closure-archive-guardian.mjs
           node --check phase2/tools/train-neural-closure-models.mjs
+          node --test --test-timeout=180000 phase2/tests/neural-closure-training-wiring.test.mjs
           node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises';
           import { verifyBinanceRawArchives } from './phase2/core/neural-closure-archive-guardian.mjs';
