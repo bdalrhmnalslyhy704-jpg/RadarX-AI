@@ -201,6 +201,9 @@ test('fixed-epoch full-window refit retains the final selected epoch instead of 
     'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION');
   assert.equal(profile.training.fixed_epoch_final_state_retained,true);
   assert.equal(profile.training.restored_best_training_checkpoint,false);
+  assert.equal(profile.training.early_stopping.monitor,
+    'FIXED_EPOCH_FINAL_STATE_AFTER_PURGED_EPOCH_SELECTION');
+  assert.equal(profile.training.early_stopping.stopped_early,false);
   assert.notEqual(profile.model.residualGate[0],0,
     'fixed-epoch refit must retain the residual-gate update from its final epoch');
 });
@@ -289,6 +292,15 @@ test('direct early-stopping monitor rejects overlapping or unpurged validation r
   assert.throws(()=>trainTcnLstmHybrid(training,{
     epochs:1,maxTrainingSamples:40,earlyStoppingRows:overlapping
   }),/TCN_LSTM_TRAINING_EARLY_STOPPING_PURGE_VIOLATION/);
+});
+
+test('fixed-epoch final-state policy cannot be combined with a live early-stopping monitor',()=>{
+  const training=makeRows(0,40,'fixed-policy-train');
+  const monitor=makeRows(41,20,'fixed-policy-monitor');
+  assert.throws(()=>trainTcnLstmHybrid(training,{
+    epochs:1,maxTrainingSamples:40,earlyStoppingRows:monitor,
+    checkpointPolicy:'FIXED_EPOCH_FINAL_STATE'
+  }),/TCN_LSTM_FIXED_EPOCH_POLICY_CANNOT_USE_EARLY_STOPPING_ROWS/);
 });
 
 test('hyper-parameter selection rejects an unresolved split purge or identity overlap',()=>{
