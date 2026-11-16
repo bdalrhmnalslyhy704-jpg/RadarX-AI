@@ -20,7 +20,9 @@ permissions:
 
 concurrency:
   group: build224-neural-closure-parity-rebenchmark-${{ github.ref }}
-  cancel-in-progress: false
+  # Keep only the latest research SHA for this fixed-cohort benchmark. A newer
+  # commit supersedes stale queued/in-flight research runs; production is untouched.
+  cancel-in-progress: true
 
 jobs:
   rebenchmark:
