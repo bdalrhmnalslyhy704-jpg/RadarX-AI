@@ -30,8 +30,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: build224-tcn-lstm-hybrid
-  cancel-in-progress: false
+  group: build224-tcn-lstm-hybrid-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   recurrent-neural:
