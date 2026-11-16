@@ -1123,9 +1123,11 @@ async function main(){
           // the outer validation partition; never calculate or attach it for
           // the final holdout. The primary prediction remains the existing
           // internally calibrated probability used by the evaluator.
+          modelArtifactsByModel.TCN_LSTM_HYBRID=artifact;
+          predictionsByModel.TCN_LSTM_HYBRID=scored.rows;
           const outerValidationIds=new Set(split.validation.map(row=>String(row.id)));
           const eventRowById=new Map(eventRows.map(row=>[String(row.id),row]));
-          const scoredRowsWithPreInnerDiagnostics=scored.rows.map(item=>{
+          predictionsByModel.TCN_LSTM_HYBRID=predictionsByModel.TCN_LSTM_HYBRID.map(item=>{
             if(!outerValidationIds.has(String(item.id)))return item;
             const sourceRow=eventRowById.get(String(item.id));
             if(!sourceRow)
@@ -1137,8 +1139,6 @@ async function main(){
               throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_NON_FINITE:'+item.id);
             return {...item,pre_inner_calibration_probability:Number(preInnerProbability)};
           });
-          modelArtifactsByModel.TCN_LSTM_HYBRID=artifact;
-          predictionsByModel.TCN_LSTM_HYBRID=scoredRowsWithPreInnerDiagnostics;
           trainingArtifacts.TCN_LSTM_HYBRID={
             artifact_sha256:artifact.artifact_sha256,
             schema:TCN_LSTM_HYBRID_SCHEMA,
