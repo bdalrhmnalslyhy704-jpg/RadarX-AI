@@ -163,16 +163,71 @@ test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
 });
 
 
-test('fixed-SHA summary exposes the outer validation gate and every validation threshold trial',async()=>{
+test('fixed-SHA summary exposes disjoint threshold-selection and outer-validation risk evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/validation:model\.validation\?\{/,
     'the report must retain the complete validation evidence object');
+  assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
+  assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
+  assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);
   assert.match(trainer,/threshold_selection:model\.validation\.threshold_selection\?\?null/);
   assert.match(trainer,/selected_threshold:model\.validation\.selected_threshold\?\?null/);
-  assert.match(trainer,/threshold_selection_eligible_count:model\.validation\.threshold_selection_eligible_count\?\?0/);
   assert.match(trainer,/threshold_selection_gates:model\.validation\.threshold_selection_gates\?\?null/);
   assert.match(trainer,/threshold_trials:model\.validation\.threshold_trials\?\?\[\]/);
+  assert.match(trainer,/validation_threshold_metrics:model\.validation\.validation_threshold_metrics\?\?null/);
+  assert.match(trainer,/validation_threshold_risk_gates:model\.validation\.validation_threshold_risk_gates\?\?null/);
   assert.match(trainer,/outer_validation_gate:model\.validation\.outer_validation_gate\?\?null/,
     'the exact reason for a holdout lock must be visible in the artifact summary');
   assert.match(trainer,/holdout_lock_reason:model\.holdout\?\.reason\?\?null/);
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(specialists\)/,
+    'each V9/V10 BTC regime must expose its selection and Logistic comparison scores');
+  assert.match(trainer,/candidate_residual_scores:specialist\.member_selection_scores\?\?\[\]/,
+    'the residual-scale search must be auditable per BTC regime');
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(attentionSpecialists\)/,
+    'TCN V11 must expose the same per-regime selection diagnostics');
+  assert.match(trainer,/inner_diagnostics:training\.model_internal_diagnostics\?\?\{\}/,
+    'workflow logs must expose the detailed internal diagnostics needed to audit failed candidate selection');
+  assert.match(trainer,/pooled_fallback_diagnostics:\{/,
+    'pooled TCN fallback scores must remain visible even when no inference state was selected');
+  assert.match(trainer,/candidate_residual_scores:pooledFallback\.member_selection_scores\?\?\[\]/);
+  assert.match(trainer,/candidate_residual_scores:attentionPooledFallback\.member_selection_scores\?\?\[\]/);
+});
+
+
+test('fixed-SHA temporal challengers use extended train-only epoch budgets without relaxing validation gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-rebenchmark.yml',import.meta.url),'utf8');
+  const temporal=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+
+  // Three TCN seeds now request 18/24/36 epochs (75% / 100% / 150%
+  // profiles from the 24-epoch base) inside the immutable outer training
+  // block. Train-only checkpointing is unchanged; selection remains separate.
+  assert.match(trainer,/regimeLocalTcnPyramidEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnMultiscaleEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnAttentionEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(workflow,/--epochs 24/);
+  assert.match(workflow,/timeout-minutes: 90/);
+  assert.match(trainer,/args\.epochs>24/);
+  assert.match(trainer,/TEMPORAL_EPOCHS_MUST_BE_1_TO_24/);
+  assert.match(trainer,/epochs:Math\.min\(8,args\.epochs\),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
+  assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
+  assert.match(temporal,/validation_or_holdout_used:false/);
+  assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
+  assert.match(temporal,/epochs:Math\.max\(1,Math\.min\(24,Math\.trunc\(Number\(epochs\)\|\|6\)\)\)/,
+    'the regime-local trainer must not clip the new 24-epoch base schedule back to eight');
+  assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
+    'the third ensemble member must retain the 1.5x epoch profile');
+
+  // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
+  // exceeds its existing 30-epoch cap or changes the inner-selection margin.
+  assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
+  assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
+  assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
+  assert.match(recurrent,/config\.epochs\s*>\s*30/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
+  assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
+  assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
 });

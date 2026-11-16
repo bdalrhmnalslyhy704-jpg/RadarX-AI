@@ -1,9 +1,12 @@
 name: Build 224 Neural Closure — parity-corrected rebenchmark
 
+# Run the frozen run-99 benchmark only after the independent nested threshold gates are green.
+
 on:
   push:
     branches:
       - research/build224-neural-closure-calibration-parity-20261116
+      - research/build224-neural-closure-independent-threshold-gate-20261116
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -17,7 +20,9 @@ permissions:
 
 concurrency:
   group: build224-neural-closure-parity-rebenchmark-${{ github.ref }}
-  cancel-in-progress: false
+  # Keep only the latest research SHA for this fixed-cohort benchmark. A newer
+  # commit supersedes stale queued/in-flight research runs; production is untouched.
+  cancel-in-progress: true
 
 jobs:
   rebenchmark:
@@ -88,8 +93,8 @@ jobs:
           mkdir -p artifacts/rebenchmark
           node --expose-gc phase2/tools/train-neural-closure-models.mjs \
             --input artifacts/source-run-99/dataset.json \
-            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v2.json \
-            --epochs 8 \
+            --output artifacts/rebenchmark/fixed-sha-neural-benchmark-v3.json \
+            --epochs 24 \
             --denseEpochs 36 \
             --minimumHoldoutTrades 100 \
             --minimumWinRatePct 55 \

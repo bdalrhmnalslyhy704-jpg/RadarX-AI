@@ -52,7 +52,7 @@ const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V2';
+const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V3';
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -74,8 +74,8 @@ function argsMap(argv){
     }else throw new Error('UNKNOWN_ARGUMENT:'+token);
     index++;
   }
-  if(!Number.isInteger(args.epochs)||args.epochs<1||args.epochs>20)
-    throw new Error('HYBRID_EPOCHS_MUST_BE_1_TO_20');
+  if(!Number.isInteger(args.epochs)||args.epochs<1||args.epochs>24)
+    throw new Error('TEMPORAL_EPOCHS_MUST_BE_1_TO_24');
   if(!Number.isInteger(args.denseEpochs)||args.denseEpochs<10||args.denseEpochs>100)
     throw new Error('DENSE_EPOCHS_MUST_BE_10_TO_100');
   if(!Number.isInteger(args.minimumHoldoutTrades)||args.minimumHoldoutTrades<1)
@@ -316,15 +316,18 @@ async function main(){
       enableTemporalBoostedTree:true,
       // Independent pooling variants share the exact purged train/selection/
       // calibration/validation/holdout boundaries but keep separate weights.
+      // The 24-epoch base schedules members for 18/24/36 epochs; checkpointing
+      // monitors training loss only, while the disjoint selection block decides
+      // whether any non-zero neural residual is allowed through.
       enableRegimeLocalTcnPyramid:true,
       regimeLocalTcnPyramidMaxTrainingSamples:2048,
-      regimeLocalTcnPyramidEpochs:Math.max(4,Math.min(6,args.epochs)),
+      regimeLocalTcnPyramidEpochs:Math.max(12,Math.min(24,args.epochs)),
       enableRegimeLocalTcnMultiscale:true,
       regimeLocalTcnMultiscaleMaxTrainingSamples:2048,
-      regimeLocalTcnMultiscaleEpochs:Math.max(4,Math.min(6,args.epochs)),
+      regimeLocalTcnMultiscaleEpochs:Math.max(12,Math.min(24,args.epochs)),
       enableRegimeLocalTcnAttention:true,
       regimeLocalTcnAttentionMaxTrainingSamples:2048,
-      regimeLocalTcnAttentionEpochs:Math.max(4,Math.min(6,args.epochs))
+      regimeLocalTcnAttentionEpochs:Math.max(12,Math.min(24,args.epochs))
     }
   });
   const cognitiveArtifacts=cognitiveProfile.research_artifacts||{};
@@ -513,16 +516,69 @@ async function main(){
     exported_inference_regimes:attentionInferenceRegimes,
     required_external_holdout_regimes:requiredHoldoutRegimes,
     missing_external_holdout_regimes:missingAttentionRegimes,
-    pooled_fallback:{status:attentionPooledFallback.status??'NOT_TRAINED',
+    pooled_fallback:{
+      status:attentionPooledFallback.status??'NOT_TRAINED',
       trained:attentionPooledFallback.trained===true,
+      training_samples:attentionPooledFallback.training_samples??0,
+      selection_samples:attentionPooledFallback.selection_samples??0,
+      calibration_samples:attentionPooledFallback.calibration_samples??0,
+      validation_samples:attentionPooledFallback.validation_samples??0,
+      holdout_samples:attentionPooledFallback.holdout_samples??0,
+      training_targets:attentionPooledFallback.training_targets??null,
+      selection_targets:attentionPooledFallback.selection_targets??null,
       selection_passed:attentionPooledFallback.selection_passed===true,
       validation_passed:attentionPooledFallback.validation_passed===true,
       holdout_passed:attentionPooledFallback.holdout_passed===true,
-      training_samples:attentionPooledFallback.training_samples??0,
-      selection_samples:attentionPooledFallback.selection_samples??0,
-      calibration_samples:attentionPooledFallback.calibration_samples??0},
+      baseline_selection_brier:attentionPooledFallback.member_selection_logistic_brier??null,
+      best_selection_candidate:attentionPooledFallback.selection_best_candidate??null,
+      candidate_residual_scores:attentionPooledFallback.member_selection_scores??[],
+      validation:attentionPooledFallback.validation??null,
+      validation_logistic:attentionPooledFallback.validation_logistic??null,
+      holdout:attentionPooledFallback.holdout??null,
+      holdout_logistic:attentionPooledFallback.holdout_logistic??null,
+      research_inference_mode:attentionPooledState?.inference_mode??null
+    },
     pooled_fallback_qualified:attentionPooledQualified,
-    both_regime_specialists_qualified:bothAttentionRegimesQualified
+    both_regime_specialists_qualified:bothAttentionRegimesQualified,
+    regime_specialists:Object.fromEntries(Object.entries(attentionSpecialists).map(([regime,specialist])=>[
+      regime,{
+        status:specialist.status??null,
+        training_samples:specialist.training_samples??0,
+        available_training_samples:specialist.available_training_samples??0,
+        selection_samples:specialist.selection_samples??0,
+        calibration_samples:specialist.calibration_samples??0,
+        validation_samples:specialist.validation_samples??0,
+        holdout_samples:specialist.holdout_samples??0,
+        training_targets:specialist.training_targets??null,
+        selection_targets:specialist.selection_targets??null,
+        support_gaps:specialist.support_gaps??[],
+        chronology_valid:specialist.chronology_valid===true,
+        member_training_profiles:specialist.member_training_profiles??[],
+        member_training_diagnostics:specialist.member_training_diagnostics??[],
+        baseline_selection_brier:specialist.member_selection_logistic_brier??null,
+        best_selection_candidate:specialist.selection_best_candidate??null,
+        candidate_residual_scores:specialist.member_selection_scores??[],
+        selected_member_index:specialist.selected_member_index??null,
+        selected_residual_scale:specialist.selected_residual_scale??null,
+        diagnostic_member_index:specialist.diagnostic_member_index??null,
+        diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
+        selection_passed:specialist.selection_passed===true,
+        calibration:{
+          fitted:specialist.probability_calibration?.fitted===true,
+          method:specialist.probability_calibration?.method??null,
+          fit_on:specialist.probability_calibration?.fit_on??null,
+          samples:specialist.probability_calibration?.sample_count??0,
+          positives:specialist.probability_calibration?.positive_count??0,
+          negatives:specialist.probability_calibration?.negative_count??0,
+          reason:specialist.probability_calibration?.reason??null
+        },
+        validation:specialist.validation??null,
+        validation_logistic:specialist.validation_logistic??null,
+        holdout:specialist.holdout??null,
+        holdout_logistic:specialist.holdout_logistic??null,
+        research_inference_mode:specialist.research_inference?.inference_mode??null
+      }
+    ]))
   };
   const temporalNames=Array.from({length:TEMPORAL_SEQUENCE_CHANNELS},(_,index)=>
     'temporal_channel_'+String(index).padStart(2,'0'));
@@ -601,6 +657,70 @@ async function main(){
       },
       pooled_fallback_qualified:pooledFallbackQualified,
       both_regime_specialists_qualified:bothRegimesSelected,
+      // Publish a compact per-regime audit trail to the workflow summary.
+      // This is diagnostics only; it does not change candidate selection.
+      regime_specialists:Object.fromEntries(Object.entries(specialists).map(([regime,specialist])=>[
+        regime,{
+          status:specialist.status??null,
+          model_kind:specialist.model_kind??modelKind,
+          training_samples:specialist.training_samples??0,
+          available_training_samples:specialist.available_training_samples??0,
+          selection_samples:specialist.selection_samples??0,
+          calibration_samples:specialist.calibration_samples??0,
+          validation_samples:specialist.validation_samples??0,
+          holdout_samples:specialist.holdout_samples??0,
+          training_targets:specialist.training_targets??null,
+          selection_targets:specialist.selection_targets??null,
+          support_gaps:specialist.support_gaps??[],
+          chronology_valid:specialist.chronology_valid===true,
+          member_training_profiles:specialist.member_training_profiles??[],
+          member_training_diagnostics:specialist.member_training_diagnostics??[],
+          baseline_selection_brier:specialist.member_selection_logistic_brier??null,
+          best_selection_candidate:specialist.selection_best_candidate??null,
+          candidate_residual_scores:specialist.member_selection_scores??[],
+          selected_member_index:specialist.selected_member_index??null,
+          selected_residual_scale:specialist.selected_residual_scale??null,
+          diagnostic_member_index:specialist.diagnostic_member_index??null,
+          diagnostic_residual_scale:specialist.diagnostic_residual_scale??null,
+          selection_passed:specialist.selection_passed===true,
+          calibration:{
+            fitted:specialist.probability_calibration?.fitted===true,
+            method:specialist.probability_calibration?.method??null,
+            fit_on:specialist.probability_calibration?.fit_on??null,
+            samples:specialist.probability_calibration?.sample_count??0,
+            positives:specialist.probability_calibration?.positive_count??0,
+            negatives:specialist.probability_calibration?.negative_count??0,
+            reason:specialist.probability_calibration?.reason??null
+          },
+          validation:specialist.validation??null,
+          validation_logistic:specialist.validation_logistic??null,
+          holdout:specialist.holdout??null,
+          holdout_logistic:specialist.holdout_logistic??null,
+          research_inference_mode:specialist.research_inference?.inference_mode??null
+        }
+      ])),
+      pooled_fallback_diagnostics:{
+        status:pooledFallback.status??null,
+        trained:pooledFallback.trained===true,
+        training_samples:pooledFallback.training_samples??0,
+        selection_samples:pooledFallback.selection_samples??0,
+        calibration_samples:pooledFallback.calibration_samples??0,
+        validation_samples:pooledFallback.validation_samples??0,
+        holdout_samples:pooledFallback.holdout_samples??0,
+        training_targets:pooledFallback.training_targets??null,
+        selection_targets:pooledFallback.selection_targets??null,
+        selection_passed:pooledFallback.selection_passed===true,
+        validation_passed:pooledFallback.validation_passed===true,
+        holdout_passed:pooledFallback.holdout_passed===true,
+        baseline_selection_brier:pooledFallback.member_selection_logistic_brier??null,
+        best_selection_candidate:pooledFallback.selection_best_candidate??null,
+        candidate_residual_scores:pooledFallback.member_selection_scores??[],
+        validation:pooledFallback.validation??null,
+        validation_logistic:pooledFallback.validation_logistic??null,
+        holdout:pooledFallback.holdout??null,
+        holdout_logistic:pooledFallback.holdout_logistic??null,
+        research_inference_mode:pooledState?.inference_mode??null
+      },
       validation:profile?.validation??null,
       validation_logistic:profile?.validation_logistic??null,
       holdout:profile?.holdout??null,
@@ -918,9 +1038,9 @@ async function main(){
           maxTrainingSamples:2048,
           seed:22429,
           candidates:[
-            {name:'4H_LR_0015_L2_0005_DROP00',learningRate:0.0015,l2:0.0005,dropout:0,epochs:4},
-            {name:'4H_LR_0025_L2_0015_DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:4},
-            {name:'4H_LR_0035_L2_0035_DROP20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:4}
+            {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
+            {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
+            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1049,7 +1169,9 @@ async function main(){
   let hybridFit=null;
   try{
     hybridFit=trainHybridTcnAttention(split.train,{
-      epochs:args.epochs,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+      // Keep the separate hybrid-attention control at its original eight epochs;
+      // the extended schedule targets the regime-local TCN and recurrent challenger.
+      epochs:Math.min(8,args.epochs),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
     });
     const normalization=hybridFit.normalization;
     const hybridArtifact=makeArtifact({
@@ -1158,11 +1280,20 @@ async function main(){
       negative_count:model.validation.negative_count??null,
       raw_brier_score:model.validation.raw_brier_score??null,
       calibrated_brier_score:model.validation.calibrated_brier_score??null,
+      threshold_selection_sample_count:model.validation.threshold_selection_sample_count??0,
+      threshold_selection_probability_distribution:
+        model.validation.threshold_selection_probability_distribution??null,
+      threshold_selection_positive_count:model.validation.threshold_selection_positive_count??0,
+      threshold_selection_negative_count:model.validation.threshold_selection_negative_count??0,
+      outer_validation_probability_distribution:
+        model.validation.outer_validation_probability_distribution??null,
       threshold_selection:model.validation.threshold_selection??null,
       selected_threshold:model.validation.selected_threshold??null,
       threshold_selection_eligible_count:model.validation.threshold_selection_eligible_count??0,
       threshold_selection_gates:model.validation.threshold_selection_gates??null,
       threshold_trials:model.validation.threshold_trials??[],
+      validation_threshold_metrics:model.validation.validation_threshold_metrics??null,
+      validation_threshold_risk_gates:model.validation.validation_threshold_risk_gates??null,
       outer_validation_gate:model.validation.outer_validation_gate??null
     }:null,
     calibration_status:model.calibration?.status??null,
@@ -1216,6 +1347,7 @@ async function main(){
     training_artifacts:Object.keys(trainingArtifacts),
     unavailable_models:unavailable,
     model_comparison:evaluated,
+    inner_diagnostics:training.model_internal_diagnostics??{},
     production_touched:false,paper_trading:true,real_order_execution:false
   };
   console.log(JSON.stringify(summary,null,2));
