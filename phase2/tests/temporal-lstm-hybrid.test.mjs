@@ -63,19 +63,45 @@ test('TCN-LSTM attention forward pass is finite, normalized and exposes sequenti
   assert.equal(output.tcn_latent_sequence[0].length,8);
   assert.ok(Math.abs(output.attention_weights.reduce((sum,value)=>sum+value,0)-1)<1e-12);
   assert.ok(output.attention_weights.every(value=>Number.isFinite(value)&&value>=0));
-  assert.equal(TCN_LSTM_PARAMETER_COUNT,1089);
+  assert.equal(TCN_LSTM_PARAMETER_COUNT,1090);
 });
 
-test('zero-initialized residual head is an exact no-op over the frozen Logistic anchor',()=>{
+test('zero residual gate preserves the exact Logistic no-op and opens a differentiable learning path',()=>{
   const sequence=makeSequence(-1,17);
   const model=createTcnLstmHybridModelForAudit(41);
   const baselineLogit=0.37;
   const output=inspectTcnLstmForward(sequence,model,baselineLogit);
-  assert.ok(model.outputWeights.every(value=>value===0));
+  assert.ok(model.outputWeights.some(value=>value!==0));
+  assert.equal(model.residualGate[0],0);
   assert.equal(model.outputBias[0],0);
+  assert.equal(output.residual_gate_scale,0);
   assert.equal(output.residual_logit,0);
   assert.equal(output.logit,baselineLogit);
   assert.ok(Math.abs(output.probability-1/(1+Math.exp(-baselineLogit)))<1e-15);
+
+  const first=lossAndGradientsTcnLstmHybrid(sequence,1,model,baselineLogit);
+  assert.ok(Number.isFinite(first.gradients.residualGate[0]));
+  assert.ok(Math.abs(first.gradients.residualGate[0])>1e-14);
+  assert.ok(first.gradients.projectionWeights.flat().every(value=>value===0));
+  model.residualGate[0]=0.05;
+  const opened=lossAndGradientsTcnLstmHybrid(sequence,1,model,baselineLogit);
+  const featureGradientMagnitude=
+    opened.gradients.projectionWeights.flat().reduce((sum,value)=>sum+Math.abs(value),0)+
+    opened.gradients.lstmInputWeights.flat().reduce((sum,value)=>sum+Math.abs(value),0);
+  assert.ok(featureGradientMagnitude>0,
+    'opened residual gate must propagate gradients into the TCN/LSTM feature extractor');
+});
+
+test('residual gate receives the first update, then later mini-batches train the TCN-LSTM extractor',()=>{
+  const rows=makeRows(0,32,'gate-training');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,
+    batchSize:16,seed:101,maxTrainingSamples:32
+  });
+  assert.equal(profile.training.history.length,1);
+  assert.ok(profile.training.history[0].maximum_residual_gate_gradient_abs>0);
+  assert.ok(profile.training.history[0].maximum_feature_extractor_gradient_l2_norm>0,
+    'second mini-batch must receive nonzero feature-extractor gradients after the gate opens');
 });
 
 test('unidirectional LSTM state for an earlier prefix is invariant to later input changes',()=>{
