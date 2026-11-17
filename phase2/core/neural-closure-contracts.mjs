@@ -97,6 +97,20 @@ function summarizeProbabilityDistribution(values) {
   };
 }
 
+function summarizeFrozenThresholdWindow(values,threshold) {
+  const distribution={...summarizeProbabilityDistribution(values)};
+  delete distribution.used_to_select_threshold;
+  return {
+    ...distribution,
+    schema:'RADARX_FROZEN_THRESHOLD_WINDOW_DISTRIBUTION_V1',
+    frozen_threshold:finite(threshold)?Number(threshold):null,
+    frozen_threshold_signal_count:finite(threshold)
+      ?values.filter(value=>Number(value)>=Number(threshold)).length:null,
+    diagnostic_only:true,
+    score_values_only:true
+  };
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === 'object') {
@@ -1428,6 +1442,26 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
   const outerMetrics=finite(frozenThreshold)
     ?portfolioMetrics(blocks.check,outerProbabilities,frozenThreshold,roundTripCostBps)
     :null;
+  // Quantify how much signal density survives the frozen threshold on the
+  // later block. These diagnostics do not alter probabilities, threshold,
+  // selection, risk gates, or the primary acceptance path.
+  const selectionDistribution=summarizeFrozenThresholdWindow(
+    selectionProbabilities,frozenThreshold
+  );
+  const outerDistribution=summarizeFrozenThresholdWindow(
+    outerProbabilities,frozenThreshold
+  );
+  const selectionSignalCount=selectionDistribution.frozen_threshold_signal_count;
+  const outerSignalCount=outerDistribution.frozen_threshold_signal_count;
+  const selectionSignalDensityPct=finite(selectionSignalCount)
+    ?Number((100*selectionSignalCount/blocks.threshold_selection.length).toFixed(6))
+    :null;
+  const outerSignalDensityPct=finite(outerSignalCount)
+    ?Number((100*outerSignalCount/blocks.check.length).toFixed(6))
+    :null;
+  const signalRetentionPct=finite(selectionSignalCount)&&selectionSignalCount>0&&
+    finite(outerSignalCount)
+    ?Number((100*outerSignalCount/selectionSignalCount).toFixed(6)):null;
   const outerRiskGates={
     return_data_complete:outerMetrics?.return_data_status==='COMPLETE',
     minimum_validation_trades:Number(outerMetrics?.trade_count)>=minimumTrades,
@@ -1499,6 +1533,18 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       calibrated_brier_score:outerBrier,
       threshold:frozenThreshold,
       threshold_metrics:outerMetrics,
+      probability_distribution:{
+        threshold_selection:selectionDistribution,
+        outer_validation:outerDistribution
+      },
+      threshold_signal_transfer:{
+        frozen_threshold:finite(frozenThreshold)?Number(frozenThreshold):null,
+        selection_signal_count:selectionSignalCount,
+        outer_validation_signal_count:outerSignalCount,
+        selection_signal_density_pct:selectionSignalDensityPct,
+        outer_validation_signal_density_pct:outerSignalDensityPct,
+        selection_to_outer_signal_retention_pct:signalRetentionPct
+      },
       risk_gates:Object.fromEntries(Object.entries(outerRiskGates)
         .map(([key,value])=>[key,value?'PASS':'FAIL'])),
       risk_gates_passed:Object.values(outerRiskGates).every(Boolean),
