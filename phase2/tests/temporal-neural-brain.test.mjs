@@ -8,6 +8,10 @@ import {
   NEURAL_CLOSURE_HORIZON_MS
 } from '../core/neural-closure-contracts.mjs';
 import {
+  DIRECTIONAL_RANKING_BUCKET_MS,
+  DIRECTIONAL_RANKING_GROUPING
+} from '../core/neural-safety-contracts.mjs';
+import {
   TEMPORAL_TARGET_DEFINITION,
   TEMPORAL_FEATURE_SEQUENCE_INTERVAL_MS,
   buildFourHourTemporalNeuralProfile,
@@ -486,6 +490,11 @@ function sample(group,index,{up=null}={}){
     temporal_sequence:sequenceFor(signal,group+index)
   };
 }
+
+test('TCN ranking-loss buckets share the same 15-minute grouping as inference Top-K',()=>{
+  assert.equal(DIRECTIONAL_RANKING_BUCKET_MS,TEMPORAL_RANKING_BUCKET_MS);
+  assert.equal(DIRECTIONAL_RANKING_GROUPING,'FLOOR_UNIX_EPOCH_15M_BUCKET');
+});
 
 test('TCN training loop consumes the asymmetric same-time ranking objective',()=>{
   const rows=Array.from({length:45*12},(_,index)=>{
