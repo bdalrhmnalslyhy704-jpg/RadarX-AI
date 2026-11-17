@@ -18,7 +18,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  runNeuralClosureBenchmark
+  topKProbabilitySignals,runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -113,6 +113,98 @@ function makePredictions(rows,sourceCommitSha,artifacts){
     output[family]=make(0.73,0.23,artifacts[family].artifact_sha256,family);
   return output;
 }
+
+test('top-K timestamp ranking selects a deterministic score-ordered shortlist per simultaneous decision group',()=>{
+  const rows=[
+    {at:100,symbol:'B',id:'b'},
+    {at:100,symbol:'A',id:'a'},
+    {at:100,symbol:'C',id:'c'},
+    {at:200,symbol:'D',id:'d'},
+    {at:200,symbol:'E',id:'e'},
+    {at:200,symbol:'F',id:'f'}
+  ];
+  const scores=[0.8,0.8,0.9,0.2,0.7,0.95];
+  const ranked=topKProbabilitySignals(rows,scores,2);
+  assert.equal(ranked.decision_group_count,2);
+  assert.equal(ranked.signal_count,4);
+  assert.deepEqual(ranked.probabilities.map(value=>value>=0.5),
+    [false,true,true,false,true,true]);
+  assert.equal(ranked.probabilities[2],0.5+0.5*0.9);
+  assert.equal(ranked.probabilities[1],0.5+0.5*0.8,
+    'equal scores must use symbol ascending as a deterministic tie break');
+  assert.ok(ranked.probabilities[5]>ranked.probabilities[2]);
+  assert.equal(ranked.selected_scores_preserve_rank,true);
+  assert.equal(ranked.tie_break_order,
+    'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING');
+  assert.throws(()=>topKProbabilitySignals(rows,scores,0),
+    /NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID/);
+});
+
+test('top-K per timestamp selection is frozen before the later validation block and cannot open Holdout',()=>{
+  // 140 days produce at least eight outer-check days after the two UTC purges,
+  // allowing K=3 to exercise the unchanged 20-trade minimum in both blocks.
+  const sourceRows=makeRows({days:140,rowsPerDay:120});
+  const rows=sourceRows.map(row=>{
+    const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
+      NEURAL_CLOSURE_PURGE_MS+BASE;
+    const decisionAt=dayStart+12*60*60_000;
+    const shift=decisionAt-row.at;
+    const sourceAudit={...row.source_audit,
+      received_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS+60_000};
+    const firstTouch={
+      ...row.first_touch,
+      first_touch_at:row.first_touch.first_touch_at+shift,
+      exit_candle:{
+        ...row.first_touch.exit_candle,
+        open_time:row.first_touch.exit_candle.open_time+shift,
+        close_time:row.first_touch.exit_candle.close_time+shift
+      }
+    };
+    return {
+      ...row,at:decisionAt,resolved_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS,
+      feature_information_cutoff_at:decisionAt,source_audit:sourceAudit,
+      max_adverse_excursion_at:row.max_adverse_excursion_at+shift,
+      max_favorable_excursion_at:row.max_favorable_excursion_at+shift,
+      first_touch:firstTouch
+    };
+  }).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const sourceCommitSha='8'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'TOP_K_COUNTERFACTUAL_TEST_ONLY',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  assert.equal(report.holdout_access.opened,false);
+  const policy=report.models.TCN_LSTM_HYBRID.validation
+    .expanded_threshold_window_counterfactual.rank_based_top_k_policy;
+  assert.equal(policy.status,'EVALUATED');
+  assert.equal(policy.diagnostic_only,true);
+  assert.ok(policy.selection.trials.every(item=>
+    item.metrics.return_data_status==='COMPLETE'));
+  assert.equal(policy.selection.selected_top_k_per_timestamp,3,
+    'K=1 and K=2 do not reach 20 trades; K=3 should be selected on the earlier block');
+  const selected=policy.selection.trials.find(item=>item.top_k_per_timestamp===3);
+  assert.equal(selected.qualified,true);
+  assert.ok(selected.metrics.trade_count>=20);
+  assert.ok(selected.metrics.win_rate_pct>=55);
+  assert.ok(selected.metrics.net_pnl_pct>0);
+  assert.ok(selected.metrics.max_drawdown_pct<=8);
+  assert.equal(policy.outer_validation.frozen_top_k_per_timestamp,3);
+  assert.equal(policy.outer_validation.labels_used_for_k_selection,false);
+  assert.equal(policy.outer_validation.metrics.return_data_status,'COMPLETE');
+  assert.ok(policy.outer_validation.metrics.trade_count>=20);
+  assert.ok(policy.outer_validation.risk_gates_passed);
+  assert.equal(policy.affects_primary_probabilities,false);
+  assert.equal(policy.affects_primary_threshold,false);
+  assert.equal(policy.affects_acceptance_gates,false);
+  assert.equal(policy.holdout_values_used,false);
+});
 
 test('Focal-Asymmetric Brier analytic probability/logit gradients match central differences',()=>{
   for(const target of [0,1]){
@@ -698,6 +790,29 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     const p=diagnostic.partitions;
     const transfer=diagnostic.outer_validation.threshold_signal_transfer;
     const distributions=diagnostic.outer_validation.probability_distribution;
+    const rankPolicy=diagnostic.rank_based_top_k_policy;
+    assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
+    assert.equal(rankPolicy.status,'EVALUATED');
+    assert.equal(rankPolicy.diagnostic_only,true);
+    assert.equal(rankPolicy.affects_primary_probabilities,false);
+    assert.equal(rankPolicy.affects_primary_threshold,false);
+    assert.equal(rankPolicy.affects_acceptance_gates,false);
+    assert.equal(rankPolicy.holdout_values_used,false);
+    assert.deepEqual(rankPolicy.top_k_grid,[1,2,3]);
+    assert.equal(rankPolicy.selection.trials.length,3);
+    assert.equal(rankPolicy.selection.selected_top_k_per_timestamp,
+      rankPolicy.outer_validation.frozen_top_k_per_timestamp);
+    assert.equal(rankPolicy.outer_validation.labels_used_for_k_selection,false);
+    assert.equal(rankPolicy.outer_validation.metrics===null,
+      rankPolicy.outer_validation.frozen_top_k_per_timestamp===null);
+    if(rankPolicy.selection.selected_top_k_per_timestamp!==null){
+      const selectedTrial=rankPolicy.selection.trials.find(item=>
+        item.top_k_per_timestamp===rankPolicy.selection.selected_top_k_per_timestamp);
+      assert.equal(selectedTrial?.qualified,true);
+      assert.ok(rankPolicy.outer_validation.signal_count<=
+        rankPolicy.outer_validation.decision_group_count*
+        rankPolicy.selection.selected_top_k_per_timestamp);
+    }
     assert.equal(distributions.threshold_selection.sample_count,p.rows.threshold_selection);
     assert.equal(distributions.outer_validation.sample_count,p.rows.outer_validation);
     assert.equal(distributions.threshold_selection.frozen_threshold,
