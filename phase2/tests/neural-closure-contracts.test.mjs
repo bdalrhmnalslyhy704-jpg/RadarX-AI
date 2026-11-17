@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 // and all threshold, risk, production, paper-only, and holdout gates stay fixed.
 // [RUN-NEURAL-REBENCHMARK] Evaluate the fixed-cohort 35% calibration-fit allocation as a diagnostic-only alternative.
 import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
+import {TEMPORAL_RANKING_BUCKET_MS} from '../core/temporal-neural-brain.mjs';
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
@@ -126,6 +127,8 @@ test('top-K ranking merges millisecond-skewed closes into the shared 15-minute d
   ];
   const scores=[0.8,0.8,0.9,0.2,0.7,0.95,0.99];
   const ranked=topKProbabilitySignals(rows,scores,2);
+  assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,TEMPORAL_RANKING_BUCKET_MS,
+    'Top-K policy must stay aligned with the established RadarX ranking bucket');
   assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,900_000);
   assert.equal(ranked.decision_group_count,2,
     'three slightly different close timestamps in each 15m bucket must be ranked together');
