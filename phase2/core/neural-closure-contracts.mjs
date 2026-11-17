@@ -1372,7 +1372,7 @@ function selectThreshold(rows,probabilities,roundTripCostBps,{
  * 0.5/0 encoding only separates selected from non-selected rows for the
  * existing event-driven portfolio simulator.
  */
-function topKProbabilitySignals(rows,probabilities,topK) {
+export function topKProbabilitySignals(rows,probabilities,topK) {
   if(!Array.isArray(rows)||!Array.isArray(probabilities)||
     rows.length!==probabilities.length||!Number.isInteger(topK)||topK<1)
     throw new TypeError('NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID');
