@@ -239,6 +239,8 @@ async function main(){
     market_data_source:input.data_quality?.source??null,
     market_data_endpoint:input.market_data_endpoint??null,
     universe_selection:input.universe?.selection??null,
+    candidate_prefilter:input.universe?.candidate_prefilter??null,
+    historical_liquidity_eligibility:input.universe?.historical_eligibility??null,
     minimum_quote_volume_24h_usdt:input.universe?.minimum_quote_volume_24h_usdt??null,
     selected_symbol_count:selectedSymbols.length,
     included_symbol_count:includedSymbols.length,
@@ -246,7 +248,7 @@ async function main(){
     included_symbols:includedSymbols,
     survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
     historical_delisted_asset_coverage:false,
-    interpretation:'CONDITIONAL_ON_CURRENTLY_TRADING_SPOT_PAIRS_AND_CURRENT_24H_LIQUIDITY'
+    interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_30_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
   };
   const rows=validateFourHourRows(input.rows);
   const datasetSha=sha256CanonicalArrayMapped(rows,row=>({
