@@ -1419,6 +1419,12 @@ test('TCN regime fitting, member selection and calibration never cross BTC regim
   assert.match(source,/innerSelectionMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN/);
   assert.match(source,/const requiredInnerSelectionMargin=effectiveTemporalTcnInnerSelectionMargin\(/);
   assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?requiredInnerSelectionMargin\)/);
+  assert.match(source,/const sharedTcnQualifiedCandidates=sharedTcnCandidates\.filter\([\s\S]*?requiredInnerSelectionMargin\)/,
+    'the shared TCN V8 path must use the smaller margin only for inner candidate discovery');
+  assert.match(source,/const validationPassed=neuralResidualContributes&&[\s\S]*?validationModel\.model_brier_score\+comparisonMargin<validationLogistic\.model_brier_score/,
+    'the shared V8 outer validation gate must continue to use the strict comparison margin');
+  assert.match(source,/const holdoutPassed=selectedMemberIndex>=0&&validationPassed&&neuralResidualContributes&&[\s\S]*?holdoutModel\.model_brier_score\+comparisonMargin<holdoutLogistic\.model_brier_score/,
+    'the shared V8 Holdout gate must continue to use the strict comparison margin');
   assert.match(source,/hasTemporalBrierSuperiority\(validationModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
   assert.match(source,/hasTemporalBrierSuperiority\(holdoutModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
   assert.match(source,/required_inner_selection_brier_margin:requiredInnerSelectionMargin/);
