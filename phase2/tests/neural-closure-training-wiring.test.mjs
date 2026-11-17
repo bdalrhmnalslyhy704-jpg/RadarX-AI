@@ -7,6 +7,26 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-SHA TCN families enable cross-sectional ranking loss on shared 15-minute decision buckets',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const safety=await readFile(new URL('../core/neural-safety-contracts.mjs',import.meta.url),'utf8');
+  assert.match(trainer,/enableAsymmetricDirectionalRankingLoss:true/);
+  for(const option of [
+    'brierWeight:1','rankingWeight:0.25','falsePositiveWeight:0.5',
+    'baselineGapWeight:0.2','pairMargin:0.1','pairTemperature:0.5',
+    'falsePositiveProbabilityThreshold:0.7','requiredBaselineImprovement:0.00025',
+    'maxPairsPerTimestamp:256'
+  ])assert.ok(trainer.includes(option),'predeclared cross-sectional loss config missing '+option);
+  assert.match(safety,/DIRECTIONAL_RANKING_BUCKET_MS = 15 \* 60 \* 1000/);
+  assert.match(safety,/Math\.floor\(Number\(timestamps\[i\]\) \/ DIRECTIONAL_RANKING_BUCKET_MS\)/);
+  assert.match(safety,/singletonBucketsExcluded/);
+  assert.match(safety,/decision_grouping: DIRECTIONAL_RANKING_GROUPING/);
+  assert.match(neural,/training_objective:enabledDirectionalLoss[\s\S]*?'ASYMMETRIC_DIRECTIONAL_RANKING_TCN_V1'/);
+  assert.match(neural,/hasTemporalBrierSuperiority\(validationModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
+  assert.match(neural,/hasTemporalBrierSuperiority\(holdoutModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
+});
+
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/predictTemporalAttentionResearchOutput/,
