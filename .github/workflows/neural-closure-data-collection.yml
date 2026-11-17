@@ -65,7 +65,7 @@ jobs:
       - name: Build a 180-day first-touch cohort from the official public Spot API
         env:
           DAYS: ${{ inputs.days || '180' }}
-          MAX_SYMBOLS: ${{ inputs.max_symbols || '30' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '50' }}
         run: |
           node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
             --days "$DAYS" \
