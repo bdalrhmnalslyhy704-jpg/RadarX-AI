@@ -27,9 +27,9 @@ on:
         default: '180'
         type: string
       max_symbols:
-        description: 'Maximum USDT Spot symbols (10–30; default 30)'
+        description: 'Maximum USDT Spot symbols (10–50; default 50)'
         required: true
-        default: '30'
+        default: '50'
         type: string
 
 permissions:
