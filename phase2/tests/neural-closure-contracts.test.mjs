@@ -764,6 +764,7 @@ test('chronological stability slices keep simultaneous multi-symbol rows togethe
   }
 });
 
+// [RUN-NEURAL-REBENCHMARK] Evaluate the matured-label walk-forward calibration diagnostic on the immutable run-99 cohort.
 test('walk-forward recalibration uses only prior matured labels and keeps one-day purges',()=>{
   const rows=makeRows({days:60,rowsPerDay:200});
   const rawMap=new Map(rows.map(row=>[
