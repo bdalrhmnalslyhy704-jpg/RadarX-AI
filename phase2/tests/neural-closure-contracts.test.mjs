@@ -660,8 +660,14 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
   const rows=makeRows(),sourceCommitSha='9'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'EXPANDED_WINDOW_DIAGNOSTIC_ONLY',diagnostic_only:true
+    }])
+  );
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,
+    qualificationByModel
   });
   assert.equal(report.holdout_access.opened,false);
   const logistic=report.models.LOGISTIC_REGRESSION.validation;
@@ -694,9 +700,11 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(diagnostic.threshold_selection.acceptance_gates.require_positive_net_pnl,true);
     assert.equal(diagnostic.threshold_selection.acceptance_gates.maximum_drawdown_pct,8);
   }
-  assert.equal(candidate.selected_threshold,null);
-  assert.equal(report.models.TCN_LSTM_HYBRID.validation.selected_threshold,null);
-  assert.equal(candidate.outer_validation_gate.passed,false);
+  assert.equal(candidate.selected_threshold,
+    candidate.outer_validation_gate.outer_validation_threshold,
+    'the diagnostic must not replace the primary selected threshold');
+  assert.equal(candidate.outer_validation_gate.passed,false,
+    'diagnostic-only qualification fixture must keep the primary candidate locked');
   assert.equal(report.holdout_access.opened,false);
   assert.equal(candidate.expanded_threshold_window_counterfactual.affects_acceptance_gates,false);
 });
