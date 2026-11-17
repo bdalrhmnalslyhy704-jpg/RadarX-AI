@@ -157,13 +157,17 @@ test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
   assert.match(trainer,/inference_coverage_complete:v8Coverage\.complete/);
   assert.match(trainer,/modelName:'TCN_V8'/);
   assert.match(trainer,/unavailable\.TCN_V8=/);
-  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(\s*temporalProfile\?\.regime_specialists\?\.\./,
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(\s*temporalProfile\?\.regime_specialists\?\?/,
     'V8 report diagnostics must source selection scores from the public temporal profile, not persisted inference state');
   assert.match(trainer,/selection_scores:specialist\.member_selection_scores\?\?\[\]/);
   assert.match(trainer,/selection_logistic_brier:specialist\.member_selection_logistic_brier\?\?null/);
   assert.match(trainer,/shared_selection_logistic_brier:temporalProfile\?\.shared_model_selection_logistic_brier\?\?null/);
   assert.match(trainer,/shared_selection_passed:temporalProfile\?\.shared_model_selection_passed===true/);
   assert.match(trainer,/selection_qualified_candidate_count:specialist\.member_selection_qualified_candidates\?\?0/);
+  assert.match(trainer,/selection_samples:specialist\.local_selection_samples\?\?0/);
+  assert.match(trainer,/shared_member_selection_samples:specialist\.shared_member_selection_samples\?\?specialist\.member_selection_samples\?\?0/);
+  assert.match(trainer,/calibration_samples:specialist\.local_calibration_samples\?\?0/);
+  assert.match(trainer,/shared_calibration_samples:specialist\.shared_calibration_samples\?\?specialist\.calibration_samples\?\?0/);
   assert.doesNotMatch(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(\s*temporalProfile\?\._research_fit\?\.specialists_by_regime/,
     'persisted inference state must not be treated as the candidate-score audit record');
   assert.match(trainer,/modelName:'TCN_V11'/);
