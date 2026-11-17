@@ -2022,9 +2022,6 @@ export function runNeuralClosureBenchmark({
       threshold_purged_rows:calibrationBlocks.threshold_purged.length,
       calibration_check_rows:calibrationBlocks.check.length,
       holdout_used_for_calibration:false,
-      primary_allocation_fit_fraction:0.50,
-      diagnostic_counterfactual_allocation_fit_fraction:0.35,
-      diagnostic_counterfactual_affects_primary_gates:false,
       threshold_selection_risk_gates_unchanged:true,
       outer_validation_rechecks_frozen_threshold:true
     },
