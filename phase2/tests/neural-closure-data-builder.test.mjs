@@ -11,6 +11,7 @@ import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-wri
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,parseBinanceSpotKline,
   createNeuralClosureDecisionSchedule,buildNeuralClosureFeatureSnapshot,
+  buildNeuralClosureHistoricalLiquiditySnapshot,
   buildNeuralClosureEventRow,verifyNeuralClosureRawCoverage
 } from '../core/neural-closure-data-builder.mjs';
 import {validateFourHourRows,NEURAL_CLOSURE_HORIZON_MS} from '../core/neural-closure-contracts.mjs';
@@ -58,6 +59,9 @@ test('60-day event schedule uses only matured 4h decisions on 15m close boundari
     assert.equal(schedule.decision_times[index]-schedule.decision_times[index-1],NEURAL_CLOSURE_HORIZON_MS);
   assert.equal(schedule.first_decision_at%FOUR_HOURS(),15*60_000-1);
   assert.ok(schedule.last_decision_at+NEURAL_CLOSURE_HORIZON_MS<=serverTime);
+  assert.equal(schedule.fifteen_minute_start_open_at,
+    schedule.first_decision_at-96*FIFTEEN+1,
+    'the raw 15m archive must contain the full trailing 24h liquidity window before the first decision');
   assert.equal((schedule.one_minute_end_open_at-schedule.one_minute_start_open_at)/MINUTE+1,60*24*60);
 });
 
@@ -70,14 +74,14 @@ test('raw coverage gate rejects a missing or duplicate candle rather than fillin
     one_minute_end_open_at:at+FOUR_HOURS()-MINUTE+1,
     five_minute_start_open_at:at-24*FIVE+1,
     five_minute_end_open_at:at-FIVE+1,
-    fifteen_minute_start_open_at:at-24*FIFTEEN+1,
+    fifteen_minute_start_open_at:at-96*FIFTEEN+1,
     fifteen_minute_end_open_at:at-FIFTEEN+1
   };
   const minute=Array.from({length:240},(_,index)=>
     makeCandle(at+1+index*MINUTE,MINUTE));
   const five=Array.from({length:24},(_,index)=>
     makeCandle(schedule.five_minute_start_open_at+index*FIVE,FIVE));
-  const fifteen=Array.from({length:24},(_,index)=>
+  const fifteen=Array.from({length:96},(_,index)=>
     makeCandle(schedule.fifteen_minute_start_open_at+index*FIFTEEN,FIFTEEN));
   const good=verifyNeuralClosureRawCoverage({
     minuteCandles:minute,fiveMinuteCandles:five,
@@ -94,9 +98,55 @@ test('raw coverage gate rejects a missing or duplicate candle rather than fillin
   assert.match(bad.checks.minute.reason,/GAP_OR_DUPLICATE/);
 });
 
+test('historical liquidity uses exactly 96 closed 15m candles ending at the decision and ignores future candles',()=>{
+  const at=Date.UTC(2026,0,2,0,0,0)-1;
+  const firstOpen=at-96*FIFTEEN+1;
+  const rows=Array.from({length:96},(_,index)=>
+    makeCandle(firstOpen+index*FIFTEEN,FIFTEEN,{
+      base:100,volume:100,trades:20
+    }));
+  const expected=rows.reduce((sum,row)=>sum+row.quoteVolume,0);
+  const future=makeCandle(at+1,FIFTEEN,{base:100,volume:1_000_000,trades:99_999});
+  const snapshot=buildNeuralClosureHistoricalLiquiditySnapshot({
+    symbolCandles:[...rows,future],decisionAt:at,
+    minimumQuoteVolume24hUsdt:750_000
+  });
+  assert.equal(snapshot.ready,true);
+  assert.equal(snapshot.eligible,true);
+  assert.equal(snapshot.window_candle_count,96);
+  assert.equal(snapshot.window_start_open_at,firstOpen);
+  assert.equal(snapshot.window_end_close_at,at);
+  assert.equal(snapshot.decision_at,at);
+  assert.equal(snapshot.quote_volume_24h_usdt,expected);
+  assert.equal(snapshot.no_future_candles_used,true);
+  assert.equal(snapshot.source,'BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME');
+});
+
+test('historical liquidity rejects a below-floor 24h window and fails closed on gaps',()=>{
+  const at=Date.UTC(2026,0,2,0,0,0)-1;
+  const firstOpen=at-96*FIFTEEN+1;
+  const lowRows=Array.from({length:96},(_,index)=>
+    makeCandle(firstOpen+index*FIFTEEN,FIFTEEN,{
+      base:100,volume:1,trades:2
+    }));
+  const low=buildNeuralClosureHistoricalLiquiditySnapshot({
+    symbolCandles:lowRows,decisionAt:at,minimumQuoteVolume24hUsdt:750_000
+  });
+  assert.equal(low.ready,true);
+  assert.equal(low.eligible,false);
+  assert.equal(low.reason,'HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM');
+  const gap=[...lowRows];gap.splice(30,1);
+  const incomplete=buildNeuralClosureHistoricalLiquiditySnapshot({
+    symbolCandles:gap,decisionAt:at,minimumQuoteVolume24hUsdt:750_000
+  });
+  assert.equal(incomplete.ready,false);
+  assert.equal(incomplete.eligible,false);
+  assert.equal(incomplete.reason,'HISTORICAL_24H_15M_WINDOW_INCOMPLETE');
+});
+
 test('one shared event row has 18 audited MLP features, 24x29 closed sequence and a 1m first-touch label',()=>{
   const firstFifteenOpen=Date.UTC(2026,0,1,0,0,0);
-  const fifteen=Array.from({length:24},(_,index)=>
+  const fifteen=Array.from({length:96},(_,index)=>
     makeCandle(firstFifteenOpen+index*FIFTEEN,FIFTEEN,{
       base:100+index*0.02,step:0,volume:1000+index*5,trades:100+index,taker:0.56
     }));
@@ -141,7 +191,7 @@ test('one shared event row has 18 audited MLP features, 24x29 closed sequence an
     minuteCandles:minute,fiveMinuteCandles:five,
     fifteenMinuteCandles:fifteen,benchmarkFifteenMinuteCandles:btc,
     firstMinuteOpenAt:at+1,sourceReceivedAt:at+NEURAL_CLOSURE_HORIZON_MS+MINUTE,
-    quoteVolume24h:900_000
+    quoteVolume24h:1_000_000_000
   });
   assert.equal(built.ready,true,built.reason);
   assert.equal(built.row.outcome,'UP');
@@ -154,7 +204,13 @@ test('one shared event row has 18 audited MLP features, 24x29 closed sequence an
   assert.equal(built.row.temporal_feature_names.length,29);
   assert.match(built.row.feature_snapshot_sha,/^[a-f0-9]{64}$/);
   assert.equal(built.row.market,'BINANCE_SPOT_USDT');
-  assert.equal(built.row.quote_volume_24h,900_000);
+  assert.equal(built.row.historical_liquidity.window_candle_count,96);
+  assert.equal(built.row.historical_liquidity.window_end_close_at,at);
+  assert.equal(built.row.historical_liquidity.no_future_candles_used,true);
+  assert.equal(built.row.quote_volume_24h,
+    built.row.historical_liquidity.quote_volume_24h_usdt);
+  assert.notEqual(built.row.quote_volume_24h,1_000_000_000,
+    'the current ticker value passed by a legacy caller must not replace historical closed-candle volume');
   assert.equal(validateFourHourRows([built.row]).length,1);
 });
 
