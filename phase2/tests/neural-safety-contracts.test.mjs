@@ -5,7 +5,9 @@ import {
   causalForwardFillWindow,
   prequalifyHybridComponent,
   prequalifyHybridComponents,
-  calculateAsymmetricDirectionalRankingLoss
+  calculateAsymmetricDirectionalRankingLoss,
+  DIRECTIONAL_RANKING_BUCKET_MS,
+  DIRECTIONAL_RANKING_GROUPING
 } from '../core/neural-safety-contracts.mjs';
 
 const STEPS=24,CHANNELS=29,INTERVAL=900000,AT=1_740_000_000_000;
@@ -160,4 +162,36 @@ test('non-finite predictions and timestamps fail closed before loss propagation'
   assert.throws(()=>calculateAsymmetricDirectionalRankingLoss({
     logits:[0,0],targets:[1,0],timestamps:[1,Infinity],baselineLogits:[0,0]
   }),/DIRECTIONAL_LOSS_TIMESTAMP_VECTOR_INVALID/);
+});
+
+
+test('directional ranking loss groups skewed symbols by the shared 15-minute candle and excludes singletons',()=>{
+  assert.equal(DIRECTIONAL_RANKING_BUCKET_MS,900000);
+  assert.equal(DIRECTIONAL_RANKING_GROUPING,'FLOOR_UNIX_EPOCH_15M_BUCKET');
+  const bucket=Math.floor(AT/DIRECTIONAL_RANKING_BUCKET_MS)*DIRECTIONAL_RANKING_BUCKET_MS;
+  const result=calculateAsymmetricDirectionalRankingLoss({
+    logits:[1.1,-0.8,0.9,-0.5,0.2],
+    targets:[1,0,1,0,1],
+    timestamps:[
+      bucket+1,
+      bucket+4*60_000,
+      bucket+DIRECTIONAL_RANKING_BUCKET_MS+2,
+      bucket+DIRECTIONAL_RANKING_BUCKET_MS+12*60_000,
+      bucket+2*DIRECTIONAL_RANKING_BUCKET_MS+3
+    ],
+    symbols:['AAAUSDT','BBBUSDT','CCCUSDT','DDDUSDT','EEEUSDT'],
+    baselineLogits:[0.2,-0.2,0.15,-0.15,0.05]
+  });
+  const metrics=result.metrics;
+  assert.equal(metrics.total_time_buckets,3);
+  assert.equal(metrics.timestamp_group_count,3);
+  assert.equal(metrics.decision_group_count,2);
+  assert.equal(metrics.singleton_buckets_excluded,1);
+  assert.equal(metrics.same_decision_bucket_pair_count,2);
+  assert.equal(metrics.same_timestamp_pair_count,2,
+    'the legacy pair counter remains available while semantics are aligned to 15m buckets');
+  assert.equal(metrics.decision_bucket_ms,DIRECTIONAL_RANKING_BUCKET_MS);
+  assert.equal(metrics.decision_grouping,DIRECTIONAL_RANKING_GROUPING);
+  assert.ok(Number.isFinite(result.loss));
+  assert.ok(result.gradient_logits.every(Number.isFinite));
 });
