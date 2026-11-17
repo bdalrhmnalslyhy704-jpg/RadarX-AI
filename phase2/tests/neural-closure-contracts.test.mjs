@@ -140,6 +140,70 @@ test('top-K timestamp ranking selects a deterministic score-ordered shortlist pe
     /NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID/);
 });
 
+test('top-K per timestamp selection is frozen before the later validation block and cannot open Holdout',()=>{
+  const sourceRows=makeRows({days:120,rowsPerDay:120});
+  const rows=sourceRows.map(row=>{
+    const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
+      NEURAL_CLOSURE_PURGE_MS+BASE;
+    const decisionAt=dayStart+12*60*60_000;
+    const shift=decisionAt-row.at;
+    const sourceAudit={...row.source_audit,
+      received_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS+60_000};
+    const firstTouch={
+      ...row.first_touch,
+      first_touch_at:row.first_touch.first_touch_at+shift,
+      exit_candle:{
+        ...row.first_touch.exit_candle,
+        open_time:row.first_touch.exit_candle.open_time+shift,
+        close_time:row.first_touch.exit_candle.close_time+shift
+      }
+    };
+    return {
+      ...row,at:decisionAt,resolved_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS,
+      feature_information_cutoff_at:decisionAt,source_audit:sourceAudit,
+      max_adverse_excursion_at:row.max_adverse_excursion_at+shift,
+      max_favorable_excursion_at:row.max_favorable_excursion_at+shift,
+      first_touch:firstTouch
+    };
+  }).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const sourceCommitSha='8'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'TOP_K_COUNTERFACTUAL_TEST_ONLY',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  assert.equal(report.holdout_access.opened,false);
+  const policy=report.models.TCN_LSTM_HYBRID.validation
+    .expanded_threshold_window_counterfactual.rank_based_top_k_policy;
+  assert.equal(policy.status,'EVALUATED');
+  assert.equal(policy.diagnostic_only,true);
+  assert.ok(policy.selection.trials.every(item=>
+    item.metrics.return_data_status==='COMPLETE'));
+  assert.equal(policy.selection.selected_top_k_per_timestamp,3,
+    'K=1 and K=2 do not reach 20 trades; K=3 should be selected on the earlier block');
+  const selected=policy.selection.trials.find(item=>item.top_k_per_timestamp===3);
+  assert.equal(selected.qualified,true);
+  assert.ok(selected.metrics.trade_count>=20);
+  assert.ok(selected.metrics.win_rate_pct>=55);
+  assert.ok(selected.metrics.net_pnl_pct>0);
+  assert.ok(selected.metrics.max_drawdown_pct<=8);
+  assert.equal(policy.outer_validation.frozen_top_k_per_timestamp,3);
+  assert.equal(policy.outer_validation.labels_used_for_k_selection,false);
+  assert.equal(policy.outer_validation.metrics.return_data_status,'COMPLETE');
+  assert.ok(policy.outer_validation.metrics.trade_count>=20);
+  assert.ok(policy.outer_validation.risk_gates_passed);
+  assert.equal(policy.affects_primary_probabilities,false);
+  assert.equal(policy.affects_primary_threshold,false);
+  assert.equal(policy.affects_acceptance_gates,false);
+  assert.equal(policy.holdout_values_used,false);
+});
+
 test('Focal-Asymmetric Brier analytic probability/logit gradients match central differences',()=>{
   for(const target of [0,1]){
     const p=0.37,step=1e-6;
