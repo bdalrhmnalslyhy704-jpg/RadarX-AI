@@ -765,7 +765,9 @@ export function buildNeuralClosureCalibrationBlocks(rows,options={}){
 
 export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   fitFraction=0.50,minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
-  maximumBlocks=4,minimumTestDays=2
+  maximumBlocks=4,minimumTestDays=2,
+  roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,
+  maximumDrawdownPct=8
 }={}) {
   const unavailable=(reason,extra={})=>({
     schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
@@ -777,7 +779,11 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   if(!finite(fitFraction)||Number(fitFraction)<0.20||Number(fitFraction)>0.80||
     !Number.isInteger(maximumBlocks)||maximumBlocks<2||
     !Number.isInteger(minimumTestDays)||minimumTestDays<1||
-    !Number.isInteger(minimumClassSupport)||minimumClassSupport<1)
+    !Number.isInteger(minimumClassSupport)||minimumClassSupport<1||
+    !finite(roundTripCostBps)||Number(roundTripCostBps)<0||
+    !Number.isInteger(minimumTrades)||minimumTrades<1||
+    !finite(minimumWinRatePct)||Number(minimumWinRatePct)<0||
+    !finite(maximumDrawdownPct)||Number(maximumDrawdownPct)<0)
     return unavailable('WALK_FORWARD_CONFIGURATION_INVALID');
   const ordered=[...rows].sort((a,b)=>Number(a?.at)-Number(b?.at)||
     String(a?.id??'').localeCompare(String(b?.id??'')));
@@ -871,6 +877,8 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       initial_purge_gap_ms:initialPurgeGapMs
     });
   const priorTestRows=[],blocks=[],staticAll=[],adaptiveAll=[],labelsAll=[];
+  const firstForwardRowsForSelection=[],firstForwardAdaptiveProbabilities=[];
+  const laterForwardRows=[],laterForwardAdaptiveProbabilities=[];
   const average=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
   for(let i=0;i<plans.length;i++){
     const daySet=new Set(plans[i]),testRows=ordered.filter(row=>daySet.has(dayOf(row)));
@@ -930,10 +938,87 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       adaptive_fit_nll_after:adaptivePlatt.fit_nll_after??null
     });
     staticAll.push(...staticProb);adaptiveAll.push(...adaptiveProb);labelsAll.push(...labels);
+    if(i===0){
+      firstForwardRowsForSelection.push(...testRows);
+      firstForwardAdaptiveProbabilities.push(...adaptiveProb);
+    }else{
+      laterForwardRows.push(...testRows);
+      laterForwardAdaptiveProbabilities.push(...adaptiveProb);
+    }
     priorTestRows.push(...testRows);
   }
   const positives=labelsAll.reduce((sum,value)=>sum+value,0),count=labelsAll.length;
   const staticBrier=brier(staticAll,labelsAll),adaptiveBrier=brier(adaptiveAll,labelsAll);
+  // Choose the entry threshold on the first forward block only, freeze it,
+  // then test it on all later blocks with causally updated calibration.
+  const forwardThresholdSelection=selectThreshold(
+    firstForwardRowsForSelection,firstForwardAdaptiveProbabilities,
+    Number(roundTripCostBps),{
+      minimumTrades,minimumWinRatePct,maximumDrawdownPct,
+      thresholdGrid:ENTRY_THRESHOLD_GRID
+    }
+  );
+  const frozenForwardThreshold=forwardThresholdSelection.threshold;
+  const laterForwardMetrics=finite(frozenForwardThreshold)&&laterForwardRows.length
+    ?portfolioMetrics(laterForwardRows,laterForwardAdaptiveProbabilities,
+      frozenForwardThreshold,Number(roundTripCostBps)):null;
+  const laterForwardRiskGates={
+    return_data_complete:laterForwardMetrics?.return_data_status==='COMPLETE',
+    minimum_validation_trades:Number(laterForwardMetrics?.trade_count)>=minimumTrades,
+    minimum_validation_win_rate:finite(laterForwardMetrics?.win_rate_pct)&&
+      laterForwardMetrics.win_rate_pct>=minimumWinRatePct,
+    positive_validation_net_pnl:finite(laterForwardMetrics?.net_pnl_pct)&&
+      laterForwardMetrics.net_pnl_pct>0,
+    maximum_validation_drawdown:finite(laterForwardMetrics?.max_drawdown_pct)&&
+      laterForwardMetrics.max_drawdown_pct<=maximumDrawdownPct
+  };
+  const laterForwardPassed=Object.values(laterForwardRiskGates).every(Boolean);
+  const causalForwardExecution={
+    schema:'RADARX_CAUSAL_WALK_FORWARD_ENTRY_POLICY_V1',
+    diagnostic_only:true,
+    labels_used_for_threshold_selection:'FIRST_FORWARD_BLOCK_ONLY',
+    later_threshold_frozen:true,
+    adaptive_calibration_used:true,
+    holdout_values_used:false,
+    acceptance_gates:{
+      minimum_trades:minimumTrades,
+      minimum_win_rate_pct:minimumWinRatePct,
+      positive_net_pnl:true,
+      maximum_drawdown_pct:maximumDrawdownPct,
+      round_trip_cost_bps:Number(roundTripCostBps)
+    },
+    selection:{
+      block_index:1,sample_count:firstForwardRowsForSelection.length,
+      status:forwardThresholdSelection.status,
+      eligible_threshold_count:forwardThresholdSelection.eligible_count??0,
+      selected_threshold:frozenForwardThreshold,
+      selected_metrics:forwardThresholdSelection.selected?{
+        signal_count:forwardThresholdSelection.selected.signal_count,
+        trade_count:forwardThresholdSelection.selected.trade_count,
+        win_rate_pct:forwardThresholdSelection.selected.win_rate_pct,
+        net_pnl_pct:forwardThresholdSelection.selected.net_pnl_pct,
+        max_drawdown_pct:forwardThresholdSelection.selected.max_drawdown_pct
+      }:null
+    },
+    later_forward_validation:{
+      block_count:Math.max(0,blocks.length-1),
+      sample_count:laterForwardRows.length,
+      frozen_threshold:frozenForwardThreshold,
+      metrics:laterForwardMetrics?{
+        signal_count:laterForwardMetrics.signal_count,
+        trade_count:laterForwardMetrics.trade_count,
+        win_rate_pct:laterForwardMetrics.win_rate_pct,
+        net_pnl_pct:laterForwardMetrics.net_pnl_pct,
+        max_drawdown_pct:laterForwardMetrics.max_drawdown_pct,
+        return_data_status:laterForwardMetrics.return_data_status,
+        skipped_capacity:laterForwardMetrics.skipped_capacity,
+        skipped_same_symbol:laterForwardMetrics.skipped_same_symbol
+      }:null,
+      risk_gates:Object.fromEntries(Object.entries(laterForwardRiskGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      passed:laterForwardPassed
+    }
+  };
   return {
     schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
     status:'AVAILABLE',diagnostic_only:true,
@@ -957,6 +1042,7 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       static_mean_probability:Number(average(staticAll).toFixed(8)),
       adaptive_mean_probability:Number(average(adaptiveAll).toFixed(8))
     },
+    causal_forward_execution:causalForwardExecution,
     blocks
   };
 }
@@ -2053,7 +2139,8 @@ export function runNeuralClosureBenchmark({
     };
     const walkForwardCalibrationDiagnostics=
       buildWalkForwardCalibrationDiagnostics(split.validation,rawMap,{
-        minimumClassSupport
+        minimumClassSupport,roundTripCostBps,minimumTrades:20,
+        minimumWinRatePct,maximumDrawdownPct
       });
     const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
       ?buildTcnLstmProbabilityStageDiagnostics({
