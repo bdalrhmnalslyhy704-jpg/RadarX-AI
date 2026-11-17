@@ -799,6 +799,31 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   assert.ok(Number.isFinite(result.aggregate.adaptive_brier_score));
 });
 
+test('walk-forward policy freezes a first-block threshold and validates it on later adaptive blocks',()=>{
+  const rows=makeRows({days:60,rowsPerDay:200});
+  const rawMap=new Map(rows.map(row=>[row.id,row.target===1?0.8:0.01]));
+  const result=buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
+    fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2,
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(result.status,'AVAILABLE');
+  const policy=result.causal_forward_execution;
+  assert.equal(policy.diagnostic_only,true);
+  assert.equal(policy.labels_used_for_threshold_selection,'FIRST_FORWARD_BLOCK_ONLY');
+  assert.equal(policy.later_threshold_frozen,true);
+  assert.equal(policy.adaptive_calibration_used,true);
+  assert.equal(policy.holdout_values_used,false);
+  assert.ok(Number.isFinite(policy.selection.selected_threshold),
+    JSON.stringify(policy.selection));
+  assert.equal(policy.later_forward_validation.frozen_threshold,
+    policy.selection.selected_threshold);
+  assert.equal(policy.later_forward_validation.block_count,3);
+  assert.ok(policy.later_forward_validation.sample_count>0);
+  assert.equal(policy.later_forward_validation.metrics?.return_data_status,'COMPLETE');
+  assert.equal(policy.later_forward_validation.passed,true,
+    JSON.stringify(policy.later_forward_validation));
+});
+
 test('walk-forward recalibration fails closed when the probability map is incomplete',()=>{
   const rows=makeRows({days:20,rowsPerDay:100});
   const result=buildWalkForwardCalibrationDiagnostics(rows,new Map());
