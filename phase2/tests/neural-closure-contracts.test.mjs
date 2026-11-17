@@ -804,7 +804,7 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
 test('walk-forward BTC regime diagnostics partition every forward row and compare both regimes with Logistic',()=>{
   const rows=makeRows({days:60,rowsPerDay:200});
   for(const row of rows){
-    const match=String(row.symbol).match(/S(\\d+)USDT/);
+    const match=String(row.symbol).match(/S(\d+)USDT/);
     const symbolIndex=Number(match?.[1]??0);
     const trend=symbolIndex%2===0?1:-1;
     row.temporal_sequence=Array.from({length:24},(_,step)=>{
