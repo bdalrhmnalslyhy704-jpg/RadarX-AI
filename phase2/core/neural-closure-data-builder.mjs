@@ -153,6 +153,13 @@ export function buildNeuralClosureHistoricalLiquiditySnapshot({
     window_start_open_at:candleOpenTime(window[0]),
     window_end_close_at:candleCloseTime(window.at(-1)),
     decision_at:at,
+    window_evidence_sha256:sha256Canonical(window.map(candle=>({
+      open_at:candleOpenTime(candle),
+      close_at:candleCloseTime(candle),
+      quote_volume_usdt:quoteVolume(candle),
+      source:candle.source??null,
+      closed:candle.closed===true
+    }))),
     no_future_candles_used:true,
     source:'BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME'
   };
