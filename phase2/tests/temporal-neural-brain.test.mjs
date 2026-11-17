@@ -557,10 +557,17 @@ test('TCN inner discovery margin is separate from the unchanged outer promotion 
   // The observed V9 risk-on candidate improved the same-window Logistic
   // Brier by 0.00062. It may be nominated for independent outer validation,
   // but it is not promoted by the unchanged 0.003 gate.
-  const candidate=0.05713,baseline=0.05775;
-  assert.equal(hasTemporalBrierSuperiority(candidate,baseline,
-    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),true);
-  assert.equal(hasTemporalBrierSuperiority(candidate,baseline,
+  const candidate=0.05713,logistic=0.05775,trainingBaseRate=0.05810;
+  assert.equal(hasTemporalBrierSuperiority(candidate,trainingBaseRate,
+    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),true,
+    'a 0.00097 improvement over the training-only base-rate anchor must qualify for inner candidate discovery');
+  assert.equal(hasTemporalBrierSuperiority(candidate,logistic,
+    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),true,
+    'a 0.00062 improvement over same-window Logistic must qualify for inner candidate discovery');
+  assert.equal(hasTemporalBrierSuperiority(candidate,trainingBaseRate,
+    TEMPORAL_BRIER_SUPERIORITY_MARGIN),false,
+    'inner candidate must not be promoted using the outer 0.003 margin');
+  assert.equal(hasTemporalBrierSuperiority(candidate,logistic,
     TEMPORAL_BRIER_SUPERIORITY_MARGIN),false);
   assert.equal(hasTemporalBrierSuperiority(0.05750,0.05775,
     TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),false,
