@@ -349,7 +349,7 @@ async function main(){
     if(!coverage.valid){
       symbolSummaries.push({
         symbol,status:'REJECTED_INCOMPLETE_RAW_ARCHIVE',
-        quote_volume_24h_usdt:asset.quote_volume_24h,coverage:coverage.checks
+        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,coverage:coverage.checks
       });
       continue;
     }
@@ -366,7 +366,7 @@ async function main(){
         benchmarkFifteenMinuteCandles:btcFifteenMinute,
         firstMinuteOpenAt:schedule.one_minute_start_open_at,
         sourceReceivedAt:receivedAt,
-        quoteVolume24h:asset.quote_volume_24h
+        minimumQuoteVolume24hUsdt:args.minQuoteVolumeUsdt
       });
       if(!built.ready){
         symbolRejected++;
@@ -379,7 +379,7 @@ async function main(){
     if(symbolRows.length<Math.floor(schedule.decision_count*0.8)){
       symbolSummaries.push({
         symbol,status:'REJECTED_LOW_VALID_EVENT_COVERAGE',
-        quote_volume_24h_usdt:asset.quote_volume_24h,
+        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
         valid_events:symbolRows.length,rejected_events:symbolRejected
       });
       for(const row of symbolRows){} // preserve diagnostic counts; do not add partial symbol cohorts
@@ -389,7 +389,7 @@ async function main(){
     rows.push(...symbolRows);
     symbolSummaries.push({
       symbol,status:'INCLUDED',
-      quote_volume_24h_usdt:asset.quote_volume_24h,
+      collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
       one_minute_candles:minute.candles.length,
       five_minute_candles:five.candles.length,
       fifteen_minute_candles:fifteen.candles.length,
@@ -500,12 +500,29 @@ async function main(){
     },
     schedule,
     universe:{
-      selection:'CURRENT_BINANCE_SPOT_24H_QUOTE_VOLUME_AT_COLLECTION_TIME',
+      selection:'CURRENT_TOP_30_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
+      candidate_prefilter:{
+        method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        maximum_symbols:args.maxSymbols,
+        scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
+      },
+      historical_eligibility:{
+        method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
+        interval:'15m',lookback_candles:96,
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        future_or_unclosed_candles_used:false,
+        below_threshold_events_excluded:true
+      },
       quote_asset:'USDT',
       minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
       maximum_symbols:args.maxSymbols,
       survivorship_bias_warning:true,
-      symbols:universe.selected,
+      historical_delisted_asset_coverage:false,
+      symbols:universe.selected.map(item=>({
+        symbol:item.symbol,base_asset:item.base_asset,quote_asset:item.quote_asset,
+        collection_time_quote_volume_24h_usdt:item.quote_volume_24h
+      })),
       symbol_results:symbolSummaries
     },
     counts,class_support:classSupport,
