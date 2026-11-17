@@ -92,7 +92,7 @@ export function createNeuralClosureDecisionSchedule({serverTime,days=60}={}) {
     one_minute_end_open_at:endAt+FOUR_HOURS_MS-MINUTE_MS+1,
     five_minute_start_open_at:startAt-23*FIVE_MINUTES_MS-FIVE_MINUTES_MS+1,
     five_minute_end_open_at:endAt-FIVE_MINUTES_MS+1,
-    fifteen_minute_start_open_at:startAt-23*FIFTEEN_MINUTES_MS-FIFTEEN_MINUTES_MS+1,
+    fifteen_minute_start_open_at:startAt-95*FIFTEEN_MINUTES_MS-FIFTEEN_MINUTES_MS+1,
     fifteen_minute_end_open_at:endAt-FIFTEEN_MINUTES_MS+1,
     required_unique_utc_days:durationDays
   };
@@ -110,6 +110,54 @@ function lastClosedWindow(candles,decisionAt,count,intervalMs) {
       return null;
   return selected;
 }
+/**
+ * Calculate point-in-time 24h USDT quote volume from the 96 completed
+ * Binance Spot 15m candles ending exactly at the decision close. No current
+ * ticker, unfinished candle, or future candle is consulted.
+ */
+export function buildNeuralClosureHistoricalLiquiditySnapshot({
+  symbolCandles,decisionAt,minimumQuoteVolume24hUsdt=750_000
+}={}) {
+  const at=num(decisionAt),minimum=num(minimumQuoteVolume24hUsdt);
+  const unavailable=(reason,extra={})=>({
+    schema:'BINANCE_SPOT_POINT_IN_TIME_24H_LIQUIDITY_V1',
+    status:'UNAVAILABLE',ready:false,eligible:false,reason,
+    decision_at:at,minimum_quote_volume_24h_usdt:minimum,...extra
+  });
+  if(at===null||at<=0)
+    return unavailable('HISTORICAL_LIQUIDITY_DECISION_TIME_INVALID');
+  if(minimum===null||minimum<750_000)
+    return unavailable('HISTORICAL_LIQUIDITY_MINIMUM_BELOW_POLICY_FLOOR');
+  const window=lastClosedWindow(symbolCandles,at,96,FIFTEEN_MINUTES_MS);
+  if(!window)
+    return unavailable('HISTORICAL_24H_15M_WINDOW_INCOMPLETE',{
+      required_closed_candles:96,interval_ms:FIFTEEN_MINUTES_MS
+    });
+  const quoteVolumes=window.map(quoteVolume);
+  if(quoteVolumes.some(value=>!Number.isFinite(value)||value<0))
+    return unavailable('HISTORICAL_24H_QUOTE_VOLUME_INVALID',{
+      observed_candles:window.length
+    });
+  const total=quoteVolumes.reduce((sum,value)=>sum+value,0);
+  const eligible=total>=minimum;
+  return {
+    schema:'BINANCE_SPOT_POINT_IN_TIME_24H_LIQUIDITY_V1',
+    status:eligible?'ELIGIBLE':'BELOW_MINIMUM',
+    ready:true,eligible,
+    reason:eligible?null:'HISTORICAL_24H_QUOTE_VOLUME_BELOW_MINIMUM',
+    quote_volume_24h_usdt:total,
+    minimum_quote_volume_24h_usdt:minimum,
+    window_interval:'15m',
+    window_interval_ms:FIFTEEN_MINUTES_MS,
+    window_candle_count:window.length,
+    window_start_open_at:candleOpenTime(window[0]),
+    window_end_close_at:candleCloseTime(window.at(-1)),
+    decision_at:at,
+    no_future_candles_used:true,
+    source:'BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME'
+  };
+}
+
 function returnsFrom(candles) {
   const output=[];
   for(let index=1;index<candles.length;index++){
@@ -304,7 +352,7 @@ function excursionMetrics(minuteCandles,firstTouch,baselinePrice,decisionAt) {
 export function buildNeuralClosureEventRow({
   symbol,decisionAt,minuteCandles,fiveMinuteCandles,fifteenMinuteCandles,
   benchmarkFifteenMinuteCandles,firstMinuteOpenAt,sourceReceivedAt,
-  quoteVolume24h
+  minimumQuoteVolume24hUsdt=750_000
 }={}) {
   const at=num(decisionAt),baseline=num(sourceReceivedAt),firstMinute=num(firstMinuteOpenAt);
   if(at===null||baseline===null||firstMinute===null)
@@ -317,6 +365,16 @@ export function buildNeuralClosureEventRow({
   if(feature.ready!==true)return {ready:false,reason:feature.reason};
   const baseCandle=fifteenMinuteCandles.find(candle=>candleCloseTime(candle)===at);
   if(!baseCandle)return {ready:false,reason:'DECISION_15M_CANDLE_MISSING'};
+  const historicalLiquidity=buildNeuralClosureHistoricalLiquiditySnapshot({
+    symbolCandles:fifteenMinuteCandles,decisionAt:at,
+    minimumQuoteVolume24hUsdt
+  });
+  if(historicalLiquidity.ready!==true)
+    return {ready:false,reason:historicalLiquidity.reason,
+      historical_liquidity:historicalLiquidity};
+  if(historicalLiquidity.eligible!==true)
+    return {ready:false,reason:historicalLiquidity.reason,
+      historical_liquidity:historicalLiquidity};
   const minuteOffset=(at+1-firstMinute)/MINUTE_MS;
   if(!Number.isInteger(minuteOffset)||minuteOffset<0)
     return {ready:false,reason:'ONE_MINUTE_WINDOW_OFFSET_INVALID'};
@@ -374,7 +432,8 @@ export function buildNeuralClosureEventRow({
       atr_pct:feature.atr_pct,atr_baseline_pct:feature.atr_baseline_pct,
       volatility_zscore:feature.volatility_zscore,
       btc_trend_return_pct:feature.btc_trend_return_pct,
-      quote_volume_24h:finite(quoteVolume24h)?Number(quoteVolume24h):null,
+      quote_volume_24h:historicalLiquidity.quote_volume_24h_usdt,
+      historical_liquidity:historicalLiquidity,
       micro_data_source:feature.micro_data_source,
       micro_availability_mask:feature.micro_availability_mask,
       order_book_available:feature.order_book_available,
@@ -421,6 +480,12 @@ export function verifyNeuralClosureRawCoverage({
 export const NEURAL_CLOSURE_MARKET_DATA_POLICY=Object.freeze({
   market:'BINANCE_SPOT_USDT',transport:SOURCE,
   quote_asset:'USDT',minimum_24h_quote_volume_usdt:750_000,
+  historical_liquidity_method:'SUM_OF_96_CLOSED_15M_QUOTE_VOLUME_CANDLES_AS_OF_DECISION_CLOSE',
+  historical_liquidity_lookback_candles:96,
+  historical_liquidity_lookback_interval:'15m',
+  candidate_universe_prefilter:'CURRENT_BINANCE_SPOT_24H_TICKER_TOP_30',
+  survivorship_bias_warning:true,
+  historical_delisted_asset_coverage:false,
   intervals:['1m','5m','15m'],
   decision_cadence_ms:FOUR_HOURS_MS,
   feature_window:{steps:24,channels:29,interval_ms:HYBRID_CANDLE_INTERVAL_MS},
