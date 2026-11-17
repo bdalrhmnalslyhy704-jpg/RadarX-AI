@@ -2479,7 +2479,9 @@ function fitRegimeLocalTemporalTcn({
     a.metrics.model_brier_score-b.metrics.model_brier_score||
     a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
   const qualified=candidates.filter(row=>row.residual_scale>0&&
-    row.metrics.beat_base_rate===true&&selectionLogistic.evaluated===true&&
+    hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+      row.metrics.base_rate_brier_score,requiredInnerSelectionMargin)&&
+    selectionLogistic.evaluated===true&&
     hasTemporalBrierSuperiority(row.metrics.model_brier_score,
       selectionLogistic.model_brier_score,requiredInnerSelectionMargin))
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
@@ -2583,6 +2585,9 @@ function fitRegimeLocalTemporalTcn({
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:selectionLogistic.model_brier_score??null,
       required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+      beats_base_rate_at_inner_margin:hasTemporalBrierSuperiority(
+        row.metrics.model_brier_score,row.metrics.base_rate_brier_score,
+        requiredInnerSelectionMargin),
       beats_same_window_logistic:selectionLogistic.evaluated===true&&
         hasTemporalBrierSuperiority(row.metrics.model_brier_score,
           selectionLogistic.model_brier_score,requiredInnerSelectionMargin),
@@ -3033,8 +3038,9 @@ export function buildTemporalNeuralProfile(samples = [], {
     a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
   const sharedTcnQualifiedCandidates=sharedTcnCandidates.filter(row=>
     row.residual_scale>0&&sharedTcnSelectionSupported&&
+    hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+      row.metrics.base_rate_brier_score,requiredInnerSelectionMargin)&&
     sharedSelectionLogistic.evaluated===true&&
-    row.metrics.beat_base_rate===true&&
     hasTemporalBrierSuperiority(row.metrics.model_brier_score,
       sharedSelectionLogistic.model_brier_score,requiredInnerSelectionMargin))
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
@@ -3366,6 +3372,9 @@ export function buildTemporalNeuralProfile(samples = [], {
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:memberSelectionLogistic.model_brier_score??null,
       required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+      beats_base_rate_at_inner_margin:hasTemporalBrierSuperiority(
+        row.metrics.model_brier_score,row.metrics.base_rate_brier_score,
+        requiredInnerSelectionMargin),
       beats_same_window_logistic:memberSelectionLogistic.evaluated===true&&
         hasTemporalBrierSuperiority(row.metrics.model_brier_score,
           memberSelectionLogistic.model_brier_score,requiredInnerSelectionMargin),
