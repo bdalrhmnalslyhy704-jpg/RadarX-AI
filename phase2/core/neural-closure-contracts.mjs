@@ -10,6 +10,8 @@ export const NEURAL_CLOSURE_PURGE_MS = 24 * 60 * 60 * 1000;
 export const NEURAL_CLOSURE_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_1M_FIRST_TOUCH_4H_V1';
 export const NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS = 15 * 60 * 1000;
+// Keep cross-sectional selection aligned with the existing temporal ranking evaluator.
+export const NEURAL_CLOSURE_RANKING_BUCKET_MS = 15 * 60 * 1000;
 export const NEURAL_CLOSURE_MIN_CLASS_SUPPORT = 50;
 export const NEURAL_CLOSURE_BRIER_MARGIN = 0.003;
 export const NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT =
@@ -1381,7 +1383,10 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
     const at=number(rows[index]?.at),probability=number(probabilities[index]);
     if(at===null||probability===null||probability<0||probability>1)
       throw new TypeError('NEURAL_TOP_K_TIMESTAMP_SCORE_INVALID:'+index);
-    const key=String(at);
+    // Match timeGroupedRankingMetrics: timestamps a few milliseconds apart
+    // within the same closed 15m candle are one simultaneous decision group.
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    const key=String(bucket);
     if(!groups.has(key))groups.set(key,[]);
     groups.get(key).push(index);
   }
@@ -1400,6 +1405,8 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
   return {
     probabilities:masked,
     decision_group_count:groups.size,
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
     signal_count:signalCount,
     selected_scores_preserve_rank:true,
     tie_break_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING'
@@ -1581,6 +1588,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     status:'EVALUATED',
     diagnostic_only:true,
     policy:'TOP_K_PER_DECISION_TIMESTAMP',
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
     score_source:'SAME_FROZEN_CALIBRATED_PROBABILITY_ORDERING_AS_ABSOLUTE_THRESHOLD',
     top_k_grid:topKGrid,
     signal_mask_threshold:0.5,
