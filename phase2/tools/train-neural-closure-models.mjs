@@ -248,12 +248,12 @@ async function main(){
     included_symbols:includedSymbols,
     survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
     historical_delisted_asset_coverage:false,
-    interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_30_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
+    interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_50_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
   };
   const historicalPolicy=input.universe?.historical_eligibility??{};
   const historicalMinimum=Number(input.universe?.minimum_quote_volume_24h_usdt);
   if(input.universe?.selection!==
-      'CURRENT_TOP_30_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1'||
+      'CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1'||
     historicalPolicy.method!==
       'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE'||
     historicalPolicy.interval!=='15m'||
@@ -262,7 +262,10 @@ async function main(){
     historicalPolicy.below_threshold_events_excluded!==true||
     !Number.isFinite(historicalMinimum)||historicalMinimum<750_000||
     input.universe?.survivorship_bias_warning!==true||
-    input.universe?.historical_delisted_asset_coverage!==false)
+    input.universe?.historical_delisted_asset_coverage!==false||
+    Number(input.universe?.maximum_symbols)!==50||
+    Number(input.universe?.candidate_prefilter?.maximum_symbols)!==50||
+    Number(input.universe?.candidate_prefilter?.minimum_quote_volume_24h_usdt)!==750_000)
     throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED');
   const rows=validateFourHourRows(input.rows);
   const historicalLiquidityRowsValid=rows.every(row=>{
