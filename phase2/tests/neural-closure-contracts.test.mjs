@@ -121,18 +121,22 @@ test('top-K ranking merges millisecond-skewed closes into the shared 15-minute d
     {at:1_799_999,symbol:'C',id:'c'},
     {at:1_800_001,symbol:'D',id:'d'},
     {at:1_900_000,symbol:'E',id:'e'},
-    {at:2_699_999,symbol:'F',id:'f'}
+    {at:2_699_999,symbol:'F',id:'f'},
+    {at:2_700_001,symbol:'SINGLETON',id:'singleton'}
   ];
-  const scores=[0.8,0.8,0.9,0.2,0.7,0.95];
+  const scores=[0.8,0.8,0.9,0.2,0.7,0.95,0.99];
   const ranked=topKProbabilitySignals(rows,scores,2);
   assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,900_000);
   assert.equal(ranked.decision_group_count,2,
     'three slightly different close timestamps in each 15m bucket must be ranked together');
+  assert.equal(ranked.total_time_buckets,3);
+  assert.equal(ranked.singleton_buckets_excluded,1,
+    'a bucket with one symbol cannot demonstrate cross-sectional ranking skill');
   assert.equal(ranked.decision_bucket_ms,900_000);
   assert.equal(ranked.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
   assert.equal(ranked.signal_count,4);
   assert.deepEqual(ranked.probabilities.map(value=>value>=0.5),
-    [false,true,true,false,true,true]);
+    [false,true,true,false,true,true,false]);
   assert.equal(ranked.probabilities[2],0.5+0.5*0.9);
   assert.equal(ranked.probabilities[1],0.5+0.5*0.8,
     'equal scores must use symbol ascending as a deterministic tie break');
@@ -801,6 +805,8 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
     assert.equal(rankPolicy.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
     assert.equal(rankPolicy.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
+    assert.equal(rankPolicy.selection.singleton_buckets_excluded,0);
+    assert.equal(rankPolicy.outer_validation.singleton_buckets_excluded,0);
     assert.equal(rankPolicy.status,'EVALUATED');
     assert.equal(rankPolicy.diagnostic_only,true);
     assert.equal(rankPolicy.affects_primary_probabilities,false);
