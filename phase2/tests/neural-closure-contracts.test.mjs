@@ -818,6 +818,18 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(rankPolicy.holdout_values_used,false);
     assert.deepEqual(rankPolicy.top_k_grid,[1,2,3]);
     assert.equal(rankPolicy.selection.trials.length,3);
+    for(const trial of rankPolicy.selection.trials){
+      assert.equal(trial.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
+      assert.equal(trial.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
+      assert.equal(trial.total_time_buckets,
+        trial.decision_group_count+trial.singleton_buckets_excluded,
+        'every 15m bucket must be reported as either multi-symbol eligible or singleton-excluded');
+    }
+    assert.equal(rankPolicy.selection.total_time_buckets,
+      rankPolicy.selection.trials[0].total_time_buckets,
+      'selection summary must carry the actual 15m bucket count instead of defaulting to zero');
+    assert.equal(rankPolicy.selection.singleton_buckets_excluded,
+      rankPolicy.selection.trials[0].singleton_buckets_excluded);
     assert.equal(rankPolicy.selection.selected_top_k_per_timestamp,
       rankPolicy.outer_validation.frozen_top_k_per_timestamp);
     assert.equal(rankPolicy.outer_validation.labels_used_for_k_selection,false);
