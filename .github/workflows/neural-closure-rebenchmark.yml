@@ -18,6 +18,7 @@ on:
       - research/build224-tcn-lstm-expanded-threshold-window-20261117
       - research/build224-tcn-lstm-fine-threshold-diagnostic-20261117
       - research/build224-v8-diagnostic-source-fix-20261117
+      - research/build224-topk-15m-bucket-correction-20261117
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
