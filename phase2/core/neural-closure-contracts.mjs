@@ -50,6 +50,12 @@ const ENTRY_THRESHOLD_GRID = Object.freeze([
   0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80
 ]);
 
+// A separate high-resolution grid for the 35% diagnostic allocation only.
+// The primary ENTRY_THRESHOLD_GRID and primary acceptance path remain unchanged.
+const EXPANDED_THRESHOLD_WINDOW_DIAGNOSTIC_GRID = Object.freeze(
+  Array.from({length:51},(_,index)=>Number((0.280+index*0.001).toFixed(3)))
+);
+
 function summarizeProbabilityDistribution(values) {
   if(!Array.isArray(values)||values.length===0||values.some(value=>
     !finite(value)||Number(value)<0||Number(value)>1)){
@@ -1314,9 +1320,13 @@ function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4
   };
 }
 function selectThreshold(rows,probabilities,roundTripCostBps,{
-  minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
+  minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
+  thresholdGrid=ENTRY_THRESHOLD_GRID
 }={}) {
-  const trials=ENTRY_THRESHOLD_GRID.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
+  if(!Array.isArray(thresholdGrid)||thresholdGrid.length===0||
+    thresholdGrid.some(value=>!finite(value)||Number(value)<=0||Number(value)>=1))
+    throw new TypeError('NEURAL_CLOSURE_THRESHOLD_GRID_INVALID');
+  const trials=thresholdGrid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
   const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
     item.trade_count>=minimumTrades&&
     finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
@@ -1408,7 +1418,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
   const outerProbabilities=probabilitiesFor(blocks.check,rawMap,calibrator);
   const selection=selectThreshold(blocks.threshold_selection,
     selectionProbabilities,roundTripCostBps,{
-      minimumTrades,minimumWinRatePct,maximumDrawdownPct
+      minimumTrades,minimumWinRatePct,maximumDrawdownPct,
+      thresholdGrid:EXPANDED_THRESHOLD_WINDOW_DIAGNOSTIC_GRID
     });
   const frozenThreshold=selection.threshold;
   const outerLabels=blocks.check.map(row=>row.target);
@@ -1468,6 +1479,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     threshold_selection:{
       status:selection.status,
       sample_count:blocks.threshold_selection.length,
+      grid_scope:'DIAGNOSTIC_FINE_THRESHOLD_SWEEP_ONLY',
+      threshold_grid:EXPANDED_THRESHOLD_WINDOW_DIAGNOSTIC_GRID,
       selected_threshold:frozenThreshold,
       eligible_threshold_count:selection.eligible_count,
       acceptance_gates:{

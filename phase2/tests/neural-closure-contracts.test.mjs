@@ -685,6 +685,15 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(diagnostic.holdout_values_used,false);
     assert.equal(diagnostic.threshold_selection_labels_used_for_calibrator_fit,false);
     assert.equal(diagnostic.outer_validation_labels_used_for_calibrator_fit,false);
+    assert.equal(diagnostic.threshold_selection.grid_scope,
+      'DIAGNOSTIC_FINE_THRESHOLD_SWEEP_ONLY');
+    assert.equal(diagnostic.threshold_selection.threshold_grid.length,51);
+    assert.deepEqual(diagnostic.threshold_selection.threshold_grid,
+      Array.from({length:51},(_,index)=>Number((0.280+index*0.001).toFixed(3))));
+    assert.equal(diagnostic.threshold_selection.trials.length,51,
+      'fine sweep must cover every diagnostic-only threshold exactly once');
+    assert.equal(validation.threshold_trials.length,34,
+      'the primary threshold grid must remain unchanged');
     const p=diagnostic.partitions;
     assert.ok(p.rows.threshold_selection>validation.threshold_selection_sample_count);
     assert.ok(p.rows.outer_validation>validation.sample_count);
