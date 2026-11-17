@@ -656,6 +656,51 @@ test('chronological stability slices keep simultaneous multi-symbol rows togethe
   }
 });
 
+test('expanded threshold-window counterfactual uses larger disjoint blocks without changing primary gates',()=>{
+  const rows=makeRows(),sourceCommitSha='9'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+  });
+  assert.equal(report.holdout_access.opened,false);
+  const logistic=report.models.LOGISTIC_REGRESSION.validation;
+  const candidate=report.models.TCN_LSTM_HYBRID.validation;
+  for(const validation of [logistic,candidate]){
+    const diagnostic=validation.expanded_threshold_window_counterfactual;
+    assert.equal(diagnostic.schema,'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1');
+    assert.equal(diagnostic.status,'EVALUATED');
+    assert.equal(diagnostic.diagnostic_only,true);
+    assert.equal(diagnostic.fit_fraction,0.35);
+    assert.equal(diagnostic.affects_primary_probabilities,false);
+    assert.equal(diagnostic.affects_primary_threshold,false);
+    assert.equal(diagnostic.affects_acceptance_gates,false);
+    assert.equal(diagnostic.holdout_values_used,false);
+    assert.equal(diagnostic.threshold_selection_labels_used_for_calibrator_fit,false);
+    assert.equal(diagnostic.outer_validation_labels_used_for_calibrator_fit,false);
+    const p=diagnostic.partitions;
+    assert.ok(p.rows.threshold_selection>validation.threshold_selection_sample_count);
+    assert.ok(p.rows.outer_validation>validation.sample_count);
+    assert.equal(p.rows.fit,diagnostic.calibration.fit_rows);
+    assert.ok(p.support.fit.positive>=50&&p.support.fit.negative>=50);
+    assert.ok(p.support.outer_validation.positive+p.support.outer_validation.negative===
+      p.rows.outer_validation);
+    const days=p.days;
+    assert.ok(days.fit.at(-1)<days.threshold_selection[0]);
+    assert.ok(days.threshold_selection.at(-1)<days.outer_validation[0]);
+    assert.ok(days.purge.length===1&&days.threshold_purge.length===1);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_trades,20);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_win_rate_pct,55);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.require_positive_net_pnl,true);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.maximum_drawdown_pct,8);
+  }
+  assert.equal(candidate.selected_threshold,null);
+  assert.equal(report.models.TCN_LSTM_HYBRID.validation.selected_threshold,null);
+  assert.equal(candidate.outer_validation_gate.passed,false);
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(candidate.expanded_threshold_window_counterfactual.affects_acceptance_gates,false);
+});
+
 test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
