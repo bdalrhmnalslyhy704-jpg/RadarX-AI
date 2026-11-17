@@ -1426,6 +1426,14 @@ test('TCN regime fitting, member selection and calibration never cross BTC regim
   assert.match(source,/innerSelectionMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN/);
   assert.match(source,/const requiredInnerSelectionMargin=effectiveTemporalTcnInnerSelectionMargin\(/);
   assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?requiredInnerSelectionMargin\)/);
+  assert.match(source,/const qualified=candidates\.filter\([\s\S]*?hasTemporalBrierSuperiority\(row\.metrics\.base_rate_brier_score,requiredInnerSelectionMargin\)/,
+    'regime-local discovery must beat its training-only base-rate anchor at the inner margin');
+  assert.match(source,/const sharedTcnQualifiedCandidates=sharedTcnCandidates\.filter\([\s\S]*?hasTemporalBrierSuperiority\(row\.metrics\.base_rate_brier_score,requiredInnerSelectionMargin\)/,
+    'shared V8 discovery must beat its training-only base-rate anchor at the inner margin');
+  assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?selectionLogistic\.model_brier_score,requiredInnerSelectionMargin\)/,
+    'regime-local discovery must beat same-window Logistic at the inner margin');
+  assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?sharedSelectionLogistic\.model_brier_score,requiredInnerSelectionMargin\)/,
+    'shared V8 discovery must beat same-window Logistic at the inner margin');
   assert.match(source,/const sharedTcnQualifiedCandidates=sharedTcnCandidates\.filter\([\s\S]*?requiredInnerSelectionMargin\)/,
     'the shared TCN V8 path must use the smaller margin only for inner candidate discovery');
   assert.match(source,/const validationPassed=neuralResidualContributes&&[\s\S]*?validationModel\.model_brier_score\+comparisonMargin<validationLogistic\.model_brier_score/,
