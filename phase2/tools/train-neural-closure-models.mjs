@@ -10,7 +10,8 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  runNeuralClosureBenchmark,sha256CanonicalArrayMapped
+  runNeuralClosureBenchmark,buildWalkForwardCalibrationDiagnostics,
+  sha256CanonicalArrayMapped
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -1360,6 +1361,50 @@ async function main(){
     minimumWinRatePct:args.minimumWinRatePct,
     maximumDrawdownPct:args.maximumDrawdownPct
   });
+
+  // Point-in-time BTC regime walk-forward audit. This side channel deliberately
+  // receives OUTER VALIDATION rows only; final holdout IDs/scores are excluded.
+  // TCN-LSTM scores are captured before its internal Platt calibration. The
+  // same validation rows and matured-label chronology calibrate both the
+  // candidate and Logistic comparator. Results never affect model weights,
+  // primary probabilities, threshold selection, acceptance gates, or holdout.
+  const outerValidationIds=new Set(split.validation.map(row=>String(row.id)));
+  const tcnLstmPreInnerValidationMap=new Map(
+    (predictionsByModel.TCN_LSTM_HYBRID??[])
+      .filter(item=>outerValidationIds.has(String(item?.id??''))&&
+        finite(item?.pre_inner_calibration_probability))
+      .map(item=>[String(item.id),Number(item.pre_inner_calibration_probability)])
+  );
+  const logisticValidationRawMap=new Map(
+    (predictionsByModel.LOGISTIC_REGRESSION??[])
+      .filter(item=>outerValidationIds.has(String(item?.id??''))&&
+        finite(item?.probability))
+      .map(item=>[String(item.id),Number(item.probability)])
+  );
+  const walkForwardDiagnostics={
+    schema:'RADARX_BUILD224_BTC_REGIME_WALK_FORWARD_REPORT_V1',
+    scored_partition:'OUTER_VALIDATION_ONLY',
+    scored_rows:split.validation.length,
+    validation_row_ids_only:true,
+    holdout_rows_included:false,
+    holdout_scores_included:false,
+    primary_probabilities_unchanged:true,
+    primary_threshold_unchanged:true,
+    acceptance_gates_unchanged:true,
+    TCN_LSTM_HYBRID:buildWalkForwardCalibrationDiagnostics(
+      split.validation,tcnLstmPreInnerValidationMap,{
+        fitFraction:0.50,
+        minimumClassSupport:10,
+        maximumBlocks:4,
+        minimumTestDays:2,
+        baselineRawMap:logisticValidationRawMap,
+        roundTripCostBps:args.roundTripCostBps,
+        minimumTrades:20,
+        minimumWinRatePct:args.minimumWinRatePct,
+        maximumDrawdownPct:args.maximumDrawdownPct
+      }
+    )
+  };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
@@ -1418,6 +1463,7 @@ async function main(){
     unavailable_models:unavailable,
     benchmark,
     model_comparison:evaluated,
+    walk_forward_diagnostics:walkForwardDiagnostics,
     policy:{
       market:'BINANCE_SPOT_ONLY',paper_trading:true,
       real_order_execution:false,production_touched:false,
@@ -1442,6 +1488,7 @@ async function main(){
     training_artifacts:Object.keys(trainingArtifacts),
     unavailable_models:unavailable,
     model_comparison:evaluated,
+    walk_forward_diagnostics:walkForwardDiagnostics,
     inner_diagnostics:training.model_internal_diagnostics??{},
     production_touched:false,paper_trading:true,real_order_execution:false
   };
