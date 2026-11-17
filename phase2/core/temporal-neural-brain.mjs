@@ -99,6 +99,22 @@ export function isValidTemporalPooledBaselineFeatures(features){
 // over every baseline. A tiny tolerance prevents floating-point equality from
 // accidentally passing a boundary that is meant to be strictly greater.
 export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0.003;
+// Inner candidate discovery runs only on a disjoint selection block. It may use
+// a smaller predeclared margin to nominate a model for independent outer testing;
+// it never changes the 0.003 promotion or holdout gate.
+export const TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN = 0.00025;
+export function effectiveTemporalTcnInnerSelectionMargin(
+  requestedMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN,
+  outerPromotionMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN
+){
+  const requested=finite(requestedMargin);
+  const configuredOuter=finite(outerPromotionMargin);
+  const requiredOuter=Math.max(TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+    configuredOuter===null?TEMPORAL_BRIER_SUPERIORITY_MARGIN:configuredOuter);
+  const desired=requested===null
+    ?TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN:requested;
+  return Math.max(0,Math.min(requiredOuter,desired));
+}
 export function hasTemporalBrierSuperiority(candidateScore, baselineScore,
   margin = TEMPORAL_BRIER_SUPERIORITY_MARGIN) {
   const candidate = finite(candidateScore);
@@ -2326,6 +2342,7 @@ function fitRegimeLocalTemporalTcn({
   regime,trainingRows=[],memberSelectionRows=[],calibrationRows=[],
   validationRows=[],holdoutRows=[],epochs=6,learningRate=0.006,l2=0.012,
   comparisonMargin=TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+  innerSelectionMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN,
   maxTrainingSamples=TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES,
   temporalPoolingMode='LAST_12_MEAN_V1',
   attentionPositionBiasL2Multiplier=1,
@@ -2344,6 +2361,11 @@ function fitRegimeLocalTemporalTcn({
   const allTraining=sortRows(trainingRows),selection=sortRows(memberSelectionRows);
   const calibration=sortRows(calibrationRows),validation=sortRows(validationRows);
   const holdout=sortRows(holdoutRows);
+  const outerPromotionMargin=Math.max(TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+    Number.isFinite(Number(comparisonMargin))?Number(comparisonMargin):TEMPORAL_BRIER_SUPERIORITY_MARGIN);
+  const requiredInnerSelectionMargin=effectiveTemporalTcnInnerSelectionMargin(
+    innerSelectionMargin,outerPromotionMargin
+  );
   const limit=Math.max(minTrainingSamples,Math.min(TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES_HARD_LIMIT,
     Math.trunc(Number(maxTrainingSamples)||TEMPORAL_REGIME_LOCAL_MAX_TRAINING_SAMPLES)));
   const training=allTraining.slice(-limit);
@@ -2456,7 +2478,8 @@ function fitRegimeLocalTemporalTcn({
     a.index-b.index||a.residual_scale-b.residual_scale)[0]||null;
   const qualified=candidates.filter(row=>row.residual_scale>0&&
     row.metrics.beat_base_rate===true&&selectionLogistic.evaluated===true&&
-    row.metrics.model_brier_score+comparisonMargin<selectionLogistic.model_brier_score)
+    hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+      selectionLogistic.model_brier_score,requiredInnerSelectionMargin))
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
   const selected=qualified[0]||null;
@@ -2499,7 +2522,8 @@ function fitRegimeLocalTemporalTcn({
   const validationPassed=Boolean(selected&&calibrator.fitted&&logisticCalibrator.fitted&&
     validationModel.evaluated&&validationLogistic.evaluated&&
     validationModel.beat_base_rate===true&&
-    validationModel.model_brier_score+comparisonMargin<validationLogistic.model_brier_score);
+    hasTemporalBrierSuperiority(validationModel.model_brier_score,
+      validationLogistic.model_brier_score,outerPromotionMargin));
   const holdoutModel=validationPassed
     ?evaluate(holdout,predictCandidate,baseRate)
     :{evaluated:false,sample_count:holdout.length,model_brier_score:null,
@@ -2512,7 +2536,8 @@ function fitRegimeLocalTemporalTcn({
       reason:'REGIME_LOCAL_TCN_DID_NOT_PASS_CHRONOLOGICAL_VALIDATION'};
   const holdoutPassed=Boolean(validationPassed&&holdoutModel.evaluated&&
     holdoutLogistic.evaluated&&holdoutModel.beat_base_rate===true&&
-    holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score);
+    hasTemporalBrierSuperiority(holdoutModel.model_brier_score,
+      holdoutLogistic.model_brier_score,outerPromotionMargin));
   return {
     ...base,
     status:!qualified.length?'REGIME_LOCAL_TCN_DID_NOT_BEAT_SELECTION_LOGISTIC':
@@ -2527,6 +2552,8 @@ function fitRegimeLocalTemporalTcn({
     model_training_strategy:fitted.training_strategy,
     trained:true,selected_for_research:validationPassed,
     validation_passed:validationPassed,holdout_passed:holdoutPassed,
+    required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+    required_outer_validation_brier_margin:outerPromotionMargin,
     selected_member_index:selected?.index??null,
     selected_residual_scale:selected?.residual_scale??null,
     diagnostic_member_index:diagnostic?.index??null,
@@ -2553,8 +2580,10 @@ function fitRegimeLocalTemporalTcn({
       ranking_metrics:row.metrics.ranking_metrics??null,
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:selectionLogistic.model_brier_score??null,
+      required_inner_selection_brier_margin:requiredInnerSelectionMargin,
       beats_same_window_logistic:selectionLogistic.evaluated===true&&
-        row.metrics.model_brier_score+comparisonMargin<selectionLogistic.model_brier_score,
+        hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+          selectionLogistic.model_brier_score,requiredInnerSelectionMargin),
       selected:Boolean(selected&&row.index===selected.index&&row.residual_scale===selected.residual_scale)
     })),
     selection_passed:Boolean(selected),
@@ -2596,7 +2625,7 @@ function fitRegimeLocalTemporalTcn({
     validation:validationModel,validation_logistic:validationLogistic,
     holdout:holdoutModel,holdout_logistic:holdoutLogistic,
     holdout_comparison:{
-      required_brier_margin:comparisonMargin,
+      required_brier_margin:outerPromotionMargin,
       model_brier_score:holdoutModel.model_brier_score??null,
       logistic_brier_score:holdoutLogistic.model_brier_score??null,
       beats_base_rate:holdoutModel.beat_base_rate===true,
@@ -2621,6 +2650,7 @@ export function buildTemporalNeuralProfile(samples = [], {
   minimumValidationSamples=MIN_VALIDATION,minimumHoldoutSamples=MIN_HOLDOUT,
   liveHoldoutSamples=LIVE_HOLDOUT,epochs=10,
   learningRate=0.006,l2=0.012,comparisonMargin=0.003,
+  innerSelectionMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN,
   targetDefinition=TEMPORAL_TARGET_DEFINITION,
   outcomeHorizonMs=HORIZON_MS,
   allowedOutcomeSources=null,
@@ -2645,6 +2675,11 @@ export function buildTemporalNeuralProfile(samples = [], {
   enableTemporalBoostedTree=true
 }={}){
   const horizonMs=Math.max(1,Math.trunc(Number(outcomeHorizonMs)||HORIZON_MS));
+  const requiredOuterPromotionMargin=Math.max(TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+    Number.isFinite(Number(comparisonMargin))?Number(comparisonMargin):TEMPORAL_BRIER_SUPERIORITY_MARGIN);
+  const requiredInnerSelectionMargin=effectiveTemporalTcnInnerSelectionMargin(
+    innerSelectionMargin,requiredOuterPromotionMargin
+  );
   const temporalLabelResolution=outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
     ?'1M_FIRST_TOUCH_WITH_15M_CLOSED_FEATURES':'15M_ONLY';
   const waitingStatus=outcomeContractKind===TEMPORAL_FOUR_HOUR_FIRST_TOUCH_CONTRACT
