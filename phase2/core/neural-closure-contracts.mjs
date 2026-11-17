@@ -1391,8 +1391,10 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
     groups.get(key).push(index);
   }
   const masked=Array(rows.length).fill(0);
+  const eligibleGroups=[...groups.values()].filter(indices=>indices.length>=2);
+  const singletonBucketCount=groups.size-eligibleGroups.length;
   let signalCount=0;
-  for(const indices of groups.values()){
+  for(const indices of eligibleGroups){
     indices.sort((left,right)=>
       Number(probabilities[right])-Number(probabilities[left])||
       String(rows[left]?.symbol??'').localeCompare(String(rows[right]?.symbol??''))||
@@ -1404,7 +1406,9 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
   }
   return {
     probabilities:masked,
-    decision_group_count:groups.size,
+    decision_group_count:eligibleGroups.length,
+    total_time_buckets:groups.size,
+    singleton_buckets_excluded:singletonBucketCount,
     decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
     decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
     signal_count:signalCount,
@@ -1608,6 +1612,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       status:frozenTopK===null?'ABSTAINED_NO_TOP_K_PASSED_RISK_GATES':'SELECTED_ON_SELECTION_ONLY',
       sample_count:blocks.threshold_selection.length,
       decision_group_count:rankSelectionTrials[0]?.decision_group_count??0,
+      total_time_buckets:rankSelectionTrials[0]?.total_time_buckets??0,
+      singleton_buckets_excluded:rankSelectionTrials[0]?.singleton_buckets_excluded??0,
       trials:rankSelectionTrials,
       selected_top_k_per_timestamp:frozenTopK,
       selected_metrics:rankSelectionReady[0]?.metrics??null,
@@ -1616,6 +1622,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     outer_validation:{
       sample_count:blocks.check.length,
       decision_group_count:outerRankMask?.decision_group_count??0,
+      total_time_buckets:outerRankMask?.total_time_buckets??0,
+      singleton_buckets_excluded:outerRankMask?.singleton_buckets_excluded??0,
       frozen_top_k_per_timestamp:frozenTopK,
       signal_count:outerRankMask?.signal_count??0,
       signals_per_decision_group:outerRankMask&&outerRankMask.decision_group_count>0
