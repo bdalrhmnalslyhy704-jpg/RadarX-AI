@@ -40,8 +40,14 @@ const logit = value => Math.log(clamp(value, 1e-12, 1 - 1e-12) /
 // fixed cohort. The baseline and every challenger share this exact grid; no
 // trade/risk gate is relaxed, and selection still uses a disjoint earlier block.
 const ENTRY_THRESHOLD_GRID = Object.freeze([
-  0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,
-  0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80
+  // Preserve the original coarse sweep and add a predeclared fine sweep around
+  // the 0.35 candidate that produced 19 trades (one below the unchanged floor).
+  // The earlier selection block chooses the threshold; purged outer validation
+  // must independently re-test that frozen threshold before holdout can open.
+  0.05,0.10,0.15,0.20,0.25,0.30,
+  0.305,0.310,0.315,0.320,0.325,0.330,0.335,0.340,0.345,
+  0.350,0.355,0.360,0.365,0.370,0.375,0.380,0.385,0.390,0.395,
+  0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80
 ]);
 
 function summarizeProbabilityDistribution(values) {
