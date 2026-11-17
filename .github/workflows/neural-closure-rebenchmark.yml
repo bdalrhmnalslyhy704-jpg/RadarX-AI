@@ -22,6 +22,7 @@ on:
       - research/build224-topk-15m-bucket-correction-20261117
       - research/build224-tcn-inner-selection-vs-promotion-margin-20261117
       - research/build224-tcn-margin-topk-report-fix-20261117
+      - research/build224-walk-forward-calibration-20261117
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
