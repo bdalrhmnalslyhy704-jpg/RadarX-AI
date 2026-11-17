@@ -3033,7 +3033,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     row.residual_scale>0&&sharedTcnSelectionSupported&&
     sharedSelectionLogistic.evaluated===true&&
     row.metrics.beat_base_rate===true&&
-    row.metrics.model_brier_score+comparisonMargin<sharedSelectionLogistic.model_brier_score)
+    hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+      sharedSelectionLogistic.model_brier_score,requiredInnerSelectionMargin))
     .sort((a,b)=>a.metrics.model_brier_score-b.metrics.model_brier_score||
       a.index-b.index||a.residual_scale-b.residual_scale);
   const sharedTcnSelectedCandidate=sharedTcnQualifiedCandidates[0]||null;
@@ -3261,6 +3262,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         holdout:{evaluated:false,sample_count:regimeHoldout.length}
       };
       regimeResults[regime]={supported:false,support_gaps:supportGaps,
+        required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+        required_outer_validation_brier_margin:requiredOuterPromotionMargin,
         training_start_at:sharedTrainingRows[0]?.at??null,
         training_cutoff_at:sharedTrainingCutoffAt,
         selection_start_at:memberSelectionRows[0]?.at??null,
@@ -3360,8 +3363,10 @@ export function buildTemporalNeuralProfile(samples = [], {
       base_rate_brier_score:row.metrics.base_rate_brier_score,
       beat_base_rate:row.metrics.beat_base_rate,
       same_window_logistic_brier_score:memberSelectionLogistic.model_brier_score??null,
+      required_inner_selection_brier_margin:requiredInnerSelectionMargin,
       beats_same_window_logistic:memberSelectionLogistic.evaluated===true&&
-        row.metrics.model_brier_score+comparisonMargin<memberSelectionLogistic.model_brier_score,
+        hasTemporalBrierSuperiority(row.metrics.model_brier_score,
+          memberSelectionLogistic.model_brier_score,requiredInnerSelectionMargin),
       selected:row.index===selectedMemberIndex&&row.residual_scale===selectedResidualScale
     }));
     // Calibration has a later chronological block and is regime-local. It
@@ -3483,6 +3488,8 @@ export function buildTemporalNeuralProfile(samples = [], {
       holdoutModel.beat_base_rate===true&&
       holdoutModel.model_brier_score+comparisonMargin<holdoutLogistic.model_brier_score;
     regimeResults[regime]={supported:true,prior:regimePrior,
+      required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+      required_outer_validation_brier_margin:requiredOuterPromotionMargin,
       training_start_at:sharedTrainingRows[0]?.at??null,
       training_cutoff_at:sharedTrainingCutoffAt,
       selection_start_at:memberSelectionRows[0]?.at??null,
@@ -3712,6 +3719,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeLocalTcnHoldoutSamples=regimeLocalTcnSelectedRegimes.reduce((sum,regime)=>
     sum+Number(regimeLocalTcnResults[regime]?.holdout?.sample_count||0),0);
   const regimeLocalTcnProfile={
+    inner_selection_required_brier_margin:requiredInnerSelectionMargin,
+    outer_validation_required_brier_margin:requiredOuterPromotionMargin,
     status:!regimeLocalTcnSupportedRegimes.length?'WAITING_FOR_REGIME_LOCAL_TCN_SUPPORT':
       !regimeLocalTcnValidationRegimes.length?'REGIME_LOCAL_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
       !regimeLocalTcnSelectedRegimes.length?'REGIME_LOCAL_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
@@ -3781,6 +3790,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeLocalTcnPyramidHoldoutSamples=regimeLocalTcnPyramidSelectedRegimes.reduce((sum,regime)=>
     sum+Number(regimeLocalTcnPyramidResults[regime]?.holdout?.sample_count||0),0);
   const regimeLocalTcnPyramidProfile={
+    inner_selection_required_brier_margin:requiredInnerSelectionMargin,
+    outer_validation_required_brier_margin:requiredOuterPromotionMargin,
     status:!regimeLocalTcnPyramidSupportedRegimes.length?'WAITING_FOR_ORDERED_POOLING_TCN_SUPPORT':
       !regimeLocalTcnPyramidValidationRegimes.length?'ORDERED_POOLING_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
       !regimeLocalTcnPyramidSelectedRegimes.length?'ORDERED_POOLING_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
@@ -3857,6 +3868,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const regimeLocalTcnMultiscaleHoldoutSamples=regimeLocalTcnMultiscaleSelectedRegimes.reduce((sum,regime)=>
     sum+Number(regimeLocalTcnMultiscaleResults[regime]?.holdout?.sample_count||0),0);
   const regimeLocalTcnMultiscaleProfile={
+    inner_selection_required_brier_margin:requiredInnerSelectionMargin,
+    outer_validation_required_brier_margin:requiredOuterPromotionMargin,
     status:!regimeLocalTcnMultiscaleSupportedRegimes.length?'WAITING_FOR_MULTISCALE_TCN_SUPPORT':
       !regimeLocalTcnMultiscaleValidationRegimes.length?'MULTISCALE_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
       !regimeLocalTcnMultiscaleSelectedRegimes.length?'MULTISCALE_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
@@ -3948,6 +3961,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   const attentionHoldoutLogistic=aggregateEvaluations(attentionPairedHoldoutRegimes.map(regime=>
     regimeLocalTcnAttentionResults[regime]?.holdout_logistic));
   const regimeLocalTcnAttentionProfile={
+    inner_selection_required_brier_margin:requiredInnerSelectionMargin,
+    outer_validation_required_brier_margin:requiredOuterPromotionMargin,
     status:!attentionSupportedRegimes.length?'WAITING_FOR_ATTENTION_TCN_SUPPORT':
       !attentionValidationRegimes.length?'ATTENTION_TCN_DID_NOT_BEAT_SELECTION_OR_VALIDATION_LOGISTIC':
       !attentionSelectedRegimes.length?'ATTENTION_TCN_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
@@ -4051,6 +4066,8 @@ export function buildTemporalNeuralProfile(samples = [], {
         result.validation_passed?'REGIME_VALIDATION_PASSED_HOLDOUT_NOT_PASSED':
         'REGIME_TCN_DID_NOT_PASS_VALIDATION',
       support_gaps:result.support_gaps||[],
+      required_inner_selection_brier_margin:result.required_inner_selection_brier_margin??requiredInnerSelectionMargin,
+      required_outer_validation_brier_margin:result.required_outer_validation_brier_margin??requiredOuterPromotionMargin,
       model_scope:'SHARED_POOLED_TCN_WITH_PER_REGIME_OUTER_GATES',
       model_split_scope:'SHARED_POOLED_CHRONOLOGICAL_PURGED_WALK_FORWARD_WITH_REGIME_GATES_V1',
       training_cutoff_at:sharedTrainingCutoffAt,
@@ -4230,6 +4247,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     shared_model_training_cutoff_at:sharedTrainingCutoffAt,
     shared_model_member_selection_cutoff_at:sharedMemberSelectionCutoffAt,
     shared_model_selection_cutoff_at:sharedSelectionCutoffAt,
+    required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+    required_outer_validation_brier_margin:requiredOuterPromotionMargin,
     shared_model_training_samples:sharedTrainingRows.length,
     shared_model_selection_samples:pooledMemberSelectionRows.length,
     shared_model_calibration_samples:sharedCalibrationRows.length,
