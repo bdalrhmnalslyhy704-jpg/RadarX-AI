@@ -118,6 +118,14 @@ test('historical liquidity uses exactly 96 closed 15m candles ending at the deci
   assert.equal(snapshot.window_end_close_at,at);
   assert.equal(snapshot.decision_at,at);
   assert.equal(snapshot.quote_volume_24h_usdt,expected);
+  assert.match(snapshot.window_evidence_sha256,/^[a-f0-9]{64}$/);
+  const modifiedRows=rows.map((row,index)=>index===0?{...row,quoteVolume:row.quoteVolume+1}:row);
+  const changed=buildNeuralClosureHistoricalLiquiditySnapshot({
+    symbolCandles:modifiedRows,decisionAt:at,
+    minimumQuoteVolume24hUsdt:750_000
+  });
+  assert.notEqual(changed.window_evidence_sha256,snapshot.window_evidence_sha256,
+    'the point-in-time liquidity evidence digest must change when any source candle changes');
   assert.equal(snapshot.no_future_candles_used,true);
   assert.equal(snapshot.source,'BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME');
 });
