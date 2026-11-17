@@ -1013,11 +1013,11 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
         return staticRanking[key]?.precision_pct===adaptiveRanking[key]?.precision_pct&&
           staticRanking[key]?.recall_pct===adaptiveRanking[key]?.recall_pct;
       }));
-    let baselineBlock=null;
+    let baselineBlock=null,baselineStaticProb=null,baselineAdaptiveProb=null;
     if(baselineRawMap!==null){
       const baselineAdaptivePlatt=fitStaticCalibrator(historyRows,baselineRawMap);
-      const baselineStaticProb=probabilitiesFor(testRows,baselineRawMap,staticBaselineCalibrator);
-      const baselineAdaptiveProb=probabilitiesFor(testRows,baselineRawMap,
+      baselineStaticProb=probabilitiesFor(testRows,baselineRawMap,staticBaselineCalibrator);
+      baselineAdaptiveProb=probabilitiesFor(testRows,baselineRawMap,
         baselineAdaptivePlatt.calibrator);
       const baselineStaticScore=brier(baselineStaticProb,testRows.map(row=>row.target));
       const baselineAdaptiveScore=brier(baselineAdaptiveProb,testRows.map(row=>row.target));
@@ -1050,6 +1050,88 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       baselineStaticAll.push(...baselineStaticProb);
       baselineAdaptiveAll.push(...baselineAdaptiveProb);
     }
+    // Regime diagnostics split identical forward-block rows by the
+    // closed BTC 3h regime feature. They are observational only and do not
+    // train regime specialists, fit calibrators, select thresholds or alter gates.
+    const regimeOfRow=row=>{
+      const btcTrend=number(row?.temporal_sequence?.at(-1)?.[19]);
+      return btcTrend===null?'BTC_REGIME_UNKNOWN':
+        btcTrend>=0?'BTC_RISK_ON':'BTC_RISK_OFF';
+    };
+    const regimeDiagnostics=Object.fromEntries(
+      ['BTC_RISK_ON','BTC_RISK_OFF','BTC_REGIME_UNKNOWN'].map(regime=>{
+        const indices=[];
+        for(let index=0;index<testRows.length;index++){
+          if(regimeOfRow(testRows[index])===regime)indices.push(index);
+        }
+        const regimeRows=indices.map(index=>testRows[index]);
+        const selectValues=values=>indices.map(index=>values[index]);
+        const regimeStaticProb=selectValues(staticProb);
+        const regimeAdaptiveProb=selectValues(adaptiveProb);
+        const regimeLabels=regimeRows.map(row=>row.target);
+        const regimeSupport=classCounts(regimeLabels);
+        const regimeStaticBrier=regimeRows.length?brier(regimeStaticProb,regimeLabels):null;
+        const regimeAdaptiveBrier=regimeRows.length?brier(regimeAdaptiveProb,regimeLabels):null;
+        const staticRegimeRanking=regimeRows.length
+          ?crossSectionalRankingMetrics(regimeRows,regimeStaticProb):null;
+        const adaptiveRegimeRanking=regimeRows.length
+          ?crossSectionalRankingMetrics(regimeRows,regimeAdaptiveProb):null;
+        let baselineRegime=null;
+        if(baselineRawMap!==null&&baselineStaticProb&&baselineAdaptiveProb){
+          const baseStatic=selectValues(baselineStaticProb);
+          const baseAdaptive=selectValues(baselineAdaptiveProb);
+          const baseStaticBrier=regimeRows.length?brier(baseStatic,regimeLabels):null;
+          const baseAdaptiveBrier=regimeRows.length?brier(baseAdaptive,regimeLabels):null;
+          const baseStaticRanking=regimeRows.length
+            ?crossSectionalRankingMetrics(regimeRows,baseStatic):null;
+          const baseAdaptiveRanking=regimeRows.length
+            ?crossSectionalRankingMetrics(regimeRows,baseAdaptive):null;
+          baselineRegime={
+            static_brier_score:baseStaticBrier,
+            adaptive_brier_score:baseAdaptiveBrier,
+            static_model_brier_improvement:baseStaticBrier===null||regimeStaticBrier===null
+              ?null:Number((baseStaticBrier-regimeStaticBrier).toFixed(10)),
+            adaptive_model_brier_improvement:baseAdaptiveBrier===null||regimeAdaptiveBrier===null
+              ?null:Number((baseAdaptiveBrier-regimeAdaptiveBrier).toFixed(10)),
+            static_ranking_metrics:baseStaticRanking,
+            adaptive_ranking_metrics:baseAdaptiveRanking,
+            adaptive_average_precision_improvement:
+              adaptiveRegimeRanking&&baseAdaptiveRanking
+                ?Number((adaptiveRegimeRanking.average_precision-
+                  baseAdaptiveRanking.average_precision).toFixed(8)):null,
+            adaptive_top_5_precision_improvement:
+              adaptiveRegimeRanking&&baseAdaptiveRanking
+                ?Number((adaptiveRegimeRanking.top_5_pct.precision_pct-
+                  baseAdaptiveRanking.top_5_pct.precision_pct).toFixed(8)):null,
+            adaptive_top_10_precision_improvement:
+              adaptiveRegimeRanking&&baseAdaptiveRanking
+                ?Number((adaptiveRegimeRanking.top_10_pct.precision_pct-
+                  baseAdaptiveRanking.top_10_pct.precision_pct).toFixed(8)):null,
+            adaptive_top_20_precision_improvement:
+              adaptiveRegimeRanking&&baseAdaptiveRanking
+                ?Number((adaptiveRegimeRanking.top_20_pct.precision_pct-
+                  baseAdaptiveRanking.top_20_pct.precision_pct).toFixed(8)):null
+          };
+        }
+        return [regime,{
+          sample_count:regimeRows.length,
+          positive_count:regimeSupport.positive,
+          negative_count:regimeSupport.negative,
+          positive_rate:Number((regimeSupport.positive/Math.max(1,regimeSupport.total)).toFixed(8)),
+          static_brier_score:regimeStaticBrier,
+          adaptive_brier_score:regimeAdaptiveBrier,
+          adaptive_brier_improvement:regimeStaticBrier===null||regimeAdaptiveBrier===null
+            ?null:Number((regimeStaticBrier-regimeAdaptiveBrier).toFixed(10)),
+          static_mean_probability:regimeStaticProb.length
+            ?Number(average(regimeStaticProb).toFixed(8)):null,
+          adaptive_mean_probability:regimeAdaptiveProb.length
+            ?Number(average(regimeAdaptiveProb).toFixed(8)):null,
+          static_ranking_metrics:staticRegimeRanking,
+          adaptive_ranking_metrics:adaptiveRegimeRanking,
+          ...(baselineRegime?{logistic_baseline:baselineRegime}:{})
+        }];
+      })
+    );
     const positives=classCounts(testRows.map(row=>row.target)).positive;
     blocks.push({
       block_index:i+1,first_at:firstAt,last_at:lastAt,
@@ -1073,6 +1155,7 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       adaptive_brier_improvement:Number((staticScore-adaptiveScore).toFixed(10)),
       static_ranking_metrics:staticRanking,
       adaptive_ranking_metrics:adaptiveRanking,
+      btc_regime_diagnostics:regimeDiagnostics,
       calibration_preserved_cross_sectional_ranking:rankOrderPreserved,
       ...(baselineBlock?{logistic_baseline:baselineBlock}:{}),
       adaptive_fit_nll_before:adaptivePlatt.platt.fit_nll_before??null,

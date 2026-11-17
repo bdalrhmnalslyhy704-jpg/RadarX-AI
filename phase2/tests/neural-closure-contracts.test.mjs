@@ -800,6 +800,51 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
 });
 
 // [RUN-NEURAL-REBENCHMARK] Test causal first-block threshold selection on the immutable run-99 cohort.
+// [RUN-NEURAL-REBENCHMARK] Split matched forward ranking and calibration metrics by the closed BTC regime feature.
+test('walk-forward BTC regime diagnostics partition every forward row and compare both regimes with Logistic',()=>{
+  const rows=makeRows({days:60,rowsPerDay:200});
+  for(const row of rows){
+    const match=String(row.symbol).match(/S(\d+)USDT/);
+    const symbolIndex=Number(match?.[1]??0);
+    const trend=symbolIndex%2===0?1:-1;
+    row.temporal_sequence=Array.from({length:24},(_,step)=>{
+      const channels=Array(29).fill(0);
+      channels[19]=step===23?trend:0;
+      return channels;
+    });
+  }
+  const modelMap=new Map(rows.map(row=>[
+    row.id,row.target===1?0.24:0.055+(Number(row.id.split(':E')[1])%5)*0.002
+  ]));
+  const logisticMap=new Map(rows.map(row=>[
+    row.id,0.07+(Number(row.id.split(':E')[1])%13)*0.001
+  ]));
+  const result=buildWalkForwardCalibrationDiagnostics(rows,modelMap,{
+    fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2,
+    baselineRawMap:logisticMap
+  });
+  assert.equal(result.status,'AVAILABLE',result.reason??JSON.stringify(result));
+  for(const block of result.blocks){
+    const regimes=block.btc_regime_diagnostics;
+    assert.ok(regimes);
+    const covered=regimes.BTC_RISK_ON.sample_count+
+      regimes.BTC_RISK_OFF.sample_count+
+      regimes.BTC_REGIME_UNKNOWN.sample_count;
+    assert.equal(covered,block.sample_count,
+      'each forward row must be assigned exactly once to a BTC regime');
+    assert.ok(regimes.BTC_RISK_ON.sample_count>0);
+    assert.ok(regimes.BTC_RISK_OFF.sample_count>0);
+    assert.equal(regimes.BTC_REGIME_UNKNOWN.sample_count,0);
+    for(const regime of ['BTC_RISK_ON','BTC_RISK_OFF']){
+      const item=regimes[regime];
+      assert.ok(Number.isFinite(item.adaptive_brier_score));
+      assert.ok(Number.isFinite(item.logistic_baseline.adaptive_model_brier_improvement));
+      assert.ok(item.adaptive_ranking_metrics.groups>0);
+      assert.ok(item.logistic_baseline.adaptive_ranking_metrics.groups>0);
+    }
+  }
+});
+
 test('walk-forward policy freezes first-block threshold and evaluates later blocks under adaptive calibration',()=>{
   const rows=makeRows({days:60,rowsPerDay:200});
   const rawMap=new Map(rows.map(row=>[row.id,row.target===1?0.8:0.01]));

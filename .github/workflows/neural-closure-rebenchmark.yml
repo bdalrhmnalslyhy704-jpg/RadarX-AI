@@ -1,4 +1,5 @@
 name: Build 224 Neural Closure — parity-corrected rebenchmark
+# [RUN-NEURAL-REBENCHMARK] Re-evaluate the immutable run-99 cohort with BTC risk-regime diagnostics.
 
 # Run the frozen run-99 benchmark only after the independent nested threshold gates are green.
 # This branch adds validation-only TCN-LSTM probability-stage observability; the run remains research-only.
@@ -24,6 +25,7 @@ on:
       - research/build224-tcn-margin-topk-report-fix-20261117
       - research/build224-walk-forward-calibration-20261117
       - research/build224-walk-forward-frozen-entry-gate-v2-20261117
+      - research/build224-walk-forward-btc-regime-audit-20261117
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
