@@ -777,7 +777,7 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   const result=buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2
   });
-  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.status,'AVAILABLE',result.reason??JSON.stringify(result));
   assert.equal(result.diagnostic_only,true);
   assert.equal(result.holdout_values_used,false);
   assert.equal(result.labels_used_for_gradient_fit,false);
@@ -802,7 +802,7 @@ test('walk-forward recalibration fails closed when the probability map is incomp
   const rows=makeRows({days:20,rowsPerDay:100});
   const result=buildWalkForwardCalibrationDiagnostics(rows,new Map());
   assert.equal(result.status,'UNAVAILABLE');
-  assert.equal(result.reason,'ROW_ID_TIME_TARGET_OR_MODEL_SCORE_INVALID');
+  assert.equal(result.reason,'WALK_FORWARD_MODEL_SCORE_INVALID');
 });
 
 test('expanded threshold-window counterfactual uses larger disjoint blocks without changing primary gates',()=>{
