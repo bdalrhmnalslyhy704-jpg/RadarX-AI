@@ -777,7 +777,7 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   const result=buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2
   });
-  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
   assert.equal(result.diagnostic_only,true);
   assert.equal(result.holdout_values_used,false);
   assert.equal(result.labels_used_for_gradient_fit,false);
