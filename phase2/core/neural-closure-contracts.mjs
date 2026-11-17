@@ -1168,6 +1168,87 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
     initialEquity:100
   });
 }
+
+/**
+ * Describe temporal stability without fitting or selecting anything.
+ * Evaluation rows are split into contiguous, chronological slices. Their
+ * labels are used only to score Brier/prevalence; they never fit calibration,
+ * choose a threshold, update weights, change gates, or unlock the holdout.
+ */
+function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4}={}) {
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||
+    rows.length===0||rows.length!==probabilities.length||
+    !Number.isInteger(blockCount)||blockCount<1)
+    return {
+      schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
+      status:'UNAVAILABLE',sample_count:Array.isArray(rows)?rows.length:0,
+      diagnostic_only:true,reason:'ROWS_OR_PROBABILITIES_INVALID'
+    };
+  const paired=rows.map((row,index)=>({
+    row,probability:Number(probabilities[index])
+  })).sort((a,b)=>Number(a.row.at)-Number(b.row.at)||
+    String(a.row.id).localeCompare(String(b.row.id)));
+  if(paired.some(item=>!Number.isFinite(item.probability)||
+    item.probability<0||item.probability>1||
+    !finite(item.row?.at)||(item.row?.target!==0&&item.row?.target!==1))){
+    return {
+      schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
+      status:'UNAVAILABLE',sample_count:rows.length,
+      diagnostic_only:true,reason:'NON_FINITE_SCORE_OR_INVALID_EVALUATION_ROW'
+    };
+  }
+  const count=Math.min(blockCount,paired.length);
+  const blocks=[];
+  const scoreThresholds=[0.15,0.20,0.25,0.30,0.35];
+  for(let index=0;index<count;index++){
+    const start=Math.floor(index*paired.length/count);
+    const end=Math.floor((index+1)*paired.length/count);
+    const slice=paired.slice(start,end);
+    const labels=slice.map(item=>item.row.target);
+    const scores=slice.map(item=>item.probability);
+    const support=classCounts(labels);
+    const prevalence=support.positive/support.total;
+    const meanScore=scores.reduce((sum,value)=>sum+value,0)/scores.length;
+    const scoreCounts=Object.fromEntries(scoreThresholds.map(threshold=>[
+      String(threshold),scores.filter(value=>value>=threshold).length
+    ]));
+    const localPrevalenceBrier=prevalence*(1-prevalence);
+    const blockBrier=brier(scores,labels);
+    blocks.push({
+      block_index:index+1,
+      sample_count:slice.length,
+      first_at:Number(slice[0].row.at),
+      last_at:Number(slice.at(-1).row.at),
+      first_id:String(slice[0].row.id),
+      last_id:String(slice.at(-1).row.id),
+      positive_count:support.positive,
+      negative_count:support.negative,
+      positive_rate_pct:Number((100*prevalence).toFixed(6)),
+      mean_probability:Number(meanScore.toFixed(8)),
+      mean_probability_minus_prevalence:Number((meanScore-prevalence).toFixed(8)),
+      brier_score:Number(blockBrier.toFixed(8)),
+      constant_prevalence_brier:Number(localPrevalenceBrier.toFixed(8)),
+      brier_skill_vs_local_prevalence:Number((localPrevalenceBrier-blockBrier).toFixed(8)),
+      scores_at_or_above:scoreCounts
+    });
+  }
+  return {
+    schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
+    status:'AVAILABLE',
+    diagnostic_only:true,
+    sample_count:paired.length,
+    block_count:blocks.length,
+    ordering:'ASCENDING_ROW_AT_CONTIGUOUS_EQUAL_COUNT_SLICES',
+    labels_used_for_scoring:true,
+    labels_used_for_fit:false,
+    labels_used_for_threshold_selection:false,
+    affects_primary_probabilities:false,
+    affects_threshold_selection:false,
+    affects_acceptance_gates:false,
+    holdout_values_used:false,
+    blocks
+  };
+}
 function selectThreshold(rows,probabilities,roundTripCostBps,{
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
 }={}) {
@@ -1387,6 +1468,16 @@ export function runNeuralClosureBenchmark({
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
       threshold_selection_negative_count:thresholdSelectionSupport.negative,
       outer_validation_probability_distribution:outerValidationProbabilityDistribution,
+      chronological_stability_diagnostics:{
+        schema:'RADARX_MODEL_CHRONOLOGICAL_STABILITY_V1',
+        diagnostic_only:true,
+        threshold_selection:buildChronologicalStabilityDiagnostics(
+          thresholdSelectionRows,thresholdSelectionProbabilities
+        ),
+        outer_validation:buildChronologicalStabilityDiagnostics(
+          validationRows,calibratedValidation
+        )
+      },
       ...(probabilityStageDiagnostics
         ?{probability_stage_diagnostics:probabilityStageDiagnostics}:{}),
       threshold_selection:thresholdSelection.status,

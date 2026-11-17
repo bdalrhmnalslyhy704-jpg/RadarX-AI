@@ -9,6 +9,7 @@ on:
       - research/build224-neural-closure-low-probability-threshold-grid-20261117
       - research/build224-tcn-lstm-4096-training-sample-ablation-20261117
       - research/build224-tcn-lstm-threshold-resolution-20261117
+      - research/build224-tcn-lstm-temporal-stability-audit-20261117
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'

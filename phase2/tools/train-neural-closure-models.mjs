@@ -1315,6 +1315,8 @@ async function main(){
       threshold_selection_negative_count:model.validation.threshold_selection_negative_count??0,
       outer_validation_probability_distribution:
         model.validation.outer_validation_probability_distribution??null,
+      chronological_stability_diagnostics:
+        model.validation.chronological_stability_diagnostics??null,
       threshold_selection:model.validation.threshold_selection??null,
       selected_threshold:model.validation.selected_threshold??null,
       threshold_selection_eligible_count:model.validation.threshold_selection_eligible_count??0,
