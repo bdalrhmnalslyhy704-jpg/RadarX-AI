@@ -5,6 +5,7 @@ on:
     branches:
       - research/neural-closure-4h-20261114
       - research/neural-closure-streaming-writer-20261114
+      - research/build224-point-in-time-liquidity-20261117
     paths:
       - '.github/workflows/neural-closure-data-collection.yml'
       - 'phase2/core/neural-closure-data-builder.mjs'
