@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+// [RUN-NEURAL-REBENCHMARK] Include the frozen-threshold signal-transfer diagnostics in the immutable-cohort report.
 // [RUN-NEURAL-REBENCHMARK] Re-run the immutable run-99 cohort after adding
 // stage-by-stage chronological diagnostics; this is evidence generation only,
 // and all threshold, risk, production, paper-only, and holdout gates stay fixed.
+// [RUN-NEURAL-REBENCHMARK] Evaluate the fixed-cohort 35% calibration-fit allocation as a diagnostic-only alternative.
 import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
@@ -654,6 +656,96 @@ test('chronological stability slices keep simultaneous multi-symbol rows togethe
       assert.ok(blocks[index-1].last_at<blocks[index].first_at,
         'a timestamp shared by multiple symbols must not cross a block boundary');
   }
+});
+
+test('expanded threshold-window counterfactual uses larger disjoint blocks without changing primary gates',()=>{
+  const rows=makeRows(),sourceCommitSha='9'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'EXPANDED_WINDOW_DIAGNOSTIC_ONLY',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,
+    qualificationByModel
+  });
+  assert.equal(report.holdout_access.opened,false);
+  const logistic=report.models.LOGISTIC_REGRESSION.validation;
+  const candidate=report.models.TCN_LSTM_HYBRID.validation;
+  for(const validation of [logistic,candidate]){
+    const diagnostic=validation.expanded_threshold_window_counterfactual;
+    assert.equal(diagnostic.schema,'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1');
+    assert.equal(diagnostic.status,'EVALUATED');
+    assert.equal(diagnostic.diagnostic_only,true);
+    assert.equal(diagnostic.fit_fraction,0.35);
+    assert.equal(diagnostic.affects_primary_probabilities,false);
+    assert.equal(diagnostic.affects_primary_threshold,false);
+    assert.equal(diagnostic.affects_acceptance_gates,false);
+    assert.equal(diagnostic.holdout_values_used,false);
+    assert.equal(diagnostic.threshold_selection_labels_used_for_calibrator_fit,false);
+    assert.equal(diagnostic.outer_validation_labels_used_for_calibrator_fit,false);
+    assert.equal(diagnostic.threshold_selection.grid_scope,
+      'DIAGNOSTIC_FINE_THRESHOLD_SWEEP_ONLY');
+    assert.equal(diagnostic.threshold_selection.threshold_grid.length,51);
+    assert.deepEqual(diagnostic.threshold_selection.threshold_grid,
+      Array.from({length:51},(_,index)=>Number((0.280+index*0.001).toFixed(3))));
+    assert.equal(diagnostic.threshold_selection.trials.length,51,
+      'fine sweep must cover every diagnostic-only threshold exactly once');
+    assert.equal(validation.threshold_trials.length,34,
+      'the primary threshold grid must remain unchanged');
+    const p=diagnostic.partitions;
+    const transfer=diagnostic.outer_validation.threshold_signal_transfer;
+    const distributions=diagnostic.outer_validation.probability_distribution;
+    assert.equal(distributions.threshold_selection.sample_count,p.rows.threshold_selection);
+    assert.equal(distributions.outer_validation.sample_count,p.rows.outer_validation);
+    assert.equal(distributions.threshold_selection.frozen_threshold,
+      diagnostic.threshold_selection.selected_threshold);
+    assert.equal(distributions.outer_validation.frozen_threshold,
+      diagnostic.threshold_selection.selected_threshold);
+    assert.equal(distributions.threshold_selection.frozen_threshold_signal_count,
+      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
+    assert.equal(distributions.outer_validation.frozen_threshold_signal_count,
+      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
+    assert.equal(transfer.frozen_threshold,diagnostic.threshold_selection.selected_threshold);
+    assert.equal(transfer.selection_signal_count,
+      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
+    assert.equal(transfer.outer_validation_signal_count,
+      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
+    if(Number.isFinite(transfer.selection_signal_count)&&transfer.selection_signal_count>0){
+      assert.equal(transfer.selection_to_outer_signal_retention_pct,
+        Number((100*transfer.outer_validation_signal_count/
+          transfer.selection_signal_count).toFixed(6)));
+    }else{
+      assert.equal(transfer.selection_to_outer_signal_retention_pct,null);
+    }
+    assert.equal(distributions.threshold_selection.diagnostic_only,true);
+    assert.equal(distributions.outer_validation.diagnostic_only,true);
+    assert.equal(distributions.threshold_selection.score_values_only,true);
+    assert.equal(distributions.outer_validation.score_values_only,true);
+    assert.ok(p.rows.threshold_selection>validation.threshold_selection_sample_count);
+    assert.ok(p.rows.outer_validation>validation.sample_count);
+    assert.equal(p.rows.fit,diagnostic.calibration.fit_rows);
+    assert.ok(p.support.fit.positive>=50&&p.support.fit.negative>=50);
+    assert.ok(p.support.outer_validation.positive+p.support.outer_validation.negative===
+      p.rows.outer_validation);
+    const days=p.days;
+    assert.ok(days.fit.at(-1)<days.threshold_selection[0]);
+    assert.ok(days.threshold_selection.at(-1)<days.outer_validation[0]);
+    assert.ok(days.purge.length===1&&days.threshold_purge.length===1);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_trades,20);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_win_rate_pct,55);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.require_positive_net_pnl,true);
+    assert.equal(diagnostic.threshold_selection.acceptance_gates.maximum_drawdown_pct,8);
+  }
+  assert.equal(candidate.selected_threshold,
+    candidate.outer_validation_gate.outer_validation_threshold,
+    'the diagnostic must not replace the primary selected threshold');
+  assert.equal(candidate.outer_validation_gate.passed,false,
+    'diagnostic-only qualification fixture must keep the primary candidate locked');
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(candidate.expanded_threshold_window_counterfactual.affects_acceptance_gates,false);
 });
 
 test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
