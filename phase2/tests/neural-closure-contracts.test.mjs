@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+// [RUN-NEURAL-REBENCHMARK] Include the frozen-threshold signal-transfer diagnostics in the immutable-cohort report.
 // [RUN-NEURAL-REBENCHMARK] Re-run the immutable run-99 cohort after adding
 // stage-by-stage chronological diagnostics; this is evidence generation only,
 // and all threshold, risk, production, paper-only, and holdout gates stay fixed.
