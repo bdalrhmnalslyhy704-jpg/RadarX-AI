@@ -1365,6 +1365,47 @@ function selectThreshold(rows,probabilities,roundTripCostBps,{
     maximum_validation_drawdown_pct:maximumDrawdownPct
   };
 }
+
+/**
+ * Construct a diagnostic-only top-K signal mask per simultaneous decision
+ * timestamp. Selected scores retain their original within-group order; the
+ * 0.5/0 encoding only separates selected from non-selected rows for the
+ * existing event-driven portfolio simulator.
+ */
+function topKProbabilitySignals(rows,probabilities,topK) {
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||
+    rows.length!==probabilities.length||!Number.isInteger(topK)||topK<1)
+    throw new TypeError('NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID');
+  const groups=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=number(rows[index]?.at),probability=number(probabilities[index]);
+    if(at===null||probability===null||probability<0||probability>1)
+      throw new TypeError('NEURAL_TOP_K_TIMESTAMP_SCORE_INVALID:'+index);
+    const key=String(at);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(index);
+  }
+  const masked=Array(rows.length).fill(0);
+  let signalCount=0;
+  for(const indices of groups.values()){
+    indices.sort((left,right)=>
+      Number(probabilities[right])-Number(probabilities[left])||
+      String(rows[left]?.symbol??'').localeCompare(String(rows[right]?.symbol??''))||
+      String(rows[left]?.id??'').localeCompare(String(rows[right]?.id??'')));
+    for(const index of indices.slice(0,topK)){
+      masked[index]=0.5+0.5*Number(probabilities[index]);
+      signalCount++;
+    }
+  }
+  return {
+    probabilities:masked,
+    decision_group_count:groups.size,
+    signal_count:signalCount,
+    selected_scores_preserve_rank:true,
+    tie_break_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING'
+  };
+}
+
 function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
   const labels=rows.map(row=>row.target);
   const counts=classCounts(labels);
@@ -1472,6 +1513,117 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     maximum_validation_drawdown:finite(outerMetrics?.max_drawdown_pct)&&
       outerMetrics.max_drawdown_pct<=maximumDrawdownPct
   };
+
+  // Separately test whether the score ranking remains useful when its absolute
+  // probability scale shifts. K is selected only on the disjoint selection
+  // block and frozen for the later outer block. All acceptance gates are
+  // identical to the absolute-threshold policy and remain diagnostic-only.
+  const topKGrid=[1,2,3];
+  const rankSelectionTrials=topKGrid.map(topK=>{
+    const masked=topKProbabilitySignals(
+      blocks.threshold_selection,selectionProbabilities,topK
+    );
+    const metrics=portfolioMetrics(
+      blocks.threshold_selection,masked.probabilities,0.5,roundTripCostBps
+    );
+    const riskGates={
+      return_data_complete:metrics?.return_data_status==='COMPLETE',
+      minimum_validation_trades:Number(metrics?.trade_count)>=minimumTrades,
+      minimum_validation_win_rate:finite(metrics?.win_rate_pct)&&
+        metrics.win_rate_pct>=minimumWinRatePct,
+      positive_validation_net_pnl:finite(metrics?.net_pnl_pct)&&
+        metrics.net_pnl_pct>0,
+      maximum_validation_drawdown:finite(metrics?.max_drawdown_pct)&&
+        metrics.max_drawdown_pct<=maximumDrawdownPct
+    };
+    return {
+      top_k_per_timestamp:topK,
+      decision_group_count:masked.decision_group_count,
+      signal_count:masked.signal_count,
+      metrics,
+      risk_gates:Object.fromEntries(Object.entries(riskGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      qualified:Object.values(riskGates).every(Boolean)
+    };
+  });
+  const rankSelectionReady=rankSelectionTrials.filter(item=>item.qualified)
+    .sort((a,b)=>Number(b.metrics.net_pnl_pct)-Number(a.metrics.net_pnl_pct)||
+      Number(a.metrics.max_drawdown_pct)-Number(b.metrics.max_drawdown_pct)||
+      Number(b.metrics.trade_count)-Number(a.metrics.trade_count)||
+      a.top_k_per_timestamp-b.top_k_per_timestamp);
+  const frozenTopK=rankSelectionReady[0]?.top_k_per_timestamp??null;
+  const outerRankMask=frozenTopK===null?null:topKProbabilitySignals(
+    blocks.check,outerProbabilities,frozenTopK
+  );
+  const outerRankMetrics=outerRankMask===null?null:portfolioMetrics(
+    blocks.check,outerRankMask.probabilities,0.5,roundTripCostBps
+  );
+  const outerRankRiskGates={
+    return_data_complete:outerRankMetrics?.return_data_status==='COMPLETE',
+    minimum_validation_trades:Number(outerRankMetrics?.trade_count)>=minimumTrades,
+    minimum_validation_win_rate:finite(outerRankMetrics?.win_rate_pct)&&
+      outerRankMetrics.win_rate_pct>=minimumWinRatePct,
+    positive_validation_net_pnl:finite(outerRankMetrics?.net_pnl_pct)&&
+      outerRankMetrics.net_pnl_pct>0,
+    maximum_validation_drawdown:finite(outerRankMetrics?.max_drawdown_pct)&&
+      outerRankMetrics.max_drawdown_pct<=maximumDrawdownPct
+  };
+  const rankSelectionMask=frozenTopK===null?null:topKProbabilitySignals(
+    blocks.threshold_selection,selectionProbabilities,frozenTopK
+  );
+  const rankRetention=rankSelectionMask&&outerRankMask&&
+    rankSelectionMask.decision_group_count>0&&outerRankMask.decision_group_count>0
+    ?Number((100*(outerRankMask.signal_count/outerRankMask.decision_group_count)/
+      (rankSelectionMask.signal_count/rankSelectionMask.decision_group_count)).toFixed(6))
+    :null;
+  const rankBasedTopKPolicy={
+    schema:'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1',
+    status:'EVALUATED',
+    diagnostic_only:true,
+    policy:'TOP_K_PER_DECISION_TIMESTAMP',
+    score_source:'SAME_FROZEN_CALIBRATED_PROBABILITY_ORDERING_AS_ABSOLUTE_THRESHOLD',
+    top_k_grid:topKGrid,
+    signal_mask_threshold:0.5,
+    minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,
+    require_positive_net_pnl:true,
+    maximum_drawdown_pct:maximumDrawdownPct,
+    affects_primary_probabilities:false,
+    affects_primary_threshold:false,
+    affects_acceptance_gates:false,
+    holdout_values_used:false,
+    threshold_selection_labels_used_for_calibrator_fit:false,
+    outer_validation_labels_used_for_calibrator_fit:false,
+    outer_validation_labels_used_for_top_k_selection:false,
+    selection:{
+      status:frozenTopK===null?'ABSTAINED_NO_TOP_K_PASSED_RISK_GATES':'SELECTED_ON_SELECTION_ONLY',
+      sample_count:blocks.threshold_selection.length,
+      decision_group_count:rankSelectionTrials[0]?.decision_group_count??0,
+      trials:rankSelectionTrials,
+      selected_top_k_per_timestamp:frozenTopK,
+      selected_metrics:rankSelectionReady[0]?.metrics??null,
+      labels_used_for_k_selection:true
+    },
+    outer_validation:{
+      sample_count:blocks.check.length,
+      decision_group_count:outerRankMask?.decision_group_count??0,
+      frozen_top_k_per_timestamp:frozenTopK,
+      signal_count:outerRankMask?.signal_count??0,
+      signals_per_decision_group:outerRankMask&&outerRankMask.decision_group_count>0
+        ?Number((outerRankMask.signal_count/outerRankMask.decision_group_count).toFixed(6)):null,
+      selection_signals_per_decision_group:rankSelectionMask&&rankSelectionMask.decision_group_count>0
+        ?Number((rankSelectionMask.signal_count/rankSelectionMask.decision_group_count).toFixed(6)):null,
+      outer_to_selection_signal_density_retention_pct:rankRetention,
+      threshold:0.5,
+      metrics:outerRankMetrics,
+      risk_gates:Object.fromEntries(Object.entries(outerRankRiskGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      risk_gates_passed:Object.values(outerRankRiskGates).every(Boolean),
+      labels_used_for_k_selection:false,
+      return_data_status:outerRankMetrics?.return_data_status??'NOT_EVALUATED'
+    }
+  };
+
   return {
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
     status:'EVALUATED',
@@ -1526,6 +1678,7 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       selected_metrics:selection.selected??null,
       trials:selection.trials
     },
+    rank_based_top_k_policy:rankBasedTopKPolicy,
     outer_validation:{
       sample_count:blocks.check.length,
       positive_count:outerSupport.positive,
