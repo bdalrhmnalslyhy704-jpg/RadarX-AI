@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 // [RUN-NEURAL-REBENCHMARK] Re-run the immutable run-99 cohort after adding
 // stage-by-stage chronological diagnostics; this is evidence generation only,
 // and all threshold, risk, production, paper-only, and holdout gates stay fixed.
+// [RUN-NEURAL-REBENCHMARK] Evaluate the fixed-cohort 35% calibration-fit allocation as a diagnostic-only alternative.
 import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
