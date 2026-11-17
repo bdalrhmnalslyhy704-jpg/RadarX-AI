@@ -210,6 +210,11 @@ export function prequalifyHybridComponents(components, {
  * confidence penalty + a training-only hinge toward the same-window Logistic
  * Brier. This guides optimization; it cannot guarantee external superiority.
  */
+// Keep training-time pair construction aligned with temporal-neural-brain's
+// cross-sectional ranking metrics and the closure Top-K decision policy.
+export const DIRECTIONAL_RANKING_BUCKET_MS = 15 * 60 * 1000;
+export const DIRECTIONAL_RANKING_GROUPING = 'FLOOR_UNIX_EPOCH_15M_BUCKET';
+
 export function calculateAsymmetricDirectionalRankingLoss({
   logits, targets, timestamps, symbols = [], baselineLogits,
   sampleWeights = [], config = {}
@@ -267,10 +272,16 @@ export function calculateAsymmetricDirectionalRankingLoss({
   }
   const groups = new Map();
   for (let i = 0; i < n; i++) {
-    const key = String(Number(timestamps[i]));
+    const bucket = Math.floor(Number(timestamps[i]) / DIRECTIONAL_RANKING_BUCKET_MS);
+    const key = String(bucket);
     if (!groups.has(key)) groups.set(key, { positive: [], negative: [] });
     groups.get(key)[targets[i] === 1 ? 'positive' : 'negative'].push(i);
   }
+  const singletonBucketsExcluded = [...groups.values()]
+    .filter(group => group.positive.length + group.negative.length === 1).length;
+  const decisionGroups = [...groups.values()].filter(group =>
+    group.positive.length > 0 && group.negative.length > 0
+  );
   const pairs = [];
   for (const [timestamp, group] of groups) {
     const candidates = [];
@@ -341,8 +352,16 @@ export function calculateAsymmetricDirectionalRankingLoss({
       candidate_brier: candidateBrier,
       baseline_brier: baselineBrier,
       improvement_vs_logistic: baselineBrier - candidateBrier,
+      // Backward-compatible pair counter name; groups now follow the same
+      // 15-minute decision bucket used by inference ranking and Top-K.
       same_timestamp_pair_count: pairs.length,
+      same_decision_bucket_pair_count: pairs.length,
+      decision_group_count: decisionGroups.length,
       timestamp_group_count: groups.size,
+      total_time_buckets: groups.size,
+      singleton_buckets_excluded: singletonBucketsExcluded,
+      decision_bucket_ms: DIRECTIONAL_RANKING_BUCKET_MS,
+      decision_grouping: DIRECTIONAL_RANKING_GROUPING,
       pairwise_ranking_loss: rankingLoss,
       false_positive_confidence_penalty: falsePositivePenalty,
       negative_sample_weight: negativeWeight,
