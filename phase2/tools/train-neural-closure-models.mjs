@@ -466,6 +466,8 @@ async function main(){
       temporalProfile?.regime_specialists??{}
     ).map(([regime,specialist])=>[regime,{
       status:specialist.status??null,
+      required_inner_selection_brier_margin:specialist.required_inner_selection_brier_margin??null,
+      required_outer_validation_brier_margin:specialist.required_outer_validation_brier_margin??null,
       support_gaps:specialist.support_gaps??[],
       training_samples:specialist.regime_training_samples??specialist.training_samples??0,
       shared_training_samples:specialist.shared_training_samples??0,
@@ -571,6 +573,8 @@ async function main(){
     missing_external_holdout_regimes:missingAttentionRegimes,
     pooled_fallback:{
       status:attentionPooledFallback.status??'NOT_TRAINED',
+      required_inner_selection_brier_margin:attentionPooledFallback.required_inner_selection_brier_margin??null,
+      required_outer_validation_brier_margin:attentionPooledFallback.required_outer_validation_brier_margin??null,
       trained:attentionPooledFallback.trained===true,
       training_samples:attentionPooledFallback.training_samples??0,
       selection_samples:attentionPooledFallback.selection_samples??0,
