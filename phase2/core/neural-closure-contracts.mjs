@@ -763,6 +763,178 @@ export function buildNeuralClosureCalibrationBlocks(rows,options={}){
   };
 }
 
+export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
+  fitFraction=0.50,minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
+  maximumBlocks=4,minimumTestDays=2
+}={}) {
+  const unavailable=(reason,extra={})=>({
+    schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,holdout_values_used:false,
+    calibration_uses_only_prior_matured_labels:true,reason,...extra
+  });
+  if(!Array.isArray(rows)||!rows.length||!(rawMap instanceof Map))
+    return unavailable('ROWS_OR_VERIFIED_PREDICTION_MAP_INVALID');
+  if(!finite(fitFraction)||Number(fitFraction)<0.20||Number(fitFraction)>0.80||
+    !Number.isInteger(maximumBlocks)||maximumBlocks<2||
+    !Number.isInteger(minimumTestDays)||minimumTestDays<1||
+    !Number.isInteger(minimumClassSupport)||minimumClassSupport<1)
+    return unavailable('WALK_FORWARD_CONFIGURATION_INVALID');
+  const ordered=[...rows].sort((a,b)=>Number(a?.at)-Number(b?.at)||
+    String(a?.id??'').localeCompare(String(b?.id??'')));
+  const ids=new Set();
+  for(const row of ordered){
+    const at=finite(row?.at),resolved=finite(row?.resolved_at);
+    const probability=rawMap.get(String(row?.id??''));
+    if(!row?.id||ids.has(String(row.id))||at===null||resolved===null||
+      resolved<=at||(row.target!==0&&row.target!==1)||
+      !finite(probability)||Number(probability)<0||Number(probability)>1)
+      return unavailable('ROW_ID_TIME_TARGET_OR_MODEL_SCORE_INVALID');
+    ids.add(String(row.id));
+  }
+  const dayOf=row=>Math.floor(Number(row.at)/NEURAL_CLOSURE_PURGE_MS)*
+    NEURAL_CLOSURE_PURGE_MS;
+  const days=[...new Set(ordered.map(dayOf))].sort((a,b)=>a-b);
+  const fitDayCount=Math.floor(days.length*Number(fitFraction));
+  if(days.length<10||fitDayCount<5||fitDayCount+1>=days.length)
+    return unavailable('INSUFFICIENT_CHRONOLOGICAL_DAYS');
+  const initialFitDays=new Set(days.slice(0,fitDayCount));
+  const initialFitRows=ordered.filter(row=>initialFitDays.has(dayOf(row)));
+  const initialSupport=classCounts(initialFitRows.map(row=>row.target));
+  if(initialSupport.positive<minimumClassSupport||
+    initialSupport.negative<minimumClassSupport)
+    return unavailable('INITIAL_CALIBRATION_CLASS_SUPPORT_NOT_MET',{
+      initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
+      minimum_class_support:minimumClassSupport
+    });
+  const initialPlatt=fitPlattScaler(
+    probabilitiesFor(initialFitRows,rawMap).map(logit),
+    initialFitRows.map(row=>row.target),{
+      minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
+    });
+  const staticCalibrator=initialPlatt.fitted===true&&initialPlatt.accepted===true
+    ?initialPlatt:null;
+  let cursor=fitDayCount+1; // one full UTC day is purged before the first test block.
+  const availableDays=days.length-cursor;
+  let blockCount=0;
+  for(let candidate=Math.min(maximumBlocks,availableDays);candidate>=2;candidate--){
+    if(availableDays-(candidate-1)>=candidate*minimumTestDays){
+      blockCount=candidate;break;
+    }
+  }
+  if(blockCount<2)
+    return unavailable('INSUFFICIENT_DISJOINT_FORWARD_TEST_BLOCKS',{
+      initial_fit_days:fitDayCount,available_test_days:availableDays,
+      minimum_test_days:minimumTestDays
+    });
+  const distributable=availableDays-(blockCount-1);
+  const baseSize=Math.floor(distributable/blockCount),extras=distributable%blockCount;
+  const plans=[];
+  for(let i=0;i<blockCount;i++){
+    const size=baseSize+(i<extras?1:0),planned=days.slice(cursor,cursor+size);
+    if(planned.length!==size)return unavailable('FORWARD_BLOCK_PLAN_INCOMPLETE');
+    plans.push(planned);cursor+=size;
+    if(i<blockCount-1)cursor+=1; // one full UTC day between scored blocks.
+  }
+  const firstRows=ordered.filter(row=>dayOf(row)===plans[0][0]);
+  const initialLastAt=Math.max(...initialFitRows.map(row=>Number(row.at)));
+  const initialPurgeGapMs=firstRows.length
+    ?Math.min(...firstRows.map(row=>Number(row.at)))-initialLastAt:null;
+  if(!(initialPurgeGapMs>NEURAL_CLOSURE_PURGE_MS))
+    return unavailable('INITIAL_FIT_TO_FORWARD_TEST_PURGE_NOT_ENFORCED',{
+      initial_purge_gap_ms:initialPurgeGapMs
+    });
+  const priorTestRows=[],blocks=[],staticAll=[],adaptiveAll=[],labelsAll=[];
+  const average=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
+  for(let i=0;i<plans.length;i++){
+    const daySet=new Set(plans[i]),testRows=ordered.filter(row=>daySet.has(dayOf(row)));
+    if(!testRows.length)return unavailable('EMPTY_FORWARD_TEST_BLOCK',{block_index:i+1});
+    const firstAt=Math.min(...testRows.map(row=>Number(row.at)));
+    const lastAt=Math.max(...testRows.map(row=>Number(row.at)));
+    const candidates=[...initialFitRows,...priorTestRows];
+    const historyRows=candidates.filter(row=>
+      finite(row?.resolved_at)&&Number(row.resolved_at)<firstAt);
+    const excludedUnmatured=candidates.length-historyRows.length;
+    const support=classCounts(historyRows.map(row=>row.target));
+    const latestAt=historyRows.length?Math.max(...historyRows.map(row=>Number(row.at))):null;
+    const latestResolved=historyRows.length?Math.max(...historyRows.map(row=>Number(row.resolved_at))):null;
+    const purgeGap=latestAt===null?null:firstAt-latestAt;
+    const maturityGap=latestResolved===null?null:firstAt-latestResolved;
+    if(!historyRows.length||support.positive<minimumClassSupport||
+      support.negative<minimumClassSupport)
+      return unavailable('FORWARD_CALIBRATION_HISTORY_CLASS_SUPPORT_NOT_MET',{
+        block_index:i+1,history_rows:historyRows.length,history_support:support,
+        minimum_class_support:minimumClassSupport
+      });
+    if(!(purgeGap>NEURAL_CLOSURE_PURGE_MS)||!(maturityGap>0))
+      return unavailable('FORWARD_CALIBRATION_HISTORY_NOT_FULLY_PURGED_OR_MATURED',{
+        block_index:i+1,purge_gap_ms:purgeGap,maturity_gap_ms:maturityGap
+      });
+    const adaptivePlatt=fitPlattScaler(
+      probabilitiesFor(historyRows,rawMap).map(logit),historyRows.map(row=>row.target),{
+        minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
+      });
+    const adaptiveCalibrator=adaptivePlatt.fitted===true&&adaptivePlatt.accepted===true
+      ?adaptivePlatt:null;
+    const staticProb=probabilitiesFor(testRows,rawMap,staticCalibrator);
+    const adaptiveProb=probabilitiesFor(testRows,rawMap,adaptiveCalibrator);
+    const labels=testRows.map(row=>row.target),positive=classCounts(labels).positive;
+    const staticScore=brier(staticProb,labels),adaptiveScore=brier(adaptiveProb,labels);
+    blocks.push({
+      block_index:i+1,first_at:firstAt,last_at:lastAt,
+      first_utc_day:plans[i][0],last_utc_day:plans[i].at(-1),
+      test_day_count:plans[i].length,sample_count:testRows.length,
+      positive_count:positive,negative_count:labels.length-positive,
+      observed_positive_rate:Number((positive/labels.length).toFixed(8)),
+      calibration_history_rows:historyRows.length,calibration_history_support:support,
+      latest_history_at:latestAt,latest_history_label_resolved_at:latestResolved,
+      calibration_to_test_purge_gap_ms:purgeGap,
+      latest_label_maturity_gap_ms:maturityGap,
+      excluded_unmatured_history_rows:excludedUnmatured,
+      static_calibrator_method:staticCalibrator?'PLATT':'RAW_FALLBACK',
+      static_brier_score:staticScore,
+      static_mean_probability:Number(average(staticProb).toFixed(8)),
+      adaptive_calibrator_method:adaptiveCalibrator?'PLATT':'RAW_FALLBACK',
+      adaptive_calibrator_fitted:adaptivePlatt.fitted===true,
+      adaptive_calibrator_accepted:adaptivePlatt.accepted===true,
+      adaptive_brier_score:adaptiveScore,
+      adaptive_mean_probability:Number(average(adaptiveProb).toFixed(8)),
+      adaptive_brier_improvement:Number((staticScore-adaptiveScore).toFixed(10)),
+      adaptive_fit_nll_before:adaptivePlatt.fit_nll_before??null,
+      adaptive_fit_nll_after:adaptivePlatt.fit_nll_after??null
+    });
+    staticAll.push(...staticProb);adaptiveAll.push(...adaptiveProb);labelsAll.push(...labels);
+    priorTestRows.push(...testRows);
+  }
+  const positives=labelsAll.reduce((sum,value)=>sum+value,0),count=labelsAll.length;
+  const staticBrier=brier(staticAll,labelsAll),adaptiveBrier=brier(adaptiveAll,labelsAll);
+  return {
+    schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
+    status:'AVAILABLE',diagnostic_only:true,
+    affects_model_weights:false,affects_primary_probabilities:false,
+    affects_primary_threshold:false,affects_acceptance_gates:false,
+    labels_used_for_gradient_fit:false,labels_used_for_calibration:true,
+    labels_used_for_current_or_future_block_calibration:false,
+    calibration_uses_only_prior_matured_labels:true,holdout_values_used:false,
+    purge_ms:NEURAL_CLOSURE_PURGE_MS,minimum_class_support:minimumClassSupport,
+    initial_fit_fraction:Number(fitFraction),initial_fit_day_count:fitDayCount,
+    initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
+    initial_calibrator_method:staticCalibrator?'PLATT':'RAW_FALLBACK',
+    initial_calibrator_accepted:initialPlatt.accepted===true,
+    initial_purge_gap_ms:initialPurgeGapMs,
+    scored_block_count:blocks.length,scored_rows:count,
+    unscored_purge_and_initial_fit_rows:ordered.length-count,
+    aggregate:{
+      observed_positive_rate:Number((positives/count).toFixed(8)),
+      static_brier_score:staticBrier,adaptive_brier_score:adaptiveBrier,
+      adaptive_brier_improvement:Number((staticBrier-adaptiveBrier).toFixed(10)),
+      static_mean_probability:Number(average(staticAll).toFixed(8)),
+      adaptive_mean_probability:Number(average(adaptiveAll).toFixed(8))
+    },
+    blocks
+  };
+}
+
+
 function collectTcnLstmPreInnerCalibrationMap(predictions,validationRows,holdoutRows){
   const property='pre_inner_calibration_probability';
   if(!Array.isArray(predictions))
@@ -1852,6 +2024,10 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
+    const walkForwardCalibrationDiagnostics=
+      buildWalkForwardCalibrationDiagnostics(split.validation,rawMap,{
+        minimumClassSupport
+      });
     const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
       ?buildTcnLstmProbabilityStageDiagnostics({
         preInner:tcnLstmPreInnerCalibration,
@@ -1900,6 +2076,7 @@ export function runNeuralClosureBenchmark({
       gammaPositive:1,gammaNegative:2
     };
     const baseValidation={
+      walk_forward_calibration_diagnostics:walkForwardCalibrationDiagnostics,
       sample_count:validationRows.length,
       positive_count:validationSupport.positive,
       negative_count:validationSupport.negative,
