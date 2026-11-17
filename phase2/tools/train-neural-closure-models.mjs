@@ -250,7 +250,38 @@ async function main(){
     historical_delisted_asset_coverage:false,
     interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_30_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
   };
+  const historicalPolicy=input.universe?.historical_eligibility??{};
+  const historicalMinimum=Number(input.universe?.minimum_quote_volume_24h_usdt);
+  if(input.universe?.selection!==
+      'CURRENT_TOP_30_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1'||
+    historicalPolicy.method!==
+      'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE'||
+    historicalPolicy.interval!=='15m'||
+    Number(historicalPolicy.lookback_candles)!==96||
+    historicalPolicy.future_or_unclosed_candles_used!==false||
+    historicalPolicy.below_threshold_events_excluded!==true||
+    !Number.isFinite(historicalMinimum)||historicalMinimum<750_000||
+    input.universe?.survivorship_bias_warning!==true||
+    input.universe?.historical_delisted_asset_coverage!==false)
+    throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED');
   const rows=validateFourHourRows(input.rows);
+  const historicalLiquidityRowsValid=rows.every(row=>{
+    const evidence=row.historical_liquidity;
+    return evidence?.schema==='BINANCE_SPOT_POINT_IN_TIME_24H_LIQUIDITY_V1'&&
+      evidence.status==='ELIGIBLE'&&evidence.eligible===true&&
+      Number(evidence.window_candle_count)===96&&
+      Number(evidence.decision_at)===Number(row.at)&&
+      Number(evidence.window_end_close_at)===Number(row.at)&&
+      Number(evidence.window_start_open_at)===Number(row.at)-96*15*60_000+1&&
+      Number(evidence.minimum_quote_volume_24h_usdt)===historicalMinimum&&
+      Number(evidence.quote_volume_24h_usdt)===Number(row.quote_volume_24h)&&
+      Number(row.quote_volume_24h)>=historicalMinimum&&
+      evidence.no_future_candles_used===true&&
+      /^[a-f0-9]{64}$/.test(String(evidence.window_evidence_sha256??''))&&
+      evidence.source==='BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME';
+  });
+  if(!historicalLiquidityRowsValid)
+    throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_ROW_EVIDENCE_INVALID');
   const datasetSha=sha256CanonicalArrayMapped(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
