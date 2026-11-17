@@ -151,7 +151,10 @@ test('top-K per timestamp selection is frozen before the later validation block 
   const rows=sourceRows.map(row=>{
     const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
       NEURAL_CLOSURE_PURGE_MS+BASE;
-    const decisionAt=dayStart+12*60*60_000;
+    const sourceIndex=Number(String(row.id).split(':E').at(-1));
+    // Different symbol files can close a few milliseconds/minutes apart yet
+    // belong to the same 15m decision candle.
+    const decisionAt=dayStart+12*60*60_000+(sourceIndex%3)*60_000;
     const shift=decisionAt-row.at;
     const sourceAudit={...row.source_audit,
       received_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS+60_000};
@@ -796,6 +799,8 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     const distributions=diagnostic.outer_validation.probability_distribution;
     const rankPolicy=diagnostic.rank_based_top_k_policy;
     assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
+    assert.equal(rankPolicy.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    assert.equal(rankPolicy.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
     assert.equal(rankPolicy.status,'EVALUATED');
     assert.equal(rankPolicy.diagnostic_only,true);
     assert.equal(rankPolicy.affects_primary_probabilities,false);
