@@ -775,7 +775,9 @@ function buildTcnLstmProbabilityStageDiagnostics({
   preInner,calibrationFitRows,thresholdSelectionRows,validationRows,
   minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   innerCalibratedThresholdSelection,innerCalibratedValidation,
+  innerCalibratedThresholdSelectionProbabilities,innerCalibratedValidationProbabilities,
   sharedCalibratedThresholdSelection,sharedCalibratedValidation,
+  sharedCalibratedThresholdSelectionProbabilities,sharedCalibratedValidationProbabilities,
   sharedCalibrationMethod
 }={}){
   const base={
@@ -889,7 +891,37 @@ function buildTcnLstmProbabilityStageDiagnostics({
       inner_platt_output_before_shared_evaluator:innerCalibratedValidation,
       shared_evaluator_output_after_selected_calibration:sharedCalibratedValidation
     },
-    single_stage_shared_calibration_counterfactual:directCalibrationCounterfactual
+    single_stage_shared_calibration_counterfactual:directCalibrationCounterfactual,
+    chronological_stages:{
+      threshold_selection:{
+        network_output_before_inner_platt:buildChronologicalStabilityDiagnostics(
+          thresholdSelectionRows,rawThresholdProbabilities
+        ),
+        inner_platt_output_before_shared_evaluator:buildChronologicalStabilityDiagnostics(
+          thresholdSelectionRows,innerCalibratedThresholdSelectionProbabilities
+        ),
+        shared_evaluator_output_after_selected_calibration:buildChronologicalStabilityDiagnostics(
+          thresholdSelectionRows,sharedCalibratedThresholdSelectionProbabilities
+        ),
+        single_stage_shared_calibration_counterfactual:buildChronologicalStabilityDiagnostics(
+          thresholdSelectionRows,directThresholdProbabilities
+        )
+      },
+      outer_validation:{
+        network_output_before_inner_platt:buildChronologicalStabilityDiagnostics(
+          validationRows,rawValidationProbabilities
+        ),
+        inner_platt_output_before_shared_evaluator:buildChronologicalStabilityDiagnostics(
+          validationRows,innerCalibratedValidationProbabilities
+        ),
+        shared_evaluator_output_after_selected_calibration:buildChronologicalStabilityDiagnostics(
+          validationRows,sharedCalibratedValidationProbabilities
+        ),
+        single_stage_shared_calibration_counterfactual:buildChronologicalStabilityDiagnostics(
+          validationRows,directValidationProbabilities
+        )
+      }
+    }
   };
 }
 
@@ -1197,13 +1229,44 @@ function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4
       diagnostic_only:true,reason:'NON_FINITE_SCORE_OR_INVALID_EVALUATION_ROW'
     };
   }
-  const count=Math.min(blockCount,paired.length);
+  // Keep rows sharing one decision timestamp in the same slice. In a
+  // multi-symbol cohort many assets can have the same candle-close time.
+  const timestampGroups=[];
+  for(const item of paired){
+    const at=Number(item.row.at);
+    const last=timestampGroups.at(-1);
+    if(last&&last.at===at)last.items.push(item);
+    else timestampGroups.push({at,items:[item]});
+  }
+  const count=Math.min(blockCount,timestampGroups.length);
   const blocks=[];
   const scoreThresholds=[0.15,0.20,0.25,0.30,0.35];
+  let groupCursor=0,consumedRows=0;
   for(let index=0;index<count;index++){
-    const start=Math.floor(index*paired.length/count);
-    const end=Math.floor((index+1)*paired.length/count);
-    const slice=paired.slice(start,end);
+    const remainingBlocks=count-index;
+    let groupEnd;
+    if(remainingBlocks===1)groupEnd=timestampGroups.length;
+    else{
+      const target=((index+1)*paired.length)/count;
+      const maximumEnd=timestampGroups.length-(remainingBlocks-1);
+      groupEnd=groupCursor;
+      while(groupEnd<maximumEnd){
+        const currentError=Math.abs(consumedRows-target);
+        const nextRows=timestampGroups[groupEnd].items.length;
+        const nextError=Math.abs(consumedRows+nextRows-target);
+        if(groupEnd>groupCursor&&currentError<=nextError)break;
+        consumedRows+=nextRows;
+        groupEnd++;
+        if(consumedRows>=target)break;
+      }
+      if(groupEnd===groupCursor){
+        consumedRows+=timestampGroups[groupEnd].items.length;
+        groupEnd++;
+      }
+    }
+    const slice=timestampGroups.slice(groupCursor,groupEnd)
+      .flatMap(group=>group.items);
+    groupCursor=groupEnd;
     const labels=slice.map(item=>item.row.target);
     const scores=slice.map(item=>item.probability);
     const support=classCounts(labels);
@@ -1424,10 +1487,14 @@ export function runNeuralClosureBenchmark({
           summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
         innerCalibratedValidation:
           summarizeProbabilityDistribution(rawValidation),
+        innerCalibratedThresholdSelectionProbabilities:rawThresholdSelectionProbabilities,
+        innerCalibratedValidationProbabilities:rawValidation,
         sharedCalibratedThresholdSelection:
           summarizeProbabilityDistribution(thresholdSelectionProbabilities),
         sharedCalibratedValidation:
           summarizeProbabilityDistribution(calibratedValidation),
+        sharedCalibratedThresholdSelectionProbabilities:thresholdSelectionProbabilities,
+        sharedCalibratedValidationProbabilities:calibratedValidation,
         sharedCalibrationMethod:calibration.selected_method
       }):null;
     const thresholdSelection=selectThreshold(thresholdSelectionRows,

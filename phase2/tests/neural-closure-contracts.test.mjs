@@ -617,6 +617,41 @@ test('chronological stability diagnostics expose contiguous labelled evaluation 
   }
 });
 
+test('chronological stability slices keep simultaneous multi-symbol rows together',()=>{
+  const baseRows=makeRows({days:60,rowsPerDay:200});
+  const duplicates=baseRows.filter((_,index)=>index%97===0).map((row,index)=>{
+    const symbol='T'+String(index).padStart(5,'0')+'USDT';
+    return {
+      ...row,
+      id:row.id+':SIMULTANEOUS',
+      symbol,
+      source_audit:{...row.source_audit,symbol}
+    };
+  });
+  const rows=[...baseRows,...duplicates].sort((a,b)=>a.at-b.at||
+    a.symbol.localeCompare(b.symbol));
+  const sourceCommitSha='f'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:false,reason:'SIMULTANEOUS_TIMESTAMP_DIAGNOSTIC_TEST',diagnostic_only:true
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  assert.equal(report.holdout_access.opened,false);
+  const stability=report.models.TCN_LSTM_HYBRID.validation.chronological_stability_diagnostics;
+  for(const name of ['threshold_selection','outer_validation']){
+    const blocks=stability[name].blocks;
+    for(let index=1;index<blocks.length;index++)
+      assert.ok(blocks[index-1].last_at<blocks[index].first_at,
+        'a timestamp shared by multiple symbols must not cross a block boundary');
+  }
+});
+
 test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
@@ -910,6 +945,26 @@ test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without ch
   assert.equal(counterfactual.outer_validation.evaluation_labels_used,true);
   assert.equal(counterfactual.outer_validation.single_stage_shared_calibration.sample_count,
     diagnostics.outer_validation.sample_count);
+  assert.ok(diagnostics.chronological_stages);
+  for(const blockName of ['threshold_selection','outer_validation']){
+    const stages=diagnostics.chronological_stages[blockName];
+    for(const stageName of [
+      'network_output_before_inner_platt',
+      'inner_platt_output_before_shared_evaluator',
+      'shared_evaluator_output_after_selected_calibration',
+      'single_stage_shared_calibration_counterfactual'
+    ]){
+      const stability=stages[stageName];
+      assert.equal(stability.schema,'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1');
+      assert.equal(stability.status,'AVAILABLE');
+      assert.equal(stability.diagnostic_only,true);
+      assert.equal(stability.affects_acceptance_gates,false);
+      assert.equal(stability.holdout_values_used,false);
+      assert.equal(stability.block_count,4);
+      assert.equal(stability.blocks.reduce((sum,item)=>sum+item.sample_count,0),
+        stability.sample_count);
+    }
+  }
   for(const blockName of ['threshold_selection','outer_validation']){
     const block=diagnostics[blockName];
     assert.ok(block.sample_count>0);
