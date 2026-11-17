@@ -799,6 +799,7 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   assert.ok(Number.isFinite(result.aggregate.adaptive_brier_score));
 });
 
+// [RUN-NEURAL-REBENCHMARK] Re-evaluate matched forward ranking metrics on the immutable run-99 cohort.
 test('walk-forward ranking reports cross-sectional AP and compares the same future blocks with Logistic',()=>{
   const rows=makeRows({days:60,rowsPerDay:200});
   const modelMap=new Map(rows.map(row=>[
