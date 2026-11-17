@@ -18,7 +18,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  topKProbabilitySignals,runNeuralClosureBenchmark
+  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -114,18 +114,22 @@ function makePredictions(rows,sourceCommitSha,artifacts){
   return output;
 }
 
-test('top-K timestamp ranking selects a deterministic score-ordered shortlist per simultaneous decision group',()=>{
+test('top-K ranking merges millisecond-skewed closes into the shared 15-minute decision bucket',()=>{
   const rows=[
-    {at:100,symbol:'B',id:'b'},
-    {at:100,symbol:'A',id:'a'},
-    {at:100,symbol:'C',id:'c'},
-    {at:200,symbol:'D',id:'d'},
-    {at:200,symbol:'E',id:'e'},
-    {at:200,symbol:'F',id:'f'}
+    {at:900_001,symbol:'B',id:'b'},
+    {at:950_000,symbol:'A',id:'a'},
+    {at:1_799_999,symbol:'C',id:'c'},
+    {at:1_800_001,symbol:'D',id:'d'},
+    {at:1_900_000,symbol:'E',id:'e'},
+    {at:2_699_999,symbol:'F',id:'f'}
   ];
   const scores=[0.8,0.8,0.9,0.2,0.7,0.95];
   const ranked=topKProbabilitySignals(rows,scores,2);
-  assert.equal(ranked.decision_group_count,2);
+  assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,900_000);
+  assert.equal(ranked.decision_group_count,2,
+    'three slightly different close timestamps in each 15m bucket must be ranked together');
+  assert.equal(ranked.decision_bucket_ms,900_000);
+  assert.equal(ranked.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
   assert.equal(ranked.signal_count,4);
   assert.deepEqual(ranked.probabilities.map(value=>value>=0.5),
     [false,true,true,false,true,true]);
