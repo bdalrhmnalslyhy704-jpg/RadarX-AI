@@ -782,14 +782,30 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   const ordered=[...rows].sort((a,b)=>Number(a?.at)-Number(b?.at)||
     String(a?.id??'').localeCompare(String(b?.id??'')));
   const ids=new Set();
-  for(const row of ordered){
+  for(let index=0;index<ordered.length;index++){
+    const row=ordered[index];
+    const id=String(row?.id??'');
     const at=finite(row?.at),resolved=finite(row?.resolved_at);
-    const probability=rawMap.get(String(row?.id??''));
-    if(!row?.id||ids.has(String(row.id))||at===null||resolved===null||
-      resolved<=at||(row.target!==0&&row.target!==1)||
-      !finite(probability)||Number(probability)<0||Number(probability)>1)
-      return unavailable('ROW_ID_TIME_TARGET_OR_MODEL_SCORE_INVALID');
-    ids.add(String(row.id));
+    const probability=rawMap.get(id);
+    if(!id||ids.has(id))
+      return unavailable('WALK_FORWARD_ROW_ID_MISSING_OR_DUPLICATE',{
+        row_index:index,row_id:id||null
+      });
+    if(at===null||resolved===null||resolved<=at)
+      return unavailable('WALK_FORWARD_ROW_TIME_INVALID',{
+        row_index:index,row_id:id,at:row?.at??null,
+        resolved_at:row?.resolved_at??null
+      });
+    if(row.target!==0&&row.target!==1)
+      return unavailable('WALK_FORWARD_ROW_TARGET_INVALID',{
+        row_index:index,row_id:id,target:row?.target??null
+      });
+    if(!finite(probability)||Number(probability)<0||Number(probability)>1)
+      return unavailable('WALK_FORWARD_MODEL_SCORE_INVALID',{
+        row_index:index,row_id:id,probability:probability??null,
+        map_size:rawMap.size
+      });
+    ids.add(id);
   }
   const dayOf=row=>Math.floor(Number(row.at)/NEURAL_CLOSURE_PURGE_MS)*
     NEURAL_CLOSURE_PURGE_MS;
