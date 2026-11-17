@@ -18,7 +18,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  runNeuralClosureBenchmark
+  topKProbabilitySignals,runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -113,6 +113,32 @@ function makePredictions(rows,sourceCommitSha,artifacts){
     output[family]=make(0.73,0.23,artifacts[family].artifact_sha256,family);
   return output;
 }
+
+test('top-K timestamp ranking selects a deterministic score-ordered shortlist per simultaneous decision group',()=>{
+  const rows=[
+    {at:100,symbol:'B',id:'b'},
+    {at:100,symbol:'A',id:'a'},
+    {at:100,symbol:'C',id:'c'},
+    {at:200,symbol:'D',id:'d'},
+    {at:200,symbol:'E',id:'e'},
+    {at:200,symbol:'F',id:'f'}
+  ];
+  const scores=[0.8,0.8,0.9,0.2,0.7,0.95];
+  const ranked=topKProbabilitySignals(rows,scores,2);
+  assert.equal(ranked.decision_group_count,2);
+  assert.equal(ranked.signal_count,4);
+  assert.deepEqual(ranked.probabilities.map(value=>value>=0.5),
+    [false,true,true,false,true,true]);
+  assert.equal(ranked.probabilities[2],0.5+0.5*0.9);
+  assert.equal(ranked.probabilities[1],0.5+0.5*0.8,
+    'equal scores must use symbol ascending as a deterministic tie break');
+  assert.ok(ranked.probabilities[5]>ranked.probabilities[2]);
+  assert.equal(ranked.selected_scores_preserve_rank,true);
+  assert.equal(ranked.tie_break_order,
+    'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING');
+  assert.throws(()=>topKProbabilitySignals(rows,scores,0),
+    /NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID/);
+});
 
 test('Focal-Asymmetric Brier analytic probability/logit gradients match central differences',()=>{
   for(const target of [0,1]){
