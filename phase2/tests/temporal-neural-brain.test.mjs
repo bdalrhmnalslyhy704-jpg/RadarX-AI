@@ -524,7 +524,12 @@ test('TCN training loop consumes the asymmetric same-time ranking objective',()=
   assert.ok(rankingDiagnostics.length>0,
     'the asymmetric objective must be calculated inside the actual TCN optimizer loop');
   assert.ok(rankingDiagnostics.some(metrics=>metrics.same_timestamp_pair_count>0),
-    'the model must build cross-sectional positive/negative pairs on shared timestamps');
+    'the model must build cross-sectional positive/negative pairs on shared 15m decision buckets');
+  assert.ok(rankingDiagnostics.every(metrics=>
+    metrics.decision_bucket_ms===TEMPORAL_RANKING_BUCKET_MS&&
+    metrics.decision_grouping==='FLOOR_UNIX_EPOCH_15M_BUCKET'&&
+    metrics.total_time_buckets===metrics.decision_group_count+metrics.singleton_buckets_excluded),
+    'every training epoch must use the same 15m bucket semantics and account for singleton exclusions');
   assert.ok(rankingDiagnostics.every(metrics=>
     Number.isFinite(metrics.candidate_brier)&&
     Number.isFinite(metrics.baseline_brier)&&
