@@ -7,6 +7,24 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-SHA collector and trainer use the expanded current top-50 candidate prefilter without relaxing historical gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
+  const policy=await readFile(new URL('../core/neural-closure-data-builder.mjs',import.meta.url),'utf8');
+  assert.match(collector,/maxSymbols:50,minSymbols:25/);
+  assert.match(collector,/result\.maxSymbols>50/);
+  assert.match(collector,/VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM/);
+  assert.match(collector,/REJECTED_INCOMPLETE_RAW_ARCHIVE/);
+  assert.match(collector,/REJECTED_LOW_VALID_EVENT_COVERAGE/);
+  assert.match(collector,/rejection_reasons:symbolRejectedReasons/);
+  assert.match(collector,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
+  assert.match(policy,/CURRENT_BINANCE_SPOT_24H_TICKER_TOP_50_AT_COLLECTION_TIME/);
+  assert.match(trainer,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
+  assert.match(trainer,/Number\(input\.universe\?\.maximum_symbols\)!==50/);
+  assert.match(trainer,/Number\(input\.universe\?\.candidate_prefilter\?\.maximum_symbols\)!==50/);
+  assert.match(trainer,/historicalMinimum<750_000/);
+});
+
 test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
