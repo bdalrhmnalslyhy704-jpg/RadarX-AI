@@ -128,3 +128,5 @@ jobs:
           path: artifacts/rebenchmark/
           if-no-files-found: ignore
           retention-days: 30
+
+# [RUN-NEURAL-REBENCHMARK] execute the validation-only BTC regime walk-forward diagnostics on this exact trainer SHA.
