@@ -7,6 +7,17 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
+  assert.match(trainer,/SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE/);
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_ROW_EVIDENCE_INVALID/);
+  assert.match(trainer,/evidence\.no_future_candles_used===true/);
+  assert.match(trainer,/evidence\.window_end_close_at\)===Number\(row\.at\)/);
+  assert.match(trainer,/evidence\.window_evidence_sha256/);
+  assert.match(trainer,/historical_delisted_asset_coverage!==false/);
+});
+
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/predictTemporalAttentionResearchOutput/,
