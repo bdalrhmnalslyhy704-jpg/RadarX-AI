@@ -313,6 +313,21 @@ async function main(){
       minimumHoldoutSamples:80,
       liveHoldoutSamples:100,
       epochs:Math.max(4,Math.min(10,args.epochs)),
+      // Research-only cross-sectional TCN objective. The pairwise term is
+      // grouped on the same 15m decision buckets as inference Top-K; singleton
+      // buckets are excluded. External validation/holdout gates remain unchanged.
+      enableAsymmetricDirectionalRankingLoss:true,
+      directionalRankingLossConfig:{
+        brierWeight:1,
+        rankingWeight:0.25,
+        falsePositiveWeight:0.5,
+        baselineGapWeight:0.2,
+        pairMargin:0.1,
+        pairTemperature:0.5,
+        falsePositiveProbabilityThreshold:0.7,
+        requiredBaselineImprovement:0.00025,
+        maxPairsPerTimestamp:256
+      },
       enableTemporalBoostedTree:true,
       // Independent pooling variants share the exact purged train/selection/
       // calibration/validation/holdout boundaries but keep separate weights.
