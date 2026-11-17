@@ -122,6 +122,34 @@ test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the sh
   assert.match(contract,/'TCN_LSTM_HYBRID'/);
 });
 
+test('regime-local TCN families use a smaller inner discovery margin but retain the strict 0.003 outer promotion gate',async()=>{
+  const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(neural,/TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN = 0\.00025/);
+  assert.equal((neural.match(/innerSelectionMargin:requiredInnerSelectionMargin/g)||[]).length,5,
+    'base regime-local TCN, V9, V10, V11 and pooled fallback must share the same explicit discovery margin');
+  assert.match(neural,/const qualified=candidates\.filter\([\s\S]*?requiredInnerSelectionMargin\)/);
+  assert.match(neural,/const validationPassed=Boolean\([\s\S]*?outerPromotionMargin\)/);
+  assert.match(neural,/const holdoutPassed=Boolean\([\s\S]*?outerPromotionMargin\)/);
+  assert.match(neural,/required_inner_selection_brier_margin:requiredInnerSelectionMargin/);
+  assert.match(neural,/required_outer_validation_brier_margin:outerPromotionMargin/);
+  assert.match(neural,/holdout_comparison:\{\s*required_brier_margin:outerPromotionMargin/);
+  assert.match(trainer,/inner_selection_required_brier_margin:temporalProfile\?\.inner_selection_required_brier_margin\?\?null/);
+  assert.match(trainer,/outer_validation_required_brier_margin:temporalProfile\?\.outer_validation_required_brier_margin\?\?null/);
+  assert.match(trainer,/required_inner_selection_brier_margin:specialist\.required_inner_selection_brier_margin\?\?null/);
+  assert.match(trainer,/required_outer_validation_brier_margin:specialist\.required_outer_validation_brier_margin\?\?null/);
+  assert.match(trainer,/required_brier_margin:outerPromotionMargin/);
+  // Candidate discovery only nominates. The independent benchmark still uses
+  // the predeclared promotion margin and all risk gates; no holdout is unlocked
+  // by this smaller inner selection threshold.
+  const contract=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(contract,/requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN/);
+  assert.match(contract,/minimumTrades=20/);
+  assert.match(contract,/minimumWinRatePct=55/);
+  assert.match(contract,/maximumDrawdownPct=8/);
+  assert.match(contract,/roundTripCostBps=30/);
+});
+
 test('V9-V11 artifacts include a strictly qualified all-regime fallback for missing BTC specialists',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
