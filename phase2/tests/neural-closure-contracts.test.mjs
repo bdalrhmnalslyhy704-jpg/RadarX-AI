@@ -695,6 +695,34 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(validation.threshold_trials.length,34,
       'the primary threshold grid must remain unchanged');
     const p=diagnostic.partitions;
+    const transfer=diagnostic.outer_validation.threshold_signal_transfer;
+    const distributions=diagnostic.outer_validation.probability_distribution;
+    assert.equal(distributions.threshold_selection.sample_count,p.rows.threshold_selection);
+    assert.equal(distributions.outer_validation.sample_count,p.rows.outer_validation);
+    assert.equal(distributions.threshold_selection.frozen_threshold,
+      diagnostic.threshold_selection.selected_threshold);
+    assert.equal(distributions.outer_validation.frozen_threshold,
+      diagnostic.threshold_selection.selected_threshold);
+    assert.equal(distributions.threshold_selection.frozen_threshold_signal_count,
+      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
+    assert.equal(distributions.outer_validation.frozen_threshold_signal_count,
+      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
+    assert.equal(transfer.frozen_threshold,diagnostic.threshold_selection.selected_threshold);
+    assert.equal(transfer.selection_signal_count,
+      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
+    assert.equal(transfer.outer_validation_signal_count,
+      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
+    if(Number.isFinite(transfer.selection_signal_count)&&transfer.selection_signal_count>0){
+      assert.equal(transfer.selection_to_outer_signal_retention_pct,
+        Number((100*transfer.outer_validation_signal_count/
+          transfer.selection_signal_count).toFixed(6)));
+    }else{
+      assert.equal(transfer.selection_to_outer_signal_retention_pct,null);
+    }
+    assert.equal(distributions.threshold_selection.diagnostic_only,true);
+    assert.equal(distributions.outer_validation.diagnostic_only,true);
+    assert.equal(distributions.threshold_selection.score_values_only,true);
+    assert.equal(distributions.outer_validation.score_values_only,true);
     assert.ok(p.rows.threshold_selection>validation.threshold_selection_sample_count);
     assert.ok(p.rows.outer_validation>validation.sample_count);
     assert.equal(p.rows.fit,diagnostic.calibration.fit_rows);
