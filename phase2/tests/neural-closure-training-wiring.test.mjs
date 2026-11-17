@@ -138,7 +138,7 @@ test('regime-local TCN families use a smaller inner discovery margin but retain 
   assert.match(trainer,/outer_validation_required_brier_margin:temporalProfile\?\.outer_validation_required_brier_margin\?\?null/);
   assert.match(trainer,/required_inner_selection_brier_margin:specialist\.required_inner_selection_brier_margin\?\?null/);
   assert.match(trainer,/required_outer_validation_brier_margin:specialist\.required_outer_validation_brier_margin\?\?null/);
-  assert.match(trainer,/required_brier_margin:outerPromotionMargin/);
+  assert.match(neural,/holdout_comparison:\{\s*required_brier_margin:outerPromotionMargin/);
   // Candidate discovery only nominates. The independent benchmark still uses
   // the predeclared promotion margin and all risk gates; no holdout is unlocked
   // by this smaller inner selection threshold.
