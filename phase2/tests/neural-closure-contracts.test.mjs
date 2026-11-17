@@ -785,6 +785,10 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   assert.equal(result.calibration_uses_only_prior_matured_labels,true);
   assert.equal(result.scored_block_count,4);
   assert.ok(result.scored_rows>0);
+  assert.equal(result.initial_unmatured_rows_excluded,1,
+    'the static calibrator must also exclude a label that had not matured before the first forward block');
+  assert.equal(result.initial_calibration_history_rows,result.initial_fit_rows-1);
+  assert.ok(result.initial_calibration_label_maturity_gap_ms>0);
   let historyCount=0;
   for(const block of result.blocks){
     assert.ok(block.latest_history_label_resolved_at<block.first_at);

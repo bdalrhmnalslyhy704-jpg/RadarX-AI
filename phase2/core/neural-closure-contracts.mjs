@@ -820,13 +820,6 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
       minimum_class_support:minimumClassSupport
     });
-  const initialPlatt=fitPlattScaler(
-    probabilitiesFor(initialFitRows,rawMap).map(logit),
-    initialFitRows.map(row=>row.target),{
-      minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
-    });
-  const staticCalibrator=initialPlatt.fitted===true&&initialPlatt.accepted===true
-    ?initialPlatt:null;
   let cursor=fitDayCount+1; // one full UTC day is purged before the first test block.
   const availableDays=days.length-cursor;
   let blockCount=0;
@@ -850,13 +843,48 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     if(i<blockCount-1)cursor+=1; // one full UTC day between scored blocks.
   }
   const firstRows=ordered.filter(row=>dayOf(row)===plans[0][0]);
+  const firstForwardAt=firstRows.length
+    ?Math.min(...firstRows.map(row=>Number(row.at))):null;
   const initialLastAt=Math.max(...initialFitRows.map(row=>Number(row.at)));
-  const initialPurgeGapMs=firstRows.length
-    ?Math.min(...firstRows.map(row=>Number(row.at)))-initialLastAt:null;
+  const initialPurgeGapMs=firstForwardAt===null?null:firstForwardAt-initialLastAt;
   if(!(initialPurgeGapMs>NEURAL_CLOSURE_PURGE_MS))
     return unavailable('INITIAL_FIT_TO_FORWARD_TEST_PURGE_NOT_ENFORCED',{
       initial_purge_gap_ms:initialPurgeGapMs
     });
+  // The fixed/static comparator must obey the same label-maturity boundary as
+  // every later walk-forward recalibration. Never fit it with an initial-fit
+  // row whose 4h first-touch label had not resolved before the first test row.
+  const initialCalibrationHistoryRows=initialFitRows.filter(row=>
+    finite(row?.resolved_at)&&Number(row.resolved_at)<firstForwardAt);
+  const initialUnmaturedRowsExcluded=initialFitRows.length-
+    initialCalibrationHistoryRows.length;
+  const initialCalibrationHistorySupport=classCounts(
+    initialCalibrationHistoryRows.map(row=>row.target)
+  );
+  if(initialCalibrationHistorySupport.positive<minimumClassSupport||
+    initialCalibrationHistorySupport.negative<minimumClassSupport)
+    return unavailable('INITIAL_CALIBRATION_HISTORY_CLASS_SUPPORT_NOT_MET',{
+      initial_fit_rows:initialFitRows.length,
+      initial_calibration_history_rows:initialCalibrationHistoryRows.length,
+      initial_unmatured_rows_excluded:initialUnmaturedRowsExcluded,
+      initial_calibration_history_support:initialCalibrationHistorySupport,
+      minimum_class_support:minimumClassSupport
+    });
+  const initialLatestResolvedAt=Math.max(...initialCalibrationHistoryRows.map(
+    row=>Number(row.resolved_at)
+  ));
+  const initialCalibrationMaturityGapMs=firstForwardAt-initialLatestResolvedAt;
+  if(!(initialCalibrationMaturityGapMs>0))
+    return unavailable('INITIAL_CALIBRATION_LABELS_NOT_MATURED_BEFORE_FORWARD_TEST',{
+      initial_calibration_label_maturity_gap_ms:initialCalibrationMaturityGapMs
+    });
+  const initialPlatt=fitPlattScaler(
+    probabilitiesFor(initialCalibrationHistoryRows,rawMap).map(logit),
+    initialCalibrationHistoryRows.map(row=>row.target),{
+      minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
+    });
+  const staticCalibrator=initialPlatt.fitted===true&&initialPlatt.accepted===true
+    ?initialPlatt:null;
   const priorTestRows=[],blocks=[],staticAll=[],adaptiveAll=[],labelsAll=[];
   const average=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
   for(let i=0;i<plans.length;i++){
@@ -932,6 +960,11 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     purge_ms:NEURAL_CLOSURE_PURGE_MS,minimum_class_support:minimumClassSupport,
     initial_fit_fraction:Number(fitFraction),initial_fit_day_count:fitDayCount,
     initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
+    initial_calibration_history_rows:initialCalibrationHistoryRows.length,
+    initial_calibration_history_support:initialCalibrationHistorySupport,
+    initial_unmatured_rows_excluded:initialUnmaturedRowsExcluded,
+    initial_calibration_latest_label_resolved_at:initialLatestResolvedAt,
+    initial_calibration_label_maturity_gap_ms:initialCalibrationMaturityGapMs,
     initial_calibrator_method:staticCalibrator?'PLATT':'RAW_FALLBACK',
     initial_calibrator_accepted:initialPlatt.accepted===true,
     initial_purge_gap_ms:initialPurgeGapMs,
