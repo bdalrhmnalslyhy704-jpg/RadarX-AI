@@ -28,6 +28,8 @@ import {
   TEMPORAL_BASELINE_FEATURE_CACHE,
   TEMPORAL_GRADIENT_BUFFER_SCOPE,
   TEMPORAL_BRIER_SUPERIORITY_MARGIN,
+  TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN,
+  effectiveTemporalTcnInnerSelectionMargin,
   TEMPORAL_ORDERED_POOLING_MODE,
   TEMPORAL_ORDERED_POOLING_SEGMENTS,
   TEMPORAL_ORDERED_POOLING_FEATURE_COUNT,
@@ -537,6 +539,45 @@ test('TCN baseline gates require a strict 0.003 Brier improvement',()=>{
     'an improvement greater than 0.003 must pass');
   assert.equal(hasTemporalBrierSuperiority(null,0.5),false,
     'missing metrics must fail closed');
+});
+
+test('TCN inner discovery margin is separate from the unchanged outer promotion margin',()=>{
+  assert.equal(TEMPORAL_BRIER_SUPERIORITY_MARGIN,0.003);
+  assert.equal(TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN,0.00025);
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(),0.00025);
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(0.00025,0.003),0.00025);
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(0.01,0.003),0.003,
+    'inner discovery may never demand or silently exceed the outer requirement');
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(0.00025,0.004),0.00025,
+    'a stricter caller outer requirement does not weaken nor force inner candidate discovery');
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(0.01,0.004),0.004,
+    'requested inner margin is capped by the configured stricter outer gate');
+  assert.equal(effectiveTemporalTcnInnerSelectionMargin(-0.2,0.003),0,
+    'negative inner margin clamps to zero and cannot be negative');
+  // The observed V9 risk-on candidate improved the same-window Logistic
+  // Brier by 0.00062. It may be nominated for independent outer validation,
+  // but it is not promoted by the unchanged 0.003 gate.
+  const candidate=0.05713,logistic=0.05775,trainingBaseRate=0.05810;
+  assert.equal(hasTemporalBrierSuperiority(candidate,trainingBaseRate,
+    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),true,
+    'a 0.00097 improvement over the training-only base-rate anchor must qualify for inner candidate discovery');
+  assert.equal(hasTemporalBrierSuperiority(candidate,logistic,
+    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),true,
+    'a 0.00062 improvement over same-window Logistic must qualify for inner candidate discovery');
+  assert.equal(hasTemporalBrierSuperiority(candidate,trainingBaseRate,
+    TEMPORAL_BRIER_SUPERIORITY_MARGIN),false,
+    'inner candidate must not be promoted using the outer 0.003 margin');
+  assert.equal(hasTemporalBrierSuperiority(candidate,logistic,
+    TEMPORAL_BRIER_SUPERIORITY_MARGIN),false);
+  assert.equal(hasTemporalBrierSuperiority(0.05750,0.05775,
+    TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN),false,
+    'inner equality at 0.00025 must still fail the strict comparison');
+  assert.equal(hasTemporalBrierSuperiority(0.05475,0.05775,
+    TEMPORAL_BRIER_SUPERIORITY_MARGIN),false,
+    'outer equality at 0.003 must still fail the strict promotion gate');
+  assert.equal(hasTemporalBrierSuperiority(0.05474,0.05775,
+    TEMPORAL_BRIER_SUPERIORITY_MARGIN),true,
+    'only a strictly greater than 0.003 independent outer improvement passes');
 });
 
 test('temporal network fails closed without first-passage tensor samples',()=>{
@@ -1382,6 +1423,27 @@ test('TCN regime fitting, member selection and calibration never cross BTC regim
   assert.ok(source.includes('const sharedTcnFit=sharedTcnTrainingSupported?fitEnsemble(sharedTrainingRows,{'));
   assert.ok(source.includes('const regimeFit=sharedTcnFit;'));
   assert.ok(!source.includes('fitEnsemble(regimeTraining,{'));
+  assert.match(source,/innerSelectionMargin=TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN/);
+  assert.match(source,/const requiredInnerSelectionMargin=effectiveTemporalTcnInnerSelectionMargin\(/);
+  assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?requiredInnerSelectionMargin\)/);
+  assert.match(source,/const qualified=candidates\.filter\([\s\S]*?hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?row\.metrics\.base_rate_brier_score,requiredInnerSelectionMargin\)/,
+    'regime-local discovery must beat its training-only base-rate anchor at the inner margin');
+  assert.match(source,/const sharedTcnQualifiedCandidates=sharedTcnCandidates\.filter\([\s\S]*?hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?row\.metrics\.base_rate_brier_score,requiredInnerSelectionMargin\)/,
+    'shared V8 discovery must beat its training-only base-rate anchor at the inner margin');
+  assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?selectionLogistic\.model_brier_score,requiredInnerSelectionMargin\)/,
+    'regime-local discovery must beat same-window Logistic at the inner margin');
+  assert.match(source,/hasTemporalBrierSuperiority\(row\.metrics\.model_brier_score,[\s\S]*?sharedSelectionLogistic\.model_brier_score,requiredInnerSelectionMargin\)/,
+    'shared V8 discovery must beat same-window Logistic at the inner margin');
+  assert.match(source,/const sharedTcnQualifiedCandidates=sharedTcnCandidates\.filter\([\s\S]*?requiredInnerSelectionMargin\)/,
+    'the shared TCN V8 path must use the smaller margin only for inner candidate discovery');
+  assert.match(source,/const validationPassed=neuralResidualContributes&&[\s\S]*?validationModel\.model_brier_score\+comparisonMargin<validationLogistic\.model_brier_score/,
+    'the shared V8 outer validation gate must continue to use the strict comparison margin');
+  assert.match(source,/const holdoutPassed=selectedMemberIndex>=0&&validationPassed&&neuralResidualContributes&&[\s\S]*?holdoutModel\.model_brier_score\+comparisonMargin<holdoutLogistic\.model_brier_score/,
+    'the shared V8 Holdout gate must continue to use the strict comparison margin');
+  assert.match(source,/hasTemporalBrierSuperiority\(validationModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
+  assert.match(source,/hasTemporalBrierSuperiority\(holdoutModel\.model_brier_score,[\s\S]*?outerPromotionMargin\)/);
+  assert.match(source,/required_inner_selection_brier_margin:requiredInnerSelectionMargin/);
+  assert.match(source,/required_outer_validation_brier_margin:outerPromotionMargin/);
   assert.ok(source.includes('const sampleCountsByTime=new Map();'));
   assert.ok(source.includes('SHARED_GLOBAL_TIME_SPLIT_WITH_REGIME_LOCAL_AUXILIARY_TREE_SPLITS_V1'));
   assert.ok(source.includes('const memberSelectionRows=pooledMemberSelectionRows;'));

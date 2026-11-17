@@ -438,6 +438,8 @@ async function main(){
   };
   training.model_internal_diagnostics.TCN_V8={
     architecture:temporalProfile?.architecture??null,
+    inner_selection_required_brier_margin:temporalProfile?.inner_selection_required_brier_margin??null,
+    outer_validation_required_brier_margin:temporalProfile?.outer_validation_required_brier_margin??null,
     temporal_pooling:temporalProfile?.temporal_pooling??null,
     requested_max_training_samples:4096,
     status:temporalProfile?.status??null,
@@ -464,6 +466,8 @@ async function main(){
       temporalProfile?.regime_specialists??{}
     ).map(([regime,specialist])=>[regime,{
       status:specialist.status??null,
+      required_inner_selection_brier_margin:specialist.required_inner_selection_brier_margin??null,
+      required_outer_validation_brier_margin:specialist.required_outer_validation_brier_margin??null,
       support_gaps:specialist.support_gaps??[],
       training_samples:specialist.regime_training_samples??specialist.training_samples??0,
       shared_training_samples:specialist.shared_training_samples??0,
@@ -550,6 +554,8 @@ async function main(){
   };
   training.model_internal_diagnostics.TCN_V11={
     status:attentionProfile?.status??'NOT_TRAINED',
+    inner_selection_required_brier_margin:attentionProfile?.inner_selection_required_brier_margin??null,
+    outer_validation_required_brier_margin:attentionProfile?.outer_validation_required_brier_margin??null,
     architecture:attentionProfile?.architecture??TEMPORAL_ATTENTION_MODEL_ARCHITECTURE,
     temporal_pooling:attentionProfile?.temporal_pooling??null,
     training_samples:attentionProfile?.training_samples??0,
@@ -567,6 +573,8 @@ async function main(){
     missing_external_holdout_regimes:missingAttentionRegimes,
     pooled_fallback:{
       status:attentionPooledFallback.status??'NOT_TRAINED',
+      required_inner_selection_brier_margin:attentionPooledFallback.required_inner_selection_brier_margin??null,
+      required_outer_validation_brier_margin:attentionPooledFallback.required_outer_validation_brier_margin??null,
       trained:attentionPooledFallback.trained===true,
       training_samples:attentionPooledFallback.training_samples??0,
       selection_samples:attentionPooledFallback.selection_samples??0,
@@ -679,6 +687,8 @@ async function main(){
     };
     training.model_internal_diagnostics[family]={
       status:profile?.status??'VARIANT_PROFILE_NOT_AVAILABLE',
+      inner_selection_required_brier_margin:profile?.inner_selection_required_brier_margin??null,
+      outer_validation_required_brier_margin:profile?.outer_validation_required_brier_margin??null,
       architecture:profile?.architecture??architecture,
       model_kind:profile?.model_kind??modelKind,
       temporal_pooling:profile?.temporal_pooling??expectedPooling,
@@ -694,6 +704,8 @@ async function main(){
       missing_external_holdout_regimes:missingRegimes,
       pooled_fallback:{
         status:pooledFallback.status??'NOT_TRAINED',
+        required_inner_selection_brier_margin:pooledFallback.required_inner_selection_brier_margin??null,
+        required_outer_validation_brier_margin:pooledFallback.required_outer_validation_brier_margin??null,
         state_present:Boolean(pooledState),
         inference_state_usable:pooledStateUsable,
         trained:pooledFallback.trained===true,
@@ -711,6 +723,8 @@ async function main(){
       regime_specialists:Object.fromEntries(Object.entries(specialists).map(([regime,specialist])=>[
         regime,{
           status:specialist.status??null,
+          required_inner_selection_brier_margin:specialist.required_inner_selection_brier_margin??null,
+          required_outer_validation_brier_margin:specialist.required_outer_validation_brier_margin??null,
           model_kind:specialist.model_kind??modelKind,
           training_samples:specialist.training_samples??0,
           available_training_samples:specialist.available_training_samples??0,
