@@ -7,6 +7,22 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-SHA trainer emits BTC risk-regime walk-forward diagnostics on validation only',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/buildWalkForwardCalibrationDiagnostics/);
+  assert.match(trainer,/buildWalkForwardCalibrationDiagnostics\(\s*split\.validation/);
+  assert.match(trainer,/pre_inner_calibration_probability/);
+  assert.match(trainer,/logisticValidationRawMap/);
+  assert.match(trainer,/minimumClassSupport:10/);
+  assert.match(trainer,/maximumBlocks:4/);
+  assert.match(trainer,/walk_forward_diagnostics:walkForwardDiagnostics/);
+  assert.match(trainer,/scored_partition:'OUTER_VALIDATION_ONLY'/);
+  assert.match(trainer,/holdout_rows_included:false/);
+  assert.match(trainer,/holdout_scores_included:false/);
+  assert.match(trainer,/primary_probabilities_unchanged:true/);
+  assert.match(trainer,/acceptance_gates_unchanged:true/);
+});
+
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/predictTemporalAttentionResearchOutput/,
