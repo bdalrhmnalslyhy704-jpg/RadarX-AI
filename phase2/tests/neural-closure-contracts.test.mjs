@@ -724,6 +724,29 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     const p=diagnostic.partitions;
     const transfer=diagnostic.outer_validation.threshold_signal_transfer;
     const distributions=diagnostic.outer_validation.probability_distribution;
+    const rankPolicy=diagnostic.rank_based_top_k_policy;
+    assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
+    assert.equal(rankPolicy.status,'EVALUATED');
+    assert.equal(rankPolicy.diagnostic_only,true);
+    assert.equal(rankPolicy.affects_primary_probabilities,false);
+    assert.equal(rankPolicy.affects_primary_threshold,false);
+    assert.equal(rankPolicy.affects_acceptance_gates,false);
+    assert.equal(rankPolicy.holdout_values_used,false);
+    assert.deepEqual(rankPolicy.top_k_grid,[1,2,3]);
+    assert.equal(rankPolicy.selection.trials.length,3);
+    assert.equal(rankPolicy.selection.selected_top_k_per_timestamp,
+      rankPolicy.outer_validation.frozen_top_k_per_timestamp);
+    assert.equal(rankPolicy.outer_validation.labels_used_for_k_selection,false);
+    assert.equal(rankPolicy.outer_validation.metrics===null,
+      rankPolicy.outer_validation.frozen_top_k_per_timestamp===null);
+    if(rankPolicy.selection.selected_top_k_per_timestamp!==null){
+      const selectedTrial=rankPolicy.selection.trials.find(item=>
+        item.top_k_per_timestamp===rankPolicy.selection.selected_top_k_per_timestamp);
+      assert.equal(selectedTrial?.qualified,true);
+      assert.ok(rankPolicy.outer_validation.signal_count<=
+        rankPolicy.outer_validation.decision_group_count*
+        rankPolicy.selection.selected_top_k_per_timestamp);
+    }
     assert.equal(distributions.threshold_selection.sample_count,p.rows.threshold_selection);
     assert.equal(distributions.outer_validation.sample_count,p.rows.outer_validation);
     assert.equal(distributions.threshold_selection.frozen_threshold,
