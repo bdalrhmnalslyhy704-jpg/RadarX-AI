@@ -763,9 +763,88 @@ export function buildNeuralClosureCalibrationBlocks(rows,options={}){
   };
 }
 
+function crossSectionalRankingMetrics(rows,probabilities){
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||
+    rows.length!==probabilities.length||!rows.length)return null;
+  const buckets=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=number(rows[index]?.at),score=number(probabilities[index]);
+    const target=rows[index]?.target;
+    if(at===null||at<=0||score===null||score<0||score>1||
+      (target!==0&&target!==1))return null;
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    if(!buckets.has(bucket))buckets.set(bucket,[]);
+    buckets.get(bucket).push({
+      score,target,symbol:String(rows[index]?.symbol??''),
+      id:String(rows[index]?.id??''),index
+    });
+  }
+  const allGroups=[...buckets.values()];
+  const groups=allGroups.filter(items=>items.length>=2);
+  const singletonCount=allGroups.length-groups.length;
+  const fractions=[5,10,20];
+  const stats=new Map(fractions.map(pct=>[pct,{
+    precision:[],recall:[],lift:[],selected:[]
+  }]));
+  let averagePrecisionSum=0,positiveGroups=0,totalPositives=0,multiSymbolRows=0,maxSize=0;
+  for(const items of groups){
+    const ordered=[...items].sort((a,b)=>b.score-a.score||
+      a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id)||a.index-b.index);
+    const positives=ordered.reduce((sum,row)=>sum+(row.target===1?1:0),0);
+    totalPositives+=positives;multiSymbolRows+=ordered.length;
+    maxSize=Math.max(maxSize,ordered.length);
+    if(positives>0){
+      let hits=0,precisionSum=0;
+      for(let rank=0;rank<ordered.length;rank++){
+        if(ordered[rank].target===1){hits++;precisionSum+=hits/(rank+1);}
+      }
+      averagePrecisionSum+=precisionSum/positives;positiveGroups++;
+    }
+    for(const pct of fractions){
+      const selected=Math.max(1,Math.ceil(ordered.length*pct/100));
+      const hits=ordered.slice(0,selected).reduce((sum,row)=>sum+(row.target===1?1:0),0);
+      const metric=stats.get(pct);
+      metric.precision.push(hits/selected);metric.selected.push(selected);
+      if(positives>0){
+        metric.recall.push(hits/positives);
+        metric.lift.push((hits/selected)/(positives/ordered.length));
+      }
+    }
+  }
+  const average=values=>values.length
+    ?values.reduce((sum,value)=>sum+value,0)/values.length:null;
+  const result={
+    method:'WITHIN_15M_MULTI_SYMBOL_TOP_K_MACRO_V2',
+    bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    total_time_buckets:allGroups.length,groups:groups.length,
+    singleton_buckets_excluded:singletonCount,
+    multi_symbol_rows:multiSymbolRows,
+    mean_symbols_per_ranking_bucket:groups.length
+      ?Number((multiSymbolRows/groups.length).toFixed(3)):null,
+    maximum_symbols_per_ranking_bucket:maxSize,
+    groups_with_positive:positiveGroups,positive_events:totalPositives,
+    average_precision:positiveGroups
+      ?Number((averagePrecisionSum/positiveGroups).toFixed(5)):null
+  };
+  for(const pct of fractions){
+    const metric=stats.get(pct),name='top_'+pct+'_pct';
+    result[name]={
+      groups:metric.precision.length,
+      mean_selected_per_timestamp:average(metric.selected)===null?null:
+        Number(average(metric.selected).toFixed(3)),
+      precision_pct:average(metric.precision)===null?null:
+        Number((average(metric.precision)*100).toFixed(2)),
+      recall_pct:average(metric.recall)===null?null:
+        Number((average(metric.recall)*100).toFixed(2)),
+      lift:average(metric.lift)===null?null:Number(average(metric.lift).toFixed(5))
+    };
+  }
+  return result;
+}
+
 export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   fitFraction=0.50,minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
-  maximumBlocks=4,minimumTestDays=2
+  maximumBlocks=4,minimumTestDays=2,baselineRawMap=null
 }={}) {
   const unavailable=(reason,extra={})=>({
     schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
@@ -774,6 +853,8 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   });
   if(!Array.isArray(rows)||!rows.length||!(rawMap instanceof Map))
     return unavailable('ROWS_OR_VERIFIED_PREDICTION_MAP_INVALID');
+  if(baselineRawMap!==null&&!(baselineRawMap instanceof Map))
+    return unavailable('BASELINE_PREDICTION_MAP_INVALID');
   if(!finite(fitFraction)||Number(fitFraction)<0.20||Number(fitFraction)>0.80||
     !Number.isInteger(maximumBlocks)||maximumBlocks<2||
     !Number.isInteger(minimumTestDays)||minimumTestDays<1||
@@ -783,10 +864,8 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     String(a?.id??'').localeCompare(String(b?.id??'')));
   const ids=new Set();
   for(let index=0;index<ordered.length;index++){
-    const row=ordered[index];
-    const id=String(row?.id??'');
-    const at=row?.at,resolved=row?.resolved_at;
-    const probability=rawMap.get(id);
+    const row=ordered[index],id=String(row?.id??'');
+    const at=row?.at,resolved=row?.resolved_at,probability=rawMap.get(id);
     if(!id||ids.has(id))
       return unavailable('WALK_FORWARD_ROW_ID_MISSING_OR_DUPLICATE',{
         row_index:index,row_id:id||null
@@ -803,6 +882,15 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       return unavailable('WALK_FORWARD_MODEL_SCORE_INVALID',{
         row_index:index,row_id:id,probability:probability??null,map_size:rawMap.size
       });
+    if(baselineRawMap!==null){
+      const baselineProbability=baselineRawMap.get(id);
+      if(!finite(baselineProbability)||Number(baselineProbability)<0||
+        Number(baselineProbability)>1)
+        return unavailable('WALK_FORWARD_BASELINE_SCORE_INVALID',{
+          row_index:index,row_id:id,
+          probability:baselineProbability??null,map_size:baselineRawMap.size
+        });
+    }
     ids.add(id);
   }
   const dayOf=row=>Math.floor(Number(row.at)/NEURAL_CLOSURE_PURGE_MS)*
@@ -818,10 +906,8 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
   const firstForwardAt=firstForwardRows.length
     ?Math.min(...firstForwardRows.map(row=>Number(row.at))):null;
   if(firstForwardAt===null)return unavailable('EMPTY_FIRST_FORWARD_TEST_BLOCK');
-  // The static reference calibrator must also be trained only on labels
-  // resolved before the first scored block. Filtering only subsequent adaptive
-  // histories is not sufficient: it would leave a delayed initial-fit label
-  // inside the supposedly leakage-free static comparator.
+  // Both static references are fitted only on labels resolved before the
+  // first scored block. Unmatured labels must not leak into either comparator.
   const initialFitMaturedRows=initialFitRows.filter(row=>
     finite(row?.resolved_at)&&Number(row.resolved_at)<firstForwardAt);
   const initialSupport=classCounts(initialFitMaturedRows.map(row=>row.target));
@@ -833,13 +919,20 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       initial_fit_support:initialSupport,
       minimum_class_support:minimumClassSupport
     });
-  const initialPlatt=fitPlattScaler(
-    probabilitiesFor(initialFitMaturedRows,rawMap).map(logit),
-    initialFitMaturedRows.map(row=>row.target),{
-      minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
-    });
-  const staticCalibrator=initialPlatt.fitted===true&&initialPlatt.accepted===true
-    ?initialPlatt:null;
+  const fitStaticCalibrator=(fitRows,scoreMap)=>{
+    const fitScores=probabilitiesFor(fitRows,scoreMap);
+    const platt=fitPlattScaler(fitScores.map(logit),
+      fitRows.map(row=>row.target),{
+        minimumPositives:minimumClassSupport,
+        minimumNegatives:minimumClassSupport
+      });
+    return {platt,calibrator:platt.fitted===true&&platt.accepted===true?platt:null};
+  };
+  const initialModelFit=fitStaticCalibrator(initialFitMaturedRows,rawMap);
+  const staticCalibrator=initialModelFit.calibrator;
+  const initialBaselineFit=baselineRawMap===null?null:
+    fitStaticCalibrator(initialFitMaturedRows,baselineRawMap);
+  const staticBaselineCalibrator=initialBaselineFit?.calibrator??null;
   let cursor=fitDayCount+1; // one full UTC day is purged before the first test block.
   const availableDays=days.length-cursor;
   let blockCount=0;
@@ -870,7 +963,8 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     return unavailable('INITIAL_FIT_TO_FORWARD_TEST_PURGE_NOT_ENFORCED',{
       initial_purge_gap_ms:initialPurgeGapMs
     });
-  const priorTestRows=[],blocks=[],staticAll=[],adaptiveAll=[],labelsAll=[];
+  const priorTestRows=[],blocks=[];
+  const staticAll=[],adaptiveAll=[],baselineStaticAll=[],baselineAdaptiveAll=[],labelsAll=[];
   const average=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
   for(let i=0;i<plans.length;i++){
     const daySet=new Set(plans[i]),testRows=ordered.filter(row=>daySet.has(dayOf(row)));
@@ -896,22 +990,65 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       return unavailable('FORWARD_CALIBRATION_HISTORY_NOT_FULLY_PURGED_OR_MATURED',{
         block_index:i+1,purge_gap_ms:purgeGap,maturity_gap_ms:maturityGap
       });
-    const adaptivePlatt=fitPlattScaler(
-      probabilitiesFor(historyRows,rawMap).map(logit),historyRows.map(row=>row.target),{
-        minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
-      });
-    const adaptiveCalibrator=adaptivePlatt.fitted===true&&adaptivePlatt.accepted===true
-      ?adaptivePlatt:null;
+    const adaptivePlatt=fitStaticCalibrator(historyRows,rawMap);
+    const adaptiveCalibrator=adaptivePlatt.calibrator;
     const staticProb=probabilitiesFor(testRows,rawMap,staticCalibrator);
     const adaptiveProb=probabilitiesFor(testRows,rawMap,adaptiveCalibrator);
-    const labels=testRows.map(row=>row.target),positive=classCounts(labels).positive;
-    const staticScore=brier(staticProb,labels),adaptiveScore=brier(adaptiveProb,labels);
+    const staticScore=brier(staticProb,testRows.map(row=>row.target));
+    const adaptiveScore=brier(adaptiveProb,testRows.map(row=>row.target));
+    const staticRanking=crossSectionalRankingMetrics(testRows,staticProb);
+    const adaptiveRanking=crossSectionalRankingMetrics(testRows,adaptiveProb);
+    const rankOrderPreserved=Boolean(staticRanking&&adaptiveRanking&&
+      staticRanking.average_precision===adaptiveRanking.average_precision&&
+      [5,10,20].every(pct=>{
+        const key='top_'+pct+'_pct';
+        return staticRanking[key]?.precision_pct===adaptiveRanking[key]?.precision_pct&&
+          staticRanking[key]?.recall_pct===adaptiveRanking[key]?.recall_pct;
+      }));
+    let baselineBlock=null;
+    if(baselineRawMap!==null){
+      const baselineAdaptivePlatt=fitStaticCalibrator(historyRows,baselineRawMap);
+      const baselineStaticProb=probabilitiesFor(testRows,baselineRawMap,staticBaselineCalibrator);
+      const baselineAdaptiveProb=probabilitiesFor(testRows,baselineRawMap,
+        baselineAdaptivePlatt.calibrator);
+      const baselineStaticScore=brier(baselineStaticProb,testRows.map(row=>row.target));
+      const baselineAdaptiveScore=brier(baselineAdaptiveProb,testRows.map(row=>row.target));
+      const baselineStaticRanking=crossSectionalRankingMetrics(testRows,baselineStaticProb);
+      const baselineAdaptiveRanking=crossSectionalRankingMetrics(testRows,baselineAdaptiveProb);
+      baselineBlock={
+        static_calibrator_method:staticBaselineCalibrator?'PLATT':'RAW_FALLBACK',
+        static_brier_score:baselineStaticScore,
+        adaptive_calibrator_method:baselineAdaptivePlatt.calibrator?'PLATT':'RAW_FALLBACK',
+        adaptive_calibrator_fitted:baselineAdaptivePlatt.platt.fitted===true,
+        adaptive_calibrator_accepted:baselineAdaptivePlatt.platt.accepted===true,
+        adaptive_brier_score:baselineAdaptiveScore,
+        static_ranking_metrics:baselineStaticRanking,
+        adaptive_ranking_metrics:baselineAdaptiveRanking,
+        static_model_brier_improvement:baselineStaticScore-staticScore,
+        adaptive_model_brier_improvement:baselineAdaptiveScore-adaptiveScore,
+        adaptive_average_precision_improvement:
+          adaptiveRanking&&baselineAdaptiveRanking
+            ?adaptiveRanking.average_precision-baselineAdaptiveRanking.average_precision:null,
+        adaptive_top_5_precision_improvement:
+          adaptiveRanking&&baselineAdaptiveRanking
+            ?adaptiveRanking.top_5_pct.precision_pct-baselineAdaptiveRanking.top_5_pct.precision_pct:null,
+        adaptive_top_10_precision_improvement:
+          adaptiveRanking&&baselineAdaptiveRanking
+            ?adaptiveRanking.top_10_pct.precision_pct-baselineAdaptiveRanking.top_10_pct.precision_pct:null,
+        adaptive_top_20_precision_improvement:
+          adaptiveRanking&&baselineAdaptiveRanking
+            ?adaptiveRanking.top_20_pct.precision_pct-baselineAdaptiveRanking.top_20_pct.precision_pct:null
+      };
+      baselineStaticAll.push(...baselineStaticProb);
+      baselineAdaptiveAll.push(...baselineAdaptiveProb);
+    }
+    const positives=classCounts(testRows.map(row=>row.target)).positive;
     blocks.push({
       block_index:i+1,first_at:firstAt,last_at:lastAt,
       first_utc_day:plans[i][0],last_utc_day:plans[i].at(-1),
       test_day_count:plans[i].length,sample_count:testRows.length,
-      positive_count:positive,negative_count:labels.length-positive,
-      observed_positive_rate:Number((positive/labels.length).toFixed(8)),
+      positive_count:positives,negative_count:testRows.length-positives,
+      observed_positive_rate:Number((positives/testRows.length).toFixed(8)),
       calibration_history_rows:historyRows.length,calibration_history_support:support,
       latest_history_at:latestAt,latest_history_label_resolved_at:latestResolved,
       calibration_to_test_purge_gap_ms:purgeGap,
@@ -921,19 +1058,34 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       static_brier_score:staticScore,
       static_mean_probability:Number(average(staticProb).toFixed(8)),
       adaptive_calibrator_method:adaptiveCalibrator?'PLATT':'RAW_FALLBACK',
-      adaptive_calibrator_fitted:adaptivePlatt.fitted===true,
-      adaptive_calibrator_accepted:adaptivePlatt.accepted===true,
+      adaptive_calibrator_fitted:adaptivePlatt.platt.fitted===true,
+      adaptive_calibrator_accepted:adaptivePlatt.platt.accepted===true,
       adaptive_brier_score:adaptiveScore,
       adaptive_mean_probability:Number(average(adaptiveProb).toFixed(8)),
       adaptive_brier_improvement:Number((staticScore-adaptiveScore).toFixed(10)),
-      adaptive_fit_nll_before:adaptivePlatt.fit_nll_before??null,
-      adaptive_fit_nll_after:adaptivePlatt.fit_nll_after??null
+      static_ranking_metrics:staticRanking,
+      adaptive_ranking_metrics:adaptiveRanking,
+      calibration_preserved_cross_sectional_ranking:rankOrderPreserved,
+      ...(baselineBlock?{logistic_baseline:baselineBlock}:{}),
+      adaptive_fit_nll_before:adaptivePlatt.platt.fit_nll_before??null,
+      adaptive_fit_nll_after:adaptivePlatt.platt.fit_nll_after??null
     });
-    staticAll.push(...staticProb);adaptiveAll.push(...adaptiveProb);labelsAll.push(...labels);
-    priorTestRows.push(...testRows);
+    staticAll.push(...staticProb);adaptiveAll.push(...adaptiveProb);
+    labelsAll.push(...testRows.map(row=>row.target));priorTestRows.push(...testRows);
   }
   const positives=labelsAll.reduce((sum,value)=>sum+value,0),count=labelsAll.length;
   const staticBrier=brier(staticAll,labelsAll),adaptiveBrier=brier(adaptiveAll,labelsAll);
+  const baselineStaticBrier=baselineRawMap===null?null:brier(baselineStaticAll,labelsAll);
+  const baselineAdaptiveBrier=baselineRawMap===null?null:brier(baselineAdaptiveAll,labelsAll);
+  const aggregateRanking=crossSectionalRankingMetrics(
+    ordered.filter(row=>new Set(plans.flat()).has(dayOf(row))),
+    adaptiveAll
+  );
+  const aggregateBaselineRanking=baselineRawMap===null?null:
+    crossSectionalRankingMetrics(
+      ordered.filter(row=>new Set(plans.flat()).has(dayOf(row))),
+      baselineAdaptiveAll
+    );
   return {
     schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
     status:'AVAILABLE',diagnostic_only:true,
@@ -942,11 +1094,15 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     labels_used_for_gradient_fit:false,labels_used_for_calibration:true,
     labels_used_for_current_or_future_block_calibration:false,
     calibration_uses_only_prior_matured_labels:true,holdout_values_used:false,
-    purge_ms:NEURAL_CLOSURE_PURGE_MS,minimum_class_support:minimumClassSupport,
+    baseline_comparison_available:baselineRawMap!==null,
+    baseline_comparison_policy:baselineRawMap!==null
+      ?'SAME_ROWS_SAME_FORWARD_BLOCKS_SAME_MATURED_HISTORY_AND_PURGE':'NOT_REQUESTED',
+    purge_ms:NEURAL_CLOSURE_PURGE_MS,ranking_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    minimum_class_support:minimumClassSupport,
     initial_fit_fraction:Number(fitFraction),initial_fit_day_count:fitDayCount,
     initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
     initial_calibrator_method:staticCalibrator?'PLATT':'RAW_FALLBACK',
-    initial_calibrator_accepted:initialPlatt.accepted===true,
+    initial_calibrator_accepted:initialModelFit.platt.accepted===true,
     initial_purge_gap_ms:initialPurgeGapMs,
     scored_block_count:blocks.length,scored_rows:count,
     unscored_purge_and_initial_fit_rows:ordered.length-count,
@@ -955,12 +1111,23 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
       static_brier_score:staticBrier,adaptive_brier_score:adaptiveBrier,
       adaptive_brier_improvement:Number((staticBrier-adaptiveBrier).toFixed(10)),
       static_mean_probability:Number(average(staticAll).toFixed(8)),
-      adaptive_mean_probability:Number(average(adaptiveAll).toFixed(8))
+      adaptive_mean_probability:Number(average(adaptiveAll).toFixed(8)),
+      baseline_static_brier_score:baselineStaticBrier,
+      baseline_adaptive_brier_score:baselineAdaptiveBrier,
+      static_brier_improvement_vs_logistic:baselineStaticBrier===null?null:
+        Number((baselineStaticBrier-staticBrier).toFixed(10)),
+      adaptive_brier_improvement_vs_logistic:baselineAdaptiveBrier===null?null:
+        Number((baselineAdaptiveBrier-adaptiveBrier).toFixed(10)),
+      ranking_metrics:aggregateRanking,
+      logistic_ranking_metrics:aggregateBaselineRanking,
+      adaptive_average_precision_improvement_vs_logistic:
+        aggregateRanking&&aggregateBaselineRanking
+          ?Number((aggregateRanking.average_precision-
+            aggregateBaselineRanking.average_precision).toFixed(8)):null
     },
     blocks
   };
 }
-
 
 function collectTcnLstmPreInnerCalibrationMap(predictions,validationRows,holdoutRows){
   const property='pre_inner_calibration_probability';
@@ -2051,9 +2218,11 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
+    const walkForwardBaselineRawMap=modelName==='LOGISTIC_REGRESSION'
+      ?null:(verifiedPredictions.get('LOGISTIC_REGRESSION')??null);
     const walkForwardCalibrationDiagnostics=
       buildWalkForwardCalibrationDiagnostics(split.validation,rawMap,{
-        minimumClassSupport
+        minimumClassSupport,baselineRawMap:walkForwardBaselineRawMap
       });
     const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
       ?buildTcnLstmProbabilityStageDiagnostics({
