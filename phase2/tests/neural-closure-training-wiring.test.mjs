@@ -176,6 +176,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
   assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
   assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
   assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);
+  assert.match(trainer,/chronological_stability_diagnostics:\s*model\.validation\.chronological_stability_diagnostics\?\?null/,
+    'the benchmark report must retain chronological stability diagnostics');
   assert.match(trainer,/threshold_selection:model\.validation\.threshold_selection\?\?null/);
   assert.match(trainer,/selected_threshold:model\.validation\.selected_threshold\?\?null/);
   assert.match(trainer,/threshold_selection_gates:model\.validation\.threshold_selection_gates\?\?null/);
