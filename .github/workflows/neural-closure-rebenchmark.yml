@@ -26,6 +26,7 @@ on:
       - research/build224-walk-forward-calibration-20261117
       - research/build224-walk-forward-frozen-entry-gate-v2-20261117
       - research/build224-walk-forward-btc-regime-audit-20261117
+      - research/build224-wire-btc-regime-walkforward-20261118
     paths:
       - '.github/workflows/neural-closure-rebenchmark.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
