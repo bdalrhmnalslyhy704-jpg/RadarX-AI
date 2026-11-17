@@ -799,6 +799,47 @@ test('walk-forward recalibration uses only prior matured labels and keeps one-da
   assert.ok(Number.isFinite(result.aggregate.adaptive_brier_score));
 });
 
+test('walk-forward ranking reports cross-sectional AP and compares the same future blocks with Logistic',()=>{
+  const rows=makeRows({days:60,rowsPerDay:200});
+  const modelMap=new Map(rows.map(row=>[
+    row.id,row.target===1?0.24:0.055+(Number(row.id.split(':E')[1])%5)*0.002
+  ]));
+  const logisticMap=new Map(rows.map(row=>[
+    row.id,0.07+(Number(row.id.split(':E')[1])%13)*0.001
+  ]));
+  const result=buildWalkForwardCalibrationDiagnostics(rows,modelMap,{
+    fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2,
+    baselineRawMap:logisticMap
+  });
+  assert.equal(result.status,'AVAILABLE',result.reason??JSON.stringify(result));
+  assert.equal(result.baseline_comparison_available,true);
+  assert.equal(result.ranking_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
+  assert.equal(result.scored_block_count,4);
+  assert.ok(Number.isFinite(result.aggregate.adaptive_brier_improvement_vs_logistic));
+  assert.ok(Number.isFinite(result.aggregate.adaptive_average_precision_improvement_vs_logistic));
+  assert.ok(result.aggregate.ranking_metrics.groups>0);
+  assert.ok(result.aggregate.logistic_ranking_metrics.groups>0);
+  for(const block of result.blocks){
+    assert.equal(block.calibration_preserved_cross_sectional_ranking,true,
+      'positive-slope Platt calibration must not reorder a cross-sectional group');
+    assert.deepEqual(block.static_ranking_metrics,block.adaptive_ranking_metrics);
+    assert.ok(block.logistic_baseline.static_ranking_metrics.groups>0);
+    assert.ok(Number.isFinite(block.logistic_baseline.adaptive_model_brier_improvement));
+    assert.ok(Number.isFinite(block.logistic_baseline.adaptive_average_precision_improvement));
+  }
+});
+
+test('walk-forward baseline comparison fails closed when a baseline score is missing',()=>{
+  const rows=makeRows({days:20,rowsPerDay:100});
+  const modelMap=new Map(rows.map(row=>[row.id,0.08]));
+  const baselineMap=new Map();
+  const result=buildWalkForwardCalibrationDiagnostics(rows,modelMap,{
+    baselineRawMap:baselineMap
+  });
+  assert.equal(result.status,'UNAVAILABLE');
+  assert.equal(result.reason,'WALK_FORWARD_BASELINE_SCORE_INVALID');
+});
+
 test('walk-forward recalibration fails closed when the probability map is incomplete',()=>{
   const rows=makeRows({days:20,rowsPerDay:100});
   const result=buildWalkForwardCalibrationDiagnostics(rows,new Map());
