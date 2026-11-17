@@ -813,16 +813,29 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     return unavailable('INSUFFICIENT_CHRONOLOGICAL_DAYS');
   const initialFitDays=new Set(days.slice(0,fitDayCount));
   const initialFitRows=ordered.filter(row=>initialFitDays.has(dayOf(row)));
-  const initialSupport=classCounts(initialFitRows.map(row=>row.target));
+  const firstForwardDay=days[fitDayCount+1];
+  const firstForwardRows=ordered.filter(row=>dayOf(row)===firstForwardDay);
+  const firstForwardAt=firstForwardRows.length
+    ?Math.min(...firstForwardRows.map(row=>Number(row.at))):null;
+  if(firstForwardAt===null)return unavailable('EMPTY_FIRST_FORWARD_TEST_BLOCK');
+  // The static reference calibrator must also be trained only on labels
+  // resolved before the first scored block. Filtering only subsequent adaptive
+  // histories is not sufficient: it would leave a delayed initial-fit label
+  // inside the supposedly leakage-free static comparator.
+  const initialFitMaturedRows=initialFitRows.filter(row=>
+    finite(row?.resolved_at)&&Number(row.resolved_at)<firstForwardAt);
+  const initialSupport=classCounts(initialFitMaturedRows.map(row=>row.target));
   if(initialSupport.positive<minimumClassSupport||
     initialSupport.negative<minimumClassSupport)
     return unavailable('INITIAL_CALIBRATION_CLASS_SUPPORT_NOT_MET',{
-      initial_fit_rows:initialFitRows.length,initial_fit_support:initialSupport,
+      initial_fit_rows:initialFitRows.length,
+      initial_fit_matured_rows:initialFitMaturedRows.length,
+      initial_fit_support:initialSupport,
       minimum_class_support:minimumClassSupport
     });
   const initialPlatt=fitPlattScaler(
-    probabilitiesFor(initialFitRows,rawMap).map(logit),
-    initialFitRows.map(row=>row.target),{
+    probabilitiesFor(initialFitMaturedRows,rawMap).map(logit),
+    initialFitMaturedRows.map(row=>row.target),{
       minimumPositives:minimumClassSupport,minimumNegatives:minimumClassSupport
     });
   const staticCalibrator=initialPlatt.fitted===true&&initialPlatt.accepted===true
@@ -850,7 +863,7 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     if(i<blockCount-1)cursor+=1; // one full UTC day between scored blocks.
   }
   const firstRows=ordered.filter(row=>dayOf(row)===plans[0][0]);
-  const initialLastAt=Math.max(...initialFitRows.map(row=>Number(row.at)));
+  const initialLastAt=Math.max(...initialFitMaturedRows.map(row=>Number(row.at)));
   const initialPurgeGapMs=firstRows.length
     ?Math.min(...firstRows.map(row=>Number(row.at)))-initialLastAt:null;
   if(!(initialPurgeGapMs>NEURAL_CLOSURE_PURGE_MS))
