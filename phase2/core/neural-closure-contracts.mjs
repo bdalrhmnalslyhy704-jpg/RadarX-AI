@@ -1886,7 +1886,7 @@ export function runNeuralClosureBenchmark({
     baseline?.validation?.expanded_threshold_window_counterfactual?.outer_validation
       ?.calibrated_brier_score??null;
   for(const modelName of NEURAL_CLOSURE_MODEL_FAMILIES){
-    const alternative=model=models[modelName];
+    const alternative=models[modelName];
     const diagnostic=alternative?.validation?.expanded_threshold_window_counterfactual;
     if(diagnostic?.status==='EVALUATED'&&finite(alternativeBaselineBrier)){
       const candidateBrier=diagnostic.outer_validation.calibrated_brier_score;
