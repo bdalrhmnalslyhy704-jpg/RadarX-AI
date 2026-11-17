@@ -1550,6 +1550,10 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     return {
       top_k_per_timestamp:topK,
       decision_group_count:masked.decision_group_count,
+      total_time_buckets:masked.total_time_buckets,
+      singleton_buckets_excluded:masked.singleton_buckets_excluded,
+      decision_bucket_ms:masked.decision_bucket_ms,
+      decision_grouping:masked.decision_grouping,
       signal_count:masked.signal_count,
       metrics,
       risk_gates:Object.fromEntries(Object.entries(riskGates)
