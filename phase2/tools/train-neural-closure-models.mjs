@@ -452,6 +452,8 @@ async function main(){
     diagnostic_only:!v8PerformanceQualified||!v8Coverage.complete
   };
   training.model_internal_diagnostics.TCN_V8={
+    training_objective:temporalProfile?.training_objective??null,
+    directional_ranking_loss_enabled:temporalProfile?.training_objective==='ASYMMETRIC_DIRECTIONAL_RANKING_TCN_V1',
     architecture:temporalProfile?.architecture??null,
     inner_selection_required_brier_margin:temporalProfile?.inner_selection_required_brier_margin??null,
     outer_validation_required_brier_margin:temporalProfile?.outer_validation_required_brier_margin??null,
@@ -568,6 +570,8 @@ async function main(){
     diagnostic_only:!attentionInnerQualified
   };
   training.model_internal_diagnostics.TCN_V11={
+    training_objective:attentionProfile?.training_objective??null,
+    directional_ranking_loss_enabled:attentionProfile?.training_objective==='ASYMMETRIC_DIRECTIONAL_RANKING_TCN_V1',
     status:attentionProfile?.status??'NOT_TRAINED',
     inner_selection_required_brier_margin:attentionProfile?.inner_selection_required_brier_margin??null,
     outer_validation_required_brier_margin:attentionProfile?.outer_validation_required_brier_margin??null,
@@ -701,6 +705,8 @@ async function main(){
       diagnostic_only:!qualificationPassed
     };
     training.model_internal_diagnostics[family]={
+      training_objective:profile?.training_objective??null,
+      directional_ranking_loss_enabled:profile?.training_objective==='ASYMMETRIC_DIRECTIONAL_RANKING_TCN_V1',
       status:profile?.status??'VARIANT_PROFILE_NOT_AVAILABLE',
       inner_selection_required_brier_margin:profile?.inner_selection_required_brier_margin??null,
       outer_validation_required_brier_margin:profile?.outer_validation_required_brier_margin??null,
