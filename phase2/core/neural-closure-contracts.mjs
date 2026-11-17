@@ -10,6 +10,8 @@ export const NEURAL_CLOSURE_PURGE_MS = 24 * 60 * 60 * 1000;
 export const NEURAL_CLOSURE_OUTCOME_SOURCE =
   'BINANCE_OFFICIAL_CLOSED_1M_FIRST_TOUCH_4H_V1';
 export const NEURAL_CLOSURE_FEATURE_SEQUENCE_INTERVAL_MS = 15 * 60 * 1000;
+// Keep cross-sectional selection aligned with the existing temporal ranking evaluator.
+export const NEURAL_CLOSURE_RANKING_BUCKET_MS = 15 * 60 * 1000;
 export const NEURAL_CLOSURE_MIN_CLASS_SUPPORT = 50;
 export const NEURAL_CLOSURE_BRIER_MARGIN = 0.003;
 export const NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT =
@@ -1381,13 +1383,18 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
     const at=number(rows[index]?.at),probability=number(probabilities[index]);
     if(at===null||probability===null||probability<0||probability>1)
       throw new TypeError('NEURAL_TOP_K_TIMESTAMP_SCORE_INVALID:'+index);
-    const key=String(at);
+    // Match timeGroupedRankingMetrics: timestamps a few milliseconds apart
+    // within the same closed 15m candle are one simultaneous decision group.
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    const key=String(bucket);
     if(!groups.has(key))groups.set(key,[]);
     groups.get(key).push(index);
   }
   const masked=Array(rows.length).fill(0);
+  const eligibleGroups=[...groups.values()].filter(indices=>indices.length>=2);
+  const singletonBucketCount=groups.size-eligibleGroups.length;
   let signalCount=0;
-  for(const indices of groups.values()){
+  for(const indices of eligibleGroups){
     indices.sort((left,right)=>
       Number(probabilities[right])-Number(probabilities[left])||
       String(rows[left]?.symbol??'').localeCompare(String(rows[right]?.symbol??''))||
@@ -1399,7 +1406,11 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
   }
   return {
     probabilities:masked,
-    decision_group_count:groups.size,
+    decision_group_count:eligibleGroups.length,
+    total_time_buckets:groups.size,
+    singleton_buckets_excluded:singletonBucketCount,
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
     signal_count:signalCount,
     selected_scores_preserve_rank:true,
     tie_break_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING'
@@ -1581,6 +1592,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     status:'EVALUATED',
     diagnostic_only:true,
     policy:'TOP_K_PER_DECISION_TIMESTAMP',
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
     score_source:'SAME_FROZEN_CALIBRATED_PROBABILITY_ORDERING_AS_ABSOLUTE_THRESHOLD',
     top_k_grid:topKGrid,
     signal_mask_threshold:0.5,
@@ -1599,6 +1612,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       status:frozenTopK===null?'ABSTAINED_NO_TOP_K_PASSED_RISK_GATES':'SELECTED_ON_SELECTION_ONLY',
       sample_count:blocks.threshold_selection.length,
       decision_group_count:rankSelectionTrials[0]?.decision_group_count??0,
+      total_time_buckets:rankSelectionTrials[0]?.total_time_buckets??0,
+      singleton_buckets_excluded:rankSelectionTrials[0]?.singleton_buckets_excluded??0,
       trials:rankSelectionTrials,
       selected_top_k_per_timestamp:frozenTopK,
       selected_metrics:rankSelectionReady[0]?.metrics??null,
@@ -1607,6 +1622,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     outer_validation:{
       sample_count:blocks.check.length,
       decision_group_count:outerRankMask?.decision_group_count??0,
+      total_time_buckets:outerRankMask?.total_time_buckets??0,
+      singleton_buckets_excluded:outerRankMask?.singleton_buckets_excluded??0,
       frozen_top_k_per_timestamp:frozenTopK,
       signal_count:outerRankMask?.signal_count??0,
       signals_per_decision_group:outerRankMask&&outerRankMask.decision_group_count>0

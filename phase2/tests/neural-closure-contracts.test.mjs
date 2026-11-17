@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 // and all threshold, risk, production, paper-only, and holdout gates stay fixed.
 // [RUN-NEURAL-REBENCHMARK] Evaluate the fixed-cohort 35% calibration-fit allocation as a diagnostic-only alternative.
 import {createVersionedModelArtifact} from '../core/model-artifact-guardian.mjs';
+import {TEMPORAL_RANKING_BUCKET_MS} from '../core/temporal-neural-brain.mjs';
 import {
   NEURAL_CLOSURE_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_OUTCOME_SOURCE,
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_PURGE_MS,
@@ -18,7 +19,7 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  topKProbabilitySignals,runNeuralClosureBenchmark
+  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -114,21 +115,31 @@ function makePredictions(rows,sourceCommitSha,artifacts){
   return output;
 }
 
-test('top-K timestamp ranking selects a deterministic score-ordered shortlist per simultaneous decision group',()=>{
+test('top-K ranking merges millisecond-skewed closes into the shared 15-minute decision bucket',()=>{
   const rows=[
-    {at:100,symbol:'B',id:'b'},
-    {at:100,symbol:'A',id:'a'},
-    {at:100,symbol:'C',id:'c'},
-    {at:200,symbol:'D',id:'d'},
-    {at:200,symbol:'E',id:'e'},
-    {at:200,symbol:'F',id:'f'}
+    {at:900_001,symbol:'B',id:'b'},
+    {at:950_000,symbol:'A',id:'a'},
+    {at:1_799_999,symbol:'C',id:'c'},
+    {at:1_800_001,symbol:'D',id:'d'},
+    {at:1_900_000,symbol:'E',id:'e'},
+    {at:2_699_999,symbol:'F',id:'f'},
+    {at:2_700_001,symbol:'SINGLETON',id:'singleton'}
   ];
-  const scores=[0.8,0.8,0.9,0.2,0.7,0.95];
+  const scores=[0.8,0.8,0.9,0.2,0.7,0.95,0.99];
   const ranked=topKProbabilitySignals(rows,scores,2);
-  assert.equal(ranked.decision_group_count,2);
+  assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,TEMPORAL_RANKING_BUCKET_MS,
+    'Top-K policy must stay aligned with the established RadarX ranking bucket');
+  assert.equal(NEURAL_CLOSURE_RANKING_BUCKET_MS,900_000);
+  assert.equal(ranked.decision_group_count,2,
+    'three slightly different close timestamps in each 15m bucket must be ranked together');
+  assert.equal(ranked.total_time_buckets,3);
+  assert.equal(ranked.singleton_buckets_excluded,1,
+    'a bucket with one symbol cannot demonstrate cross-sectional ranking skill');
+  assert.equal(ranked.decision_bucket_ms,900_000);
+  assert.equal(ranked.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
   assert.equal(ranked.signal_count,4);
   assert.deepEqual(ranked.probabilities.map(value=>value>=0.5),
-    [false,true,true,false,true,true]);
+    [false,true,true,false,true,true,false]);
   assert.equal(ranked.probabilities[2],0.5+0.5*0.9);
   assert.equal(ranked.probabilities[1],0.5+0.5*0.8,
     'equal scores must use symbol ascending as a deterministic tie break');
@@ -147,7 +158,10 @@ test('top-K per timestamp selection is frozen before the later validation block 
   const rows=sourceRows.map(row=>{
     const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
       NEURAL_CLOSURE_PURGE_MS+BASE;
-    const decisionAt=dayStart+12*60*60_000;
+    const sourceIndex=Number(String(row.id).split(':E').at(-1));
+    // Different symbol files can close a few milliseconds/minutes apart yet
+    // belong to the same 15m decision candle.
+    const decisionAt=dayStart+12*60*60_000+(sourceIndex%3)*60_000;
     const shift=decisionAt-row.at;
     const sourceAudit={...row.source_audit,
       received_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS+60_000};
@@ -792,6 +806,10 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     const distributions=diagnostic.outer_validation.probability_distribution;
     const rankPolicy=diagnostic.rank_based_top_k_policy;
     assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
+    assert.equal(rankPolicy.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    assert.equal(rankPolicy.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
+    assert.equal(rankPolicy.selection.singleton_buckets_excluded,0);
+    assert.equal(rankPolicy.outer_validation.singleton_buckets_excluded,0);
     assert.equal(rankPolicy.status,'EVALUATED');
     assert.equal(rankPolicy.diagnostic_only,true);
     assert.equal(rankPolicy.affects_primary_probabilities,false);
