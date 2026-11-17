@@ -3124,6 +3124,7 @@ export function buildTemporalNeuralProfile(samples = [], {
       regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
       calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
       epochs:regimeLocalTcnEpochs,learningRate,l2,comparisonMargin,
+    innerSelectionMargin:requiredInnerSelectionMargin,
       maxTrainingSamples:regimeLocalTcnMaxTrainingSamples,
       enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
       minTrainingSamples:minRegimeTraining,
@@ -3150,6 +3151,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
         calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
         epochs:regimeLocalTcnPyramidEpochs,learningRate,l2,comparisonMargin,
+    innerSelectionMargin:requiredInnerSelectionMargin,
         maxTrainingSamples:regimeLocalTcnPyramidMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ORDERED_POOLING_MODE,
         enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
@@ -3178,6 +3180,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
         calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
         epochs:regimeLocalTcnMultiscaleEpochs,learningRate,l2,comparisonMargin,
+    innerSelectionMargin:requiredInnerSelectionMargin,
         maxTrainingSamples:regimeLocalTcnMultiscaleMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_MULTISCALE_POOLING_MODE,
         enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
@@ -3206,6 +3209,7 @@ export function buildTemporalNeuralProfile(samples = [], {
         regime,trainingRows:regimeTraining,memberSelectionRows:regimeMemberSelection,
         calibrationRows:regimeCalibration,validationRows:regimeValidation,holdoutRows:regimeHoldout,
         epochs:regimeLocalTcnAttentionEpochs,learningRate,l2,comparisonMargin,
+    innerSelectionMargin:requiredInnerSelectionMargin,
         maxTrainingSamples:regimeLocalTcnAttentionMaxTrainingSamples,
         temporalPoolingMode:TEMPORAL_ATTENTION_POOLING_MODE,
         attentionPositionBiasL2Multiplier:regimeLocalTcnAttentionPositionBiasL2Multiplier,
@@ -3621,6 +3625,7 @@ export function buildTemporalNeuralProfile(samples = [], {
     validationRows:validation,
     holdoutRows:holdout,
     epochs:variantEpochs,learningRate,l2,comparisonMargin,
+    innerSelectionMargin:requiredInnerSelectionMargin,
     maxTrainingSamples,temporalPoolingMode,
     attentionPositionBiasL2Multiplier,
     enableAsymmetricDirectionalRankingLoss,directionalRankingLossConfig,
@@ -3638,6 +3643,8 @@ export function buildTemporalNeuralProfile(samples = [], {
   }):null;
   const summarizePooledVariantFallback=result=>result?{
     status:result.status??null,regime:'ALL_REGIMES',
+    required_inner_selection_brier_margin:result.required_inner_selection_brier_margin??null,
+    required_outer_validation_brier_margin:result.required_outer_validation_brier_margin??null,
     trained:result.trained===true,
     selection_passed:result.selection_passed===true,
     validation_passed:result.validation_passed===true,
@@ -4158,6 +4165,8 @@ export function buildTemporalNeuralProfile(samples = [], {
     liveReady?'LIVE_GATE_PASSED_OUT_OF_SAMPLE':'OUT_OF_SAMPLE_VALIDATED_PAPER_ONLY';
   return{
     status,architecture,target_definition:targetDefinition,
+    inner_selection_required_brier_margin:requiredInnerSelectionMargin,
+    outer_validation_required_brier_margin:requiredOuterPromotionMargin,
     outcome_contract_kind:outcomeContractKind,
     temporal_boosted_tree:temporalBoostedTreeProfile,
     regime_local_tcn_challenger:regimeLocalTcnProfile,
