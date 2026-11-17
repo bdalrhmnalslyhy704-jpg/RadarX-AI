@@ -141,7 +141,9 @@ test('top-K timestamp ranking selects a deterministic score-ordered shortlist pe
 });
 
 test('top-K per timestamp selection is frozen before the later validation block and cannot open Holdout',()=>{
-  const sourceRows=makeRows({days:120,rowsPerDay:120});
+  // 140 days produce at least eight outer-check days after the two UTC purges,
+  // allowing K=3 to exercise the unchanged 20-trade minimum in both blocks.
+  const sourceRows=makeRows({days:140,rowsPerDay:120});
   const rows=sourceRows.map(row=>{
     const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
       NEURAL_CLOSURE_PURGE_MS+BASE;
