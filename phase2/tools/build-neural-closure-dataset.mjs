@@ -473,6 +473,9 @@ async function main(){
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
+    quote_volume_24h:row.quote_volume_24h,
+    historical_liquidity:row.historical_liquidity??null,
+    feature_snapshot_sha:row.feature_snapshot_sha??null,
     realized_return_pct:row.realized_return_pct
   }));
   const finalServerTime=await getServerTime();
