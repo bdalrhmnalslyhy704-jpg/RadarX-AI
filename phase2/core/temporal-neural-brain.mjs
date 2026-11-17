@@ -2322,7 +2322,9 @@ function fitEnsemble(rows, options = {}) {
       ...(member.training_diagnostics||{})
     })),
     residual_scale_selection:'REGIME_LOCAL_SELECTION_BLOCK_BRIER_GRID_V4',
-    training_objective:'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
+    training_objective:enabledDirectionalLoss
+      ?'ASYMMETRIC_DIRECTIONAL_RANKING_TCN_V1'
+      :'FOCAL_ASYMMETRIC_BRIER_TCN_ENSEMBLE_WITH_TRAIN_ONLY_CLASS_BALANCE_V1',
     candidate_residual_scales:[...RESIDUAL_SCALES],
     training_prior_probability:baseRate
   };
