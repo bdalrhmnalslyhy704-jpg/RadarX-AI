@@ -522,7 +522,7 @@ test('entry probability distribution diagnostics expose raw and calibrated tails
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
   });
-  const expectedGrid=[0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
+  const expectedGrid=[0.05,0.10,0.15,0.20,0.25,0.30,0.305,0.310,0.315,0.320,0.325,0.330,0.335,0.340,0.345,0.350,0.355,0.360,0.365,0.370,0.375,0.380,0.385,0.390,0.395,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
   for(const family of ['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES]){
     const diagnostic=report.models[family].validation.threshold_selection_probability_distribution;
     assert.equal(diagnostic.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
