@@ -14,7 +14,7 @@ import {
   sha256Canonical,sha256CanonicalArrayMapped,
   NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,NEURAL_CLOSURE_MODEL_FAMILIES,focalAsymmetricBrierLoss,buildFourHourFirstTouchOutcome,
   deriveTrainingClassWeights,validateFourHourRows,splitFourHourRows,
-  buildNeuralClosureCalibrationBlocks,
+  buildNeuralClosureCalibrationBlocks,buildWalkForwardCalibrationDiagnostics,
   chooseCalibration,
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
@@ -762,6 +762,46 @@ test('chronological stability slices keep simultaneous multi-symbol rows togethe
       assert.ok(blocks[index-1].last_at<blocks[index].first_at,
         'a timestamp shared by multiple symbols must not cross a block boundary');
   }
+});
+
+test('walk-forward recalibration uses only prior matured labels and keeps one-day purges',()=>{
+  const rows=makeRows({days:60,rowsPerDay:200});
+  const rawMap=new Map(rows.map(row=>[
+    row.id,row.target===1?0.24:0.055+(Number(row.id.split(':E')[1])%5)*0.002
+  ]));
+  // An unresolved fit label must be excluded from the first forward history.
+  const initialFitDayCount=Math.floor(60*0.5);
+  const firstForwardAt=BASE+(initialFitDayCount+1)*NEURAL_CLOSURE_PURGE_MS;
+  rows[initialFitDayCount*200-1].resolved_at=firstForwardAt+1;
+  const result=buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
+    fitFraction:0.5,minimumClassSupport:50,maximumBlocks:4,minimumTestDays:2
+  });
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.diagnostic_only,true);
+  assert.equal(result.holdout_values_used,false);
+  assert.equal(result.labels_used_for_gradient_fit,false);
+  assert.equal(result.labels_used_for_current_or_future_block_calibration,false);
+  assert.equal(result.calibration_uses_only_prior_matured_labels,true);
+  assert.equal(result.scored_block_count,4);
+  assert.ok(result.scored_rows>0);
+  let historyCount=0;
+  for(const block of result.blocks){
+    assert.ok(block.latest_history_label_resolved_at<block.first_at);
+    assert.ok(block.calibration_to_test_purge_gap_ms>NEURAL_CLOSURE_PURGE_MS);
+    assert.ok(block.latest_label_maturity_gap_ms>0);
+    assert.ok(block.calibration_history_rows>=historyCount);
+    historyCount=block.calibration_history_rows;
+  }
+  assert.ok(result.blocks[0].excluded_unmatured_history_rows>=1);
+  assert.ok(Number.isFinite(result.aggregate.static_brier_score));
+  assert.ok(Number.isFinite(result.aggregate.adaptive_brier_score));
+});
+
+test('walk-forward recalibration fails closed when the probability map is incomplete',()=>{
+  const rows=makeRows({days:20,rowsPerDay:100});
+  const result=buildWalkForwardCalibrationDiagnostics(rows,new Map());
+  assert.equal(result.status,'UNAVAILABLE');
+  assert.equal(result.reason,'ROW_ID_TIME_TARGET_OR_MODEL_SCORE_INVALID');
 });
 
 test('expanded threshold-window counterfactual uses larger disjoint blocks without changing primary gates',()=>{
