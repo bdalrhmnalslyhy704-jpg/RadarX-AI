@@ -2422,6 +2422,8 @@ function fitRegimeLocalTemporalTcn({
         temporalPoolingMode===TEMPORAL_ORDERED_POOLING_MODE
           ?'INDEPENDENT_BTC_REGIME_TCN_ORDERED_FOUR_SEGMENT_POOLING_V1'
           :TEMPORAL_REGIME_LOCAL_TRAINING_STRATEGY,
+    required_inner_selection_brier_margin:requiredInnerSelectionMargin,
+    required_outer_validation_brier_margin:outerPromotionMargin,
     training_window_policy:'LATEST_ELIGIBLE_ROWS_WITHIN_FIXED_TRAINING_BLOCK',
     training_sample_budget:limit,
     training_samples:training.length,available_training_samples:allTraining.length,
