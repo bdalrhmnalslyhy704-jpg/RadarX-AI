@@ -987,12 +987,15 @@ export function summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
     source:'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
     diagnostic_only:true,holdout_values_used:false};
 }
-function evaluatePairwiseReturnRankingLoss(rows,pairs,model) {
+function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
   if(!pairs.length)return 0;
   let total=0;
   for(const pair of pairs){
-    const hp=predictTcnLstmHybridProbability(rows[pair.high_index].sequence,model);
-    const lp=predictTcnLstmHybridProbability(rows[pair.low_index].sequence,model);
+    const high=rows[pair.high_index],low=rows[pair.low_index];
+    const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
+    const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
+    const hp=inspectTcnLstmForward(high.sequence,model,highBase).probability;
+    const lp=inspectTcnLstmForward(low.sequence,model,lowBase).probability;
     total+=tcnLstmPairwiseReturnRankingLoss(hp,lp).loss;
   }
   return total/pairs.length;
@@ -1062,7 +1065,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   const random = mulberry32(seed ^ 0xA5A5A5A5);
   const history = [];
   const initialBrier = evaluateBrier(rows, model, anchor);
-  const initialRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model);
+  const initialRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
   let bestBrier=initialBrier,bestRankingLoss=initialRankingLoss;
   let bestObjective=initialBrier+rankingWeight*initialRankingLoss;
   let bestEpoch = 0;
@@ -1250,7 +1253,9 @@ export function trainTcnLstmHybrid(trainingRows, {
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor: 'TRAINING_PARTITION_BRIER_ONLY',
+        monitor: rankingWeight>0
+          ?'TRAINING_BRIER_PLUS_PAIRWISE_RETURN_RANKING_ONLY'
+          :'TRAINING_PARTITION_BRIER_ONLY',
         patience,
         stopped_early: stoppedEarly
       },
