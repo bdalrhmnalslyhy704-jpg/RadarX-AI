@@ -2114,7 +2114,7 @@ function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
 function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps,{
   minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  fitFraction=0.35
+  fitFraction=0.35,rankingScoreMap=null
 }={}) {
   const unavailable=(reason,extra={})=>({
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
@@ -2321,6 +2321,18 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     }
   };
 
+  const auxiliaryRankingHeadTopKPolicy=rankingScoreMap instanceof Map
+    ?evaluateAuxiliaryRankingHeadTopKPolicy(
+      blocks.threshold_selection,blocks.check,rankingScoreMap,roundTripCostBps,{
+        minimumTrades,minimumWinRatePct,maximumDrawdownPct
+      })
+    :{
+      schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+      status:'UNAVAILABLE',diagnostic_only:true,
+      affects_primary_probabilities:false,affects_primary_threshold:false,
+      affects_acceptance_gates:false,holdout_values_used:false,
+      reason:'AUXILIARY_RANKING_SCORE_MAP_NOT_AVAILABLE'
+    };
   return {
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
     status:'EVALUATED',
@@ -2376,6 +2388,7 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       trials:selection.trials
     },
     rank_based_top_k_policy:rankBasedTopKPolicy,
+    auxiliary_ranking_head_top_k_policy:auxiliaryRankingHeadTopKPolicy,
     outer_validation:{
       sample_count:blocks.check.length,
       positive_count:outerSupport.positive,
@@ -2494,6 +2507,10 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
+      ?collectTcnLstmAuxiliaryRankingMap(
+        predictionsByModel[modelName],split.validation,split.holdout
+      ):null;
     const tcnLstmPreInnerCalibration=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmPreInnerCalibrationMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -2608,9 +2625,15 @@ export function runNeuralClosureBenchmark({
         buildExpandedThresholdWindowCounterfactual(
           split.validation,rawMap,roundTripCostBps,{
             minimumClassSupport,minimumTrades:20,
-            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35
+            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35,
+            rankingScoreMap:modelName==='TCN_LSTM_HYBRID'&&
+              auxiliaryRankingMap?.status==='AVAILABLE'
+                ?auxiliaryRankingMap.map:null
           }
         ),
+      ...(modelName==='TCN_LSTM_HYBRID'
+        ?{auxiliary_ranking_map_status:auxiliaryRankingMap?.status??'NOT_AVAILABLE',
+          auxiliary_ranking_map_reason:auxiliaryRankingMap?.reason??null}:{}),
       ...(probabilityStageDiagnostics
         ?{probability_stage_diagnostics:probabilityStageDiagnostics}:{}),
       threshold_selection:thresholdSelection.status,
