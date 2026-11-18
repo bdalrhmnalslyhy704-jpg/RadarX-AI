@@ -34,7 +34,8 @@ import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
   selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
-  predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability
+  predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
+  predictTcnLstmHybridRankingLogit
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1277,7 +1278,16 @@ async function main(){
             );
             if(!finite(preInnerProbability)||preInnerProbability<0||preInnerProbability>1)
               throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_NON_FINITE:'+item.id);
-            return {...item,pre_inner_calibration_probability:Number(preInnerProbability)};
+            const auxiliaryRankingLogit=predictTcnLstmHybridRankingLogit(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(!finite(auxiliaryRankingLogit))
+              throw new Error('TCN_LSTM_AUXILIARY_RANKING_DIAGNOSTIC_NON_FINITE:'+item.id);
+            return {
+              ...item,
+              pre_inner_calibration_probability:Number(preInnerProbability),
+              auxiliary_ranking_logit:Number(auxiliaryRankingLogit)
+            };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
             artifact_sha256:artifact.artifact_sha256,
@@ -1302,6 +1312,8 @@ async function main(){
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
             ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
+            ranking_scores_emitted_for:'OUTER_VALIDATION_ONLY',
+            holdout_ranking_scores_emitted:false,
             internal_calibrator:calibrator.method,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
