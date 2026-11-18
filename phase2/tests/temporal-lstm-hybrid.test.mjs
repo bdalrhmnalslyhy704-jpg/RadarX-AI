@@ -18,6 +18,9 @@ import {
   splitFourHourTcnLstmTrainingRows,
   selectTcnLstmHybridHyperparameters,
   summarizeTcnLstmSelectionReturns,
+  tcnLstmPairwiseReturnRankingLoss,
+  buildTcnLstmReturnRankingPairs,
+  summarizeTcnLstmPairwiseReturnRanking,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -38,6 +41,24 @@ function makeSequence(direction=1,seed=0){
     })
   );
 }
+function makeRankedRows(startGroup=0,groupCount=10,prefix='ranked'){
+  const returns=[4,2,-1,-3];
+  return Array.from({length:groupCount*4},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const at=BASE+(startGroup+group)*DAY+rank*75;
+    return {
+      id:prefix+'-'+(startGroup+group)+'-'+rank,
+      symbol:'RANK'+rank+'USDT',
+      at,resolved_at:at+4*60*60*1000,
+      target:rank%2===0?1:0,
+      realized_return_pct:returns[rank],
+      sequence:makeSequence(rank<2?1:-1,(startGroup+group)*0.031+rank*0.17),
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*900000)
+    };
+  });
+}
+
 function makeRows(start,count,prefix='sample'){
   return Array.from({length:count},(_,index)=>{
     const absolute=start+index;
@@ -165,6 +186,98 @@ test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()
   assert.equal(profile.training.history[0].loss_objective,'FOCAL_ASYMMETRIC_BRIER');
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('TCN-LSTM pairwise return ranking loss orders high-return candidates above low-return candidates',()=>{
+  const correct=tcnLstmPairwiseReturnRankingLoss(0.82,0.18);
+  const reversed=tcnLstmPairwiseReturnRankingLoss(0.18,0.82);
+  assert.equal(correct.correct,true);
+  assert.equal(reversed.correct,false);
+  assert.ok(correct.loss<reversed.loss);
+  assert.ok(correct.high_logit_gradient<0);
+  assert.ok(correct.low_logit_gradient>0);
+});
+
+test('training return-ranking pairs use net realized returns and group near-simultaneous 15m decisions',()=>{
+  const rows=makeRankedRows(0,10,'rank-pairs').map((row,index)=>({
+    ...row,at:row.at+(index%4)*0.25
+  }));
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  assert.equal(built.source_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(built.decision_group_count,10);
+  assert.equal(built.comparison_pairs,10);
+  assert.ok(built.pairs.every(pair=>pair.return_gap_pct>=0.5));
+  assert.ok(built.pairs.every(pair=>pair.high_index!==pair.low_index));
+  const mismatched=rows.map((row,index)=>index===0?{...row,symbol:'WRONGUSDT'}:row);
+  assert.throws(()=>buildTcnLstmReturnRankingPairs(fitRows,mismatched),/ROW_IDENTITY_MISMATCH/);
+});
+
+test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
+  const rows=makeRankedRows(0,10,'rank-eval');
+  const probabilities=rows.map(row=>[0.84,0.72,0.28,0.16][Number(row.id.split('-').at(-1))]);
+  const score=summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5
+  });
+  assert.equal(score.status,'AVAILABLE');
+  assert.equal(score.comparison_pairs,10);
+  assert.equal(score.pairwise_accuracy_pct,100);
+  assert.equal(score.holdout_values_used,false);
+  assert.equal(score.diagnostic_only,true);
+});
+
+test('external-logit backprop passes finite differences for pairwise ranking gradients',()=>{
+  const audit=auditTcnLstmHybridGradients(makeSequence(1,71),1,{
+    model:createTcnLstmHybridModelForAudit(73),
+    baselineLogit:-0.11,epsilon:1e-5,
+    objective:'EXTERNAL_LOGIT',externalLogitGradient:-0.37
+  });
+  assert.equal(audit.passed,true,
+    'external-logit max absolute error='+audit.maximum_absolute_error+
+    ' worst='+JSON.stringify(audit.worst_parameter));
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('TCN-LSTM pairwise ranking updates fit weights using training returns only',()=>{
+  const rows=makeRankedRows(0,10,'rank-train');
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const profile=trainTcnLstmHybrid(fitRows,{
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0.02,
+    rankingRoundTripCostBps:30,rankingMinimumReturnGapPct:0.5,
+    rankingPairsPerTimestamp:4
+  });
+  assert.equal(profile.training.return_ranking.enabled,true);
+  assert.equal(profile.training.return_ranking.source_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.training.return_ranking.comparison_pairs,10);
+  assert.equal(profile.training.return_ranking.ranking_labels_seen_outside_training_partition,false);
+  assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
+});
+
+test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
+  const trainingRows=makeRankedRows(0,10,'selector-train');
+  const selectionRows=makeRankedRows(20,10,'selector-selection');
+  const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
+    requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
+    roundTripCostBps:30,rankingScoreWeight:0.01,
+    rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    candidates:[
+      {name:'BRIER_ONLY',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
+      {name:'PAIRWISE_RANK',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1,rankingWeight:0.02}
+    ]
+  });
+  assert.equal(result.baseline.pairwise_ranking.status,'AVAILABLE');
+  assert.equal(result.baseline.pairwise_ranking.comparison_pairs,10);
+  assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
+  assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
+  assert.equal(result.candidates.length,2);
+  assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
+  assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
+  assert.equal(result.real_order_execution,false);
 });
 
 test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{

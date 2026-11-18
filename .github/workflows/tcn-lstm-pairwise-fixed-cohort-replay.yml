@@ -1,0 +1,94 @@
+name: Build 224 TCN-LSTM Pairwise Fixed-Cohort Replay
+
+on:
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
+    paths:
+      - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
+      - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  # Keep each immutable candidate-SHA replay independent; a stale run must not block the latest benchmark.
+  group: build224-tcn-lstm-pairwise-fixed-cohort-replay-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Rebenchmark challengers on the immutable 180-day Binance Spot cohort
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Download the previously validated fixed cohort
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-039c9074fc21fa0ea303e360a6ea56d3a401a559
+          path: artifacts/neural-closure
+          repository: ${{ github.repository }}
+          run-id: '44196188685'
+          github-token: ${{ github.token }}
+
+      - name: Verify required immutable cohort file exists
+        run: |
+          test -s artifacts/neural-closure/dataset.json
+          echo "Reusing the exact validated 30-symbol / 32,300-row cohort."
+          echo "Expected canonical dataset SHA-256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77"
+
+      - name: Train neural challengers on the unchanged cohort
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \
+            --input artifacts/neural-closure/dataset.json \
+            --output artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json \
+            --epochs 8 \
+            --denseEpochs 36 \
+            --minimumHoldoutTrades 100 \
+            --minimumWinRatePct 55 \
+            --maximumDrawdownPct 8 \
+            --roundTripCostBps 30
+
+      - name: Verify exact cohort identity and candidate code SHA
+        env:
+          EXPECTED_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
+          EXPECTED_ROW_COUNT: '32300'
+        run: |
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            const report=JSON.parse(fs.readFileSync('artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json','utf8'));
+            if(report.integrity?.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) throw new Error('FIXED_COHORT_SHA_MISMATCH');
+            if(Number(report.integrity?.row_count)!==Number(process.env.EXPECTED_ROW_COUNT)) throw new Error('FIXED_COHORT_ROW_COUNT_MISMATCH');
+            if(report.integrity?.model_source_commit_sha!==process.env.GITHUB_SHA) throw new Error('MODEL_SOURCE_SHA_MISMATCH');
+            console.log(JSON.stringify({dataset_sha256:report.integrity.dataset_sha256,row_count:report.integrity.row_count,model_source_commit_sha:report.integrity.model_source_commit_sha,status:report.status}));
+          "
+
+      - name: Upload fixed-cohort rebenchmark report and model artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-replay-${{ github.sha }}
+          path: artifacts/neural-closure-replay/
+          if-no-files-found: ignore
+          retention-days: 30
