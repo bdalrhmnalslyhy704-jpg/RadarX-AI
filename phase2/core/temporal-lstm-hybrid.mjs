@@ -1171,7 +1171,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     }
 
     const trainingBrier=evaluateBrier(rows,model,anchor);
-    const trainingRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model);
+    const trainingRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
     if(!finite(trainingBrier)||!finite(trainingRankingLoss))
       throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_NON_FINITE');
     const trainingObjective=trainingBrier+rankingWeight*trainingRankingLoss;
