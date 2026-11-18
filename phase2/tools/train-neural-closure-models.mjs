@@ -1078,7 +1078,6 @@ async function main(){
     const lstmRows=split.train.map(row=>({
       id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
       target:row.target,sequence:row.temporal_sequence,
-      realized_return_pct:row.realized_return_pct,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps
     })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
     const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
@@ -1110,6 +1109,12 @@ async function main(){
       const trainingRows=internalSplit.partitions?.training??[];
       const selectionRows=internalSplit.partitions?.selection??[];
       const calibrationRows=internalSplit.partitions?.calibration??[];
+      const realizedReturnById=new Map(split.train.map(row=>[
+        String(row.id),row.realized_return_pct
+      ]));
+      const selectionRowsWithReturns=selectionRows.map(row=>({
+        ...row,realized_return_pct:realizedReturnById.get(String(row.id))
+      }));
       const internalChronologyValid=internalSplit.status==='READY';
       const internalSupport=internalSplit.support??{
         training:{rows:trainingRows.length,positive:trainingRows.filter(row=>row.target===1).length,
@@ -1136,7 +1141,7 @@ async function main(){
           validation_or_holdout_rows_seen_by_fit:0
         };
       }else{
-        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
+        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRowsWithReturns,{
           requiredImprovement:0.00025,
           maxTrainingSamples:4096,
           seed:22429,
