@@ -1205,7 +1205,7 @@ export function trainTcnLstmHybrid(trainingRows, {
 
   Object.assign(model, cloneTree(bestModel));
   const finalBrier=evaluateBrier(rows,model,anchor);
-  const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model);
+  const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
   if(!finite(finalBrier)||!finite(finalRankingLoss)||!treeFinite(trainableParameters(model)))
     throw new TypeError('TCN_LSTM_FINAL_MODEL_NON_FINITE');
   return {
