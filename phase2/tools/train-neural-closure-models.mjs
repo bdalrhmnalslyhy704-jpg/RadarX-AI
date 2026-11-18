@@ -1109,11 +1109,21 @@ async function main(){
       const trainingRows=internalSplit.partitions?.training??[];
       const selectionRows=internalSplit.partitions?.selection??[];
       const calibrationRows=internalSplit.partitions?.calibration??[];
-      const realizedReturnById=new Map(split.train.map(row=>[
-        String(row.id),row.realized_return_pct
-      ]));
-      const selectionRowsWithReturns=selectionRows.map(row=>({
-        ...row,realized_return_pct:realizedReturnById.get(String(row.id))
+      // Attach execution-only evidence to the internal selection rows.
+      // These fields are consumed only by the return/rank diagnostics; model
+      // fitting still receives feature tensors and binary targets only.
+      const executionEvidenceById=new Map(split.train.map(row=>[String(row.id),({
+        outcome:row.outcome,
+        realized_return_pct:row.realized_return_pct,
+        execution_return_contract:row.execution_return_contract,
+        first_touch:row.first_touch,
+        max_adverse_excursion_pct:row.max_adverse_excursion_pct,
+        max_adverse_excursion_at:row.max_adverse_excursion_at,
+        max_favorable_excursion_pct:row.max_favorable_excursion_pct,
+        max_favorable_excursion_at:row.max_favorable_excursion_at
+      })]));
+      const selectionRowsWithExecutionEvidence=selectionRows.map(row=>({
+        ...row,...(executionEvidenceById.get(String(row.id))??{})
       }));
       const internalChronologyValid=internalSplit.status==='READY';
       const internalSupport=internalSplit.support??{
@@ -1141,7 +1151,7 @@ async function main(){
           validation_or_holdout_rows_seen_by_fit:0
         };
       }else{
-        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRowsWithReturns,{
+        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
           maxTrainingSamples:4096,
           seed:22429,
