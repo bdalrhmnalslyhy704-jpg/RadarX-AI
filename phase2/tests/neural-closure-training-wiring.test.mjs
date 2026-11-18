@@ -110,6 +110,7 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/const lstmRows=split\.train\.map/);
   assert.match(trainer,/sequence:row\.temporal_sequence/);
   assert.match(trainer,/target:row\.target/);
+  assert.match(trainer,/realized_return_pct:row\.realized_return_pct/);
   assert.match(trainer,/resolved_at:row\.resolved_at/);
   assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
   assert.match(trainer,/splitFourHourTcnLstmTrainingRows\(/);
@@ -119,6 +120,10 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/fitTcnLstmHybridCalibration\(\s*calibrationRows/);
   assert.match(trainer,/predictTcnLstmHybridCalibratedProbability/);
   const lstmModule=await readFile(lstmModuleUrl,'utf8');
+  assert.match(lstmModule,/export function summarizeTcnLstmSelectionReturns/);
+  assert.match(lstmModule,/return_selection_diagnostics:returnDiagnostics/);
+  assert.match(lstmModule,/affects_candidate_ranking:false/);
+  assert.match(lstmModule,/affects_acceptance_gates:false/);
   assert.match(lstmModule,/export function splitFourHourTcnLstmTrainingRows/);
   assert.match(lstmModule,/external_validation_labels_read:false/);
   assert.match(lstmModule,/OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION/);
