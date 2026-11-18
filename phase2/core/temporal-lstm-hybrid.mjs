@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
+import {
+  focalAsymmetricBrierLoss,deriveTrainingClassWeights,
+  topKProbabilitySignals,simulateFirstTouchPaperPortfolio,
+  NEURAL_CLOSURE_PORTFOLIO_POLICY
+} from './neural-closure-contracts.mjs';
 
 /**
  * RadarX Build 224 — Research-only TCN → LSTM → temporal-attention challenger.
@@ -1073,6 +1077,7 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
   roundTripCostBps = 30,
   minimumTrades = 20,
   minimumWinRatePct = 55,
+  baselineProbabilities = null,
   thresholds = [
     0.10,0.15,0.20,0.25,0.30,0.325,0.35,0.355,0.36,0.365,
     0.37,0.375,0.38,0.39,0.40,0.425,0.45,0.475,0.50,0.55,0.60
@@ -1101,6 +1106,10 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
   if(rows.some(row=>!finite(row?.realized_return_pct))||
     probabilities.some(value=>!finite(value)||value<0||value>1))
     return unavailable('SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+  if(baselineProbabilities!==null&&
+    (!Array.isArray(baselineProbabilities)||baselineProbabilities.length!==rows.length||
+      baselineProbabilities.some(value=>!finite(value)||value<0||value>1)))
+    return unavailable('LOGISTIC_BASELINE_PROBABILITY_VECTOR_INVALID');
 
   const roundTripCostPct=Number(roundTripCostBps)/100;
   const trials=thresholds.map(threshold=>{
@@ -1144,6 +1153,76 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
   const preliminary=trials.filter(item=>item.preliminary_return_screen_passed)
     .sort((a,b)=>b.mean_net_trade_return_pct-a.mean_net_trade_return_pct||
       b.trade_count-a.trade_count||a.threshold-b.threshold);
+  // Diagnose cross-sectional ordering against the frozen Logistic anchor
+  // using the exact first-touch execution simulator. This is selection-only:
+  // the comparison is reported but never chooses the model, its threshold,
+  // or any outer-validation/holdout acceptance gate.
+  let crossSectionalRankDiagnostics={
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RANK_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',
+    reason:'LOGISTIC_BASELINE_OR_DECISION_TIMESTAMP_SUPPORT_UNAVAILABLE',
+    diagnostic_only:true,
+    selection_partition_only:true,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false
+  };
+  const rankRowsValid=rows.every(row=>finite(row?.at)&&
+    typeof row?.symbol==='string'&&row.symbol.length>0);
+  if(baselineProbabilities!==null&&rankRowsValid){
+    const trials=[1,2,3].map(topK=>{
+      const modelMask=topKProbabilitySignals(rows,probabilities,topK);
+      const logisticMask=topKProbabilitySignals(rows,baselineProbabilities,topK);
+      const portfolioOptions={
+        threshold:0.5,
+        roundTripCostBps:Number(roundTripCostBps),
+        maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+        initialEquity:100
+      };
+      const modelMetrics=simulateFirstTouchPaperPortfolio(
+        rows,modelMask.probabilities,portfolioOptions
+      );
+      const logisticMetrics=simulateFirstTouchPaperPortfolio(
+        rows,logisticMask.probabilities,portfolioOptions
+      );
+      const delta=(left,right,key)=>finite(left?.[key])&&finite(right?.[key])
+        ?Number((Number(left[key])-Number(right[key])).toFixed(6)):null;
+      return {
+        top_k_per_timestamp:topK,
+        decision_group_count:modelMask.decision_group_count,
+        logistic_decision_group_count:logisticMask.decision_group_count,
+        model_signal_count:modelMask.signal_count,
+        logistic_signal_count:logisticMask.signal_count,
+        model_metrics:modelMetrics,
+        logistic_metrics:logisticMetrics,
+        model_minus_logistic:{
+          net_pnl_pct:delta(modelMetrics,logisticMetrics,'net_pnl_pct'),
+          win_rate_percentage_points:delta(modelMetrics,logisticMetrics,'win_rate_pct'),
+          max_drawdown_percentage_points:delta(modelMetrics,logisticMetrics,'max_drawdown_pct'),
+          trade_count:delta(modelMetrics,logisticMetrics,'trade_count')
+        }
+      };
+    });
+    crossSectionalRankDiagnostics={
+      schema:'RADARX_TCN_LSTM_INNER_SELECTION_RANK_DIAGNOSTICS_V1',
+      status:'AVAILABLE',
+      diagnostic_only:true,
+      selection_partition_only:true,
+      policy:'TOP_K_PER_DECISION_TIMESTAMP',
+      decision_bucket_ms:15*60*1000,
+      decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
+      baseline:'FROZEN_LOGISTIC_ANCHOR_FIT_ON_IDENTICAL_TRAINING_ROWS',
+      top_k_grid:[1,2,3],
+      score_source:'RAW_FROZEN_CANDIDATE_AND_LOGISTIC_PROBABILITIES',
+      round_trip_cost_bps:Number(roundTripCostBps),
+      portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY,
+      holdout_values_used:false,
+      affects_candidate_ranking:false,
+      affects_acceptance_gates:false,
+      trials
+    };
+  }
+
   return {
     schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
     status:'AVAILABLE',
@@ -1162,7 +1241,8 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
     trials,
     preliminary_return_screen_candidates:preliminary.length,
     best_preliminary_threshold:preliminary[0]?.threshold??null,
-    best_preliminary_metrics:preliminary[0]??null
+    best_preliminary_metrics:preliminary[0]??null,
+    cross_sectional_rank_diagnostics:crossSectionalRankDiagnostics
   };
 }
 
@@ -1244,7 +1324,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const score = brierFrom(selectionRows, predictions);
     const returnDiagnostics=summarizeTcnLstmSelectionReturns(
       selectionRows,predictions,{roundTripCostBps,minimumTrades:minimumReturnTrades,
-        minimumWinRatePct:minimumReturnWinRatePct}
+        minimumWinRatePct:minimumReturnWinRatePct,
+        baselineProbabilities}
     );
     evaluated.push({
       name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
