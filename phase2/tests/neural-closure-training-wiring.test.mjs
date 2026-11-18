@@ -145,7 +145,7 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(lstmModule,/topKProbabilitySignals\(rows,baselineProbabilities,topK\)/);
   assert.match(lstmModule,/simulateFirstTouchPaperPortfolio\(\s*rows,modelMask\.probabilities/);
   assert.match(lstmModule,/model_minus_logistic/);
-  assert.match(lstmModule,/baselineProbabilities\n\s*\}/);
+  assert.match(lstmModule,/baselineProbabilities:baselinePredictions/);
   assert.match(trainer,/roundTripCostBps:args\.roundTripCostBps/);
   assert.match(trainer,/minimumReturnTrades:20/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
