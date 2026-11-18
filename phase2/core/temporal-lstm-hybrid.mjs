@@ -46,6 +46,12 @@ export const TCN_LSTM_PARAMETER_COUNT =
   4 * TCN_LSTM_HIDDEN +
   TCN_LSTM_HIDDEN + TCN_LSTM_STEPS +
   TCN_LSTM_HIDDEN + 1;
+// The original count is the classifier/encoder BPTT parameter surface. The
+// auxiliary pairwise head is fitted separately and is not part of that BPTT.
+export const TCN_LSTM_CLASSIFIER_PARAMETER_COUNT = TCN_LSTM_PARAMETER_COUNT;
+export const TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT = TCN_LSTM_HIDDEN;
+export const TCN_LSTM_TOTAL_PARAMETER_COUNT =
+  TCN_LSTM_CLASSIFIER_PARAMETER_COUNT + TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT;
 
 const EPSILON = 1e-12;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1336,7 +1342,18 @@ export function trainTcnLstmHybrid(trainingRows, {
     dilations: [...TCN_LSTM_DILATIONS],
     receptive_field: TCN_LSTM_RECEPTIVE_FIELD,
     attention: 'SINGLE_HEAD_QUERY_SOFTMAX_OVER_LSTM_HIDDEN_STATES',
-    trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
+    trainable_parameter_count: TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
+    ranking_head_parameter_count:rankingHeadFit.fitted
+      ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
+    total_parameter_count:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
+      (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0),
+    parameter_count_contract:{
+      classifier_bptt_parameters:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
+      auxiliary_ranking_head_parameters:rankingHeadFit.fitted
+        ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
+      total:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
+        (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)
+    },
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
     loss_objective:objective,
