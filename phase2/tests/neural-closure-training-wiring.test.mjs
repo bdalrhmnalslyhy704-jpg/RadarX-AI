@@ -7,6 +7,25 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-cohort replay workflow downloads the exact validated dataset and verifies immutable identity',async()=>{
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-fixed-cohort-replay.yml',import.meta.url),'utf8');
+  assert.match(workflow,/actions: read/);
+  assert.match(workflow,/run-id: '44196188685'/);
+  assert.match(workflow,/radarx-build224-neural-closure-dataset-039c9074fc21fa0ea303e360a6ea56d3a401a559/);
+  assert.match(workflow,/path: artifacts\/neural-closure/);
+  assert.match(workflow,/--input artifacts\/neural-closure\/dataset\.json/);
+  assert.match(workflow,/--roundTripCostBps 30/);
+  assert.match(workflow,/--minimumWinRatePct 55/);
+  assert.match(workflow,/--maximumDrawdownPct 8/);
+  assert.match(workflow,/f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77/);
+  assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
+  assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
+  assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
+  assert.match(workflow,/cancel-in-progress: false/);
+  assert.doesNotMatch(workflow,/BINANCE_API_KEY|REAL_ORDER_EXECUTION|/i,
+    'fixed-cohort replay must remain a public-data paper-only research run');
+});
+
 test('fixed-SHA collector and trainer use the expanded current top-50 candidate prefilter without relaxing historical gates',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
