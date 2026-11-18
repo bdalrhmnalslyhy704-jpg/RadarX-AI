@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import {focalAsymmetricBrierLoss,deriveTrainingClassWeights} from './neural-closure-contracts.mjs';
 
 /**
  * RadarX Build 224 — Research-only TCN → LSTM → temporal-attention challenger.
@@ -576,7 +577,8 @@ function zeroGradients(model) {
 }
 
 export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0, {
-  dropoutScale = null
+  dropoutScale = null,objective='BRIER',classWeights=null,
+  gammaPositive=1,gammaNegative=2
 } = {}) {
   if (target !== 0 && target !== 1)
     throw new TypeError('TCN_LSTM_TARGET_INVALID');
@@ -584,8 +586,19 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   const parameters = trainableParameters(model);
   const gradients = zeroGradients(model);
   const hidden = TCN_LSTM_HIDDEN;
+  if(!['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(objective))
+    throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_INVALID');
   const error = forward.probability - target;
-  const logitGradient = 2 * error * forward.probability * (1 - forward.probability);
+  const focal=objective==='FOCAL_ASYMMETRIC_BRIER'
+    ?focalAsymmetricBrierLoss(forward.probability,target,{
+      ...(classWeights??{}),gammaPositive,gammaNegative
+    }):null;
+  if(objective==='FOCAL_ASYMMETRIC_BRIER'&&classWeights===null)
+    throw new TypeError('TCN_LSTM_FOCAL_CLASS_WEIGHTS_REQUIRED');
+  const logitGradient = focal
+    ?focal.logitGradient
+    :2 * error * forward.probability * (1 - forward.probability);
+  const objectiveLoss=focal?focal.loss:error*error;
   const cache = forward.cache;
   gradients.outputBias[0] = logitGradient;
   const pooledGradient = Array(hidden).fill(0);
@@ -711,7 +724,8 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   if (!treeFinite(gradients) || !finite(logitGradient))
     throw new TypeError('TCN_LSTM_BACKPROP_NON_FINITE');
   return {
-    loss: error * error,
+    loss: objectiveLoss,
+    loss_objective:objective,
     gradient_logits: logitGradient,
     probability: forward.probability,
     gradients,
@@ -741,13 +755,28 @@ export function auditTcnLstmHybridGradients(sequence, target, {
   model = initializeModel(29),
   baselineLogit = 0,
   epsilon = 1e-5,
-  dropoutScale = null
+  dropoutScale = null,
+  objective='BRIER',
+  classWeights=null,
+  gammaPositive=1,
+  gammaNegative=2
 } = {}) {
   validateSequence(sequence);
   if (!finite(epsilon) || epsilon <= 0) throw new TypeError('TCN_LSTM_GRADIENT_EPSILON_INVALID');
+  const objectiveOptions={dropoutScale,objective,classWeights,gammaPositive,gammaNegative};
   const analytic = lossAndGradientsTcnLstmHybrid(
-    sequence, target, model, baselineLogit, {dropoutScale}
+    sequence, target, model, baselineLogit, objectiveOptions
   );
+  const objectiveLoss=()=>{
+    const probability=inspectTcnLstmForward(
+      sequence,model,baselineLogit,{dropoutScale}
+    ).probability;
+    return objective==='FOCAL_ASYMMETRIC_BRIER'
+      ?focalAsymmetricBrierLoss(probability,target,{
+        ...(classWeights??{}),gammaPositive,gammaNegative
+      }).loss
+      :(probability-target)**2;
+  };
   const parameters = trainableParameters(model);
   const parameterPaths = flattenPaths(parameters);
   const gradientPaths = flattenPaths(analytic.gradients);
@@ -760,9 +789,9 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     const path = parameterPaths[index];
     const original = getPath(parameters, path);
     setPath(parameters, path, original + epsilon);
-    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const plus = objectiveLoss();
     setPath(parameters, path, original - epsilon);
-    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const minus = objectiveLoss();
     setPath(parameters, path, original);
     const numerical = (plus - minus) / (2 * epsilon);
     const exact = getPath(analytic.gradients, gradientPaths[index]);
@@ -845,7 +874,8 @@ function evaluateBrier(rows, model, anchor) {
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
-  baselineFit = null, earlyStoppingPatience = 5
+  baselineFit = null, earlyStoppingPatience = 5,
+  objective='BRIER',gammaPositive=1,gammaNegative=2
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -855,6 +885,10 @@ export function trainTcnLstmHybrid(trainingRows, {
     throw new TypeError('TCN_LSTM_TRAINING_CONFIGURATION_INVALID');
   const rate = clamp(Number(learningRate), 0.0001, 0.01);
   const regularization = clamp(Number(l2), 0, 0.2);
+  if(!['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(objective)||
+    !finite(gammaPositive)||gammaPositive<0||
+    !finite(gammaNegative)||gammaNegative<0)
+    throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_CONFIGURATION_INVALID');
   const dropoutRate = Number(dropout);
   if (!finite(rate) || !finite(regularization) ||
       !finite(dropoutRate) || dropoutRate < 0 || dropoutRate > 0.40)
@@ -863,6 +897,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     (finite(a.at) ? a.at : 0) - (finite(b.at) ? b.at : 0));
   const rows = ordered.slice(-Math.min(maxTrainingSamples, ordered.length));
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
+  const classWeights=objective==='FOCAL_ASYMMETRIC_BRIER'
+    ?deriveTrainingClassWeights(rows.map(row=>row.target)):null;
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
@@ -907,7 +943,8 @@ export function trainTcnLstmHybrid(trainingRows, {
         const dropoutScale = Array(TCN_LSTM_HIDDEN).fill(0).map(() =>
           dropoutRate > 0 && random() < dropoutRate ? 0 : 1 / (1 - dropoutRate));
         const item = lossAndGradientsTcnLstmHybrid(
-          row.sequence, row.target, model, baselineLogit, {dropoutScale}
+          row.sequence, row.target, model, baselineLogit,
+          {dropoutScale,objective,classWeights,gammaPositive,gammaNegative}
         );
         epochLoss += item.loss;
         seen++;
@@ -942,7 +979,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
       dropout: dropoutRate,
-      dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
+      dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1',
+      loss_objective:objective
     });
     if (epoch >= Math.min(5, epochs) && wait >= patience) {
       stoppedEarly = true;
@@ -969,6 +1007,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
+    loss_objective:objective,
+    loss_class_weights:classWeights,
+    loss_focal_gamma:{positive:gammaPositive,negative:gammaNegative},
     model, baseline_fit: anchor,
     training: {
       rows: rows.length,
@@ -1177,9 +1218,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
     const candidateDropout = config?.dropout === undefined ? 0 : config.dropout;
+    const candidateObjective=config?.objective??'BRIER';
     if (!config || typeof config.name !== 'string' ||
         !finite(config.learningRate) || !finite(config.l2) ||
         !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
+        !['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(candidateObjective)||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
     const fit = trainTcnLstmHybrid(effectiveTrainingRowsForFit, {
@@ -1187,6 +1230,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       learningRate: config.learningRate,
       l2: config.l2,
       dropout:candidateDropout,
+      objective:candidateObjective,
       seed: seed + index * 101,
       maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor
@@ -1197,7 +1241,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       selectionRows,predictions
     );
     evaluated.push({
-      name: config.name, config: { ...config, dropout: candidateDropout },
+      name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
       selection_brier: score,
       logistic_selection_brier: baselineBrier,
       improvement: baselineBrier - score,
