@@ -68,6 +68,20 @@ jobs:
             --maximumDrawdownPct 8 \
             --roundTripCostBps 30
 
+      - name: Verify exact cohort identity and candidate code SHA
+        env:
+          EXPECTED_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
+          EXPECTED_ROW_COUNT: '32300'
+        run: |
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            const report=JSON.parse(fs.readFileSync('artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json','utf8'));
+            if(report.integrity?.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) throw new Error('FIXED_COHORT_SHA_MISMATCH');
+            if(Number(report.integrity?.row_count)!==Number(process.env.EXPECTED_ROW_COUNT)) throw new Error('FIXED_COHORT_ROW_COUNT_MISMATCH');
+            if(report.integrity?.model_source_commit_sha!==process.env.GITHUB_SHA) throw new Error('MODEL_SOURCE_SHA_MISMATCH');
+            console.log(JSON.stringify({dataset_sha256:report.integrity.dataset_sha256,row_count:report.integrity.row_count,model_source_commit_sha:report.integrity.model_source_commit_sha,status:report.status}));
+          "
+
       - name: Upload fixed-cohort rebenchmark report and model artifacts
         if: always()
         uses: actions/upload-artifact@v4
