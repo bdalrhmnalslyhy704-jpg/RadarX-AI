@@ -1122,6 +1122,9 @@ async function main(){
         max_favorable_excursion_pct:row.max_favorable_excursion_pct,
         max_favorable_excursion_at:row.max_favorable_excursion_at
       })]));
+      const trainingRowsWithExecutionEvidence=trainingRows.map(row=>({
+        ...row,...(executionEvidenceById.get(String(row.id))??{})
+      }));
       const selectionRowsWithExecutionEvidence=selectionRows.map(row=>({
         ...row,...(executionEvidenceById.get(String(row.id))??{})
       }));
@@ -1151,13 +1154,17 @@ async function main(){
           validation_or_holdout_rows_seen_by_fit:0
         };
       }else{
-        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRowsWithExecutionEvidence,{
+        const selection=selectTcnLstmHybridHyperparameters(
+          trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
           maxTrainingSamples:4096,
           seed:22429,
           roundTripCostBps:args.roundTripCostBps,
           minimumReturnTrades:20,
           minimumReturnWinRatePct:55,
+          rankingScoreWeight:0.01,
+          rankingMinimumReturnGapPct:0.50,
+          rankingPairsPerTimestamp:4,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
@@ -1165,7 +1172,11 @@ async function main(){
             {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
             {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER'}
+              objective:'FOCAL_ASYMMETRIC_BRIER'},
+            {name:'4H_PAIRWISE_RANK_W025_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              rankingWeight:0.25},
+            {name:'4H_PAIRWISE_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingWeight:0.50}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1196,6 +1207,7 @@ async function main(){
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
           diagnostic_configuration:selection.diagnostic_configuration??null,
           required_inner_brier_improvement:0.00025,
+          selection_scoring:selection.selection_scoring??null,
           selection_status:selection.status,
           baseline_selection_brier:selection.baseline?.selection_brier??null,
           candidates:selection.candidates??[],
@@ -1276,7 +1288,12 @@ async function main(){
             selected_configuration:selection.selected_configuration,
             selection_brier:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.selection_brier??null,
+            selection_score:selection.candidates.find(row=>
+              row.name===selection.selected_configuration)?.selection_score??null,
             logistic_selection_brier:selection.baseline?.selection_brier??null,
+            logistic_selection_score:selection.baseline?.selection_score??null,
+            selected_pairwise_ranking:selection.candidates.find(row=>
+              row.name===selection.selected_configuration)?.pairwise_ranking??null,
             internal_calibrator:calibrator.method,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
