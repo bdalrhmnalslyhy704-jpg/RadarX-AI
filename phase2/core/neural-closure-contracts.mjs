@@ -2665,17 +2665,27 @@ export function runNeuralClosureBenchmark({
       ?portfolioMetrics(validationRows,calibratedValidation,
         thresholdSelection.threshold,roundTripCostBps)
       :null;
-    const validationThresholdRiskGates={
-      return_data_complete:validationThresholdMetrics?.return_data_status==='COMPLETE',
-      minimum_validation_trades:Number(validationThresholdMetrics?.trade_count)>=20,
-      minimum_validation_win_rate:finite(validationThresholdMetrics?.win_rate_pct)&&
+    // If threshold selection abstains, outer execution gates were not run.
+    // Preserve that distinction instead of misreporting absent metrics as
+    // incomplete return data or failed risk measurements.
+    const validationThresholdRiskGates=validationThresholdMetrics?{
+      return_data_complete:validationThresholdMetrics.return_data_status==='COMPLETE',
+      minimum_validation_trades:Number(validationThresholdMetrics.trade_count)>=20,
+      minimum_validation_win_rate:finite(validationThresholdMetrics.win_rate_pct)&&
         validationThresholdMetrics.win_rate_pct>=minimumWinRatePct,
-      positive_validation_net_pnl:finite(validationThresholdMetrics?.net_pnl_pct)&&
+      positive_validation_net_pnl:finite(validationThresholdMetrics.net_pnl_pct)&&
         validationThresholdMetrics.net_pnl_pct>0,
-      maximum_validation_drawdown:finite(validationThresholdMetrics?.max_drawdown_pct)&&
+      maximum_validation_drawdown:finite(validationThresholdMetrics.max_drawdown_pct)&&
         validationThresholdMetrics.max_drawdown_pct<=maximumDrawdownPct
+    }:{
+      return_data_complete:null,
+      minimum_validation_trades:null,
+      minimum_validation_win_rate:null,
+      positive_validation_net_pnl:null,
+      maximum_validation_drawdown:null
     };
-    const validationThresholdRiskPassed=Object.values(validationThresholdRiskGates).every(Boolean);
+    const validationThresholdRiskPassed=validationThresholdMetrics!==null&&
+      Object.values(validationThresholdRiskGates).every(value=>value===true);
     const thresholdSelectionSupport=classCounts(thresholdSelectionRows.map(row=>row.target));
     const metricWeights={
       positiveWeight:trainingWeights.positiveWeight,
@@ -2751,7 +2761,9 @@ export function runNeuralClosureBenchmark({
         skipped_same_symbol:validationThresholdMetrics.skipped_same_symbol
       }:null,
       validation_threshold_risk_gates:Object.fromEntries(
-        Object.entries(validationThresholdRiskGates).map(([key,value])=>[key,value?'PASS':'FAIL'])
+        Object.entries(validationThresholdRiskGates).map(([key,value])=>[
+          key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+        ])
       )
     };
 
@@ -2791,9 +2803,10 @@ export function runNeuralClosureBenchmark({
       threshold_selection_qualified:
         thresholdSelection.status==='SELECTED_ON_VALIDATION_ONLY'&&
         finite(thresholdSelection.threshold)&&thresholdSelection.eligible_count>0,
-      outer_validation_threshold_risk_gates:validationThresholdRiskPassed
+      outer_validation_threshold_risk_gates:
+        validationThresholdMetrics===null?null:validationThresholdRiskPassed
     };
-    const validationPassed=Object.values(validationGates).every(Boolean);
+    const validationPassed=Object.values(validationGates).every(value=>value===true);
     const validationReason=!validationGates.inner_selection_qualified
       ?'INNER_SELECTION_NOT_QUALIFIED'
       :!validationGates.calibration_class_support
@@ -2823,7 +2836,9 @@ export function runNeuralClosureBenchmark({
         diagnostic_only:qualification.diagnostic_only===true
       },
       gates:Object.fromEntries(Object.entries(validationGates)
-        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+        .map(([key,value])=>[
+          key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+        ])),
       reason:validationReason
     };
     const baseModel={
