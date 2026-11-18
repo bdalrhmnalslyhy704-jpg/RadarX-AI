@@ -1165,6 +1165,9 @@ async function main(){
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
           rankingPairsPerTimestamp:4,
+          rankingHeadLearningRate:0.03,
+          rankingHeadEpochs:40,
+          rankingHeadL2:0.001,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
@@ -1173,10 +1176,10 @@ async function main(){
               objective:'FOCAL_ASYMMETRIC_BRIER'},
             {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_PAIRWISE_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingWeight:0.02},
-            {name:'4H_PAIRWISE_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.05}
+            {name:'4H_AUX_RANK_HEAD_LR015_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              rankingHeadLearningRate:0.015},
+            {name:'4H_AUX_RANK_HEAD_LR045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingHeadLearningRate:0.045}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1294,6 +1297,11 @@ async function main(){
             logistic_selection_score:selection.baseline?.selection_score??null,
             selected_pairwise_ranking:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.pairwise_ranking??null,
+            selected_pairwise_ranking_head:selection.candidates.find(row=>
+              row.name===selection.selected_configuration)?.ranking_head??null,
+            ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
+            ranking_head_parameters:TCN_LSTM_HIDDEN,
+            ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
             internal_calibrator:calibrator.method,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
