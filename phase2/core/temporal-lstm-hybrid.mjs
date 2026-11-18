@@ -1272,7 +1272,7 @@ export function trainTcnLstmHybrid(trainingRows, {
         seen++;
         accumulated = accumulateTree(accumulated, item.gradients);
       }
-      const averaged=scaleTree(accumulated,1/indexes.length);
+      let averaged=scaleTree(accumulated,1/indexes.length);
       if (!treeFinite(averaged)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NON_FINITE');
       const norm = parameterNorm(averaged);
       if (!finite(norm)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NORM_NON_FINITE');
