@@ -1613,7 +1613,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   seed = 29,
   maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55,
-  rankingScoreWeight=0.01,rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4
+  rankingScoreWeight=0.01,rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
+  rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -1626,7 +1627,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100||
     !finite(rankingScoreWeight)||rankingScoreWeight<0||rankingScoreWeight>1||
     !finite(rankingMinimumReturnGapPct)||rankingMinimumReturnGapPct<0||
-    !Number.isInteger(rankingPairsPerTimestamp)||rankingPairsPerTimestamp<1||rankingPairsPerTimestamp>32)
+    !Number.isInteger(rankingPairsPerTimestamp)||rankingPairsPerTimestamp<1||rankingPairsPerTimestamp>32||
+    !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
+    !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
+    !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1)
     throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
   const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
     maxTrainingSamples,trainingRows.length
@@ -1697,6 +1701,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingRows:effectiveTrainingRows,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
+      rankingHeadEpochs,rankingHeadL2,
       rankingRoundTripCostBps:roundTripCostBps,
       rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
       rankingPairsPerTimestamp:rankingPairsPerTimestamp
@@ -1774,7 +1779,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     selection_scoring:{
       method:rankingScoreAvailable
-        ?'BRIER_PLUS_WITHIN_TIMESTAMP_PAIRWISE_RETURN_RANK_LOSS_V1'
+        ?'BRIER_PLUS_SEPARATE_TRAINING_ONLY_PAIRWISE_RANK_HEAD_V1'
         :'BRIER_ONLY_PAIRWISE_RANK_SUPPORT_UNAVAILABLE',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
@@ -1791,13 +1796,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     candidates:evaluated.map(({name,config,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement,selection_score,logistic_selection_score,
-      composite_improvement,return_selection_diagnostics})=>({
+      composite_improvement,return_selection_diagnostics,fit})=>({
       name,config,selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
       brier_improvement:Number(brier_improvement.toFixed(8)),
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
-        ?Number(pairwise_ranking_improvement.toFixed(8)):null,
+        ?Number(pairwiseRankingImprovement.toFixed(8)):null,
+      ranking_head:fit.training?.return_ranking?.ranking_head??null,
       selection_score:Number(selection_score.toFixed(8)),
       logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
       composite_improvement:Number(composite_improvement.toFixed(8)),
