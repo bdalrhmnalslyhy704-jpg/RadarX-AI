@@ -1606,12 +1606,18 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   evaluated.sort((a,b)=>
     a.selection_score-b.selection_score||
     a.selection_brier-b.selection_brier||a.name.localeCompare(b.name));
-  const winner = evaluated[0];
+  const isInnerQualified=item=>
+    item.brier_improvement>requiredImprovement&&
+    item.composite_improvement>requiredImprovement&&
+    (!rankingScoreAvailable||
+      (finite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0));
+  const qualifiedCandidates=evaluated.filter(isInnerQualified);
+  const winner=(qualifiedCandidates.length?qualifiedCandidates:evaluated)[0];
   const brierGatePassed=winner.brier_improvement>requiredImprovement;
   const rankingGatePassed=!rankingScoreAvailable||
     (finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0);
   const compositeGatePassed=winner.composite_improvement>requiredImprovement;
-  const passed=brierGatePassed&&rankingGatePassed&&compositeGatePassed;
+  const passed=isInnerQualified(winner);
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
