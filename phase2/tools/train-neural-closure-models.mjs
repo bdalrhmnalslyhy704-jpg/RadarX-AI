@@ -1078,6 +1078,7 @@ async function main(){
     const lstmRows=split.train.map(row=>({
       id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
       target:row.target,sequence:row.temporal_sequence,
+      realized_return_pct:row.realized_return_pct,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps
     })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
     const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
