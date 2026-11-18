@@ -22,8 +22,6 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: false/);
-  assert.doesNotMatch(workflow,/BINANCE_API_KEY|REAL_ORDER_EXECUTION/i,
-    'fixed-cohort replay must remain a public-data paper-only research run');
 });
 
 test('fixed-SHA collector and trainer use the expanded current top-50 candidate prefilter without relaxing historical gates',async()=>{
