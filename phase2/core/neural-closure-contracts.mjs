@@ -1299,683 +1299,97 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     blocks
   };
 }
-
-function collectTcnLstmPreInnerCalibrationMap(predictions,validationRows,holdoutRows){
-  const property='pre_inner_calibration_probability';
-  if(!Array.isArray(predictions))
-    return {status:'UNAVAILABLE',reason:'PREDICTIONS_NOT_ARRAY',map:new Map()};
-  const staged=predictions.filter(item=>
-    Object.prototype.hasOwnProperty.call(item??{},property));
-  if(!staged.length)
-    return {status:'NOT_PROVIDED',reason:'PRE_INNER_CALIBRATION_CHANNEL_MISSING',map:new Map()};
-  const holdoutIds=new Set(holdoutRows.map(row=>String(row.id)));
-  if(staged.some(item=>holdoutIds.has(String(item?.id||''))))
-    return {status:'REJECTED_HOLDOUT_DIAGNOSTIC_EXPOSURE',
-      reason:'PRE_INNER_DIAGNOSTICS_MUST_NOT_INCLUDE_FINAL_HOLDOUT_VALUES',map:new Map()};
-  const expectedIds=new Set(validationRows.map(row=>String(row.id)));
-  const map=new Map();
-  for(const item of staged){
-    const id=String(item?.id||'');
-    const value=item?.[property];
-    if(!id||!expectedIds.has(id)||map.has(id))
-      return {status:'REJECTED_INVALID_DIAGNOSTIC_ROW_SET',
-        reason:'PRE_INNER_DIAGNOSTIC_ID_INVALID_DUPLICATE_OR_OUT_OF_SCOPE',map:new Map()};
-    if(!finite(value)||Number(value)<0||Number(value)>1)
-      return {status:'REJECTED_INVALID_DIAGNOSTIC_VALUE',
-        reason:'PRE_INNER_DIAGNOSTIC_PROBABILITY_OUT_OF_RANGE',map:new Map()};
-    map.set(id,Number(value));
-  }
-  if(map.size!==expectedIds.size||[...expectedIds].some(id=>!map.has(id)))
-    return {status:'REJECTED_INCOMPLETE_VALIDATION_COVERAGE',
-      reason:'PRE_INNER_DIAGNOSTIC_MUST_COVER_EVERY_OUTER_VALIDATION_ROW',map:new Map()};
-  return {status:'AVAILABLE',reason:null,map};
-}
-
-function buildTcnLstmProbabilityStageDiagnostics({
-  preInner,calibrationFitRows,thresholdSelectionRows,validationRows,
-  minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
-  innerCalibratedThresholdSelection,innerCalibratedValidation,
-  innerCalibratedThresholdSelectionProbabilities,innerCalibratedValidationProbabilities,
-  sharedCalibratedThresholdSelection,sharedCalibratedValidation,
-  sharedCalibratedThresholdSelectionProbabilities,sharedCalibratedValidationProbabilities,
-  sharedCalibrationMethod
-}={}){
-  const base={
-    schema:'RADARX_TCN_LSTM_PROBABILITY_STAGE_DISTRIBUTIONS_V1',
-    diagnostic_only:true,
-    labels_used:false,
-    holdout_values_used:false,
-    affects_primary_probabilities:false,
-    affects_threshold_selection:false,
-    shared_evaluator_calibration_method:sharedCalibrationMethod??null
-  };
-  if(preInner?.status!=='AVAILABLE')
-    return {...base,status:preInner?.status??'NOT_PROVIDED',
-      reason:preInner?.reason??'PRE_INNER_DIAGNOSTICS_UNAVAILABLE'};
-  const distribution=(rows,map)=>summarizeProbabilityDistribution(
-    rows.map(row=>map.get(String(row.id)))
-  );
-  const preThreshold=distribution(thresholdSelectionRows,preInner.map);
-  const preValidation=distribution(validationRows,preInner.map);
-
-  // Counterfactual only: fit one evaluator Platt calibrator directly on the
-  // network's pre-inner scores, using the same isolated calibration-fit rows.
-  // This tests whether applying an evaluator Platt transform to an already
-  // internally-Platt-calibrated score compounds calibration error. Its outputs
-  // never replace primary predictions or participate in threshold selection.
-  const fitLabels=calibrationFitRows.map(row=>row.target);
-  const fitLogits=probabilitiesFor(calibrationFitRows,preInner.map).map(logit);
-  const directPlatt=fitPlattScaler(fitLogits,fitLabels,{
-    minimumPositives:minimumClassSupport,
-    minimumNegatives:minimumClassSupport
+function evaluateAuxiliaryRankingHeadTopKPolicy(selectionRows,outerRows,rankingScoreMap,
+  roundTripCostBps,{minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8}={}) {
+  const unavailable=(reason,extra={})=>({
+    schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,
+    affects_primary_probabilities:false,affects_primary_threshold:false,
+    affects_acceptance_gates:false,holdout_values_used:false,reason,...extra
   });
-  const directCalibrator=directPlatt.fitted===true&&directPlatt.accepted===true
-    ?directPlatt:null;
-  const directMethod=directCalibrator
-    ?'SINGLE_STAGE_SHARED_PLATT_ON_PRE_INNER_SCORES'
-    :'RAW_PRE_INNER_FALLBACK_PLATT_NOT_ACCEPTED';
-  const scoredBlock=(rows,probabilities)=>({
-    sample_count:rows.length,
-    positive_count:classCounts(rows.map(row=>row.target)).positive,
-    negative_count:classCounts(rows.map(row=>row.target)).negative,
-    brier_score:brier(probabilities,rows.map(row=>row.target)),
-    probability_distribution:summarizeProbabilityDistribution(probabilities)
-  });
-  const directThresholdProbabilities=probabilitiesFor(
-    thresholdSelectionRows,preInner.map,directCalibrator
-  );
-  const directValidationProbabilities=probabilitiesFor(
-    validationRows,preInner.map,directCalibrator
-  );
-  const rawThresholdProbabilities=probabilitiesFor(thresholdSelectionRows,preInner.map);
-  const rawValidationProbabilities=probabilitiesFor(validationRows,preInner.map);
-  const directCalibrationCounterfactual={
-    schema:'RADARX_TCN_LSTM_SINGLE_STAGE_SHARED_PLATT_COUNTERFACTUAL_V1',
-    diagnostic_only:true,
-    affects_primary_probabilities:false,
-    affects_threshold_selection:false,
-    holdout_values_used:false,
-    fit_partition:'CALIBRATION_FIT_ONLY',
-    fit_rows:calibrationFitRows.length,
-    fit_positive:classCounts(fitLabels).positive,
-    fit_negative:classCounts(fitLabels).negative,
-    fit_labels_used:true,
-    threshold_selection_labels_used_for_fit:false,
-    outer_validation_labels_used_for_fit:false,
-    shared_calibrator:{
-      method:'PLATT_SCALING',
-      fitted:directPlatt.fitted,
-      accepted:directPlatt.accepted,
-      status:directPlatt.status,
-      selected_path:directMethod,
-      samples:directPlatt.samples,
-      positive:directPlatt.positive,
-      negative:directPlatt.negative,
-      min_positive:directPlatt.min_positive,
-      min_negative:directPlatt.min_negative,
-      slope:directPlatt.slope,
-      intercept:directPlatt.intercept,
-      fit_nll_before:directPlatt.fit_nll_before,
-      fit_nll_after:directPlatt.fit_nll_after
-    },
-    threshold_selection:{
-      raw_network_output:scoredBlock(thresholdSelectionRows,rawThresholdProbabilities),
-      single_stage_shared_calibration:scoredBlock(
-        thresholdSelectionRows,directThresholdProbabilities
-      ),
-      evaluation_labels_used:true,
-      labels_used_for_calibrator_fit:false
-    },
-    outer_validation:{
-      raw_network_output:scoredBlock(validationRows,rawValidationProbabilities),
-      single_stage_shared_calibration:scoredBlock(
-        validationRows,directValidationProbabilities
-      ),
-      evaluation_labels_used:true,
-      labels_used_for_calibrator_fit:false
-    }
-  };
-  return {
-    ...base,status:'AVAILABLE',
-    threshold_selection:{
-      sample_count:thresholdSelectionRows.length,
-      network_output_before_inner_platt:preThreshold,
-      inner_platt_output_before_shared_evaluator:
-        innerCalibratedThresholdSelection,
-      shared_evaluator_output_after_selected_calibration:
-        sharedCalibratedThresholdSelection
-    },
-    outer_validation:{
-      sample_count:validationRows.length,
-      network_output_before_inner_platt:preValidation,
-      inner_platt_output_before_shared_evaluator:innerCalibratedValidation,
-      shared_evaluator_output_after_selected_calibration:sharedCalibratedValidation
-    },
-    single_stage_shared_calibration_counterfactual:directCalibrationCounterfactual,
-    chronological_stages:{
-      threshold_selection:{
-        network_output_before_inner_platt:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,rawThresholdProbabilities
-        ),
-        inner_platt_output_before_shared_evaluator:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,innerCalibratedThresholdSelectionProbabilities
-        ),
-        shared_evaluator_output_after_selected_calibration:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,sharedCalibratedThresholdSelectionProbabilities
-        ),
-        single_stage_shared_calibration_counterfactual:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,directThresholdProbabilities
-        )
-      },
-      outer_validation:{
-        network_output_before_inner_platt:buildChronologicalStabilityDiagnostics(
-          validationRows,rawValidationProbabilities
-        ),
-        inner_platt_output_before_shared_evaluator:buildChronologicalStabilityDiagnostics(
-          validationRows,innerCalibratedValidationProbabilities
-        ),
-        shared_evaluator_output_after_selected_calibration:buildChronologicalStabilityDiagnostics(
-          validationRows,sharedCalibratedValidationProbabilities
-        ),
-        single_stage_shared_calibration_counterfactual:buildChronologicalStabilityDiagnostics(
-          validationRows,directValidationProbabilities
-        )
-      }
-    }
-  };
-}
-
-function predictionMap(predictions,modelName,requiredIds,{
-  sourceCommitSha,targetDefinition,targetSemantics,artifactSha256=null
-}={}) {
-  if(!Array.isArray(predictions))
-    return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
-  const map=new Map();
-  for(const item of predictions){
-    const id=String(item?.id||'');
-    if(!id||map.has(id)||!finite(item?.probability)||
-      Number(item.probability)<0||Number(item.probability)>1)
-      return {valid:false,reason:'MODEL_PREDICTION_DUPLICATE_OR_INVALID:'+modelName,map};
-    if(String(item?.source_commit_sha||'').toLowerCase()!==String(sourceCommitSha).toLowerCase())
-      return {valid:false,reason:'MODEL_PREDICTION_SOURCE_SHA_MISMATCH:'+modelName,map};
-    if(item?.target_definition!==targetDefinition)
-      return {valid:false,reason:'MODEL_PREDICTION_TARGET_DEFINITION_MISMATCH:'+modelName,map};
-    if(item?.target_semantics!==targetSemantics)
-      return {valid:false,reason:'MODEL_PREDICTION_TARGET_SEMANTICS_MISMATCH:'+modelName,map};
-    if(artifactSha256
-      ?String(item?.artifact_sha256||'').toLowerCase()!==artifactSha256
-      :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
-      return {valid:false,reason:'MODEL_PREDICTION_ARTIFACT_SHA_MISMATCH:'+modelName,map};
-    map.set(id,Number(item.probability));
-  }
-  const missing=requiredIds.filter(id=>!map.has(id));
-  const extra=[...map.keys()].filter(id=>!requiredIds.includes(id));
-  if(missing.length||extra.length)
-    return {valid:false,reason:'MODEL_PREDICTION_ROW_SET_MISMATCH:'+modelName,
-      missing_count:missing.length,extra_count:extra.length,map};
-  return {valid:true,map};
-}
-function probabilitiesFor(rows,map,calibrator=null) {
-  return rows.map(row=>{
-    const p=map.get(row.id);
-    if(!finite(p))throw new Error('MODEL_PROBABILITY_MISSING:'+row.id);
-    const rawLogit=logit(p);
-    return calibrator?applyProbabilityCalibrator(rawLogit,calibrator):p;
-  });
-}
-export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
-  purgedRows=[],thresholdSelectionRows=[],thresholdPurgedRows=[],calibrationDays=null
-}={}){
-  const fitLabels=fitRows.map(row=>row.target);
-  const fitLogits=probabilitiesFor(fitRows,rawMap).map(logit);
-  const checkLabels=checkRows.map(row=>row.target);
-  const rawCheck=probabilitiesFor(checkRows,rawMap);
-  const rawCheckBrier=brier(rawCheck,checkLabels);
-
-  // Calibration algorithm is predeclared: Platt is fitted only on the
-  // calibration-fit block. The check block is a sealed evaluation block and
-  // must never be used to choose between RAW / temperature / Platt.
-  const temperature={
-    method:'TEMPERATURE_SCALING',status:'NOT_FIT_PREDECLARED_PLATT_ONLY',
-    fitted:false,accepted:false,fit_partition:'NOT_USED'
-  };
-  const fittedPlatt=fitPlattScaler(fitLogits,fitLabels,{
-    minimumPositives,minimumNegatives:minimumPositives
-  });
-  const platt={...fittedPlatt,fit_partition:'CALIBRATION_FIT_ONLY'};
-  const selectedCalibrator=platt.fitted===true&&platt.accepted===true
-    ?platt:null;
-  const selectedMethod=selectedCalibrator
-    ?'PLATT_SCALING_FIT_ONLY':'RAW_PLATT_NOT_ACCEPTED';
-  const selectedCheckProbabilities=probabilitiesFor(
-    checkRows,rawMap,selectedCalibrator
-  );
-  const selectedCheckBrier=brier(selectedCheckProbabilities,checkLabels);
-  const supportReady=platt.fitted===true;
-  return {
-    status:supportReady?'EVALUATED':'INSUFFICIENT_CLASS_SUPPORT',
-    selected_method:selectedMethod,
-    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
-    selected_calibrator:selectedCalibrator,
-    raw_check_brier:rawCheckBrier,
-    selected_check_brier:selectedCheckBrier,
-    check_block_used_for_calibrator_selection:false,
-    improvement:rawCheckBrier!==null&&selectedCheckBrier!==null
-      ?rawCheckBrier-selectedCheckBrier:null,
-    temperature,platt,
-    calibration_fit_support:classCounts(fitLabels),
-    calibration_check_support:classCounts(checkLabels),
-    minimum_positive_support_per_block:minimumPositives,
-    calibration_fit_rows:fitRows.length,
-    calibration_purged_rows:purgedRows.length,
-    threshold_selection_rows:thresholdSelectionRows.length,
-    threshold_purged_rows:thresholdPurgedRows.length,
-    calibration_check_rows:checkRows.length,
-    calibration_days:calibrationDays,
-    support_ready:supportReady
-  };
-}
-
-/**
- * Gross realized return follows the first-touch execution contract:
- * take-profit/stop-loss exits occur at their recorded barrier prices;
- * only rows that reach the horizon without either barrier use the final close.
- */
-export function realizedExecutionGrossReturnPct(row) {
-  const firstTouch=row?.first_touch;
-  if(row?.execution_return_contract!==NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT||
-    !isValidFourHourFirstTouchExecution(firstTouch,row?.outcome,row?.realized_return_pct))
-    return null;
-  const baseline=number(firstTouch.baseline_price);
-  const exitPrice=number(firstTouch.exit_price);
-  return baseline!==null&&baseline>0&&exitPrice!==null
-    ?(exitPrice/baseline-1)*100:null;
-}
-
-export function realizedExecutionNetReturnPct(row,roundTripCostBps=30) {
-  if(!finite(roundTripCostBps)||Number(roundTripCostBps)<0)
-    throw new TypeError('NEURAL_CLOSURE_ROUND_TRIP_COST_INVALID');
-  const gross=realizedExecutionGrossReturnPct(row);
-  return finite(gross)?gross-Number(roundTripCostBps)/100:null;
-}
-
-export const NEURAL_CLOSURE_PORTFOLIO_POLICY=Object.freeze({
-  method:'EVENT_DRIVEN_FIRST_TOUCH_EXECUTION_MTM_V1',
-  max_concurrent_positions:30,
-  position_fraction_of_initial_equity:1/30,
-  entry_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING',
-  exit_time:'FIRST_TOUCH_AT_OR_HORIZON_CLOSE_AT',
-  mark_to_market:'OBSERVED_MAX_ADVERSE_AND_FAVORABLE_EXCURSIONS',
-  same_timestamp_exit_before_entry:true
-});
-
-/**
- * Event-driven long-only Spot portfolio. Each trade uses one fixed equal slot
- * of initial equity; overlapping positions cannot reuse the same capital.
- * MAE/MFE events mark open positions before their actual first-touch exit.
- */
-export function simulateFirstTouchPaperPortfolio(rows,probabilities,{
-  threshold=0.55,roundTripCostBps=30,maxConcurrentPositions=30,
-  initialEquity=100
-}={}){
-  if(!Array.isArray(rows)||!Array.isArray(probabilities)||rows.length!==probabilities.length)
-    throw new TypeError('NEURAL_CLOSURE_PORTFOLIO_ROWS_AND_PROBABILITIES_REQUIRED');
-  if(!finite(roundTripCostBps)||Number(roundTripCostBps)<0)
-    throw new TypeError('NEURAL_CLOSURE_ROUND_TRIP_COST_INVALID');
-  const maxOpen=Math.max(1,Math.min(100,Math.trunc(Number(maxConcurrentPositions)||30)));
-  const equityStart=Math.max(1,Number(initialEquity)||100);
-  const slotCapital=equityStart/maxOpen;
-  const selected=[];
-  for(let index=0;index<rows.length;index++){
-    const probability=number(probabilities[index]);
-    if(probability===null||probability<0||probability>1)
-      throw new TypeError('NEURAL_CLOSURE_PORTFOLIO_PROBABILITY_INVALID:'+index);
-    if(probability>=threshold)selected.push({row:rows[index],probability,index});
-  }
-  const invalid=selected.find(item=>{
-    const row=item.row;
-    const at=number(row?.at);
-    const exitAt=number(row?.first_touch?.first_touch_at);
-    const gross=realizedExecutionGrossReturnPct(row);
-    const mae=number(row?.max_adverse_excursion_pct);
-    const maeAt=number(row?.max_adverse_excursion_at);
-    const mfe=number(row?.max_favorable_excursion_pct);
-    const mfeAt=number(row?.max_favorable_excursion_at);
-    return at===null||exitAt===null||exitAt<=at||gross===null||
-      mae===null||maeAt===null||maeAt<at||maeAt>exitAt||
-      mfe===null||mfeAt===null||mfeAt<at||mfeAt>exitAt;
-  });
-  if(invalid)return {
-    signal_count:selected.length,trade_count:0,threshold,
-    win_rate_pct:null,net_pnl_pct:null,max_drawdown_pct:null,
-    sharpe_per_trade:null,return_data_status:'NOT_AVAILABLE_OR_INCOMPLETE',
-    failure_id:String(invalid.row?.id??invalid.index)
-  };
-  const events=[];
-  for(const item of selected){
-    const row=item.row;
-    const at=Number(row.at),exitAt=Number(row.first_touch.first_touch_at);
-    const netReturn=realizedExecutionNetReturnPct(row,roundTripCostBps);
-    if(!finite(netReturn)||netReturn<=-100)
-      throw new Error('NEURAL_CLOSURE_RETURN_AT_OR_BELOW_MINUS_100_PERCENT');
-    const position={
-      id:String(row.id??item.index),
-      symbol:String(row.symbol??'').toUpperCase(),
-      row,at,exitAt,netReturn,probability:item.probability,
-      capital:slotCapital,markPct:0
-    };
-    const adversePriority=row.outcome==='DOWN'?1:0;
-    const favorablePriority=row.outcome==='DOWN'?0:1;
-    if(Number(row.max_adverse_excursion_at)<=exitAt)
-      events.push({at:Number(row.max_adverse_excursion_at),type:'MAE',
-        priority:adversePriority,position,value:Number(row.max_adverse_excursion_pct)});
-    if(Number(row.max_favorable_excursion_at)<=exitAt)
-      events.push({at:Number(row.max_favorable_excursion_at),type:'MFE',
-        priority:favorablePriority,position,value:Number(row.max_favorable_excursion_pct)});
-    events.push({at:exitAt,type:'EXIT',priority:2,position});
-    events.push({at,type:'ENTRY',priority:3,position});
-  }
-  events.sort((a,b)=>a.at-b.at||a.priority-b.priority||
-    (a.type==='ENTRY'&&b.type==='ENTRY'
-      ?b.position.probability-a.position.probability||
-        a.position.symbol.localeCompare(b.position.symbol)
-      :a.position.id.localeCompare(b.position.id)));
-  let cash=equityStart,peakEquity=equityStart,maxDrawdown=0;
-  const open=new Map(),openSymbols=new Set(),executedReturns=[],holdingMinutes=[];
-  let skippedCapacity=0,skippedSameSymbol=0,skippedInsufficientCash=0;
-  let maximumConcurrent=0;
-  const markedEquity=()=>cash+[...open.values()].reduce((sum,position)=>
-    sum+position.capital*(1+position.markPct/100),0);
-  const markDrawdown=()=>{
-    const equity=markedEquity();
-    peakEquity=Math.max(peakEquity,equity);
-    if(peakEquity>0)maxDrawdown=Math.max(maxDrawdown,(peakEquity-equity)/peakEquity*100);
-  };
-  for(const event of events){
-    const position=event.position;
-    if(event.type==='ENTRY'){
-      if(openSymbols.has(position.symbol)){skippedSameSymbol++;continue;}
-      if(open.size>=maxOpen){skippedCapacity++;continue;}
-      if(cash+1e-10<slotCapital){skippedInsufficientCash++;continue;}
-      cash-=slotCapital;
-      open.set(position.id,position);openSymbols.add(position.symbol);
-      maximumConcurrent=Math.max(maximumConcurrent,open.size);
-      markDrawdown();
-      continue;
-    }
-    if(!open.has(position.id))continue;
-    if(event.type==='MAE'){
-      position.markPct=Math.min(position.markPct,event.value);
-      markDrawdown();
-      continue;
-    }
-    if(event.type==='MFE'){
-      position.markPct=Math.max(position.markPct,event.value);
-      markDrawdown();
-      continue;
-    }
-    if(event.type==='EXIT'){
-      position.markPct=position.netReturn;
-      cash+=position.capital*(1+position.netReturn/100);
-      open.delete(position.id);openSymbols.delete(position.symbol);
-      executedReturns.push(position.netReturn);
-      holdingMinutes.push((position.exitAt-position.at)/60_000);
-      markDrawdown();
-    }
-  }
-  if(open.size!==0)return {
-    signal_count:selected.length,trade_count:executedReturns.length,threshold,
-    win_rate_pct:null,net_pnl_pct:null,max_drawdown_pct:maxDrawdown,
-    sharpe_per_trade:null,return_data_status:'OPEN_POSITIONS_REMAIN',
-    open_positions:open.size
-  };
-  const wins=executedReturns.filter(value=>value>0).length;
-  const mean=executedReturns.length
-    ?executedReturns.reduce((sum,value)=>sum+value,0)/executedReturns.length:null;
-  const variance=executedReturns.length
-    ?executedReturns.reduce((sum,value)=>sum+(value-mean)**2,0)/executedReturns.length:null;
-  const sd=variance===null?null:Math.sqrt(variance);
-  return {
-    signal_count:selected.length,trade_count:executedReturns.length,threshold,
-    win_rate_pct:executedReturns.length?100*wins/executedReturns.length:null,
-    net_pnl_pct:(cash/equityStart-1)*100,max_drawdown_pct:maxDrawdown,
-    sharpe_per_trade:sd>0?mean/sd:null,
-    average_net_return_pct:mean,
-    average_holding_minutes:holdingMinutes.length
-      ?holdingMinutes.reduce((sum,value)=>sum+value,0)/holdingMinutes.length:null,
-    max_concurrent_positions:maximumConcurrent,
-    skipped_capacity:skippedCapacity,
-    skipped_same_symbol:skippedSameSymbol,
-    skipped_insufficient_cash:skippedInsufficientCash,
-    position_fraction_pct:100/maxOpen,
-    return_data_status:'COMPLETE',
-    portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY
-  };
-}
-
-function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
-  return simulateFirstTouchPaperPortfolio(rows,probabilities,{
-    threshold,roundTripCostBps,
-    maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
-    initialEquity:100
-  });
-}
-
-/**
- * Describe temporal stability without fitting or selecting anything.
- * Evaluation rows are split into contiguous, chronological slices. Their
- * labels are used only to score Brier/prevalence; they never fit calibration,
- * choose a threshold, update weights, change gates, or unlock the holdout.
- */
-function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4}={}) {
-  if(!Array.isArray(rows)||!Array.isArray(probabilities)||
-    rows.length===0||rows.length!==probabilities.length||
-    !Number.isInteger(blockCount)||blockCount<1)
-    return {
-      schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
-      status:'UNAVAILABLE',sample_count:Array.isArray(rows)?rows.length:0,
-      diagnostic_only:true,reason:'ROWS_OR_PROBABILITIES_INVALID'
-    };
-  const paired=rows.map((row,index)=>({
-    row,probability:Number(probabilities[index])
-  })).sort((a,b)=>Number(a.row.at)-Number(b.row.at)||
-    String(a.row.id).localeCompare(String(b.row.id)));
-  if(paired.some(item=>!Number.isFinite(item.probability)||
-    item.probability<0||item.probability>1||
-    !finite(item.row?.at)||(item.row?.target!==0&&item.row?.target!==1))){
-    return {
-      schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
-      status:'UNAVAILABLE',sample_count:rows.length,
-      diagnostic_only:true,reason:'NON_FINITE_SCORE_OR_INVALID_EVALUATION_ROW'
-    };
-  }
-  // Keep rows sharing one decision timestamp in the same slice. In a
-  // multi-symbol cohort many assets can have the same candle-close time.
-  const timestampGroups=[];
-  for(const item of paired){
-    const at=Number(item.row.at);
-    const last=timestampGroups.at(-1);
-    if(last&&last.at===at)last.items.push(item);
-    else timestampGroups.push({at,items:[item]});
-  }
-  const count=Math.min(blockCount,timestampGroups.length);
-  const blocks=[];
-  const scoreThresholds=[0.15,0.20,0.25,0.30,0.35];
-  let groupCursor=0,consumedRows=0;
-  for(let index=0;index<count;index++){
-    const remainingBlocks=count-index;
-    let groupEnd;
-    if(remainingBlocks===1)groupEnd=timestampGroups.length;
-    else{
-      const target=((index+1)*paired.length)/count;
-      const maximumEnd=timestampGroups.length-(remainingBlocks-1);
-      groupEnd=groupCursor;
-      while(groupEnd<maximumEnd){
-        const currentError=Math.abs(consumedRows-target);
-        const nextRows=timestampGroups[groupEnd].items.length;
-        const nextError=Math.abs(consumedRows+nextRows-target);
-        if(groupEnd>groupCursor&&currentError<=nextError)break;
-        consumedRows+=nextRows;
-        groupEnd++;
-        if(consumedRows>=target)break;
-      }
-      if(groupEnd===groupCursor){
-        consumedRows+=timestampGroups[groupEnd].items.length;
-        groupEnd++;
-      }
-    }
-    const slice=timestampGroups.slice(groupCursor,groupEnd)
-      .flatMap(group=>group.items);
-    groupCursor=groupEnd;
-    const labels=slice.map(item=>item.row.target);
-    const scores=slice.map(item=>item.probability);
-    const support=classCounts(labels);
-    const prevalence=support.positive/support.total;
-    const meanScore=scores.reduce((sum,value)=>sum+value,0)/scores.length;
-    const scoreCounts=Object.fromEntries(scoreThresholds.map(threshold=>[
-      String(threshold),scores.filter(value=>value>=threshold).length
-    ]));
-    const localPrevalenceBrier=prevalence*(1-prevalence);
-    const blockBrier=brier(scores,labels);
-    blocks.push({
-      block_index:index+1,
-      sample_count:slice.length,
-      first_at:Number(slice[0].row.at),
-      last_at:Number(slice.at(-1).row.at),
-      first_id:String(slice[0].row.id),
-      last_id:String(slice.at(-1).row.id),
-      positive_count:support.positive,
-      negative_count:support.negative,
-      positive_rate_pct:Number((100*prevalence).toFixed(6)),
-      mean_probability:Number(meanScore.toFixed(8)),
-      mean_probability_minus_prevalence:Number((meanScore-prevalence).toFixed(8)),
-      brier_score:Number(blockBrier.toFixed(8)),
-      constant_prevalence_brier:Number(localPrevalenceBrier.toFixed(8)),
-      brier_skill_vs_local_prevalence:Number((localPrevalenceBrier-blockBrier).toFixed(8)),
-      scores_at_or_above:scoreCounts
+  if(!(rankingScoreMap instanceof Map))
+    return unavailable('AUXILIARY_RANKING_SCORE_MAP_MISSING');
+  const selectionScores=selectionRows.map(row=>rankingScoreMap.get(String(row.id)));
+  const outerScores=outerRows.map(row=>rankingScoreMap.get(String(row.id)));
+  if(selectionScores.some(value=>!finite(value))||outerScores.some(value=>!finite(value)))
+    return unavailable('AUXILIARY_RANKING_SCORE_COVERAGE_INCOMPLETE',{
+      selection_rows:selectionRows.length,outer_validation_rows:outerRows.length
     });
-  }
+  const topKGrid=[1,2,3];
+  const riskGatesFor=metrics=>({
+    return_data_complete:metrics?.return_data_status==='COMPLETE',
+    minimum_validation_trades:Number(metrics?.trade_count)>=minimumTrades,
+    minimum_validation_win_rate:finite(metrics?.win_rate_pct)&&
+      metrics.win_rate_pct>=minimumWinRatePct,
+    positive_validation_net_pnl:finite(metrics?.net_pnl_pct)&&
+      metrics.net_pnl_pct>0,
+    maximum_validation_drawdown:finite(metrics?.max_drawdown_pct)&&
+      metrics.max_drawdown_pct<=maximumDrawdownPct
+  });
+  const trials=topKGrid.map(topK=>{
+    const mask=topKRankingSignals(selectionRows,selectionScores,topK);
+    const metrics=portfolioMetrics(selectionRows,mask.probabilities,0.5,roundTripCostBps);
+    const gates=riskGatesFor(metrics);
+    return {
+      top_k_per_timestamp:topK,decision_group_count:mask.decision_group_count,
+      total_time_buckets:mask.total_time_buckets,
+      singleton_buckets_excluded:mask.singleton_buckets_excluded,
+      signal_count:mask.signal_count,metrics,
+      risk_gates:Object.fromEntries(Object.entries(gates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      qualified:Object.values(gates).every(Boolean)
+    };
+  });
+  const eligible=trials.filter(item=>item.qualified).sort((a,b)=>
+    Number(b.metrics.net_pnl_pct)-Number(a.metrics.net_pnl_pct)||
+    Number(a.metrics.max_drawdown_pct)-Number(b.metrics.max_drawdown_pct)||
+    Number(b.metrics.trade_count)-Number(a.metrics.trade_count)||
+    a.top_k_per_timestamp-b.top_k_per_timestamp);
+  const selected=eligible[0]??null;
+  const outerMask=selected
+    ?topKRankingSignals(outerRows,outerScores,selected.top_k_per_timestamp):null;
+  const outerMetrics=outerMask
+    ?portfolioMetrics(outerRows,outerMask.probabilities,0.5,roundTripCostBps):null;
+  const outerGates=riskGatesFor(outerMetrics);
   return {
-    schema:'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1',
-    status:'AVAILABLE',
-    diagnostic_only:true,
-    sample_count:paired.length,
-    block_count:blocks.length,
-    ordering:'ASCENDING_ROW_AT_CONTIGUOUS_EQUAL_COUNT_SLICES',
-    labels_used_for_scoring:true,
-    labels_used_for_fit:false,
-    labels_used_for_threshold_selection:false,
-    affects_primary_probabilities:false,
-    affects_threshold_selection:false,
-    affects_acceptance_gates:false,
-    holdout_values_used:false,
-    blocks
-  };
-}
-function selectThreshold(rows,probabilities,roundTripCostBps,{
-  minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  thresholdGrid=ENTRY_THRESHOLD_GRID
-}={}) {
-  if(!Array.isArray(thresholdGrid)||thresholdGrid.length===0||
-    thresholdGrid.some(value=>!finite(value)||Number(value)<=0||Number(value)>=1))
-    throw new TypeError('NEURAL_CLOSURE_THRESHOLD_GRID_INVALID');
-  const trials=thresholdGrid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
-  const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
-    item.trade_count>=minimumTrades&&
-    finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
-    finite(item.net_pnl_pct)&&item.net_pnl_pct>0&&
-    finite(item.max_drawdown_pct)&&item.max_drawdown_pct<=maximumDrawdownPct);
-  if(!ready.length)return {
-    threshold:null,status:'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',
-    selected:null,trials,eligible_count:0,
-    minimum_validation_trades:minimumTrades,
-    minimum_validation_win_rate_pct:minimumWinRatePct,
-    require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
-  };
-  ready.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
-    a.max_drawdown_pct-b.max_drawdown_pct||b.trade_count-a.trade_count);
-  return {
-    threshold:ready[0].threshold,status:'SELECTED_ON_VALIDATION_ONLY',
-    trials,eligible_count:ready.length,selected:ready[0],
-    minimum_validation_trades:minimumTrades,
-    minimum_validation_win_rate_pct:minimumWinRatePct,
-    require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
-  };
-}
-
-/**
- * Construct a diagnostic-only top-K signal mask per simultaneous decision
- * timestamp. Selected scores retain their original within-group order; the
- * 0.5/0 encoding only separates selected from non-selected rows for the
- * existing event-driven portfolio simulator.
- */
-export function topKProbabilitySignals(rows,probabilities,topK) {
-  if(!Array.isArray(rows)||!Array.isArray(probabilities)||
-    rows.length!==probabilities.length||!Number.isInteger(topK)||topK<1)
-    throw new TypeError('NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID');
-  const groups=new Map();
-  for(let index=0;index<rows.length;index++){
-    const at=number(rows[index]?.at),probability=number(probabilities[index]);
-    if(at===null||probability===null||probability<0||probability>1)
-      throw new TypeError('NEURAL_TOP_K_TIMESTAMP_SCORE_INVALID:'+index);
-    // Match timeGroupedRankingMetrics: timestamps a few milliseconds apart
-    // within the same closed 15m candle are one simultaneous decision group.
-    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
-    const key=String(bucket);
-    if(!groups.has(key))groups.set(key,[]);
-    groups.get(key).push(index);
-  }
-  const masked=Array(rows.length).fill(0);
-  const eligibleGroups=[...groups.values()].filter(indices=>indices.length>=2);
-  const singletonBucketCount=groups.size-eligibleGroups.length;
-  let signalCount=0;
-  for(const indices of eligibleGroups){
-    indices.sort((left,right)=>
-      Number(probabilities[right])-Number(probabilities[left])||
-      String(rows[left]?.symbol??'').localeCompare(String(rows[right]?.symbol??''))||
-      String(rows[left]?.id??'').localeCompare(String(rows[right]?.id??'')));
-    for(const index of indices.slice(0,topK)){
-      masked[index]=0.5+0.5*Number(probabilities[index]);
-      signalCount++;
-    }
-  }
-  return {
-    probabilities:masked,
-    decision_group_count:eligibleGroups.length,
-    total_time_buckets:groups.size,
-    singleton_buckets_excluded:singletonBucketCount,
+    schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+    status:'EVALUATED',diagnostic_only:true,
+    policy:'TOP_K_PER_15M_DECISION_BUCKET_BY_AUXILIARY_RANKING_LOGIT',
+    score_source:'FROZEN_TRAINING_ONLY_AUXILIARY_RANKING_HEAD_RAW_LOGIT',
+    top_k_grid:topKGrid,minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,
+    require_positive_net_pnl:true,maximum_drawdown_pct:maximumDrawdownPct,
     decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
     decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
-    signal_count:signalCount,
-    selected_scores_preserve_rank:true,
-    tie_break_order:'PROBABILITY_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING'
+    affects_primary_probabilities:false,affects_primary_threshold:false,
+    affects_acceptance_gates:false,holdout_values_used:false,
+    selection:{
+      status:selected?'SELECTED_ON_DISJOINT_SELECTION_ONLY':'ABSTAINED_NO_TOP_K_PASSED_RISK_GATES',
+      sample_count:selectionRows.length,
+      decision_group_count:trials[0]?.decision_group_count??0,
+      trials,selected_top_k_per_timestamp:selected?.top_k_per_timestamp??null,
+      selected_metrics:selected?.metrics??null,labels_used_for_k_selection:true,
+      ranking_scores_fit_using_selection_labels:false
+    },
+    outer_validation:{
+      sample_count:outerRows.length,
+      decision_group_count:outerMask?.decision_group_count??0,
+      signal_count:outerMask?.signal_count??0,
+      frozen_top_k_per_timestamp:selected?.top_k_per_timestamp??null,
+      metrics:outerMetrics,
+      risk_gates:Object.fromEntries(Object.entries(outerGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      risk_gates_passed:Object.values(outerGates).every(Boolean),
+      labels_used_for_k_selection:false,
+      return_data_status:outerMetrics?.return_data_status??'NOT_EVALUATED'
+    }
   };
 }
 
-function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
-  const labels=rows.map(row=>row.target);
-  const counts=classCounts(labels);
-  return {
-    sample_count:rows.length,
-    positive_count:counts.positive,negative_count:counts.negative,
-    brier_score:brier(probabilities,labels),
-    focal_asymmetric_brier:focalMean(probabilities,labels,weights),
-    ...portfolioMetrics(rows,probabilities,threshold,roundTripCostBps)
-  };
-}
-
-/**
- * Diagnostic-only alternative allocation of the existing outer-validation
- * partition. It trades some calibration-fit days for larger disjoint threshold
- * selection and later outer-check blocks. The original 50% fit allocation
- * remains the primary acceptance path and is never overwritten.
- */
 function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps,{
   minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  fitFraction=0.35
+  fitFraction=0.35,rankingScoreMap=null
 }={}) {
   const unavailable=(reason,extra={})=>({
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
@@ -2182,6 +1596,20 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     }
   };
 
+
+  const auxiliaryRankingHeadTopKPolicy=rankingScoreMap instanceof Map
+    ?evaluateAuxiliaryRankingHeadTopKPolicy(
+      blocks.threshold_selection,blocks.check,rankingScoreMap,roundTripCostBps,{
+        minimumTrades,minimumWinRatePct,maximumDrawdownPct
+      })
+    :{
+      schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+      status:'UNAVAILABLE',diagnostic_only:true,
+      affects_primary_probabilities:false,affects_primary_threshold:false,
+      affects_acceptance_gates:false,holdout_values_used:false,
+      reason:'AUXILIARY_RANKING_SCORE_MAP_NOT_AVAILABLE'
+    };
+
   return {
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
     status:'EVALUATED',
@@ -2237,6 +1665,7 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       trials:selection.trials
     },
     rank_based_top_k_policy:rankBasedTopKPolicy,
+    auxiliary_ranking_head_top_k_policy:auxiliaryRankingHeadTopKPolicy,
     outer_validation:{
       sample_count:blocks.check.length,
       positive_count:outerSupport.positive,
@@ -2355,6 +1784,10 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
+      ?collectTcnLstmAuxiliaryRankingMap(
+        predictionsByModel[modelName],split.validation,split.holdout
+      ):null;
     const tcnLstmPreInnerCalibration=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmPreInnerCalibrationMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -2469,9 +1902,15 @@ export function runNeuralClosureBenchmark({
         buildExpandedThresholdWindowCounterfactual(
           split.validation,rawMap,roundTripCostBps,{
             minimumClassSupport,minimumTrades:20,
-            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35
+            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35,
+            rankingScoreMap:modelName==='TCN_LSTM_HYBRID'&&
+              auxiliaryRankingMap?.status==='AVAILABLE'
+                ?auxiliaryRankingMap.map:null
           }
         ),
+      ...(modelName==='TCN_LSTM_HYBRID'
+        ?{auxiliary_ranking_map_status:auxiliaryRankingMap?.status??'NOT_AVAILABLE',
+          auxiliary_ranking_map_reason:auxiliaryRankingMap?.reason??null}:{}),
       ...(probabilityStageDiagnostics
         ?{probability_stage_diagnostics:probabilityStageDiagnostics}:{}),
       threshold_selection:thresholdSelection.status,
