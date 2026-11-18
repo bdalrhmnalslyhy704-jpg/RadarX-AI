@@ -12,6 +12,7 @@ import {
   lossAndGradientsTcnLstmHybrid,
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
+  auditTcnLstmHybridGradients,
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
@@ -97,6 +98,38 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
     ', max relative error='+result.maximum_relative_error+
     ', worst parameter='+JSON.stringify(result.worst_parameter));
   assert.ok(result.maximum_absolute_error<2e-5);
+});
+
+test('focal-asymmetric TCN-LSTM objective matches finite-difference gradients',()=>{
+  const audit=auditTcnLstmHybridGradients(makeSequence(1,37),1,{
+    model:createTcnLstmHybridModelForAudit(43),
+    baselineLogit:-0.11,
+    epsilon:1e-5,
+    objective:'FOCAL_ASYMMETRIC_BRIER',
+    classWeights:{positiveWeight:2.4,negativeWeight:0.53},
+    gammaPositive:1,
+    gammaNegative:2
+  });
+  assert.equal(audit.passed,true,
+    'focal TCN-LSTM max abs error='+audit.maximum_absolute_error+
+    ', max relative error='+audit.maximum_relative_error+
+    ', worst='+JSON.stringify(audit.worst_parameter));
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()=>{
+  const rows=makeRows(0,40,'focal-train');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:107,maxTrainingSamples:40,objective:'FOCAL_ASYMMETRIC_BRIER'
+  });
+  assert.equal(profile.loss_objective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.loss_class_weights.derived_from,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.loss_class_weights.training_positive,20);
+  assert.equal(profile.loss_class_weights.training_negative,20);
+  assert.equal(profile.training.history[0].loss_objective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
 });
 
 test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{
