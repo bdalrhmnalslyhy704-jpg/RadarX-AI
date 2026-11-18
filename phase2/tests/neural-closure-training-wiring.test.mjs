@@ -321,7 +321,13 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
   assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
   assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
+  assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
+  assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
+  assert.match(trainer,/4H_FOCAL_LR_0025_L2_0015_DROP10_E16/);
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
+  assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
+  assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
+  assert.match(recurrent,/loss_objective:objective/);
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
   assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
