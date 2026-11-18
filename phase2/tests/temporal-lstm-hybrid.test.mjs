@@ -31,9 +31,38 @@ import {
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
+import { topKRankingSignals } from '../core/neural-closure-contracts.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
+
+test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
+  const bucketMs=15*60*1000;
+  const bucket=Math.floor(BASE/bucketMs)*bucketMs;
+  const rows=[
+    {id:'a',symbol:'AAA',at:bucket},
+    {id:'b',symbol:'BBB',at:bucket+1000},
+    {id:'c',symbol:'CCC',at:bucket+2000},
+    {id:'d',symbol:'DDD',at:bucket+bucketMs},
+    {id:'e',symbol:'EEE',at:bucket+bucketMs+1000},
+    {id:'f',symbol:'FFF',at:bucket+2*bucketMs}
+  ];
+  const result=topKRankingSignals(rows,[0.2,2.0,1.0,-1.0,3.0,9.0],1);
+  assert.equal(result.decision_group_count,2);
+  assert.equal(result.total_time_buckets,3);
+  assert.equal(result.singleton_buckets_excluded,1);
+  assert.equal(result.signal_count,2);
+  assert.ok(result.probabilities[1]>0.5);
+  assert.ok(result.probabilities[4]>0.5);
+  assert.equal(result.probabilities[0],0);
+  assert.equal(result.probabilities[2],0);
+  assert.equal(result.probabilities[3],0);
+  assert.equal(result.probabilities[5],0);
+  assert.ok(result.probabilities[1]>result.probabilities[2]);
+  assert.equal(result.score_source,'RAW_AUXILIARY_RANKING_LOGIT');
+  assert.throws(()=>topKRankingSignals(rows,[0,1,Infinity,2,3,4],1),
+    /NEURAL_TOP_K_RANKING_SCORE_INVALID/);
+});
 
 function makeSequence(direction=1,seed=0){
   return Array.from({length:TCN_LSTM_STEPS},(_,time)=>
