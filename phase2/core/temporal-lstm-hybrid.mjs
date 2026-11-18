@@ -1178,7 +1178,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   ],
   requiredImprovement = 0.00025,
   seed = 29,
-  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES
+  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
+  roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -1186,6 +1187,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     throw new TypeError('TCN_LSTM_HYPERPARAMETER_GRID_INVALID');
   if (!finite(requiredImprovement) || requiredImprovement < 0)
     throw new TypeError('TCN_LSTM_SELECTION_MARGIN_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||roundTripCostBps>300||
+    !Number.isInteger(minimumReturnTrades)||minimumReturnTrades<1||
+    !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100)
+    throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
   const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
     maxTrainingSamples,trainingRows.length
   );
@@ -1238,7 +1243,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
     const score = brierFrom(selectionRows, predictions);
     const returnDiagnostics=summarizeTcnLstmSelectionReturns(
-      selectionRows,predictions
+      selectionRows,predictions,{roundTripCostBps,minimumTrades:minimumReturnTrades,
+        minimumWinRatePct:minimumReturnWinRatePct}
     );
     evaluated.push({
       name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
