@@ -12,7 +12,6 @@ import {
   lossAndGradientsTcnLstmHybrid,
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
-  auditTcnLstmHybridGradients,
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
