@@ -52,6 +52,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const LOGIT_LIMIT = 30;
 const SOFTMAX_LIMIT = 40;
 const BASELINE_FEATURES = TCN_LSTM_INPUT_CHANNELS * 2;
+const TCN_LSTM_RANKING_BUCKET_MS=15*60*1000;
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
 /**
@@ -930,7 +931,9 @@ export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
       String(evidence.symbol??'')!==String(row.symbol??''))
       throw new TypeError('TCN_LSTM_RANKING_ROW_IDENTITY_MISMATCH:'+id);
     if(!finite(row.at))throw new TypeError('TCN_LSTM_RANKING_EVENT_TIME_INVALID:'+id);
-    const key=String(Number(row.at));
+    const decisionAt=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
+      TCN_LSTM_RANKING_BUCKET_MS;
+    const key=String(decisionAt);
     if(!groups.has(key))groups.set(key,[]);
     groups.get(key).push({index,id,symbol:String(row.symbol??'').toUpperCase(),
       net_return_pct:Number(evidence.realized_return_pct)-costPct});
@@ -1078,7 +1081,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     if(rankingPairs.length){
       const groups=new Map();
       rows.forEach((row,index)=>{
-        const key=String(Number(row.at));
+        const decisionAt=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
+          TCN_LSTM_RANKING_BUCKET_MS;
+        const key=String(decisionAt);
         if(!groups.has(key))groups.set(key,[]);
         groups.get(key).push(index);
       });
@@ -1124,7 +1129,9 @@ export function trainTcnLstmHybrid(trainingRows, {
       }
       let averaged=scaleTree(accumulated,1/indexes.length);
       if(rankingPairs.length&&indexes.length){
-        const inBatch=new Set(indexes),decisionAt=String(Number(rows[indexes[0]].at));
+        const inBatch=new Set(indexes);
+        const decisionAt=String(Math.floor(Number(rows[indexes[0]].at)/
+          TCN_LSTM_RANKING_BUCKET_MS)*TCN_LSTM_RANKING_BUCKET_MS);
         const batchPairs=(rankingPairsByTime.get(decisionAt)||[]).filter(pair=>
           inBatch.has(pair.high_index)&&inBatch.has(pair.low_index));
         if(batchPairs.length){
