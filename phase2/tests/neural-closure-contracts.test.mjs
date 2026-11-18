@@ -1438,3 +1438,44 @@ test('TCN-LSTM pre-inner diagnostic rejects any final-holdout score payload',()=
   assert.equal(report.holdout_access.opened,false);
 });
 
+
+
+test('unselected threshold reports outer execution risk as NOT_EVALUATED, not missing data',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  predictions.LOGISTIC_REGRESSION=predictions.LOGISTIC_REGRESSION.map(row=>({
+    ...row,probability:0.05
+  }));
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    predictions[family]=predictions[family].map(row=>({
+      ...row,probability:0.05,
+      artifact_sha256:modelArtifactsByModel[family].artifact_sha256
+    }));
+  }
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const validation=report.models.TCN_LSTM_HYBRID.validation;
+  assert.equal(validation.threshold_selection,
+    'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES');
+  assert.equal(validation.selected_threshold,null);
+  assert.equal(validation.validation_threshold_metrics,null);
+  assert.deepEqual(validation.validation_threshold_risk_gates,{
+    return_data_complete:'NOT_EVALUATED',
+    minimum_validation_trades:'NOT_EVALUATED',
+    minimum_validation_win_rate:'NOT_EVALUATED',
+    positive_validation_net_pnl:'NOT_EVALUATED',
+    maximum_validation_drawdown:'NOT_EVALUATED'
+  });
+  assert.equal(validation.outer_validation_gate.gates.threshold_selection_qualified,'FAIL');
+  assert.equal(validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,
+    'NOT_EVALUATED');
+  assert.equal(report.holdout_access.opened,false);
+});
