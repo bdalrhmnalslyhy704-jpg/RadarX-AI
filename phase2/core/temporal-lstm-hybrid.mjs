@@ -1022,6 +1022,110 @@ function brierFrom(rows, probabilities) {
 }
 
 /**
+ * Research-only realized-return diagnostics on the inner-selection block.
+ * The binary model objective and candidate ranking remain Brier-based; this
+ * sidecar answers whether a model's scores also concentrate positive net
+ * first-touch returns after the declared round-trip cost. It is not a
+ * portfolio simulator and cannot qualify a model for validation or live use.
+ */
+export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
+  roundTripCostBps = 30,
+  minimumTrades = 20,
+  minimumWinRatePct = 55,
+  thresholds = [
+    0.10,0.15,0.20,0.25,0.30,0.325,0.35,0.355,0.36,0.365,
+    0.37,0.375,0.38,0.39,0.40,0.425,0.45,0.475,0.50,0.55,0.60
+  ]
+} = {}) {
+  const unavailable = reason => ({
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',
+    reason,
+    diagnostic_only:true,
+    selection_partition_only:true,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false
+  });
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||!rows.length||
+    rows.length!==probabilities.length)
+    return unavailable('SELECTION_ROWS_OR_PROBABILITY_LENGTH_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||
+    !Number.isInteger(minimumTrades)||minimumTrades<1||
+    !finite(minimumWinRatePct)||minimumWinRatePct<0||minimumWinRatePct>100||
+    !Array.isArray(thresholds)||!thresholds.length||
+    thresholds.some(value=>!finite(value)||value<0||value>1)||
+    new Set(thresholds).size!==thresholds.length)
+    return unavailable('RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
+  if(rows.some(row=>!finite(row?.realized_return_pct))||
+    probabilities.some(value=>!finite(value)||value<0||value>1))
+    return unavailable('SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+
+  const roundTripCostPct=Number(roundTripCostBps)/100;
+  const trials=thresholds.map(threshold=>{
+    const selected=[];
+    for(let index=0;index<rows.length;index++){
+      if(probabilities[index]>=threshold){
+        selected.push(Number(rows[index].realized_return_pct)-roundTripCostPct);
+      }
+    }
+    const wins=selected.filter(value=>value>0);
+    const losses=selected.filter(value=>value<0);
+    const sum=values=>values.reduce((total,value)=>total+value,0);
+    const sorted=[...selected].sort((a,b)=>a-b);
+    const median=sorted.length
+      ?(sorted.length%2
+        ?sorted[(sorted.length-1)/2]
+        :(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2)
+      :null;
+    const meanNet=selected.length?sum(selected)/selected.length:null;
+    const winRate=selected.length?100*wins.length/selected.length:null;
+    return {
+      threshold,
+      trade_count:selected.length,
+      net_wins:wins.length,
+      net_losses:losses.length,
+      win_rate_pct:winRate===null?null:Number(winRate.toFixed(4)),
+      mean_net_trade_return_pct:meanNet===null?null:Number(meanNet.toFixed(6)),
+      median_net_trade_return_pct:median===null?null:Number(median.toFixed(6)),
+      profit_factor:losses.length
+        ?Number((sum(wins)/Math.abs(sum(losses))).toFixed(6))
+        :wins.length?null:0,
+      minimum_trade_and_win_rate_screen_passed:
+        selected.length>=minimumTrades&&winRate!==null&&winRate>=minimumWinRatePct,
+      positive_mean_net_return:
+        meanNet!==null&&meanNet>0,
+      preliminary_return_screen_passed:
+        selected.length>=minimumTrades&&winRate!==null&&
+        winRate>=minimumWinRatePct&&meanNet!==null&&meanNet>0
+    };
+  });
+  const preliminary=trials.filter(item=>item.preliminary_return_screen_passed)
+    .sort((a,b)=>b.mean_net_trade_return_pct-a.mean_net_trade_return_pct||
+      b.trade_count-a.trade_count||a.threshold-b.threshold);
+  return {
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
+    status:'AVAILABLE',
+    diagnostic_only:true,
+    selection_partition_only:true,
+    selection_sample_count:rows.length,
+    round_trip_cost_bps:Number(roundTripCostBps),
+    round_trip_cost_pct:roundTripCostPct,
+    thresholds_tested:thresholds.length,
+    minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false,
+    portfolio_drawdown_evaluated:false,
+    trials,
+    preliminary_return_screen_candidates:preliminary.length,
+    best_preliminary_threshold:preliminary[0]?.threshold??null,
+    best_preliminary_metrics:preliminary[0]??null
+  };
+}
+
+/**
  * Predeclared LR/L2 calibration on inner selection only. The frozen Logistic
  * anchor is fit once on training rows and reused for every challenger config.
  */
@@ -1083,11 +1187,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
     const score = brierFrom(selectionRows, predictions);
+    const returnDiagnostics=summarizeTcnLstmSelectionReturns(
+      selectionRows,predictions
+    );
     evaluated.push({
       name: config.name, config: { ...config, dropout: candidateDropout },
       selection_brier: score,
       logistic_selection_brier: baselineBrier,
       improvement: baselineBrier - score,
+      return_selection_diagnostics:returnDiagnostics,
       fit
     });
   }
@@ -1107,12 +1215,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       training_rows: anchor.training_rows,
       selection_brier: Number(baselineBrier.toFixed(8))
     },
-    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement }) => ({
+    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, return_selection_diagnostics }) => ({
       name, config,
       selection_brier: Number(selection_brier.toFixed(8)),
       logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
       improvement: Number(improvement.toFixed(8)),
-      passed_inner_margin: improvement > requiredImprovement
+      passed_inner_margin: improvement > requiredImprovement,
+      return_selection_diagnostics
     })),
     selected_configuration: passed ? winner.name : null,
     diagnostic_configuration: passed ? null : winner.name,
