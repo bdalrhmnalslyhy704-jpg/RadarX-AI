@@ -19,8 +19,10 @@ import {
   selectTcnLstmHybridHyperparameters,
   summarizeTcnLstmSelectionReturns,
   tcnLstmPairwiseReturnRankingLoss,
+  tcnLstmPairwiseLogitRankingLoss,
   buildTcnLstmReturnRankingPairs,
   summarizeTcnLstmPairwiseReturnRanking,
+  summarizeTcnLstmPairwiseLogitRanking,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -198,6 +200,18 @@ test('TCN-LSTM pairwise return ranking loss orders high-return candidates above 
   assert.ok(correct.low_logit_gradient>0);
 });
 
+test('TCN-LSTM pairwise logit loss preserves ranking margins beyond probability clipping',()=>{
+  const pair=tcnLstmPairwiseLogitRankingLoss(22,21.5);
+  assert.ok(Math.abs(pair.margin-0.5)<1e-12);
+  assert.ok(Math.abs(pair.loss-Math.log1p(Math.exp(-0.5)))<1e-12);
+  assert.equal(pair.correct,true);
+  assert.ok(pair.high_logit_gradient<0);
+  assert.ok(pair.low_logit_gradient>0);
+  const reversed=tcnLstmPairwiseLogitRankingLoss(21.5,22);
+  assert.equal(reversed.correct,false);
+  assert.ok(reversed.loss>pair.loss);
+});
+
 test('training return-ranking pairs use net realized returns and group near-simultaneous 15m decisions',()=>{
   const rows=makeRankedRows(0,10,'rank-pairs').map((row,index)=>({
     ...row,at:row.at+(index%4)*0.25
@@ -228,16 +242,28 @@ test('pairwise return-ranking evaluation reports only selection-supplied ranking
   assert.equal(score.diagnostic_only,true);
 });
 
-test('external-logit backprop passes finite differences for pairwise ranking gradients',()=>{
+test('external-logit backprop passes finite differences without high-logit probability clipping',()=>{
   const audit=auditTcnLstmHybridGradients(makeSequence(1,71),1,{
     model:createTcnLstmHybridModelForAudit(73),
-    baselineLogit:-0.11,epsilon:1e-5,
+    baselineLogit:22,epsilon:1e-5,
     objective:'EXTERNAL_LOGIT',externalLogitGradient:-0.37
   });
   assert.equal(audit.passed,true,
     'external-logit max absolute error='+audit.maximum_absolute_error+
     ' worst='+JSON.stringify(audit.worst_parameter));
   assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('pairwise logit ranking summary preserves high-confidence cross-sectional ordering',()=>{
+  const rows=makeRankedRows(0,10,'rank-logit-eval');
+  const logits=rows.map(row=>[22,21, -21,-22][Number(row.id.split('-').at(-1))]);
+  const score=summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5
+  });
+  assert.equal(score.status,'AVAILABLE');
+  assert.equal(score.pairwise_accuracy_pct,100);
+  assert.equal(score.score_domain,'RAW_MODEL_LOGITS_NO_PROBABILITY_CLIPPING');
+  assert.equal(score.holdout_values_used,false);
 });
 
 test('TCN-LSTM pairwise ranking updates fit weights using training returns only',()=>{
