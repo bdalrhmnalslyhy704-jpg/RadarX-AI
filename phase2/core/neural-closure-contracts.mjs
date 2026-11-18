@@ -1990,6 +1990,37 @@ export function topKRankingSignals(rows,scores,topK) {
   };
 }
 
+
+/** Accept ranking logits for the exact validation set; reject every holdout score. */
+function collectTcnLstmAuxiliaryRankingMap(predictions,validationRows,holdoutRows) {
+  const key='auxiliary_ranking_logit';
+  if(!Array.isArray(predictions))
+    return {status:'UNAVAILABLE',reason:'PREDICTIONS_NOT_ARRAY',map:new Map()};
+  const staged=predictions.filter(item=>Object.prototype.hasOwnProperty.call(item??{},key));
+  if(!staged.length)
+    return {status:'NOT_PROVIDED',reason:'AUXILIARY_RANKING_LOGIT_MISSING',map:new Map()};
+  const holdoutIds=new Set(holdoutRows.map(row=>String(row.id)));
+  if(staged.some(item=>holdoutIds.has(String(item?.id??''))))
+    return {status:'REJECTED_HOLDOUT_RANKING_EXPOSURE',
+      reason:'AUXILIARY_RANKING_DIAGNOSTICS_MUST_NOT_INCLUDE_FINAL_HOLDOUT',map:new Map()};
+  const expected=new Set(validationRows.map(row=>String(row.id)));
+  const map=new Map();
+  for(const item of staged){
+    const id=String(item?.id??''),value=item?.[key];
+    if(!id||!expected.has(id)||map.has(id))
+      return {status:'REJECTED_INVALID_RANKING_ROW_SET',
+        reason:'AUXILIARY_RANKING_ID_INVALID_DUPLICATE_OR_OUT_OF_SCOPE',map:new Map()};
+    if(typeof value!=='number'||!Number.isFinite(value))
+      return {status:'REJECTED_INVALID_RANKING_SCORE',
+        reason:'AUXILIARY_RANKING_SCORE_NON_FINITE',map:new Map()};
+    map.set(id,value);
+  }
+  if(map.size!==expected.size||[...expected].some(id=>!map.has(id)))
+    return {status:'REJECTED_INCOMPLETE_VALIDATION_COVERAGE',
+      reason:'AUXILIARY_RANKING_MUST_COVER_EVERY_OUTER_VALIDATION_ROW',map:new Map()};
+  return {status:'AVAILABLE',reason:null,map};
+}
+
 function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
   const labels=rows.map(row=>row.target);
   const counts=classCounts(labels);
