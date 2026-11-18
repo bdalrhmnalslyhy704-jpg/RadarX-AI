@@ -1150,6 +1150,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   );
   const effectiveTrainingRows = [...trainingRows].sort((a, b) => a.at - b.at)
     .slice(-effectiveTrainingBudget);
+  // Realized returns belong only to the separate selection diagnostic; strip
+  // them before either the Logistic anchor or neural optimizer sees fit rows.
+  const effectiveTrainingRowsForFit=effectiveTrainingRows.map(row=>{
+    const {realized_return_pct,...fitRow}=row;
+    return fitRow;
+  });
   const trainAt = effectiveTrainingRows.map(row => row.at);
   const trainResolved = effectiveTrainingRows.map(row => row.resolved_at);
   const selectionAt = selectionRows.map(row => row.at);
@@ -1163,7 +1169,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const trainingIds = new Set(effectiveTrainingRows.map(sampleIdentity));
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
-  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRows);
+  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
@@ -1176,7 +1182,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
-    const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
+    const fit = trainTcnLstmHybrid(effectiveTrainingRowsForFit, {
       epochs: config.epochs,
       learningRate: config.learningRate,
       l2: config.l2,
