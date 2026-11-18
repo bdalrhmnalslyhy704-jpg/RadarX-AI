@@ -1585,13 +1585,20 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         minimumWinRatePct:minimumReturnWinRatePct,
         baselineProbabilities:baselinePredictions}
     );
+    const brierImprovement=baselineBrier-score;
+    const pairwiseRankingImprovement=rankingScoreAvailable&&
+      pairwiseRanking.status==='AVAILABLE'
+        ?baselineRanking.pairwise_log_loss-pairwiseRanking.pairwise_log_loss:null;
     evaluated.push({
       name:config.name,
       config:{...config,dropout:candidateDropout,objective:candidateObjective,
         rankingWeight:Number(config.rankingWeight??0)},
       selection_brier:score,logistic_selection_brier:baselineBrier,
+      brier_improvement:brierImprovement,
       pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
+      pairwise_ranking_improvement:pairwiseRankingImprovement,
       selection_score:selectionScore,logistic_selection_score:baselineSelectionScore,
+      composite_improvement:baselineSelectionScore-selectionScore,
       improvement:baselineSelectionScore-selectionScore,
       return_selection_diagnostics:returnDiagnostics,fit
     });
@@ -1600,7 +1607,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     a.selection_score-b.selection_score||
     a.selection_brier-b.selection_brier||a.name.localeCompare(b.name));
   const winner = evaluated[0];
-  const passed = winner.improvement > requiredImprovement;
+  const brierGatePassed=winner.brier_improvement>requiredImprovement;
+  const rankingGatePassed=!rankingScoreAvailable||
+    (finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0);
+  const compositeGatePassed=winner.composite_improvement>requiredImprovement;
+  const passed=brierGatePassed&&rankingGatePassed&&compositeGatePassed;
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
@@ -1619,20 +1630,39 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         ?'BRIER_PLUS_WITHIN_TIMESTAMP_PAIRWISE_RETURN_RANK_LOSS_V1'
         :'BRIER_ONLY_PAIRWISE_RANK_SUPPORT_UNAVAILABLE',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
-      required_inner_improvement:requiredImprovement,
+      required_inner_brier_improvement:requiredImprovement,
+      required_composite_improvement:requiredImprovement,
+      require_pairwise_ranking_improvement:rankingScoreAvailable,
+      gate_results:{
+        brier_improvement:brierGatePassed?'PASS':'FAIL',
+        pairwise_ranking_improvement:rankingGatePassed?'PASS':'FAIL',
+        composite_improvement:compositeGatePassed?'PASS':'FAIL'
+      },
       ranking_uses_inner_selection_partition_only:true,
       outer_validation_or_holdout_used:false
     },
     candidates:evaluated.map(({name,config,selection_brier,logistic_selection_brier,
-      pairwise_ranking,logistic_pairwise_ranking,selection_score,logistic_selection_score,
-      improvement,return_selection_diagnostics})=>({
+      brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
+      pairwise_ranking_improvement,selection_score,logistic_selection_score,
+      composite_improvement,return_selection_diagnostics})=>({
       name,config,selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
+      brier_improvement:Number(brier_improvement.toFixed(8)),
       pairwise_ranking,logistic_pairwise_ranking,
+      pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
+        ?Number(pairwise_ranking_improvement.toFixed(8)):null,
       selection_score:Number(selection_score.toFixed(8)),
       logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
-      improvement:Number(improvement.toFixed(8)),
-      passed_inner_margin:improvement>requiredImprovement,
+      composite_improvement:Number(composite_improvement.toFixed(8)),
+      improvement:Number(composite_improvement.toFixed(8)),
+      passed_inner_brier_margin:brier_improvement>requiredImprovement,
+      passed_inner_pairwise_ranking_gate:!rankingScoreAvailable||
+        (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0),
+      passed_inner_composite_margin:composite_improvement>requiredImprovement,
+      passed_inner_margin:brier_improvement>requiredImprovement&&
+        composite_improvement>requiredImprovement&&
+        (!rankingScoreAvailable||
+          (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
       return_selection_diagnostics
     })),
     selected_configuration: passed ? winner.name : null,
