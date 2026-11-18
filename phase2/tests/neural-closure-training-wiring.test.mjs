@@ -141,6 +141,9 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   const lstmModule=await readFile(lstmModuleUrl,'utf8');
   assert.match(lstmModule,/export function summarizeTcnLstmSelectionReturns/);
   assert.match(lstmModule,/return_selection_diagnostics:returnDiagnostics/);
+  assert.match(lstmModule,/roundTripCostBps:args\.roundTripCostBps/);
+  assert.match(lstmModule,/minimumReturnTrades:20/);
+  assert.match(lstmModule,/minimumReturnWinRatePct:55/);
   assert.match(lstmModule,/const \{realized_return_pct,\.\.\.fitRow\}=row/,
     'realized outcomes must be stripped before the Logistic anchor and neural optimizer fit');
   assert.match(lstmModule,/affects_candidate_ranking:false/);
