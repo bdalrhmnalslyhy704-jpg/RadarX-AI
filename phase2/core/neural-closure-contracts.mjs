@@ -1299,6 +1299,89 @@ export function buildWalkForwardCalibrationDiagnostics(rows,rawMap,{
     blocks
   };
 }
+/**
+ * Auxiliary ranking scores are raw logits, not probabilities. This helper
+ * creates a Top-K-per-closed-candle mask while preserving their order.
+ * Only the selected/non-selected mask reaches the existing portfolio engine.
+ */
+export function topKRankingSignals(rows,scores,topK) {
+  if(!Array.isArray(rows)||!Array.isArray(scores)||
+    rows.length!==scores.length||!Number.isInteger(topK)||topK<1)
+    throw new TypeError('NEURAL_TOP_K_RANKING_INPUT_INVALID');
+  const groups=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=number(rows[index]?.at),score=number(scores[index]);
+    if(at===null||score===null)
+      throw new TypeError('NEURAL_TOP_K_RANKING_SCORE_INVALID:'+index);
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    const key=String(bucket);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(index);
+  }
+  const masked=Array(rows.length).fill(0);
+  const eligibleGroups=[...groups.values()].filter(indices=>indices.length>=2);
+  const singletonBucketCount=groups.size-eligibleGroups.length;
+  let signalCount=0;
+  for(const indices of eligibleGroups){
+    indices.sort((left,right)=>
+      Number(scores[right])-Number(scores[left])||
+      String(rows[left]?.symbol??'').localeCompare(String(rows[right]?.symbol??''))||
+      String(rows[left]?.id??'').localeCompare(String(rows[right]?.id??'')));
+    for(const index of indices.slice(0,topK)){
+      const bounded=Math.max(-30,Math.min(30,Number(scores[index])));
+      const scoreAsMonotonicRank=Math.max(0,Math.min(1,1/(1+Math.exp(-bounded))));
+      masked[index]=0.5+0.5*scoreAsMonotonicRank;
+      signalCount++;
+    }
+  }
+  return {
+    probabilities:masked,
+    decision_group_count:eligibleGroups.length,
+    total_time_buckets:groups.size,
+    singleton_buckets_excluded:singletonBucketCount,
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
+    signal_count:signalCount,
+    selected_scores_preserve_rank:true,
+    score_source:'RAW_AUXILIARY_RANKING_LOGIT',
+    tie_break_order:'RANKING_LOGIT_DESCENDING_THEN_SYMBOL_ASCENDING_THEN_ID_ASCENDING'
+  };
+}
+
+/**
+ * Accept auxiliary ranking diagnostics only for a complete and exact set of
+ * outer-validation IDs. Any holdout score is rejected before it can be read.
+ */
+function collectTcnLstmAuxiliaryRankingMap(predictions,validationRows,holdoutRows) {
+  const property='auxiliary_ranking_logit';
+  if(!Array.isArray(predictions))
+    return {status:'UNAVAILABLE',reason:'PREDICTIONS_NOT_ARRAY',map:new Map()};
+  const staged=predictions.filter(item=>
+    Object.prototype.hasOwnProperty.call(item??{},property));
+  if(!staged.length)
+    return {status:'NOT_PROVIDED',reason:'AUXILIARY_RANKING_LOGIT_MISSING',map:new Map()};
+  const holdoutIds=new Set(holdoutRows.map(row=>String(row.id)));
+  if(staged.some(item=>holdoutIds.has(String(item?.id||''))))
+    return {status:'REJECTED_HOLDOUT_RANKING_EXPOSURE',
+      reason:'AUXILIARY_RANKING_DIAGNOSTICS_MUST_NOT_INCLUDE_FINAL_HOLDOUT',map:new Map()};
+  const expectedIds=new Set(validationRows.map(row=>String(row.id)));
+  const map=new Map();
+  for(const item of staged){
+    const id=String(item?.id||''),value=item?.[property];
+    if(!id||!expectedIds.has(id)||map.has(id))
+      return {status:'REJECTED_INVALID_RANKING_ROW_SET',
+        reason:'AUXILIARY_RANKING_ID_INVALID_DUPLICATE_OR_OUT_OF_SCOPE',map:new Map()};
+    if(typeof value!=='number'||!Number.isFinite(value))
+      return {status:'REJECTED_INVALID_RANKING_SCORE',
+        reason:'AUXILIARY_RANKING_SCORE_NON_FINITE',map:new Map()};
+    map.set(id,value);
+  }
+  if(map.size!==expectedIds.size||[...expectedIds].some(id=>!map.has(id)))
+    return {status:'REJECTED_INCOMPLETE_VALIDATION_COVERAGE',
+      reason:'AUXILIARY_RANKING_MUST_COVER_EVERY_OUTER_VALIDATION_ROW',map:new Map()};
+  return {status:'AVAILABLE',reason:null,map};
+}
+
 function evaluateAuxiliaryRankingHeadTopKPolicy(selectionRows,outerRows,rankingScoreMap,
   roundTripCostBps,{minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8}={}) {
   const unavailable=(reason,extra={})=>({
