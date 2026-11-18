@@ -5,6 +5,7 @@ on:
     branches:
       - research/build224-tcn-lstm-pairwise-rank-20261118
       - research/build224-tcn-lstm-logit-ranking-fix-20261118
+      - research/build224-tcn-lstm-dual-head-ranking-20261118
     paths:
       - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -13,6 +14,7 @@ on:
     branches:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
     paths:
       - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
