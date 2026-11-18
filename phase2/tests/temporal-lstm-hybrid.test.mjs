@@ -55,6 +55,42 @@ function makeRows(start,count,prefix='sample'){
   });
 }
 
+function makeExecutionRow(index,outcome,at){
+  const baseline=100,take=103,stop=98;
+  const candleOpenTime=at+120_000;
+  const candleCloseTime=candleOpenTime+59_999;
+  const up=outcome==='UP';
+  const exit=up?take:stop;
+  const candle=up?{
+    source:'BINANCE_PUBLIC_REST',is_closed:true,
+    open_time:candleOpenTime,close_time:candleCloseTime,
+    open:100.4,high:103.2,low:99.2,close:102.8
+  }:{
+    source:'BINANCE_PUBLIC_REST',is_closed:true,
+    open_time:candleOpenTime,close_time:candleCloseTime,
+    open:99.5,high:102.4,low:97.8,close:98.2
+  };
+  return {
+    id:'rank-'+index,
+    symbol:'RANK'+index+'USDT',
+    at,resolved_at:at+4*60*60*1000,
+    outcome,target:up?1:0,
+    realized_return_pct:up?3:-2,
+    execution_return_contract:'FIRST_TOUCH_PRICE_WITH_OPEN_GAP_AWARE_EXITS_V1',
+    first_touch:{
+      resolution:up?'TAKE_PROFIT_FIRST':'STOP_LOSS_FIRST',
+      first_touch_at:candleCloseTime,
+      baseline_price:baseline,take_profit_price:take,stop_loss_price:stop,
+      exit_price:exit,exit_price_source:'BARRIER',exit_candle:candle
+    },
+    max_adverse_excursion_pct:up?-0.3:-2,
+    max_adverse_excursion_at:up?at+60_000:candleCloseTime,
+    max_favorable_excursion_pct:up?3:0.3,
+    max_favorable_excursion_at:up?candleCloseTime:at+90_000
+  };
+}
+
+
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
   const sequence=makeSequence(1,3);
   const model=createTcnLstmHybridModelForAudit(71);
@@ -194,6 +230,41 @@ test('inner-selection return diagnostics deduct round-trip fees and never alter 
   );
   assert.equal(incomplete.status,'UNAVAILABLE');
   assert.equal(incomplete.reason,'SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+});
+
+test('inner-selection top-K diagnostics compare TCN-LSTM with the frozen Logistic anchor on identical decision times',()=>{
+  const rows=[];
+  const modelProbabilities=[];
+  const logisticProbabilities=[];
+  for(let group=0;group<8;group++){
+    const at=Math.floor((BASE+group*4*60*60*1000)/900000)*900000;
+    rows.push(
+      makeExecutionRow(group*3,'UP',at),
+      makeExecutionRow(group*3+1,'DOWN',at),
+      makeExecutionRow(group*3+2,'DOWN',at)
+    );
+    modelProbabilities.push(0.9,0.2,0.1);
+    logisticProbabilities.push(0.1,0.9,0.2);
+  }
+  const result=summarizeTcnLstmSelectionReturns(rows,modelProbabilities,{
+    baselineProbabilities:logisticProbabilities,
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    thresholds:[0.5]
+  });
+  const rank=result.cross_sectional_rank_diagnostics;
+  assert.equal(rank.status,'AVAILABLE');
+  assert.equal(rank.selection_partition_only,true);
+  assert.equal(rank.holdout_values_used,false);
+  assert.equal(rank.affects_candidate_ranking,false);
+  assert.equal(rank.affects_acceptance_gates,false);
+  assert.deepEqual(rank.top_k_grid,[1,2,3]);
+  const topOne=rank.trials[0];
+  assert.equal(topOne.decision_group_count,8);
+  assert.equal(topOne.model_metrics.trade_count,8);
+  assert.equal(topOne.model_metrics.win_rate_pct,100);
+  assert.equal(topOne.logistic_metrics.trade_count,8);
+  assert.equal(topOne.logistic_metrics.win_rate_pct,0);
+  assert.ok(topOne.model_minus_logistic.net_pnl_pct>0);
 });
 
 test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and predicts probabilities',()=>{
