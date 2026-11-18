@@ -1173,10 +1173,10 @@ async function main(){
               objective:'FOCAL_ASYMMETRIC_BRIER'},
             {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_PAIRWISE_RANK_W025_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingWeight:0.25},
+            {name:'4H_PAIRWISE_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              rankingWeight:0.02},
             {name:'4H_PAIRWISE_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.50}
+              rankingWeight:0.05}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
