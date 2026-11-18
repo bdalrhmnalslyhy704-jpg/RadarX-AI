@@ -604,9 +604,8 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
     throw new TypeError('TCN_LSTM_EXTERNAL_LOGIT_GRADIENT_INVALID');
   const logitGradient=objective==='EXTERNAL_LOGIT'?Number(externalLogitGradient):
     focal?focal.logitGradient:2*error*forward.probability*(1-forward.probability);
-  const probabilityForLogit=clamp(forward.probability,1e-9,1-1e-9);
   const objectiveLoss=objective==='EXTERNAL_LOGIT'
-    ?Number(externalLogitGradient)*Math.log(probabilityForLogit/(1-probabilityForLogit))
+    ?Number(externalLogitGradient)*forward.logit
     :focal?focal.loss:error*error;
   const cache = forward.cache;
   gradients.outputBias[0] = logitGradient;
@@ -778,13 +777,13 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     sequence, target, model, baselineLogit, objectiveOptions
   );
   const objectiveLoss=()=>{
-    const probability=inspectTcnLstmForward(
+    const forward=inspectTcnLstmForward(
       sequence,model,baselineLogit,{dropoutScale}
-    ).probability;
+    );
+    const probability=forward.probability;
     if(objective==='EXTERNAL_LOGIT'){
       if(!finite(externalLogitGradient))throw new TypeError('TCN_LSTM_EXTERNAL_LOGIT_GRADIENT_INVALID');
-      const safeProbability=clamp(probability,1e-9,1-1e-9);
-      return Number(externalLogitGradient)*Math.log(safeProbability/(1-safeProbability));
+      return Number(externalLogitGradient)*forward.logit;
     }
     return objective==='FOCAL_ASYMMETRIC_BRIER'
       ?focalAsymmetricBrierLoss(probability,target,{
@@ -894,14 +893,24 @@ function stableSoftplus(value) {
   const number=Number(value);
   return Math.max(0,number)+Math.log1p(Math.exp(-Math.abs(number)));
 }
+export function tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit) {
+  if(!finite(highLogit)||!finite(lowLogit)||
+    Math.abs(highLogit)>LOGIT_LIMIT||Math.abs(lowLogit)>LOGIT_LIMIT)
+    throw new TypeError('TCN_LSTM_PAIRWISE_LOGIT_INVALID');
+  const margin=Number(highLogit)-Number(lowLogit);
+  const error=margin>=0
+    ?Math.exp(-margin)/(1+Math.exp(-margin))
+    :1/(1+Math.exp(margin));
+  return {margin,loss:stableSoftplus(-margin),high_logit_gradient:-error,
+    low_logit_gradient:error,correct:margin>0};
+}
 export function tcnLstmPairwiseReturnRankingLoss(highProbability,lowProbability) {
   if(!finite(highProbability)||!finite(lowProbability)||highProbability<0||
     highProbability>1||lowProbability<0||lowProbability>1)
     throw new TypeError('TCN_LSTM_PAIRWISE_PROBABILITY_INVALID');
-  const margin=safeProbabilityLogit(highProbability)-safeProbabilityLogit(lowProbability);
-  const error=sigmoid(-margin);
-  return {margin,loss:stableSoftplus(-margin),high_logit_gradient:-error,
-    low_logit_gradient:error,correct:margin>0};
+  return tcnLstmPairwiseLogitRankingLoss(
+    safeProbabilityLogit(highProbability),safeProbabilityLogit(lowProbability)
+  );
 }
 /** Build deterministic comparisons using realized returns from the fit partition only. */
 export function buildTcnLstmReturnRankingPairs(trainingRows,rankingRows,{
@@ -990,6 +999,35 @@ export function summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
     source:'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
     diagnostic_only:true,holdout_values_used:false};
 }
+/** Rank realized-return pairs directly from uncompressed forward logits. */
+export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
+  roundTripCostBps=30,minimumReturnGapPct=0.50,maxPairsPerTimestamp=4
+}={}) {
+  const unavailable=reason=>({schema:'RADARX_TCN_LSTM_PAIRWISE_LOGIT_RANKING_METRICS_V1',
+    status:'UNAVAILABLE',reason,diagnostic_only:true,holdout_values_used:false});
+  if(!Array.isArray(rows)||!Array.isArray(logits)||rows.length!==logits.length||
+    rows.length<20||logits.some(v=>!finite(v)||Math.abs(v)>LOGIT_LIMIT)||
+    rows.some(row=>!finite(row?.realized_return_pct)))
+    return unavailable('RANKING_EVALUATION_ROWS_OR_LOGITS_INVALID');
+  let built;
+  try{built=buildTcnLstmReturnRankingPairs(rows,rows,{
+    roundTripCostBps,minimumReturnGapPct,maxPairsPerTimestamp
+  });}catch(error){return unavailable(String(error?.message||error));}
+  if(!built.comparison_pairs)return unavailable('NO_MATURED_WITHIN_TIMESTAMP_RETURN_PAIRS');
+  let loss=0,correct=0;
+  for(const pair of built.pairs){
+    const item=tcnLstmPairwiseLogitRankingLoss(logits[pair.high_index],logits[pair.low_index]);
+    loss+=item.loss;if(item.correct)correct++;
+  }
+  return {schema:'RADARX_TCN_LSTM_PAIRWISE_LOGIT_RANKING_METRICS_V1',
+    status:'AVAILABLE',sample_count:rows.length,decision_group_count:built.decision_group_count,
+    comparison_pairs:built.comparison_pairs,pairwise_log_loss:Number((loss/built.comparison_pairs).toFixed(8)),
+    pairwise_accuracy_pct:Number((100*correct/built.comparison_pairs).toFixed(4)),
+    source:'REALIZED_RETURN_WITHIN_SIMULTANEOUS_DECISION_TIMESTAMP',
+    score_domain:'RAW_MODEL_LOGITS_NO_PROBABILITY_CLIPPING',
+    diagnostic_only:true,holdout_values_used:false};
+}
+
 function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
   if(!pairs.length)return 0;
   let total=0;
@@ -997,9 +1035,9 @@ function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
     const high=rows[pair.high_index],low=rows[pair.low_index];
     const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
     const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
-    const hp=inspectTcnLstmForward(high.sequence,model,highBase).probability;
-    const lp=inspectTcnLstmForward(low.sequence,model,lowBase).probability;
-    total+=tcnLstmPairwiseReturnRankingLoss(hp,lp).loss;
+    const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
+    const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
+    total+=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit).loss;
   }
   return total/pairs.length;
 }
@@ -1140,9 +1178,9 @@ export function trainTcnLstmHybrid(trainingRows, {
             const high=rows[pair.high_index],low=rows[pair.low_index];
             const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
             const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
-            const highProb=inspectTcnLstmForward(high.sequence,model,highBase).probability;
-            const lowProb=inspectTcnLstmForward(low.sequence,model,lowBase).probability;
-            const pairLoss=tcnLstmPairwiseReturnRankingLoss(highProb,lowProb);
+            const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
+            const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
+            const pairLoss=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
             const highGrad=lossAndGradientsTcnLstmHybrid(high.sequence,high.target,model,highBase,{
               objective:'EXTERNAL_LOGIT',
               externalLogitGradient:pairLoss.high_logit_gradient*rankingWeight
@@ -1529,11 +1567,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
-  const baselinePredictions = selectionRows.map(row =>
-    sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
+  const baselineLogits = selectionRows.map(row =>
+    predictTcnLstmLogisticLogit(row.sequence, anchor));
+  const baselinePredictions = baselineLogits.map(sigmoid);
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
-  const baselineRanking=summarizeTcnLstmPairwiseReturnRanking(
-    selectionRows,baselinePredictions,{
+  const baselineRanking=summarizeTcnLstmPairwiseLogitRanking(
+    selectionRows,baselineLogits,{
       roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
       maxPairsPerTimestamp:rankingPairsPerTimestamp
     }
@@ -1569,10 +1608,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
       rankingPairsPerTimestamp:rankingPairsPerTimestamp
     });
-    const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
+    const selectionLogits = selectionRows.map(row => {
+      const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
+      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).logit;
+    });
+    const predictions = selectionLogits.map(sigmoid);
     const score = brierFrom(selectionRows, predictions);
-    const pairwiseRanking=summarizeTcnLstmPairwiseReturnRanking(
-      selectionRows,predictions,{
+    const pairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
+      selectionRows,selectionLogits,{
         roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
         maxPairsPerTimestamp:rankingPairsPerTimestamp
       }
