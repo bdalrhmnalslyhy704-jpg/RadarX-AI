@@ -973,7 +973,7 @@ export function trainTcnLstmHybrid(trainingRows, {
     } else wait++;
     history.push({
       epoch,
-      pre_update_mean_batch_brier: Number((epochLoss / Math.max(1, seen)).toFixed(8)),
+      pre_update_mean_batch_objective_loss: Number((epochLoss / Math.max(1, seen)).toFixed(8)),
       post_update_training_brier: Number(trainingBrier.toFixed(8)),
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
