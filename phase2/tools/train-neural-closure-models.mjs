@@ -35,7 +35,8 @@ import {
   selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
-  predictTcnLstmHybridRankingLogit
+  predictTcnLstmHybridRankingLogit,
+  predictTcnLstmHybridRankingAnchorLogit
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1283,10 +1284,16 @@ async function main(){
             );
             if(!finite(auxiliaryRankingLogit))
               throw new Error('TCN_LSTM_AUXILIARY_RANKING_DIAGNOSTIC_NON_FINITE:'+item.id);
+            const auxiliaryRankingAnchorLogit=predictTcnLstmHybridRankingAnchorLogit(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(!finite(auxiliaryRankingAnchorLogit))
+              throw new Error('TCN_LSTM_AUXILIARY_RANKING_ANCHOR_DIAGNOSTIC_NON_FINITE:'+item.id);
             return {
               ...item,
               pre_inner_calibration_probability:Number(preInnerProbability),
-              auxiliary_ranking_logit:Number(auxiliaryRankingLogit)
+              auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
+              auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit)
             };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
@@ -1314,6 +1321,8 @@ async function main(){
             ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
             ranking_scores_emitted_for:'OUTER_VALIDATION_ONLY',
             holdout_ranking_scores_emitted:false,
+            ranking_anchor_scores_emitted_for:'OUTER_VALIDATION_ONLY',
+            holdout_ranking_anchor_scores_emitted:false,
             internal_calibrator:calibrator.method,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
