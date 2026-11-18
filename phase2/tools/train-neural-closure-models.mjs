@@ -1145,6 +1145,9 @@ async function main(){
           requiredImprovement:0.00025,
           maxTrainingSamples:4096,
           seed:22429,
+          roundTripCostBps:args.roundTripCostBps,
+          minimumReturnTrades:20,
+          minimumReturnWinRatePct:55,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
