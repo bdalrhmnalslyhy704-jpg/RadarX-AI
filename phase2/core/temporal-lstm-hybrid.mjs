@@ -371,7 +371,9 @@ function initializeModel(seed = 29) {
     outputWeights: Array.from({ length: hidden }, () => (random() - 0.5) * 0.04),
     // Trainable scalars are one-element arrays so optimizer/finite-difference
     // updates mutate the model object rather than a detached wrapper property.
-    outputBias: [0]
+    outputBias: [0],
+    // Auxiliary rank head is separate from calibrated classification.
+    rankingHeadWeights: Array(hidden).fill(0)
   };
 }
 
@@ -508,10 +510,20 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
     residualLogit += model.outputWeights[channel] * pooled[channel];
   const logit = clamp(baselineLogit + residualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
   const probability = sigmoid(logit);
-  if (![...pooled, ...attentionWeights, probability, logit].every(finite))
+  const rankingWeights = model.rankingHeadWeights === undefined
+    ? Array(hidden).fill(0) : model.rankingHeadWeights;
+  if (!Array.isArray(rankingWeights) || rankingWeights.length !== hidden ||
+      rankingWeights.some(value => !finite(value)))
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_WEIGHTS_INVALID');
+  let rankingResidualLogit = 0;
+  for (let channel = 0; channel < hidden; channel++)
+    rankingResidualLogit += rankingWeights[channel] * pooled[channel];
+  const rankingLogit = clamp(baselineLogit + rankingResidualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
+  if (![...pooled, ...attentionWeights, probability, logit, rankingLogit].every(finite))
     throw new TypeError('TCN_LSTM_FORWARD_NON_FINITE');
   return {
-    probability, logit, residual_logit: residualLogit,
+    probability, logit, ranking_logit: rankingLogit,
+    ranking_residual_logit: rankingResidualLogit, residual_logit: residualLogit,
     attention_weights: attentionWeights,
     tcn_latent_sequence: current,
     projected_sequence: projected,
@@ -1035,19 +1047,115 @@ function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
     const high=rows[pair.high_index],low=rows[pair.low_index];
     const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
     const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
-    const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
-    const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
+    const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).ranking_logit;
+    const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).ranking_logit;
     total+=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit).loss;
   }
   return total/pairs.length;
 }
+
+/**
+ * Fit a linear residual ranking head on frozen TCN-LSTM pooled representations.
+ * It starts from the training-only Logistic anchor, and never backpropagates
+ * into classifier/encoder weights, isolating the calibrated probability path.
+ */
+function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
+  learningRate=0.03,epochs=40,l2=0.001,patience=10
+}={}) {
+  if(!Array.isArray(rows)||!Array.isArray(pairs)||pairs.length<10)
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_TRAINING_SUPPORT_TOO_SMALL');
+  if(!finite(learningRate)||learningRate<=0||learningRate>0.25||
+    !Number.isInteger(epochs)||epochs<1||epochs>200||
+    !finite(l2)||l2<0||l2>1||
+    !Number.isInteger(patience)||patience<1||patience>50)
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
+  const vectors=rows.map(row=>{
+    const baselineLogit=predictTcnLstmLogisticLogit(row.sequence,anchor);
+    const forward=inspectTcnLstmForward(row.sequence,model,baselineLogit);
+    return {baselineLogit,pooled:[...forward.cache.pooled]};
+  });
+  const hidden=TCN_LSTM_HIDDEN;
+  let weights=Array.isArray(model.rankingHeadWeights)
+    ?[...model.rankingHeadWeights]:Array(hidden).fill(0);
+  if(weights.length!==hidden||weights.some(value=>!finite(value)))
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_INITIAL_WEIGHTS_INVALID');
+  const score=(item,currentWeights)=>{
+    let logit=item.baselineLogit;
+    for(let channel=0;channel<hidden;channel++)
+      logit+=currentWeights[channel]*item.pooled[channel];
+    return clamp(logit,-LOGIT_LIMIT,LOGIT_LIMIT);
+  };
+  const evaluate=currentWeights=>{
+    let loss=0;
+    for(const pair of pairs){
+      const high=score(vectors[pair.high_index],currentWeights);
+      const low=score(vectors[pair.low_index],currentWeights);
+      loss+=tcnLstmPairwiseLogitRankingLoss(high,low).loss;
+    }
+    return loss/pairs.length;
+  };
+  let bestLoss=evaluate(weights),bestWeights=[...weights],wait=0,completed=0;
+  const initialLoss=bestLoss;
+  const firstMoment=Array(hidden).fill(0),secondMoment=Array(hidden).fill(0);
+  const beta1=0.9,beta2=0.999,epsilon=1e-8;
+  for(let epoch=1;epoch<=epochs;epoch++){
+    const gradient=Array(hidden).fill(0);
+    for(const pair of pairs){
+      const high=vectors[pair.high_index],low=vectors[pair.low_index];
+      const item=tcnLstmPairwiseLogitRankingLoss(score(high,weights),score(low,weights));
+      for(let channel=0;channel<hidden;channel++)
+        gradient[channel]+=
+          item.high_logit_gradient*high.pooled[channel]+
+          item.low_logit_gradient*low.pooled[channel];
+    }
+    const averaged=gradient.map((value,channel)=>
+      value/pairs.length+l2*weights[channel]);
+    const norm=Math.sqrt(averaged.reduce((sum,value)=>sum+value*value,0));
+    const clipped=norm>1?averaged.map(value=>value/norm):averaged;
+    for(let channel=0;channel<hidden;channel++){
+      firstMoment[channel]=beta1*firstMoment[channel]+(1-beta1)*clipped[channel];
+      secondMoment[channel]=beta2*secondMoment[channel]+(1-beta2)*clipped[channel]*clipped[channel];
+      const correctedFirst=firstMoment[channel]/(1-Math.pow(beta1,epoch));
+      const correctedSecond=secondMoment[channel]/(1-Math.pow(beta2,epoch));
+      weights[channel]=clamp(weights[channel]-
+        learningRate*correctedFirst/(Math.sqrt(correctedSecond)+epsilon),-8,8);
+    }
+    const currentLoss=evaluate(weights);
+    if(!finite(currentLoss)||weights.some(value=>!finite(value)))
+      throw new TypeError('TCN_LSTM_RANKING_HEAD_NON_FINITE');
+    completed=epoch;
+    if(currentLoss<bestLoss-1e-9){
+      bestLoss=currentLoss;bestWeights=[...weights];wait=0;
+    }else wait++;
+    if(wait>=patience)break;
+  }
+  model.rankingHeadWeights=bestWeights;
+  const finalLoss=evaluate(bestWeights);
+  if(!finite(finalLoss)||bestWeights.some(value=>!finite(value)))
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_FINAL_STATE_INVALID');
+  return {
+    schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
+    fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
+    input:'FROZEN_TCN_LSTM_TEMPORAL_ATTENTION_POOLED_REPRESENTATION',
+    baseline:'SAME_TRAINING_ROW_FROZEN_LOGISTIC_ANCHOR',
+    training_rows:rows.length,training_pairs:pairs.length,
+    learning_rate:learningRate,epochs_requested:epochs,epochs_completed:completed,
+    l2,patience,early_stopped:completed<epochs,
+    initial_pairwise_log_loss:Number(initialLoss.toFixed(8)),
+    final_pairwise_log_loss:Number(finalLoss.toFixed(8)),
+    weight_l2_norm:Number(Math.sqrt(bestWeights.reduce((sum,value)=>sum+value*value,0)).toFixed(8)),
+    classifier_parameters_updated:false,validation_or_holdout_used:false
+  };
+}
+
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   baselineFit = null, earlyStoppingPatience = 5,
   objective='BRIER',gammaPositive=1,gammaNegative=2,
   rankingRows=null,rankingWeight=0,rankingRoundTripCostBps=30,
-  rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4
+  rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
+  rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -1073,7 +1181,14 @@ export function trainTcnLstmHybrid(trainingRows, {
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
   const classWeights=objective==='FOCAL_ASYMMETRIC_BRIER'
     ?deriveTrainingClassWeights(rows.map(row=>row.target)):null;
-  const ranking=rankingWeight>0
+  if(rankingRows!==null&&!Array.isArray(rankingRows))
+    throw new TypeError('TCN_LSTM_RANKING_ROWS_INVALID');
+  if(!finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||
+    rankingHeadLearningRate>0.25||!Number.isInteger(rankingHeadEpochs)||
+    rankingHeadEpochs<1||rankingHeadEpochs>200||
+    !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1)
+    throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
+  const ranking=Array.isArray(rankingRows)
     ?buildTcnLstmReturnRankingPairs(rows,rankingRows,{
       roundTripCostBps:rankingRoundTripCostBps,
       minimumReturnGapPct:rankingMinimumReturnGapPct,
@@ -1081,15 +1196,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     })
     :{schema:'RADARX_TCN_LSTM_TRAINING_RETURN_RANK_PAIRS_V1',
       source_partition:'DISABLED',decision_group_count:0,comparison_pairs:0,pairs:[]};
-  if(rankingWeight>0&&ranking.comparison_pairs<10)
+  if(Array.isArray(rankingRows)&&ranking.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_RETURN_RANKING_PAIR_SUPPORT_TOO_SMALL');
   const rankingPairs=ranking.pairs;
-  const rankingPairsByTime=new Map();
-  for(const pair of rankingPairs){
-    const key=String(pair.decision_at);
-    if(!rankingPairsByTime.has(key))rankingPairsByTime.set(key,[]);
-    rankingPairsByTime.get(key).push(pair);
-  }
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
@@ -1106,9 +1215,8 @@ export function trainTcnLstmHybrid(trainingRows, {
   const random = mulberry32(seed ^ 0xA5A5A5A5);
   const history = [];
   const initialBrier = evaluateBrier(rows, model, anchor);
-  const initialRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
-  let bestBrier=initialBrier,bestRankingLoss=initialRankingLoss;
-  let bestObjective=initialBrier+rankingWeight*initialRankingLoss;
+  let bestBrier=initialBrier;
+  let bestObjective=initialBrier;
   let bestEpoch = 0;
   let bestModel = cloneTree(trainableParameters(model));
   let wait = 0, stoppedEarly = false;
@@ -1143,7 +1251,6 @@ export function trainTcnLstmHybrid(trainingRows, {
         batches.push(order.slice(start,Math.min(order.length,start+batchSize)));
     }
     let epochLoss=0,seen=0,maxGradientNorm=0,clippedBatches=0;
-    let epochRankingLoss=0,epochRankingPairs=0;
     const schedule = 0.1 + 0.9 * 0.5 *
       (1 + Math.cos(Math.PI * (epoch - 1) / Math.max(1, epochs - 1)));
     const epochRate = rate * schedule;
@@ -1165,37 +1272,7 @@ export function trainTcnLstmHybrid(trainingRows, {
         seen++;
         accumulated = accumulateTree(accumulated, item.gradients);
       }
-      let averaged=scaleTree(accumulated,1/indexes.length);
-      if(rankingPairs.length&&indexes.length){
-        const inBatch=new Set(indexes);
-        const decisionAt=String(Math.floor(Number(rows[indexes[0]].at)/
-          TCN_LSTM_RANKING_BUCKET_MS)*TCN_LSTM_RANKING_BUCKET_MS);
-        const batchPairs=(rankingPairsByTime.get(decisionAt)||[]).filter(pair=>
-          inBatch.has(pair.high_index)&&inBatch.has(pair.low_index));
-        if(batchPairs.length){
-          let rankGradient=zeroGradients(model);
-          for(const pair of batchPairs){
-            const high=rows[pair.high_index],low=rows[pair.low_index];
-            const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
-            const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
-            const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
-            const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
-            const pairLoss=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
-            const highGrad=lossAndGradientsTcnLstmHybrid(high.sequence,high.target,model,highBase,{
-              objective:'EXTERNAL_LOGIT',
-              externalLogitGradient:pairLoss.high_logit_gradient*rankingWeight
-            });
-            const lowGrad=lossAndGradientsTcnLstmHybrid(low.sequence,low.target,model,lowBase,{
-              objective:'EXTERNAL_LOGIT',
-              externalLogitGradient:pairLoss.low_logit_gradient*rankingWeight
-            });
-            rankGradient=accumulateTree(rankGradient,highGrad.gradients);
-            rankGradient=accumulateTree(rankGradient,lowGrad.gradients);
-            epochRankingLoss+=pairLoss.loss;epochRankingPairs++;
-          }
-          averaged=accumulateTree(averaged,scaleTree(rankGradient,1/batchPairs.length));
-        }
-      }
+      const averaged=scaleTree(accumulated,1/indexes.length);
       if (!treeFinite(averaged)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NON_FINITE');
       const norm = parameterNorm(averaged);
       if (!finite(norm)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NORM_NON_FINITE');
@@ -1209,25 +1286,17 @@ export function trainTcnLstmHybrid(trainingRows, {
     }
 
     const trainingBrier=evaluateBrier(rows,model,anchor);
-    const trainingRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
-    if(!finite(trainingBrier)||!finite(trainingRankingLoss))
+    if(!finite(trainingBrier))
       throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_NON_FINITE');
-    const trainingObjective=trainingBrier+rankingWeight*trainingRankingLoss;
-    if(trainingObjective<bestObjective-1e-8){
-      bestObjective=trainingObjective;bestBrier=trainingBrier;
-      bestRankingLoss=trainingRankingLoss;bestEpoch=epoch;
+    if(trainingBrier<bestObjective-1e-8){
+      bestObjective=trainingBrier;bestBrier=trainingBrier;bestEpoch=epoch;
       bestModel = cloneTree(trainableParameters(model));
       wait = 0;
     } else wait++;
     history.push({
       epoch,
-      pre_update_mean_batch_objective_loss:Number((
-        epochLoss/Math.max(1,seen)+rankingWeight*epochRankingLoss/Math.max(1,epochRankingPairs)
-      ).toFixed(8)),
+      pre_update_mean_batch_objective_loss:Number((epochLoss/Math.max(1,seen)).toFixed(8)),
       post_update_training_brier:Number(trainingBrier.toFixed(8)),
-      post_update_training_pairwise_rank_loss:Number(trainingRankingLoss.toFixed(8)),
-      post_update_training_composite_objective:Number(trainingObjective.toFixed(8)),
-      ranking_pairs_used:epochRankingPairs,
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
@@ -1242,9 +1311,18 @@ export function trainTcnLstmHybrid(trainingRows, {
   }
 
   Object.assign(model, cloneTree(bestModel));
+  const rankingHeadFit=rankingPairs.length
+    ?fitTcnLstmPairwiseRankingHead(rows,rankingPairs,model,anchor,{
+      learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
+      l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
+    })
+    :{schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
+      fitted:false,reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',
+      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
   const finalBrier=evaluateBrier(rows,model,anchor);
   const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
-  if(!finite(finalBrier)||!finite(finalRankingLoss)||!treeFinite(trainableParameters(model)))
+  if(!finite(finalBrier)||!finite(finalRankingLoss)||!treeFinite(trainableParameters(model))||
+    !Array.isArray(model.rankingHeadWeights)||model.rankingHeadWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_FINAL_MODEL_NON_FINITE');
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
@@ -1282,25 +1360,27 @@ export function trainTcnLstmHybrid(trainingRows, {
       epochs_completed: history.length,
       best_epoch: bestEpoch,
       best_training_brier:Number(bestBrier.toFixed(8)),
-      best_training_pairwise_rank_loss:Number(bestRankingLoss.toFixed(8)),
-      best_training_composite_objective:Number(bestObjective.toFixed(8)),
+      best_training_pairwise_rank_loss:Number(finalRankingLoss.toFixed(8)),
+      best_training_classification_objective:Number(bestObjective.toFixed(8)),
       return_ranking:{
-        enabled:rankingWeight>0,weight:Number(rankingWeight),
+        enabled:rankingHeadFit.fitted===true,
+        method:'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
+        legacy_joint_ranking_weight_ignored:Number(rankingWeight),
         pair_schema:ranking.schema,source_partition:ranking.source_partition,
         decision_group_count:ranking.decision_group_count,
         comparison_pairs:ranking.comparison_pairs,
         round_trip_cost_bps:Number(rankingRoundTripCostBps),
         minimum_return_gap_pct:Number(rankingMinimumReturnGapPct),
         maximum_pairs_per_timestamp:rankingPairsPerTimestamp,
+        ranking_head:rankingHeadFit,
         training_pairwise_log_loss:Number(finalRankingLoss.toFixed(8)),
-        ranking_labels_seen_outside_training_partition:false
+        ranking_labels_seen_outside_training_partition:false,
+        classifier_parameters_updated_by_ranking_head:false
       },
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor: rankingWeight>0
-          ?'TRAINING_BRIER_PLUS_PAIRWISE_RETURN_RANKING_ONLY'
-          :'TRAINING_PARTITION_BRIER_ONLY',
+        monitor:'TRAINING_PARTITION_CLASSIFICATION_BRIER_ONLY',
         patience,
         stopped_early: stoppedEarly
       },
@@ -1319,6 +1399,12 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
   const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
   return inspectTcnLstmForward(sequence, profile.model, baselineLogit).probability;
+}
+export function predictTcnLstmHybridRankingLogit(sequence, profile) {
+  if (!profile?.model || !profile?.baseline_fit)
+    throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
+  return inspectTcnLstmForward(sequence, profile.model, baselineLogit).ranking_logit;
 }
 
 function splitPredictions(rows, profile) {
@@ -1591,8 +1677,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         !['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(candidateObjective)||
         (config.rankingWeight!==undefined&&
           (!finite(config.rankingWeight)||config.rankingWeight<0||config.rankingWeight>1))||
+        (config.rankingHeadLearningRate!==undefined&&
+          (!finite(config.rankingHeadLearningRate)||config.rankingHeadLearningRate<=0||
+            config.rankingHeadLearningRate>0.25))||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
+    const candidateRankingHeadLearningRate=Number(
+      config.rankingHeadLearningRate??rankingHeadLearningRate
+    );
     const fit = trainTcnLstmHybrid(effectiveTrainingRowsForFit, {
       epochs: config.epochs,
       learningRate: config.learningRate,
@@ -1604,6 +1696,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       baselineFit: anchor,
       rankingRows:effectiveTrainingRows,
       rankingWeight:Number(config.rankingWeight??0),
+      rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingRoundTripCostBps:roundTripCostBps,
       rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
       rankingPairsPerTimestamp:rankingPairsPerTimestamp
@@ -1614,8 +1707,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const predictions = selectionLogits.map(sigmoid);
     const score = brierFrom(selectionRows, predictions);
+    const selectionRankingLogits = selectionRows.map(row => {
+      const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
+      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_logit;
+    });
     const pairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
-      selectionRows,selectionLogits,{
+      selectionRows,selectionRankingLogits,{
         roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
         maxPairsPerTimestamp:rankingPairsPerTimestamp
       }
@@ -1635,7 +1732,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     evaluated.push({
       name:config.name,
       config:{...config,dropout:candidateDropout,objective:candidateObjective,
-        rankingWeight:Number(config.rankingWeight??0)},
+        rankingWeight:Number(config.rankingWeight??0),
+        rankingHeadLearningRate:candidateRankingHeadLearningRate},
       selection_brier:score,logistic_selection_brier:baselineBrier,
       brier_improvement:brierImprovement,
       pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
