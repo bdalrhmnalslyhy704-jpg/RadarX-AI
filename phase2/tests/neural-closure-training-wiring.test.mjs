@@ -133,7 +133,7 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/execution_return_contract:row\.execution_return_contract/);
   assert.match(trainer,/max_adverse_excursion_pct:row\.max_adverse_excursion_pct/);
   assert.match(trainer,/max_favorable_excursion_pct:row\.max_favorable_excursion_pct/);
-  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(trainingRows,selectionRowsWithExecutionEvidence/);
+  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(\s*trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence/);
   assert.match(trainer,/resolved_at:row\.resolved_at/);
   assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
   assert.match(trainer,/splitFourHourTcnLstmTrainingRows\(/);
