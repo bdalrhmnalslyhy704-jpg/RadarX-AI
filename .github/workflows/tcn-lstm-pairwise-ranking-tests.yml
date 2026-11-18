@@ -9,6 +9,7 @@ on:
     paths:
       - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
     paths:
       - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
 
 permissions:
