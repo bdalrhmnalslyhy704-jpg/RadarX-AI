@@ -14,6 +14,7 @@ import {
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridRankingLogit,
+  predictTcnLstmHybridRankingAnchorLogit,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
@@ -31,7 +32,7 @@ import {
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
-import { topKRankingSignals } from '../core/neural-closure-contracts.mjs';
+import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics } from '../core/neural-closure-contracts.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -308,6 +309,22 @@ test('separate auxiliary rank head changes ranking logits without changing class
   assert.notEqual(after.ranking_logit,before.ranking_logit);
 });
 
+
+test('rank-head execution diagnostics quantify lift against the same frozen Logistic anchor',()=>{
+  const comparison=compareTcnLstmRankingExecutionMetrics(
+    {trade_count:66,win_rate_pct:57.5,net_pnl_pct:1.25,
+      max_drawdown_pct:2.0,average_net_return_pct:0.12,sharpe_per_trade:0.4},
+    {trade_count:66,win_rate_pct:52.0,net_pnl_pct:0.35,
+      max_drawdown_pct:2.5,average_net_return_pct:0.04,sharpe_per_trade:0.1}
+  );
+  assert.equal(comparison.comparison_baseline,'SAME_FROZEN_TCN_LSTM_LOGISTIC_ANCHOR');
+  assert.deepEqual(comparison.head_minus_anchor,{
+    trade_count:0,win_rate_percentage_points:5.5,
+    net_pnl_percentage_points:0.9,max_drawdown_percentage_points:-0.5,
+    average_net_return_percentage_points:0.08,sharpe_per_trade:0.3
+  });
+});
+
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
@@ -328,7 +345,11 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
   assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
     profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
   assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
-  assert.ok(Number.isFinite(predictTcnLstmHybridRankingLogit(rows[0].sequence,profile)));
+  const rankingLogit=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
+  const anchorLogit=predictTcnLstmHybridRankingAnchorLogit(rows[0].sequence,profile);
+  assert.ok(Number.isFinite(rankingLogit));
+  assert.ok(Number.isFinite(anchorLogit));
+  assert.notEqual(rankingLogit,anchorLogit);
   assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
