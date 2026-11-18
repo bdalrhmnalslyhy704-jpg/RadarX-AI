@@ -1659,8 +1659,41 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const rankingTrainingEvidenceComplete=effectiveTrainingRows.every(row=>
     finite(row.realized_return_pct)
   );
-  const rankingRowsForFit=rankingTrainingEvidenceComplete
-    ?effectiveTrainingRows:null;
+  let rankingRowsForFit=null;
+  let rankingTrainingPairSupport={
+    status:'UNAVAILABLE',
+    reason:rankingTrainingEvidenceComplete
+      ?'TRAINING_RETURN_PAIR_SUPPORT_NOT_CHECKED'
+      :'TRAINING_REALIZED_RETURN_EVIDENCE_INCOMPLETE',
+    comparison_pairs:0,decision_group_count:0,
+    source_partition:'TRAINING_PARTITION_ONLY'
+  };
+  if(rankingTrainingEvidenceComplete){
+    try{
+      const support=buildTcnLstmReturnRankingPairs(
+        effectiveTrainingRowsForFit,effectiveTrainingRows,{
+          roundTripCostBps,
+          minimumReturnGapPct:rankingMinimumReturnGapPct,
+          maxPairsPerTimestamp:rankingPairsPerTimestamp
+        }
+      );
+      rankingTrainingPairSupport={
+        status:support.comparison_pairs>=10?'AVAILABLE':'UNAVAILABLE',
+        reason:support.comparison_pairs>=10?null:'FEWER_THAN_10_TRAINING_RETURN_PAIRS',
+        comparison_pairs:support.comparison_pairs,
+        decision_group_count:support.decision_group_count,
+        source_partition:'TRAINING_PARTITION_ONLY'
+      };
+      if(support.comparison_pairs>=10)
+        rankingRowsForFit=effectiveTrainingRows;
+    }catch(error){
+      rankingTrainingPairSupport={
+        status:'UNAVAILABLE',reason:String(error?.message||error),
+        comparison_pairs:0,decision_group_count:0,
+        source_partition:'TRAINING_PARTITION_ONLY'
+      };
+    }
+  }
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
   const baselineLogits = selectionRows.map(row =>
     predictTcnLstmLogisticLogit(row.sequence, anchor));
@@ -1776,6 +1809,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     selection_support: selectionSupport,
     effective_training_budget:effectiveTrainingBudget,
     effective_training_rows:effectiveTrainingRows.length,
+    ranking_training_pair_support:rankingTrainingPairSupport,
     baseline: {
       kind:anchor.kind,training_rows:anchor.training_rows,
       selection_brier:Number(baselineBrier.toFixed(8)),
