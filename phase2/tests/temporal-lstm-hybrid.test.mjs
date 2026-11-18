@@ -272,7 +272,7 @@ test('separate auxiliary rank head changes ranking logits without changing class
   const model=createTcnLstmHybridModelForAudit(993);
   const baselineLogit=0.17;
   const before=inspectTcnLstmForward(sequence,model,baselineLogit);
-  model.rankingHeadWeights=Array(TCN_LSTM_HIDDEN).fill(1.5);
+  model.rankingHeadWeights=Array(before.cache.pooled.length).fill(1.5);
   const after=inspectTcnLstmForward(sequence,model,baselineLogit);
   assert.equal(after.probability,before.probability);
   assert.equal(after.logit,before.logit);
@@ -299,6 +299,7 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
   assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
     profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
   assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
+  assert.ok(Number.isFinite(predictTcnLstmHybridRankingLogit(rows[0].sequence,profile)));
   assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
