@@ -1656,6 +1656,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const trainingIds = new Set(effectiveTrainingRows.map(sampleIdentity));
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
+  const rankingTrainingEvidenceComplete=effectiveTrainingRows.every(row=>
+    finite(row.realized_return_pct)
+  );
+  const rankingRowsForFit=rankingTrainingEvidenceComplete
+    ?effectiveTrainingRows:null;
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
   const baselineLogits = selectionRows.map(row =>
     predictTcnLstmLogisticLogit(row.sequence, anchor));
@@ -1698,7 +1703,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       seed: seed + index * 101,
       maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor,
-      rankingRows:effectiveTrainingRows,
+      rankingRows:rankingRowsForFit,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
