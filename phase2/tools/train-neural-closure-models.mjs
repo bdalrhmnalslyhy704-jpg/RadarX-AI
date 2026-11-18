@@ -239,6 +239,8 @@ async function main(){
     market_data_source:input.data_quality?.source??null,
     market_data_endpoint:input.market_data_endpoint??null,
     universe_selection:input.universe?.selection??null,
+    candidate_prefilter:input.universe?.candidate_prefilter??null,
+    historical_liquidity_eligibility:input.universe?.historical_eligibility??null,
     minimum_quote_volume_24h_usdt:input.universe?.minimum_quote_volume_24h_usdt??null,
     selected_symbol_count:selectedSymbols.length,
     included_symbol_count:includedSymbols.length,
@@ -246,15 +248,52 @@ async function main(){
     included_symbols:includedSymbols,
     survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
     historical_delisted_asset_coverage:false,
-    interpretation:'CONDITIONAL_ON_CURRENTLY_TRADING_SPOT_PAIRS_AND_CURRENT_24H_LIQUIDITY'
+    interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_50_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
   };
+  const historicalPolicy=input.universe?.historical_eligibility??{};
+  const historicalMinimum=Number(input.universe?.minimum_quote_volume_24h_usdt);
+  if(input.universe?.selection!==
+      'CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1'||
+    historicalPolicy.method!==
+      'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE'||
+    historicalPolicy.interval!=='15m'||
+    Number(historicalPolicy.lookback_candles)!==96||
+    historicalPolicy.future_or_unclosed_candles_used!==false||
+    historicalPolicy.below_threshold_events_excluded!==true||
+    !Number.isFinite(historicalMinimum)||historicalMinimum<750_000||
+    input.universe?.survivorship_bias_warning!==true||
+    input.universe?.historical_delisted_asset_coverage!==false||
+    Number(input.universe?.maximum_symbols)!==50||
+    Number(input.universe?.candidate_prefilter?.maximum_symbols)!==50||
+    Number(input.universe?.candidate_prefilter?.minimum_quote_volume_24h_usdt)!==750_000)
+    throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED');
   const rows=validateFourHourRows(input.rows);
+  const historicalLiquidityRowsValid=rows.every(row=>{
+    const evidence=row.historical_liquidity;
+    return evidence?.schema==='BINANCE_SPOT_POINT_IN_TIME_24H_LIQUIDITY_V1'&&
+      evidence.status==='ELIGIBLE'&&evidence.eligible===true&&
+      Number(evidence.window_candle_count)===96&&
+      Number(evidence.decision_at)===Number(row.at)&&
+      Number(evidence.window_end_close_at)===Number(row.at)&&
+      Number(evidence.window_start_open_at)===Number(row.at)-96*15*60_000+1&&
+      Number(evidence.minimum_quote_volume_24h_usdt)===historicalMinimum&&
+      Number(evidence.quote_volume_24h_usdt)===Number(row.quote_volume_24h)&&
+      Number(row.quote_volume_24h)>=historicalMinimum&&
+      evidence.no_future_candles_used===true&&
+      /^[a-f0-9]{64}$/.test(String(evidence.window_evidence_sha256??''))&&
+      evidence.source==='BINANCE_OFFICIAL_CLOSED_15M_KLINE_QUOTE_VOLUME';
+  });
+  if(!historicalLiquidityRowsValid)
+    throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_ROW_EVIDENCE_INVALID');
   const datasetSha=sha256CanonicalArrayMapped(rows,row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
     outcome:row.outcome,target:row.target,
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
+    quote_volume_24h:row.quote_volume_24h,
+    historical_liquidity:row.historical_liquidity??null,
+    feature_snapshot_sha:row.feature_snapshot_sha??null,
     realized_return_pct:row.realized_return_pct
   }));
   if(datasetSha!==input.dataset_sha256)
@@ -1070,6 +1109,22 @@ async function main(){
       const trainingRows=internalSplit.partitions?.training??[];
       const selectionRows=internalSplit.partitions?.selection??[];
       const calibrationRows=internalSplit.partitions?.calibration??[];
+      // Attach execution-only evidence to the internal selection rows.
+      // These fields are consumed only by the return/rank diagnostics; model
+      // fitting still receives feature tensors and binary targets only.
+      const executionEvidenceById=new Map(split.train.map(row=>[String(row.id),({
+        outcome:row.outcome,
+        realized_return_pct:row.realized_return_pct,
+        execution_return_contract:row.execution_return_contract,
+        first_touch:row.first_touch,
+        max_adverse_excursion_pct:row.max_adverse_excursion_pct,
+        max_adverse_excursion_at:row.max_adverse_excursion_at,
+        max_favorable_excursion_pct:row.max_favorable_excursion_pct,
+        max_favorable_excursion_at:row.max_favorable_excursion_at
+      })]));
+      const selectionRowsWithExecutionEvidence=selectionRows.map(row=>({
+        ...row,...(executionEvidenceById.get(String(row.id))??{})
+      }));
       const internalChronologyValid=internalSplit.status==='READY';
       const internalSupport=internalSplit.support??{
         training:{rows:trainingRows.length,positive:trainingRows.filter(row=>row.target===1).length,
@@ -1096,14 +1151,21 @@ async function main(){
           validation_or_holdout_rows_seen_by_fit:0
         };
       }else{
-        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
+        const selection=selectTcnLstmHybridHyperparameters(trainingRows,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
           maxTrainingSamples:4096,
           seed:22429,
+          roundTripCostBps:args.roundTripCostBps,
+          minimumReturnTrades:20,
+          minimumReturnWinRatePct:55,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
-            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20}
+            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20},
+            {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              objective:'FOCAL_ASYMMETRIC_BRIER'},
+            {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER'}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;

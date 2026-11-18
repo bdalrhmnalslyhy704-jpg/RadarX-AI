@@ -7,6 +7,59 @@ const temporalTestUrl=new URL('./temporal-neural-brain.test.mjs',import.meta.url
 const lstmModuleUrl=new URL('../core/temporal-lstm-hybrid.mjs',import.meta.url);
 const lstmTestUrl=new URL('./temporal-lstm-hybrid.test.mjs',import.meta.url);
 
+test('fixed-cohort replay workflow downloads the exact validated dataset and verifies immutable identity',async()=>{
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-fixed-cohort-replay.yml',import.meta.url),'utf8');
+  assert.match(workflow,/actions: read/);
+  assert.match(workflow,/run-id: '44196188685'/);
+  assert.match(workflow,/radarx-build224-neural-closure-dataset-039c9074fc21fa0ea303e360a6ea56d3a401a559/);
+  assert.match(workflow,/path: artifacts\/neural-closure/);
+  assert.match(workflow,/--input artifacts\/neural-closure\/dataset\.json/);
+  assert.match(workflow,/--roundTripCostBps 30/);
+  assert.match(workflow,/--minimumWinRatePct 55/);
+  assert.match(workflow,/--maximumDrawdownPct 8/);
+  assert.match(workflow,/f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77/);
+  assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
+  assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
+  assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
+  assert.match(workflow,/cancel-in-progress: false/);
+});
+
+test('fixed-SHA collector and trainer use the expanded current top-50 candidate prefilter without relaxing historical gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
+  const policy=await readFile(new URL('../core/neural-closure-data-builder.mjs',import.meta.url),'utf8');
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-data-collection.yml',import.meta.url),'utf8');
+  assert.match(collector,/maxSymbols:50,minSymbols:25/);
+  assert.match(collector,/result\.maxSymbols>50/);
+  assert.match(collector,/VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM/);
+  assert.match(collector,/REJECTED_INCOMPLETE_RAW_ARCHIVE/);
+  assert.match(collector,/REJECTED_LOW_VALID_EVENT_COVERAGE/);
+  assert.match(collector,/rejection_reasons:symbolRejectedReasons/);
+  assert.match(collector,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
+  assert.match(policy,/CURRENT_BINANCE_SPOT_24H_TICKER_TOP_50_AT_COLLECTION_TIME/);
+  assert.match(trainer,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
+  assert.match(trainer,/Number\(input\.universe\?\.maximum_symbols\)!==50/);
+  assert.match(trainer,/Number\(input\.universe\?\.candidate_prefilter\?\.maximum_symbols\)!==50/);
+  assert.match(trainer,/historicalMinimum<750_000/);
+  assert.ok(workflow.includes("MAX_SYMBOLS: ${{ inputs.max_symbols || '50' }}"),
+    'push-triggered collection must use the documented top-50 default when no manual input is supplied');
+  assert.ok(workflow.includes("default: '50'"),
+    'manual workflow dispatch must retain the documented top-50 default');
+  assert.ok(workflow.includes('--maxSymbols "$MAX_SYMBOLS"'),
+    'the selected workflow universe must be passed to the collector');
+});
+
+test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
+  assert.match(trainer,/SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE/);
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_ROW_EVIDENCE_INVALID/);
+  assert.match(trainer,/evidence\.no_future_candles_used===true/);
+  assert.match(trainer,/evidence\.window_end_close_at\)===Number\(row\.at\)/);
+  assert.match(trainer,/evidence\.window_evidence_sha256/);
+  assert.match(trainer,/historical_delisted_asset_coverage!==false/);
+});
+
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/predictTemporalAttentionResearchOutput/,
@@ -74,6 +127,13 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/const lstmRows=split\.train\.map/);
   assert.match(trainer,/sequence:row\.temporal_sequence/);
   assert.match(trainer,/target:row\.target/);
+  assert.match(trainer,/const executionEvidenceById=new Map\(split\.train\.map/);
+  assert.match(trainer,/const selectionRowsWithExecutionEvidence=selectionRows\.map/);
+  assert.match(trainer,/first_touch:row\.first_touch/);
+  assert.match(trainer,/execution_return_contract:row\.execution_return_contract/);
+  assert.match(trainer,/max_adverse_excursion_pct:row\.max_adverse_excursion_pct/);
+  assert.match(trainer,/max_favorable_excursion_pct:row\.max_favorable_excursion_pct/);
+  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(trainingRows,selectionRowsWithExecutionEvidence/);
   assert.match(trainer,/resolved_at:row\.resolved_at/);
   assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
   assert.match(trainer,/splitFourHourTcnLstmTrainingRows\(/);
@@ -83,6 +143,20 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
   assert.match(trainer,/fitTcnLstmHybridCalibration\(\s*calibrationRows/);
   assert.match(trainer,/predictTcnLstmHybridCalibratedProbability/);
   const lstmModule=await readFile(lstmModuleUrl,'utf8');
+  assert.match(lstmModule,/export function summarizeTcnLstmSelectionReturns/);
+  assert.match(lstmModule,/return_selection_diagnostics:returnDiagnostics/);
+  assert.match(lstmModule,/cross_sectional_rank_diagnostics:crossSectionalRankDiagnostics/);
+  assert.match(lstmModule,/topKProbabilitySignals\(rows,baselineProbabilities,topK\)/);
+  assert.match(lstmModule,/simulateFirstTouchPaperPortfolio\(\s*rows,modelMask\.probabilities/);
+  assert.match(lstmModule,/model_minus_logistic/);
+  assert.match(lstmModule,/baselineProbabilities:baselinePredictions/);
+  assert.match(trainer,/roundTripCostBps:args\.roundTripCostBps/);
+  assert.match(trainer,/minimumReturnTrades:20/);
+  assert.match(trainer,/minimumReturnWinRatePct:55/);
+  assert.match(lstmModule,/const \{realized_return_pct,\.\.\.fitRow\}=row/,
+    'realized outcomes must be stripped before the Logistic anchor and neural optimizer fit');
+  assert.match(lstmModule,/affects_candidate_ranking:false/);
+  assert.match(lstmModule,/affects_acceptance_gates:false/);
   assert.match(lstmModule,/export function splitFourHourTcnLstmTrainingRows/);
   assert.match(lstmModule,/external_validation_labels_read:false/);
   assert.match(lstmModule,/OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION/);
@@ -276,7 +350,13 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
   assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
   assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
+  assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
+  assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
+  assert.match(trainer,/4H_FOCAL_LR_0025_L2_0015_DROP10_E16/);
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
+  assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
+  assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
+  assert.match(recurrent,/loss_objective:objective/);
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
   assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);

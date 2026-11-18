@@ -29,7 +29,7 @@ const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 function parseArgs(argv){
-  const result={days:180,maxSymbols:30,minSymbols:25,
+  const result={days:180,maxSymbols:50,minSymbols:25,
     minQuoteVolumeUsdt:750_000,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -48,8 +48,8 @@ function parseArgs(argv){
   }
   if(!Number.isInteger(result.days)||result.days<60||result.days>180)
     throw new Error('DAYS_MUST_BE_AN_INTEGER_FROM_60_TO_180');
-  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>30)
-    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_30');
+  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>50)
+    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_50');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
@@ -347,16 +347,21 @@ async function main(){
       schedule
     });
     if(!coverage.valid){
-      symbolSummaries.push({
+      const rejection={
         symbol,status:'REJECTED_INCOMPLETE_RAW_ARCHIVE',
-        quote_volume_24h_usdt:asset.quote_volume_24h,coverage:coverage.checks
-      });
+        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,coverage:coverage.checks
+      };
+      symbolSummaries.push(rejection);
+      console.log(JSON.stringify({
+        event:'NEURAL_CLOSURE_SYMBOL_PROGRESS',included:false,...rejection
+      }));
       continue;
     }
 
     const receivedAt=await getServerTime();
     const symbolRows=[];
     let symbolRejected=0;
+    const symbolRejectedReasons={};
     for(const decisionAt of schedule.decision_times){
       const built=buildNeuralClosureEventRow({
         symbol,decisionAt,
@@ -366,30 +371,36 @@ async function main(){
         benchmarkFifteenMinuteCandles:btcFifteenMinute,
         firstMinuteOpenAt:schedule.one_minute_start_open_at,
         sourceReceivedAt:receivedAt,
-        quoteVolume24h:asset.quote_volume_24h
+        minimumQuoteVolume24hUsdt:args.minQuoteVolumeUsdt
       });
       if(!built.ready){
         symbolRejected++;
         const key=built.reason||'UNKNOWN_EVENT_REJECTION';
         rejectedCounts[key]=(rejectedCounts[key]||0)+1;
+        symbolRejectedReasons[key]=(symbolRejectedReasons[key]||0)+1;
         continue;
       }
       symbolRows.push(built.row);
     }
     if(symbolRows.length<Math.floor(schedule.decision_count*0.8)){
-      symbolSummaries.push({
+      const rejection={
         symbol,status:'REJECTED_LOW_VALID_EVENT_COVERAGE',
-        quote_volume_24h_usdt:asset.quote_volume_24h,
-        valid_events:symbolRows.length,rejected_events:symbolRejected
-      });
-      for(const row of symbolRows){} // preserve diagnostic counts; do not add partial symbol cohorts
+        collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
+        valid_events:symbolRows.length,rejected_events:symbolRejected,
+        expected_events:schedule.decision_count,
+        rejection_reasons:symbolRejectedReasons
+      };
+      symbolSummaries.push(rejection);
+      console.log(JSON.stringify({
+        event:'NEURAL_CLOSURE_SYMBOL_PROGRESS',included:false,...rejection
+      }));
       continue;
     }
 
     rows.push(...symbolRows);
     symbolSummaries.push({
       symbol,status:'INCLUDED',
-      quote_volume_24h_usdt:asset.quote_volume_24h,
+      collection_time_quote_volume_24h_usdt:asset.quote_volume_24h,
       one_minute_candles:minute.candles.length,
       five_minute_candles:five.candles.length,
       fifteen_minute_candles:fifteen.candles.length,
@@ -473,6 +484,9 @@ async function main(){
     source_audit_sha256:row.source_audit.raw_klines_sha256,
     feature_information_cutoff_at:row.feature_information_cutoff_at,
     features:row.features,temporal_sequence:row.temporal_sequence,
+    quote_volume_24h:row.quote_volume_24h,
+    historical_liquidity:row.historical_liquidity??null,
+    feature_snapshot_sha:row.feature_snapshot_sha??null,
     realized_return_pct:row.realized_return_pct
   }));
   const finalServerTime=await getServerTime();
@@ -500,12 +514,29 @@ async function main(){
     },
     schedule,
     universe:{
-      selection:'CURRENT_BINANCE_SPOT_24H_QUOTE_VOLUME_AT_COLLECTION_TIME',
+      selection:'CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
+      candidate_prefilter:{
+        method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        maximum_symbols:args.maxSymbols,
+        scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
+      },
+      historical_eligibility:{
+        method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
+        interval:'15m',lookback_candles:96,
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        future_or_unclosed_candles_used:false,
+        below_threshold_events_excluded:true
+      },
       quote_asset:'USDT',
       minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
       maximum_symbols:args.maxSymbols,
       survivorship_bias_warning:true,
-      symbols:universe.selected,
+      historical_delisted_asset_coverage:false,
+      symbols:universe.selected.map(item=>({
+        symbol:item.symbol,base_asset:item.base_asset,quote_asset:item.quote_asset,
+        collection_time_quote_volume_24h_usdt:item.quote_volume_24h
+      })),
       symbol_results:symbolSummaries
     },
     counts,class_support:classSupport,
