@@ -1325,7 +1325,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const returnDiagnostics=summarizeTcnLstmSelectionReturns(
       selectionRows,predictions,{roundTripCostBps,minimumTrades:minimumReturnTrades,
         minimumWinRatePct:minimumReturnWinRatePct,
-        baselineProbabilities}
+        baselineProbabilities:baselinePredictions}
     );
     evaluated.push({
       name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
