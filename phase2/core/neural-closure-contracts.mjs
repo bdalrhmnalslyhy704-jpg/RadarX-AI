@@ -1954,6 +1954,42 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
   };
 }
 
+
+/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
+export function topKRankingSignals(rows,scores,topK) {
+  if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
+    !Number.isInteger(topK)||topK<1)
+    throw new TypeError('NEURAL_TOP_K_RANKING_INPUT_INVALID');
+  const groups=new Map();
+  for(let i=0;i<rows.length;i++){
+    const at=number(rows[i]?.at),score=number(scores[i]);
+    if(at===null||score===null)throw new TypeError('NEURAL_TOP_K_RANKING_SCORE_INVALID:'+i);
+    const key=String(Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS));
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(i);
+  }
+  const masked=Array(rows.length).fill(0);
+  const eligible=[...groups.values()].filter(indices=>indices.length>=2);
+  let signalCount=0;
+  for(const indices of eligible){
+    indices.sort((a,b)=>Number(scores[b])-Number(scores[a])||
+      String(rows[a]?.symbol??'').localeCompare(String(rows[b]?.symbol??''))||
+      String(rows[a]?.id??'').localeCompare(String(rows[b]?.id??'')));
+    const selected=indices.slice(0,topK);
+    for(let rank=0;rank<selected.length;rank++){
+      masked[selected[rank]]=0.5+0.5*((indices.length-rank)/(indices.length+1));
+      signalCount++;
+    }
+  }
+  return {
+    probabilities:masked,decision_group_count:eligible.length,total_time_buckets:groups.size,
+    singleton_buckets_excluded:groups.size-eligible.length,
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',signal_count:signalCount,
+    selected_scores_preserve_rank:true,score_source:'RAW_AUXILIARY_RANKING_LOGIT'
+  };
+}
+
 function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
   const labels=rows.map(row=>row.target);
   const counts=classCounts(labels);
