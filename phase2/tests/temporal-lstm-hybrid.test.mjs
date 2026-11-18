@@ -17,6 +17,7 @@ import {
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   selectTcnLstmHybridHyperparameters,
+  summarizeTcnLstmSelectionReturns,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -46,6 +47,7 @@ function makeRows(start,count,prefix='sample'){
       id:prefix+'-'+absolute,
       symbol:'TST'+String(absolute%4)+'USDT',
       at,resolved_at:at+DAY,target,
+      realized_return_pct:target===1?2.8:-2.2,
       sequence:makeSequence(target?1:-1,absolute*0.017),
       temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
         at-(23-step)*900000)
@@ -133,6 +135,35 @@ test('training-only Logistic anchor is deterministic and identity-bound to its t
   assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
 });
 
+test('inner-selection return diagnostics deduct round-trip fees and never alter model acceptance',()=>{
+  const rows=Array.from({length:24},(_,index)=>({
+    id:'return-'+index,
+    realized_return_pct:index<14?3:-2
+  }));
+  const probabilities=rows.map(()=>0.7);
+  const result=summarizeTcnLstmSelectionReturns(rows,probabilities,{
+    thresholds:[0.5],roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55
+  });
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.selection_partition_only,true);
+  assert.equal(result.holdout_values_used,false);
+  assert.equal(result.affects_candidate_ranking,false);
+  assert.equal(result.affects_acceptance_gates,false);
+  assert.equal(result.portfolio_drawdown_evaluated,false);
+  assert.equal(result.trials[0].trade_count,24);
+  assert.equal(result.trials[0].net_wins,14);
+  assert.equal(result.trials[0].net_losses,10);
+  assert.equal(result.trials[0].win_rate_pct,58.3333);
+  assert.equal(result.trials[0].mean_net_trade_return_pct,0.616667);
+  assert.equal(result.best_preliminary_threshold,0.5);
+  const incomplete=summarizeTcnLstmSelectionReturns(
+    [{realized_return_pct:1},{realized_return_pct:null}],
+    [0.8,0.7],{thresholds:[0.5]}
+  );
+  assert.equal(incomplete.status,'UNAVAILABLE');
+  assert.equal(incomplete.reason,'SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+});
+
 test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and predicts probabilities',()=>{
   const rows=makeRows(0,32);
   const profile=trainTcnLstmHybrid(rows,{
@@ -167,6 +198,12 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.ok(result.candidates.every(row=>
     Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
   assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
+  assert.ok(result.candidates.every(row=>
+    row.return_selection_diagnostics.status==='AVAILABLE'&&
+    row.return_selection_diagnostics.selection_partition_only===true));
+  assert.ok(result.candidates.every(row=>
+    row.return_selection_diagnostics.affects_candidate_ranking===false&&
+    row.return_selection_diagnostics.affects_acceptance_gates===false));
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
