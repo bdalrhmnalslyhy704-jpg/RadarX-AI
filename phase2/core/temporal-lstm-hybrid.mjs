@@ -1802,7 +1802,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       brier_improvement:Number(brier_improvement.toFixed(8)),
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
-        ?Number(pairwiseRankingImprovement.toFixed(8)):null,
+        ?Number(pairwise_ranking_improvement.toFixed(8)):null,
       ranking_head:fit.training?.return_ranking?.ranking_head??null,
       selection_score:Number(selection_score.toFixed(8)),
       logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
