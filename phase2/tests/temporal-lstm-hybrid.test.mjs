@@ -13,6 +13,7 @@ import {
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
+  predictTcnLstmHybridRankingLogit,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
@@ -266,19 +267,38 @@ test('pairwise logit ranking summary preserves high-confidence cross-sectional o
   assert.equal(score.holdout_values_used,false);
 });
 
-test('TCN-LSTM pairwise ranking updates fit weights using training returns only',()=>{
+test('separate auxiliary rank head changes ranking logits without changing classifier probabilities',()=>{
+  const sequence=makeSequence(1,991);
+  const model=createTcnLstmHybridModelForAudit(993);
+  const baselineLogit=0.17;
+  const before=inspectTcnLstmForward(sequence,model,baselineLogit);
+  model.rankingHeadWeights=Array(TCN_LSTM_HIDDEN).fill(1.5);
+  const after=inspectTcnLstmForward(sequence,model,baselineLogit);
+  assert.equal(after.probability,before.probability);
+  assert.equal(after.logit,before.logit);
+  assert.notEqual(after.ranking_logit,before.ranking_logit);
+});
+
+test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
   const profile=trainTcnLstmHybrid(fitRows,{
     epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
-    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0.02,
+    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0,
+    rankingHeadLearningRate:0.03,rankingHeadEpochs:40,
     rankingRoundTripCostBps:30,rankingMinimumReturnGapPct:0.5,
     rankingPairsPerTimestamp:4
   });
   assert.equal(profile.training.return_ranking.enabled,true);
+  assert.equal(profile.training.return_ranking.method,'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1');
   assert.equal(profile.training.return_ranking.source_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.training.return_ranking.comparison_pairs,10);
   assert.equal(profile.training.return_ranking.ranking_labels_seen_outside_training_partition,false);
+  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_ranking_head,false);
+  assert.equal(profile.training.return_ranking.ranking_head.fitted,true);
+  assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
+    profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
+  assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
   assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
@@ -302,6 +322,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
   assert.equal(result.candidates.length,2);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
+  assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
+  assert.equal(result.selection_scoring.method,'BRIER_PLUS_SEPARATE_TRAINING_ONLY_PAIRWISE_RANK_HEAD_V1');
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
   assert.equal(result.real_order_execution,false);
 });
