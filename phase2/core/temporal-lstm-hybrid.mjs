@@ -1424,6 +1424,13 @@ export function predictTcnLstmHybridRankingLogit(sequence, profile) {
   return inspectTcnLstmForward(sequence, profile.model, baselineLogit).ranking_logit;
 }
 
+/** Exact frozen Logistic anchor score underlying the separate ranking head. */
+export function predictTcnLstmHybridRankingAnchorLogit(sequence, profile) {
+  if (!profile?.model || !profile?.baseline_fit)
+    throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  return predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
+}
+
 function splitPredictions(rows, profile) {
   const modelPredictions = rows.map(row => predictTcnLstmHybridProbability(row.sequence, profile));
   const baselinePredictions = rows.map(row =>
