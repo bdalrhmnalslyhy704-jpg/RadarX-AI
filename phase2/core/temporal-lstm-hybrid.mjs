@@ -1481,7 +1481,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   requiredImprovement = 0.00025,
   seed = 29,
   maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
-  roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55
+  roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55,
+  rankingScoreWeight=0.01,rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -1491,7 +1492,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     throw new TypeError('TCN_LSTM_SELECTION_MARGIN_INVALID');
   if(!finite(roundTripCostBps)||roundTripCostBps<0||roundTripCostBps>300||
     !Number.isInteger(minimumReturnTrades)||minimumReturnTrades<1||
-    !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100)
+    !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100||
+    !finite(rankingScoreWeight)||rankingScoreWeight<0||rankingScoreWeight>1||
+    !finite(rankingMinimumReturnGapPct)||rankingMinimumReturnGapPct<0||
+    !Number.isInteger(rankingPairsPerTimestamp)||rankingPairsPerTimestamp<1||rankingPairsPerTimestamp>32)
     throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
   const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
     maxTrainingSamples,trainingRows.length
@@ -1521,6 +1525,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
+  const baselineRanking=summarizeTcnLstmPairwiseReturnRanking(
+    selectionRows,baselinePredictions,{
+      roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
+      maxPairsPerTimestamp:rankingPairsPerTimestamp
+    }
+  );
+  const rankingScoreAvailable=baselineRanking.status==='AVAILABLE';
+  const baselineSelectionScore=baselineBrier+
+    (rankingScoreAvailable?rankingScoreWeight*baselineRanking.pairwise_log_loss:0);
   const evaluated = [];
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
@@ -1530,6 +1543,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         !finite(config.learningRate) || !finite(config.l2) ||
         !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
         !['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(candidateObjective)||
+        (config.rankingWeight!==undefined&&
+          (!finite(config.rankingWeight)||config.rankingWeight<0||config.rankingWeight>1))||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
     const fit = trainTcnLstmHybrid(effectiveTrainingRowsForFit, {
@@ -1540,26 +1555,43 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       objective:candidateObjective,
       seed: seed + index * 101,
       maxTrainingSamples: effectiveTrainingRows.length,
-      baselineFit: anchor
+      baselineFit: anchor,
+      rankingRows:effectiveTrainingRows,
+      rankingWeight:Number(config.rankingWeight??0),
+      rankingRoundTripCostBps:roundTripCostBps,
+      rankingMinimumReturnGapPct:rankingMinimumReturnGapPct,
+      rankingPairsPerTimestamp:rankingPairsPerTimestamp
     });
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
     const score = brierFrom(selectionRows, predictions);
+    const pairwiseRanking=summarizeTcnLstmPairwiseReturnRanking(
+      selectionRows,predictions,{
+        roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
+        maxPairsPerTimestamp:rankingPairsPerTimestamp
+      }
+    );
+    const selectionScore=score+
+      (rankingScoreAvailable&&pairwiseRanking.status==='AVAILABLE'
+        ?rankingScoreWeight*pairwiseRanking.pairwise_log_loss:0);
     const returnDiagnostics=summarizeTcnLstmSelectionReturns(
       selectionRows,predictions,{roundTripCostBps,minimumTrades:minimumReturnTrades,
         minimumWinRatePct:minimumReturnWinRatePct,
         baselineProbabilities:baselinePredictions}
     );
     evaluated.push({
-      name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
-      selection_brier: score,
-      logistic_selection_brier: baselineBrier,
-      improvement: baselineBrier - score,
-      return_selection_diagnostics:returnDiagnostics,
-      fit
+      name:config.name,
+      config:{...config,dropout:candidateDropout,objective:candidateObjective,
+        rankingWeight:Number(config.rankingWeight??0)},
+      selection_brier:score,logistic_selection_brier:baselineBrier,
+      pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
+      selection_score:selectionScore,logistic_selection_score:baselineSelectionScore,
+      improvement:baselineSelectionScore-selectionScore,
+      return_selection_diagnostics:returnDiagnostics,fit
     });
   }
-  evaluated.sort((a, b) =>
-    a.selection_brier - b.selection_brier || a.name.localeCompare(b.name));
+  evaluated.sort((a,b)=>
+    a.selection_score-b.selection_score||
+    a.selection_brier-b.selection_brier||a.name.localeCompare(b.name));
   const winner = evaluated[0];
   const passed = winner.improvement > requiredImprovement;
   return {
@@ -1570,16 +1602,30 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     effective_training_budget:effectiveTrainingBudget,
     effective_training_rows:effectiveTrainingRows.length,
     baseline: {
-      kind: anchor.kind,
-      training_rows: anchor.training_rows,
-      selection_brier: Number(baselineBrier.toFixed(8))
+      kind:anchor.kind,training_rows:anchor.training_rows,
+      selection_brier:Number(baselineBrier.toFixed(8)),
+      pairwise_ranking:baselineRanking,
+      selection_score:Number(baselineSelectionScore.toFixed(8))
     },
-    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, return_selection_diagnostics }) => ({
-      name, config,
-      selection_brier: Number(selection_brier.toFixed(8)),
-      logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
-      improvement: Number(improvement.toFixed(8)),
-      passed_inner_margin: improvement > requiredImprovement,
+    selection_scoring:{
+      method:rankingScoreAvailable
+        ?'BRIER_PLUS_WITHIN_TIMESTAMP_PAIRWISE_RETURN_RANK_LOSS_V1'
+        :'BRIER_ONLY_PAIRWISE_RANK_SUPPORT_UNAVAILABLE',
+      pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
+      required_inner_improvement:requiredImprovement,
+      ranking_uses_inner_selection_partition_only:true,
+      outer_validation_or_holdout_used:false
+    },
+    candidates:evaluated.map(({name,config,selection_brier,logistic_selection_brier,
+      pairwise_ranking,logistic_pairwise_ranking,selection_score,logistic_selection_score,
+      improvement,return_selection_diagnostics})=>({
+      name,config,selection_brier:Number(selection_brier.toFixed(8)),
+      logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
+      pairwise_ranking,logistic_pairwise_ranking,
+      selection_score:Number(selection_score.toFixed(8)),
+      logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
+      improvement:Number(improvement.toFixed(8)),
+      passed_inner_margin:improvement>requiredImprovement,
       return_selection_diagnostics
     })),
     selected_configuration: passed ? winner.name : null,
