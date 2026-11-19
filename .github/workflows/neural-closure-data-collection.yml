@@ -6,6 +6,7 @@ on:
       - research/neural-closure-4h-20261114
       - research/neural-closure-streaming-writer-20261114
       - research/build224-point-in-time-liquidity-20261117
+      - research/build224-neural-universe-expansion-20261119
     paths:
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -25,9 +26,9 @@ on:
         default: '180'
         type: string
       max_symbols:
-        description: 'Maximum USDT Spot symbols (10–50; default 50)'
+        description: 'Maximum USDT Spot symbols (10–100; default 100)'
         required: true
-        default: '50'
+        default: '100'
         type: string
 
 permissions:
@@ -63,12 +64,12 @@ jobs:
       - name: Build a 180-day first-touch cohort from the official public Spot API
         env:
           DAYS: ${{ inputs.days || '180' }}
-          MAX_SYMBOLS: ${{ inputs.max_symbols || '50' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '100' }}
         run: |
           node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
             --days "$DAYS" \
             --maxSymbols "$MAX_SYMBOLS" \
-            --minSymbols 25 \
+            --minSymbols 40 \
             --minQuoteVolumeUsdt 750000 \
             --output artifacts/neural-closure/dataset.json \
             --archiveDir artifacts/neural-closure/raw
