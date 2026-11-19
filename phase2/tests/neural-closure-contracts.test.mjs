@@ -317,8 +317,8 @@ test('calibrator method is fixed from fit rows and cannot be selected by validat
   }));
   const checkRows=Array.from({length:80},(_,index)=>({
     id:'CAL-CHECK-'+index,target:index%2,
-    at:Date.UTC(2025,1,5)+index*4*60*60*1000,
-    resolved_at:Date.UTC(2025,1,5)+(index+1)*4*60*60*1000
+    at:Date.UTC(2025,3,5)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,5)+(index+1)*4*60*60*1000
   }));
   const rawMap=new Map([...fitRows,...checkRows].map(row=>[
     row.id,row.target===1?0.70:0.30
@@ -359,6 +359,29 @@ test('Platt calibration must improve both Brier and NLL on a purged chronologica
     result.platt.generalization_gate.raw_check_brier);
   assert.ok(result.platt.generalization_gate.calibrated_check_nll<
     result.platt.generalization_gate.raw_check_nll);
+});
+
+test('Platt falls back to raw when its purged chronological inner check reverses',()=>{
+  const fitRows=Array.from({length:400},(_,index)=>({
+    id:'CAL-DRIFT-'+index,target:index%2,
+    at:Date.UTC(2025,0,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
+  }));
+  const rawMap=new Map(fitRows.map((row,index)=>[
+    row.id,index<240
+      ?(row.target===1?0.70:0.30)
+      :(row.target===1?0.30:0.70)
+  ]));
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-DRIFT-CHECK-'+index,target:index%2,
+    at:Date.UTC(2025,3,5)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,5)+(index+1)*4*60*60*1000
+  }));
+  for(const row of checkRows)rawMap.set(row.id,row.target===1?0.30:0.70);
+  const result=chooseCalibration(rawMap,fitRows,checkRows,20);
+  assert.equal(result.platt.generalization_gate.accepted,false);
+  assert.equal(result.selected_method,'RAW_PLATT_NOT_ACCEPTED');
+  assert.equal(result.selected_calibrator,null);
 });
 
 test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
