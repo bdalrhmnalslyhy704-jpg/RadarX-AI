@@ -389,6 +389,12 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   profile.execution_risk_penalty_weight=2;
   const higherPenalty=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
   assert.ok(higherPenalty.risk_adjusted_net_return_score<=scored.risk_adjusted_net_return_score);
+  const restored=JSON.parse(JSON.stringify(profile));
+  const restoredScore=predictTcnLstmHybridExecutionScore(evidence[0].sequence,restored);
+  assert.equal(restoredScore.status,'AVAILABLE');
+  assert.equal(restoredScore.risk_penalty_weight,2);
+  assert.equal(restoredScore.risk_adjusted_net_return_score,
+    higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
 });
 
