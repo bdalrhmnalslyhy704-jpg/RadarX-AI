@@ -1077,7 +1077,8 @@ async function main(){
     };
   }
 
-  // TCN -> LSTM -> temporal attention on the SAME 4h first-touch
+  let frozenExecutionFitForOuterAudit=null;
+// TCN -> LSTM -> temporal attention on the SAME 4h first-touch
   // cohort. Its private fitting/selection/calibration slices are drawn only
   // from the outer training partition and purged by the 4h label horizon.
   // Outer validation and untouched holdout are never passed to this trainer.
@@ -1191,6 +1192,7 @@ async function main(){
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
+        frozenExecutionFitForOuterAudit=selectedFit;
         const calibrator=selectedFit?fitTcnLstmHybridCalibration(
           calibrationRows,
           sequence=>predictTcnLstmHybridProbability(sequence,selectedFit),
@@ -1332,12 +1334,12 @@ async function main(){
             :{status:'UNAVAILABLE',passed:false,
               reason:!innerQualified?'INNER_SELECTION_NOT_QUALIFIED':frozenPolicyAudit.reason,
               policy_reselected:false};
-          const frozenPolicyHoldout=frozenPolicyValidation.status==='EVALUATED'&&
-            frozenPolicyValidation.passed===true
-            ?evaluateFrozenTcnLstmExecutionPolicy(toExecutionRows(split.holdout),selectedFit)
-            :{status:'LOCKED',passed:false,
-              reason:'HOLDOUT_LOCKED_UNTIL_FROZEN_VALIDATION_EXECUTION_PASSES',
-              policy_reselected:false};
+          // Do not inspect holdout outcomes here. The shared benchmark must
+          // first pass its complete outer gate (frozen execution + calibrated
+          // Brier superiority + threshold/risk gates).
+          const frozenPolicyHoldout={status:'LOCKED',passed:false,
+            reason:'HOLDOUT_LOCKED_UNTIL_FULL_OUTER_VALIDATION_GATE_PASSES',
+            policy_reselected:false};
           qualificationByModel.TCN_LSTM_HYBRID={
             passed:innerQualified&&frozenPolicyValidation.status==='EVALUATED'&&
               frozenPolicyValidation.passed===true,
@@ -1354,8 +1356,7 @@ async function main(){
             frozen_execution_policy_audit:frozenPolicyAudit,
             frozen_validation_execution:frozenPolicyValidation,
             frozen_holdout_execution:frozenPolicyHoldout,
-            holdout_opened_only_after_frozen_validation_pass:
-              frozenPolicyHoldout.status==='EVALUATED',
+            holdout_opened_only_after_full_outer_validation_gate_pass:false,
             policy_reselected_on_external_data:false
           };
           trainingArtifacts.TCN_LSTM_HYBRID={
@@ -1540,6 +1541,37 @@ async function main(){
     minimumWinRatePct:args.minimumWinRatePct,
     maximumDrawdownPct:args.maximumDrawdownPct
   });
+  // Open the final execution-policy holdout only after the complete shared
+  // outer-validation gate passes, not merely after the execution sub-gate.
+  const lstmOuterValidationPassed=
+    benchmark.models?.TCN_LSTM_HYBRID?.validation?.outer_validation_gate?.passed===true;
+  let frozenPolicyHoldout={status:'LOCKED',passed:false,
+    reason:'HOLDOUT_LOCKED_UNTIL_FULL_OUTER_VALIDATION_GATE_PASSES',
+    policy_reselected:false};
+  if(lstmOuterValidationPassed&&frozenExecutionFitForOuterAudit){
+    const holdoutExecutionRows=split.holdout.map(row=>({
+      id:row.id,symbol:row.symbol,at:row.at,sequence:row.temporal_sequence,
+      first_touch:row.first_touch,realized_return_pct:row.realized_return_pct,
+      max_adverse_excursion_pct:row.max_adverse_excursion_pct
+    }));
+    frozenPolicyHoldout=evaluateFrozenTcnLstmExecutionPolicy(
+      holdoutExecutionRows,frozenExecutionFitForOuterAudit
+    );
+  }
+  if(training.model_internal_diagnostics.TCN_LSTM_HYBRID){
+    training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+      ...training.model_internal_diagnostics.TCN_LSTM_HYBRID,
+      frozen_holdout_execution:frozenPolicyHoldout,
+      holdout_opened_only_after_full_outer_validation_gate_pass:lstmOuterValidationPassed,
+      full_outer_validation_gate_passed:lstmOuterValidationPassed,
+      policy_reselected_on_external_data:false
+    };
+  }
+  if(trainingArtifacts.TCN_LSTM_HYBRID){
+    trainingArtifacts.TCN_LSTM_HYBRID.frozen_holdout_execution=frozenPolicyHoldout;
+    trainingArtifacts.TCN_LSTM_HYBRID.holdout_opened_only_after_full_outer_validation_gate_pass=
+      lstmOuterValidationPassed;
+  }
 
   // Outer-validation-only execution-risk rank comparison. The penalty lambda
   // was selected on the earlier inner-selection block and is never refitted here.
