@@ -442,6 +442,8 @@ async function main(){
     throw new Error('VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM:'+included.length);
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_COHORT_BELOW_600_ROWS:'+rows.length);
 
+  if(rawArchiveRecords.length!==included.length*3)
+    throw new Error('RAW_ARCHIVE_INTERVAL_COUNT_MISMATCH:'+rawArchiveRecords.length+':'+included.length);
   const validated=validateFourHourRows(rows);
   // Validation clones only row envelopes; release the prevalidated envelopes
   // before split/hash/output allocations while preserving shared feature data.
