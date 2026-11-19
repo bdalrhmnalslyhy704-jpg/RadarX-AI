@@ -10,7 +10,8 @@ import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
-  runNeuralClosureBenchmark,sha256CanonicalArrayMapped
+  runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
+  evaluateExternalExecutionRiskTopK,evaluateExternalRankingObjectivesTopK
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -1490,9 +1491,117 @@ async function main(){
     minimumWinRatePct:args.minimumWinRatePct,
     maximumDrawdownPct:args.maximumDrawdownPct
   });
+
+  // Outer-validation-only execution-risk rank comparison. The penalty lambda
+  // was selected on the earlier inner-selection block and is never refitted here.
+  let externalExecutionRiskTopK={
+    schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_RISK_EXTERNAL_VALIDATION_TOP_K_V1',
+    status:'UNAVAILABLE',reason:'TCN_LSTM_OR_LOGISTIC_EXTERNAL_PREDICTIONS_UNAVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
+  };
+  const lstmExternalPredictions=predictionsByModel.TCN_LSTM_HYBRID;
+  const logisticExternalPredictions=predictionsByModel.LOGISTIC_REGRESSION;
+  if(Array.isArray(lstmExternalPredictions)&&Array.isArray(logisticExternalPredictions)){
+    const validationIds=new Set(split.validation.map(row=>String(row.id)));
+    const riskById=new Map(lstmExternalPredictions.filter(item=>
+      validationIds.has(String(item.id))).map(item=>[String(item.id),item]));
+    const logisticById=new Map(logisticExternalPredictions.filter(item=>
+      validationIds.has(String(item.id))).map(item=>[String(item.id),item]));
+    const alignedRows=[...split.validation].sort((a,b)=>a.at-b.at||
+      String(a.symbol).localeCompare(String(b.symbol))||
+      String(a.id).localeCompare(String(b.id)));
+    const complete=alignedRows.every(row=>{
+      const neural=riskById.get(String(row.id)),logistic=logisticById.get(String(row.id));
+      return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
+        finite(neural.execution_risk_penalty_weight)&&finite(logistic.probability);
+    });
+    if(complete){
+      externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
+        alignedRows,
+        alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score),
+        alignedRows.map(row=>logisticById.get(String(row.id)).probability),
+        {riskPenaltyWeights:alignedRows.map(row=>
+          riskById.get(String(row.id)).execution_risk_penalty_weight),
+          topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+      );
+    }else{
+      externalExecutionRiskTopK={
+        ...externalExecutionRiskTopK,
+        reason:'OUTER_VALIDATION_RISK_OR_LOGISTIC_PREDICTION_ALIGNMENT_INCOMPLETE',
+        expected_validation_rows:alignedRows.length,
+        aligned_risk_rows:alignedRows.filter(row=>riskById.has(String(row.id))).length,
+        aligned_logistic_rows:alignedRows.filter(row=>logisticById.has(String(row.id))).length
+      };
+    }
+  }
+  // Separate outer-validation ranking objectives on identical opportunities:
+  // (1) calibrated probability asks "will this event be a net win?",
+  // (2) pairwise logit ranks net winners above non-winners,
+  // (3) expected return minus a frozen downside-risk penalty ranks EV.
+  // All three are measured against Logistic with the same Top-K and simulator.
+  let separatedRankingObjectivesTopK={
+    schema:'RADARX_TCN_LSTM_SEPARATED_RANKING_OBJECTIVES_EXTERNAL_VALIDATION_V1',
+    status:'UNAVAILABLE',reason:'TCN_LSTM_SEPARATED_OBJECTIVE_PREDICTIONS_UNAVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
+  };
+  if(Array.isArray(lstmExternalPredictions)&&Array.isArray(logisticExternalPredictions)){
+    const validationIds=new Set(split.validation.map(row=>String(row.id)));
+    const neuralById=new Map(lstmExternalPredictions.filter(item=>
+      validationIds.has(String(item.id))).map(item=>[String(item.id),item]));
+    const logisticById=new Map(logisticExternalPredictions.filter(item=>
+      validationIds.has(String(item.id))).map(item=>[String(item.id),item]));
+    const alignedRows=[...split.validation].sort((a,b)=>a.at-b.at||
+      String(a.symbol).localeCompare(String(b.symbol))||
+      String(a.id).localeCompare(String(b.id)));
+    const complete=alignedRows.every(row=>{
+      const neural=neuralById.get(String(row.id)),logistic=logisticById.get(String(row.id));
+      return neural&&logistic&&finite(neural.probability)&&
+        finite(neural.auxiliary_ranking_logit)&&
+        finite(neural.execution_risk_adjusted_score)&&
+        finite(neural.execution_risk_penalty_weight)&&finite(logistic.probability);
+    });
+    if(complete){
+      separatedRankingObjectivesTopK=evaluateExternalRankingObjectivesTopK(
+        alignedRows,{
+          TCN_LSTM_CALIBRATED_WIN_PROBABILITY:{
+            score_semantics:'CALIBRATED_PROBABILITY_OF_FIRST_TOUCH_UP_NET_WIN',
+            scores:alignedRows.map(row=>neuralById.get(String(row.id)).probability)
+          },
+          TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT:{
+            score_semantics:'TRAINING_ONLY_PAIRWISE_NET_POSITIVE_VS_NON_POSITIVE_LOGIT',
+            scores:alignedRows.map(row=>neuralById.get(String(row.id)).auxiliary_ranking_logit)
+          },
+          TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK:{
+            score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+            scores:alignedRows.map(row=>neuralById.get(String(row.id)).execution_risk_adjusted_score)
+          }
+        },
+        alignedRows.map(row=>logisticById.get(String(row.id)).probability),
+        {topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+      );
+    }else{
+      separatedRankingObjectivesTopK={
+        ...separatedRankingObjectivesTopK,
+        reason:'OUTER_VALIDATION_SEPARATED_OBJECTIVE_OR_LOGISTIC_ALIGNMENT_INCOMPLETE',
+        expected_validation_rows:alignedRows.length,
+        aligned_neural_rows:alignedRows.filter(row=>neuralById.has(String(row.id))).length,
+        aligned_logistic_rows:alignedRows.filter(row=>logisticById.has(String(row.id))).length,
+        missing_neural_probability:alignedRows.filter(row=>!finite(neuralById.get(String(row.id))?.probability)).length,
+        missing_pairwise_rank_logit:alignedRows.filter(row=>!finite(neuralById.get(String(row.id))?.auxiliary_ranking_logit)).length,
+        missing_execution_risk_score:alignedRows.filter(row=>!finite(neuralById.get(String(row.id))?.execution_risk_adjusted_score)).length
+      };
+    }
+  }
+  training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+    ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
+    external_validation_execution_risk_top_k:externalExecutionRiskTopK,
+    external_validation_separated_ranking_objectives_top_k:separatedRankingObjectivesTopK
+  };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
+    external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?externalExecutionRiskTopK:null,
+    external_validation_separated_ranking_objectives_top_k:name==='TCN_LSTM_HYBRID'?separatedRankingObjectivesTopK:null,
     probability_stage_diagnostics:
       model.validation?.probability_stage_diagnostics??null,
     validation:model.validation?{
