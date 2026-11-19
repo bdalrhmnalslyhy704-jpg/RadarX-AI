@@ -1,0 +1,55 @@
+name: Build 224 TCN-LSTM Pairwise Ranking Tests
+
+on:
+  push:
+    branches:
+      - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
+      - research/build224-tcn-lstm-dual-head-ranking-20261118
+    paths:
+      - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
+      - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
+    paths:
+      - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-lstm-pairwise-tests-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  pairwise-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Syntax-check TCN-LSTM implementation
+        run: node --check phase2/core/temporal-lstm-hybrid.mjs
+
+      - name: Run focused TCN-LSTM contract and pairwise-gradient tests
+        run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs

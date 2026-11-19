@@ -1,0 +1,51 @@
+name: Build 224 TCN-LSTM Pairwise Ranking Contract Tests
+
+on:
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
+      - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
+    paths:
+      - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-tcn-lstm-pairwise-contract-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pairwise-tests:
+    name: Verify pairwise ranking math and training integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Check pairwise model and trainer syntax
+        run: |
+          node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+
+      - name: Run pairwise ranking and trainer wiring tests
+        run: |
+          node --test phase2/tests/temporal-lstm-hybrid.test.mjs phase2/tests/neural-closure-training-wiring.test.mjs

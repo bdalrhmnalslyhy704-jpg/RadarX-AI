@@ -6,7 +6,9 @@ on:
       - research/neural-closure-4h-20261114
       - research/neural-closure-streaming-writer-20261114
       - research/build224-point-in-time-liquidity-20261117
+      - research/build224-neural-universe-expansion-20261119
     paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
@@ -17,6 +19,18 @@ on:
       - 'phase2/core/binance-server-retry-policy.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-data-builder.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
+    paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
+      - 'phase2/core/neural-closure-data-builder.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tools/build-neural-closure-dataset.mjs'
+      - 'phase2/core/neural-closure-json-writer.mjs'
+      - 'phase2/core/neural-closure-raw-archive.mjs'
+      - 'phase2/core/binance-server-retry-policy.mjs'
+      - 'phase2/tests/neural-closure-data-builder.test.mjs'
   workflow_dispatch:
     inputs:
       days:
@@ -25,9 +39,9 @@ on:
         default: '180'
         type: string
       max_symbols:
-        description: 'Maximum USDT Spot symbols (10–50; default 50)'
+        description: 'Maximum USDT Spot symbols (10–100; default 100)'
         required: true
-        default: '50'
+        default: '100'
         type: string
 
 permissions:
@@ -39,6 +53,8 @@ concurrency:
 
 jobs:
   collect:
+    # Pull-request events validate the workflow but must not launch a second 180-day API crawl.
+    if: github.event_name != 'pull_request'
     name: Collect, archive and validate real Binance Spot candles
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -63,12 +79,12 @@ jobs:
       - name: Build a 180-day first-touch cohort from the official public Spot API
         env:
           DAYS: ${{ inputs.days || '180' }}
-          MAX_SYMBOLS: ${{ inputs.max_symbols || '50' }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols || '100' }}
         run: |
           node --expose-gc --max-old-space-size=3072 phase2/tools/build-neural-closure-dataset.mjs \
             --days "$DAYS" \
             --maxSymbols "$MAX_SYMBOLS" \
-            --minSymbols 25 \
+            --minSymbols 40 \
             --minQuoteVolumeUsdt 750000 \
             --output artifacts/neural-closure/dataset.json \
             --archiveDir artifacts/neural-closure/raw

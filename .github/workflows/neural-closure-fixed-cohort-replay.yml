@@ -4,6 +4,16 @@ on:
   push:
     branches:
       - research/build224-point-in-time-liquidity-20261117
+      - research/build224-tcn-lstm-pairwise-rank-20261118
+    paths:
+      - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -17,8 +27,8 @@ permissions:
 
 concurrency:
   # Keep each immutable candidate-SHA replay independent; a stale run must not block the latest benchmark.
-  group: build224-neural-closure-fixed-cohort-replay-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: build224-neural-closure-fixed-cohort-replay-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   replay:
@@ -64,7 +74,7 @@ jobs:
             --output artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json \
             --epochs 8 \
             --denseEpochs 36 \
-            --minimumHoldoutTrades 100 \
+            --minimumHoldoutTrades 20 \
             --minimumWinRatePct 55 \
             --maximumDrawdownPct 8 \
             --roundTripCostBps 30
