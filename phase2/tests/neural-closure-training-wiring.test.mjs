@@ -199,9 +199,9 @@ test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the sh
 
 test('fixed-config attention and dense challengers cannot claim inner qualification from training alone',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
-  const initialQualification=trainer.match(/const qualificationByModel=\\{([\\s\\S]*?)\\n  \\};/)?.[1]??'';
-  assert.match(initialQualification,/HYBRID_TCN_ATTENTION:\\{[\\s\\S]*?passed:false[\\s\\S]*?diagnostic_only:true/);
-  assert.match(initialQualification,/DENSE_MLP:\\{[\\s\\S]*?passed:false[\\s\\S]*?diagnostic_only:true/);
+  const initialQualification=trainer.match(/const qualificationByModel=\{([\s\S]*?)\n  \};/)?.[1]??'';
+  assert.match(initialQualification,/HYBRID_TCN_ATTENTION:\{[\s\S]*?passed:false[\s\S]*?diagnostic_only:true/);
+  assert.match(initialQualification,/DENSE_MLP:\{[\s\S]*?passed:false[\s\S]*?diagnostic_only:true/);
   assert.doesNotMatch(initialQualification,/FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION/,
     'model fitting must never temporarily mark a fixed-config challenger as qualified');
   assert.match(trainer,/NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_ATTENTION/);
