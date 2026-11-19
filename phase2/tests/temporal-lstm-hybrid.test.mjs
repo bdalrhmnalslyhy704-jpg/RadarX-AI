@@ -15,6 +15,7 @@ import {
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridRankingLogit,
   predictTcnLstmHybridRankingAnchorLogit,
+  predictTcnLstmHybridExecutionHeads,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
@@ -350,6 +351,31 @@ test('rank-head execution diagnostics quantify lift against the same frozen Logi
     net_pnl_percentage_points:0.9,max_drawdown_percentage_points:-0.5,
     average_net_return_percentage_points:0.08,sharpe_per_trade:0.3
   });
+});
+
+test('TCN-LSTM fits separate net-return and downside regression heads on training outcomes only',()=>{
+  const evidence=makeRankedRows(0,10,'execution-train').map((row,index)=>({
+    ...row,
+    max_adverse_excursion_pct:index%4===0?-0.35:index%4===1?-0.75:
+      index%4===2?-1.4:-2.1,
+    max_adverse_excursion_at:row.at+60*60*1000
+  }));
+  const fitRows=evidence.map(({realized_return_pct,...row})=>row);
+  const profile=trainTcnLstmHybrid(fitRows,{
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:771,maxTrainingSamples:40,rankingRows:evidence,
+    rankingHeadEpochs:12,executionHeadEpochs:20,
+    executionHeadRoundTripCostBps:30
+  });
+  assert.equal(profile.training.execution_regression_heads.fitted,true);
+  assert.equal(profile.training.execution_regression_heads.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.training.execution_regression_heads.validation_or_holdout_used,false);
+  assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
+  const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
+  assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
+  assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
+  assert.ok(prediction.predicted_downside_risk_pct>=0);
+  assert.equal(profile.real_order_execution,false);
 });
 
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
