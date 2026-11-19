@@ -1957,6 +1957,82 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
 
 
 /**
+ * Compare several semantically distinct TCN-LSTM ranking objectives against
+ * Logistic on the same outer-validation opportunities and the same Top-K,
+ * timestamp buckets, portfolio simulator and round-trip cost. This is a
+ * diagnostic only: it cannot refit a model, choose a threshold or touch holdout.
+ */
+export function evaluateExternalRankingObjectivesTopK(rows,objectives,logisticProbabilities,{
+  topKGrid=[1,2,3],roundTripCostBps=30
+}={}){
+  if(!Array.isArray(rows)||!rows.length||!objectives||
+    typeof objectives!=='object'||Array.isArray(objectives)||
+    !Object.keys(objectives).length||
+    !Array.isArray(logisticProbabilities)||logisticProbabilities.length!==rows.length||
+    !Array.isArray(topKGrid)||!topKGrid.length||
+    topKGrid.some(k=>!Number.isInteger(k)||k<1||k>100)||
+    !finite(roundTripCostBps)||Number(roundTripCostBps)<0||Number(roundTripCostBps)>300)
+    throw new TypeError('EXTERNAL_RANKING_OBJECTIVES_TOP_K_INPUT_INVALID');
+  if(rows.some(row=>!row?.id||!row?.symbol||!finite(row?.at))||
+    new Set(rows.map(row=>String(row.id))).size!==rows.length||
+    logisticProbabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1))
+    throw new TypeError('EXTERNAL_RANKING_OBJECTIVES_BASELINE_OR_ROW_INVALID');
+  const entries=Object.entries(objectives);
+  for(const [name,objective] of entries){
+    if(!name||!objective||typeof objective.score_semantics!=='string'||
+      !objective.score_semantics.trim()||
+      !Array.isArray(objective.scores)||objective.scores.length!==rows.length||
+      objective.scores.some(value=>!finite(value)))
+      throw new TypeError('EXTERNAL_RANKING_OBJECTIVE_INVALID:'+name);
+  }
+  const baselineResults=new Map();
+  const trials=entries.map(([name,objective])=>{
+    const objectiveTrials=topKGrid.map(topK=>{
+      const modelMask=topKRankingSignals(rows,objective.scores,topK);
+      let baselineMask=baselineResults.get(topK);
+      if(!baselineMask){
+        baselineMask=topKRankingSignals(rows,logisticProbabilities,topK);
+        baselineResults.set(topK,baselineMask);
+      }
+      const options={threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+        maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+        initialEquity:100};
+      const model=simulateFirstTouchPaperPortfolio(rows,modelMask.probabilities,options);
+      const logistic=simulateFirstTouchPaperPortfolio(rows,baselineMask.probabilities,options);
+      const delta=(a,b,key)=>finite(a?.[key])&&finite(b?.[key])
+        ?Number((Number(a[key])-Number(b[key])).toFixed(6)):null;
+      return {
+        top_k_per_timestamp:topK,
+        decision_group_count:modelMask.decision_group_count,
+        logistic_decision_group_count:baselineMask.decision_group_count,
+        neural_selected_count:modelMask.signal_count,
+        logistic_selected_count:baselineMask.signal_count,
+        neural_metrics:model,logistic_metrics:logistic,
+        neural_minus_logistic:{
+          executed_trade_count:delta(model,logistic,'trade_count'),
+          win_rate_percentage_points:delta(model,logistic,'win_rate_pct'),
+          net_pnl_percentage_points:delta(model,logistic,'net_pnl_pct'),
+          max_drawdown_percentage_points:delta(model,logistic,'max_drawdown_pct')
+        }
+      };
+    });
+    return {objective:name,score_semantics:objective.score_semantics,top_k_trials:objectiveTrials};
+  });
+  return {
+    schema:'RADARX_TCN_LSTM_SEPARATED_RANKING_OBJECTIVES_EXTERNAL_VALIDATION_V1',
+    status:'AVAILABLE',evaluation_partition:'OUTER_VALIDATION_ONLY',
+    baseline:'LOGISTIC_REGRESSION_SAME_TRAINING_PARTITION',
+    opportunity_rows:rows.length,top_k_grid:[...topKGrid],
+    round_trip_cost_bps:Number(roundTripCostBps),
+    objectives_kept_semantically_separate:true,
+    objective_count:trials.length,objectives:trials,
+    model_fit_or_selection_on_outer_validation:false,
+    thresholds_or_penalties_tuned_on_outer_validation:false,
+    holdout_rows_or_scores_used:false
+  };
+}
+
+/**
  * Compare a frozen execution-risk score with the frozen Logistic ranker on
  * identical outer-validation opportunities. Lambda is read-only here.
  */
