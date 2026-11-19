@@ -19,7 +19,8 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,runNeuralClosureBenchmark
+  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,runNeuralClosureBenchmark,
+  evaluateExternalRankingObjectivesTopK
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -80,6 +81,54 @@ function makeRows({days=60,rowsPerDay=200}={}){
   }
   return rows;
 }
+test('external Top-K diagnostics keep win probability, net-win ranking and EV-risk as separate objectives',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const logistic=rows.map(row=>row.target?0.64:0.36);
+  const probability=rows.map((row,index)=>row.target
+    ?0.58+(index%3)*0.01:0.42-(index%3)*0.01);
+  const pairwise=rows.map((row,index)=>row.target
+    ?2.5+(index%4)*0.1:-2.5-(index%4)*0.1);
+  const evRisk=rows.map((row,index)=>row.target
+    ?1.2+(index%5)*0.03:-1.0-(index%5)*0.02);
+  const report=evaluateExternalRankingObjectivesTopK(rows,{
+    TCN_LSTM_CALIBRATED_WIN_PROBABILITY:{
+      score_semantics:'CALIBRATED_PROBABILITY_OF_FIRST_TOUCH_UP_NET_WIN',
+      scores:probability
+    },
+    TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT:{
+      score_semantics:'TRAINING_ONLY_PAIRWISE_NET_POSITIVE_VS_NON_POSITIVE_LOGIT',
+      scores:pairwise
+    },
+    TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK:{
+      score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+      scores:evRisk
+    }
+  },logistic,{topKGrid:[1,2,3],roundTripCostBps:30});
+  assert.equal(report.status,'AVAILABLE');
+  assert.equal(report.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(report.objectives_kept_semantically_separate,true);
+  assert.equal(report.holdout_rows_or_scores_used,false);
+  assert.equal(report.round_trip_cost_bps,30);
+  assert.equal(report.objectives.length,3);
+  assert.deepEqual(report.objectives.map(item=>item.objective),[
+    'TCN_LSTM_CALIBRATED_WIN_PROBABILITY',
+    'TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT',
+    'TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK'
+  ]);
+  for(const objective of report.objectives){
+    assert.equal(objective.top_k_trials.length,3);
+    for(const trial of objective.top_k_trials){
+      assert.equal(trial.neural_selected_count,trial.logistic_selected_count);
+      assert.equal(trial.decision_group_count,trial.logistic_decision_group_count);
+      assert.equal(trial.neural_metrics.return_data_status,'COMPLETE');
+      assert.equal(trial.logistic_metrics.return_data_status,'COMPLETE');
+    }
+  }
+  assert.throws(()=>evaluateExternalRankingObjectivesTopK(rows,{
+    INVALID:{score_semantics:'',scores:probability}
+  },logistic,{topKGrid:[1]}),/EXTERNAL_RANKING_OBJECTIVE_INVALID/);
+});
+
 function makeArtifacts(sourceCommitSha){
   return Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map((family,index)=>[
     family,createVersionedModelArtifact({
