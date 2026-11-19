@@ -30,8 +30,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: build224-tcn-lstm-pairwise-tests-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: build224-tcn-lstm-pairwise-tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pairwise-tests:
