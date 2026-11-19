@@ -1316,6 +1316,7 @@ async function main(){
               row.name===selection.selected_configuration)?.pairwise_ranking??null,
             selected_pairwise_ranking_head:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.ranking_head??null,
+            ranking_head_selection_qualification:selection.ranking_head_selection_qualification??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
             ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
