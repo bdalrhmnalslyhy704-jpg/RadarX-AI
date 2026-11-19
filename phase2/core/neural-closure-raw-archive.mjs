@@ -8,6 +8,11 @@ import {createGzip} from 'node:zlib';
 
 const ARCHIVE_SCHEMA='BINANCE_SPOT_RAW_KLINE_ARCHIVE_V1';
 
+export function isRawSpotArchiveSymbol(symbol){
+  const normalized=String(symbol||'').trim().toUpperCase();
+  return /^[A-Z0-9]+USDT$/.test(normalized);
+}
+
 /**
  * Stream the canonical raw Binance kline envelope through gzip while hashing
  * both byte streams. This preserves the exact SHA-256 contract of
@@ -21,8 +26,8 @@ export async function writeRawSpotKlineArchive({
 }={}){
   const normalizedSymbol=String(symbol||'').trim().toUpperCase();
   const normalizedInterval=String(interval||'').trim();
-  if(!/^[A-Z0-9]+USDT$/.test(normalizedSymbol))
-    throw new TypeError('NEURAL_RAW_ARCHIVE_SYMBOL_INVALID');
+  if(!isRawSpotArchiveSymbol(normalizedSymbol))
+    throw new TypeError('NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:'+normalizedSymbol);
   if(!['1m','5m','15m'].includes(normalizedInterval))
     throw new TypeError('NEURAL_RAW_ARCHIVE_INTERVAL_INVALID');
   if(!Array.isArray(rawRows)||rawRows.some(row=>!Array.isArray(row)))
