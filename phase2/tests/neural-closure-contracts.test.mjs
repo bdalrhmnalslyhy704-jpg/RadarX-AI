@@ -355,6 +355,15 @@ test('Platt calibration must improve both Brier and NLL on a purged chronologica
   const result=chooseCalibration(rawMap,fitRows,checkRows,20);
   assert.equal(result.platt.generalization_gate.accepted,true);
   assert.equal(result.platt.accepted,true);
+  assert.equal(result.platt.generalization_gate.purge_ms,86_400_000);
+  assert.equal(
+    result.platt.generalization_gate.purge_rule,
+    'FULL_UTC_DAY_PURGE_BETWEEN_INNER_FIT_LABEL_MATURITY_AND_CHECK'
+  );
+  assert.ok(
+    result.platt.generalization_gate.inner_check_earliest_at-
+    result.platt.generalization_gate.inner_fit_latest_resolved_at>=86_400_000
+  );
   assert.ok(result.platt.generalization_gate.calibrated_check_brier<
     result.platt.generalization_gate.raw_check_brier);
   assert.ok(result.platt.generalization_gate.calibrated_check_nll<
