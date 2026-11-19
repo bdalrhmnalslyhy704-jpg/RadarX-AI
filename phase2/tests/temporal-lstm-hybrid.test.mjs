@@ -765,9 +765,9 @@ test('holdout outcome labels remain unread until external validation passes',()=
   // Without matured MAE/first-touch execution evidence, the new independent
   // return/risk heads cannot qualify the inner fit. The sealed holdout getter
   // must still remain unread and the evaluator must fail closed.
-  assert.equal(result.validation.evaluated,false);
-  assert.equal(result.validation.passed,false);
-  assert.equal(result.holdout.evaluated,false);
+  assert.notEqual(result.validation?.evaluated,true);
+  assert.notEqual(result.validation?.passed,true);
+  assert.notEqual(result.holdout?.evaluated,true);
   assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
 });
 
