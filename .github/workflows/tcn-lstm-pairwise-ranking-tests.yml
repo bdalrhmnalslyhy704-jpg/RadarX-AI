@@ -36,7 +36,7 @@ concurrency:
 jobs:
   pairwise-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 120
     steps:
       - name: Checkout exact candidate SHA
         uses: actions/checkout@v4
@@ -59,3 +59,51 @@ jobs:
         run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs
       - name: Run fixed-cohort trainer wiring and frozen-policy gate tests
         run: node --test phase2/tests/neural-closure-training-wiring.test.mjs
+
+      - name: Download the immutable 32,300-row Binance Spot cohort
+        uses: actions/download-artifact@v4
+        with:
+          name: radarx-build224-neural-closure-dataset-039c9074fc21fa0ea303e360a6ea56d3a401a559
+          repository: ${{ github.repository }}
+          run-id: '44196188685'
+          github-token: ${{ github.token }}
+          path: artifacts/neural-closure
+
+      - name: Verify fixed cohort identity before training
+        env:
+          EXPECTED_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
+          EXPECTED_ROW_COUNT: '32300'
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const d=JSON.parse(fs.readFileSync('artifacts/neural-closure/dataset.json','utf8'));
+          if(d.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) throw new Error('FIXED_COHORT_SHA_MISMATCH');
+          if(Number(d.rows?.length)!==Number(process.env.EXPECTED_ROW_COUNT)) throw new Error('FIXED_COHORT_ROW_COUNT_MISMATCH');
+          if(Number(d.universe?.minimum_quote_volume_24h_usdt)<750000) throw new Error('LIQUIDITY_FLOOR_MISMATCH');
+          console.log(JSON.stringify({dataset_sha256:d.dataset_sha256,rows:d.rows.length,
+            source_commit_sha:d.source_commit_sha,minimum_quote_volume_24h_usdt:d.universe.minimum_quote_volume_24h_usdt}));
+          NODE
+
+      - name: Run the real fixed-cohort neural versus Logistic benchmark
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: |
+          mkdir -p artifacts/neural-closure-benchmark
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \\
+            --input artifacts/neural-closure/dataset.json \\
+            --output artifacts/neural-closure-benchmark/fixed-sha-neural-benchmark.json \\
+            --epochs 8 \\
+            --denseEpochs 36 \\
+            --minimumHoldoutTrades 100 \\
+            --minimumWinRatePct 55 \\
+            --maximumDrawdownPct 8 \\
+            --roundTripCostBps 30
+
+      - name: Publish benchmark report and frozen model artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-build224-frozen-policy-benchmark-${{ github.sha }}
+          path: artifacts/neural-closure-benchmark/
+          if-no-files-found: ignore
+          retention-days: 30
