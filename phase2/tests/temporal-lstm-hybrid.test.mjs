@@ -16,6 +16,7 @@ import {
   predictTcnLstmHybridRankingLogit,
   predictTcnLstmHybridRankingAnchorLogit,
   predictTcnLstmHybridExecutionHeads,
+  predictTcnLstmHybridExecutionScore,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
@@ -375,6 +376,19 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
   assert.ok(prediction.predicted_downside_risk_pct>=0);
+  const unavailable=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.equal(unavailable.status,'UNAVAILABLE');
+  profile.execution_risk_penalty_weight=0.5;
+  const scored=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.equal(scored.status,'AVAILABLE');
+  assert.equal(scored.risk_penalty_weight,0.5);
+  assert.equal(scored.score_semantics,
+    'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK');
+  assert.ok(Math.abs(scored.risk_adjusted_net_return_score-
+    (prediction.predicted_net_return_pct-0.5*prediction.predicted_downside_risk_pct))<1e-10);
+  profile.execution_risk_penalty_weight=2;
+  const higherPenalty=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.ok(higherPenalty.risk_adjusted_net_return_score<=scored.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
 });
 
