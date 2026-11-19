@@ -310,7 +310,7 @@ test('fixed-SHA calibration, threshold-selection and outer-validation blocks are
 });
 
 test('calibrator method is fixed from fit rows and cannot be selected by validation-check labels',()=>{
-  const fitRows=Array.from({length:200},(_,index)=>({
+  const fitRows=Array.from({length:400},(_,index)=>({
     id:'CAL-FIT-'+index,target:index%2,
     at:Date.UTC(2025,0,1)+index*4*60*60*1000,
     resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
@@ -344,8 +344,15 @@ test('Platt calibration must improve both Brier and NLL on a purged chronologica
     at:Date.UTC(2025,0,1)+index*4*60*60*1000,
     resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
   }));
-  const rawMap=new Map(fitRows.map(row=>[row.id,row.target===1?0.70:0.30]));
-  const result=chooseCalibration(rawMap,fitRows,fitRows.slice(-80),20);
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-GATE-CHECK-'+index,target:index%2,
+    at:Date.UTC(2025,3,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,1)+(index+1)*4*60*60*1000
+  }));
+  const rawMap=new Map([...fitRows,...checkRows].map(row=>[
+    row.id,row.target===1?0.70:0.30
+  ]));
+  const result=chooseCalibration(rawMap,fitRows,checkRows,20);
   assert.equal(result.platt.generalization_gate.accepted,true);
   assert.equal(result.platt.accepted,true);
   assert.ok(result.platt.generalization_gate.calibrated_check_brier<
