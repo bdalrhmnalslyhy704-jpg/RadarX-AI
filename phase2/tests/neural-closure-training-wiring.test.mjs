@@ -76,8 +76,8 @@ test('expanded Binance cohort filters unarchivable Spot symbols before top-100 l
   assert.match(trainer,/evidence\.window_evidence_sha256/);
   assert.match(trainer,/historical_delisted_asset_coverage!==false/);
   assert.match(collector,/if\(universe\.selected\.length<args\.minSymbols\)/);
-  assert.match(collector,/--minSymbols 40/);
-  assert.match(collector,/--minQuoteVolumeUsdt 750000/);
+  assert.ok(workflow.includes('--minSymbols 40'));
+  assert.ok(workflow.includes('--minQuoteVolumeUsdt 750000'));
 });
 
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
@@ -396,7 +396,7 @@ test('TCN-LSTM keeps calibrated classification independent of net-win ranking an
   assert.match(trainer,/TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT/);
   assert.match(trainer,/TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK/);
   assert.match(trainer,/external_validation_separated_ranking_objectives_top_k/);
-  assert.match(lstm,/validation_or_holdout_used_for_fit:false/);
+  assert.match(lstm,/validation_or_selection_or_holdout_used_for_fit:\s*false/);
   assert.match(lstm,/holdout_values_used:false/);
 });
 test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
@@ -713,19 +713,3 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
 });
 
-test('TCN-LSTM keeps calibrated classification independent of net-win ranking and execution heads',async()=>{
-  const trainer=await readFile(trainerUrl,'utf8');
-  const lstm=await readFile(lstmModuleUrl,'utf8');
-  assert.match(lstm,/Probability is deliberately independent of the auxiliary/);
-  assert.match(lstm,/return sigmoid\(forward\.logit\)/);
-  assert.match(lstm,/NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE/);
-  assert.match(lstm,/pair_target:'NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE'/);
-  assert.match(lstm,/PURE_CLASSIFIER_BRIER_WITH_SEPARATE_NET_WIN_RANK_AND_EXECUTION_GATES_V3/);
-  assert.match(trainer,/evaluateExternalRankingObjectivesTopK/);
-  assert.match(trainer,/TCN_LSTM_CALIBRATED_WIN_PROBABILITY/);
-  assert.match(trainer,/TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT/);
-  assert.match(trainer,/TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK/);
-  assert.match(trainer,/external_validation_separated_ranking_objectives_top_k/);
-  assert.match(lstm,/validation_or_holdout_used_for_fit:false/);
-  assert.match(lstm,/holdout_values_used:false/);
-});
