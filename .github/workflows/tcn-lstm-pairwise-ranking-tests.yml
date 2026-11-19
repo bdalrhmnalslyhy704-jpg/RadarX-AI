@@ -6,6 +6,7 @@ on:
       - research/build224-tcn-lstm-pairwise-rank-20261118
       - research/build224-tcn-lstm-logit-ranking-fix-20261118
       - research/build224-tcn-lstm-dual-head-ranking-20261118
+      - research/build224-net-win-probability-head-20261119
     paths:
       - '.github/workflows/tcn-lstm-pairwise-ranking-tests.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
