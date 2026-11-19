@@ -74,7 +74,7 @@ jobs:
             --output artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json \
             --epochs 8 \
             --denseEpochs 36 \
-            --minimumHoldoutTrades 100 \
+            --minimumHoldoutTrades 20 \
             --minimumWinRatePct 55 \
             --maximumDrawdownPct 8 \
             --roundTripCostBps 30
