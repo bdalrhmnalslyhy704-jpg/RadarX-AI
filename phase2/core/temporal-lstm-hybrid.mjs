@@ -2086,6 +2086,45 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
  * Predeclared LR/L2 calibration on inner selection only. The frozen Logistic
  * anchor is fit once on training rows and reused for every challenger config.
  */
+function frozenExecutionPolicyPayload(policy) {
+  return {
+    schema:policy.schema,version:policy.version,
+    selected_risk_penalty_weight:policy.selected_risk_penalty_weight,
+    selected_top_k_per_timestamp:policy.selected_top_k_per_timestamp,
+    round_trip_cost_bps:policy.round_trip_cost_bps,
+    minimum_trades:policy.minimum_trades,
+    minimum_win_rate_pct:policy.minimum_win_rate_pct,
+    maximum_drawdown_pct:policy.maximum_drawdown_pct,
+    max_concurrent_positions:policy.max_concurrent_positions,
+    selection_partition_fingerprint:policy.selection_partition_fingerprint,
+    candidate_configuration:policy.candidate_configuration,
+    ranking_probability_blend_weight:policy.ranking_probability_blend_weight,
+    trained_model_fingerprint:policy.trained_model_fingerprint
+  };
+}
+function frozenExecutionPolicyFingerprint(policy) {
+  return createHash('sha256').update(JSON.stringify(frozenExecutionPolicyPayload(policy))).digest('hex');
+}
+export function verifyTcnLstmFrozenExecutionPolicy(profile) {
+  const policy=profile?.frozen_execution_policy;
+  if(!policy||policy.state!=='FROZEN_BEFORE_OUTER_VALIDATION'||
+    !finite(policy.selected_risk_penalty_weight)||
+    !Number.isInteger(policy.selected_top_k_per_timestamp)||
+    !finite(policy.round_trip_cost_bps)||!finite(policy.minimum_trades)||
+    !finite(policy.minimum_win_rate_pct)||!finite(policy.maximum_drawdown_pct)||
+    typeof policy.fingerprint!=='string'||policy.fingerprint.length!==64)
+    return {valid:false,reason:'FROZEN_POLICY_MISSING_OR_INVALID'};
+  if(frozenExecutionPolicyFingerprint(policy)!==policy.fingerprint||
+    Number(profile.execution_risk_penalty_weight)!==Number(policy.selected_risk_penalty_weight)||
+    Number(profile.execution_risk_policy?.selected_top_k_per_timestamp)!==Number(policy.selected_top_k_per_timestamp)||
+    Number(profile.execution_risk_policy?.selected_risk_penalty_weight)!==Number(policy.selected_risk_penalty_weight))
+    return {valid:false,reason:'FROZEN_POLICY_FINGERPRINT_OR_VALUE_MISMATCH'};
+  const modelFingerprint=createHash('sha256').update(JSON.stringify(profile.model)).digest('hex');
+  if(modelFingerprint!==policy.trained_model_fingerprint)
+    return {valid:false,reason:'FROZEN_POLICY_MODEL_FINGERPRINT_MISMATCH'};
+  return {valid:true,fingerprint:policy.fingerprint};
+}
+
 export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, {
   candidates = [
     { name: 'LR_0015_L2_0005_DROP00', learningRate: 0.0015, l2: 0.0005, dropout: 0, epochs: 6 },
@@ -2096,7 +2135,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   seed = 29,
   maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55,
-  rankingScoreWeight=0.01,rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
+  rankingScoreWeight=0.01,rankingTrainingWeight=0.10,
+  rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
@@ -2109,6 +2149,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !Number.isInteger(minimumReturnTrades)||minimumReturnTrades<1||
     !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100||
     !finite(rankingScoreWeight)||rankingScoreWeight<0||rankingScoreWeight>1||
+    !finite(rankingTrainingWeight)||rankingTrainingWeight<0||rankingTrainingWeight>1||
     !finite(rankingMinimumReturnGapPct)||rankingMinimumReturnGapPct<0||
     !Number.isInteger(rankingPairsPerTimestamp)||rankingPairsPerTimestamp<1||rankingPairsPerTimestamp>32||
     !finite(rankingHeadLearningRate)||rankingHeadLearningRate<=0||rankingHeadLearningRate>0.25||
@@ -2222,7 +2263,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingRows:rankingRowsForFit,
       executionRows:effectiveTrainingRows.every(row=>finite(row.realized_return_pct)&&
         finite(row.max_adverse_excursion_pct))?effectiveTrainingRows:null,
-      rankingWeight:Number(config.rankingWeight??0),
+      rankingWeight:Number(config.rankingWeight??rankingTrainingWeight),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
       rankingRoundTripCostBps:roundTripCostBps,
@@ -2312,7 +2353,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     evaluated.push({
       name:config.name,
       config:{...config,dropout:candidateDropout,objective:candidateObjective,
-        rankingWeight:Number(config.rankingWeight??0),
+        rankingWeight:Number(config.rankingWeight??rankingTrainingWeight),
         rankingHeadLearningRate:candidateRankingHeadLearningRate},
       ranking_probability_blend_weight:selectedBlend.weight,
       ranking_blend_search:blendTrials.map(item=>({
@@ -2366,6 +2407,31 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     (finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0);
   const compositeGatePassed=winner.composite_improvement>requiredImprovement;
   const passed=isInnerQualified(winner);
+  let frozenExecutionPolicy=null;
+  if(passed&&winner.fit?.execution_risk_policy?.passed===true){
+    const policy={
+      schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_POLICY_V1',version:1,
+      state:'FROZEN_BEFORE_OUTER_VALIDATION',
+      selected_risk_penalty_weight:Number(winner.execution_risk_policy.selected_risk_penalty_weight),
+      selected_top_k_per_timestamp:Number(winner.execution_risk_policy.selected_top_k_per_timestamp),
+      round_trip_cost_bps:Number(winner.execution_risk_policy.round_trip_cost_bps),
+      minimum_trades:Number(winner.execution_risk_policy.minimum_trades),
+      minimum_win_rate_pct:Number(winner.execution_risk_policy.minimum_win_rate_pct),
+      maximum_drawdown_pct:Number(winner.execution_risk_policy.maximum_drawdown_pct),
+      max_concurrent_positions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+      selection_partition_fingerprint:createHash('sha256').update(
+        JSON.stringify(selectionRows.map(sampleIdentity))
+      ).digest('hex'),
+      candidate_configuration:winner.config,
+      ranking_probability_blend_weight:Number(winner.ranking_probability_blend_weight),
+      trained_model_fingerprint:createHash('sha256').update(
+        JSON.stringify(winner.fit.model)
+      ).digest('hex')
+    };
+    policy.fingerprint=frozenExecutionPolicyFingerprint(policy);
+    winner.fit.frozen_execution_policy=policy;
+    frozenExecutionPolicy=policy;
+  }
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
@@ -2434,6 +2500,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       source_partition:'INNER_SELECTION_ONLY',
       holdout_values_used:false
     },
+    frozen_execution_policy:frozenExecutionPolicy,
     selected_configuration: passed ? winner.name : null,
     diagnostic_configuration: passed ? null : winner.name,
     required_inner_improvement: requiredImprovement,
@@ -2972,6 +3039,10 @@ export function evaluateTcnLstmHybridGeneralization({
     return { ...base, status: 'ABSTAIN_INNER_SELECTION_GATE_FAILED' };
 
   const selectedFit = selection.selected_fit;
+  const frozenPolicyAudit=verifyTcnLstmFrozenExecutionPolicy(selectedFit);
+  if(!frozenPolicyAudit.valid)
+    return {...base,status:'ABSTAIN_FROZEN_EXECUTION_POLICY_INVALID',
+      frozen_execution_policy_audit:frozenPolicyAudit};
   const modelPredictor = sequence => predictTcnLstmHybridProbability(sequence, selectedFit);
   const baselinePredictor = sequence =>
     sigmoid(predictTcnLstmLogisticLogit(sequence, selectedFit.baseline_fit));
