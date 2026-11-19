@@ -58,7 +58,8 @@ jobs:
     if: github.event_name != 'pull_request'
     name: Collect, archive and validate real Binance Spot candles
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 100 current top-liquidity candidates × 180 days requires a full uncapped crawl.
+    timeout-minutes: 240
     steps:
       - name: Checkout exact candidate SHA
         uses: actions/checkout@v4
