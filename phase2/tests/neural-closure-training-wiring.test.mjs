@@ -183,8 +183,11 @@ test('TCN-LSTM frozen execution policy is audited on outer validation and holdou
   assert.match(trainer,/evaluateFrozenTcnLstmExecutionPolicy,verifyTcnLstmFrozenExecutionPolicy/);
   assert.match(trainer,/frozenPolicyValidation/);
   assert.match(trainer,/frozenPolicyHoldout/);
-  assert.match(trainer,/HOLDOUT_LOCKED_UNTIL_FROZEN_VALIDATION_EXECUTION_PASSES/);
+  assert.match(trainer,/HOLDOUT_LOCKED_UNTIL_FULL_OUTER_VALIDATION_GATE_PASSES/);
   assert.match(trainer,/policy_reselected_on_external_data:false/);
+  assert.match(trainer,/holdout_opened_only_after_full_outer_validation_gate_pass:false/);
+  assert.match(trainer,/validation\.outer_validation_gate\?\.passed===true/);
+  assert.match(trainer,/holdout_opened_only_after_full_outer_validation_gate_pass:lstmOuterValidationPassed/);
   assert.match(trainer,/passed:innerQualified&&frozenPolicyValidation\.status==='EVALUATED'/);
 });
 
