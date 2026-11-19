@@ -1649,14 +1649,20 @@ export function trainTcnLstmHybrid(trainingRows, {
     trainable_parameter_count: TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
     ranking_head_parameter_count:rankingHeadFit.fitted
       ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
+    execution_regression_head_parameter_count:executionHeadFit.fitted
+      ?2*(TCN_LSTM_HIDDEN+1):0,
     total_parameter_count:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
-      (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0),
+      (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
+      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1):0),
     parameter_count_contract:{
       classifier_bptt_parameters:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
       auxiliary_ranking_head_parameters:rankingHeadFit.fitted
         ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
+      execution_regression_head_parameters:executionHeadFit.fitted
+        ?2*(TCN_LSTM_HIDDEN+1):0,
       total:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
-        (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)
+        (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
+        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1):0)
     },
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
