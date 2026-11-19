@@ -839,11 +839,16 @@ export function auditTcnLstmHybridGradients(sequence, target, {
   classWeights=null,
   gammaPositive=1,
   gammaNegative=2,
-  externalLogitGradient=null
+  externalLogitGradient=null,
+  classificationWeight=1,rankingLogitGradient=0,rankingLoss=0,
+  netReturnTarget=null,downsideRiskTarget=null,
+  returnLossWeight=0,riskLossWeight=0,huberDelta=1
 } = {}) {
   validateSequence(sequence);
   if (!finite(epsilon) || epsilon <= 0) throw new TypeError('TCN_LSTM_GRADIENT_EPSILON_INVALID');
-  const objectiveOptions={dropoutScale,objective,classWeights,gammaPositive,gammaNegative,externalLogitGradient};
+  const objectiveOptions={dropoutScale,objective,classWeights,gammaPositive,gammaNegative,
+    externalLogitGradient,classificationWeight,rankingLogitGradient,rankingLoss,
+    netReturnTarget,downsideRiskTarget,returnLossWeight,riskLossWeight,huberDelta};
   const analytic = lossAndGradientsTcnLstmHybrid(
     sequence, target, model, baselineLogit, objectiveOptions
   );
@@ -852,15 +857,20 @@ export function auditTcnLstmHybridGradients(sequence, target, {
       sequence,model,baselineLogit,{dropoutScale}
     );
     const probability=forward.probability;
-    if(objective==='EXTERNAL_LOGIT'){
-      if(!finite(externalLogitGradient))throw new TypeError('TCN_LSTM_EXTERNAL_LOGIT_GRADIENT_INVALID');
-      return Number(externalLogitGradient)*forward.logit;
-    }
-    return objective==='FOCAL_ASYMMETRIC_BRIER'
-      ?focalAsymmetricBrierLoss(probability,target,{
-        ...(classWeights??{}),gammaPositive,gammaNegative
-      }).loss
-      :(probability-target)**2;
+    const classificationLoss=objective==='EXTERNAL_LOGIT'
+      ?Number(externalLogitGradient)*forward.logit
+      :objective==='FOCAL_ASYMMETRIC_BRIER'
+        ?focalAsymmetricBrierLoss(probability,target,{
+          ...(classWeights??{}),gammaPositive,gammaNegative
+        }).loss
+        :(probability-target)**2;
+    const huber=(prediction,actual)=>{const delta=prediction-actual;
+      return Math.abs(delta)<=huberDelta?0.5*delta*delta:
+        huberDelta*(Math.abs(delta)-0.5*huberDelta);};
+    return classificationWeight*classificationLoss+
+      rankingLogitGradient*forward.ranking_logit+
+      (netReturnTarget===null?0:returnLossWeight*huber(forward.predicted_net_return_pct,netReturnTarget))+
+      (downsideRiskTarget===null?0:riskLossWeight*huber(forward.predicted_downside_risk_pct,downsideRiskTarget));
   };
   const parameters = trainableParameters(model);
   const parameterPaths = flattenPaths(parameters);
