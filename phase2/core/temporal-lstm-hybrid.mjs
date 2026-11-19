@@ -398,7 +398,12 @@ function trainableParameters(model) {
     attentionQuery: model.attentionQuery,
     attentionPositionBiases: model.attentionPositionBiases,
     outputWeights: model.outputWeights,
-    outputBias: model.outputBias
+    outputBias: model.outputBias,
+    rankingHeadWeights: model.rankingHeadWeights,
+    executionReturnHeadWeights: model.executionReturnHeadWeights,
+    executionReturnHeadBias: [model.executionReturnHeadBias],
+    executionRiskHeadWeights: model.executionRiskHeadWeights,
+    executionRiskHeadBias: [model.executionRiskHeadBias]
   };
 }
 
@@ -523,15 +528,23 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
   if (!Array.isArray(rankingWeights) || rankingWeights.length !== hidden ||
       rankingWeights.some(value => !finite(value)))
     throw new TypeError('TCN_LSTM_RANKING_HEAD_WEIGHTS_INVALID');
-  let rankingResidualLogit = 0;
-  for (let channel = 0; channel < hidden; channel++)
+  let rankingResidualLogit = 0, predictedNetReturn = Number(model.executionReturnHeadBias ?? 0),
+    predictedDownsideRisk = Number(model.executionRiskHeadBias ?? 0);
+  for (let channel = 0; channel < hidden; channel++) {
     rankingResidualLogit += rankingWeights[channel] * pooled[channel];
+    predictedNetReturn += Number(model.executionReturnHeadWeights?.[channel] ?? 0) * pooled[channel];
+    predictedDownsideRisk += Number(model.executionRiskHeadWeights?.[channel] ?? 0) * pooled[channel];
+  }
   const rankingLogit = clamp(baselineLogit + rankingResidualLogit, -LOGIT_LIMIT, LOGIT_LIMIT);
-  if (![...pooled, ...attentionWeights, probability, logit, rankingLogit].every(finite))
+  if (![...pooled, ...attentionWeights, probability, logit, rankingLogit,
+    predictedNetReturn, predictedDownsideRisk].every(finite))
     throw new TypeError('TCN_LSTM_FORWARD_NON_FINITE');
   return {
     probability, logit, ranking_logit: rankingLogit,
-    ranking_residual_logit: rankingResidualLogit, residual_logit: residualLogit,
+    ranking_residual_logit: rankingResidualLogit,
+    predicted_net_return_pct: predictedNetReturn,
+    predicted_downside_risk_pct: predictedDownsideRisk,
+    residual_logit: residualLogit,
     attention_weights: attentionWeights,
     tcn_latent_sequence: current,
     projected_sequence: projected,
@@ -603,7 +616,10 @@ function zeroGradients(model) {
 
 export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0, {
   dropoutScale = null,objective='BRIER',classWeights=null,
-  gammaPositive=1,gammaNegative=2,externalLogitGradient=null
+  gammaPositive=1,gammaNegative=2,externalLogitGradient=null,
+  classificationWeight=1,rankingLogitGradient=0,rankingLoss=0,
+  netReturnTarget=null,downsideRiskTarget=null,
+  returnLossWeight=0,riskLossWeight=0,huberDelta=1
 } = {}) {
   if (target !== 0 && target !== 1)
     throw new TypeError('TCN_LSTM_TARGET_INVALID');
@@ -624,16 +640,48 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
     throw new TypeError('TCN_LSTM_EXTERNAL_LOGIT_GRADIENT_INVALID');
   const logitGradient=objective==='EXTERNAL_LOGIT'?Number(externalLogitGradient):
     focal?focal.logitGradient:2*error*forward.probability*(1-forward.probability);
-  const objectiveLoss=objective==='EXTERNAL_LOGIT'
+  if (![classificationWeight,rankingLogitGradient,rankingLoss,returnLossWeight,
+    riskLossWeight,huberDelta].every(finite) || classificationWeight<0 ||
+    returnLossWeight<0 || riskLossWeight<0 || huberDelta<=0 ||
+    (netReturnTarget!==null&&!finite(netReturnTarget)) ||
+    (downsideRiskTarget!==null&&!finite(downsideRiskTarget)))
+    throw new TypeError('TCN_LSTM_JOINT_AUXILIARY_LOSS_CONFIGURATION_INVALID');
+  const classificationLoss=objective==='EXTERNAL_LOGIT'
     ?Number(externalLogitGradient)*forward.logit
     :focal?focal.loss:error*error;
   const cache = forward.cache;
-  gradients.outputBias[0] = logitGradient;
+  gradients.outputBias[0] = logitGradient * classificationWeight;
   const pooledGradient = Array(hidden).fill(0);
+  let jointLoss=classificationLoss*classificationWeight+
+    rankingLoss;
   for (let channel = 0; channel < hidden; channel++) {
-    gradients.outputWeights[channel] = logitGradient * cache.pooled[channel];
-    pooledGradient[channel] = logitGradient * model.outputWeights[channel];
+    gradients.outputWeights[channel] = logitGradient * classificationWeight * cache.pooled[channel];
+    pooledGradient[channel] = logitGradient * classificationWeight * model.outputWeights[channel];
+    gradients.rankingHeadWeights[channel] = rankingLogitGradient * cache.pooled[channel];
+    pooledGradient[channel] += rankingLogitGradient * model.rankingHeadWeights[channel];
+    if(netReturnTarget!==null){
+      const delta=forward.predicted_net_return_pct-Number(netReturnTarget);
+      const derivative=Math.max(-huberDelta,Math.min(huberDelta,delta))*returnLossWeight;
+      gradients.executionReturnHeadWeights[channel]=derivative*cache.pooled[channel];
+      pooledGradient[channel]+=derivative*model.executionReturnHeadWeights[channel];
+      jointLoss+=returnLossWeight*(Math.abs(delta)<=huberDelta
+        ?0.5*delta*delta:huberDelta*(Math.abs(delta)-0.5*huberDelta));
+    }
+    if(downsideRiskTarget!==null){
+      const delta=forward.predicted_downside_risk_pct-Number(downsideRiskTarget);
+      const derivative=Math.max(-huberDelta,Math.min(huberDelta,delta))*riskLossWeight;
+      gradients.executionRiskHeadWeights[channel]=derivative*cache.pooled[channel];
+      pooledGradient[channel]+=derivative*model.executionRiskHeadWeights[channel];
+      jointLoss+=riskLossWeight*(Math.abs(delta)<=huberDelta
+        ?0.5*delta*delta:huberDelta*(Math.abs(delta)-0.5*huberDelta));
+    }
   }
+  gradients.executionReturnHeadBias[0]=netReturnTarget===null?0:
+    Math.max(-huberDelta,Math.min(huberDelta,
+      forward.predicted_net_return_pct-Number(netReturnTarget)))*returnLossWeight;
+  gradients.executionRiskHeadBias[0]=downsideRiskTarget===null?0:
+    Math.max(-huberDelta,Math.min(huberDelta,
+      forward.predicted_downside_risk_pct-Number(downsideRiskTarget)))*riskLossWeight;
 
   const hiddenGradients = Array.from({ length: TCN_LSTM_STEPS }, () => Array(hidden).fill(0));
   const attentionScale = 1 / Math.sqrt(hidden);
@@ -752,8 +800,11 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   if (!treeFinite(gradients) || !finite(logitGradient))
     throw new TypeError('TCN_LSTM_BACKPROP_NON_FINITE');
   return {
-    loss: objectiveLoss,
+    loss: jointLoss,
     loss_objective:objective,
+    joint_loss_components:{classification:classificationLoss*classificationWeight,
+      ranking:Number(rankingLoss),net_return_weight:Number(returnLossWeight),
+      downside_risk_weight:Number(riskLossWeight)},
     gradient_logits: logitGradient,
     probability: forward.probability,
     gradients,
