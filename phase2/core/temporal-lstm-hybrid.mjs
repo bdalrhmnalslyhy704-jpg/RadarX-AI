@@ -1046,6 +1046,106 @@ export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
     diagnostic_only:true,holdout_values_used:false};
 }
 
+
+/**
+ * Execution-side qualification for the auxiliary rank head. Pairwise loss can
+ * improve while the actual Top-K portfolio gets worse; only the disjoint
+ * inner-selection rows may qualify this separate ranking policy.
+ */
+export function summarizeTcnLstmRankingExecutionSelection(rows,rankingLogits,anchorLogits,{
+  roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
+}={}){
+  const unavailable=reason=>({
+    schema:'RADARX_TCN_LSTM_RANKING_EXECUTION_SELECTION_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,passed:false,reason,top_k_trials:[]
+  });
+  if(!Array.isArray(rows)||!Array.isArray(rankingLogits)||!Array.isArray(anchorLogits)||
+    rows.length!==rankingLogits.length||rows.length!==anchorLogits.length||rows.length<20||
+    rankingLogits.some(value=>!finite(value))||anchorLogits.some(value=>!finite(value)))
+    return unavailable('RANKING_EXECUTION_SELECTION_INPUT_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||
+    !Number.isInteger(minimumTrades)||minimumTrades<1||
+    !finite(minimumWinRatePct)||minimumWinRatePct<0||minimumWinRatePct>100||
+    !finite(maximumDrawdownPct)||maximumDrawdownPct<=0)
+    return unavailable('RANKING_EXECUTION_SELECTION_CONFIGURATION_INVALID');
+  if(rows.some(row=>!finite(row?.at)||!finite(row?.realized_return_pct)||
+    !row?.first_touch||!finite(row.first_touch.first_touch_at)||
+    !finite(row?.max_adverse_excursion_pct)||!finite(row?.max_adverse_excursion_at)||
+    !finite(row?.max_favorable_excursion_pct)||!finite(row?.max_favorable_excursion_at)))
+    return unavailable('SELECTION_EXECUTION_EVIDENCE_INCOMPLETE');
+  const groups=new Map();
+  rows.forEach((row,index)=>{
+    const bucket=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS);
+    if(!groups.has(bucket))groups.set(bucket,[]);
+    groups.get(bucket).push(index);
+  });
+  const eligible=[...groups.values()].filter(indices=>indices.length>=2);
+  if(!eligible.length)return unavailable('NO_SIMULTANEOUS_SELECTION_DECISION_GROUPS');
+  const trials=[];
+  for(const topK of [1,2,3]){
+    const buildMask=scores=>{
+      const mask=Array(rows.length).fill(0);
+      for(const indices of eligible){
+        const ordered=[...indices].sort((a,b)=>scores[b]-scores[a]||
+          String(rows[a]?.symbol??'').localeCompare(String(rows[b]?.symbol??''))||
+          String(rows[a]?.id??'').localeCompare(String(rows[b]?.id??'')));
+        for(const index of ordered.slice(0,Math.min(topK,ordered.length)))mask[index]=1;
+      }
+      return mask;
+    };
+    let modelMetrics,anchorMetrics;
+    try{
+      modelMetrics=simulateFirstTouchPaperPortfolio(rows,buildMask(rankingLogits),{
+        threshold:0.5,roundTripCostBps
+      });
+      anchorMetrics=simulateFirstTouchPaperPortfolio(rows,buildMask(anchorLogits),{
+        threshold:0.5,roundTripCostBps
+      });
+    }catch(error){
+      return unavailable('SELECTION_EXECUTION_SIMULATION_FAILED:'+String(error?.message||error));
+    }
+    const complete=modelMetrics.return_data_status==='COMPLETE'&&
+      anchorMetrics.return_data_status==='COMPLETE';
+    const gates={
+      return_data_complete:complete,
+      minimum_trades:Number(modelMetrics.trade_count)>=minimumTrades,
+      minimum_win_rate:finite(modelMetrics.win_rate_pct)&&
+        modelMetrics.win_rate_pct>=minimumWinRatePct,
+      positive_net_pnl:finite(modelMetrics.net_pnl_pct)&&modelMetrics.net_pnl_pct>0,
+      maximum_drawdown:finite(modelMetrics.max_drawdown_pct)&&
+        modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
+      beats_logistic_anchor:complete&&
+        modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
+        modelMetrics.win_rate_pct>anchorMetrics.win_rate_pct
+    };
+    trials.push({
+      top_k_per_timestamp:topK,decision_group_count:eligible.length,
+      model_metrics:modelMetrics,logistic_anchor_metrics:anchorMetrics,
+      model_minus_anchor:{
+        net_pnl_pct:finite(modelMetrics.net_pnl_pct)&&finite(anchorMetrics.net_pnl_pct)
+          ?Number((modelMetrics.net_pnl_pct-anchorMetrics.net_pnl_pct).toFixed(6)):null,
+        win_rate_percentage_points:finite(modelMetrics.win_rate_pct)&&finite(anchorMetrics.win_rate_pct)
+          ?Number((modelMetrics.win_rate_pct-anchorMetrics.win_rate_pct).toFixed(6)):null
+      },
+      risk_gates:gates,risk_gates_passed:Object.values(gates).every(Boolean)
+    });
+  }
+  const passed=trials.some(trial=>trial.risk_gates_passed);
+  return {
+    schema:'RADARX_TCN_LSTM_RANKING_EXECUTION_SELECTION_V1',
+    status:'EVALUATED',diagnostic_only:true,passed,
+    reason:passed?null:'NO_TOP_K_POLICY_PASSED_EXECUTION_AND_ANCHOR_GATES',
+    source_partition:'INNER_SELECTION_ONLY',
+    round_trip_cost_bps:Number(roundTripCostBps),
+    minimum_trades:minimumTrades,minimum_win_rate_pct:minimumWinRatePct,
+    require_positive_net_pnl:true,maximum_drawdown_pct:maximumDrawdownPct,
+    requires_strict_improvement_over_logistic_anchor:true,
+    affects_classifier_probabilities:false,affects_primary_threshold:false,
+    holdout_values_used:false,top_k_trials:trials
+  };
+}
+
+
 function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
   if(!pairs.length)return 0;
   let total=0;
@@ -1796,6 +1896,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const pairwiseRankingImprovement=rankingScoreAvailable&&
       pairwiseRanking.status==='AVAILABLE'
         ?baselineRanking.pairwise_log_loss-pairwiseRanking.pairwise_log_loss:null;
+    const rankingExecutionSelection=summarizeTcnLstmRankingExecutionSelection(
+      selectionRows,selectionRankingLogits,baselineLogits,{
+        roundTripCostBps,minimumTrades:minimumReturnTrades,
+        minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
+      }
+    );
     evaluated.push({
       name:config.name,
       config:{...config,dropout:candidateDropout,objective:candidateObjective,
@@ -1805,6 +1911,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       brier_improvement:brierImprovement,
       pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
       pairwise_ranking_improvement:pairwiseRankingImprovement,
+      ranking_execution_selection:rankingExecutionSelection,
+      ranking_head_selection_qualified:rankingExecutionSelection.status==='EVALUATED'&&
+        rankingExecutionSelection.passed===true,
       selection_score:selectionScore,logistic_selection_score:baselineSelectionScore,
       composite_improvement:baselineSelectionScore-selectionScore,
       improvement:baselineSelectionScore-selectionScore,
@@ -1858,7 +1967,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     candidates:evaluated.map(({name,config,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
-      pairwise_ranking_improvement,selection_score,logistic_selection_score,
+      pairwise_ranking_improvement,ranking_execution_selection,
+      ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
       name,config,selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
@@ -1866,6 +1976,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
         ?Number(pairwise_ranking_improvement.toFixed(8)):null,
+      ranking_execution_selection,
+      ranking_head_selection_qualified,
       ranking_head:fit.training?.return_ranking?.ranking_head??null,
       selection_score:Number(selection_score.toFixed(8)),
       logistic_selection_score:Number(logistic_selection_score.toFixed(8)),
@@ -1881,6 +1993,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
       return_selection_diagnostics
     })),
+    ranking_head_selection_qualification:{
+      qualified:winner.ranking_head_selection_qualified===true,
+      status:winner.ranking_execution_selection?.status??'UNAVAILABLE',
+      reason:winner.ranking_execution_selection?.reason??null,
+      source_partition:'INNER_SELECTION_ONLY',
+      holdout_values_used:false
+    },
     selected_configuration: passed ? winner.name : null,
     diagnostic_configuration: passed ? null : winner.name,
     required_inner_improvement: requiredImprovement,
