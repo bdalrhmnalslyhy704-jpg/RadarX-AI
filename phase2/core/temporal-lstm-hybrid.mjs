@@ -2102,7 +2102,7 @@ function frozenExecutionPolicyPayload(policy) {
     trained_model_fingerprint:policy.trained_model_fingerprint
   };
 }
-function frozenExecutionPolicyFingerprint(policy) {
+export function computeTcnLstmFrozenExecutionPolicyFingerprint(policy) {
   return createHash('sha256').update(JSON.stringify(frozenExecutionPolicyPayload(policy))).digest('hex');
 }
 export function verifyTcnLstmFrozenExecutionPolicy(profile) {
@@ -2114,7 +2114,7 @@ export function verifyTcnLstmFrozenExecutionPolicy(profile) {
     !finite(policy.minimum_win_rate_pct)||!finite(policy.maximum_drawdown_pct)||
     typeof policy.fingerprint!=='string'||policy.fingerprint.length!==64)
     return {valid:false,reason:'FROZEN_POLICY_MISSING_OR_INVALID'};
-  if(frozenExecutionPolicyFingerprint(policy)!==policy.fingerprint||
+  if(computeTcnLstmFrozenExecutionPolicyFingerprint(policy)!==policy.fingerprint||
     Number(profile.execution_risk_penalty_weight)!==Number(policy.selected_risk_penalty_weight)||
     Number(profile.execution_risk_policy?.selected_top_k_per_timestamp)!==Number(policy.selected_top_k_per_timestamp)||
     Number(profile.execution_risk_policy?.selected_risk_penalty_weight)!==Number(policy.selected_risk_penalty_weight))
@@ -2963,6 +2963,66 @@ function pairedFiveDayClusterBootstrap(rows, modelProbabilities, baselineProbabi
   };
 }
 
+function evaluateFrozenTcnLstmExecutionPolicy(rows,profile) {
+  const policy=profile?.frozen_execution_policy;
+  const unavailable=reason=>({status:'UNAVAILABLE',passed:false,reason,
+    policy_reselected:false,selection_partition_only:false});
+  if(!Array.isArray(rows)||rows.length<20||
+    rows.some(row=>!finite(row?.at)||!row?.first_touch||
+      !finite(row?.realized_return_pct)||!finite(row?.max_adverse_excursion_pct)))
+    return unavailable('OUTER_EXECUTION_EVIDENCE_INCOMPLETE');
+  const audit=verifyTcnLstmFrozenExecutionPolicy(profile);
+  if(!audit.valid)return unavailable(audit.reason);
+  const lambda=Number(policy.selected_risk_penalty_weight);
+  const topK=Number(policy.selected_top_k_per_timestamp);
+  const roundTripCostBps=Number(policy.round_trip_cost_bps);
+  const groups=new Map();
+  rows.forEach((row,index)=>{
+    const bucket=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS);
+    if(!groups.has(bucket))groups.set(bucket,[]);
+    groups.get(bucket).push(index);
+  });
+  const eligible=[...groups.values()].filter(items=>items.length>=2);
+  if(!eligible.length)return unavailable('NO_OUTER_SIMULTANEOUS_DECISION_GROUPS');
+  const predictions=rows.map(row=>predictTcnLstmHybridExecutionHeads(row.sequence,profile));
+  const logistic=rows.map(row=>predictTcnLstmLogisticLogit(row.sequence,profile.baseline_fit));
+  const modelMask=Array(rows.length).fill(0),baselineMask=Array(rows.length).fill(0);
+  for(const indices of eligible){
+    const modelOrder=[...indices].sort((a,b)=>
+      (predictions[b].predicted_net_return_pct-lambda*predictions[b].predicted_downside_risk_pct)-
+      (predictions[a].predicted_net_return_pct-lambda*predictions[a].predicted_downside_risk_pct)||
+      String(rows[a].symbol??'').localeCompare(String(rows[b].symbol??'')));
+    const baselineOrder=[...indices].sort((a,b)=>logistic[b]-logistic[a]||
+      String(rows[a].symbol??'').localeCompare(String(rows[b].symbol??'')));
+    for(const index of modelOrder.slice(0,Math.min(topK,indices.length)))modelMask[index]=1;
+    for(const index of baselineOrder.slice(0,Math.min(topK,indices.length)))baselineMask[index]=1;
+  }
+  const options={threshold:0.5,roundTripCostBps,
+    maxConcurrentPositions:policy.max_concurrent_positions,initialEquity:100};
+  const modelMetrics=simulateFirstTouchPaperPortfolio(rows,modelMask,options);
+  const baselineMetrics=simulateFirstTouchPaperPortfolio(rows,baselineMask,options);
+  const complete=modelMetrics.return_data_status==='COMPLETE'&&
+    baselineMetrics.return_data_status==='COMPLETE';
+  const gates={
+    return_data_complete:complete,
+    minimum_trades:Number(modelMetrics.trade_count)>=Number(policy.minimum_trades),
+    minimum_win_rate:finite(modelMetrics.win_rate_pct)&&
+      modelMetrics.win_rate_pct>=Number(policy.minimum_win_rate_pct),
+    positive_net_pnl:finite(modelMetrics.net_pnl_pct)&&modelMetrics.net_pnl_pct>0,
+    maximum_drawdown:finite(modelMetrics.max_drawdown_pct)&&
+      modelMetrics.max_drawdown_pct<=Number(policy.maximum_drawdown_pct),
+    beats_logistic_anchor:complete&&
+      modelMetrics.net_pnl_pct>baselineMetrics.net_pnl_pct&&
+      modelMetrics.win_rate_pct>baselineMetrics.win_rate_pct
+  };
+  return {status:'EVALUATED',passed:Object.values(gates).every(Boolean),
+    policy_reselected:false,policy_fingerprint:audit.fingerprint,
+    selection_partition_only:false,outer_partition_only:true,
+    selected_risk_penalty_weight:lambda,selected_top_k_per_timestamp:topK,
+    round_trip_cost_bps:roundTripCostBps,model_metrics:modelMetrics,
+    logistic_anchor_metrics:baselineMetrics,gates};
+}
+
 function evaluateCalibratedSplit(rows, selectedFit, modelCalibrator, baselineCalibrator, {
   bootstrapSeed = 73, bootstrapIterations = 500, requiredImprovement = 0.003,
   minimumSamples = 30, minimumPositive = 8, minimumNegative = 8
@@ -2991,15 +3051,18 @@ function evaluateCalibratedSplit(rows, selectedFit, modelCalibrator, baselineCal
   const confidence = pairedFiveDayClusterBootstrap(rows, modelPredictions, baselinePredictions, {
     iterations: bootstrapIterations, seed: bootstrapSeed
   });
+  const execution=evaluateFrozenTcnLstmExecutionPolicy(rows,selectedFit);
   return {
     evaluated:true,sample_count:rows.length,
     model, baseline,
     brier_improvement: improvement,
     paired_bootstrap_95ci: confidence,
+    execution,
     required_brier_improvement: requiredImprovement,
     passed: improvement > requiredImprovement &&
       confidence.evaluated === true && confidence.improvement_ci95_low > 0 &&
-      model.asymmetric_risk_brier <= baseline.asymmetric_risk_brier + 1e-10
+      model.asymmetric_risk_brier <= baseline.asymmetric_risk_brier + 1e-10 &&
+      execution.status==='EVALUATED'&&execution.passed===true
   };
 }
 
