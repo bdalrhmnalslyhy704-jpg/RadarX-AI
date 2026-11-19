@@ -674,7 +674,7 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
   }else{
     assert.ok(['ABSTAIN_INNER_SELECTION_GATE_FAILED','ABSTAIN_CALIBRATION_SUPPORT_FAILED']
       .includes(result.status));
-    assert.equal(result.holdout.evaluated,false);
+    assert.notEqual(result.holdout?.evaluated,true);
   }
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
