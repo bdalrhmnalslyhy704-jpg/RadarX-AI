@@ -1575,8 +1575,8 @@ export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
         boundary_utc:new Date(boundary).toISOString(),
         purge_rule:'INNER_FIT_LABELS_MUST_MATURE_BEFORE_INNER_CHECK_START'
       };
-      if(!supportFailure(fitSupport,minimumPositives,minimumNegatives)&&
-        !supportFailure(checkSupport,minimumPositives,minimumNegatives)){
+      if(!supportFailure(fitSupport,minimumPositives,minimumPositives)&&
+        !supportFailure(checkSupport,minimumPositives,minimumPositives)){
         const innerFitLogits=probabilitiesFor(innerFitRows,rawMap).map(logit);
         const innerCheckLogits=probabilitiesFor(innerCheckRows,rawMap).map(logit);
         const innerPlatt=fitPlattScaler(innerFitLogits,innerFitLabels,{
