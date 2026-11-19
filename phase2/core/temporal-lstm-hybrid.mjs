@@ -1742,20 +1742,22 @@ export function trainTcnLstmHybrid(trainingRows, {
 
   Object.assign(model, cloneTree(bestModel));
   const rankingHeadFit=rankingPairs.length
-    ?fitTcnLstmPairwiseRankingHead(rows,rankingPairs,model,anchor,{
-      learningRate:rankingHeadLearningRate,epochs:rankingHeadEpochs,
-      l2:rankingHeadL2,patience:Math.min(20,Math.max(5,earlyStoppingPatience*2))
-    })
-    :{schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
-      fitted:false,reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',
-      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
+    ?{schema:'RADARX_TCN_LSTM_JOINT_PAIRWISE_RANKING_HEAD_V2',fitted:true,
+      method:'PAIRWISE_LOGIT_GRADIENT_BACKPROPAGATED_THROUGH_SHARED_ENCODER',
+      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false,
+      classifier_encoder_parameters_updated:true}
+    :{schema:'RADARX_TCN_LSTM_JOINT_PAIRWISE_RANKING_HEAD_V2',fitted:false,
+      reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',fit_boundary:'TRAINING_PARTITION_ONLY',
+      validation_or_holdout_used:false};
   const executionHeadFit=Array.isArray(executionRows)
-    ?fitTcnLstmExecutionRegressionHeads(rows,executionRows,model,anchor,{
-      roundTripCostBps:executionHeadRoundTripCostBps,
-      learningRate:executionHeadLearningRate,epochs:executionHeadEpochs,l2:executionHeadL2
-    })
-    :{schema:'RADARX_TCN_LSTM_NET_RETURN_DOWNSIDE_REGRESSION_HEADS_V1',
-      fitted:false,reason:'MATURED_TRAINING_EXECUTION_EVIDENCE_NOT_SUPPLIED',
+    ?{schema:'RADARX_TCN_LSTM_JOINT_RETURN_DOWNSIDE_HEADS_V2',fitted:true,
+      method:'HUBER_RETURN_AND_DOWNSIDE_GRADIENT_BACKPROPAGATED_THROUGH_SHARED_ENCODER',
+      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false,
+      round_trip_cost_bps:Number(executionHeadRoundTripCostBps),
+      return_loss_weight:Number(returnLossWeight),risk_loss_weight:Number(riskLossWeight),
+      classifier_encoder_parameters_updated:true}
+    :{schema:'RADARX_TCN_LSTM_JOINT_RETURN_DOWNSIDE_HEADS_V2',fitted:false,
+      reason:'MATURED_TRAINING_EXECUTION_EVIDENCE_NOT_SUPPLIED',
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
   const finalBrier=evaluateBrier(rows,model,anchor);
   const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
@@ -1820,8 +1822,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       execution_regression_heads:executionHeadFit,
       return_ranking:{
         enabled:rankingHeadFit.fitted===true,
-        method:'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
-        legacy_joint_ranking_weight_ignored:Number(rankingWeight),
+        method:'JOINT_PAIRWISE_LOGIT_GRADIENT_THROUGH_SHARED_ENCODER_V2',
+        joint_ranking_loss_weight:Number(rankingWeight),
         pair_schema:ranking.schema,source_partition:ranking.source_partition,
         decision_group_count:ranking.decision_group_count,
         comparison_pairs:ranking.comparison_pairs,
@@ -1831,8 +1833,9 @@ export function trainTcnLstmHybrid(trainingRows, {
         ranking_head:rankingHeadFit,
         training_pairwise_log_loss:Number(finalRankingLoss.toFixed(8)),
         ranking_labels_seen_outside_training_partition:false,
-        classifier_parameters_updated_by_ranking_head:false
+        classifier_parameters_updated_by_ranking_head:rankingHeadFit.fitted===true
       },
+      joint_loss_weights:{ranking:Number(rankingWeight),net_return:Number(returnLossWeight),downside_risk:Number(riskLossWeight)},
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
