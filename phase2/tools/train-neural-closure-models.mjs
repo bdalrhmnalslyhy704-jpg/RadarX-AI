@@ -1367,9 +1367,13 @@ async function main(){
   let hybridFit=null;
   try{
     hybridFit=trainHybridTcnAttention(split.train,{
-      // Keep the separate hybrid-attention control at its original eight epochs;
-      // the extended schedule targets the regime-local TCN and recurrent challenger.
-      epochs:Math.min(8,args.epochs),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+      // This model previously optimized a trading-return surrogate while being
+      // judged as a probability forecaster. Switch the primary experiment to
+      // proper-scoring BCE; initialize only from the training-fold class prior.
+      // The return/drawdown objective remains available for separate ranking work.
+      epochs:16,learningRate:0.0015,l2:0.001,
+      objectiveMode:'BINARY_CROSS_ENTROPY',
+      targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
     });
     const normalization=hybridFit.normalization;
     const hybridArtifact=makeArtifact({
