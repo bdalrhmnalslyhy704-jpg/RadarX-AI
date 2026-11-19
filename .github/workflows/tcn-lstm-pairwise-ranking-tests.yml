@@ -89,14 +89,14 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=3072
         run: |
           mkdir -p artifacts/neural-closure-benchmark
-          node --expose-gc phase2/tools/train-neural-closure-models.mjs \\
-            --input artifacts/neural-closure/dataset.json \\
-            --output artifacts/neural-closure-benchmark/fixed-sha-neural-benchmark.json \\
-            --epochs 8 \\
-            --denseEpochs 36 \\
-            --minimumHoldoutTrades 100 \\
-            --minimumWinRatePct 55 \\
-            --maximumDrawdownPct 8 \\
+          node --expose-gc phase2/tools/train-neural-closure-models.mjs \
+            --input artifacts/neural-closure/dataset.json \
+            --output artifacts/neural-closure-benchmark/fixed-sha-neural-benchmark.json \
+            --epochs 8 \
+            --denseEpochs 36 \
+            --minimumHoldoutTrades 100 \
+            --minimumWinRatePct 55 \
+            --maximumDrawdownPct 8 \
             --roundTripCostBps 30
 
       - name: Publish benchmark report and frozen model artifacts
