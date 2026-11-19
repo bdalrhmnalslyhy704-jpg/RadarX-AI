@@ -1453,7 +1453,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   baselineFit = null, earlyStoppingPatience = 5,
   objective='BRIER',gammaPositive=1,gammaNegative=2,
-  rankingRows=null,rankingWeight=0,rankingRoundTripCostBps=30,
+  rankingRows=null,executionRows=null,rankingWeight=0,rankingRoundTripCostBps=30,
   rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
@@ -1621,8 +1621,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     :{schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
       fitted:false,reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
-  const executionHeadFit=Array.isArray(rankingRows)
-    ?fitTcnLstmExecutionRegressionHeads(rows,rankingRows,model,anchor,{
+  const executionHeadFit=Array.isArray(executionRows)
+    ?fitTcnLstmExecutionRegressionHeads(rows,executionRows,model,anchor,{
       roundTripCostBps:executionHeadRoundTripCostBps,
       learningRate:executionHeadLearningRate,epochs:executionHeadEpochs,l2:executionHeadL2
     })
@@ -2073,6 +2073,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor,
       rankingRows:rankingRowsForFit,
+      executionRows:effectiveTrainingRows.every(row=>finite(row.realized_return_pct)&&
+        finite(row.max_adverse_excursion_pct))?effectiveTrainingRows:null,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
