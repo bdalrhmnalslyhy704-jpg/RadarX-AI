@@ -396,7 +396,6 @@ test('TCN-LSTM keeps calibrated classification independent of net-win ranking an
   assert.match(lstm,/validation_or_holdout_used_for_fit:false/);
   assert.match(lstm,/holdout_values_used:false/);
 });
-/);
   assert.match(collector,/if\(universe\.selected\.length<args\.minSymbols\)/);
   assert.match(collector,/--minSymbols 40/);
   assert.match(collector,/--minQuoteVolumeUsdt 750000/);
