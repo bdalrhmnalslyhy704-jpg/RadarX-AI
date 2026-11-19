@@ -666,6 +666,23 @@ test('inner-selection top-K diagnostics compare TCN-LSTM with the frozen Logisti
   assert.ok(topOne.model_minus_logistic.net_pnl_pct>0);
 });
 
+test('ranking blend metadata cannot alter the independently calibrated classification probability',()=>{
+  const rows=makeRows(0,32,'probability-separation');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,seed:303,maxTrainingSamples:32
+  });
+  profile.ranking_probability_blend_weight=0;
+  const classifierOnly=predictTcnLstmHybridProbability(rows[0].sequence,profile);
+  profile.ranking_probability_blend_weight=2;
+  const rankingWeightChanged=predictTcnLstmHybridProbability(rows[0].sequence,profile);
+  assert.equal(rankingWeightChanged,classifierOnly);
+  const rankingBefore=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
+  profile.model.rankingHeadWeights=profile.model.rankingHeadWeights.map(value=>value+0.1);
+  const rankingAfter=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
+  assert.notEqual(rankingAfter,rankingBefore);
+  assert.equal(predictTcnLstmHybridProbability(rows[0].sequence,profile),classifierOnly);
+});
+
 test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and predicts probabilities',()=>{
   const rows=makeRows(0,32);
   const profile=trainTcnLstmHybrid(rows,{
