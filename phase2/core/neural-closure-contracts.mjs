@@ -2334,6 +2334,34 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     maximum_validation_drawdown:finite(outerRankMetrics?.max_drawdown_pct)&&
       outerRankMetrics.max_drawdown_pct<=maximumDrawdownPct
   };
+  // Always report the predeclared K=1/2/3 outer-validation diagnostics,
+  // even when no K qualifies on the earlier selection block. This is strictly
+  // report-only: it cannot select K, change acceptance gates, or unlock holdout.
+  const outerRankDiagnosticGrid=topKGrid.map(topK=>{
+    const mask=topKProbabilitySignals(blocks.check,outerProbabilities,topK);
+    const metrics=portfolioMetrics(blocks.check,mask.probabilities,0.5,roundTripCostBps);
+    const riskGates={
+      return_data_complete:metrics?.return_data_status==='COMPLETE',
+      minimum_validation_trades:Number(metrics?.trade_count)>=minimumTrades,
+      minimum_validation_win_rate:finite(metrics?.win_rate_pct)&&
+        metrics.win_rate_pct>=minimumWinRatePct,
+      positive_validation_net_pnl:finite(metrics?.net_pnl_pct)&&
+        metrics.net_pnl_pct>0,
+      maximum_validation_drawdown:finite(metrics?.max_drawdown_pct)&&
+        metrics.max_drawdown_pct<=maximumDrawdownPct
+    };
+    return {
+      top_k_per_timestamp:topK,
+      decision_group_count:mask.decision_group_count,
+      signal_count:mask.signal_count,
+      metrics,
+      risk_gates:Object.fromEntries(Object.entries(riskGates)
+        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+      risk_gates_passed:Object.values(riskGates).every(Boolean),
+      diagnostic_only:true,
+      labels_used_for_k_selection:false
+    };
+  });
   const rankSelectionMask=frozenTopK===null?null:topKProbabilitySignals(
     blocks.threshold_selection,selectionProbabilities,frozenTopK
   );
