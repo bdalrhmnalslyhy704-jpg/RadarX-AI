@@ -2963,7 +2963,7 @@ function pairedFiveDayClusterBootstrap(rows, modelProbabilities, baselineProbabi
   };
 }
 
-function evaluateFrozenTcnLstmExecutionPolicy(rows,profile) {
+export function evaluateFrozenTcnLstmExecutionPolicy(rows,profile) {
   const policy=profile?.frozen_execution_policy;
   const unavailable=reason=>({status:'UNAVAILABLE',passed:false,reason,
     policy_reselected:false,selection_partition_only:false});
