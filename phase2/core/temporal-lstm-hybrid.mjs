@@ -3015,9 +3015,24 @@ export function evaluateFrozenTcnLstmExecutionPolicy(rows,profile) {
       modelMetrics.net_pnl_pct>baselineMetrics.net_pnl_pct&&
       modelMetrics.win_rate_pct>baselineMetrics.win_rate_pct
   };
+  const sharedOpportunityIdentity=rows.map(row=>({
+    id:String(row.id??sampleIdentity(row)),
+    symbol:String(row.symbol??'').toUpperCase(),
+    at:Number(row.at)
+  })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
+  const sharedOpportunityIdentitySha256=createHash('sha256')
+    .update(JSON.stringify(sharedOpportunityIdentity),'utf8').digest('hex');
   return {status:'EVALUATED',passed:Object.values(gates).every(Boolean),
     policy_reselected:false,policy_fingerprint:audit.fingerprint,
     selection_partition_only:false,outer_partition_only:true,
+    comparison_opportunity_identity:'IDENTICAL_SHARED_ROWS',
+    shared_opportunity_rows:rows.length,
+    shared_opportunity_identity_sha256:sharedOpportunityIdentitySha256,
+    decision_bucket_ms:TCN_LSTM_RANKING_BUCKET_MS,
+    simultaneous_decision_bucket_count:groups.size,
+    eligible_decision_bucket_count:eligible.length,
+    model_selected_opportunities:modelMask.reduce((sum,value)=>sum+value,0),
+    logistic_selected_opportunities:baselineMask.reduce((sum,value)=>sum+value,0),
     selected_risk_penalty_weight:lambda,selected_top_k_per_timestamp:topK,
     round_trip_cost_bps:roundTripCostBps,model_metrics:modelMetrics,
     logistic_anchor_metrics:baselineMetrics,gates};
