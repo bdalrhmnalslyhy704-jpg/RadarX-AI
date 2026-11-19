@@ -36,7 +36,7 @@ import {
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
   predictTcnLstmHybridRankingLogit,
-  predictTcnLstmHybridRankingAnchorLogit
+  predictTcnLstmHybridRankingAnchorLogit,predictTcnLstmHybridExecutionScore
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1249,6 +1249,8 @@ async function main(){
               architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
               input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
               fit:selectedFit,calibrator,
+              execution_risk_policy:selectedFit.execution_risk_policy??null,
+              execution_risk_score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
               target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
               outcome_horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
               fit_partition:'FIXED_SHA_OUTER_TRAIN_INTERNAL_TRAIN_ONLY'
@@ -1293,11 +1295,22 @@ async function main(){
             );
             if(!finite(auxiliaryRankingAnchorLogit))
               throw new Error('TCN_LSTM_AUXILIARY_RANKING_ANCHOR_DIAGNOSTIC_NON_FINITE:'+item.id);
+            const executionScore=predictTcnLstmHybridExecutionScore(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(executionScore.status!=='AVAILABLE'||
+              !finite(executionScore.risk_adjusted_net_return_score))
+              throw new Error('TCN_LSTM_EXECUTION_RISK_ADJUSTED_SCORE_UNAVAILABLE:'+item.id);
             return {
               ...item,
               pre_inner_calibration_probability:Number(preInnerProbability),
               auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
-              auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit)
+              auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit),
+              predicted_net_return_pct:Number(executionScore.predicted_net_return_pct),
+              predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
+              execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
+              execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
+              execution_risk_score_semantics:executionScore.score_semantics
             };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
