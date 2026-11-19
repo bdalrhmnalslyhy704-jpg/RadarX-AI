@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {gunzipSync} from 'node:zlib';
-import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {writeRawSpotKlineArchive,isRawSpotArchiveSymbol} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {
@@ -15,6 +15,15 @@ import {
   buildNeuralClosureEventRow,verifyNeuralClosureRawCoverage
 } from '../core/neural-closure-data-builder.mjs';
 import {validateFourHourRows,NEURAL_CLOSURE_HORIZON_MS} from '../core/neural-closure-contracts.mjs';
+
+test('raw Spot archive symbol contract is shared with prefilter and rejects unsupported filenames explicitly',()=>{
+  assert.equal(isRawSpotArchiveSymbol('BTCUSDT'),true);
+  assert.equal(isRawSpotArchiveSymbol('1000SATSUSDT'),true);
+  assert.equal(isRawSpotArchiveSymbol('1INCHUSDT'),true);
+  assert.equal(isRawSpotArchiveSymbol('BTC/USDT'),false);
+  assert.equal(isRawSpotArchiveSymbol('BTC-USDT'),false);
+  assert.equal(isRawSpotArchiveSymbol(''),false);
+});
 
 const FIFTEEN=15*60_000,FIVE=5*60_000,MINUTE=60_000;
 const makeCandle=(openTime,intervalMs,{base=100,step=0,volume=1000,trades=100,taker=0.56}={})=>{
