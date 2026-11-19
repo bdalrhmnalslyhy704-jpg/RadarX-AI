@@ -196,6 +196,15 @@ test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the sh
   assert.match(contract,/'TCN_LSTM_HYBRID'/);
 });
 
+
+test('fixed-config attention and dense challengers cannot claim inner qualification from training alone',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_ATTENTION/);
+  assert.match(trainer,/NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_DENSE_MLP/);
+  assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{[\s\S]*?passed:false,[\s\S]*?diagnostic_only:true/);
+  assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{[\s\S]*?passed:false,[\s\S]*?diagnostic_only:true/);
+});
+
 test('regime-local TCN families use a smaller inner discovery margin but retain the strict 0.003 outer promotion gate',async()=>{
   const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
   const trainer=await readFile(trainerUrl,'utf8');
