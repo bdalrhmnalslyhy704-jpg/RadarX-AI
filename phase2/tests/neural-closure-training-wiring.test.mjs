@@ -60,6 +60,7 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
 test('expanded Binance cohort filters unarchivable Spot symbols before top-100 liquidity selection and backfills',async()=>{
   const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
   const archive=await readFile(new URL('../core/neural-closure-raw-archive.mjs',import.meta.url),'utf8');
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-data-collection.yml',import.meta.url),'utf8');
   assert.match(archive,/export function isRawSpotArchiveSymbol/);
   assert.match(collector,/filter\(item=>!isRawSpotArchiveSymbol\(item\.symbol\)\)/);
   assert.match(collector,/filter\(item=>isRawSpotArchiveSymbol\(item\.symbol\)\)/);
