@@ -12,6 +12,8 @@ on:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
   pull_request:
     branches:
       - research/build224-point-in-time-liquidity-20261117
@@ -22,6 +24,8 @@ on:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
 
 permissions:
   contents: read
@@ -33,7 +37,7 @@ concurrency:
 jobs:
   pairwise-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Checkout exact candidate SHA
         uses: actions/checkout@v4
@@ -53,4 +57,4 @@ jobs:
         run: node --check phase2/core/temporal-lstm-hybrid.mjs
 
       - name: Run focused TCN-LSTM contract and pairwise-gradient tests
-        run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs
+        run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs phase2/tests/neural-closure-contracts.test.mjs phase2/tests/neural-closure-training-wiring.test.mjs
