@@ -52,6 +52,8 @@ concurrency:
 
 jobs:
   collect:
+    # Pull-request events validate the workflow but must not launch a second 180-day API crawl.
+    if: github.event_name != 'pull_request'
     name: Collect, archive and validate real Binance Spot candles
     runs-on: ubuntu-latest
     timeout-minutes: 120
