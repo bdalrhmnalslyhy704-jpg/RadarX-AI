@@ -29,6 +29,7 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
   const trainer=await readFile(trainerUrl,'utf8');
   const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
   const policy=await readFile(new URL('../core/neural-closure-data-builder.mjs',import.meta.url),'utf8');
+  const archive=await readFile(new URL('../core/neural-closure-raw-archive.mjs',import.meta.url),'utf8');
   const workflow=await readFile(new URL('../../.github/workflows/neural-closure-data-collection.yml',import.meta.url),'utf8');
   assert.match(collector,/maxSymbols:100,minSymbols:40/);
   assert.match(collector,/result\.maxSymbols>100/);
@@ -48,6 +49,12 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
     'manual workflow dispatch must retain the documented top-100 default');
   assert.ok(workflow.includes('--maxSymbols "$MAX_SYMBOLS"'),
     'the selected workflow universe must be passed to the collector');
+  assert.match(collector,/isRawSpotArchiveSymbol/);
+  assert.match(collector,/archiveSymbolFormatRejections/);
+  assert.match(collector,/NEURAL_CLOSURE_ARCHIVE_SYMBOL_FORMAT_EXCLUSIONS/);
+  assert.match(archive,/export function isRawSpotArchiveSymbol/);
+  assert.match(archive,/NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:\$\{normalizedSymbol\}/);
+  assert.match(collector,/invalid_archive_symbol_names_excluded_before_candidate_cap:true/);
 });
 
 test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
