@@ -537,7 +537,11 @@ async function main(){
         minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
         maximum_symbols:args.maxSymbols,
         scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY',
-        raw_archive_symbol_pattern:'^[A-Z0-9]+USDT
+        raw_archive_symbol_pattern:'ALPHANUMERIC_USDT_ONLY',
+        invalid_archive_symbol_names_excluded_before_candidate_cap:true,
+        invalid_archive_symbol_names:universe.archiveSymbolFormatRejections
+      },
+      historical_eligibility:{
         method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
         interval:'15m',lookback_candles:96,
         minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
