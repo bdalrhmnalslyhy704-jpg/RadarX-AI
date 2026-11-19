@@ -1418,7 +1418,7 @@ async function main(){
   const denseAnchor=fitDenseLogisticAnchor(denseSplit.train,denseScaler);
   const denseFit=fitDenseGeneralizationProjection(denseSplit.train,denseAnchor,denseScaler,{
     dropout:0.15,l2:0.06,rank:6,hidden:12,epochs:args.denseEpochs,seed:1337,
-    learningRate:0.008,lossObjective:'FOCAL_ASYMMETRIC_BRIER',
+    learningRate:0.008,lossObjective:'BRIER',
     focalGammaPositive:1,focalGammaNegative:2
   });
   const denseArtifact=makeArtifact({
