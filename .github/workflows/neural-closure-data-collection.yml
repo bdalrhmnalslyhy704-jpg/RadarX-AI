@@ -8,6 +8,7 @@ on:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-neural-universe-expansion-20261119
     paths:
+      - '.github/workflows/neural-closure-data-collection.yml'
       - 'phase2/core/neural-closure-data-builder.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
