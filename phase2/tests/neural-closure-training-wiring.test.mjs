@@ -180,6 +180,10 @@ test('TCN-LSTM frozen execution policy is audited on outer validation and holdou
   assert.match(recurrent,/roundTripCostBps/);
   assert.match(recurrent,/simulateFirstTouchPaperPortfolio\(rows,modelMask,options\)/);
   assert.match(recurrent,/simulateFirstTouchPaperPortfolio\(rows,baselineMask,options\)/);
+  assert.match(recurrent,/comparison_opportunity_identity:'IDENTICAL_SHARED_ROWS'/);
+  assert.match(recurrent,/shared_opportunity_identity_sha256/);
+  assert.match(recurrent,/decision_bucket_ms:TCN_LSTM_RANKING_BUCKET_MS/);
+  assert.match(recurrent,/round_trip_cost_bps:roundTripCostBps/);
   assert.match(trainer,/evaluateFrozenTcnLstmExecutionPolicy,verifyTcnLstmFrozenExecutionPolicy/);
   assert.match(trainer,/frozenPolicyValidation/);
   assert.match(trainer,/frozenPolicyHoldout/);
