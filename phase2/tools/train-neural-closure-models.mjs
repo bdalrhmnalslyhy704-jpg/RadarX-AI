@@ -1450,19 +1450,22 @@ async function main(){
     holdout_split_rows:denseSplit.holdout.length
   };
 
+  // A successful fit is not an inner-selection result. These fixed-config
+  // challengers have no independent inner model-selection gate in this replay,
+  // so they must remain diagnostic-only and cannot unlock the outer holdout.
   qualificationByModel.HYBRID_TCN_ATTENTION={
-    passed:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined,
-    reason:trainingArtifacts.HYBRID_TCN_ATTENTION
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+    passed:false,
+    reason:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined
+      ?'NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_ATTENTION'
       :unavailable.HYBRID_TCN_ATTENTION?.reason??'HYBRID_TCN_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    diagnostic_only:true
   };
   qualificationByModel.DENSE_MLP={
-    passed:trainingArtifacts.DENSE_MLP!==undefined,
-    reason:trainingArtifacts.DENSE_MLP
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+    passed:false,
+    reason:trainingArtifacts.DENSE_MLP!==undefined
+      ?'NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_DENSE_MLP'
       :'DENSE_MLP_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    diagnostic_only:true
   };
   const benchmark=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha,
