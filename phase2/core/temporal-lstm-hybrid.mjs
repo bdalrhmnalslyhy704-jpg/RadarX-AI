@@ -1626,7 +1626,7 @@ export function trainTcnLstmHybrid(trainingRows, {
   const history = [];
   const initialBrier = evaluateBrier(rows, model, anchor);
   let bestBrier=initialBrier;
-  let bestObjective=initialBrier;
+  let bestObjective=Infinity;
   let bestEpoch = 0;
   let bestModel = cloneTree(trainableParameters(model));
   let wait = 0, stoppedEarly = false;
