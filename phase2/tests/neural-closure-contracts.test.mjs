@@ -310,11 +310,15 @@ test('fixed-SHA calibration, threshold-selection and outer-validation blocks are
 });
 
 test('calibrator method is fixed from fit rows and cannot be selected by validation-check labels',()=>{
-  const fitRows=Array.from({length:200},(_,index)=>({
-    id:'CAL-FIT-'+index,target:index%2
+  const fitRows=Array.from({length:400},(_,index)=>({
+    id:'CAL-FIT-'+index,target:index%2,
+    at:Date.UTC(2025,0,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
   }));
   const checkRows=Array.from({length:80},(_,index)=>({
-    id:'CAL-CHECK-'+index,target:index%2
+    id:'CAL-CHECK-'+index,target:index%2,
+    at:Date.UTC(2025,3,5)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,5)+(index+1)*4*60*60*1000
   }));
   const rawMap=new Map([...fitRows,...checkRows].map(row=>[
     row.id,row.target===1?0.70:0.30
@@ -323,7 +327,7 @@ test('calibrator method is fixed from fit rows and cannot be selected by validat
   const flippedCheck=checkRows.map(row=>({...row,target:1-row.target}));
   const flipped=chooseCalibration(rawMap,fitRows,flippedCheck,20);
   assert.equal(fitted.check_block_used_for_calibrator_selection,false);
-  assert.equal(fitted.selection_scope,'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.selection_scope,'PREDECLARED_PURGED_INNER_GENERALIZATION_WITHIN_CALIBRATION_FIT');
   assert.equal(fitted.platt.fit_partition,'CALIBRATION_FIT_ONLY');
   assert.equal(fitted.temperature.fitted,false);
   assert.equal(fitted.selected_method,flipped.selected_method);
@@ -331,6 +335,62 @@ test('calibrator method is fixed from fit rows and cannot be selected by validat
     'changing only validation-check labels must not change fitted calibration parameters');
   assert.notEqual(fitted.selected_check_brier,flipped.selected_check_brier,
     'validation-check labels may change the reported evaluation score, not the fitted calibrator');
+});
+
+
+test('Platt calibration must improve both Brier and NLL on a purged chronological inner check',()=>{
+  const fitRows=Array.from({length:400},(_,index)=>({
+    id:'CAL-GATE-'+index,target:index%2,
+    at:Date.UTC(2025,0,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
+  }));
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-GATE-CHECK-'+index,target:index%2,
+    at:Date.UTC(2025,3,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,1)+(index+1)*4*60*60*1000
+  }));
+  const rawMap=new Map([...fitRows,...checkRows].map(row=>[
+    row.id,row.target===1?0.70:0.30
+  ]));
+  const result=chooseCalibration(rawMap,fitRows,checkRows,20);
+  assert.equal(result.platt.generalization_gate.accepted,true);
+  assert.equal(result.platt.accepted,true);
+  assert.equal(result.platt.generalization_gate.purge_ms,86_400_000);
+  assert.equal(
+    result.platt.generalization_gate.purge_rule,
+    'FULL_UTC_DAY_PURGE_BETWEEN_INNER_FIT_LABEL_MATURITY_AND_CHECK'
+  );
+  assert.ok(
+    result.platt.generalization_gate.inner_check_earliest_at-
+    result.platt.generalization_gate.inner_fit_latest_resolved_at>=86_400_000
+  );
+  assert.ok(result.platt.generalization_gate.calibrated_check_brier<
+    result.platt.generalization_gate.raw_check_brier);
+  assert.ok(result.platt.generalization_gate.calibrated_check_nll<
+    result.platt.generalization_gate.raw_check_nll);
+});
+
+test('Platt falls back to raw when its purged chronological inner check reverses',()=>{
+  const fitRows=Array.from({length:400},(_,index)=>({
+    id:'CAL-DRIFT-'+index,target:index%2,
+    at:Date.UTC(2025,0,1)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
+  }));
+  const rawMap=new Map(fitRows.map((row,index)=>[
+    row.id,index<240
+      ?(row.target===1?0.70:0.30)
+      :(row.target===1?0.30:0.70)
+  ]));
+  const checkRows=Array.from({length:80},(_,index)=>({
+    id:'CAL-DRIFT-CHECK-'+index,target:index%2,
+    at:Date.UTC(2025,3,5)+index*4*60*60*1000,
+    resolved_at:Date.UTC(2025,3,5)+(index+1)*4*60*60*1000
+  }));
+  for(const row of checkRows)rawMap.set(row.id,row.target===1?0.30:0.70);
+  const result=chooseCalibration(rawMap,fitRows,checkRows,20);
+  assert.equal(result.platt.generalization_gate.accepted,false);
+  assert.equal(result.selected_method,'RAW_PLATT_NOT_ACCEPTED');
+  assert.equal(result.selected_calibrator,null);
 });
 
 test('calibration preflight reports insufficient class support without reducing the 50-row floor',()=>{
@@ -539,13 +599,13 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   }
   assert.deepEqual(report.calibration_policy,{
     schema:'DISJOINT_CALIBRATION_THRESHOLD_SELECTION_OUTER_VALIDATION_V1',
-    method:'PREDECLARED_PLATT_SCALING_WITH_RAW_FALLBACK',
+    method:'PREDECLARED_PURGED_INTERNAL_GENERALIZATION_PLATT_WITH_RAW_FALLBACK',
     fit_partition:'CALIBRATION_FIT_ONLY',
     threshold_selection_partition:'EARLIER_DISJOINT_PURGED_BLOCK',
     outer_validation_partition:'LATER_DISJOINT_PURGED_CHECK_BLOCK',
     fallback:'RAW_IF_PLATT_NOT_ACCEPTED',
     temperature_scaling:'NOT_FIT_PREDECLARED_PLATT_ONLY',
-    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
+    selection_scope:'PREDECLARED_PURGED_INNER_GENERALIZATION_WITHIN_CALIBRATION_FIT',
     check_block_used_for_calibrator_selection:false,
     threshold_selection_rows_used_for_outer_validation_metrics:false,
     same_fit_purge_threshold_and_check_rows_for_logistic_and_neural_models:true,
@@ -1438,3 +1498,51 @@ test('TCN-LSTM pre-inner diagnostic rejects any final-holdout score payload',()=
   assert.equal(report.holdout_access.opened,false);
 });
 
+
+
+test('unselected threshold reports outer execution risk as NOT_EVALUATED, not missing data',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  predictions.LOGISTIC_REGRESSION=predictions.LOGISTIC_REGRESSION.map(row=>({
+    ...row,probability:0.05
+  }));
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    predictions[family]=predictions[family].map(row=>({
+      ...row,probability:0.05,
+      artifact_sha256:modelArtifactsByModel[family].artifact_sha256
+    }));
+  }
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const validation=report.models.TCN_LSTM_HYBRID.validation;
+  assert.equal(validation.threshold_selection,
+    'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES');
+  assert.equal(validation.selected_threshold,null);
+  assert.equal(validation.validation_threshold_metrics,null);
+  assert.deepEqual(validation.validation_threshold_risk_gates,{
+    return_data_complete:'NOT_EVALUATED',
+    minimum_validation_trades:'NOT_EVALUATED',
+    minimum_validation_win_rate:'NOT_EVALUATED',
+    positive_validation_net_pnl:'NOT_EVALUATED',
+    maximum_validation_drawdown:'NOT_EVALUATED'
+  });
+  assert.equal(validation.outer_validation_gate.gates.threshold_selection_qualified,'FAIL');
+  assert.equal(validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,
+    'NOT_EVALUATED');
+  const topK=validation.expanded_threshold_window_counterfactual
+    .rank_based_top_k_policy.outer_validation;
+  assert.equal(topK.diagnostic_grid_only,true);
+  assert.deepEqual(topK.diagnostic_grid.map(item=>item.top_k_per_timestamp),[1,2,3]);
+  assert.ok(topK.diagnostic_grid.every(item=>
+    item.diagnostic_only===true&&item.labels_used_for_k_selection===false));
+  assert.ok(topK.diagnostic_grid.every(item=>item.metrics.return_data_status==='COMPLETE'));
+  assert.equal(report.holdout_access.opened,false);
+});

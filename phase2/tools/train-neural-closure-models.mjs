@@ -31,10 +31,12 @@ import {
   TEMPORAL_MULTISCALE_POOLING_MODE,TEMPORAL_MULTISCALE_MODEL_ARCHITECTURE
 } from '../core/temporal-neural-brain.mjs';
 import {
-  TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,
+  TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
   selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
-  predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability
+  predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
+  predictTcnLstmHybridRankingLogit,
+  predictTcnLstmHybridRankingAnchorLogit
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1165,6 +1167,9 @@ async function main(){
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
           rankingPairsPerTimestamp:4,
+          rankingHeadLearningRate:0.03,
+          rankingHeadEpochs:40,
+          rankingHeadL2:0.001,
           candidates:[
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
@@ -1173,10 +1178,10 @@ async function main(){
               objective:'FOCAL_ASYMMETRIC_BRIER'},
             {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_PAIRWISE_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingWeight:0.02},
-            {name:'4H_PAIRWISE_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.05}
+            {name:'4H_AUX_RANK_HEAD_LR015_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              rankingHeadLearningRate:0.015},
+            {name:'4H_AUX_RANK_HEAD_LR045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingHeadLearningRate:0.045}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1274,7 +1279,22 @@ async function main(){
             );
             if(!finite(preInnerProbability)||preInnerProbability<0||preInnerProbability>1)
               throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_NON_FINITE:'+item.id);
-            return {...item,pre_inner_calibration_probability:Number(preInnerProbability)};
+            const auxiliaryRankingLogit=predictTcnLstmHybridRankingLogit(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(!finite(auxiliaryRankingLogit))
+              throw new Error('TCN_LSTM_AUXILIARY_RANKING_DIAGNOSTIC_NON_FINITE:'+item.id);
+            const auxiliaryRankingAnchorLogit=predictTcnLstmHybridRankingAnchorLogit(
+              sourceRow.temporal_sequence,selectedFit
+            );
+            if(!finite(auxiliaryRankingAnchorLogit))
+              throw new Error('TCN_LSTM_AUXILIARY_RANKING_ANCHOR_DIAGNOSTIC_NON_FINITE:'+item.id);
+            return {
+              ...item,
+              pre_inner_calibration_probability:Number(preInnerProbability),
+              auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
+              auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit)
+            };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
             artifact_sha256:artifact.artifact_sha256,
@@ -1294,6 +1314,16 @@ async function main(){
             logistic_selection_score:selection.baseline?.selection_score??null,
             selected_pairwise_ranking:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.pairwise_ranking??null,
+            selected_pairwise_ranking_head:selection.candidates.find(row=>
+              row.name===selection.selected_configuration)?.ranking_head??null,
+            ranking_head_selection_qualification:selection.ranking_head_selection_qualification??null,
+            ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
+            ranking_head_parameters:TCN_LSTM_HIDDEN,
+            ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
+            ranking_scores_emitted_for:'OUTER_VALIDATION_ONLY',
+            holdout_ranking_scores_emitted:false,
+            ranking_anchor_scores_emitted_for:'OUTER_VALIDATION_ONLY',
+            holdout_ranking_anchor_scores_emitted:false,
             internal_calibrator:calibrator.method,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
@@ -1337,9 +1367,13 @@ async function main(){
   let hybridFit=null;
   try{
     hybridFit=trainHybridTcnAttention(split.train,{
-      // Keep the separate hybrid-attention control at its original eight epochs;
-      // the extended schedule targets the regime-local TCN and recurrent challenger.
-      epochs:Math.min(8,args.epochs),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
+      // This model previously optimized a trading-return surrogate while being
+      // judged as a probability forecaster. Switch the primary experiment to
+      // proper-scoring BCE; initialize only from the training-fold class prior.
+      // The return/drawdown objective remains available for separate ranking work.
+      epochs:16,learningRate:0.0015,l2:0.001,
+      objectiveMode:'BINARY_CROSS_ENTROPY',
+      targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
     });
     const normalization=hybridFit.normalization;
     const hybridArtifact=makeArtifact({
@@ -1384,7 +1418,7 @@ async function main(){
   const denseAnchor=fitDenseLogisticAnchor(denseSplit.train,denseScaler);
   const denseFit=fitDenseGeneralizationProjection(denseSplit.train,denseAnchor,denseScaler,{
     dropout:0.15,l2:0.06,rank:6,hidden:12,epochs:args.denseEpochs,seed:1337,
-    learningRate:0.008,lossObjective:'FOCAL_ASYMMETRIC_BRIER',
+    learningRate:0.008,lossObjective:'BRIER',
     focalGammaPositive:1,focalGammaNegative:2
   });
   const denseArtifact=makeArtifact({
@@ -1416,19 +1450,22 @@ async function main(){
     holdout_split_rows:denseSplit.holdout.length
   };
 
+  // A successful fit is not an inner-selection result. These fixed-config
+  // challengers have no independent inner model-selection gate in this replay,
+  // so they must remain diagnostic-only and cannot unlock the outer holdout.
   qualificationByModel.HYBRID_TCN_ATTENTION={
-    passed:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined,
-    reason:trainingArtifacts.HYBRID_TCN_ATTENTION
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+    passed:false,
+    reason:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined
+      ?'NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_ATTENTION'
       :unavailable.HYBRID_TCN_ATTENTION?.reason??'HYBRID_TCN_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    diagnostic_only:true
   };
   qualificationByModel.DENSE_MLP={
-    passed:trainingArtifacts.DENSE_MLP!==undefined,
-    reason:trainingArtifacts.DENSE_MLP
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
+    passed:false,
+    reason:trainingArtifacts.DENSE_MLP!==undefined
+      ?'NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_DENSE_MLP'
       :'DENSE_MLP_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    diagnostic_only:true
   };
   const benchmark=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha,

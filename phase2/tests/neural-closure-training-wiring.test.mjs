@@ -196,6 +196,15 @@ test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the sh
   assert.match(contract,/'TCN_LSTM_HYBRID'/);
 });
 
+
+test('fixed-config attention and dense challengers cannot claim inner qualification from training alone',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_ATTENTION/);
+  assert.match(trainer,/NO_INNER_SELECTION_QUALIFICATION_FOR_FIXED_CONFIG_DENSE_MLP/);
+  assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{[\s\S]*?passed:false,[\s\S]*?diagnostic_only:true/);
+  assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{[\s\S]*?passed:false,[\s\S]*?diagnostic_only:true/);
+});
+
 test('regime-local TCN families use a smaller inner discovery margin but retain the strict 0.003 outer promotion gate',async()=>{
   const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
   const trainer=await readFile(trainerUrl,'utf8');
@@ -336,7 +345,9 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(workflow,/timeout-minutes: 90/);
   assert.match(trainer,/args\.epochs>24/);
   assert.match(trainer,/TEMPORAL_EPOCHS_MUST_BE_1_TO_24/);
-  assert.match(trainer,/epochs:Math\.min\(8,args\.epochs\),targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
+  assert.match(trainer,/epochs:16,learningRate:0\.0015,l2:0\.001,[\s\S]*?objectiveMode:'BINARY_CROSS_ENTROPY',[\s\S]*?targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
+  assert.match(trainer,/learningRate:0\.008,lossObjective:'BRIER'/,
+    'Dense MLP checkpoint objective must match the Brier probability metric used for evaluation');
   assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
   assert.match(temporal,/validation_or_holdout_used:false/);
   assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);

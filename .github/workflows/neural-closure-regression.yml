@@ -12,6 +12,7 @@ on:
       - research/build224-tcn-lstm-temporal-stability-audit-20261117
       - research/build224-tcn-lstm-expanded-threshold-window-20261117
       - research/build224-tcn-lstm-fine-threshold-diagnostic-20261117
+      - research/build224-outer-topk-diagnostic-20261119
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -41,6 +42,7 @@ on:
     branches:
       - research/daily-early-riser-mlp-budget-20261113
       - research/build224-tcn-v11-inference-coverage-20261116
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
       - research/build224-neural-closure-calibration-parity-20261116
       - research/build224-neural-closure-independent-threshold-gate-20261116
       - research/build224-tcn-lstm-pre-inner-calibration-diagnostics-20261116

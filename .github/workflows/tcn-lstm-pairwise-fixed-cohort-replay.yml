@@ -5,10 +5,12 @@ on:
     branches:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-logit-ranking-fix-20261118
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - '.github/workflows/tcn-lstm-pairwise-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
