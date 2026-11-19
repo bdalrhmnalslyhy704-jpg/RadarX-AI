@@ -237,6 +237,11 @@ async function main(){
     ?input.universe.symbol_results.filter(item=>item?.status==='INCLUDED')
       .map(item=>String(item.symbol??'').toUpperCase()).filter(Boolean)
     :[];
+  const maximumCandidateSymbols=Number(input.universe?.maximum_symbols);
+  const expectedUniverseSelection=`CURRENT_TOP_${maximumCandidateSymbols}_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1`;
+  const validCandidateUniverse=Number.isInteger(maximumCandidateSymbols)&&
+    maximumCandidateSymbols>=10&&maximumCandidateSymbols<=100&&
+    Number(input.universe?.candidate_prefilter?.maximum_symbols)===maximumCandidateSymbols;
   const datasetScope={
     market_data_source:input.data_quality?.source??null,
     market_data_endpoint:input.market_data_endpoint??null,
@@ -250,12 +255,12 @@ async function main(){
     included_symbols:includedSymbols,
     survivorship_bias_warning:input.universe?.survivorship_bias_warning===true,
     historical_delisted_asset_coverage:false,
-    interpretation:'POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_50_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED'
+    interpretation:`POINT_IN_TIME_24H_LIQUIDITY_WITHIN_CURRENT_TOP_${maximumCandidateSymbols}_CANDIDATE_PREFILTER; HISTORICAL_DELISTED_PAIRS_NOT_COVERED`
   };
   const historicalPolicy=input.universe?.historical_eligibility??{};
   const historicalMinimum=Number(input.universe?.minimum_quote_volume_24h_usdt);
-  if(input.universe?.selection!==
-      'CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1'||
+  if(input.universe?.selection!==expectedUniverseSelection||
+    !validCandidateUniverse||
     historicalPolicy.method!==
       'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE'||
     historicalPolicy.interval!=='15m'||
@@ -265,8 +270,6 @@ async function main(){
     !Number.isFinite(historicalMinimum)||historicalMinimum<750_000||
     input.universe?.survivorship_bias_warning!==true||
     input.universe?.historical_delisted_asset_coverage!==false||
-    Number(input.universe?.maximum_symbols)!==50||
-    Number(input.universe?.candidate_prefilter?.maximum_symbols)!==50||
     Number(input.universe?.candidate_prefilter?.minimum_quote_volume_24h_usdt)!==750_000)
     throw new Error('POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED');
   const rows=validateFourHourRows(input.rows);
