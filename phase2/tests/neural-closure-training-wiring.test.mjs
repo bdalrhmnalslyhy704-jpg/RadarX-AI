@@ -24,26 +24,26 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/cancel-in-progress: false/);
 });
 
-test('fixed-SHA collector and trainer use the expanded current top-50 candidate prefilter without relaxing historical gates',async()=>{
+test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
   const policy=await readFile(new URL('../core/neural-closure-data-builder.mjs',import.meta.url),'utf8');
   const workflow=await readFile(new URL('../../.github/workflows/neural-closure-data-collection.yml',import.meta.url),'utf8');
-  assert.match(collector,/maxSymbols:50,minSymbols:25/);
-  assert.match(collector,/result\.maxSymbols>50/);
+  assert.match(collector,/maxSymbols:100,minSymbols:40/);
+  assert.match(collector,/result\.maxSymbols>100/);
   assert.match(collector,/VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM/);
   assert.match(collector,/REJECTED_INCOMPLETE_RAW_ARCHIVE/);
   assert.match(collector,/REJECTED_LOW_VALID_EVENT_COVERAGE/);
   assert.match(collector,/rejection_reasons:symbolRejectedReasons/);
-  assert.match(collector,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
-  assert.match(policy,/CURRENT_BINANCE_SPOT_24H_TICKER_TOP_50_AT_COLLECTION_TIME/);
-  assert.match(trainer,/CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
-  assert.match(trainer,/Number\(input\.universe\?\.maximum_symbols\)!==50/);
-  assert.match(trainer,/Number\(input\.universe\?\.candidate_prefilter\?\.maximum_symbols\)!==50/);
+  assert.match(collector,/CURRENT_TOP_100_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1/);
+  assert.match(policy,/CURRENT_BINANCE_SPOT_24H_TICKER_TOP_100_AT_COLLECTION_TIME/);
+  assert.match(trainer,/expectedUniverseSelection/);
+  assert.match(trainer,/maximumCandidateSymbols>=10&&maximumCandidateSymbols<=100/);
+  assert.match(trainer,/candidate_prefilter\?\.maximum_symbols\)===maximumCandidateSymbols/);
   assert.match(trainer,/historicalMinimum<750_000/);
-  assert.ok(workflow.includes("MAX_SYMBOLS: ${{ inputs.max_symbols || '50' }}"),
+  assert.ok(workflow.includes("MAX_SYMBOLS: ${{ inputs.max_symbols || '100' }}"),
     'push-triggered collection must use the documented top-50 default when no manual input is supplied');
-  assert.ok(workflow.includes("default: '50'"),
+  assert.ok(workflow.includes("default: '100'"),
     'manual workflow dispatch must retain the documented top-50 default');
   assert.ok(workflow.includes('--maxSymbols "$MAX_SYMBOLS"'),
     'the selected workflow universe must be passed to the collector');
