@@ -1571,11 +1571,11 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
     schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
     status:'UNAVAILABLE',
     reason,
-    diagnostic_only:true,
+    diagnostic_only:false,
     selection_partition_only:true,
     holdout_values_used:false,
-    affects_candidate_ranking:false,
-    affects_acceptance_gates:false
+    affects_candidate_ranking:true,
+    affects_acceptance_gates:true
   });
   if(!Array.isArray(rows)||!Array.isArray(probabilities)||!rows.length||
     rows.length!==probabilities.length)
@@ -1710,7 +1710,7 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
   return {
     schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
     status:'AVAILABLE',
-    diagnostic_only:true,
+    diagnostic_only:false,
     selection_partition_only:true,
     selection_sample_count:rows.length,
     round_trip_cost_bps:Number(roundTripCostBps),
@@ -1719,8 +1719,8 @@ export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
     minimum_trades:minimumTrades,
     minimum_win_rate_pct:minimumWinRatePct,
     holdout_values_used:false,
-    affects_candidate_ranking:false,
-    affects_acceptance_gates:false,
+    affects_candidate_ranking:true,
+    affects_acceptance_gates:true,
     portfolio_drawdown_evaluated:false,
     trials,
     preliminary_return_screen_candidates:preliminary.length,
