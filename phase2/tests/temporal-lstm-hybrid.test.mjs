@@ -214,13 +214,57 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
     baselineLogit:0.23,
     epsilon:1e-5
   });
-  assert.equal(result.parameter_count,TCN_LSTM_PARAMETER_COUNT);
-  assert.equal(result.checked_parameters,TCN_LSTM_PARAMETER_COUNT);
+  assert.equal(result.parameter_count,TCN_LSTM_PARAMETER_COUNT+26);
+  assert.equal(result.checked_parameters,TCN_LSTM_PARAMETER_COUNT+26);
   assert.equal(result.passed,true,
     'max absolute gradient error='+result.maximum_absolute_error+
     ', max relative error='+result.maximum_relative_error+
     ', worst parameter='+JSON.stringify(result.worst_parameter));
   assert.ok(result.maximum_absolute_error<2e-5);
+});
+
+test('joint ranking, net-return and downside gradients match central finite differences across the full encoder',()=>{
+  const audit=auditTcnLstmHybridGradients(makeSequence(1,59),1,{
+    model:createTcnLstmHybridModelForAudit(61),
+    baselineLogit:0.17,
+    epsilon:1e-5,
+    rankingLogitGradient:-0.37,
+    rankingLoss:0.42,
+    netReturnTarget:1.35,
+    downsideRiskTarget:0.82,
+    returnLossWeight:0.23,
+    riskLossWeight:0.31,
+    huberDelta:1.1
+  });
+  assert.equal(audit.passed,true,
+    'joint max abs error='+audit.maximum_absolute_error+
+    ', max relative error='+audit.maximum_relative_error+
+    ', worst='+JSON.stringify(audit.worst_parameter));
+  assert.equal(audit.checked_parameters,TCN_LSTM_PARAMETER_COUNT+26);
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('joint TCN-LSTM training sends ranking and execution losses through shared encoder',()=>{
+  const rows=makeRankedRows(30,10,'joint-train');
+  const executionRows=rows.map(row=>({...row,
+    max_adverse_excursion_pct:row.realized_return_pct>0?-0.4:-2.1
+  }));
+  const initial=createTcnLstmHybridModelForAudit(113);
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:2,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:113,maxTrainingSamples:40,
+    rankingRows:rows,executionRows,
+    rankingWeight:0.1,returnLossWeight:0.1,riskLossWeight:0.1
+  });
+  assert.equal(profile.training.return_ranking.method,
+    'JOINT_PAIRWISE_LOGIT_GRADIENT_THROUGH_SHARED_ENCODER_V2');
+  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_ranking_head,true);
+  assert.equal(profile.training.execution_regression_heads.classifier_encoder_parameters_updated,true);
+  assert.ok(profile.model.rankingHeadWeights.some((value,index)=>value!==initial.rankingHeadWeights[index]));
+  assert.ok(profile.model.executionReturnHeadWeights.some((value,index)=>value!==initial.executionReturnHeadWeights[index]));
+  assert.ok(profile.model.executionRiskHeadWeights.some((value,index)=>value!==initial.executionRiskHeadWeights[index]));
+  assert.equal(profile.training.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.real_order_execution,false);
 });
 
 test('focal-asymmetric TCN-LSTM objective matches finite-difference gradients',()=>{
