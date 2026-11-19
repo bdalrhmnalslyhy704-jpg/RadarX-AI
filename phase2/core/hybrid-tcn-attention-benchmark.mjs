@@ -1430,6 +1430,7 @@ export function profitDrawdownObjective(probabilities, rows, {
 export function trainHybridTcnAttention(trainingRows, {
   epochs = 8, learningRate = 0.003, l2 = 0.001,
   seed = 17, objectiveOptions = {},
+  objectiveMode = 'BINARY_CROSS_ENTROPY',
   targetDefinition = DEFAULT_TARGET_DEFINITION
 } = {}) {
   if(![DEFAULT_TARGET_DEFINITION,NEURAL_CLOSURE_TARGET_DEFINITION].includes(targetDefinition))
@@ -1440,7 +1441,13 @@ export function trainHybridTcnAttention(trainingRows, {
   const normalizedRows = rows.map(row => ({
     ...row, sequence: normalizeHybridSequence(row.sequence, normalization)
   }));
+  if(!['BINARY_CROSS_ENTROPY','PROFIT_DRAWDOWN'].includes(objectiveMode))
+    throw new Error('HYBRID_TCN_OBJECTIVE_MODE_UNSUPPORTED');
   const model = initializeHybridModel(seed);
+  const trainingPositiveRate=rows.reduce((sum,row)=>sum+row.target,0)/rows.length;
+  if(objectiveMode==='BINARY_CROSS_ENTROPY')
+    model.outputBias=Math.log(clamp(trainingPositiveRate,1e-5,1-1e-5)/
+      (1-clamp(trainingPositiveRate,1e-5,1-1e-5)));
   const parameters = () => ({
     inputWeights: model.inputWeights, inputBias: model.inputBias,
     depthWeights: model.depthWeights, pointWeights: model.pointWeights,
@@ -1464,9 +1471,22 @@ export function trainHybridTcnAttention(trainingRows, {
         throw new TypeError('HYBRID_TCN_FORWARD_PROPAGATED_NON_FINITE:' + index);
       probabilities[index] = prediction.probability;
     }
-    const objective = profitDrawdownObjective(probabilities, normalizedRows, {
-      enforceMarketGates: true, ...objectiveOptions
-    });
+    let objective;
+    if(objectiveMode==='BINARY_CROSS_ENTROPY'){
+      const epsilon=1e-8;
+      let loss=0;
+      const logitGradients=normalizedRows.map((row,index)=>{
+        const probability=clamp(probabilities[index],epsilon,1-epsilon);
+        loss+=-(row.target*Math.log(probability)+
+          (1-row.target)*Math.log(1-probability));
+        return (probabilities[index]-row.target)/normalizedRows.length;
+      });
+      objective={loss:loss/normalizedRows.length,logit_gradients:logitGradients};
+    }else{
+      objective=profitDrawdownObjective(probabilities, normalizedRows, {
+        enforceMarketGates: true, ...objectiveOptions
+      });
+    }
     if(!Number.isFinite(objective.loss)||
        !Array.isArray(objective.logit_gradients)||
        objective.logit_gradients.length!==normalizedRows.length||
@@ -1485,12 +1505,13 @@ export function trainHybridTcnAttention(trainingRows, {
       clamp(Number(learningRate) || 0.003, 0.0001, 0.02), Math.max(0, Number(l2) || 0));
     Object.assign(model, update.parameters);
     optimizer = update.optimizer;
-    trace.push({ epoch, loss: objective.loss, mean_net_return_pct: objective.mean_net_return_pct,
-      sharpe_per_decision: objective.sharpe_per_decision,
-      max_additive_drawdown_pct: objective.max_additive_drawdown_pct,
-      focal_sample_count: objective.focal_sample_count,
-      cross_sectional_ranking_loss: objective.cross_sectional_ranking_loss,
-      cross_sectional_ranking_pair_count: objective.cross_sectional_ranking_pair_count });
+    trace.push({ epoch, objective_mode:objectiveMode, loss: objective.loss,
+      mean_net_return_pct: objective.mean_net_return_pct??null,
+      sharpe_per_decision: objective.sharpe_per_decision??null,
+      max_additive_drawdown_pct: objective.max_additive_drawdown_pct??null,
+      focal_sample_count: objective.focal_sample_count??0,
+      cross_sectional_ranking_loss: objective.cross_sectional_ranking_loss??0,
+      cross_sectional_ranking_pair_count: objective.cross_sectional_ranking_pair_count??0 });
   }
   return {
     model, architecture: HYBRID_TCN_ARCHITECTURE,
@@ -1507,7 +1528,8 @@ export function trainHybridTcnAttention(trainingRows, {
       retained_per_epoch_values: 'ONE_PROBABILITY_PER_ROW',
       full_cache_recomputation_count_per_epoch: rows.length
     },
-    training_objective: 'CUMULATIVE_EQUITY_SHARPE_BTC_COUNTERTREND_FOCAL_ASYMMETRIC_BRIER_TARGET_LABEL_RANKING_KAMA_V6',
+    training_objective:objectiveMode,
+    training_positive_rate:trainingPositiveRate,
     objective_trace: trace
   };
 }

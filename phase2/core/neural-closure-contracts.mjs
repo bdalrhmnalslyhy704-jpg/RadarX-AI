@@ -1954,6 +1954,220 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
   };
 }
 
+
+/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
+export function topKRankingSignals(rows,scores,topK) {
+  if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
+    !Number.isInteger(topK)||topK<1)
+    throw new TypeError('NEURAL_TOP_K_RANKING_INPUT_INVALID');
+  const groups=new Map();
+  for(let i=0;i<rows.length;i++){
+    const at=number(rows[i]?.at),score=number(scores[i]);
+    if(at===null||score===null)throw new TypeError('NEURAL_TOP_K_RANKING_SCORE_INVALID:'+i);
+    const key=String(Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS));
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(i);
+  }
+  const masked=Array(rows.length).fill(0);
+  const eligible=[...groups.values()].filter(indices=>indices.length>=2);
+  let signalCount=0;
+  for(const indices of eligible){
+    indices.sort((a,b)=>Number(scores[b])-Number(scores[a])||
+      String(rows[a]?.symbol??'').localeCompare(String(rows[b]?.symbol??''))||
+      String(rows[a]?.id??'').localeCompare(String(rows[b]?.id??'')));
+    const selected=indices.slice(0,topK);
+    for(let rank=0;rank<selected.length;rank++){
+      masked[selected[rank]]=0.5+0.5*((indices.length-rank)/(indices.length+1));
+      signalCount++;
+    }
+  }
+  return {
+    probabilities:masked,decision_group_count:eligible.length,total_time_buckets:groups.size,
+    singleton_buckets_excluded:groups.size-eligible.length,
+    decision_bucket_ms:NEURAL_CLOSURE_RANKING_BUCKET_MS,
+    decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',signal_count:signalCount,
+    selected_scores_preserve_rank:true,score_source:'RAW_AUXILIARY_RANKING_LOGIT'
+  };
+}
+
+
+/** Accept ranking logits for the exact validation set; reject every holdout score. */
+function collectTcnLstmValidationScoreMap(predictions,validationRows,holdoutRows,key) {
+  if(!Array.isArray(predictions))
+    return {status:'UNAVAILABLE',reason:'PREDICTIONS_NOT_ARRAY',map:new Map()};
+  const staged=predictions.filter(item=>Object.prototype.hasOwnProperty.call(item??{},key));
+  if(!staged.length)
+    return {status:'NOT_PROVIDED',reason:key.toUpperCase()+'_MISSING',map:new Map()};
+  const holdoutIds=new Set(holdoutRows.map(row=>String(row.id)));
+  if(staged.some(item=>holdoutIds.has(String(item?.id??''))))
+    return {status:'REJECTED_HOLDOUT_SCORE_EXPOSURE',
+      reason:'TCN_LSTM_RANKING_DIAGNOSTICS_MUST_NOT_INCLUDE_FINAL_HOLDOUT:'+key,
+      map:new Map()};
+  const expected=new Set(validationRows.map(row=>String(row.id)));
+  const map=new Map();
+  for(const item of staged){
+    const id=String(item?.id??''),value=item?.[key];
+    if(!id||!expected.has(id)||map.has(id))
+      return {status:'REJECTED_INVALID_SCORE_ROW_SET',
+        reason:'TCN_LSTM_RANKING_SCORE_ID_INVALID_DUPLICATE_OR_OUT_OF_SCOPE:'+key,
+        map:new Map()};
+    if(typeof value!=='number'||!Number.isFinite(value))
+      return {status:'REJECTED_INVALID_RANKING_SCORE',
+        reason:'TCN_LSTM_RANKING_SCORE_NON_FINITE:'+key,map:new Map()};
+    map.set(id,value);
+  }
+  if(map.size!==expected.size||[...expected].some(id=>!map.has(id)))
+    return {status:'REJECTED_INCOMPLETE_VALIDATION_COVERAGE',
+      reason:'TCN_LSTM_RANKING_SCORE_MUST_COVER_EVERY_VALIDATION_ROW:'+key,
+      map:new Map()};
+  return {status:'AVAILABLE',reason:null,map};
+}
+function collectTcnLstmAuxiliaryRankingMap(predictions,validationRows,holdoutRows) {
+  return collectTcnLstmValidationScoreMap(
+    predictions,validationRows,holdoutRows,'auxiliary_ranking_logit'
+  );
+}
+function collectTcnLstmRankingAnchorMap(predictions,validationRows,holdoutRows) {
+  return collectTcnLstmValidationScoreMap(
+    predictions,validationRows,holdoutRows,'auxiliary_ranking_anchor_logit'
+  );
+}
+
+/** Diagnostic only: tune K on the disjoint selection rows, then freeze it on outer validation. */
+export function compareTcnLstmRankingExecutionMetrics(rankingHeadMetrics,logisticAnchorMetrics) {
+  const delta=key=>finite(rankingHeadMetrics?.[key])&&finite(logisticAnchorMetrics?.[key])
+    ?Number((Number(rankingHeadMetrics[key])-Number(logisticAnchorMetrics[key])).toFixed(6))
+    :null;
+  return {
+    comparison_baseline:'SAME_FROZEN_TCN_LSTM_LOGISTIC_ANCHOR',
+    head_minus_anchor:{
+      trade_count:delta('trade_count'),
+      win_rate_percentage_points:delta('win_rate_pct'),
+      net_pnl_percentage_points:delta('net_pnl_pct'),
+      max_drawdown_percentage_points:delta('max_drawdown_pct'),
+      average_net_return_percentage_points:delta('average_net_return_pct'),
+      sharpe_per_trade:delta('sharpe_per_trade')
+    }
+  };
+}
+
+/** Diagnostic only: tune K on disjoint selection rows; evaluate the frozen anchor beside the head. */
+function evaluateAuxiliaryRankingHeadTopKPolicy(selectionRows,outerRows,scoreMap,
+  anchorScoreMap,roundTripCostBps,{
+    minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
+  }={}) {
+  const unavailable=(reason)=>({
+    schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,affects_primary_probabilities:false,
+    affects_primary_threshold:false,affects_acceptance_gates:false,
+    holdout_values_used:false,reason
+  });
+  if(!(scoreMap instanceof Map))return unavailable('AUXILIARY_RANKING_SCORE_MAP_MISSING');
+  if(!(anchorScoreMap instanceof Map))return unavailable('AUXILIARY_RANKING_ANCHOR_SCORE_MAP_MISSING');
+  const selectionScores=selectionRows.map(row=>scoreMap.get(String(row.id)));
+  const outerScores=outerRows.map(row=>scoreMap.get(String(row.id)));
+  const selectionAnchorScores=selectionRows.map(row=>anchorScoreMap.get(String(row.id)));
+  const outerAnchorScores=outerRows.map(row=>anchorScoreMap.get(String(row.id)));
+  if([...selectionScores,...outerScores,...selectionAnchorScores,...outerAnchorScores]
+    .some(v=>typeof v!=='number'||!Number.isFinite(v)))
+    return unavailable('AUXILIARY_RANKING_OR_ANCHOR_SCORE_COVERAGE_INCOMPLETE');
+  const gatesFor=metrics=>({
+    return_data_complete:metrics?.return_data_status==='COMPLETE',
+    minimum_trades:Number(metrics?.trade_count)>=minimumTrades,
+    minimum_win_rate:finite(metrics?.win_rate_pct)&&metrics.win_rate_pct>=minimumWinRatePct,
+    positive_net_pnl:finite(metrics?.net_pnl_pct)&&metrics.net_pnl_pct>0,
+    maximum_drawdown:finite(metrics?.max_drawdown_pct)&&metrics.max_drawdown_pct<=maximumDrawdownPct
+  });
+  const compare=(head,anchor)=>({
+    logistic_anchor_metrics:anchor,
+    ...compareTcnLstmRankingExecutionMetrics(head,anchor)
+  });
+  const evaluateGrid=(rows,headScores,anchorScores)=>[1,2,3].map(topK=>{
+    const headMask=topKRankingSignals(rows,headScores,topK);
+    const anchorMask=topKRankingSignals(rows,anchorScores,topK);
+    const metrics=portfolioMetrics(rows,headMask.probabilities,0.5,roundTripCostBps);
+    const anchorMetrics=portfolioMetrics(rows,anchorMask.probabilities,0.5,roundTripCostBps);
+    return {
+      top_k_per_timestamp:topK,
+      decision_group_count:headMask.decision_group_count,
+      signal_count:headMask.signal_count,
+      metrics,
+      ...compare(metrics,anchorMetrics)
+    };
+  });
+  const trials=evaluateGrid(selectionRows,selectionScores,selectionAnchorScores).map(row=>{
+    const gates=gatesFor(row.metrics);
+    return {
+      top_k_per_timestamp:row.top_k_per_timestamp,
+      decision_group_count:row.decision_group_count,
+      signal_count:row.signal_count,
+      metrics:row.metrics,
+      logistic_anchor_metrics:row.logistic_anchor_metrics,
+      comparison_baseline:row.comparison_baseline,
+      head_minus_anchor:row.head_minus_anchor,
+      risk_gates:Object.fromEntries(Object.entries(gates).map(([k,v])=>[k,v?'PASS':'FAIL'])),
+      qualified:Object.values(gates).every(Boolean)
+    };
+  });
+  const eligible=trials.filter(t=>t.qualified).sort((a,b)=>
+    Number(b.metrics.net_pnl_pct)-Number(a.metrics.net_pnl_pct)||
+    Number(a.metrics.max_drawdown_pct)-Number(b.metrics.max_drawdown_pct)||
+    Number(b.metrics.trade_count)-Number(a.metrics.trade_count));
+  const selected=eligible[0]??null;
+  // This predeclared grid is a report-only comparison. Outer-validation outcomes
+  // cannot choose K, change gates, or unlock the final holdout.
+  const outerDiagnosticGrid=evaluateGrid(outerRows,outerScores,outerAnchorScores);
+  const outerMask=selected
+    ?topKRankingSignals(outerRows,outerScores,selected.top_k_per_timestamp):null;
+  const outerAnchorMask=selected
+    ?topKRankingSignals(outerRows,outerAnchorScores,selected.top_k_per_timestamp):null;
+  const outerMetrics=outerMask
+    ?portfolioMetrics(outerRows,outerMask.probabilities,0.5,roundTripCostBps):null;
+  const outerAnchorMetrics=outerAnchorMask
+    ?portfolioMetrics(outerRows,outerAnchorMask.probabilities,0.5,roundTripCostBps):null;
+  const outerGates=outerMetrics?gatesFor(outerMetrics):{
+    return_data_complete:false,minimum_trades:false,minimum_win_rate:false,
+    positive_net_pnl:false,maximum_drawdown:false
+  };
+  return {
+    schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+    status:'EVALUATED',diagnostic_only:true,
+    policy:'TOP_K_PER_15M_DECISION_BUCKET_BY_AUXILIARY_RANKING_LOGIT',
+    score_source:'TRAINING_ONLY_AUXILIARY_RANKING_HEAD_RAW_LOGIT',
+    baseline_score_source:'SAME_FROZEN_TCN_LSTM_LOGISTIC_ANCHOR_LOGIT',
+    top_k_grid:[1,2,3],minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,require_positive_net_pnl:true,
+    maximum_drawdown_pct:maximumDrawdownPct,
+    affects_primary_probabilities:false,affects_primary_threshold:false,
+    affects_acceptance_gates:false,holdout_values_used:false,
+    selection:{
+      status:selected?'SELECTED_ON_DISJOINT_SELECTION_ONLY':'ABSTAINED_NO_TOP_K_PASSED_RISK_GATES',
+      sample_count:selectionRows.length,
+      trials,
+      selected_top_k_per_timestamp:selected?.top_k_per_timestamp??null,
+      selected_metrics:selected?.metrics??null,
+      selected_logistic_anchor_metrics:selected?.logistic_anchor_metrics??null,
+      selected_head_minus_anchor:selected?.head_minus_anchor??null,
+      labels_used_for_k_selection:true
+    },
+    outer_validation:{
+      sample_count:outerRows.length,
+      diagnostic_grid_only:true,
+      diagnostic_grid:outerDiagnosticGrid,
+      decision_group_count:outerMask?.decision_group_count??0,
+      signal_count:outerMask?.signal_count??0,
+      frozen_top_k_per_timestamp:selected?.top_k_per_timestamp??null,
+      metrics:outerMetrics,
+      logistic_anchor_metrics:outerAnchorMetrics,
+      ...(outerMetrics?compareTcnLstmRankingExecutionMetrics(outerMetrics,outerAnchorMetrics):{}),
+      risk_gates:Object.fromEntries(Object.entries(outerGates).map(([k,v])=>[k,v?'PASS':'FAIL'])),
+      risk_gates_passed:Object.values(outerGates).every(Boolean),
+      labels_used_for_k_selection:false,
+      return_data_status:outerMetrics?.return_data_status??'NOT_EVALUATED'
+    }
+  };
+}
+
 function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
   const labels=rows.map(row=>row.target);
   const counts=classCounts(labels);
@@ -1975,7 +2189,7 @@ function holdoutMetrics(rows,probabilities,threshold,roundTripCostBps,weights) {
 function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps,{
   minimumClassSupport=NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  fitFraction=0.35
+  fitFraction=0.35,rankingScoreMap=null,rankingAnchorScoreMap=null
 }={}) {
   const unavailable=(reason,extra={})=>({
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
@@ -2182,6 +2396,22 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     }
   };
 
+  const auxiliaryRankingHeadTopKPolicy=rankingScoreMap instanceof Map&&
+    rankingAnchorScoreMap instanceof Map
+    ?evaluateAuxiliaryRankingHeadTopKPolicy(
+      blocks.threshold_selection,blocks.check,rankingScoreMap,
+      rankingAnchorScoreMap,roundTripCostBps,{
+        minimumTrades,minimumWinRatePct,maximumDrawdownPct
+      })
+    :{
+      schema:'RADARX_TCN_LSTM_AUXILIARY_RANK_HEAD_TOP_K_POLICY_V1',
+      status:'UNAVAILABLE',diagnostic_only:true,
+      affects_primary_probabilities:false,affects_primary_threshold:false,
+      affects_acceptance_gates:false,holdout_values_used:false,
+      reason:!(rankingScoreMap instanceof Map)
+        ?'AUXILIARY_RANKING_SCORE_MAP_NOT_AVAILABLE'
+        :'AUXILIARY_RANKING_ANCHOR_SCORE_MAP_NOT_AVAILABLE'
+    };
   return {
     schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
     status:'EVALUATED',
@@ -2237,6 +2467,7 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
       trials:selection.trials
     },
     rank_based_top_k_policy:rankBasedTopKPolicy,
+    auxiliary_ranking_head_top_k_policy:auxiliaryRankingHeadTopKPolicy,
     outer_validation:{
       sample_count:blocks.check.length,
       positive_count:outerSupport.positive,
@@ -2355,6 +2586,14 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
+      ?collectTcnLstmAuxiliaryRankingMap(
+        predictionsByModel[modelName],split.validation,split.holdout
+      ):null;
+    const auxiliaryRankingAnchorMap=modelName==='TCN_LSTM_HYBRID'
+      ?collectTcnLstmRankingAnchorMap(
+        predictionsByModel[modelName],split.validation,split.holdout
+      ):null;
     const tcnLstmPreInnerCalibration=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmPreInnerCalibrationMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -2426,17 +2665,27 @@ export function runNeuralClosureBenchmark({
       ?portfolioMetrics(validationRows,calibratedValidation,
         thresholdSelection.threshold,roundTripCostBps)
       :null;
-    const validationThresholdRiskGates={
-      return_data_complete:validationThresholdMetrics?.return_data_status==='COMPLETE',
-      minimum_validation_trades:Number(validationThresholdMetrics?.trade_count)>=20,
-      minimum_validation_win_rate:finite(validationThresholdMetrics?.win_rate_pct)&&
+    // If threshold selection abstains, outer execution gates were not run.
+    // Preserve that distinction instead of misreporting absent metrics as
+    // incomplete return data or failed risk measurements.
+    const validationThresholdRiskGates=validationThresholdMetrics?{
+      return_data_complete:validationThresholdMetrics.return_data_status==='COMPLETE',
+      minimum_validation_trades:Number(validationThresholdMetrics.trade_count)>=20,
+      minimum_validation_win_rate:finite(validationThresholdMetrics.win_rate_pct)&&
         validationThresholdMetrics.win_rate_pct>=minimumWinRatePct,
-      positive_validation_net_pnl:finite(validationThresholdMetrics?.net_pnl_pct)&&
+      positive_validation_net_pnl:finite(validationThresholdMetrics.net_pnl_pct)&&
         validationThresholdMetrics.net_pnl_pct>0,
-      maximum_validation_drawdown:finite(validationThresholdMetrics?.max_drawdown_pct)&&
+      maximum_validation_drawdown:finite(validationThresholdMetrics.max_drawdown_pct)&&
         validationThresholdMetrics.max_drawdown_pct<=maximumDrawdownPct
+    }:{
+      return_data_complete:null,
+      minimum_validation_trades:null,
+      minimum_validation_win_rate:null,
+      positive_validation_net_pnl:null,
+      maximum_validation_drawdown:null
     };
-    const validationThresholdRiskPassed=Object.values(validationThresholdRiskGates).every(Boolean);
+    const validationThresholdRiskPassed=validationThresholdMetrics!==null&&
+      Object.values(validationThresholdRiskGates).every(value=>value===true);
     const thresholdSelectionSupport=classCounts(thresholdSelectionRows.map(row=>row.target));
     const metricWeights={
       positiveWeight:trainingWeights.positiveWeight,
@@ -2469,9 +2718,20 @@ export function runNeuralClosureBenchmark({
         buildExpandedThresholdWindowCounterfactual(
           split.validation,rawMap,roundTripCostBps,{
             minimumClassSupport,minimumTrades:20,
-            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35
+            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35,
+            rankingScoreMap:modelName==='TCN_LSTM_HYBRID'&&
+              auxiliaryRankingMap?.status==='AVAILABLE'
+                ?auxiliaryRankingMap.map:null,
+            rankingAnchorScoreMap:modelName==='TCN_LSTM_HYBRID'&&
+              auxiliaryRankingAnchorMap?.status==='AVAILABLE'
+                ?auxiliaryRankingAnchorMap.map:null
           }
         ),
+      ...(modelName==='TCN_LSTM_HYBRID'
+        ?{auxiliary_ranking_map_status:auxiliaryRankingMap?.status??'NOT_AVAILABLE',
+          auxiliary_ranking_map_reason:auxiliaryRankingMap?.reason??null,
+          auxiliary_ranking_anchor_map_status:auxiliaryRankingAnchorMap?.status??'NOT_AVAILABLE',
+          auxiliary_ranking_anchor_map_reason:auxiliaryRankingAnchorMap?.reason??null}:{}),
       ...(probabilityStageDiagnostics
         ?{probability_stage_diagnostics:probabilityStageDiagnostics}:{}),
       threshold_selection:thresholdSelection.status,
@@ -2501,7 +2761,9 @@ export function runNeuralClosureBenchmark({
         skipped_same_symbol:validationThresholdMetrics.skipped_same_symbol
       }:null,
       validation_threshold_risk_gates:Object.fromEntries(
-        Object.entries(validationThresholdRiskGates).map(([key,value])=>[key,value?'PASS':'FAIL'])
+        Object.entries(validationThresholdRiskGates).map(([key,value])=>[
+          key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+        ])
       )
     };
 
@@ -2541,9 +2803,10 @@ export function runNeuralClosureBenchmark({
       threshold_selection_qualified:
         thresholdSelection.status==='SELECTED_ON_VALIDATION_ONLY'&&
         finite(thresholdSelection.threshold)&&thresholdSelection.eligible_count>0,
-      outer_validation_threshold_risk_gates:validationThresholdRiskPassed
+      outer_validation_threshold_risk_gates:
+        validationThresholdMetrics===null?null:validationThresholdRiskPassed
     };
-    const validationPassed=Object.values(validationGates).every(Boolean);
+    const validationPassed=Object.values(validationGates).every(value=>value===true);
     const validationReason=!validationGates.inner_selection_qualified
       ?'INNER_SELECTION_NOT_QUALIFIED'
       :!validationGates.calibration_class_support
@@ -2573,7 +2836,9 @@ export function runNeuralClosureBenchmark({
         diagnostic_only:qualification.diagnostic_only===true
       },
       gates:Object.fromEntries(Object.entries(validationGates)
-        .map(([key,value])=>[key,value?'PASS':'FAIL'])),
+        .map(([key,value])=>[
+          key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+        ])),
       reason:validationReason
     };
     const baseModel={
