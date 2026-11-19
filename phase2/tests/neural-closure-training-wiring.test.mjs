@@ -66,7 +66,7 @@ test('expanded Binance cohort filters unarchivable Spot symbols before top-100 l
   assert.match(collector,/eligible\.slice\(0,maxSymbols\)/);
   assert.match(collector,/invalid_archive_symbol_names_excluded_before_candidate_cap:true/);
   assert.match(collector,/archiveSymbolFormatRejections/);
-  assert.match(collector,/raw_archive_symbol_pattern:'\^\[A-Z0-9\]\+USDT\
+  assert.match(collector,/raw_archive_symbol_pattern:'ALPHANUMERIC_USDT_ONLY'/);
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
   assert.match(trainer,/SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE/);
