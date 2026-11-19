@@ -1329,8 +1329,8 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile) {
   if(!Array.isArray(rw)||rw.length!==pooled.length||
     !Array.isArray(dw)||dw.length!==pooled.length||
     [...rw,...dw].some(x=>!finite(x))||
-    !finite(profile.model.executionReturnHeadBias)||
-    !finite(profile.model.executionRiskHeadBias))
+    !finite(Number(profile.model.executionReturnHeadBias))||
+    !finite(Number(profile.model.executionRiskHeadBias)))
     throw new TypeError('TCN_LSTM_EXECUTION_HEADS_NOT_FITTED');
   return {
     predicted_net_return_pct:dot(rw,profile.model.executionReturnHeadBias),
