@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {mkdir,writeFile,unlink} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
-import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {writeRawSpotKlineArchive,isRawSpotArchiveSymbol} from '../core/neural-closure-raw-archive.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
@@ -217,11 +217,18 @@ const num=value=>value===null||value===undefined||value===''?null:Number(value);
 
 function liquidityUniverse(exchangeInfo,tickers,{minimumQuoteVolume,maxSymbols}){
   const tickerMap=new Map(tickers.map(item=>[String(item.symbol),item]));
-  const allowed=exchangeInfo.symbols.filter(item=>
+  const exchangeEligible=exchangeInfo.symbols.filter(item=>
     item.status==='TRADING'&&item.quoteAsset==='USDT'&&
     item.isSpotTradingAllowed===true&&
     !STABLE_BASE_ASSETS.has(String(item.baseAsset||'').toUpperCase())&&
     !/(UP|DOWN|BULL|BEAR)$/.test(String(item.baseAsset||'').toUpperCase()));
+  // Keep the raw-archive filename contract from aborting the entire 100-symbol
+  // crawl. Exclude incompatible exchange symbols before ranking/capping and
+  // backfill with the next eligible liquid Spot/USDT symbols.
+  const archiveSymbolFormatRejections=exchangeEligible
+    .filter(item=>!isRawSpotArchiveSymbol(item.symbol))
+    .map(item=>String(item.symbol??''));
+  const allowed=exchangeEligible.filter(item=>isRawSpotArchiveSymbol(item.symbol));
   const eligible=allowed.map(symbol=>{
     const ticker=tickerMap.get(symbol.symbol);
     const quoteVolume=num(ticker?.quoteVolume);
@@ -239,7 +246,7 @@ function liquidityUniverse(exchangeInfo,tickers,{minimumQuoteVolume,maxSymbols})
     selected.push(btc);
     selected.sort((a,b)=>b.quote_volume_24h-a.quote_volume_24h);
   }
-  return {eligible,selected};
+  return {eligible,selected,archiveSymbolFormatRejections};
 }
 
 async function main(){
@@ -256,6 +263,14 @@ async function main(){
   const universe=liquidityUniverse(exchangeInfo,tickers,{
     minimumQuoteVolume:args.minQuoteVolumeUsdt,maxSymbols:args.maxSymbols
   });
+  if(universe.archiveSymbolFormatRejections.length){
+    console.log(JSON.stringify({
+      event:'NEURAL_CLOSURE_ARCHIVE_SYMBOL_FORMAT_EXCLUSIONS',
+      count:universe.archiveSymbolFormatRejections.length,
+      symbols:universe.archiveSymbolFormatRejections.slice(0,50),
+      policy:'EXCLUDE_BEFORE_TOP_100_LIQUIDITY_CAP_AND_BACKFILL_NEXT_VALID_SPOT_USDT_SYMBOL'
+    }));
+  }
   if(universe.selected.length<args.minSymbols)
     throw new Error('LIQUIDITY_UNIVERSE_BELOW_MIN_SYMBOLS:'+universe.selected.length);
 
@@ -521,7 +536,78 @@ async function main(){
         method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
         minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
         maximum_symbols:args.maxSymbols,
-        scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY'
+        scope:'CURRENTLY_TRADING_BINANCE_SPOT_USDT_PAIRS_ONLY',
+        raw_archive_symbol_pattern:'^[A-Z0-9]+USDT
+        method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
+        interval:'15m',lookback_candles:96,
+        minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+        future_or_unclosed_candles_used:false,
+        below_threshold_events_excluded:true
+      },
+      quote_asset:'USDT',
+      minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,
+      maximum_symbols:args.maxSymbols,
+      survivorship_bias_warning:true,
+      historical_delisted_asset_coverage:false,
+      symbols:universe.selected.map(item=>({
+        symbol:item.symbol,base_asset:item.base_asset,quote_asset:item.quote_asset,
+        collection_time_quote_volume_24h_usdt:item.quote_volume_24h
+      })),
+      symbol_results:symbolSummaries
+    },
+    counts,class_support:classSupport,
+    data_quality:{
+      source:'BINANCE_OFFICIAL_PUBLIC_REST_ONLY',
+      intervals:NEURAL_CLOSURE_DATASET_INTERVALS,
+      raw_archive_files:rawArchiveRecords.length,
+      raw_archive_records:rawArchiveRecords,
+      request_pages:pageCounts,
+      rejected_event_reasons:rejectedCounts,
+      feature_masks:{
+        micro_5m:'REAL_5M_KLINE_TAKER_BUY_QUOTE_VOLUME',
+        order_book:'UNAVAILABLE_MASKED_NO_IMPUTATION',
+        aggregate_trades:'UNAVAILABLE_MASKED_NO_IMPUTATION',
+        trade_level_volume_profile:'UNAVAILABLE_MASKED_CANDLE_PROXY_ONLY'
+      },
+      exact_240_closed_1m_bars_required:true,
+      no_synthetic_or_mock_rows:true
+    },
+    partitions:{
+      schema:split.schema,
+      days:split.days,
+      counts:split.counts,
+      class_support:classSupport
+    },
+    policy:{
+      ...NEURAL_CLOSURE_MARKET_DATA_POLICY,
+      paper_trading:true,real_order_execution:false
+    },
+    models_expected:[...NEURAL_CLOSURE_MODEL_FAMILIES]
+  };
+  await writeJsonObjectWithArrayStreaming(outputPath,{...output,rows:validated},'rows');
+  const summary={
+    status:'DATASET_READY_FOR_MODEL_TRAINING',
+    output:outputPath,dataset_sha256:datasetSha,
+    source_commit_sha:sourceCommitSha||null,counts,class_support:classSupport,
+    archive_files:rawArchiveRecords.length,
+    rejected_event_reasons:rejectedCounts
+  };
+  console.log(JSON.stringify(summary,null,2));
+}
+try{
+  await main();
+}catch(error){
+  console.error(JSON.stringify({
+    status:'DATASET_COLLECTION_FAILED_CLOSED',
+    code:String(error?.code||error?.message||'UNKNOWN_FAILURE'),
+    message:String(error?.message||error),
+    policy:{paper_trading:true,real_order_execution:false,market:'BINANCE_SPOT_ONLY'}
+  },null,2));
+  process.exitCode=1;
+}
+,
+        invalid_archive_symbol_names_excluded_before_candidate_cap:true,
+        invalid_archive_symbol_names:universe.archiveSymbolFormatRejections
       },
       historical_eligibility:{
         method:'SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE',
