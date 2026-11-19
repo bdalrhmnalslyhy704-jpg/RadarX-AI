@@ -75,6 +75,9 @@ test('expanded Binance cohort filters unarchivable Spot symbols before top-100 l
   assert.match(trainer,/evidence\.window_end_close_at\)===Number\(row\.at\)/);
   assert.match(trainer,/evidence\.window_evidence_sha256/);
   assert.match(trainer,/historical_delisted_asset_coverage!==false/);
+  assert.match(collector,/if\(universe\.selected\.length<args\.minSymbols\)/);
+  assert.match(collector,/--minSymbols 40/);
+  assert.match(collector,/--minQuoteVolumeUsdt 750000/);
 });
 
 test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
@@ -395,10 +398,6 @@ test('TCN-LSTM keeps calibrated classification independent of net-win ranking an
   assert.match(trainer,/external_validation_separated_ranking_objectives_top_k/);
   assert.match(lstm,/validation_or_holdout_used_for_fit:false/);
   assert.match(lstm,/holdout_values_used:false/);
-});
-  assert.match(collector,/if\(universe\.selected\.length<args\.minSymbols\)/);
-  assert.match(collector,/--minSymbols 40/);
-  assert.match(collector,/--minQuoteVolumeUsdt 750000/);
 });
 test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
