@@ -21,7 +21,8 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
-  assert.match(workflow,/cancel-in-progress: false/);
+  assert.match(workflow,/cancel-in-progress: true/);
+  assert.match(workflow,/github\.event\.pull_request\.number \|\| github\.ref/);
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
@@ -42,9 +43,9 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
   assert.match(trainer,/candidate_prefilter\?\.maximum_symbols\)===maximumCandidateSymbols/);
   assert.match(trainer,/historicalMinimum<750_000/);
   assert.ok(workflow.includes("MAX_SYMBOLS: ${{ inputs.max_symbols || '100' }}"),
-    'push-triggered collection must use the documented top-50 default when no manual input is supplied');
+    'push-triggered collection must use the documented top-100 default when no manual input is supplied');
   assert.ok(workflow.includes("default: '100'"),
-    'manual workflow dispatch must retain the documented top-50 default');
+    'manual workflow dispatch must retain the documented top-100 default');
   assert.ok(workflow.includes('--maxSymbols "$MAX_SYMBOLS"'),
     'the selected workflow universe must be passed to the collector');
 });
