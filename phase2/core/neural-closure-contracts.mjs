@@ -1580,7 +1580,7 @@ export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
         const innerFitLogits=probabilitiesFor(innerFitRows,rawMap).map(logit);
         const innerCheckLogits=probabilitiesFor(innerCheckRows,rawMap).map(logit);
         const innerPlatt=fitPlattScaler(innerFitLogits,innerFitLabels,{
-          minimumPositives,minimumNegatives
+          minimumPositives,minimumNegatives:minimumPositives
         });
         const rawInner=innerCheckLogits.map(value=>sigmoid(value));
         const calibratedInner=innerCheckLogits.map(value=>
