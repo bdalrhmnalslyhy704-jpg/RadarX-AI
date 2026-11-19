@@ -12,6 +12,7 @@ on:
       - research/build224-tcn-lstm-temporal-stability-audit-20261117
       - research/build224-tcn-lstm-expanded-threshold-window-20261117
       - research/build224-tcn-lstm-fine-threshold-diagnostic-20261117
+      - build224-joint-return-ranking-encoder-20261120
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -21,6 +22,8 @@ on:
       - 'phase2/core/feature-parity-guardian.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
       - 'phase2/core/dense-generalization-projection.mjs'
       - 'phase2/tools/dense-4h-benchmark.mjs'
@@ -118,6 +121,8 @@ jobs:
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
       - name: Test fixed-SHA trainer wiring and disjoint threshold-validation windows
         run: node --test --test-timeout=180000 phase2/tests/neural-closure-training-wiring.test.mjs
+      - name: Test TCN-LSTM joint gradients, frozen policy and execution simulator
+        run: node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
       - name: Test checksummed model artifacts and fail-closed feature parity
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Test Cognitive MLP V5 focal training, calibration and shared cohort contracts
