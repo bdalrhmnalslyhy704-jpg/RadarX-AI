@@ -363,7 +363,7 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   const fitRows=evidence.map(({realized_return_pct,...row})=>row);
   const profile=trainTcnLstmHybrid(fitRows,{
     epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
-    seed:771,maxTrainingSamples:40,rankingRows:evidence,
+    seed:771,maxTrainingSamples:40,rankingRows:evidence,executionRows:evidence,
     rankingHeadEpochs:12,executionHeadEpochs:20,
     executionHeadRoundTripCostBps:30
   });
