@@ -49,6 +49,8 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
     'manual workflow dispatch must retain the documented top-100 default');
   assert.ok(workflow.includes('--maxSymbols "$MAX_SYMBOLS"'),
     'the selected workflow universe must be passed to the collector');
+  assert.match(workflow,/timeout-minutes: 240/,
+    'the complete top-100, 180-day official Spot crawl must not be cut off by the former two-hour timeout');
   assert.match(collector,/isRawSpotArchiveSymbol/);
   assert.match(collector,/archiveSymbolFormatRejections/);
   assert.match(collector,/NEURAL_CLOSURE_ARCHIVE_SYMBOL_FORMAT_EXCLUSIONS/);
