@@ -1955,6 +1955,76 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
 }
 
 
+
+/**
+ * Compare a frozen execution-risk score with the frozen Logistic ranker on
+ * identical outer-validation opportunities. Lambda is read-only here.
+ */
+export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logisticProbabilities,{
+  riskPenaltyWeights,topKGrid=[1,2,3],roundTripCostBps=30
+}={}){
+  if(!Array.isArray(rows)||!rows.length||
+    !Array.isArray(riskAdjustedScores)||riskAdjustedScores.length!==rows.length||
+    !Array.isArray(logisticProbabilities)||logisticProbabilities.length!==rows.length||
+    !Array.isArray(riskPenaltyWeights)||riskPenaltyWeights.length!==rows.length||
+    !Array.isArray(topKGrid)||!topKGrid.length||
+    topKGrid.some(k=>!Number.isInteger(k)||k<1||k>100)||
+    !finite(roundTripCostBps)||Number(roundTripCostBps)<0||Number(roundTripCostBps)>300)
+    throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_INPUT_INVALID');
+  if(rows.some((row,index)=>!row?.id||!row?.symbol||!finite(row?.at)||
+    !finite(riskAdjustedScores[index])||
+    !finite(logisticProbabilities[index])||Number(logisticProbabilities[index])<0||
+    Number(logisticProbabilities[index])>1||
+    !finite(riskPenaltyWeights[index])||Number(riskPenaltyWeights[index])<0))
+    throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_ROW_INVALID');
+  const lambdas=[...new Set(riskPenaltyWeights.map(Number))];
+  if(lambdas.length!==1)
+    throw new TypeError('EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN');
+  if(new Set(rows.map(row=>String(row.id))).size!==rows.length)
+    throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_DUPLICATE_ROW_ID');
+  const trials=topKGrid.map(topK=>{
+    const neuralMask=topKRankingSignals(rows,riskAdjustedScores,topK);
+    const logisticMask=topKRankingSignals(rows,logisticProbabilities,topK);
+    const options={threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+      maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+      initialEquity:100};
+    const neural=simulateFirstTouchPaperPortfolio(rows,neuralMask.probabilities,options);
+    const logistic=simulateFirstTouchPaperPortfolio(rows,logisticMask.probabilities,options);
+    const delta=(a,b,key)=>finite(a?.[key])&&finite(b?.[key])
+      ?Number((Number(a[key])-Number(b[key])).toFixed(6)):null;
+    return {
+      top_k_per_timestamp:topK,
+      decision_group_count:neuralMask.decision_group_count,
+      logistic_decision_group_count:logisticMask.decision_group_count,
+      neural_selected_count:neuralMask.signal_count,
+      logistic_selected_count:logisticMask.signal_count,
+      neural_metrics:neural,logistic_metrics:logistic,
+      neural_minus_logistic:{
+        executed_trade_count:delta(neural,logistic,'trade_count'),
+        win_rate_percentage_points:delta(neural,logistic,'win_rate_pct'),
+        net_pnl_percentage_points:delta(neural,logistic,'net_pnl_pct'),
+        max_drawdown_percentage_points:delta(neural,logistic,'max_drawdown_pct')
+      }
+    };
+  });
+  return {
+    schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_RISK_EXTERNAL_VALIDATION_TOP_K_V1',
+    status:'AVAILABLE',evaluation_partition:'OUTER_VALIDATION_ONLY',
+    score_source:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+    risk_penalty_weight:lambdas[0],
+    baseline:'LOGISTIC_REGRESSION_SAME_TRAINING_PARTITION',
+    ranking:'TOP_K_PER_IDENTICAL_CLOSED_15M_DECISION_TIMESTAMP',
+    top_k_grid:[...topKGrid],opportunity_rows:rows.length,
+    round_trip_cost_bps:Number(roundTripCostBps),
+    portfolio_policy:NEURAL_CLOSURE_PORTFOLIO_POLICY,
+    lambda_refitted_on_outer_validation:false,
+    outer_validation_used_for_model_fit_or_selection:false,
+    holdout_rows_or_scores_used:false,
+    thresholds_or_lambda_tuned_on_outer_validation:false,
+    trials
+  };
+}
+
 /** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
 export function topKRankingSignals(rows,scores,topK) {
   if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
