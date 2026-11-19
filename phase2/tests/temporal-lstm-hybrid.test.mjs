@@ -25,6 +25,7 @@ import {
   buildTcnLstmReturnRankingPairs,
   summarizeTcnLstmPairwiseReturnRanking,
   summarizeTcnLstmPairwiseLogitRanking,
+  summarizeTcnLstmRankingExecutionSelection,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -231,6 +232,32 @@ test('TCN-LSTM pairwise return ranking loss orders high-return candidates above 
   assert.ok(correct.low_logit_gradient>0);
 });
 
+
+test('auxiliary rank head must pass inner-selection Top-K execution gates and beat the Logistic anchor',()=>{
+  const rows=Array.from({length:24*4},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const at=BASE+group*DAY+rank*75;
+    const execution=makeExecutionRow(index,rank<2?'UP':'DOWN',at);
+    return {...execution,sequence:makeSequence(rank<2?1:-1,index*0.01)};
+  });
+  const head=rows.map((_,index)=>[4,3,-3,-4][index%4]);
+  const anchor=rows.map((_,index)=>[-4,-3,3,4][index%4]);
+  const passed=summarizeTcnLstmRankingExecutionSelection(rows,head,anchor,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(passed.status,'EVALUATED');
+  assert.equal(passed.source_partition,'INNER_SELECTION_ONLY');
+  assert.equal(passed.passed,true);
+  assert.ok(passed.top_k_trials.some(item=>item.risk_gates_passed));
+  const rejected=summarizeTcnLstmRankingExecutionSelection(rows,head,head,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(rejected.passed,false);
+  assert.ok(rejected.top_k_trials.every(item=>
+    item.risk_gates.beats_logistic_anchor===false));
+  assert.equal(rejected.holdout_values_used,false);
+});
+
 test('TCN-LSTM pairwise logit loss preserves ranking margins beyond probability clipping',()=>{
   const pair=tcnLstmPairwiseLogitRankingLoss(22,21.5);
   assert.ok(Math.abs(pair.margin-0.5)<1e-12);
@@ -376,6 +403,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.equal(result.selection_scoring.method,'BRIER_PLUS_SEPARATE_TRAINING_ONLY_PAIRWISE_RANK_HEAD_V1');
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
+  assert.ok(result.candidates.every(item=>
+    item.ranking_execution_selection.status==='UNAVAILABLE'&&
+    item.ranking_head_selection_qualified===false));
+  assert.equal(result.ranking_head_selection_qualification.qualified,false);
   assert.equal(result.real_order_execution,false);
 });
 
