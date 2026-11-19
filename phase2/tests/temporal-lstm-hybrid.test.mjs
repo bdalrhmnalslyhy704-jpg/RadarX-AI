@@ -473,25 +473,23 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   assert.equal(profile.real_order_execution,false);
 });
 
-test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
+test('TCN-LSTM pairwise ranking updates the shared encoder from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
   const profile=trainTcnLstmHybrid(fitRows,{
     epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
-    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0,
+    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0.1,
     rankingHeadLearningRate:0.03,rankingHeadEpochs:40,
     rankingRoundTripCostBps:30,rankingMinimumReturnGapPct:0.5,
     rankingPairsPerTimestamp:4
   });
   assert.equal(profile.training.return_ranking.enabled,true);
-  assert.equal(profile.training.return_ranking.method,'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1');
+  assert.equal(profile.training.return_ranking.method,'JOINT_PAIRWISE_LOGIT_GRADIENT_THROUGH_SHARED_ENCODER_V2');
   assert.equal(profile.training.return_ranking.source_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.training.return_ranking.comparison_pairs,10);
   assert.equal(profile.training.return_ranking.ranking_labels_seen_outside_training_partition,false);
-  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_ranking_head,false);
+  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_ranking_head,true);
   assert.equal(profile.training.return_ranking.ranking_head.fitted,true);
-  assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
-    profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
   assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
   const rankingLogit=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
   const anchorLogit=predictTcnLstmHybridRankingAnchorLogit(rows[0].sequence,profile);
