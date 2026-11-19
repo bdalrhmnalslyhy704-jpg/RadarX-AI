@@ -237,6 +237,7 @@ async function main(){
     ?input.universe.symbol_results.filter(item=>item?.status==='INCLUDED')
       .map(item=>String(item.symbol??'').toUpperCase()).filter(Boolean)
     :[];
+  // Preserve the frozen top-50 cohort while admitting new point-in-time cohorts up to 100 candidates.
   const maximumCandidateSymbols=Number(input.universe?.maximum_symbols);
   const expectedUniverseSelection=`CURRENT_TOP_${maximumCandidateSymbols}_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1`;
   const validCandidateUniverse=Number.isInteger(maximumCandidateSymbols)&&
