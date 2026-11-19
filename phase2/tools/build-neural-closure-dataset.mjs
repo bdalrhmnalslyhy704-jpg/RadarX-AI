@@ -29,7 +29,7 @@ const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 function parseArgs(argv){
-  const result={days:180,maxSymbols:50,minSymbols:25,
+  const result={days:180,maxSymbols:100,minSymbols:40,
     minQuoteVolumeUsdt:750_000,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -48,8 +48,8 @@ function parseArgs(argv){
   }
   if(!Number.isInteger(result.days)||result.days<60||result.days>180)
     throw new Error('DAYS_MUST_BE_AN_INTEGER_FROM_60_TO_180');
-  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>50)
-    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_50');
+  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>100)
+    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_100');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
