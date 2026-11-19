@@ -703,14 +703,15 @@ test('five-partition calibrated evaluation gates holdout behind external validat
   });
   assert.equal(result.partition_summary.training.rows,40);
   assert.equal(result.partition_summary.calibration.rows,60);
-  assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
-  assert.equal(result.validation.evaluated ?? true,true);
+  // The synthetic fixture has no inner-selection return-qualified candidate.
+  // Fail closed before fitting calibration or opening external validation.
+  assert.equal(result.status,'ABSTAIN_INNER_SELECTION_GATE_FAILED');
+  assert.equal(result.calibration.fitted,false);
+  assert.equal(result.validation.evaluated,false);
+  assert.equal(result.holdout.evaluated,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
-  assert.equal(result.holdout.evaluated,result.validation.passed);
-  if(!result.validation.passed)
-    assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
 });
 
 test('holdout outcome labels remain unread until external validation passes',()=>{
