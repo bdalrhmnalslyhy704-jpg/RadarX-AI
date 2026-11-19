@@ -171,6 +171,23 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
     'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
 });
 
+test('TCN-LSTM frozen execution policy is audited on outer validation and holdout stays locked until validation passes',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(recurrent,/export function evaluateFrozenTcnLstmExecutionPolicy/);
+  assert.match(recurrent,/verifyTcnLstmFrozenExecutionPolicy\(profile\)/);
+  assert.match(recurrent,/policy_reselected:false/);
+  assert.match(recurrent,/roundTripCostBps/);
+  assert.match(recurrent,/simulateFirstTouchPaperPortfolio\(rows,modelMask,options\)/);
+  assert.match(recurrent,/simulateFirstTouchPaperPortfolio\(rows,baselineMask,options\)/);
+  assert.match(trainer,/evaluateFrozenTcnLstmExecutionPolicy,verifyTcnLstmFrozenExecutionPolicy/);
+  assert.match(trainer,/frozenPolicyValidation/);
+  assert.match(trainer,/frozenPolicyHoldout/);
+  assert.match(trainer,/HOLDOUT_LOCKED_UNTIL_FROZEN_VALIDATION_EXECUTION_PASSES/);
+  assert.match(trainer,/policy_reselected_on_external_data:false/);
+  assert.match(trainer,/passed:innerQualified&&frozenPolicyValidation\.status==='EVALUATED'/);
+});
+
 test('fixed-SHA trainer exports failed-inner TCN-LSTM candidates only as diagnostic outer predictions',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
