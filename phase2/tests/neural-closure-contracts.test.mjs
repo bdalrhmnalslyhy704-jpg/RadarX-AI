@@ -339,7 +339,7 @@ test('calibrator method is fixed from fit rows and cannot be selected by validat
 
 
 test('Platt calibration must improve both Brier and NLL on a purged chronological inner check',()=>{
-  const fitRows=Array.from({length:240},(_,index)=>({
+  const fitRows=Array.from({length:400},(_,index)=>({
     id:'CAL-GATE-'+index,target:index%2,
     at:Date.UTC(2025,0,1)+index*4*60*60*1000,
     resolved_at:Date.UTC(2025,0,1)+(index+1)*4*60*60*1000
