@@ -1477,5 +1477,12 @@ test('unselected threshold reports outer execution risk as NOT_EVALUATED, not mi
   assert.equal(validation.outer_validation_gate.gates.threshold_selection_qualified,'FAIL');
   assert.equal(validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,
     'NOT_EVALUATED');
+  const topK=validation.expanded_threshold_window_counterfactual
+    .rank_based_top_k_policy.outer_validation;
+  assert.equal(topK.diagnostic_grid_only,true);
+  assert.deepEqual(topK.diagnostic_grid.map(item=>item.top_k_per_timestamp),[1,2,3]);
+  assert.ok(topK.diagnostic_grid.every(item=>
+    item.diagnostic_only===true&&item.labels_used_for_k_selection===false));
+  assert.ok(topK.diagnostic_grid.every(item=>item.metrics.return_data_status==='COMPLETE'));
   assert.equal(report.holdout_access.opened,false);
 });
