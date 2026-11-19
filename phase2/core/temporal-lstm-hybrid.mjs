@@ -1278,6 +1278,35 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile) {
 }
 
 /** Choose risk penalty only on purged inner-selection rows, against identical Logistic opportunities. */
+/**
+ * Frozen inference score for cross-sectional execution ranking.
+ * The penalty weight is selected on the purged inner-selection partition and
+ * then carried unchanged into outer validation. Probability calibration is
+ * deliberately separate from this return/risk score.
+ */
+export function predictTcnLstmHybridExecutionScore(sequence,profile) {
+  const prediction=predictTcnLstmHybridExecutionHeads(sequence,profile);
+  const lambda=finite(profile?.execution_risk_penalty_weight)
+    ?clamp(Number(profile.execution_risk_penalty_weight),0,8):null;
+  if(lambda===null)
+    return {status:'UNAVAILABLE',reason:'FROZEN_EXECUTION_RISK_PENALTY_NOT_SELECTED',
+      predicted_net_return_pct:prediction.predicted_net_return_pct,
+      predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
+      risk_penalty_weight:null,risk_adjusted_net_return_score:null};
+  const score=prediction.predicted_net_return_pct-
+    lambda*prediction.predicted_downside_risk_pct;
+  if(!finite(score))
+    return {status:'UNAVAILABLE',reason:'EXECUTION_RISK_ADJUSTED_SCORE_NON_FINITE',
+      predicted_net_return_pct:prediction.predicted_net_return_pct,
+      predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
+      risk_penalty_weight:lambda,risk_adjusted_net_return_score:null};
+  return {status:'AVAILABLE',score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+    predicted_net_return_pct:Number(prediction.predicted_net_return_pct),
+    predicted_downside_risk_pct:Number(prediction.predicted_downside_risk_pct),
+    risk_penalty_weight:lambda,
+    risk_adjusted_net_return_score:Number(score)};
+}
+
 export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logisticLogits,{
   roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
 }={}) {
@@ -2098,8 +2127,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       }
     );
     if(executionRiskPolicy.status==='EVALUATED'&&
-      finite(executionRiskPolicy.selected_risk_penalty_weight))
+      finite(executionRiskPolicy.selected_risk_penalty_weight)){
       fit.execution_risk_penalty_weight=executionRiskPolicy.selected_risk_penalty_weight;
+      fit.execution_risk_policy=executionRiskPolicy;
+    }
     const selectionLogits = selectionRows.map(row => {
       const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
       return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).logit;
@@ -2183,6 +2214,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking_improvement:pairwiseRankingImprovement,
       ranking_execution_selection:rankingExecutionSelection,
       execution_risk_policy:executionRiskPolicy,
+      execution_risk_penalty_weight:finite(fit.execution_risk_penalty_weight)
+        ?fit.execution_risk_penalty_weight:null,
       execution_heads_fitted:fit.training.execution_regression_heads?.fitted===true,
       ranking_head_selection_qualified:rankingExecutionSelection.status==='EVALUATED'&&
         rankingExecutionSelection.passed===true,
@@ -2254,8 +2287,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     candidates:evaluated.map(({name,config,ranking_probability_blend_weight,
       ranking_blend_search,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
-      pairwise_ranking_improvement,ranking_execution_selection,
-      ranking_head_selection_qualified,selection_score,logistic_selection_score,
+      pairwise_ranking_improvement,ranking_execution_selection,execution_risk_policy,
+      execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
       name,config,ranking_probability_blend_weight,ranking_blend_search,
       selection_brier:Number(selection_brier.toFixed(8)),
@@ -2265,6 +2298,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
         ?Number(pairwise_ranking_improvement.toFixed(8)):null,
       ranking_execution_selection,
+      execution_risk_policy,execution_risk_penalty_weight,
       ranking_head_selection_qualified,
       ranking_head:fit.training?.return_ranking?.ranking_head??null,
       selection_score:Number(selection_score.toFixed(8)),
