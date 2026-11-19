@@ -11,6 +11,8 @@ import {
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
   auditTcnLstmHybridGradients,
+  computeTcnLstmFrozenExecutionPolicyFingerprint,
+  verifyTcnLstmFrozenExecutionPolicy,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
   predictTcnLstmHybridRankingLogit,
@@ -221,6 +223,37 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
     ', max relative error='+result.maximum_relative_error+
     ', worst parameter='+JSON.stringify(result.worst_parameter));
   assert.ok(result.maximum_absolute_error<2e-5);
+});
+
+test('frozen execution policy fingerprint rejects any post-selection policy or model mutation',()=>{
+  const model={projectionWeights:[[0.25]],outputBias:[0.1]};
+  const profile={
+    model,execution_risk_penalty_weight:0.5,
+    execution_risk_policy:{
+      selected_risk_penalty_weight:0.5,
+      selected_top_k_per_timestamp:2
+    }
+  };
+  const policy={
+    schema:'RADARX_TCN_LSTM_FROZEN_EXECUTION_POLICY_V1',version:1,
+    state:'FROZEN_BEFORE_OUTER_VALIDATION',
+    selected_risk_penalty_weight:0.5,selected_top_k_per_timestamp:2,
+    round_trip_cost_bps:30,minimum_trades:20,minimum_win_rate_pct:55,
+    maximum_drawdown_pct:8,max_concurrent_positions:3,
+    selection_partition_fingerprint:'a'.repeat(64),
+    candidate_configuration:{learningRate:0.0015,rankingWeight:0.1},
+    ranking_probability_blend_weight:0.25,
+    trained_model_fingerprint:(await import('node:crypto')).createHash('sha256')
+      .update(JSON.stringify(model)).digest('hex')
+  };
+  policy.fingerprint=computeTcnLstmFrozenExecutionPolicyFingerprint(policy);
+  profile.frozen_execution_policy=policy;
+  assert.equal(verifyTcnLstmFrozenExecutionPolicy(profile).valid,true);
+  profile.frozen_execution_policy={...policy,selected_risk_penalty_weight:0.75};
+  assert.equal(verifyTcnLstmFrozenExecutionPolicy(profile).valid,false);
+  profile.frozen_execution_policy=policy;
+  profile.model.outputBias[0]=0.2;
+  assert.equal(verifyTcnLstmFrozenExecutionPolicy(profile).valid,false);
 });
 
 test('joint ranking, net-return and downside gradients match central finite differences across the full encoder',()=>{
