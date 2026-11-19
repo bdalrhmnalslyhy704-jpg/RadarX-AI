@@ -556,7 +556,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
   assert.ok(result.candidates.every(item=>item.ranking_blend_search.length===7));
-  assert.equal(result.selection_scoring.method,'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_AND_PAIRWISE_RANK_V2');
+  assert.equal(result.selection_scoring.method,'CLASSIFIER_ONLY_BRIER_PLUS_SEPARATE_EXECUTION_RANK_AND_RETURN_RISK_V3');
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
   assert.ok(result.candidates.every(item=>
     item.ranking_execution_selection.status==='UNAVAILABLE'&&
