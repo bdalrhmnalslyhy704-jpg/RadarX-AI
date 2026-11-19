@@ -380,8 +380,8 @@ function initializeModel(seed = 29) {
     outputBias: [0],
     // Auxiliary rank head is separate from calibrated classification.
     rankingHeadWeights: Array(hidden).fill(0),
-    executionReturnHeadWeights:Array(hidden).fill(0),executionReturnHeadBias:0,
-    executionRiskHeadWeights:Array(hidden).fill(0),executionRiskHeadBias:0
+    executionReturnHeadWeights:Array(hidden).fill(0),executionReturnHeadBias:[0],
+    executionRiskHeadWeights:Array(hidden).fill(0),executionRiskHeadBias:[0]
   };
 }
 
@@ -401,9 +401,9 @@ function trainableParameters(model) {
     outputBias: model.outputBias,
     rankingHeadWeights: model.rankingHeadWeights,
     executionReturnHeadWeights: model.executionReturnHeadWeights,
-    executionReturnHeadBias: [model.executionReturnHeadBias],
+    executionReturnHeadBias: model.executionReturnHeadBias,
     executionRiskHeadWeights: model.executionRiskHeadWeights,
-    executionRiskHeadBias: [model.executionRiskHeadBias]
+    executionRiskHeadBias: model.executionRiskHeadBias
   };
 }
 
@@ -1293,9 +1293,9 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   };
   const returns=fitHead('net'),risk=fitHead('downside');
   model.executionReturnHeadWeights=returns.weights;
-  model.executionReturnHeadBias=returns.bias;
+  model.executionReturnHeadBias=[returns.bias];
   model.executionRiskHeadWeights=risk.weights;
-  model.executionRiskHeadBias=risk.bias;
+  model.executionRiskHeadBias=[risk.bias];
   return {
     schema:'RADARX_TCN_LSTM_NET_RETURN_DOWNSIDE_REGRESSION_HEADS_V1',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
@@ -1533,7 +1533,8 @@ export function trainTcnLstmHybrid(trainingRows, {
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
   baselineFit = null, earlyStoppingPatience = 5,
   objective='BRIER',gammaPositive=1,gammaNegative=2,
-  rankingRows=null,executionRows=null,rankingWeight=0,rankingRoundTripCostBps=30,
+  rankingRows=null,executionRows=null,rankingWeight=0.10,rankingRoundTripCostBps=30,
+  returnLossWeight=0.10,riskLossWeight=0.10,
   rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
   executionHeadRoundTripCostBps=30,executionHeadLearningRate=0.015,
@@ -1551,8 +1552,10 @@ export function trainTcnLstmHybrid(trainingRows, {
     !finite(gammaPositive)||gammaPositive<0||
     !finite(gammaNegative)||gammaNegative<0)
     throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_CONFIGURATION_INVALID');
-  if(!finite(rankingWeight)||rankingWeight<0||rankingWeight>1)
-    throw new TypeError('TCN_LSTM_RANKING_WEIGHT_INVALID');
+  if(!finite(rankingWeight)||rankingWeight<0||rankingWeight>1||
+    !finite(returnLossWeight)||returnLossWeight<0||returnLossWeight>1||
+    !finite(riskLossWeight)||riskLossWeight<0||riskLossWeight>1)
+    throw new TypeError('TCN_LSTM_JOINT_LOSS_WEIGHT_INVALID');
   const dropoutRate = Number(dropout);
   if (!finite(rate) || !finite(regularization) ||
       !finite(dropoutRate) || dropoutRate < 0 || dropoutRate > 0.40)
@@ -1581,6 +1584,21 @@ export function trainTcnLstmHybrid(trainingRows, {
   if(Array.isArray(rankingRows)&&ranking.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_RETURN_RANKING_PAIR_SUPPORT_TOO_SMALL');
   const rankingPairs=ranking.pairs;
+  const executionEvidenceById=new Map();
+  if(executionRows!==null){
+    if(!Array.isArray(executionRows))throw new TypeError('TCN_LSTM_EXECUTION_ROWS_INVALID');
+    for(const evidence of executionRows){
+      const id=sampleIdentity(evidence);
+      if(executionEvidenceById.has(id)||!finite(evidence.realized_return_pct)||
+        !finite(evidence.max_adverse_excursion_pct))
+        throw new TypeError('TCN_LSTM_EXECUTION_EVIDENCE_INVALID:'+id);
+      executionEvidenceById.set(id,evidence);
+    }
+    if(executionEvidenceById.size!==rows.length||rows.some(row=>{
+      const e=executionEvidenceById.get(sampleIdentity(row));
+      return !e||Number(e.at)!==Number(row.at)||String(e.symbol??'')!==String(row.symbol??'');
+    }))throw new TypeError('TCN_LSTM_EXECUTION_EVIDENCE_IDENTITY_MISMATCH');
+  }
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
@@ -1648,11 +1666,39 @@ export function trainTcnLstmHybrid(trainingRows, {
           dropoutRate > 0 && random() < dropoutRate ? 0 : 1 / (1 - dropoutRate));
         const item = lossAndGradientsTcnLstmHybrid(
           row.sequence, row.target, model, baselineLogit,
-          {dropoutScale,objective,classWeights,gammaPositive,gammaNegative}
+          {dropoutScale,objective,classWeights,gammaPositive,gammaNegative,
+            returnLossWeight:executionRows?returnLossWeight:0,
+            riskLossWeight:executionRows?riskLossWeight:0,
+            ...(executionRows?(()=>{const e=executionEvidenceById.get(sampleIdentity(row));
+              const costPct=Number(executionHeadRoundTripCostBps)/100;
+              return {netReturnTarget:Math.max(-30,Math.min(30,Number(e.realized_return_pct)-costPct)),
+                downsideRiskTarget:Math.max(0,Math.min(30,-Number(e.max_adverse_excursion_pct)))};})():{})}
         );
         epochLoss += item.loss;
         seen++;
         accumulated = accumulateTree(accumulated, item.gradients);
+      }
+      if(rankingWeight>0&&rankingPairs.length){
+        const batchSet=new Set(indexes);
+        for(const pair of rankingPairs){
+          if(!batchSet.has(pair.high_index)||!batchSet.has(pair.low_index))continue;
+          const highRow=rows[pair.high_index],lowRow=rows[pair.low_index];
+          const highBase=predictTcnLstmLogisticLogit(highRow.sequence,anchor);
+          const lowBase=predictTcnLstmLogisticLogit(lowRow.sequence,anchor);
+          const highForward=inspectTcnLstmForward(highRow.sequence,model,highBase);
+          const lowForward=inspectTcnLstmForward(lowRow.sequence,model,lowBase);
+          const pairLoss=tcnLstmPairwiseLogitRankingLoss(highForward.ranking_logit,lowForward.ranking_logit);
+          const scale=rankingWeight/Math.max(1,rankingPairs.length);
+          const highGrad=lossAndGradientsTcnLstmHybrid(highRow.sequence,highRow.target,model,highBase,
+            {objective:'EXTERNAL_LOGIT',externalLogitGradient:0,classificationWeight:0,
+              rankingLogitGradient:pairLoss.high_logit_gradient*scale,rankingLoss:pairLoss.loss*scale});
+          const lowGrad=lossAndGradientsTcnLstmHybrid(lowRow.sequence,lowRow.target,model,lowBase,
+            {objective:'EXTERNAL_LOGIT',externalLogitGradient:0,classificationWeight:0,
+              rankingLogitGradient:pairLoss.low_logit_gradient*scale,rankingLoss:0});
+          accumulated=accumulateTree(accumulated,highGrad.gradients);
+          accumulated=accumulateTree(accumulated,lowGrad.gradients);
+          epochLoss+=pairLoss.loss*scale;seen+=2;
+        }
       }
       let averaged=scaleTree(accumulated,1/indexes.length);
       if (!treeFinite(averaged)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NON_FINITE');
@@ -1670,8 +1716,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     const trainingBrier=evaluateBrier(rows,model,anchor);
     if(!finite(trainingBrier))
       throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_NON_FINITE');
-    if(trainingBrier<bestObjective-1e-8){
-      bestObjective=trainingBrier;bestBrier=trainingBrier;bestEpoch=epoch;
+    const jointTrainingObjective=epochLoss/Math.max(1,seen);
+    if(jointTrainingObjective<bestObjective-1e-8){
+      bestObjective=jointTrainingObjective;bestBrier=trainingBrier;bestEpoch=epoch;
       bestModel = cloneTree(trainableParameters(model));
       wait = 0;
     } else wait++;
@@ -1679,6 +1726,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       epoch,
       pre_update_mean_batch_objective_loss:Number((epochLoss/Math.max(1,seen)).toFixed(8)),
       post_update_training_brier:Number(trainingBrier.toFixed(8)),
+      pre_update_joint_training_objective:Number(jointTrainingObjective.toFixed(8)),
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
@@ -1788,7 +1836,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor:'TRAINING_PARTITION_CLASSIFICATION_BRIER_ONLY',
+        monitor:'TRAINING_PARTITION_JOINT_CLASSIFICATION_RANKING_RETURN_RISK_OBJECTIVE',
         patience,
         stopped_early: stoppedEarly
       },
