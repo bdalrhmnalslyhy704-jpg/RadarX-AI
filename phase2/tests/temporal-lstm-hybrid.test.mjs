@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {
   TCN_LSTM_HYBRID_SCHEMA,
@@ -243,7 +244,7 @@ test('frozen execution policy fingerprint rejects any post-selection policy or m
     selection_partition_fingerprint:'a'.repeat(64),
     candidate_configuration:{learningRate:0.0015,rankingWeight:0.1},
     ranking_probability_blend_weight:0.25,
-    trained_model_fingerprint:(await import('node:crypto')).createHash('sha256')
+    trained_model_fingerprint:createHash('sha256')
       .update(JSON.stringify(model)).digest('hex')
   };
   policy.fingerprint=computeTcnLstmFrozenExecutionPolicyFingerprint(policy);
