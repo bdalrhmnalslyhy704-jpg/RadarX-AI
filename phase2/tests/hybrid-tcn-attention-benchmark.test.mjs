@@ -957,7 +957,7 @@ test('Hybrid TCN consumes only audited 4h first-touch labels on closed 15m featu
     epochs:2,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION
   });
   assert.equal(fitted.training_samples,20);
-  assert.match(fitted.training_objective,/FOCAL_ASYMMETRIC_BRIER/);
+  assert.equal(fitted.training_objective,'BINARY_CROSS_ENTROPY');
   assert.equal(fitted.memory_profile.maximum_simultaneous_forward_caches,1);
   const corrupted=rows.map(row=>({...row,first_touch:{...row.first_touch}}));
   corrupted[0].first_touch.observed_candles=239;
