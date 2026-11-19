@@ -1559,8 +1559,10 @@ export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
     ))].sort((a,b)=>a-b);
     const boundary=fitDays[Math.floor(fitDays.length*0.60)];
     if(Number.isFinite(boundary)){
+      const innerPurgeBoundary=boundary-86_400_000;
       const innerFitRows=fitRows.filter(row=>
-        Number(row.at)<boundary&&Number(row.resolved_at)<boundary
+        Number(row.at)<innerPurgeBoundary&&
+        Number(row.resolved_at)<innerPurgeBoundary
       );
       const innerCheckRows=fitRows.filter(row=>Number(row.at)>=boundary);
       const innerFitLabels=innerFitRows.map(row=>row.target);
@@ -1573,7 +1575,10 @@ export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
         check_rows:innerCheckRows.length,
         fit_support:fitSupport,check_support:checkSupport,
         boundary_utc:new Date(boundary).toISOString(),
-        purge_rule:'INNER_FIT_LABELS_MUST_MATURE_BEFORE_INNER_CHECK_START'
+        purge_rule:'FULL_UTC_DAY_PURGE_BETWEEN_INNER_FIT_LABEL_MATURITY_AND_CHECK',
+        purge_ms:86_400_000,
+        inner_fit_latest_resolved_at:innerFitRows.length?Math.max(...innerFitRows.map(row=>Number(row.resolved_at))):null,
+        inner_check_earliest_at:innerCheckRows.length?Math.min(...innerCheckRows.map(row=>Number(row.at))):null
       };
       if(!supportFailure(fitSupport,minimumPositives,minimumPositives)&&
         !supportFailure(checkSupport,minimumPositives,minimumPositives)){
