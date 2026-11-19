@@ -386,13 +386,15 @@ async function main(){
       reason:cognitiveProfile.hybrid_model?.status??'HYBRID_NOT_SELECTED',
       diagnostic_only:cognitiveProfile.hybrid_model?.probability_ready!==true
     },
+    // Fitted weights are not qualification. These fixed-config models stay
+    // fail-closed until an independent chronological inner-selection gate runs.
     HYBRID_TCN_ATTENTION:{
-      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
-      diagnostic_only:false
+      passed:false,reason:'INNER_SELECTION_NOT_RUN_FIXED_CONFIG_DIAGNOSTIC_ONLY',
+      diagnostic_only:true
     },
     DENSE_MLP:{
-      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
-      diagnostic_only:false
+      passed:false,reason:'INNER_SELECTION_NOT_RUN_FIXED_CONFIG_DIAGNOSTIC_ONLY',
+      diagnostic_only:true
     }
   };
   training.model_internal_diagnostics={
