@@ -1539,14 +1539,92 @@ export function chooseCalibration(rawMap,fitRows,checkRows,minimumPositives,{
     method:'TEMPERATURE_SCALING',status:'NOT_FIT_PREDECLARED_PLATT_ONLY',
     fitted:false,accepted:false,fit_partition:'NOT_USED'
   };
+  // Do not accept Platt merely because it improves in-sample NLL.
+  // Run a chronological, purged internal check entirely inside the calibration-fit
+  // partition. The later outer calibration-check block remains sealed and cannot
+  // influence this decision.
+  const chronologyReady=fitRows.length>0&&fitRows.every(row=>
+    finite(row.at)!==null&&finite(row.resolved_at)!==null
+  );
+  let plattGeneralizationGate={
+    status:'ABSTAIN_CHRONOLOGY_UNAVAILABLE',
+    fit_rows:0,check_rows:0,fit_support:null,check_support:null,
+    raw_check_brier:null,calibrated_check_brier:null,
+    raw_check_nll:null,calibrated_check_nll:null,accepted:false
+  };
+  let generalizationAccepted=false;
+  if(chronologyReady){
+    const fitDays=[...new Set(fitRows.map(row=>
+      Math.floor(Number(row.at)/86_400_000)*86_400_000
+    ))].sort((a,b)=>a-b);
+    const boundary=fitDays[Math.floor(fitDays.length*0.60)];
+    if(Number.isFinite(boundary)){
+      const innerFitRows=fitRows.filter(row=>
+        Number(row.at)<boundary&&Number(row.resolved_at)<boundary
+      );
+      const innerCheckRows=fitRows.filter(row=>Number(row.at)>=boundary);
+      const innerFitLabels=innerFitRows.map(row=>row.target);
+      const innerCheckLabels=innerCheckRows.map(row=>row.target);
+      const fitSupport=classCounts(innerFitLabels);
+      const checkSupport=classCounts(innerCheckLabels);
+      plattGeneralizationGate={
+        ...plattGeneralizationGate,
+        status:'EVALUATED',fit_rows:innerFitRows.length,
+        check_rows:innerCheckRows.length,
+        fit_support:fitSupport,check_support:checkSupport,
+        boundary_utc:new Date(boundary).toISOString(),
+        purge_rule:'INNER_FIT_LABELS_MUST_MATURE_BEFORE_INNER_CHECK_START'
+      };
+      if(!supportFailure(fitSupport,minimumPositives,minimumNegatives)&&
+        !supportFailure(checkSupport,minimumPositives,minimumNegatives)){
+        const innerFitLogits=probabilitiesFor(innerFitRows,rawMap).map(logit);
+        const innerCheckLogits=probabilitiesFor(innerCheckRows,rawMap).map(logit);
+        const innerPlatt=fitPlattScaler(innerFitLogits,innerFitLabels,{
+          minimumPositives,minimumNegatives
+        });
+        const rawInner=innerCheckLogits.map(value=>sigmoid(value));
+        const calibratedInner=innerCheckLogits.map(value=>
+          innerPlatt.fitted?applyProbabilityCalibrator(value,innerPlatt):sigmoid(value)
+        );
+        const rawBrier=brier(rawInner,innerCheckLabels);
+        const calibratedBrier=brier(calibratedInner,innerCheckLabels);
+        const rawNll=binaryNll(innerCheckLogits,innerCheckLabels,sigmoid);
+        const calibratedNll=binaryNll(innerCheckLogits,innerCheckLabels,value=>
+          innerPlatt.fitted?applyProbabilityCalibrator(value,innerPlatt):sigmoid(value)
+        );
+        generalizationAccepted=innerPlatt.fitted===true&&innerPlatt.accepted===true&&
+          calibratedBrier<rawBrier&&calibratedNll<rawNll;
+        plattGeneralizationGate={
+          ...plattGeneralizationGate,
+          inner_platt_status:innerPlatt.status,
+          raw_check_brier:rawBrier,calibrated_check_brier:calibratedBrier,
+          raw_check_nll:rawNll,calibrated_check_nll:calibratedNll,
+          accepted:generalizationAccepted,
+          reason:generalizationAccepted?'PURGED_CHRONOLOGICAL_BRIER_AND_NLL_IMPROVED':
+            'PLATT_DID_NOT_IMPROVE_BOTH_PURGED_CHECK_METRICS'
+        };
+      }else{
+        plattGeneralizationGate={
+          ...plattGeneralizationGate,status:'ABSTAIN_INSUFFICIENT_INNER_CLASS_SUPPORT',
+          reason:'INNER_FIT_OR_CHECK_CLASS_SUPPORT_BELOW_PREDECLARED_MINIMUM'
+        };
+      }
+    }
+  }
   const fittedPlatt=fitPlattScaler(fitLogits,fitLabels,{
     minimumPositives,minimumNegatives:minimumPositives
   });
-  const platt={...fittedPlatt,fit_partition:'CALIBRATION_FIT_ONLY'};
+  const platt={
+    ...fittedPlatt,
+    accepted:fittedPlatt.fitted===true&&generalizationAccepted,
+    fit_partition:'CALIBRATION_FIT_ONLY',
+    generalization_gate:plattGeneralizationGate
+  };
   const selectedCalibrator=platt.fitted===true&&platt.accepted===true
     ?platt:null;
   const selectedMethod=selectedCalibrator
-    ?'PLATT_SCALING_FIT_ONLY':'RAW_PLATT_NOT_ACCEPTED';
+    ?'PLATT_SCALING_FIT_ONLY_PURGED_INTERNAL_GENERALIZATION'
+    :'RAW_PLATT_NOT_ACCEPTED';
   const selectedCheckProbabilities=probabilitiesFor(
     checkRows,rawMap,selectedCalibrator
   );
@@ -3079,7 +3157,7 @@ export function runNeuralClosureBenchmark({
     holdout_access:holdoutAccess,
     calibration_policy:{
       schema:'DISJOINT_CALIBRATION_THRESHOLD_SELECTION_OUTER_VALIDATION_V1',
-      method:'PREDECLARED_PLATT_SCALING_WITH_RAW_FALLBACK',
+      method:'PREDECLARED_PURGED_INTERNAL_GENERALIZATION_PLATT_WITH_RAW_FALLBACK',
       fit_partition:'CALIBRATION_FIT_ONLY',
       threshold_selection_partition:'EARLIER_DISJOINT_PURGED_BLOCK',
       outer_validation_partition:'LATER_DISJOINT_PURGED_CHECK_BLOCK',
