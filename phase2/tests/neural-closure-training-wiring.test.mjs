@@ -53,7 +53,7 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
   assert.match(collector,/archiveSymbolFormatRejections/);
   assert.match(collector,/NEURAL_CLOSURE_ARCHIVE_SYMBOL_FORMAT_EXCLUSIONS/);
   assert.match(archive,/export function isRawSpotArchiveSymbol/);
-  assert.match(archive,/NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:\$\{normalizedSymbol\}/);
+  assert.match(archive,/NEURAL_RAW_ARCHIVE_SYMBOL_INVALID:'\+normalizedSymbol/);
   assert.match(collector,/invalid_archive_symbol_names_excluded_before_candidate_cap:true/);
 });
 
@@ -383,7 +383,7 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
 test('TCN-LSTM keeps calibrated classification independent of net-win ranking and execution heads',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const lstm=await readFile(lstmModuleUrl,'utf8');
-  assert.match(lstm,/Probability is deliberately independent of the auxiliary/);
+  assert.match(lstm,/probability is deliberately independent of the auxiliary/i);
   assert.match(lstm,/return sigmoid\(forward\.logit\)/);
   assert.match(lstm,/NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE/);
   assert.match(lstm,/pair_target:'NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE'/);
