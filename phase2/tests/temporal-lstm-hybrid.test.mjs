@@ -35,7 +35,8 @@ import {
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
-import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics } from '../core/neural-closure-contracts.mjs';
+import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
+  evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
@@ -146,6 +147,36 @@ function makeExecutionRow(index,outcome,at){
     max_favorable_excursion_at:up?candleCloseTime:at+90_000
   };
 }
+
+
+test('external execution-risk Top-K uses one frozen lambda and identical validation opportunities',()=>{
+  const bucket=Math.floor(BASE/(15*60*1000))*(15*60*1000);
+  const rows=Array.from({length:8},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const row=makeExecutionRow(index,index%2===0?'UP':'DOWN',
+      bucket+group*15*60*1000+rank*1000);
+    return {...row,symbol:'RISK'+index+'USDT'};
+  });
+  const result=evaluateExternalExecutionRiskTopK(rows,
+    [-0.3,0.9,0.2,-0.1,0.8,-0.4,0.1,0.3],
+    [0.95,0.2,0.3,0.4,0.1,0.9,0.8,0.7],
+    {riskPenaltyWeights:Array(rows.length).fill(1.25),topKGrid:[1,2],roundTripCostBps:30});
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(result.risk_penalty_weight,1.25);
+  assert.equal(result.lambda_refitted_on_outer_validation,false);
+  assert.equal(result.holdout_rows_or_scores_used,false);
+  assert.equal(result.trials.length,2);
+  assert.equal(result.trials[0].neural_selected_count,2);
+  assert.equal(result.trials[0].logistic_selected_count,2);
+  assert.equal(result.trials[0].neural_metrics.return_data_status,'COMPLETE');
+  assert.equal(result.trials[0].logistic_metrics.return_data_status,'COMPLETE');
+  assert.throws(()=>evaluateExternalExecutionRiskTopK(rows,
+    [-0.3,0.9,0.2,-0.1,0.8,-0.4,0.1,0.3],
+    [0.95,0.2,0.3,0.4,0.1,0.9,0.8,0.7],
+    {riskPenaltyWeights:[...Array(7).fill(1.25),1.5],topKGrid:[1]}),
+    /EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN/);
+});
 
 
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
