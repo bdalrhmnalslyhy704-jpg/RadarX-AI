@@ -1868,13 +1868,11 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
   const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
   const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
-  // The return-ranking head is fitted on TRAINING rows only. Its blend weight
-  // is selected on the disjoint inner-selection partition, then frozen before
-  // calibration and outer validation. A zero weight preserves classifier-only
-  // behavior for legacy artifacts.
-  const blendWeight=finite(profile.ranking_probability_blend_weight)
-    ?clamp(Number(profile.ranking_probability_blend_weight),0,2):0;
-  return sigmoid(forward.logit+blendWeight*forward.ranking_logit);
+  // Classification probability is a dedicated calibrated output. Never add
+  // ranking_logit here: that value already contains the Logistic anchor logit,
+  // so blending it into forward.logit double-counts the anchor and corrupts
+  // probability calibration. Ranking/return/risk are execution-only outputs.
+  return sigmoid(forward.logit);
 }
 export function predictTcnLstmHybridRankingLogit(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
