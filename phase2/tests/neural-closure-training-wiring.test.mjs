@@ -57,6 +57,350 @@ test('fixed-SHA collector and trainer accept expanded current top-100 candidate 
   assert.match(collector,/invalid_archive_symbol_names_excluded_before_candidate_cap:true/);
 });
 
+test('expanded Binance cohort filters unarchivable Spot symbols before top-100 liquidity selection and backfills',async()=>{
+  const collector=await readFile(new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8');
+  const archive=await readFile(new URL('../core/neural-closure-raw-archive.mjs',import.meta.url),'utf8');
+  assert.match(archive,/export function isRawSpotArchiveSymbol/);
+  assert.match(collector,/filter\(item=>!isRawSpotArchiveSymbol\(item\.symbol\)\)/);
+  assert.match(collector,/filter\(item=>isRawSpotArchiveSymbol\(item\.symbol\)\)/);
+  assert.match(collector,/eligible\.slice\(0,maxSymbols\)/);
+  assert.match(collector,/invalid_archive_symbol_names_excluded_before_candidate_cap:true/);
+  assert.match(collector,/archiveSymbolFormatRejections/);
+  assert.match(collector,/raw_archive_symbol_pattern:'\^\[A-Z0-9\]\+USDT\
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
+  assert.match(trainer,/SUM_OF_96_CLOSED_15M_KLINE_QUOTE_VOLUME_AT_EACH_DECISION_CLOSE/);
+  assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_ROW_EVIDENCE_INVALID/);
+  assert.match(trainer,/evidence\.no_future_candles_used===true/);
+  assert.match(trainer,/evidence\.window_end_close_at\)===Number\(row\.at\)/);
+  assert.match(trainer,/evidence\.window_evidence_sha256/);
+  assert.match(trainer,/historical_delisted_asset_coverage!==false/);
+});
+
+test('fixed-SHA trainer opts into the separate regime-local TCN V11 attention challenger',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/predictTemporalAttentionResearchOutput/,
+    'the trainer must use the dedicated V11 attention predictor');
+  assert.match(trainer,/enableRegimeLocalTcnAttention:true/,
+    'the four-hour fixed-SHA workflow must actually train attention specialists');
+  assert.match(trainer,/regimeLocalTcnAttentionMaxTrainingSamples:2048/,
+    'the V11 training budget must remain explicit and bounded alongside V9/V10');
+  assert.match(trainer,/TEMPORAL_ATTENTION_MODEL_ARCHITECTURE/,
+    'the saved model identity must use the V11 attention architecture');
+});
+
+test('TCN V11 artifact is reloadable and its predictor consumes the persisted model state shape',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/schema:'RADARX_BUILD224_TCN_V11_ATTENTION_ARTIFACT_V1'/);
+  assert.match(trainer,/regime,\{research_inference:attentionSpecialists\[regime\]\.research_inference\}/,
+    'each serialized BTC regime must wrap research_inference exactly as the predictor expects');
+  assert.match(trainer,/row\.temporal_sequence,v11State,\{allowDiagnostic:true\}/,
+    'external scoring must exercise the same serialized state that is saved as the artifact');
+  assert.match(trainer,/modelName:'TCN_V11'/);
+  assert.match(trainer,/modelArtifactsByModel\.TCN_V11=attentionArtifact/);
+  const temporalTests=await readFile(temporalTestUrl,'utf8');
+  assert.match(temporalTests,/persistedArtifactProfile/,
+    'the neural test suite must include a JSON serialization/reload round-trip');
+  assert.match(temporalTests,/artifact reload must preserve the exact attention probability/);
+});
+
+test('TCN V11 inner qualification requires BOTH BTC risk regimes to pass inner validation and holdout',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/const expectedBtcRegimes=\['BTC_RISK_ON','BTC_RISK_OFF'\]/);
+  assert.match(trainer,/expectedBtcRegimes\.every\(regime=>\{/);
+  assert.match(trainer,/specialist\.validation_passed===true&&specialist\.holdout_passed===true/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
+  assert.match(trainer,/passed:attentionInnerQualified/);
+  assert.match(trainer,/diagnostic_only:!attentionInnerQualified/);
+});
+
+test('fixed-SHA trainer exports V9 ordered-pyramid and V10 multiscale as separate benchmark families',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/enableRegimeLocalTcnPyramid:true/);
+  assert.match(trainer,/enableRegimeLocalTcnMultiscale:true/);
+  assert.match(trainer,/predictTemporalVariantResearchOutput/);
+  assert.match(trainer,/family:'TCN_V9'/);
+  assert.match(trainer,/family:'TCN_V10'/);
+  assert.match(trainer,/expectedPooling:TEMPORAL_ORDERED_POOLING_MODE/);
+  assert.match(trainer,/expectedPooling:TEMPORAL_MULTISCALE_POOLING_MODE/);
+  assert.match(trainer,/modelName:family/);
+  assert.match(trainer,/predictionsByModel\[family\]=scored\.rows/);
+  assert.match(trainer,/bothRegimesSelected/);
+  assert.match(trainer,/INNER_SELECTED_TCN_VARIANT_MEMBER/);
+});
+
+test('TCN V9 and V10 families are no longer silently left without fixed-SHA predictions',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const families=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(families,/'TCN_V9'/);
+  assert.match(families,/'TCN_V10'/);
+  assert.match(trainer,/exportTemporalPoolingVariant\(\{[\s\S]*?family:'TCN_V9'/);
+  assert.match(trainer,/exportTemporalPoolingVariant\(\{[\s\S]*?family:'TCN_V10'/);
+});
+
+test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on split.train only',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/TCN_LSTM_HYBRID_SCHEMA/);
+  assert.match(trainer,/const lstmRows=split\.train\.map/);
+  assert.match(trainer,/sequence:row\.temporal_sequence/);
+  assert.match(trainer,/target:row\.target/);
+  assert.match(trainer,/const executionEvidenceById=new Map\(split\.train\.map/);
+  assert.match(trainer,/const selectionRowsWithExecutionEvidence=selectionRows\.map/);
+  assert.match(trainer,/first_touch:row\.first_touch/);
+  assert.match(trainer,/execution_return_contract:row\.execution_return_contract/);
+  assert.match(trainer,/max_adverse_excursion_pct:row\.max_adverse_excursion_pct/);
+  assert.match(trainer,/max_favorable_excursion_pct:row\.max_favorable_excursion_pct/);
+  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(\s*trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence/);
+  assert.match(trainer,/resolved_at:row\.resolved_at/);
+  assert.match(trainer,/const lstmHorizonMs=NEURAL_CLOSURE_HORIZON_MS/);
+  assert.match(trainer,/splitFourHourTcnLstmTrainingRows\(/);
+  assert.match(trainer,/validationRowsForLstm=split\.validation\.map/);
+  assert.match(trainer,/internalSplit\.status==='READY'/);
+  assert.match(trainer,/selectTcnLstmHybridHyperparameters\(\s*trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence/);
+  assert.match(trainer,/fitTcnLstmHybridCalibration\(\s*calibrationRows/);
+  assert.match(trainer,/predictTcnLstmHybridCalibratedProbability/);
+  const lstmModule=await readFile(lstmModuleUrl,'utf8');
+  assert.match(lstmModule,/export function summarizeTcnLstmSelectionReturns/);
+  assert.match(lstmModule,/return_selection_diagnostics:returnDiagnostics/);
+  assert.match(lstmModule,/cross_sectional_rank_diagnostics:crossSectionalRankDiagnostics/);
+  assert.match(lstmModule,/topKProbabilitySignals\(rows,baselineProbabilities,topK\)/);
+  assert.match(lstmModule,/simulateFirstTouchPaperPortfolio\(\s*rows,modelMask\.probabilities/);
+  assert.match(lstmModule,/model_minus_logistic/);
+  assert.match(lstmModule,/baselineProbabilities:baselinePredictions/);
+  assert.match(trainer,/roundTripCostBps:args\.roundTripCostBps/);
+  assert.match(trainer,/minimumReturnTrades:20/);
+  assert.match(trainer,/minimumReturnWinRatePct:55/);
+  assert.match(lstmModule,/const \{realized_return_pct,\.\.\.fitRow\}=row/,
+    'realized outcomes must be stripped before the Logistic anchor and neural optimizer fit');
+  assert.match(lstmModule,/affects_candidate_ranking:false/);
+  assert.match(lstmModule,/affects_acceptance_gates:false/);
+  assert.match(lstmModule,/export function splitFourHourTcnLstmTrainingRows/);
+  assert.match(lstmModule,/external_validation_labels_read:false/);
+  assert.match(lstmModule,/OUTER_TRAINING_LABELS_OVERLAP_EXTERNAL_VALIDATION/);
+  const lstmTests=await readFile(lstmTestUrl,'utf8');
+  assert.match(lstmTests,/four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train/);
+  assert.match(lstmTests,/four-hour TCN-LSTM splitter rejects non-four-hour labels/);
+  assert.match(trainer,/modelName:'TCN_LSTM_HYBRID'/);
+  assert.match(trainer,/modelArtifactsByModel\.TCN_LSTM_HYBRID=artifact/);
+  assert.match(trainer,/predictionsByModel\.TCN_LSTM_HYBRID=scored\.rows/);
+  assert.doesNotMatch(trainer,/benchmarkTcnLstmHybridChronological/,
+    'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
+});
+
+test('fixed-SHA trainer exports failed-inner TCN-LSTM candidates only as diagnostic outer predictions',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/);
+  assert.match(trainer,/selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
+  assert.match(trainer,/if\(selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/passed:innerQualified/);
+  assert.match(trainer,/inner_selection_qualified:innerQualified/);
+  assert.match(trainer,/diagnostic_only:!innerQualified/);
+  assert.match(trainer,/INNER_BEST_DIAGNOSTIC_ONLY/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.doesNotMatch(trainer,/qualificationByModel\.TCN_LSTM_HYBRID=\{\s*passed:true/,
+    'trainer must never force-pass a diagnostic-only LSTM');
+});
+
+test('TCN-LSTM qualification is inner-only and leaves outer acceptance to the shared Brier benchmark',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(trainer,/passed:innerQualified/);
+  assert.match(trainer,/diagnostic_only:!innerQualified/);
+  assert.match(trainer,/probability_ready:false,live_eligibility_ready:false/);
+  assert.match(trainer,/runNeuralClosureBenchmark\(\{[\s\S]*qualificationByModel/);
+  const contract=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(contract,/'TCN_LSTM_HYBRID'/);
+});
+
+test('regime-local TCN families use a smaller inner discovery margin but retain the strict 0.003 outer promotion gate',async()=>{
+  const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(neural,/TEMPORAL_TCN_INNER_SELECTION_BRIER_MARGIN = 0\.00025/);
+  assert.equal((neural.match(/innerSelectionMargin:requiredInnerSelectionMargin/g)||[]).length,5,
+    'base regime-local TCN, V9, V10, V11 and pooled fallback must share the same explicit discovery margin');
+  assert.match(neural,/const qualified=candidates\.filter\([\s\S]*?requiredInnerSelectionMargin\)/);
+  assert.match(neural,/const validationPassed=Boolean\([\s\S]*?outerPromotionMargin\)/);
+  assert.match(neural,/const holdoutPassed=Boolean\([\s\S]*?outerPromotionMargin\)/);
+  assert.match(neural,/required_inner_selection_brier_margin:requiredInnerSelectionMargin/);
+  assert.match(neural,/required_outer_validation_brier_margin:outerPromotionMargin/);
+  assert.match(neural,/holdout_comparison:\{\s*required_brier_margin:outerPromotionMargin/);
+  assert.match(trainer,/inner_selection_required_brier_margin:temporalProfile\?\.inner_selection_required_brier_margin\?\?null/);
+  assert.match(trainer,/outer_validation_required_brier_margin:temporalProfile\?\.outer_validation_required_brier_margin\?\?null/);
+  assert.match(trainer,/required_inner_selection_brier_margin:specialist\.required_inner_selection_brier_margin\?\?null/);
+  assert.match(trainer,/required_outer_validation_brier_margin:specialist\.required_outer_validation_brier_margin\?\?null/);
+  assert.match(neural,/holdout_comparison:\{\s*required_brier_margin:outerPromotionMargin/);
+  // Candidate discovery only nominates. The independent benchmark still uses
+  // the predeclared promotion margin and all risk gates; no holdout is unlocked
+  // by this smaller inner selection threshold.
+  const contract=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(contract,/requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN/);
+  assert.match(contract,/minimumTrades=20/);
+  assert.match(contract,/minimumWinRatePct=55/);
+  assert.match(contract,/maximumDrawdownPct=8/);
+  assert.match(contract,/roundTripCostBps=30/);
+});
+
+test('V9-V11 artifacts include a strictly qualified all-regime fallback for missing BTC specialists',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const neural=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  assert.match(neural,/const pooledAcrossRegimes=regime==='ALL_REGIMES'/);
+  assert.match(neural,/filter\(row=>pooledAcrossRegimes\|\|regimeOfSequence/);
+  assert.match(neural,/pooled_fallback:pooledTcnPyramidFallback/);
+  assert.match(neural,/pooled_fallback:pooledTcnMultiscaleFallback/);
+  assert.match(neural,/pooled_fallback:pooledTcnAttentionFallback/);
+  assert.match(neural,/profile\?\.pooled_fallback\?\.research_inference/);
+  assert.match(trainer,/const pooledFallbackQualified=pooledFallback\.selection_passed===true&&/);
+  assert.match(trainer,/pooledFallback\.validation_passed===true&&pooledFallback\.holdout_passed===true/);
+  assert.match(trainer,/const attentionPooledQualified=attentionPooledFallback\.selection_passed===true&&/);
+  assert.match(trainer,/pooled_fallback:pooledStateUsable\?\{research_inference:pooledState\}:null/);
+  assert.match(trainer,/pooled_fallback:attentionPooledStateUsable\?\{research_inference:attentionPooledState\}:null/);
+  assert.match(trainer,/auditTemporalAttentionResearchInferenceCoverage\(/);
+  assert.match(trainer,/auditTemporalVariantResearchInferenceCoverage\(/);
+  assert.match(trainer,/isUsableTemporalAttentionResearchInferenceState\(state\)/);
+  assert.match(trainer,/isUsableTemporalVariantResearchInferenceState\(state,\{\s*expectedPoolingMode:expectedPooling\s*\}\)/);
+  assert.match(trainer,/const missingRegimes=variantCoverage\.missing_regimes/);
+  assert.match(trainer,/if\(\(inferenceRegimes\.length===0&&!pooledStateUsable\)\|\|missingRegimes\.length>0\)/);
+  assert.match(neural,/isUsableTemporalAttentionResearchInferenceState/);
+  assert.match(neural,/isUsableTemporalVariantResearchInferenceState/);
+  assert.match(trainer,/qualificationPassed=bothRegimesSelected\|\|pooledFallbackQualified/);
+  assert.match(trainer,/POOLED_ALL_REGIMES_FALLBACK_PASSED_VALIDATION_AND_HOLDOUT/);
+  assert.match(trainer,/diagnostic_only:!qualificationPassed/);
+});
+
+test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/auditTemporalResearchInferenceCoverage\(/);
+  assert.match(trainer,/v8Coverage\.complete/);
+  assert.match(trainer,/TCN_V8_MISSING_REGIME_INFERENCE_STATE/);
+  assert.match(trainer,/inference_coverage_complete:v8Coverage\.complete/);
+  assert.match(trainer,/modelName:'TCN_V8'/);
+  assert.match(trainer,/unavailable\.TCN_V8=/);
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(\s*temporalProfile\?\.regime_specialists\?\?/,
+    'V8 report diagnostics must source selection scores from the public temporal profile, not persisted inference state');
+  assert.match(trainer,/selection_scores:specialist\.member_selection_scores\?\?\[\]/);
+  assert.match(trainer,/selection_logistic_brier:specialist\.member_selection_logistic_brier\?\?null/);
+  assert.match(trainer,/shared_selection_logistic_brier:temporalProfile\?\.shared_model_selection_logistic_brier\?\?null/);
+  assert.match(trainer,/shared_selection_passed:temporalProfile\?\.shared_model_selection_passed===true/);
+  assert.match(trainer,/selection_qualified_candidate_count:specialist\.member_selection_qualified_candidates\?\?0/);
+  assert.match(trainer,/selection_samples:specialist\.local_selection_samples\?\?0/);
+  assert.match(trainer,/shared_member_selection_samples:specialist\.shared_member_selection_samples\?\?specialist\.member_selection_samples\?\?0/);
+  assert.match(trainer,/calibration_samples:specialist\.local_calibration_samples\?\?0/);
+  assert.match(trainer,/shared_calibration_samples:specialist\.shared_calibration_samples\?\?specialist\.calibration_samples\?\?0/);
+  assert.doesNotMatch(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(\s*temporalProfile\?\._research_fit\?\.specialists_by_regime/,
+    'persisted inference state must not be treated as the candidate-score audit record');
+  assert.match(trainer,/modelName:'TCN_V11'/);
+  assert.match(trainer,/unavailable\.TCN_V11=/);
+  assert.doesNotMatch(trainer,/unavailable\.TCN_V11=\{\s*reason:scored\.reason,\s*diagnostic_regimes:training\.model_internal_diagnostics\.TCN_V8/);
+});
+
+
+test('fixed-SHA summary exposes disjoint threshold-selection and outer-validation risk evidence',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/validation:model\.validation\?\{/,
+    'the report must retain the complete validation evidence object');
+  assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
+    'the console and model-comparison summary must expose the full staged calibration diagnostics');
+  assert.match(trainer,/maxTrainingSamples:4096/,
+    'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
+  assert.match(trainer,/max_training_samples:4096/,
+    'the reported TCN-LSTM training budget must match the actual trainer configuration');
+  assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
+  assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
+  assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);
+  assert.match(trainer,/chronological_stability_diagnostics:\s*model\.validation\.chronological_stability_diagnostics\?\?null/,
+    'the benchmark report must retain chronological stability diagnostics');
+  assert.match(trainer,/expanded_threshold_window_counterfactual:\s*model\.validation\.expanded_threshold_window_counterfactual\?\?null/,
+    'the report must preserve the independent expanded-window counterfactual');
+  assert.match(trainer,/threshold_selection:model\.validation\.threshold_selection\?\?null/);
+  assert.match(trainer,/selected_threshold:model\.validation\.selected_threshold\?\?null/);
+  assert.match(trainer,/threshold_selection_gates:model\.validation\.threshold_selection_gates\?\?null/);
+  assert.match(trainer,/threshold_trials:model\.validation\.threshold_trials\?\?\[\]/);
+  assert.match(trainer,/validation_threshold_metrics:model\.validation\.validation_threshold_metrics\?\?null/);
+  assert.match(trainer,/validation_threshold_risk_gates:model\.validation\.validation_threshold_risk_gates\?\?null/);
+  assert.match(trainer,/outer_validation_gate:model\.validation\.outer_validation_gate\?\?null/,
+    'the exact reason for a holdout lock must be visible in the artifact summary');
+  assert.match(trainer,/holdout_lock_reason:model\.holdout\?\.reason\?\?null/);
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(specialists\)/,
+    'each V9/V10 BTC regime must expose its selection and Logistic comparison scores');
+  assert.match(trainer,/candidate_residual_scores:specialist\.member_selection_scores\?\?\[\]/,
+    'the residual-scale search must be auditable per BTC regime');
+  assert.match(trainer,/regime_specialists:Object\.fromEntries\(Object\.entries\(attentionSpecialists\)/,
+    'TCN V11 must expose the same per-regime selection diagnostics');
+  assert.match(trainer,/inner_diagnostics:training\.model_internal_diagnostics\?\?\{\}/,
+    'workflow logs must expose the detailed internal diagnostics needed to audit failed candidate selection');
+  assert.match(trainer,/pooled_fallback_diagnostics:\{/,
+    'pooled TCN fallback scores must remain visible even when no inference state was selected');
+  assert.match(trainer,/candidate_residual_scores:pooledFallback\.member_selection_scores\?\?\[\]/);
+  assert.match(trainer,/candidate_residual_scores:attentionPooledFallback\.member_selection_scores\?\?\[\]/);
+});
+
+
+test('fixed-SHA temporal challengers use extended train-only epoch budgets without relaxing validation gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const workflow=await readFile(new URL('../../.github/workflows/neural-closure-rebenchmark.yml',import.meta.url),'utf8');
+  const temporal=await readFile(new URL('../core/temporal-neural-brain.mjs',import.meta.url),'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+
+  // Three TCN seeds now request 18/24/36 epochs (75% / 100% / 150%
+  // profiles from the 24-epoch base) inside the immutable outer training
+  // block. Train-only checkpointing is unchanged; selection remains separate.
+  assert.match(trainer,/regimeLocalTcnPyramidEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnMultiscaleEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(trainer,/regimeLocalTcnAttentionEpochs:Math\.max\(12,Math\.min\(24,args\.epochs\)\)/);
+  assert.match(workflow,/--epochs 24/);
+  assert.match(workflow,/timeout-minutes: 90/);
+  assert.match(trainer,/args\.epochs>24/);
+  assert.match(trainer,/TEMPORAL_EPOCHS_MUST_BE_1_TO_24/);
+  assert.match(trainer,/epochs:16,learningRate:0\.0015,l2:0\.001,[\s\S]*?objectiveMode:'BINARY_CROSS_ENTROPY',[\s\S]*?targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
+  assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
+  assert.match(temporal,/validation_or_holdout_used:false/);
+  assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
+  assert.match(temporal,/epochs:Math\.max\(1,Math\.min\(24,Math\.trunc\(Number\(epochs\)\|\|6\)\)\)/,
+    'the regime-local trainer must not clip the new 24-epoch base schedule back to eight');
+  assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
+    'the third ensemble member must retain the 1.5x epoch profile');
+
+  // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
+  // exceeds its existing 30-epoch cap or changes the inner-selection margin.
+  assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
+  assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
+  assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
+  assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
+  assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
+  assert.match(trainer,/4H_FOCAL_LR_0025_L2_0015_DROP10_E16/);
+  assert.match(recurrent,/config\.epochs\s*>\s*30/);
+  assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
+  assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
+  assert.match(recurrent,/loss_objective:objective/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
+  assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
+  assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
+});
+
+test('TCN-LSTM keeps calibrated classification independent of net-win ranking and execution heads',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const lstm=await readFile(lstmModuleUrl,'utf8');
+  assert.match(lstm,/Probability is deliberately independent of the auxiliary/);
+  assert.match(lstm,/return sigmoid\(forward\.logit\)/);
+  assert.match(lstm,/NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE/);
+  assert.match(lstm,/pair_target:'NET_POSITIVE_AFTER_COST_OVER_NON_POSITIVE'/);
+  assert.match(lstm,/PURE_CLASSIFIER_BRIER_WITH_SEPARATE_NET_WIN_RANK_AND_EXECUTION_GATES_V3/);
+  assert.match(trainer,/evaluateExternalRankingObjectivesTopK/);
+  assert.match(trainer,/TCN_LSTM_CALIBRATED_WIN_PROBABILITY/);
+  assert.match(trainer,/TCN_LSTM_NET_WIN_PAIRWISE_RANK_LOGIT/);
+  assert.match(trainer,/TCN_LSTM_EXPECTED_NET_RETURN_MINUS_RISK/);
+  assert.match(trainer,/external_validation_separated_ranking_objectives_top_k/);
+  assert.match(lstm,/validation_or_holdout_used_for_fit:false/);
+  assert.match(lstm,/holdout_values_used:false/);
+});
+/);
+  assert.match(collector,/if\(universe\.selected\.length<args\.minSymbols\)/);
+  assert.match(collector,/--minSymbols 40/);
+  assert.match(collector,/--minQuoteVolumeUsdt 750000/);
+});
 test('fixed-SHA trainer refuses rows without exact point-in-time 96-bar liquidity evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   assert.match(trainer,/POINT_IN_TIME_HISTORICAL_LIQUIDITY_POLICY_REQUIRED/);
