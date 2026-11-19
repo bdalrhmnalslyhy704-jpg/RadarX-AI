@@ -37,7 +37,8 @@ import {
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
   predictTcnLstmHybridRankingLogit,
-  predictTcnLstmHybridRankingAnchorLogit,predictTcnLstmHybridExecutionScore
+  predictTcnLstmHybridRankingAnchorLogit,predictTcnLstmHybridExecutionScore,
+  evaluateFrozenTcnLstmExecutionPolicy,verifyTcnLstmFrozenExecutionPolicy
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1314,6 +1315,49 @@ async function main(){
               execution_risk_score_semantics:executionScore.score_semantics
             };
           });
+          // The inner-selected lambda/Top-K/cost/gates are immutable here.
+          // Evaluate the exact same outer-validation opportunities for neural and
+          // Logistic using the shared first-touch simulator. Only if that gate
+          // passes may the untouched final holdout be opened for this policy.
+          const frozenPolicyAudit=verifyTcnLstmFrozenExecutionPolicy(selectedFit);
+          const toExecutionRows=sourceRows=>sourceRows.map(row=>({
+            id:row.id,symbol:row.symbol,at:row.at,
+            sequence:row.temporal_sequence,
+            first_touch:row.first_touch,
+            realized_return_pct:row.realized_return_pct,
+            max_adverse_excursion_pct:row.max_adverse_excursion_pct
+          }));
+          const frozenPolicyValidation=frozenPolicyAudit.valid&&innerQualified
+            ?evaluateFrozenTcnLstmExecutionPolicy(toExecutionRows(split.validation),selectedFit)
+            :{status:'UNAVAILABLE',passed:false,
+              reason:!innerQualified?'INNER_SELECTION_NOT_QUALIFIED':frozenPolicyAudit.reason,
+              policy_reselected:false};
+          const frozenPolicyHoldout=frozenPolicyValidation.status==='EVALUATED'&&
+            frozenPolicyValidation.passed===true
+            ?evaluateFrozenTcnLstmExecutionPolicy(toExecutionRows(split.holdout),selectedFit)
+            :{status:'LOCKED',passed:false,
+              reason:'HOLDOUT_LOCKED_UNTIL_FROZEN_VALIDATION_EXECUTION_PASSES',
+              policy_reselected:false};
+          qualificationByModel.TCN_LSTM_HYBRID={
+            passed:innerQualified&&frozenPolicyValidation.status==='EVALUATED'&&
+              frozenPolicyValidation.passed===true,
+            reason:!innerQualified?'INNER_SELECTION_OR_CALIBRATION_FAILED':
+              frozenPolicyValidation.status!=='EVALUATED'
+                ?'FROZEN_VALIDATION_EXECUTION_UNAVAILABLE'
+                :frozenPolicyValidation.passed
+                  ?'INNER_AND_FROZEN_VALIDATION_EXECUTION_PASSED'
+                  :'FROZEN_VALIDATION_EXECUTION_GATE_FAILED',
+            diagnostic_only:!(innerQualified&&frozenPolicyValidation.passed===true)
+          };
+          training.model_internal_diagnostics.TCN_LSTM_HYBRID={
+            ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
+            frozen_execution_policy_audit:frozenPolicyAudit,
+            frozen_validation_execution:frozenPolicyValidation,
+            frozen_holdout_execution:frozenPolicyHoldout,
+            holdout_opened_only_after_frozen_validation_pass:
+              frozenPolicyHoldout.status==='EVALUATED',
+            policy_reselected_on_external_data:false
+          };
           trainingArtifacts.TCN_LSTM_HYBRID={
             artifact_sha256:artifact.artifact_sha256,
             schema:TCN_LSTM_HYBRID_SCHEMA,
@@ -1343,6 +1387,11 @@ async function main(){
             ranking_anchor_scores_emitted_for:'OUTER_VALIDATION_ONLY',
             holdout_ranking_anchor_scores_emitted:false,
             internal_calibrator:calibrator.method,
+            frozen_execution_policy:selectedFit.frozen_execution_policy??null,
+            frozen_execution_policy_fingerprint:frozenPolicyAudit.fingerprint??null,
+            frozen_validation_execution:frozenPolicyValidation,
+            frozen_holdout_execution:frozenPolicyHoldout,
+            policy_reselected_on_external_data:false,
             pre_inner_calibration_diagnostic:{
               schema:'RADARX_TCN_LSTM_PRE_INNER_CALIBRATION_SCORE_AUDIT_V1',
               rows:split.validation.length,
