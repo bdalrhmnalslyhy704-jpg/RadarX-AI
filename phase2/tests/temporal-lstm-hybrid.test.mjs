@@ -401,7 +401,9 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.candidates.length,2);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
-  assert.equal(result.selection_scoring.method,'BRIER_PLUS_SEPARATE_TRAINING_ONLY_PAIRWISE_RANK_HEAD_V1');
+  assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
+  assert.ok(result.candidates.every(item=>item.ranking_blend_search.length===7));
+  assert.equal(result.selection_scoring.method,'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_AND_PAIRWISE_RANK_V2');
   assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
   assert.ok(result.candidates.every(item=>
     item.ranking_execution_selection.status==='UNAVAILABLE'&&
@@ -446,7 +448,7 @@ test('training-only Logistic anchor is deterministic and identity-bound to its t
   assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
 });
 
-test('inner-selection return diagnostics deduct round-trip fees and never alter model acceptance',()=>{
+test('inner-selection return screen deducts fees and becomes a bounded candidate-selection gate',()=>{
   const rows=Array.from({length:24},(_,index)=>({
     id:'return-'+index,
     realized_return_pct:index<14?3:-2
@@ -458,8 +460,9 @@ test('inner-selection return diagnostics deduct round-trip fees and never alter 
   assert.equal(result.status,'AVAILABLE');
   assert.equal(result.selection_partition_only,true);
   assert.equal(result.holdout_values_used,false);
-  assert.equal(result.affects_candidate_ranking,false);
-  assert.equal(result.affects_acceptance_gates,false);
+  assert.equal(result.diagnostic_only,false);
+  assert.equal(result.affects_candidate_ranking,true);
+  assert.equal(result.affects_acceptance_gates,true);
   assert.equal(result.portfolio_drawdown_evaluated,false);
   assert.equal(result.trials[0].trade_count,24);
   assert.equal(result.trials[0].net_wins,14);
@@ -548,8 +551,8 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
     row.return_selection_diagnostics.status==='AVAILABLE'&&
     row.return_selection_diagnostics.selection_partition_only===true));
   assert.ok(result.candidates.every(row=>
-    row.return_selection_diagnostics.affects_candidate_ranking===false&&
-    row.return_selection_diagnostics.affects_acceptance_gates===false));
+    row.return_selection_diagnostics.affects_candidate_ranking===true&&
+    row.return_selection_diagnostics.affects_acceptance_gates===true));
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
