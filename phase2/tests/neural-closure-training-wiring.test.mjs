@@ -337,6 +337,8 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/args\.epochs>24/);
   assert.match(trainer,/TEMPORAL_EPOCHS_MUST_BE_1_TO_24/);
   assert.match(trainer,/epochs:16,learningRate:0\.0015,l2:0\.001,[\s\S]*?objectiveMode:'BINARY_CROSS_ENTROPY',[\s\S]*?targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION/);
+  assert.match(trainer,/learningRate:0\.008,lossObjective:'BRIER'/,
+    'Dense MLP checkpoint objective must match the Brier probability metric used for evaluation');
   assert.match(temporal,/monitor:'TRAINING_BLOCK_OBJECTIVE_ONLY'/);
   assert.match(temporal,/validation_or_holdout_used:false/);
   assert.match(temporal,/const effectiveEpochs=Math\.max\(1,Math\.min\(180/);
