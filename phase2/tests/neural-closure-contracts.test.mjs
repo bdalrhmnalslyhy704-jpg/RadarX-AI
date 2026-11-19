@@ -327,7 +327,7 @@ test('calibrator method is fixed from fit rows and cannot be selected by validat
   const flippedCheck=checkRows.map(row=>({...row,target:1-row.target}));
   const flipped=chooseCalibration(rawMap,fitRows,flippedCheck,20);
   assert.equal(fitted.check_block_used_for_calibrator_selection,false);
-  assert.equal(fitted.selection_scope,'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY');
+  assert.equal(fitted.selection_scope,'PREDECLARED_PURGED_INNER_GENERALIZATION_WITHIN_CALIBRATION_FIT');
   assert.equal(fitted.platt.fit_partition,'CALIBRATION_FIT_ONLY');
   assert.equal(fitted.temperature.fitted,false);
   assert.equal(fitted.selected_method,flipped.selected_method);
@@ -573,7 +573,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
     outer_validation_partition:'LATER_DISJOINT_PURGED_CHECK_BLOCK',
     fallback:'RAW_IF_PLATT_NOT_ACCEPTED',
     temperature_scaling:'NOT_FIT_PREDECLARED_PLATT_ONLY',
-    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
+    selection_scope:'PREDECLARED_PURGED_INNER_GENERALIZATION_WITHIN_CALIBRATION_FIT',
     check_block_used_for_calibrator_selection:false,
     threshold_selection_rows_used_for_outer_validation_metrics:false,
     same_fit_purge_threshold_and_check_rows_for_logistic_and_neural_models:true,
