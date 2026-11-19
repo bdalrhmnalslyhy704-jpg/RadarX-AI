@@ -2404,6 +2404,8 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
     },
     outer_validation:{
       sample_count:blocks.check.length,
+      diagnostic_grid_only:true,
+      diagnostic_grid:outerRankDiagnosticGrid,
       decision_group_count:outerRankMask?.decision_group_count??0,
       total_time_buckets:outerRankMask?.total_time_buckets??0,
       singleton_buckets_excluded:outerRankMask?.singleton_buckets_excluded??0,
