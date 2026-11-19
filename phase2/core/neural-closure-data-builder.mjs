@@ -490,7 +490,7 @@ export const NEURAL_CLOSURE_MARKET_DATA_POLICY=Object.freeze({
   historical_liquidity_method:'SUM_OF_96_CLOSED_15M_QUOTE_VOLUME_CANDLES_AS_OF_DECISION_CLOSE',
   historical_liquidity_lookback_candles:96,
   historical_liquidity_lookback_interval:'15m',
-  candidate_universe_prefilter:'CURRENT_BINANCE_SPOT_24H_TICKER_TOP_50_AT_COLLECTION_TIME',
+  candidate_universe_prefilter:'CURRENT_BINANCE_SPOT_24H_TICKER_TOP_100_AT_COLLECTION_TIME',
   survivorship_bias_warning:true,
   historical_delisted_asset_coverage:false,
   intervals:['1m','5m','15m'],
