@@ -125,7 +125,7 @@ function makePredictions(rows,sourceCommitSha,artifacts){
   // Always derive predictions from the current outer split. This keeps the
   // synthetic test fixture aligned when calibration/threshold blocks change.
   const split=splitFourHourRows(rows);
-  const requiredIds=new Set([...split.validation,...split.holdout].map(row=>row.id));
+  const requiredIds=new Set(split.validation.map(row=>row.id));
   const validationIds=new Set(split.validation.map(row=>row.id));
   const evaluated=rows.filter(row=>requiredIds.has(row.id));
   const make=(positive,negative,artifactSha256=null,modelName=null)=>evaluated.map(row=>({
@@ -838,7 +838,7 @@ test('fixed reference threshold failure and incomplete protocol keep every holdo
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const evaluated=[...splitFourHourRows(rows).validation,...splitFourHourRows(rows).holdout];
+  const evaluated=splitFourHourRows(rows).validation;
   const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
     id:row.id,probability:row.target===1?positive:negative,
     source_commit_sha:sourceCommitSha,target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
@@ -873,7 +873,7 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
   const rows=makeRows(),sourceCommitSha='f'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const outerSplit=splitFourHourRows(rows);
-  const evaluated=[...outerSplit.validation,...outerSplit.holdout];
+  const evaluated=outerSplit.validation;
   const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
     id:row.id,
     probability:row.target===1?positive:negative,
@@ -1146,26 +1146,28 @@ test('TCN-LSTM diagnostics explicitly disable outer-validation calibration stage
   assert.deepEqual(alteredValidation.threshold_trials,[]);
 });
 
-test('TCN-LSTM stage diagnostics never expose a holdout calibration score',()=>{
+test('fixed-SHA evaluator rejects any prediction row from the untouched holdout',()=>{
   const rows=makeRows(),sourceCommitSha='2'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const holdoutId=splitFourHourRows(rows).holdout[0].id;
-  predictions.TCN_LSTM_HYBRID=predictions.TCN_LSTM_HYBRID.map(item=>
-    item.id===holdoutId?{...item,pre_inner_calibration_probability:0.77}:item
-  );
-  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
-    family,{passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true}
-  ]));
-  const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
+  const holdoutRow=splitFourHourRows(rows).holdout[0];
+  predictions.TCN_LSTM_HYBRID.push({
+    id:holdoutRow.id,probability:0.77,raw_probability:0.77,
+    calibrated_probability:0.77,pre_inner_calibration_probability:0.77,
+    source_commit_sha:sourceCommitSha,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    artifact_sha256:modelArtifactsByModel.TCN_LSTM_HYBRID.artifact_sha256
   });
-  const diagnostics=report.models.TCN_LSTM_HYBRID.validation.probability_stage_diagnostics;
-  assert.equal(diagnostics.status,'DISABLED_STRICT_OUTER_EVALUATION_ONLY');
-  assert.equal(diagnostics.holdout_values_used,false);
-  assert.equal(diagnostics.holdout_score_count,undefined);
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+  });
+  assert.equal(report.models.TCN_LSTM_HYBRID.status,'NOT_EVALUATED');
+  assert.match(report.models.TCN_LSTM_HYBRID.reason,/MODEL_PREDICTION_ROW_SET_MISMATCH/);
   assert.equal(report.holdout_access.opened,false);
   assert.equal(report.holdout_access.opening_protocol.holdout_metrics_read,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.brier_score,null);
 });
 
 test('missing Logistic predictions prevent a matched comparison without changing the frozen policy',()=>{
