@@ -3239,10 +3239,15 @@ export function runNeuralClosureBenchmark({
     }
     const model=models[modelName];
     if(model.status==='VALIDATION_EVALUATED_HOLDOUT_LOCKED'){
+      const protocolBlocked=model.holdout.reason==='HOLDOUT_OPENING_PROTOCOL_INCOMPLETE';
       model.acceptance={
-        status:'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',
+        status:protocolBlocked
+          ?'HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'
+          :'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',
         passed:false,
         reason:model.holdout.reason,
+        missing_protocol_checks:protocolBlocked
+          ?model.holdout.missing_protocol_checks??[]:[],
         validation_gate:model.validation.outer_validation_gate
       };
       continue;
