@@ -1164,6 +1164,56 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('a frozen Logistic threshold remains comparable when Logistic fails on the later outer block',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const split=splitFourHourRows(rows);
+  const calibrationBlocks=buildNeuralClosureCalibrationBlocks(split.validation);
+  const laterCheckIds=new Set(calibrationBlocks.check.map(row=>row.id));
+  const rowById=new Map([...split.validation,...split.holdout].map(row=>[row.id,row]));
+  // Logistic separates winners on its fit/threshold-selection blocks, so its
+  // threshold is genuinely frozen there. It reverses on the later check and
+  // holdout blocks; this must not erase the already-frozen reference threshold.
+  for(const prediction of predictions.LOGISTIC_REGRESSION){
+    const row=rowById.get(prediction.id);
+    const later=laterCheckIds.has(prediction.id)||!split.validation.some(item=>item.id===prediction.id);
+    prediction.probability=row.target===1
+      ?(later?0.20:0.80)
+      :(later?0.80:0.20);
+  }
+  // The neural challenger keeps correct separation on the later block and
+  // must be evaluated at exactly Logistic's earlier frozen threshold.
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    for(const prediction of predictions[family]){
+      const row=rowById.get(prediction.id);
+      prediction.probability=row.target===1?0.90:0.10;
+    }
+  }
+  const qualificationByModel=Object.fromEntries(
+    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
+      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
+    }])
+  );
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,
+    sourceCommitSha,qualificationByModel
+  });
+  const logistic=report.models.LOGISTIC_REGRESSION.validation;
+  const neural=report.models.TCN_LSTM_HYBRID.validation.outer_validation_gate;
+  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_ONLY');
+  assert.ok(Number.isFinite(logistic.selected_threshold));
+  assert.equal(logistic.validation_threshold_metrics.return_data_status,'COMPLETE');
+  assert.equal(logistic.validation_threshold_risk_gates.minimum_validation_win_rate,'FAIL',
+    'the fixture intentionally makes Logistic fail on the later outer block');
+  assert.equal(neural.gates.matched_execution_threshold_available,'PASS');
+  assert.equal(neural.execution_reference,'MATCHED_LOGISTIC_EXECUTION_THRESHOLD');
+  assert.equal(neural.outer_validation_threshold,logistic.selected_threshold);
+  assert.equal(neural.gates.matched_outer_validation_execution_risk_gates,'PASS');
+  assert.equal(neural.passed,true);
+  assert.equal(report.holdout_access.opened,true);
+});
+
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
   const rows=makeRows(),sourceCommitSha='b'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
