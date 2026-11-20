@@ -22,11 +22,36 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: true/,
-    'a newer research SHA must supersede an older full-cohort training job on the same branch');
-  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\$\{\{ github\.ref \}\}/,
-    'the replay concurrency key must be scoped to one branch, not each commit SHA');
-  assert.ok(workflow.includes('research/build224-tcn-lstm-score-head-oos-ablation-20261120'),
-    'the matched score-conditioned head ablation branch must trigger the fixed-cohort replay');
+    'a newer push to the same branch must supersede an older full-cohort replay');
+  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\\$\\{\\{ github\\.head_ref \\|\\| github\\.ref_name \\}\\}/,
+    'the replay concurrency key must be normalized by branch name');
+  assert.doesNotMatch(workflow,/^  pull_request:/m,
+    'expensive full-cohort replay must not run on pull requests');
+  assert.ok(workflow.includes('research/build224-temporal-logistic-cv-20261120'),
+    'the tuned Logistic research branch must trigger the fixed-cohort replay');
+  assert.match(workflow,/RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1/);
+  assert.match(workflow,/HOLDOUT_WAS_OPENED/);
+  assert.match(workflow,/HOLDOUT_PREDICTION_ROWS_NOT_ZERO/);
+  assert.match(workflow,/TUNED_LOGISTIC_CV_INCOMPLETE/);
+  assert.match(workflow,/scientific-decision\\.json/);
+});
+
+test('trainer emits a reproducible manifest and scores only outer validation while holdout remains locked',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const contracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(trainer,/holdout_access_status:'LOCKED_NOT_SCORED'/);
+  assert.match(trainer,/holdout_metrics_read:false/);
+  assert.match(trainer,/const eventRows=\\[\\.\\.\\.split\\.validation\\]/);
+  assert.match(trainer,/experiment_manifest:experimentManifest/);
+  assert.match(trainer,/experiment-manifest\\.json/);
+  assert.match(trainer,/node_version:process\\.version/);
+  assert.match(trainer,/command_line:process\\.argv\\.slice\\(2\\)/);
+  assert.match(trainer,/predictions_generated:false/);
+  assert.match(trainer,/rows_included_in_scored_predictions:0/);
+  assert.match(contracts,/eventRows=holdoutOpeningProtocolStatus\\.passed/);
+  assert.match(contracts,/if\\(!holdoutOpeningProtocolStatus\\.passed\\)[\\s\\S]*?HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL/);
+  assert.match(contracts,/probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS'/);
+  assert.match(contracts,/baseline_logistic_raw_brier:baselineValidationBrier/);
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
