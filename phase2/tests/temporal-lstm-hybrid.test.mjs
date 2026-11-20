@@ -578,9 +578,14 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
   assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
   const rankingLogit=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
   const anchorLogit=predictTcnLstmHybridRankingAnchorLogit(rows[0].sequence,profile);
+  const forward=inspectTcnLstmForward(rows[0].sequence,profile.model,anchorLogit);
+  const expectedRankingLogit=forward.logit+
+    profile.ranking_probability_blend_weight*forward.ranking_residual_logit;
   assert.ok(Number.isFinite(rankingLogit));
   assert.ok(Number.isFinite(anchorLogit));
   assert.notEqual(rankingLogit,anchorLogit);
+  assert.ok(Math.abs(rankingLogit-expectedRankingLogit)<1e-12,
+    'outer ranking logit must equal the exact frozen classifier-plus-residual blend selected internally');
   assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
