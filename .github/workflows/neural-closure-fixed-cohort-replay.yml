@@ -6,6 +6,7 @@ on:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
       - research/build224-tcn-lstm-shared-loss-20261120
+      - research/build224-tcn-lstm-score-head-oos-ablation-20261120
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -32,10 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Each immutable commit gets its own replay slot; older candidates must not block
-  # the scientific benchmark for the current head after an engineering fix.
-  group: build224-neural-closure-fixed-cohort-replay-${{ github.sha }}
-  cancel-in-progress: false
+  # One full-cohort replay per research branch. A newer commit supersedes stale
+  # in-flight training instead of launching duplicate 32,300-row jobs in parallel.
+  group: build224-neural-closure-fixed-cohort-replay-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   replay:
