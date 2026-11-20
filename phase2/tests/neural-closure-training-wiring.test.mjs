@@ -349,7 +349,7 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   // The bounded eight-candidate recurrent grid keeps the plain Brier anchor
   // and seven Brier + shared-classifier ranking weights. Focal is excluded
   // because the prior replay showed a Brier/ranking tradeoff.
-  assert.match(trainer,/4H_BRIER_BASE_LR0015_L2_0005_E12[\\s\\S]*?epochs:12/);
+  assert.match(trainer,/4H_BRIER_BASE_LR0015_L2_0005_E12[\s\S]*?epochs:12/);
   assert.match(trainer,/objective:'BRIER'/);
   for(const name of [
     '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
@@ -402,6 +402,8 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.match(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
   assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
   assert.match(recurrent,/CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1/);
+  assert.match(recurrent,/projectTcnLstmAuxiliaryGradient/);
+  assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
 
 test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{

@@ -591,6 +591,57 @@ function sumSquares(value) {
     return Object.values(value).reduce((sum, item) => sum + sumSquares(item), 0);
   return value * value;
 }
+function treeDot(left,right) {
+  if(Array.isArray(left)){
+    if(!Array.isArray(right)||left.length!==right.length)
+      throw new TypeError('TCN_LSTM_GRADIENT_TREE_SHAPE_MISMATCH');
+    return left.reduce((sum,value,index)=>sum+treeDot(value,right[index]),0);
+  }
+  if(isPlainTreeObject(left)){
+    if(!isPlainTreeObject(right)||Object.keys(left).length!==Object.keys(right).length)
+      throw new TypeError('TCN_LSTM_GRADIENT_TREE_SHAPE_MISMATCH');
+    let total=0;
+    for(const key of Object.keys(left)){
+      if(!(key in right))throw new TypeError('TCN_LSTM_GRADIENT_TREE_KEY_MISMATCH:'+key);
+      total+=treeDot(left[key],right[key]);
+    }
+    return total;
+  }
+  if(!finite(left)||!finite(right))
+    throw new TypeError('TCN_LSTM_GRADIENT_NON_FINITE');
+  return Number(left)*Number(right);
+}
+
+/**
+ * Project a conflicting auxiliary ranking gradient away from the primary
+ * probability-loss gradient. This PCGrad step prevents the ranking objective
+ * from taking a first-order step that increases the proper-scoring objective.
+ */
+export function projectTcnLstmAuxiliaryGradient(primaryGradient,auxiliaryGradient) {
+  if(!treeFinite(primaryGradient)||!treeFinite(auxiliaryGradient))
+    throw new TypeError('TCN_LSTM_PCGRAD_INPUT_NON_FINITE');
+  const dotBefore=treeDot(primaryGradient,auxiliaryGradient);
+  const primaryNormSquared=sumSquares(primaryGradient);
+  const auxiliaryNormSquared=sumSquares(auxiliaryGradient);
+  const conflict=dotBefore<0;
+  const projectionApplied=conflict&&primaryNormSquared>1e-18;
+  const gradient=projectionApplied
+    ?accumulateTree(cloneTree(auxiliaryGradient),
+      scaleTree(primaryGradient,-dotBefore/primaryNormSquared))
+    :cloneTree(auxiliaryGradient);
+  const dotAfter=treeDot(primaryGradient,gradient);
+  const cosineBefore=primaryNormSquared>0&&auxiliaryNormSquared>0
+    ?dotBefore/Math.sqrt(primaryNormSquared*auxiliaryNormSquared):0;
+  return {
+    gradient,conflict,projection_applied:projectionApplied,
+    dot_before:Number(dotBefore.toFixed(12)),
+    dot_after:Number(dotAfter.toFixed(12)),
+    cosine_before:Number(cosineBefore.toFixed(8)),
+    primary_gradient_norm_squared:Number(primaryNormSquared.toFixed(12)),
+    auxiliary_gradient_norm_squared:Number(auxiliaryNormSquared.toFixed(12))
+  };
+}
+
 function treeFinite(value) {
   if (Array.isArray(value)) return value.every(treeFinite);
   if (isPlainTreeObject(value)) return Object.values(value).every(treeFinite);
@@ -1601,6 +1652,10 @@ export function trainTcnLstmHybrid(trainingRows, {
   let bestObjective=initialClassificationObjective+rankingWeight*initialSharedRankingLoss;
   let sharedRankingGradientBatches=0;
   let sharedRankingPairsApplied=0;
+  let sharedRankingGradientConflictBatches=0;
+  let sharedRankingGradientProjectionBatches=0;
+  let sharedRankingGradientCosineSum=0;
+  let sharedRankingGradientCosineCount=0;
   let bestEpoch = 0;
   let bestModel = cloneTree(trainableParameters(model));
   let wait = 0, stoppedEarly = false;
@@ -1675,18 +1730,25 @@ export function trainTcnLstmHybrid(trainingRows, {
             const pairLoss=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
             const highGrad=lossAndGradientsTcnLstmHybrid(high.sequence,high.target,model,highBase,{
               objective:'EXTERNAL_LOGIT',
-              externalLogitGradient:pairLoss.high_logit_gradient*rankingWeight
+              externalLogitGradient:pairLoss.high_logit_gradient
             });
             const lowGrad=lossAndGradientsTcnLstmHybrid(low.sequence,low.target,model,lowBase,{
               objective:'EXTERNAL_LOGIT',
-              externalLogitGradient:pairLoss.low_logit_gradient*rankingWeight
+              externalLogitGradient:pairLoss.low_logit_gradient
             });
             rankGradient=accumulateTree(rankGradient,highGrad.gradients);
             rankGradient=accumulateTree(rankGradient,lowGrad.gradients);
             epochSharedRankingLoss+=pairLoss.loss;
             epochSharedRankingPairs++;
           }
-          averaged=accumulateTree(averaged,scaleTree(rankGradient,1/batchPairs.length));
+          const projectedRanking=projectTcnLstmAuxiliaryGradient(averaged,rankGradient);
+          if(projectedRanking.conflict)sharedRankingGradientConflictBatches++;
+          if(projectedRanking.projection_applied)sharedRankingGradientProjectionBatches++;
+          sharedRankingGradientCosineSum+=projectedRanking.cosine_before;
+          sharedRankingGradientCosineCount++;
+          averaged=accumulateTree(averaged,scaleTree(
+            projectedRanking.gradient,rankingWeight/batchPairs.length
+          ));
           epochSharedRankingGradientBatches++;
           sharedRankingGradientBatches++;
           sharedRankingPairsApplied+=batchPairs.length;
@@ -1736,6 +1798,8 @@ export function trainTcnLstmHybrid(trainingRows, {
       post_update_training_composite_objective:Number(trainingObjective.toFixed(8)),
       shared_ranking_pairs_used:epochSharedRankingPairs,
       shared_ranking_gradient_batches:epochSharedRankingGradientBatches,
+      shared_ranking_gradient_conflict_batches:sharedRankingGradientConflictBatches,
+      shared_ranking_gradient_projection_batches:sharedRankingGradientProjectionBatches,
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
@@ -1833,7 +1897,12 @@ export function trainTcnLstmHybrid(trainingRows, {
       best_training_composite_objective:Number(bestObjective.toFixed(8)),
       shared_classifier_loss:{
         enabled:rankingWeight>0,
-        method:'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1',
+        method:'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_PCGRAD_V2',
+        conflict_resolution:'PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT',
+        gradient_conflict_batches:sharedRankingGradientConflictBatches,
+        gradient_projection_batches:sharedRankingGradientProjectionBatches,
+        mean_gradient_cosine_before_projection:sharedRankingGradientCosineCount
+          ?Number((sharedRankingGradientCosineSum/sharedRankingGradientCosineCount).toFixed(8)):null,
         weight:Number(rankingWeight),
         source_partition:'TRAINING_PARTITION_ONLY',
         pair_schema:ranking.schema,

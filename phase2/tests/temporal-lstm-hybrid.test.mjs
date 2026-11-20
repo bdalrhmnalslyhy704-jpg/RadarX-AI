@@ -10,6 +10,7 @@ import {
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
+  projectTcnLstmAuxiliaryGradient,
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
@@ -331,6 +332,26 @@ test('pairwise return-ranking evaluation reports only selection-supplied ranking
   assert.equal(score.pairwise_accuracy_pct,100);
   assert.equal(score.holdout_values_used,false);
   assert.equal(score.diagnostic_only,true);
+});
+
+test('PCGrad projects conflicting auxiliary rank gradients away from the primary Brier gradient',()=>{
+  const primary={output:[1,0],encoder:{gate:[0,2]}};
+  const auxiliary={output:[-1,3],encoder:{gate:[0,0]}};
+  const projected=projectTcnLstmAuxiliaryGradient(primary,auxiliary);
+  assert.equal(projected.conflict,true);
+  assert.equal(projected.projection_applied,true);
+  assert.ok(projected.dot_before<0);
+  assert.ok(Math.abs(projected.dot_after)<1e-10);
+  assert.deepEqual(projected.gradient,{
+    output:[-1+1/5,3],
+    encoder:{gate:[0,2/5]}
+  });
+  assert.equal(projectTcnLstmAuxiliaryGradient(primary,{
+    output:[1,3],encoder:{gate:[0,0]}
+  }).projection_applied,false);
+  assert.equal(projectTcnLstmAuxiliaryGradient({output:[0,0]},{
+    output:[-1,1]
+  }).projection_applied,false);
 });
 
 test('external-logit backprop passes finite differences without high-logit probability clipping',()=>{
