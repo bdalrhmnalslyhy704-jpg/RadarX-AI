@@ -19,7 +19,8 @@ import {
   fitTemperatureScaler,fitPlattScaler,applyProbabilityCalibrator,
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
-  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,runNeuralClosureBenchmark
+  NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,
+  evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark
 } from '../core/neural-closure-contracts.mjs';
 
 const BASE=Date.UTC(2026,0,1);
@@ -1578,4 +1579,32 @@ test('unselected threshold reports outer execution risk as NOT_EVALUATED, not mi
   assert.equal(validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,
     'NOT_EVALUATED');
   assert.equal(report.holdout_access.opened,false);
+});
+
+test('external execution Top-K compares identical opportunities and rejects unfrozen risk penalties',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const contextScores=rows.map((row,index)=>Number((0.2+(index%15)/100).toFixed(4)));
+  const logisticProbabilities=rows.map((row,index)=>Number((0.3+((index*7)%15)/100).toFixed(4)));
+  const lambdas=rows.map(()=>0.5);
+  const report=evaluateExternalExecutionRiskTopK(rows,contextScores,logisticProbabilities,{
+    riskPenaltyWeights:lambdas,topKGrid:[1,2,3],roundTripCostBps:30
+  });
+  assert.equal(report.status,'AVAILABLE');
+  assert.equal(report.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(report.opportunity_rows,30);
+  assert.equal(report.risk_penalty_weight,0.5);
+  assert.deepEqual(report.top_k_grid,[1,2,3]);
+  assert.equal(report.lambda_refitted_on_outer_validation,false);
+  assert.equal(report.holdout_rows_or_scores_used,false);
+  assert.equal(report.thresholds_or_lambda_tuned_on_outer_validation,false);
+  assert.equal(report.trials.length,3);
+  assert.ok(report.trials.every(row=>
+    row.neural_selected_count===row.logistic_selected_count&&
+    row.neural_metrics.return_data_status==='COMPLETE'&&
+    row.logistic_metrics.return_data_status==='COMPLETE'
+  ));
+  assert.throws(()=>evaluateExternalExecutionRiskTopK(rows,contextScores,logisticProbabilities,{
+    riskPenaltyWeights:lambdas.map((value,index)=>index===0?value+0.1:value),
+    topKGrid:[1,2,3],roundTripCostBps:30
+  }),/EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN/);
 });
