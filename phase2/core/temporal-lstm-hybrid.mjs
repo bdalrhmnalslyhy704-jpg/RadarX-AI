@@ -2820,7 +2820,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     }
   }
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
-  const externalLogisticScoringRows=[...executionHeadRows,...selectionRows];
+  const externalLogisticScoringRows=[
+    ...(Array.isArray(executionHeadRows)?executionHeadRows:[]),...selectionRows
+  ];
   const modelTrainingMaxResolvedAt=Math.max(
     ...modelTrainingRows.map(row=>Number(row.resolved_at))
   );
@@ -2841,7 +2843,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     scoring_min_at:externalLogisticScoringMinAt,
     validation_or_holdout_used:false
   };
-  let executionHeadRowsWithLogisticContext=executionHeadRows;
+  let executionHeadRowsWithLogisticContext=
+    Array.isArray(executionHeadRows)?executionHeadRows:null;
   let selectionRowsWithLogisticContext=selectionRows;
   if(externalLogisticExecutionContextProvider){
     const provided=externalLogisticExecutionContextProvider(
@@ -2873,7 +2876,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_ROW_ALIGNMENT_FAILED:'+row.id);
       return {...row,external_logistic_logit:prediction.logit};
     });
-    executionHeadRowsWithLogisticContext=enrichRows(executionHeadRows);
+    executionHeadRowsWithLogisticContext=Array.isArray(executionHeadRows)
+      ?enrichRows(executionHeadRows):null;
     selectionRowsWithLogisticContext=enrichRows(selectionRows);
     externalLogisticContextModel=provided.model;
     externalLogisticContextMetadata={
@@ -2897,7 +2901,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       ...row,
       external_logistic_logit:predictTcnLstmLogisticLogit(row.sequence,anchor)
     }));
-    executionHeadRowsWithLogisticContext=enrichRows(executionHeadRows);
+    executionHeadRowsWithLogisticContext=Array.isArray(executionHeadRows)
+      ?enrichRows(executionHeadRows):null;
     selectionRowsWithLogisticContext=enrichRows(selectionRows);
   }
   const baselineLogits = selectionRows.map(row =>
