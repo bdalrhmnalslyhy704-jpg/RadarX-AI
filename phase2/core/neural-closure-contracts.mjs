@@ -646,31 +646,63 @@ export function fitPlattScaler(logits, labels, {
     slope:null,intercept:null};
   if(supportFailure(counts,minimumPositives,minimumNegatives))
     return {...base,status:'INSUFFICIENT_CLASS_SUPPORT'};
-  let slope=1,intercept=0;
-  for(let iteration=0;iteration<iterations;iteration++){
-    let g0=regularization*(slope-1),g1=regularization*intercept;
-    let h00=regularization,h01=0,h11=regularization;
-    for(let i=0;i<logits.length;i++){
-      const x=Number(logits[i]),p=sigmoid(slope*x+intercept);
-      const error=p-labels[i],weight=p*(1-p);
-      g0+=error*x;g1+=error;
-      h00+=weight*x*x;h01+=weight*x;h11+=weight;
-    }
-    const determinant=h00*h11-h01*h01;
-    if(!Number.isFinite(determinant)||determinant<=1e-18)
-      return {...base,status:'SINGULAR_HESSIAN'};
-    const deltaSlope=(h11*g0-h01*g1)/determinant;
-    const deltaIntercept=(-h01*g0+h00*g1)/determinant;
-    slope=clamp(slope-deltaSlope,0.05,20);
-    intercept=clamp(intercept-deltaIntercept,-12,12);
-    if(!Number.isFinite(slope)||!Number.isFinite(intercept))
-      return {...base,status:'NON_FINITE_OPTIMIZER_STATE'};
-    if(Math.max(Math.abs(deltaSlope),Math.abs(deltaIntercept))<1e-9)break;
-  }
+
   const before=binaryNll(logits,labels,sigmoid);
-  const after=binaryNll(logits,labels,value=>sigmoid(slope*value+intercept));
-  return {...base,status:'FITTED',fitted:true,accepted:after<before,
-    slope,intercept,fit_nll_before:before,fit_nll_after:after};
+  const steps=Math.max(1,Math.min(2000,Math.trunc(iterations)));
+  const fitOrientation=orientation=>{
+    let slope=orientation,intercept=0;
+    const lower=orientation>0?0.05:-20;
+    const upper=orientation>0?20:-0.05;
+    for(let iteration=0;iteration<steps;iteration++){
+      let g0=regularization*(slope-orientation),g1=regularization*intercept;
+      let h00=regularization,h01=0,h11=regularization;
+      for(let i=0;i<logits.length;i++){
+        const x=Number(logits[i]),p=sigmoid(slope*x+intercept);
+        const error=p-labels[i],weight=p*(1-p);
+        g0+=error*x;g1+=error;
+        h00+=weight*x*x;h01+=weight;h01-=weight;h01+=weight*x;h11+=weight;
+      }
+      const determinant=h00*h11-h01*h01;
+      if(!Number.isFinite(determinant)||determinant<=1e-18)
+        return {orientation,status:'SINGULAR_HESSIAN'};
+      const deltaSlope=(h11*g0-h01*g1)/determinant;
+      const deltaIntercept=(-h01*g0+h00*g1)/determinant;
+      slope=clamp(slope-deltaSlope,lower,upper);
+      intercept=clamp(intercept-deltaIntercept,-12,12);
+      if(!Number.isFinite(slope)||!Number.isFinite(intercept))
+        return {orientation,status:'NON_FINITE_OPTIMIZER_STATE'};
+      if(Math.max(Math.abs(deltaSlope),Math.abs(deltaIntercept))<1e-9)break;
+    }
+    const after=binaryNll(logits,labels,value=>sigmoid(slope*value+intercept));
+    if(!Number.isFinite(after))
+      return {orientation,status:'NON_FINITE_OBJECTIVE'};
+    return {orientation,status:'FITTED',slope,intercept,fit_nll_after:after,
+      accepted:after<before};
+  };
+
+  // Platt orientation is selected only on the declared calibration-fit rows.
+  // The held-out calibration-check and outer-validation blocks never choose
+  // the sign; they remain independent tests of the selected transform.
+  const orientationTrials=[fitOrientation(1),fitOrientation(-1)];
+  const fitted=orientationTrials.filter(candidate=>candidate.status==='FITTED');
+  if(!fitted.length)
+    return {...base,status:'OPTIMIZER_FAILED',orientation_trials:orientationTrials};
+  fitted.sort((a,b)=>a.fit_nll_after-b.fit_nll_after||
+    (b.orientation-a.orientation));
+  const best=fitted[0];
+  return {...base,status:'FITTED',fitted:true,accepted:best.accepted===true,
+    slope:best.slope,intercept:best.intercept,
+    slope_orientation:best.orientation>0?'POSITIVE':'NEGATIVE',
+    fit_nll_before:before,fit_nll_after:best.fit_nll_after,
+    orientation_trials:orientationTrials.map(candidate=>({
+      orientation:candidate.orientation>0?'POSITIVE':'NEGATIVE',
+      status:candidate.status,
+      accepted:candidate.accepted??false,
+      slope:candidate.slope??null,
+      intercept:candidate.intercept??null,
+      fit_nll_after:candidate.fit_nll_after??null
+    }))
+  };
 }
 export function applyProbabilityCalibrator(logitValue, calibrator) {
   if(!finite(logitValue))throw new TypeError('NEURAL_CALIBRATION_LOGIT_NON_FINITE');
