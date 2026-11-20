@@ -409,7 +409,10 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
 test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{
   const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(closure,/logisticThresholdSelectionReady=\s*logisticValidationReference\?\.threshold_selection==='SELECTED_ON_VALIDATION_ONLY'/);
+  assert.match(closure,/referenceOnly:modelName==='LOGISTIC_REGRESSION'/);
+  assert.match(closure,/status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY'/);
+  assert.match(closure,/selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY'/);
+  assert.match(closure,/logisticThresholdSelectionReady=\[\s*'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'/);
   assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\s\S]*?Object\.values\(logisticReferenceRiskGates\)\.every/);
   assert.match(closure,/strictly_beats_logistic_net_pnl/);
   assert.match(closure,/drawdown_no_worse_than_logistic/);

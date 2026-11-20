@@ -1874,12 +1874,48 @@ function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4
 }
 function selectThreshold(rows,probabilities,roundTripCostBps,{
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  thresholdGrid=ENTRY_THRESHOLD_GRID
+  referenceOnly=false,thresholdGrid=ENTRY_THRESHOLD_GRID
 }={}) {
   if(!Array.isArray(thresholdGrid)||thresholdGrid.length===0||
     thresholdGrid.some(value=>!finite(value)||Number(value)<=0||Number(value)>=1))
     throw new TypeError('NEURAL_CLOSURE_THRESHOLD_GRID_INVALID');
   const trials=thresholdGrid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
+  if(referenceOnly){
+    // A comparator does not need to pass promotion gates. Freeze its threshold
+    // on this earlier disjoint block using net return after fees, but require
+    // complete evidence and the same minimum sample support as the challenger.
+    const eligible=trials.filter(item=>item.return_data_status==='COMPLETE'&&
+      Number(item.trade_count)>=minimumTrades&&
+      finite(item.net_pnl_pct)&&finite(item.max_drawdown_pct)&&
+      finite(item.win_rate_pct));
+    if(!eligible.length)return {
+      threshold:null,status:'ABSTAINED_NO_REFERENCE_THRESHOLD_WITH_MINIMUM_TRADES',
+      selected:null,trials,eligible_count:0,
+      selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY',
+      selection_objective:'MAX_NET_PNL_AFTER_COST_WITH_MINIMUM_TRADES_ON_EARLIER_DISJOINT_BLOCK',
+      minimum_validation_trades:minimumTrades,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false
+    };
+    eligible.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
+      a.max_drawdown_pct-b.max_drawdown_pct||
+      b.win_rate_pct-a.win_rate_pct||b.trade_count-a.trade_count);
+    return {
+      threshold:eligible[0].threshold,status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY',
+      trials,eligible_count:eligible.length,selected:eligible[0],
+      selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY',
+      selection_objective:'MAX_NET_PNL_AFTER_COST_WITH_MINIMUM_TRADES_ON_EARLIER_DISJOINT_BLOCK',
+      minimum_validation_trades:minimumTrades,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false
+    };
+  }
   const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
     item.trade_count>=minimumTrades&&
     finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
@@ -1888,20 +1924,26 @@ function selectThreshold(rows,probabilities,roundTripCostBps,{
   if(!ready.length)return {
     threshold:null,status:'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',
     selected:null,trials,eligible_count:0,
+    selection_role:'NEURAL_OR_CANDIDATE_QUALIFICATION',
     minimum_validation_trades:minimumTrades,
     minimum_validation_win_rate_pct:minimumWinRatePct,
+    minimum_validation_win_rate_enforced:true,
     require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
+    maximum_validation_drawdown_pct:maximumDrawdownPct,
+    acceptance_qualified:false
   };
   ready.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
     a.max_drawdown_pct-b.max_drawdown_pct||b.trade_count-a.trade_count);
   return {
     threshold:ready[0].threshold,status:'SELECTED_ON_VALIDATION_ONLY',
     trials,eligible_count:ready.length,selected:ready[0],
+    selection_role:'NEURAL_OR_CANDIDATE_QUALIFICATION',
     minimum_validation_trades:minimumTrades,
     minimum_validation_win_rate_pct:minimumWinRatePct,
+    minimum_validation_win_rate_enforced:true,
     require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
+    maximum_validation_drawdown_pct:maximumDrawdownPct,
+    acceptance_qualified:true
   };
 }
 
@@ -2727,7 +2769,8 @@ export function runNeuralClosureBenchmark({
       }):null;
     const thresholdSelection=selectThreshold(thresholdSelectionRows,
       thresholdSelectionProbabilities,roundTripCostBps,{
-        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
+        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct,
+        referenceOnly:modelName==='LOGISTIC_REGRESSION'
       });
     // The threshold is chosen only on the earlier threshold-selection block.
     // The later outer-validation block evaluates that frozen threshold once.
@@ -2769,8 +2812,9 @@ export function runNeuralClosureBenchmark({
     // Eligibility is determined on the earlier disjoint threshold-selection block.
     // Do not require Logistic to win again on the later outer-validation block:
     // that block exists precisely to compare the neural challenger against it.
-    const logisticThresholdSelectionReady=
-      logisticValidationReference?.threshold_selection==='SELECTED_ON_VALIDATION_ONLY'&&
+    const logisticThresholdSelectionReady=[
+      'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'
+    ].includes(logisticValidationReference?.threshold_selection)&&
       Number(logisticValidationReference?.threshold_selection_eligible_count??0)>0;
     const matchedExecutionThresholdReady=finite(matchedExecutionThreshold)&&
       logisticThresholdSelectionReady&&
@@ -2870,10 +2914,14 @@ export function runNeuralClosureBenchmark({
       selected_threshold:thresholdSelection.threshold,
       threshold_selection_eligible_count:thresholdSelection.eligible_count??0,
       threshold_selection_gates:{
+        selection_role:thresholdSelection.selection_role??'MODEL_QUALIFICATION',
+        selection_objective:thresholdSelection.selection_objective??'RISK_GATED_NET_RETURN',
         minimum_threshold_selection_trades:thresholdSelection.minimum_validation_trades??20,
         minimum_threshold_selection_win_rate_pct:thresholdSelection.minimum_validation_win_rate_pct??minimumWinRatePct,
+        minimum_threshold_selection_win_rate_enforced:thresholdSelection.minimum_validation_win_rate_enforced!==false,
         require_positive_threshold_selection_net_pnl:thresholdSelection.require_positive_validation_net_pnl===true,
-        maximum_threshold_selection_drawdown_pct:thresholdSelection.maximum_validation_drawdown_pct??maximumDrawdownPct
+        maximum_threshold_selection_drawdown_pct:thresholdSelection.maximum_validation_drawdown_pct??maximumDrawdownPct,
+        acceptance_qualified:thresholdSelection.acceptance_qualified===true
       },
       threshold_trials:thresholdSelection.trials.map(item=>({
         threshold:item.threshold,signal_count:item.signal_count,trade_count:item.trade_count,

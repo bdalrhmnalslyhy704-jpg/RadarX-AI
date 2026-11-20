@@ -1131,10 +1131,10 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     artifact_sha256:artifactSha256
   }));
-  // Logistic is a Brier-only reference here and intentionally emits no
-  // executable scores. The neural challenger has enough positive separation
-  // to qualify an independent paper threshold on the earlier block.
-  const predictions={LOGISTIC_REGRESSION:build(0.05,0.05,null)};
+  // Logistic probabilities stay above the complete predeclared threshold grid,
+  // so no reference threshold can meet the minimum trade support. The neural
+  // challenger cannot bypass the missing matched baseline reference.
+  const predictions={LOGISTIC_REGRESSION:build(0.99,0.99,null)};
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     predictions[family]=build(0.85,0.05,modelArtifactsByModel[family].artifact_sha256);
   const qualificationByModel=Object.fromEntries(
@@ -1172,22 +1172,19 @@ test('a frozen Logistic threshold remains comparable when Logistic fails on the 
   const calibrationBlocks=buildNeuralClosureCalibrationBlocks(split.validation);
   const laterCheckIds=new Set(calibrationBlocks.check.map(row=>row.id));
   const rowById=new Map([...split.validation,...split.holdout].map(row=>[row.id,row]));
-  // Logistic separates winners on its fit/threshold-selection blocks, so its
-  // threshold is genuinely frozen there. It reverses on the later check and
-  // holdout blocks; this must not erase the already-frozen reference threshold.
-  for(const prediction of predictions.LOGISTIC_REGRESSION){
-    const row=rowById.get(prediction.id);
-    const later=laterCheckIds.has(prediction.id)||!split.validation.some(item=>item.id===prediction.id);
-    prediction.probability=row.target===1
-      ?(later?0.20:0.80)
-      :(later?0.80:0.20);
-  }
-  // The neural challenger keeps correct separation on the later block and
-  // must be evaluated at exactly Logistic's earlier frozen threshold.
+  // Logistic is intentionally a weak reference here: every row scores
+  // 0.05, so the earlier selection block can freeze a threshold with enough
+  // trades but cannot satisfy the 55%/positive-return qualification gates.
+  // The later block must still evaluate the neural challenger at that exact
+  // reference threshold rather than abstaining because Logistic is weak.
+  for(const prediction of predictions.LOGISTIC_REGRESSION)
+    prediction.probability=0.05;
+  // The neural challenger separates positives from negatives. At Logistic's
+  // frozen 0.05 reference threshold it should trade only the positive cohort.
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     for(const prediction of predictions[family]){
       const row=rowById.get(prediction.id);
-      prediction.probability=row.target===1?0.90:0.10;
+      prediction.probability=row.target===1?0.90:0.01;
     }
   }
   const qualificationByModel=Object.fromEntries(
@@ -1201,9 +1198,15 @@ test('a frozen Logistic threshold remains comparable when Logistic fails on the 
   });
   const logistic=report.models.LOGISTIC_REGRESSION.validation;
   const neural=report.models.TCN_LSTM_HYBRID.validation.outer_validation_gate;
-  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_ONLY');
-  assert.ok(Number.isFinite(logistic.selected_threshold));
+  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_REFERENCE_ONLY');
+  assert.equal(logistic.threshold_selection_gates.selection_role,'LOGISTIC_BASELINE_REFERENCE_ONLY');
+  assert.equal(logistic.threshold_selection_gates.minimum_threshold_selection_win_rate_enforced,false);
+  assert.equal(logistic.threshold_selection_gates.require_positive_threshold_selection_net_pnl,false);
+  assert.equal(logistic.threshold_selection_gates.acceptance_qualified,false);
+  assert.equal(logistic.selected_threshold,0.05);
   assert.equal(logistic.validation_threshold_metrics.return_data_status,'COMPLETE');
+  assert.equal(logistic.validation_threshold_risk_gates.minimum_validation_win_rate,'FAIL',
+    'a frozen reference can be unprofitable without blocking the matched comparison');
   assert.equal(logistic.validation_threshold_risk_gates.minimum_validation_win_rate,'FAIL',
     'the fixture intentionally makes Logistic fail on the later outer block');
   assert.equal(neural.gates.matched_execution_threshold_available,'PASS');
