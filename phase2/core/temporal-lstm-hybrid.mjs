@@ -1163,6 +1163,42 @@ function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
 }
 
 /**
+ * Pairwise ranking loss on the classifier's primary logit, not the frozen
+ * auxiliary ranking head. Its gradient is propagated through the same TCN,
+ * LSTM and attention parameters used by the probability output.
+ */
+function evaluateSharedClassifierRankingLoss(rows,pairs,model,anchor) {
+  if(!pairs.length)return 0;
+  let total=0;
+  for(const pair of pairs){
+    const high=rows[pair.high_index],low=rows[pair.low_index];
+    const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
+    const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
+    const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
+    const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
+    total+=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit).loss;
+  }
+  return total/pairs.length;
+}
+
+function evaluateClassifierTrainingObjective(rows,model,anchor,{
+  objective='BRIER',classWeights=null,gammaPositive=1,gammaNegative=2
+}={}) {
+  if(objective==='BRIER')return evaluateBrier(rows,model,anchor);
+  if(objective!=='FOCAL_ASYMMETRIC_BRIER'||classWeights===null)
+    throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_CONFIGURATION_INVALID');
+  let total=0;
+  for(const row of rows){
+    const baselineLogit=predictTcnLstmLogisticLogit(row.sequence,anchor);
+    const probability=inspectTcnLstmForward(row.sequence,model,baselineLogit).probability;
+    total+=focalAsymmetricBrierLoss(probability,row.target,{
+      ...classWeights,gammaPositive,gammaNegative
+    }).loss;
+  }
+  return total/rows.length;
+}
+
+/**
  * Fit independent pointwise execution heads on frozen pooled representations.
  * Targets are derived exclusively from matured TRAINING partition outcomes.
  */
@@ -1502,6 +1538,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_CONFIGURATION_INVALID');
   if(!finite(rankingWeight)||rankingWeight<0||rankingWeight>1)
     throw new TypeError('TCN_LSTM_RANKING_WEIGHT_INVALID');
+  if(rankingWeight>0&&!Array.isArray(rankingRows))
+    throw new TypeError('TCN_LSTM_SHARED_RANKING_REQUIRES_TRAINING_RETURN_ROWS');
   const dropoutRate = Number(dropout);
   if (!finite(rate) || !finite(regularization) ||
       !finite(dropoutRate) || dropoutRate < 0 || dropoutRate > 0.40)
@@ -1530,6 +1568,12 @@ export function trainTcnLstmHybrid(trainingRows, {
   if(Array.isArray(rankingRows)&&ranking.comparison_pairs<10)
     throw new TypeError('TCN_LSTM_RETURN_RANKING_PAIR_SUPPORT_TOO_SMALL');
   const rankingPairs=ranking.pairs;
+  const rankingPairsByTime=new Map();
+  for(const pair of rankingPairs){
+    const key=String(pair.decision_at);
+    if(!rankingPairsByTime.has(key))rankingPairsByTime.set(key,[]);
+    rankingPairsByTime.get(key).push(pair);
+  }
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
@@ -1546,8 +1590,17 @@ export function trainTcnLstmHybrid(trainingRows, {
   const random = mulberry32(seed ^ 0xA5A5A5A5);
   const history = [];
   const initialBrier = evaluateBrier(rows, model, anchor);
+  const initialClassificationObjective=evaluateClassifierTrainingObjective(rows,model,anchor,{
+    objective,classWeights,gammaPositive,gammaNegative
+  });
+  const initialSharedRankingLoss=rankingWeight>0
+    ?evaluateSharedClassifierRankingLoss(rows,rankingPairs,model,anchor):0;
   let bestBrier=initialBrier;
-  let bestObjective=initialBrier;
+  let bestClassificationObjective=initialClassificationObjective;
+  let bestSharedRankingLoss=initialSharedRankingLoss;
+  let bestObjective=initialClassificationObjective+rankingWeight*initialSharedRankingLoss;
+  let sharedRankingGradientBatches=0;
+  let sharedRankingPairsApplied=0;
   let bestEpoch = 0;
   let bestModel = cloneTree(trainableParameters(model));
   let wait = 0, stoppedEarly = false;
@@ -1582,6 +1635,7 @@ export function trainTcnLstmHybrid(trainingRows, {
         batches.push(order.slice(start,Math.min(order.length,start+batchSize)));
     }
     let epochLoss=0,seen=0,maxGradientNorm=0,clippedBatches=0;
+    let epochSharedRankingLoss=0,epochSharedRankingPairs=0,epochSharedRankingGradientBatches=0;
     const schedule = 0.1 + 0.9 * 0.5 *
       (1 + Math.cos(Math.PI * (epoch - 1) / Math.max(1, epochs - 1)));
     const epochRate = rate * schedule;
@@ -1604,6 +1658,40 @@ export function trainTcnLstmHybrid(trainingRows, {
         accumulated = accumulateTree(accumulated, item.gradients);
       }
       let averaged=scaleTree(accumulated,1/indexes.length);
+      if(rankingWeight>0&&indexes.length){
+        const inBatch=new Set(indexes);
+        const decisionAt=String(Math.floor(Number(rows[indexes[0]].at)/
+          TCN_LSTM_RANKING_BUCKET_MS)*TCN_LSTM_RANKING_BUCKET_MS);
+        const batchPairs=(rankingPairsByTime.get(decisionAt)||[]).filter(pair=>
+          inBatch.has(pair.high_index)&&inBatch.has(pair.low_index));
+        if(batchPairs.length){
+          let rankGradient=zeroGradients(model);
+          for(const pair of batchPairs){
+            const high=rows[pair.high_index],low=rows[pair.low_index];
+            const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
+            const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
+            const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
+            const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
+            const pairLoss=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
+            const highGrad=lossAndGradientsTcnLstmHybrid(high.sequence,high.target,model,highBase,{
+              objective:'EXTERNAL_LOGIT',
+              externalLogitGradient:pairLoss.high_logit_gradient*rankingWeight
+            });
+            const lowGrad=lossAndGradientsTcnLstmHybrid(low.sequence,low.target,model,lowBase,{
+              objective:'EXTERNAL_LOGIT',
+              externalLogitGradient:pairLoss.low_logit_gradient*rankingWeight
+            });
+            rankGradient=accumulateTree(rankGradient,highGrad.gradients);
+            rankGradient=accumulateTree(rankGradient,lowGrad.gradients);
+            epochSharedRankingLoss+=pairLoss.loss;
+            epochSharedRankingPairs++;
+          }
+          averaged=accumulateTree(averaged,scaleTree(rankGradient,1/batchPairs.length));
+          epochSharedRankingGradientBatches++;
+          sharedRankingGradientBatches++;
+          sharedRankingPairsApplied+=batchPairs.length;
+        }
+      }
       if (!treeFinite(averaged)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NON_FINITE');
       const norm = parameterNorm(averaged);
       if (!finite(norm)) throw new TypeError('TCN_LSTM_BATCH_GRADIENT_NORM_NON_FINITE');
@@ -1617,17 +1705,37 @@ export function trainTcnLstmHybrid(trainingRows, {
     }
 
     const trainingBrier=evaluateBrier(rows,model,anchor);
-    if(!finite(trainingBrier))
+    const trainingClassificationObjective=evaluateClassifierTrainingObjective(rows,model,anchor,{
+      objective,classWeights,gammaPositive,gammaNegative
+    });
+    const trainingSharedRankingLoss=rankingWeight>0
+      ?evaluateSharedClassifierRankingLoss(rows,rankingPairs,model,anchor):0;
+    const trainingObjective=trainingClassificationObjective+
+      rankingWeight*trainingSharedRankingLoss;
+    if(!finite(trainingBrier)||!finite(trainingClassificationObjective)||
+      !finite(trainingSharedRankingLoss)||!finite(trainingObjective))
       throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_NON_FINITE');
-    if(trainingBrier<bestObjective-1e-8){
-      bestObjective=trainingBrier;bestBrier=trainingBrier;bestEpoch=epoch;
+    if(trainingObjective<bestObjective-1e-8){
+      bestObjective=trainingObjective;
+      bestBrier=trainingBrier;
+      bestClassificationObjective=trainingClassificationObjective;
+      bestSharedRankingLoss=trainingSharedRankingLoss;
+      bestEpoch=epoch;
       bestModel = cloneTree(trainableParameters(model));
       wait = 0;
     } else wait++;
     history.push({
       epoch,
-      pre_update_mean_batch_objective_loss:Number((epochLoss/Math.max(1,seen)).toFixed(8)),
+      pre_update_mean_batch_objective_loss:Number((
+        epochLoss/Math.max(1,seen)+
+        rankingWeight*epochSharedRankingLoss/Math.max(1,epochSharedRankingPairs)
+      ).toFixed(8)),
       post_update_training_brier:Number(trainingBrier.toFixed(8)),
+      post_update_training_classification_objective:Number(trainingClassificationObjective.toFixed(8)),
+      post_update_shared_classifier_pairwise_rank_loss:Number(trainingSharedRankingLoss.toFixed(8)),
+      post_update_training_composite_objective:Number(trainingObjective.toFixed(8)),
+      shared_ranking_pairs_used:epochSharedRankingPairs,
+      shared_ranking_gradient_batches:epochSharedRankingGradientBatches,
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
@@ -1660,7 +1768,10 @@ export function trainTcnLstmHybrid(trainingRows, {
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
   const finalBrier=evaluateBrier(rows,model,anchor);
   const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
-  if(!finite(finalBrier)||!finite(finalRankingLoss)||!treeFinite(trainableParameters(model))||
+  const finalSharedRankingLoss=rankingWeight>0
+    ?evaluateSharedClassifierRankingLoss(rows,rankingPairs,model,anchor):0;
+  if(!finite(finalBrier)||!finite(finalRankingLoss)||!finite(finalSharedRankingLoss)||
+    !treeFinite(trainableParameters(model))||
     !Array.isArray(model.rankingHeadWeights)||model.rankingHeadWeights.some(value=>!finite(value)))
     throw new TypeError('TCN_LSTM_FINAL_MODEL_NON_FINITE');
   return {
@@ -1717,12 +1828,33 @@ export function trainTcnLstmHybrid(trainingRows, {
       best_epoch: bestEpoch,
       best_training_brier:Number(bestBrier.toFixed(8)),
       best_training_pairwise_rank_loss:Number(finalRankingLoss.toFixed(8)),
-      best_training_classification_objective:Number(bestObjective.toFixed(8)),
+      best_training_shared_classifier_pairwise_rank_loss:Number(bestSharedRankingLoss.toFixed(8)),
+      best_training_classification_objective:Number(bestClassificationObjective.toFixed(8)),
+      best_training_composite_objective:Number(bestObjective.toFixed(8)),
+      shared_classifier_loss:{
+        enabled:rankingWeight>0,
+        method:'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1',
+        weight:Number(rankingWeight),
+        source_partition:'TRAINING_PARTITION_ONLY',
+        pair_schema:ranking.schema,
+        comparison_pairs:ranking.comparison_pairs,
+        decision_group_count:ranking.decision_group_count,
+        round_trip_cost_bps:Number(rankingRoundTripCostBps),
+        minimum_return_gap_pct:Number(rankingMinimumReturnGapPct),
+        maximum_pairs_per_timestamp:rankingPairsPerTimestamp,
+        gradient_batches_applied:sharedRankingGradientBatches,
+        pair_updates_applied:sharedRankingPairsApplied,
+        classifier_parameters_updated:sharedRankingGradientBatches>0,
+        initial_pairwise_log_loss:Number(initialSharedRankingLoss.toFixed(8)),
+        restored_checkpoint_pairwise_log_loss:Number(bestSharedRankingLoss.toFixed(8)),
+        final_restored_pairwise_log_loss:Number(finalSharedRankingLoss.toFixed(8)),
+        validation_or_holdout_used:false
+      },
       execution_regression_heads:executionHeadFit,
       return_ranking:{
         enabled:rankingHeadFit.fitted===true,
-        method:'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
-        legacy_joint_ranking_weight_ignored:Number(rankingWeight),
+        method:'SHARED_CLASSIFIER_PAIRWISE_LOSS_PLUS_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V2',
+        shared_classifier_loss_weight:Number(rankingWeight),
         pair_schema:ranking.schema,source_partition:ranking.source_partition,
         decision_group_count:ranking.decision_group_count,
         comparison_pairs:ranking.comparison_pairs,
@@ -1732,12 +1864,15 @@ export function trainTcnLstmHybrid(trainingRows, {
         ranking_head:rankingHeadFit,
         training_pairwise_log_loss:Number(finalRankingLoss.toFixed(8)),
         ranking_labels_seen_outside_training_partition:false,
-        classifier_parameters_updated_by_ranking_head:false
+        classifier_parameters_updated_by_ranking_head:false,
+        classifier_parameters_updated_by_shared_ranking_loss:sharedRankingGradientBatches>0
       },
       restored_best_training_checkpoint: true,
       validation_or_selection_or_holdout_used_for_fit: false,
       early_stopping: {
-        monitor:'TRAINING_PARTITION_CLASSIFICATION_BRIER_ONLY',
+        monitor:rankingWeight>0
+          ?'TRAINING_CLASSIFICATION_OBJECTIVE_PLUS_WEIGHTED_SHARED_PAIRWISE_LOGIT_RANK_LOSS'
+          :'TRAINING_CLASSIFICATION_OBJECTIVE_ONLY',
         patience,
         stopped_early: stoppedEarly
       },
@@ -1762,7 +1897,7 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
   // behavior for legacy artifacts.
   const blendWeight=finite(profile.ranking_probability_blend_weight)
     ?clamp(Number(profile.ranking_probability_blend_weight),0,2):0;
-  return sigmoid(forward.logit+blendWeight*forward.ranking_logit);
+  return sigmoid(forward.logit+blendWeight*forward.ranking_residual_logit);
 }
 export function predictTcnLstmHybridRankingLogit(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
@@ -2079,9 +2214,21 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const rankingScoreAvailable=baselineRanking.status==='AVAILABLE';
   const baselineSelectionScore=baselineBrier+
     (rankingScoreAvailable?rankingScoreWeight*baselineRanking.pairwise_log_loss:0);
+  const effectiveCandidates=candidates.filter(config=>
+    Number(config?.rankingWeight??0)<=0||rankingRowsForFit!==null
+  );
+  const skippedCandidates=candidates.filter(config=>
+    Number(config?.rankingWeight??0)>0&&rankingRowsForFit===null
+  ).map(config=>({
+    name:config?.name??null,
+    ranking_weight:Number(config?.rankingWeight),
+    reason:'TRAINING_RETURN_PAIR_SUPPORT_UNAVAILABLE'
+  }));
+  if(effectiveCandidates.length<2)
+    throw new TypeError('TCN_LSTM_EFFECTIVE_HYPERPARAMETER_GRID_TOO_SMALL');
   const evaluated = [];
-  for (let index = 0; index < candidates.length; index++) {
-    const config = candidates[index];
+  for (let index = 0; index < effectiveCandidates.length; index++) {
+    const config = effectiveCandidates[index];
     const candidateDropout = config?.dropout === undefined ? 0 : config.dropout;
     const candidateObjective=config?.objective??'BRIER';
     if (!config || typeof config.name !== 'string' ||
@@ -2137,7 +2284,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectionRankingLogits = selectionRows.map(row => {
       const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
-      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_logit;
+      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_residual_logit;
     });
     // Search a small, predeclared blend grid using only the purged inner-
     // selection partition. The ranking head is no longer stranded as a
@@ -2175,10 +2322,20 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectedBlend=blendPool[0];
     fit.ranking_probability_blend_weight=selectedBlend.weight;
+    fit.ranking_probability_blend_method='CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1';
     const predictions=selectedBlend.probabilities;
+    const selectedCombinedLogits=selectionLogits.map((logit,index)=>
+      logit+selectedBlend.weight*selectionRankingLogits[index]
+    );
     const score=selectedBlend.score;
     const pairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
-      selectionRows,selectionRankingLogits,{
+      selectionRows,selectedCombinedLogits,{
+        roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
+        maxPairsPerTimestamp:rankingPairsPerTimestamp
+      }
+    );
+    const sharedClassifierPairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
+      selectionRows,selectionLogits,{
         roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
         maxPairsPerTimestamp:rankingPairsPerTimestamp
       }
@@ -2191,8 +2348,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const pairwiseRankingImprovement=rankingScoreAvailable&&
       pairwiseRanking.status==='AVAILABLE'
         ?baselineRanking.pairwise_log_loss-pairwiseRanking.pairwise_log_loss:null;
+    const sharedClassifierPairwiseRankingImprovement=rankingScoreAvailable&&
+      sharedClassifierPairwiseRanking.status==='AVAILABLE'
+        ?baselineRanking.pairwise_log_loss-sharedClassifierPairwiseRanking.pairwise_log_loss:null;
     const rankingExecutionSelection=summarizeTcnLstmRankingExecutionSelection(
-      selectionRows,selectionRankingLogits,baselineLogits,{
+      selectionRows,selectedCombinedLogits,baselineLogits,{
         roundTripCostBps,minimumTrades:minimumReturnTrades,
         minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
       }
@@ -2203,6 +2363,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         rankingWeight:Number(config.rankingWeight??0),
         rankingHeadLearningRate:candidateRankingHeadLearningRate},
       ranking_probability_blend_weight:selectedBlend.weight,
+      ranking_probability_blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
       ranking_blend_search:blendTrials.map(item=>({
         weight:item.weight,selection_brier:Number(item.score.toFixed(8)),
         preliminary_return_screen_candidates:item.returns.preliminary_return_screen_candidates??0,
@@ -2212,6 +2373,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       brier_improvement:brierImprovement,
       pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
       pairwise_ranking_improvement:pairwiseRankingImprovement,
+      shared_classifier_pairwise_ranking:sharedClassifierPairwiseRanking,
+      shared_classifier_pairwise_ranking_improvement:sharedClassifierPairwiseRankingImprovement,
       ranking_execution_selection:rankingExecutionSelection,
       execution_risk_policy:executionRiskPolicy,
       execution_risk_penalty_weight:finite(fit.execution_risk_penalty_weight)
@@ -2240,6 +2403,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const isInnerQualified=item=>
     item.brier_improvement>requiredImprovement&&
     item.composite_improvement>requiredImprovement&&
+    (Number(item.config.rankingWeight??0)<=0||
+      (finite(item.shared_classifier_pairwise_ranking_improvement)&&
+        item.shared_classifier_pairwise_ranking_improvement>0))&&
     item.execution_heads_fitted===true&&
     item.execution_risk_policy?.status==='EVALUATED'&&
     item.execution_risk_policy?.passed===true&&
@@ -2253,10 +2419,18 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const rankingGatePassed=!rankingScoreAvailable||
     (finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0);
   const compositeGatePassed=winner.composite_improvement>requiredImprovement;
+  const sharedClassifierRankingGateRequired=Number(winner.config.rankingWeight??0)>0;
+  const sharedClassifierRankingGatePassed=!sharedClassifierRankingGateRequired||
+    (finite(winner.shared_classifier_pairwise_ranking_improvement)&&
+      winner.shared_classifier_pairwise_ranking_improvement>0);
   const passed=isInnerQualified(winner);
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
+    candidate_count_requested:candidates.length,
+    candidate_count_evaluated:evaluated.length,
+    skipped_candidates:skippedCandidates,
+    training_return_pair_support:rankingTrainingPairSupport,
     training_support: trainSupport,
     selection_support: selectionSupport,
     effective_training_budget:effectiveTrainingBudget,
@@ -2270,8 +2444,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     selection_scoring:{
       method:rankingScoreAvailable
-        ?'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_AND_PAIRWISE_RANK_V2'
-        :'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_V2',
+        ?'INNER_RETURN_SCREENED_BRIER_PLUS_CLASSIFIER_AND_RANKING_RESIDUAL_LOGIT_V4'
+        :'INNER_RETURN_SCREENED_BRIER_CLASSIFIER_LOGIT_V4',
+      blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
@@ -2279,24 +2454,33 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       gate_results:{
         brier_improvement:brierGatePassed?'PASS':'FAIL',
         pairwise_ranking_improvement:rankingGatePassed?'PASS':'FAIL',
+        shared_classifier_pairwise_ranking_improvement:
+          !sharedClassifierRankingGateRequired?'NOT_REQUIRED':
+            sharedClassifierRankingGatePassed?'PASS':'FAIL',
         composite_improvement:compositeGatePassed?'PASS':'FAIL'
       },
       ranking_uses_inner_selection_partition_only:true,
       outer_validation_or_holdout_used:false
     },
     candidates:evaluated.map(({name,config,ranking_probability_blend_weight,
-      ranking_blend_search,selection_brier,logistic_selection_brier,
+      ranking_probability_blend_method,ranking_blend_search,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
-      pairwise_ranking_improvement,ranking_execution_selection,execution_risk_policy,
+      pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
+      shared_classifier_pairwise_ranking_improvement,
+      ranking_execution_selection,execution_risk_policy,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
-      name,config,ranking_probability_blend_weight,ranking_blend_search,
+      name,config,ranking_probability_blend_weight,ranking_probability_blend_method,ranking_blend_search,
       selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
       brier_improvement:Number(brier_improvement.toFixed(8)),
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
         ?Number(pairwise_ranking_improvement.toFixed(8)):null,
+      shared_classifier_pairwise_ranking,
+      shared_classifier_pairwise_ranking_improvement:
+        finite(shared_classifier_pairwise_ranking_improvement)
+          ?Number(shared_classifier_pairwise_ranking_improvement.toFixed(8)):null,
       ranking_execution_selection,
       execution_risk_policy,execution_risk_penalty_weight,
       ranking_head_selection_qualified,
@@ -2308,9 +2492,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       passed_inner_brier_margin:brier_improvement>requiredImprovement,
       passed_inner_pairwise_ranking_gate:!rankingScoreAvailable||
         (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0),
+      passed_inner_shared_classifier_ranking_gate:Number(config.rankingWeight??0)<=0||
+        (finite(shared_classifier_pairwise_ranking_improvement)&&
+          shared_classifier_pairwise_ranking_improvement>0),
       passed_inner_composite_margin:composite_improvement>requiredImprovement,
       passed_inner_margin:brier_improvement>requiredImprovement&&
         composite_improvement>requiredImprovement&&
+        (Number(config.rankingWeight??0)<=0||
+          (finite(shared_classifier_pairwise_ranking_improvement)&&
+            shared_classifier_pairwise_ranking_improvement>0))&&
         (!rankingScoreAvailable||
           (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
       return_selection_diagnostics
