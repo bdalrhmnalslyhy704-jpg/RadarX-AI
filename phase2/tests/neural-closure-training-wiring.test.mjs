@@ -432,9 +432,15 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
-  assert.match(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
+  const classifierProbabilityImplementation=recurrent.match(
+    /export function predictTcnLstmHybridProbability\([\\s\\S]*?\\n}/
+  )?.[0]??'';
+  assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
+  assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
+    'the proper-scoring classifier probability must remain independent of ranking features');
+  assert.match(recurrent,/function predictTcnLstmHybridRankingProbability[\\s\\S]*?forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
+  assert.match(recurrent,/SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1/);
   assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
-  assert.match(recurrent,/CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1/);
   assert.match(recurrent,/projectTcnLstmAuxiliaryGradient/);
   assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
