@@ -21,7 +21,8 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
-  assert.match(workflow,/cancel-in-progress: true/);
+  assert.match(workflow,/cancel-in-progress: false/,
+    'a newer candidate replay must queue instead of cancelling the active fixed-cohort benchmark');
   assert.match(workflow,/github\.head_ref \|\| github\.ref_name/);
 });
 
