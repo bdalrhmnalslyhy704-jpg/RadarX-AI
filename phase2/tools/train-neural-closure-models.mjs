@@ -192,6 +192,8 @@ function predictionRows(rows,predictor,{sourceCommitSha,targetDefinition=NEURAL_
       throw new Error('MODEL_PREDICTION_UNAVAILABLE:'+modelName+':'+row.id);
     const item={
       id:row.id,probability:Number(probability),
+      raw_probability:Number(probability),
+      calibrated_probability:Number(probability),
       source_commit_sha:sourceCommitSha,
       target_definition:targetDefinition,
       target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS
@@ -326,10 +328,11 @@ async function main(){
   const split=splitFourHourRows(rows);
   const supports={
     train:assertMinimumClassSupport('train',split.train),
-    validation:assertMinimumClassSupport('validation',split.validation),
-    holdout:assertMinimumClassSupport('holdout',split.holdout)
+    validation:assertMinimumClassSupport('validation',split.validation)
   };
-  const eventRows=[...split.validation,...split.holdout];
+  // The untouched holdout is present only as a row-count/integrity boundary.
+  // No holdout labels, features, predictions, returns or metrics are consumed.
+  const eventRows=[...split.validation];
   if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
   const training={
     model_source_commit_sha:sourceCommitSha,
@@ -338,6 +341,8 @@ async function main(){
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
     partition_class_support:supports,
+    holdout_access_status:'LOCKED_NOT_SCORED',
+    holdout_metrics_read:false,
     dataset_scope:datasetScope
   };
 
@@ -1421,6 +1426,23 @@ async function main(){
               throw new Error('TCN_LSTM_POOLED_ONLY_EXECUTION_RISK_SCORE_UNAVAILABLE:'+item.id);
             return {
               ...item,
+              probability:Number(preInnerProbability),
+              raw_probability:Number(preInnerProbability),
+              calibrated_probability:Number(item.probability),
+              calibration_metadata:{
+                schema:'RADARX_TCN_LSTM_TRAIN_ONLY_INTERNAL_CALIBRATION_V1',
+                status:'TRAIN_ONLY_CALIBRATED',
+                selected_method:calibrator.method??'UNKNOWN',
+                applied_to_final_model:true,
+                fit_partition:'OUTER_TRAIN_INTERNAL_CALIBRATION_BLOCK',
+                fit_rows:calibrationRows.length,
+                fit_positive:calibrator.positive??null,
+                fit_negative:calibrator.negative??null,
+                training_partition_only:true,
+                outer_validation_used_for_calibrator_fit:false,
+                outer_validation_used_for_calibrator_selection:false,
+                holdout_used_for_calibration:false
+              },
               pre_inner_calibration_probability:Number(preInnerProbability),
               auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
               auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit),
@@ -1667,7 +1689,9 @@ async function main(){
     if(complete){
       const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
       const pooledScores=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_adjusted_score);
-      const logisticScores=alignedRows.map(row=>logisticById.get(String(row.id)).probability);
+      const logisticScores=alignedRows.map(row=>
+        logisticById.get(String(row.id)).calibrated_probability??
+        logisticById.get(String(row.id)).probability);
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
@@ -1748,12 +1772,14 @@ async function main(){
     const pooledComplete=bootstrapIds.every(id=>
       finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score));
     if(contextComplete&&pooledComplete){
+      const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
+        .map(item=>[String(item.id),Number(item.calibrated_probability??item.probability)]));
       const executionScoresByPolicy={
         LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
           riskById.get(id).execution_risk_adjusted_score),
         POOLED_ONLY:bootstrapIds.map(id=>
           riskById.get(id).pooled_only_execution_risk_adjusted_score),
-        LOGISTIC_REGRESSION:bootstrapProbabilityByModel.LOGISTIC_REGRESSION
+        LOGISTIC_REGRESSION:bootstrapIds.map(id=>logisticExecutionById.get(id))
       };
       outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
         bootstrapRows,bootstrapProbabilityByModel,{
