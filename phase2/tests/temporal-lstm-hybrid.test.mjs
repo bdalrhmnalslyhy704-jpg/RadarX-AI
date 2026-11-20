@@ -647,12 +647,12 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
   assert.ok(result.candidates.every(item=>item.ranking_blend_search.length===7));
   assert.equal(result.selection_scoring.blend_method,
-    'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1');
+    'SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1');
   assert.ok(result.candidates.every(item=>
-    item.ranking_probability_blend_method==='CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1'
+    item.ranking_probability_blend_method==='SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1'
   ));
   assert.equal(result.selection_scoring.method,
-    'INNER_RETURN_SCREENED_BRIER_PLUS_CLASSIFIER_AND_RANKING_RESIDUAL_LOGIT_V4');
+    'INNER_CLASSIFIER_BRIER_PLUS_SEPARATE_RETURN_RANKING_V5');
   assert.ok(result.candidates.every(item=>
     item.shared_classifier_pairwise_ranking.status==='AVAILABLE'&&
     Number.isFinite(item.shared_classifier_pairwise_ranking_improvement)
