@@ -23,7 +23,7 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: false/,
     'a newer candidate replay must queue instead of cancelling the active fixed-cohort benchmark');
-  assert.match(workflow,/github\\.sha/,
+  assert.ok(workflow.includes('github.sha'),
     'each immutable candidate commit must have its own fixed-cohort replay slot');
 });
 
