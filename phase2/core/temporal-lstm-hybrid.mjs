@@ -1679,7 +1679,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     return {weights:best.weights,bias:best.bias,initial_huber_loss:Number(initial.toFixed(8)),
       final_huber_loss:Number(bestLoss.toFixed(8)),epochs_completed:done,feature_count:featureCount};
   };
-  const hidden=TCN_LSTM_HIDDEN,contextCount=3*hidden+2
+  const hidden=TCN_LSTM_HIDDEN,contextCount=4*hidden+3
   const pooledOnly={
     net_return:fitHead('net','pooled',hidden),
     downside_risk:fitHead('downside','pooled',hidden)
