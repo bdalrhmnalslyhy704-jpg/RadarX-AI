@@ -2655,22 +2655,36 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       rankingPairsPerTimestamp:rankingPairsPerTimestamp,
       executionHeadRoundTripCostBps:roundTripCostBps
     });
-    const selectionExecutionPredictions=selectionRows.map(row=>
-      predictTcnLstmHybridExecutionHeads(row.sequence,fit));
-    const pooledOnlySelectionExecutionPredictions=selectionRows.map(row=>
-      predictTcnLstmHybridExecutionHeads(row.sequence,fit,{variant:'POOLED_ONLY'}));
-    const executionRiskPolicy=selectTcnLstmExecutionRiskPolicy(
-      selectionRows,selectionExecutionPredictions,baselineLogits,{
-        roundTripCostBps,minimumTrades:minimumReturnTrades,
-        minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
-      }
-    );
-    const pooledOnlyExecutionRiskPolicy=selectTcnLstmExecutionRiskPolicy(
-      selectionRows,pooledOnlySelectionExecutionPredictions,baselineLogits,{
-        roundTripCostBps,minimumTrades:minimumReturnTrades,
-        minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
-      }
-    );
+    const executionHeadsFitted=fit.training.execution_regression_heads?.fitted===true;
+    const executionRiskPolicyUnavailable={
+      schema:'RADARX_TCN_LSTM_EXECUTION_RISK_POLICY_V1',
+      status:'UNAVAILABLE',reason:'EXECUTION_REGRESSION_HEADS_NOT_FITTED',
+      selection_partition_only:true,holdout_values_used:false,passed:false
+    };
+    const selectionExecutionPredictions=executionHeadsFitted
+      ?selectionRows.map(row=>predictTcnLstmHybridExecutionHeads(row.sequence,fit))
+      :null;
+    const pooledOnlySelectionExecutionPredictions=executionHeadsFitted
+      ?selectionRows.map(row=>predictTcnLstmHybridExecutionHeads(
+        row.sequence,fit,{variant:'POOLED_ONLY'}
+      ))
+      :null;
+    const executionRiskPolicy=executionHeadsFitted
+      ?selectTcnLstmExecutionRiskPolicy(
+        selectionRows,selectionExecutionPredictions,baselineLogits,{
+          roundTripCostBps,minimumTrades:minimumReturnTrades,
+          minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
+        }
+      )
+      :executionRiskPolicyUnavailable;
+    const pooledOnlyExecutionRiskPolicy=executionHeadsFitted
+      ?selectTcnLstmExecutionRiskPolicy(
+        selectionRows,pooledOnlySelectionExecutionPredictions,baselineLogits,{
+          roundTripCostBps,minimumTrades:minimumReturnTrades,
+          minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
+        }
+      )
+      :{...executionRiskPolicyUnavailable,reason:'POOLED_ONLY_REFERENCE_HEAD_NOT_FITTED'};
     const executionHeadContextAblation=summarizeTcnLstmExecutionHeadContextAblation(
       pooledOnlyExecutionRiskPolicy,executionRiskPolicy
     );
