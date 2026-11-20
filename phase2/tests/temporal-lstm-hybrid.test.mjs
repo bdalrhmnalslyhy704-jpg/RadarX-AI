@@ -521,8 +521,13 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
   assert.ok(result.candidates.every(item=>item.ranking_blend_search.length===7));
+  assert.equal(result.selection_scoring.blend_method,
+    'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1');
+  assert.ok(result.candidates.every(item=>
+    item.ranking_probability_blend_method==='CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1'
+  ));
   assert.equal(result.selection_scoring.method,
-    'INNER_RETURN_SCREENED_BRIER_PLUS_FINAL_COMBINED_LOGIT_AND_SHARED_CLASSIFIER_RANK_V3');
+    'INNER_RETURN_SCREENED_BRIER_PLUS_CLASSIFIER_AND_RANKING_RESIDUAL_LOGIT_V4');
   assert.ok(result.candidates.every(item=>
     item.shared_classifier_pairwise_ranking.status==='AVAILABLE'&&
     Number.isFinite(item.shared_classifier_pairwise_ranking_improvement)
@@ -652,6 +657,37 @@ test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and p
   assert.ok(Number.isFinite(probability)&&probability>=0&&probability<=1);
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.live_eligibility_ready,false);
+});
+
+test('ranking blend adds only the ranking residual and never duplicates the frozen Logistic anchor',()=>{
+  const rows=makeRows(0,32,'blend-residual');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:2,learningRate:0.0015,l2:0.001,
+    batchSize:8,seed:202,maxTrainingSamples:32
+  });
+  const sequence=rows[0].sequence;
+  const baselineLogit=predictTcnLstmHybridRankingAnchorLogit(sequence,profile);
+  const initial=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
+  const hidden=initial.cache.pooled.length;
+  const sigmoid=value=>1/(1+Math.exp(-value));
+
+  // A zero ranking residual must be a true no-op at every frozen blend weight.
+  profile.model.rankingHeadWeights=Array(hidden).fill(0);
+  profile.ranking_probability_blend_weight=0.75;
+  const zeroResidual=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
+  assert.equal(
+    predictTcnLstmHybridProbability(sequence,profile),
+    sigmoid(zeroResidual.logit)
+  );
+
+  // A non-zero head contributes only its residual, not the Logistic anchor a second time.
+  profile.model.rankingHeadWeights=Array(hidden).fill(0.01);
+  const residualForward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
+  const expected=sigmoid(
+    residualForward.logit+
+    profile.ranking_probability_blend_weight*residualForward.ranking_residual_logit
+  );
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-expected)<1e-12);
 });
 
 test('hyper-parameter selection uses only a purged chronological inner-selection block',()=>{
