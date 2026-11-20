@@ -34,7 +34,8 @@ permissions:
 concurrency:
   # Push and PR events for the same head branch share one expensive fixed-cohort replay slot.
   group: build224-neural-closure-fixed-cohort-replay-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  # Preserve the immutable cohort replay when a follow-up commit is queued.
+  cancel-in-progress: false
 
 jobs:
   replay:

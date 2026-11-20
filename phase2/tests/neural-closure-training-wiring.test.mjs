@@ -294,7 +294,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the active execution head must include normalized Logistic and neural classifier scores');
   assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
     'the score-conditioned head must be the default execution path');
-  assert.match(temporal,/pooled_latent_\+index/,
+  assert.match(temporal,/pooled_latent_'\+index/,
     'score conditioning must expose pooled-channel multiplicative interactions');
   assert.match(temporal,/x_logistic_anchor_score/,
     'each pooled channel must be gated by the Logistic score');
