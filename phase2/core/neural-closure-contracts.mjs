@@ -2294,7 +2294,7 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
               ...row,id:String(row.id)+'#BOOT'+repetition+'_'+sampleDay,
               at:Number(row.at)+shift,
               resolved_at:Number(row.resolved_at)+shift,
-              first_touch,
+              first_touch:firstTouch,
               max_adverse_excursion_at:Number(row.max_adverse_excursion_at)+shift,
               max_favorable_excursion_at:Number(row.max_favorable_excursion_at)+shift
             };
