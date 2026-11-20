@@ -666,6 +666,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         Math.min(...scoringRows.map(row=>row.at));
       return {
         model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
+        feature_schema_id:'TEST_COGNITIVE_FEATURE_SCHEMA_V1',
         report:{
           schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
           status:'COMPLETE',training_partition_only:true,
