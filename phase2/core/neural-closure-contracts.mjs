@@ -3674,6 +3674,12 @@ export function runNeuralClosureBenchmark({
                 ?'OUTER_VALIDATION_MATCHED_EXECUTION_RISK_GATES_FAILED':null;
     const validationGate={
       passed:validationPassed,
+      probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS',
+      baseline_logistic_raw_brier:baselineValidationBrier,
+      baseline_logistic_calibrated_brier:
+        models.LOGISTIC_REGRESSION.validation?.calibrated_brier_score??null,
+      candidate_validation_raw_brier:validationBrier,
+      candidate_validation_calibrated_brier:calibratedValidationBrier,
       baseline_logistic_brier:baselineValidationBrier,
       candidate_validation_brier:validationBrier,
       brier_improvement_vs_logistic:improvement,
