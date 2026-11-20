@@ -170,7 +170,7 @@ jobs:
             failures
           };
           fs.writeFileSync('artifacts/neural-closure-replay/scientific-decision.json',
-            JSON.stringify(scientificDecision,null,2)+'\\n');
+            JSON.stringify(scientificDecision,null,2)+'\n');
           console.log(JSON.stringify(scientificDecision,null,2));
           if(failures.length) process.exitCode=1;
           NODE
