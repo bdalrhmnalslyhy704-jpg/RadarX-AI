@@ -1100,12 +1100,19 @@ test('fixed-SHA evaluator never opens holdout when every validation entry thresh
     rows,predictionsByModel:predictions,modelArtifactsByModel,
     sourceCommitSha,qualificationByModel
   });
+  const logistic=report.models.LOGISTIC_REGRESSION.validation;
+  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_REFERENCE_ONLY');
+  assert.equal(logistic.threshold_selection_gates.acceptance_qualified,false);
+  assert.ok(Number.isFinite(logistic.selected_threshold));
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
     assert.ok(model.validation.calibrated_brier_score<
       report.models.LOGISTIC_REGRESSION.validation.calibrated_brier_score,
     family+' should demonstrate that Brier improvement alone is not enough');
-    assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL',family);
+    assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'PASS',family);
+    assert.equal(model.validation.outer_validation_gate.execution_reference,
+      'MATCHED_LOGISTIC_EXECUTION_THRESHOLD',family);
+    assert.equal(model.validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,'FAIL',family);
     assert.equal(model.validation.threshold_selection,'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',family);
     assert.equal(model.validation.validation_threshold_metrics,null,family);
     assert.equal(model.validation.selected_threshold,null,family);
@@ -1514,9 +1521,9 @@ test('unselected threshold reports outer execution risk as NOT_EVALUATED, not mi
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  predictions.LOGISTIC_REGRESSION=predictions.LOGISTIC_REGRESSION.map(row=>({
-    ...row,probability:0.05
-  }));
+  // No Logistic reference stream means no frozen comparator threshold, so the
+  // matched outer execution-risk gates must remain NOT_EVALUATED.
+  delete predictions.LOGISTIC_REGRESSION;
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     predictions[family]=predictions[family].map(row=>({
       ...row,probability:0.05,
