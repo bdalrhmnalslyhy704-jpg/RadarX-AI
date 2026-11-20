@@ -1150,7 +1150,7 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
   assert.equal(report.holdout_access.opened,false);
   assert.equal(report.holdout_access.opened_for_models.length,0);
   assert.equal(report.holdout_access.reason,'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES');
-  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.execution_evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
   assert.equal(report.models.LOGISTIC_REGRESSION.holdout.net_pnl_pct,null);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
