@@ -11,7 +11,7 @@ import {
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
   runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
-  evaluateExternalExecutionRiskTopK
+  evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -51,6 +51,10 @@ import {
 import {
   createVersionedModelArtifact,verifyVersionedModelArtifact
 } from '../core/model-artifact-guardian.mjs';
+import {
+  fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
+  evaluateBinaryProbabilityMetrics
+} from '../core/temporal-logistic-baseline.mjs';
 
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
@@ -335,11 +339,77 @@ async function main(){
     dataset_scope:datasetScope
   };
 
-  // Proper-scoring logistic baseline: same exact train rows, 18 decision features.
-  const logisticFit=fitLogisticBaseline(split.train);
+  // Preserve the previous fixed Logistic fit as a diagnostic comparator,
+  // but use a purged expanding-window tuned Logistic fit as the primary baseline.
+  // Every fold standardizer and every hyperparameter choice is train-fold only.
+  const logisticTrainingVectors=split.train.map(row=>
+    buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA));
+  const fixedLogisticFit=fitLogisticBaseline(split.train);
+  const fixedLogisticValidationProbabilities=split.validation.map(row=>
+    predictLogistic(row.features,fixedLogisticFit));
+  const logisticTuning=fitTunedTemporalLogisticBaseline(
+    split.train,logisticTrainingVectors,{
+      foldCount:3,purgeMs:86_400_000,
+      initialTrainingFraction:0.50,validationFraction:0.15,
+      minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
+      candidateGrid:[
+        {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
+        {l2:0.1,learningRate:0.01},{l2:1,learningRate:0.01},
+        {l2:0.001,learningRate:0.03},{l2:0.01,learningRate:0.03},
+        {l2:0.1,learningRate:0.03},{l2:1,learningRate:0.03}
+      ],
+      maxEpochs:160,seed:22429,
+      // This is a predeclared, fixed-threshold diagnostic only. It is not
+      // included in the Brier-based hyperparameter selection objective.
+      executionEvaluator:(foldRows,probabilities)=>
+        simulateFirstTouchPaperPortfolio(foldRows,probabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    });
+  const logisticFit=logisticTuning.model;
+  const tunedLogisticValidationProbabilities=split.validation.map(row=>
+    predictTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ));
+  const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  const tunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    tunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  training.logistic_baseline_temporal_cv=logisticTuning.report;
+  training.logistic_baseline_comparison={
+    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V1',
+    outer_validation_rows:split.validation.length,
+    same_outer_validation_rows:true,
+    fixed_reference:{
+      solver:'FULL_BATCH_GRADIENT_DESCENT',
+      epochs:1200,learning_rate:0.08,l2:0.05,
+      feature_normalization:'LEGACY_FEATURE_TRANSFORM_ONLY',
+      raw_probability_metrics:fixedLogisticValidationMetrics,
+      execution_metrics_at_frozen_reference_threshold:simulateFirstTouchPaperPortfolio(
+        split.validation,fixedLogisticValidationProbabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    },
+    tuned_temporal_cv:{
+      selected_configuration:logisticTuning.report.selected_configuration,
+      raw_probability_metrics:tunedLogisticValidationMetrics,
+      execution_metrics_at_frozen_reference_threshold:simulateFirstTouchPaperPortfolio(
+        split.validation,tunedLogisticValidationProbabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    },
+    calibration_is_evaluated_separately_by_shared_benchmark:true,
+    outer_validation_used_for_hyperparameter_selection:false,
+    outer_validation_used_for_threshold_selection:false,
+    holdout_used:false
+  };
   const predictionsByModel={
     LOGISTIC_REGRESSION:predictionRows(eventRows,
-      row=>predictLogistic(row.features,logisticFit),{
+      row=>predictTemporalLogisticProbability(
+        buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+      ),{
         sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
       })
   };
