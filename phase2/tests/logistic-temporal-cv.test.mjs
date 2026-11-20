@@ -79,8 +79,8 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   const {rows,vectors}=cohort();
   const executionCalls=[];
   const result=fitTunedTemporalLogisticBaseline(rows,vectors,{
-    foldCount:3,purgeMs:86_400_000,initialTrainingFraction:0.5,
-    validationFraction:0.15,minimumTrainingRows:100,
+    foldCount:5,purgeMs:86_400_000,initialTrainingFraction:0.32,
+    validationFraction:0.12,minimumTrainingRows:100,
     minimumValidationRows:50,minimumClassCount:5,
     candidateGrid:[
       {l2:0.001,learningRate:0.01},
@@ -126,6 +126,10 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   assert.ok(probability>0&&probability<1);
   const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(vectors[0],result.model);
   assert.ok(calibratedProbability>0&&calibratedProbability<1);
+  assert.ok(['NO_CALIBRATION','PLATT_SCALING','ISOTONIC_REGRESSION']
+    .includes(result.report.calibration.selected_method));
+  const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(vectors[0],result.model);
+  assert.ok(calibratedProbability>0&&calibratedProbability<1);
   assert.equal(result.report.random_seed,null,
     'full-batch deterministic optimization must not claim an unused random seed');
   assert.equal(result.report.deterministic_solver_id,'FULL_BATCH_GD_DETERMINISTIC_V1');
@@ -135,6 +139,10 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
   const trainer=await readFile(new URL('../tools/train-neural-closure-models.mjs',import.meta.url),'utf8');
   assert.match(trainer,/fitTunedTemporalLogisticBaseline\(\s*split\.train,logisticTrainingVectors/);
   assert.match(trainer,/predictTemporalLogisticProbability/);
+  assert.match(trainer,/predictCrossFittedCalibratedTemporalLogisticProbability/);
+  assert.match(trainer,/foldCount:5,purgeMs:86_400_000/);
+  assert.match(trainer,/initialTrainingFraction:0\.32,validationFraction:0\.12/);
+  assert.match(trainer,/calibration_metadata:logisticTuning\.report\.calibration/);
   assert.match(trainer,/predictCrossFittedCalibratedTemporalLogisticProbability/);
   assert.match(trainer,/foldCount:5,purgeMs:86_400_000/);
   assert.match(trainer,/initialTrainingFraction:0\.32,validationFraction:0\.12/);
