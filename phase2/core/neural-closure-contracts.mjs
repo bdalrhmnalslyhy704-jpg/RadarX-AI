@@ -1522,11 +1522,18 @@ function predictionMap(predictions,modelName,requiredIds,{
 }={}) {
   if(!Array.isArray(predictions))
     return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
-  const map=new Map();
+  const map=new Map(),calibratedMap=new Map();
+  let calibrationMetadata=null,calibrationMetadataJson=null;
   for(const item of predictions){
     const id=String(item?.id||'');
+    const rawValue=item?.raw_probability??item?.probability;
+    const calibratedValue=item?.calibrated_probability??rawValue;
     if(!id||map.has(id)||!finite(item?.probability)||
-      Number(item.probability)<0||Number(item.probability)>1)
+      !finite(rawValue)||!finite(calibratedValue)||
+      Number(item.probability)<0||Number(item.probability)>1||
+      Number(rawValue)<0||Number(rawValue)>1||
+      Number(calibratedValue)<0||Number(calibratedValue)>1||
+      Math.abs(Number(item.probability)-Number(rawValue))>1e-12)
       return {valid:false,reason:'MODEL_PREDICTION_DUPLICATE_OR_INVALID:'+modelName,map};
     if(String(item?.source_commit_sha||'').toLowerCase()!==String(sourceCommitSha).toLowerCase())
       return {valid:false,reason:'MODEL_PREDICTION_SOURCE_SHA_MISMATCH:'+modelName,map};
@@ -1538,14 +1545,29 @@ function predictionMap(predictions,modelName,requiredIds,{
       ?String(item?.artifact_sha256||'').toLowerCase()!==artifactSha256
       :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
       return {valid:false,reason:'MODEL_PREDICTION_ARTIFACT_SHA_MISMATCH:'+modelName,map};
-    map.set(id,Number(item.probability));
+    const metadata=item?.calibration_metadata??null;
+    const metadataJson=metadata===null?null:JSON.stringify(metadata);
+    if(calibrationMetadataJson===null&&map.size===0){
+      calibrationMetadataJson=metadataJson;
+      calibrationMetadata=metadata;
+    }else if(metadataJson!==calibrationMetadataJson){
+      return {valid:false,reason:'MODEL_PREDICTION_CALIBRATION_METADATA_MISMATCH:'+modelName,map};
+    }
+    if(metadata?.applied_to_final_model===true&&(
+      metadata.training_partition_only!==true||
+      metadata.outer_validation_used_for_calibrator_fit!==false||
+      metadata.outer_validation_used_for_calibrator_selection!==false||
+      metadata.holdout_used_for_calibration!==false
+    ))return {valid:false,reason:'MODEL_CALIBRATION_PROVENANCE_INVALID:'+modelName,map};
+    map.set(id,Number(rawValue));
+    calibratedMap.set(id,Number(calibratedValue));
   }
   const missing=requiredIds.filter(id=>!map.has(id));
   const extra=[...map.keys()].filter(id=>!requiredIds.includes(id));
   if(missing.length||extra.length)
     return {valid:false,reason:'MODEL_PREDICTION_ROW_SET_MISMATCH:'+modelName,
       missing_count:missing.length,extra_count:extra.length,map};
-  return {valid:true,map};
+  return {valid:true,map,calibratedMap,calibrationMetadata};
 }
 function probabilitiesFor(rows,map,calibrator=null) {
   return rows.map(row=>{
@@ -3055,7 +3077,12 @@ export function runNeuralClosureBenchmark({
     opened_for_models:[]
   };
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
-  const eventRows=[...split.validation,...split.holdout];
+  // Scores for the untouched holdout are not even requested until the
+  // explicit fourteen-check opening protocol has been approved. In the normal
+  // research run this remains outer-validation-only.
+  const eventRows=holdoutOpeningProtocolStatus.passed
+    ?[...split.validation,...split.holdout]
+    :[...split.validation];
   const requiredIds=eventRows.map(row=>row.id);
   const datasetSha=sha256Canonical(rows.map(row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
@@ -3108,6 +3135,9 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const calibratedMap=verified.calibratedMap??rawMap;
+    const calibrationMetadata=verified.calibrationMetadata??null;
+    const calibrationApplied=calibrationMetadata?.applied_to_final_model===true;
     const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmAuxiliaryRankingMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -3121,34 +3151,38 @@ export function runNeuralClosureBenchmark({
         predictionsByModel[modelName],split.validation,split.holdout
       ):null;
     verifiedPredictions.set(modelName,rawMap);
-    // All 6,282 outer-validation opportunities are scored once with the
-    // model's native output. This block is never used to fit/select calibration.
+    // Outer validation scores frozen raw/calibrated probability stages only.
+    // All calibration fitting and method selection must already be train-only.
     const thresholdSelectionRows=[];
     const validationRows=split.validation;
     const rawValidation=probabilitiesFor(validationRows,rawMap);
-    const calibratedValidation=rawValidation;
+    const calibratedValidation=probabilitiesFor(validationRows,calibratedMap);
     const validationLabels=validationRows.map(row=>row.target);
     const validationSupport=classCounts(validationLabels);
     const validationBrier=brier(rawValidation,validationLabels);
+    const calibratedValidationBrier=brier(calibratedValidation,validationLabels);
     const rawThresholdSelectionProbabilities=[];
     const thresholdSelectionProbabilities=[];
     const calibration={
-      schema:'RADARX_OUTER_VALIDATION_NO_CALIBRATION_V1',
-      status:'NOT_APPLIED_PREDECLARED_IDENTITY',
-      selected_method:'IDENTITY_NO_CALIBRATION',
-      selection_scope:'PREDECLARED_NO_OUTER_VALIDATION_FIT_OR_SELECTION',
-      selected_calibrator:null,
-      fit_partition:'NONE',
-      fit_rows:0,
-      check_block_rows:validationRows.length,
-      raw_check_brier:validationBrier,
-      selected_check_brier:null,
-      improvement:null,
-      check_block_used_for_calibrator_selection:false,
+      ...(calibrationMetadata??{}),
+      schema:calibrationMetadata?.schema??'RADARX_OUTER_VALIDATION_IDENTITY_PROBABILITY_STAGE_V1',
+      status:calibrationApplied
+        ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
+        :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
+      selected_method:calibrationMetadata?.selected_method??'NO_CALIBRATION',
+      applied_to_final_model:calibrationApplied,
+      fit_partition:calibrationMetadata?.fit_partition??
+        (calibrationApplied?'TRAIN_ONLY_CROSSFITTED':'NONE_IDENTITY'),
+      outer_validation_used_for_calibrator_fit:false,
+      outer_validation_used_for_calibrator_selection:false,
       outer_validation_labels_used_for_calibrator_fit:false,
-      support_ready:true,
+      outer_validation_labels_used_for_calibrator_selection:false,
+      holdout_used_for_calibration:false,
       holdout_values_used:false,
-      reason:'NO_TRAIN_ONLY_CROSS_FITTED_CALIBRATOR_WAS_SUPPLIED'
+      check_block_used_for_calibrator_selection:false,
+      support_ready:true,
+      raw_outer_validation_brier:validationBrier,
+      calibrated_outer_validation_brier:calibratedValidationBrier
     };
     const thresholdSelectionProbabilityDistribution={
       raw:summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
