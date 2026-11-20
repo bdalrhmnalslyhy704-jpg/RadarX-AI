@@ -54,6 +54,7 @@ import {
 } from '../core/model-artifact-guardian.mjs';
 import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
+  predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
 } from '../core/temporal-logistic-baseline.mjs';
 
@@ -350,8 +351,8 @@ async function main(){
     predictLogistic(row.features,fixedLogisticFit));
   const logisticTuning=fitTunedTemporalLogisticBaseline(
     split.train,logisticTrainingVectors,{
-      foldCount:3,purgeMs:86_400_000,
-      initialTrainingFraction:0.50,validationFraction:0.15,
+      foldCount:5,purgeMs:86_400_000,
+      initialTrainingFraction:0.32,validationFraction:0.12,
       minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
       candidateGrid:[
         {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
@@ -368,15 +369,22 @@ async function main(){
         })
     });
   const logisticFit=logisticTuning.model;
-  const tunedLogisticValidationProbabilities=split.validation.map(row=>
+  const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
     predictTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ));
+  const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
+    predictCrossFittedCalibratedTemporalLogisticProbability(
       buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
     ));
   const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
     fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
   );
-  const tunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    tunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  const rawTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    rawTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  const calibratedTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    calibratedTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
   );
   training.logistic_baseline_temporal_cv=logisticTuning.report;
   training.logistic_baseline_comparison={
@@ -395,9 +403,11 @@ async function main(){
     },
     tuned_temporal_cv:{
       selected_configuration:logisticTuning.report.selected_configuration,
-      raw_probability_metrics:tunedLogisticValidationMetrics,
+      calibration:logisticTuning.report.calibration,
+      raw_probability_metrics:rawTunedLogisticValidationMetrics,
+      calibrated_probability_metrics:calibratedTunedLogisticValidationMetrics,
       execution_metrics_at_frozen_reference_threshold:simulateFirstTouchPaperPortfolio(
-        split.validation,tunedLogisticValidationProbabilities,{
+        split.validation,calibratedTunedLogisticValidationProbabilities,{
           threshold:0.15,roundTripCostBps:args.roundTripCostBps
         })
     },
@@ -406,13 +416,25 @@ async function main(){
     outer_validation_used_for_threshold_selection:false,
     holdout_used:false
   };
+  const logisticRawPredictionRows=predictionRows(eventRows,
+    row=>predictTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ),{
+      sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
+    });
+  const eventRowsById=new Map(eventRows.map(row=>[String(row.id),row]));
   const predictionsByModel={
-    LOGISTIC_REGRESSION:predictionRows(eventRows,
-      row=>predictTemporalLogisticProbability(
+    LOGISTIC_REGRESSION:logisticRawPredictionRows.map(item=>{
+      const row=eventRowsById.get(String(item.id));
+      const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
         buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
-      ),{
-        sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
-      })
+      );
+      return {
+        ...item,
+        calibrated_probability:Number(calibratedProbability),
+        calibration_metadata:logisticTuning.report.calibration
+      };
+    })
   };
   const modelArtifactsByModel={};
   const trainingArtifacts={};
