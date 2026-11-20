@@ -305,6 +305,16 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the pooled-only head must be retained as a matched ablation control');
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
     'inner qualification must require a matched execution-head ablation pass');
+  assert.match(temporal,/splitTcnLstmTrainingRowsForExecutionHead/,
+    'the execution regression heads must use a purged later training-only block');
+  assert.match(temporal,/TCN_LSTM_EXECUTION_HEAD_TRAINING_PURGE_VIOLATION/,
+    'encoder and execution-head training rows must satisfy a strict forward-label purge');
+  assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(executionRows,executionRows,model,anchor/,
+    'execution-head latent features must be produced by a model that did not fit those rows');
+  assert.match(temporal,/representation_out_of_sample:true/,
+    'the fitted execution head must attest to out-of-sample representations');
+  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3/,
+    'the report must publish the exact active V3 score-gated execution-head schema');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
