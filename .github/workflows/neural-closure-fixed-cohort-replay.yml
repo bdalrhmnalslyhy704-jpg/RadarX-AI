@@ -5,6 +5,7 @@ on:
     branches:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-shared-loss-20261120
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -14,6 +15,7 @@ on:
   pull_request:
     branches:
       - research/build224-point-in-time-liquidity-20261117
+      - research/build224-neural-universe-expansion-20261119
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -74,7 +76,7 @@ jobs:
             --output artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json \
             --epochs 8 \
             --denseEpochs 36 \
-            --minimumHoldoutTrades 20 \
+            --minimumHoldoutTrades 100 \
             --minimumWinRatePct 55 \
             --maximumDrawdownPct 8 \
             --roundTripCostBps 30
