@@ -2489,9 +2489,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       passed_inner_brier_margin:brier_improvement>requiredImprovement,
       passed_inner_pairwise_ranking_gate:!rankingScoreAvailable||
         (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0),
+      passed_inner_shared_classifier_ranking_gate:Number(config.rankingWeight??0)<=0||
+        (finite(shared_classifier_pairwise_ranking_improvement)&&
+          shared_classifier_pairwise_ranking_improvement>0),
       passed_inner_composite_margin:composite_improvement>requiredImprovement,
       passed_inner_margin:brier_improvement>requiredImprovement&&
         composite_improvement>requiredImprovement&&
+        (Number(config.rankingWeight??0)<=0||
+          (finite(shared_classifier_pairwise_ranking_improvement)&&
+            shared_classifier_pairwise_ranking_improvement>0))&&
         (!rankingScoreAvailable||
           (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
       return_selection_diagnostics
