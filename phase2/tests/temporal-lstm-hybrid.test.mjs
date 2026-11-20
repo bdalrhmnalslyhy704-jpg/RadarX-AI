@@ -969,7 +969,7 @@ test('recurrent training budget uses up to 4,096 available training rows without
   assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
 });
 
-test('recurrent fit budget samples complete 15m decision groups across the full training chronology',()=>{
+test('recurrent fit budget preserves recent regimes and anchors older complete 15m groups',()=>{
   const bucketMs=15*60*1000;
   const rows=Array.from({length:12},(_,groupIndex)=>{
     const at=Math.floor((BASE+groupIndex*bucketMs)/bucketMs)*bucketMs;
@@ -983,9 +983,14 @@ test('recurrent fit budget samples complete 15m decision groups across the full 
   const repeated=selectChronologicalTcnLstmTrainingRows(rows,120);
   assert.equal(selected.rows.length,120);
   assert.equal(selected.diagnostics.effective_budget,120);
-  assert.equal(selected.diagnostics.method,'EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1');
+  assert.equal(selected.diagnostics.method,'RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1');
   assert.equal(selected.diagnostics.available_decision_groups,12);
   assert.equal(selected.diagnostics.selected_decision_groups,4);
+  assert.equal(selected.diagnostics.recent_window_fraction,0.35);
+  assert.equal(selected.diagnostics.recent_budget_fraction,0.70);
+  assert.equal(selected.diagnostics.recent_selected_decision_groups,3);
+  assert.equal(selected.diagnostics.older_selected_decision_groups,1);
+  assert.equal(selected.diagnostics.recent_selected_fraction,0.75);
   assert.equal(selected.diagnostics.sampled_across_full_training_chronology,true);
   assert.equal(selected.diagnostics.complete_decision_groups,true);
   const selectedGroupCounts=new Map();
@@ -994,6 +999,9 @@ test('recurrent fit budget samples complete 15m decision groups across the full 
     selectedGroupCounts.set(key,(selectedGroupCounts.get(key)||0)+1);
   }
   assert.deepEqual([...selectedGroupCounts.values()],[30,30,30,30]);
+  const selectedIndices=[...selectedGroupCounts.keys()].map(at=>
+    Math.round((at-Math.floor(BASE/bucketMs)*bucketMs)/bucketMs));
+  assert.deepEqual(selectedIndices,[0,7,9,11]);
   assert.deepEqual(selected.rows.map(row=>row.id),repeated.rows.map(row=>row.id));
   assert.equal(selected.rows[0].at,rows[0].at);
   assert.equal(selected.rows.at(-1).at,rows.at(-1).at);

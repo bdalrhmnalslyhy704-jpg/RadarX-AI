@@ -109,6 +109,19 @@ export function selectChronologicalTcnLstmTrainingRows(
     bucketMap.get(bucketAt).push(row);
   }
   const buckets=[...bucketMap.entries()].sort((a,b)=>a[0]-b[0]);
+  const recentWindowFraction=0.35;
+  const recentBudgetFraction=0.70;
+  const recentStartIndex=Math.min(
+    Math.max(0,buckets.length-1),
+    Math.floor(buckets.length*(1-recentWindowFraction))
+  );
+  const evenIndices=(start,end,count,preferRecent)=>{
+    if(count<=0||end<start)return [];
+    if(count===1)return [preferRecent?end:start];
+    return Array.from({length:count},(_,index)=>
+      Math.round(start+index*(end-start)/(count-1))
+    );
+  };
   const diagnostics={
     method:'ALL_AVAILABLE_ROWS_WITHIN_BUDGET_V1',
     requested_budget:finite(maxTrainingSamples)?Number(maxTrainingSamples):TCN_LSTM_MAX_TRAINING_SAMPLES,
@@ -121,6 +134,12 @@ export function selectChronologicalTcnLstmTrainingRows(
     last_selected_bucket_at:buckets.at(-1)?.[0]??null,
     sampled_across_full_training_chronology:true,
     complete_decision_groups:true,
+    recent_window_fraction:recentWindowFraction,
+    recent_budget_fraction:recentBudgetFraction,
+    recent_window_start_bucket_at:buckets[recentStartIndex]?.[0]??null,
+    recent_selected_decision_groups:buckets.length,
+    older_selected_decision_groups:0,
+    recent_selected_fraction:1,
     selected_bucket_min_rows:buckets.length?Math.min(...buckets.map(([,group])=>group.length)):0,
     selected_bucket_max_rows:buckets.length?Math.max(...buckets.map(([,group])=>group.length)):0
   };
@@ -129,8 +148,9 @@ export function selectChronologicalTcnLstmTrainingRows(
     ...diagnostics,method:'ZERO_BUDGET_V1',selected_rows:0,
     selected_decision_groups:0,first_selected_bucket_at:null,
     last_selected_bucket_at:null,sampled_across_full_training_chronology:false,
-    complete_decision_groups:false,selected_bucket_min_rows:0,
-    selected_bucket_max_rows:0
+    complete_decision_groups:false,recent_selected_decision_groups:0,
+    older_selected_decision_groups:0,recent_selected_fraction:null,
+    selected_bucket_min_rows:0,selected_bucket_max_rows:0
   }};
 
   const averageBucketSize=ordered.length/Math.max(1,buckets.length);
@@ -139,13 +159,24 @@ export function selectChronologicalTcnLstmTrainingRows(
   ));
   let selectedBuckets=[];
   let selectedRows=[];
+  let selectedOlderGroups=0;
+  let selectedRecentGroups=0;
   while(targetGroups>=1){
-    const indices=targetGroups===1
-      ?[buckets.length-1]
-      :Array.from({length:targetGroups},(_,index)=>
-        Math.round(index*(buckets.length-1)/(targetGroups-1))
-      );
-    selectedBuckets=[...new Set(indices)].map(index=>buckets[index]);
+    // Preserve a broad historical anchor while allocating 70% of the fit
+    // budget to the most recent 35% of training buckets. This is designed to
+    // limit stale-regime dilution without reverting to a latest-only window.
+    const olderAvailable=recentStartIndex>0;
+    selectedRecentGroups=olderAvailable&&targetGroups>1
+      ?Math.min(targetGroups-1,Math.max(1,Math.ceil(targetGroups*recentBudgetFraction)))
+      :targetGroups;
+    selectedOlderGroups=targetGroups-selectedRecentGroups;
+    const olderIndices=selectedOlderGroups>0
+      ?evenIndices(0,recentStartIndex-1,selectedOlderGroups,false):[];
+    const recentIndices=evenIndices(
+      recentStartIndex,buckets.length-1,selectedRecentGroups,true
+    );
+    const indices=[...new Set([...olderIndices,...recentIndices])].sort((a,b)=>a-b);
+    selectedBuckets=indices.map(index=>buckets[index]);
     selectedRows=selectedBuckets.flatMap(([,group])=>group);
     if(selectedRows.length<=budget)break;
     targetGroups--;
@@ -166,6 +197,12 @@ export function selectChronologicalTcnLstmTrainingRows(
       first_selected_bucket_at:fallback[0]?.[0]??null,
       last_selected_bucket_at:fallback.at(-1)?.[0]??null,
       sampled_across_full_training_chronology:false,complete_decision_groups:false,
+      recent_selected_decision_groups:fallback.filter(([at])=>at>=
+        (buckets[recentStartIndex]?.[0]??Infinity)).length,
+      older_selected_decision_groups:fallback.filter(([at])=>at<
+        (buckets[recentStartIndex]?.[0]??Infinity)).length,
+      recent_selected_fraction:fallback.length
+        ?fallback.filter(([at])=>at>=(buckets[recentStartIndex]?.[0]??Infinity)).length/fallback.length:null,
       selected_bucket_min_rows:fallback.length?Math.min(...fallback.map(([,g])=>g.length)):0,
       selected_bucket_max_rows:fallback.length?Math.max(...fallback.map(([,g])=>g.length)):0
     }};
@@ -174,9 +211,13 @@ export function selectChronologicalTcnLstmTrainingRows(
     String(a.symbol??a.id??'').localeCompare(String(b.symbol??b.id??''))||
     String(a.id??'').localeCompare(String(b.id??''))
   );
+  const recentSelected=selectedBuckets.filter(([at])=>
+    at>=(buckets[recentStartIndex]?.[0]??Infinity)
+  ).length;
+  const olderSelected=selectedBuckets.length-recentSelected;
   return {rows:selectedRows,diagnostics:{
     ...diagnostics,
-    method:'EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1',
+    method:'RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1',
     selected_rows:selectedRows.length,
     selected_decision_groups:selectedBuckets.length,
     first_selected_bucket_at:selectedBuckets[0]?.[0]??null,
@@ -185,6 +226,9 @@ export function selectChronologicalTcnLstmTrainingRows(
       selectedBuckets.length>1&&selectedBuckets[0]?.[0]===buckets[0]?.[0]&&
       selectedBuckets.at(-1)?.[0]===buckets.at(-1)?.[0],
     complete_decision_groups:true,
+    recent_selected_decision_groups:recentSelected,
+    older_selected_decision_groups:olderSelected,
+    recent_selected_fraction:selectedBuckets.length?recentSelected/selectedBuckets.length:null,
     selected_bucket_min_rows:Math.min(...selectedBuckets.map(([,group])=>group.length)),
     selected_bucket_max_rows:Math.max(...selectedBuckets.map(([,group])=>group.length))
   }};

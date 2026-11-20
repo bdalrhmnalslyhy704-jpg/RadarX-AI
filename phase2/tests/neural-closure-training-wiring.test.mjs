@@ -290,7 +290,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
   assert.match(trainer,/max_training_samples:4096/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
-  assert.match(temporal,/EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1/,
+  assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
     'the public benchmark must expose recurrent training-sample selection provenance');
