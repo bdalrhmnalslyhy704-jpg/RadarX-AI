@@ -1,3 +1,5 @@
+import {fitPlattScaler,applyProbabilityCalibrator} from './neural-closure-contracts.mjs';
+
 const DAY_MS=86_400_000;
 
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
@@ -315,9 +317,114 @@ const DEFAULT_GRID=Object.freeze([
  * partition. A callback may attach fixed-threshold execution diagnostics; it
  * is never used in hyperparameter selection.
  */
+function fitFoldModel(rows,featureVectors,fold,configuration,maxEpochs){
+  const trainingVectors=fold.train_indices.map(index=>featureVectors[index]);
+  const validationVectors=fold.validation_indices.map(index=>featureVectors[index]);
+  const trainingLabels=fold.train_indices.map(index=>rows[index].target);
+  const validationLabels=fold.validation_indices.map(index=>rows[index].target);
+  const standardizer=fitStandardizer(trainingVectors);
+  const scaledTraining=transformVectors(trainingVectors,standardizer);
+  const scaledValidation=transformVectors(validationVectors,standardizer);
+  const fit=fitLogisticWeights(scaledTraining,trainingLabels,{
+    l2:configuration.l2,learningRate:configuration.learning_rate,maxEpochs
+  });
+  const probabilities=scaledValidation.map(vector=>predictFromScaledVector(vector,fit));
+  return {
+    probabilities,
+    metrics:evaluateBinaryProbabilityMetrics(probabilities,validationLabels),
+    standardizer,fit,
+    training_labels:trainingLabels,
+    validation_labels:validationLabels
+  };
+}
+
+function fitIsotonicCalibrator(probabilities,labels,{
+  minimumPositives=50,minimumNegatives=50
+}={}) {
+  const support=counts(labels.map(target=>({target})));
+  const base={
+    method:'ISOTONIC_REGRESSION',fitted:false,
+    sample_count:labels.length,positive_count:support.positive,
+    negative_count:support.negative,
+    fit_partition:'TRAIN_ONLY_CROSSFITTED_CALIBRATION_FOLD'
+  };
+  if(!Array.isArray(probabilities)||probabilities.length!==labels.length||
+    labels.length===0||probabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1))
+    return {...base,status:'INVALID_CALIBRATION_INPUT'};
+  if(support.positive<minimumPositives||support.negative<minimumNegatives)
+    return {...base,status:'INSUFFICIENT_CLASS_SUPPORT'};
+  const sorted=probabilities.map((probability,index)=>({
+    probability:Number(probability),label:labels[index]
+  })).sort((a,b)=>a.probability-b.probability);
+  const grouped=[];
+  for(const item of sorted){
+    const last=grouped.at(-1);
+    if(last&&last.probability===item.probability){
+      last.count++;last.positive+=item.label;
+    }else grouped.push({
+      probability:item.probability,count:1,positive:item.label
+    });
+  }
+  const blocks=[];
+  for(const group of grouped){
+    blocks.push({
+      lower:group.probability,upper:group.probability,
+      count:group.count,positive:group.positive
+    });
+    while(blocks.length>=2){
+      const right=blocks.at(-1),left=blocks.at(-2);
+      const leftRate=left.positive/left.count;
+      const rightRate=right.positive/right.count;
+      if(leftRate<=rightRate)break;
+      blocks.splice(-2,2,{
+        lower:left.lower,upper:right.upper,
+        count:left.count+right.count,
+        positive:left.positive+right.positive
+      });
+    }
+  }
+  const thresholds=blocks.map(block=>block.upper);
+  const values=blocks.map(block=>clamp(block.positive/block.count,1e-6,1-1e-6));
+  return {
+    ...base,status:'FITTED',fitted:true,
+    x_thresholds:thresholds,y_thresholds:values,
+    block_count:blocks.length,
+    monotonic_non_decreasing:true,
+    fit_objective:'POOL_ADJACENT_VIOLATORS_BINOMIAL_ISOTONIC_REGRESSION'
+  };
+}
+function applyIsotonicCalibrator(probability,calibrator){
+  if(!calibrator||calibrator.fitted!==true)return probability;
+  const x=calibrator.x_thresholds,y=calibrator.y_thresholds;
+  if(!Array.isArray(x)||!Array.isArray(y)||x.length!==y.length||!x.length)
+    throw new TypeError('TEMPORAL_LOGISTIC_ISOTONIC_STATE_INVALID');
+  const value=clamp(Number(probability),0,1);
+  let index=x.findIndex(threshold=>value<=threshold);
+  if(index<0)index=x.length-1;
+  return clamp(Number(y[index]),1e-6,1-1e-6);
+}
+function applyCrossFittedCalibrator(probability,calibrator){
+  if(!calibrator||calibrator.fitted!==true)return Number(probability);
+  if(calibrator.method==='PLATT_SCALING'){
+    const p=clamp(Number(probability),1e-9,1-1e-9);
+    const logit=Math.log(p/(1-p));
+    return applyProbabilityCalibrator(logit,calibrator);
+  }
+  if(calibrator.method==='ISOTONIC_REGRESSION')
+    return applyIsotonicCalibrator(probability,calibrator);
+  throw new TypeError('TEMPORAL_LOGISTIC_CALIBRATOR_METHOD_UNSUPPORTED');
+}
+
+/**
+ * Tune Logistic only on early purged expanding-window folds of the supplied
+ * outer-training rows. The penultimate fold fits calibration on OOF scores;
+ * the final later fold selects Platt, isotonic or raw fallback. The selected
+ * classifier is finally refit on the complete supplied training partition.
+ * Outer validation and holdout are never passed to any fitting or selection.
+ */
 export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
-  foldCount=3,purgeMs=DAY_MS,initialTrainingFraction=0.50,
-  validationFraction=0.15,minimumTrainingRows=100,
+  foldCount=5,purgeMs=DAY_MS,initialTrainingFraction=0.32,
+  validationFraction=0.12,minimumTrainingRows=100,
   minimumValidationRows=50,minimumClassCount=5,
   candidateGrid=DEFAULT_GRID,maxEpochs=160,
   seed=22429,executionEvaluator=null
@@ -325,6 +432,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   if(!Array.isArray(rows)||!Array.isArray(featureVectors)||
     rows.length!==featureVectors.length||!rows.length||
     !Number.isInteger(seed)||!Array.isArray(candidateGrid)||!candidateGrid.length||
+    foldCount<5||
     typeof executionEvaluator!=='function'&&executionEvaluator!==null)
     throw new TypeError('TEMPORAL_LOGISTIC_TUNING_INPUT_INVALID');
   const width=featureVectors[0]?.length;
@@ -336,6 +444,12 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     foldCount,purgeMs,initialTrainingFraction,validationFraction,
     minimumTrainingRows,minimumValidationRows,minimumClassCount
   });
+  const tuningFolds=folds.folds.slice(0,-2);
+  const calibrationFitFold=folds.folds.at(-2);
+  const calibrationCheckFold=folds.folds.at(-1);
+  if(tuningFolds.length<3||!calibrationFitFold||!calibrationCheckFold)
+    throw new Error('TEMPORAL_LOGISTIC_CV_CALIBRATION_FOLDS_UNAVAILABLE');
+
   const normalizedGrid=candidateGrid.map((candidate,index)=>{
     const l2=Number(candidate?.l2),learningRate=Number(candidate?.learningRate);
     if(!Number.isFinite(l2)||l2<0||!Number.isFinite(learningRate)||
@@ -346,24 +460,9 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
 
   const candidateResults=[];
   for(const candidate of normalizedGrid){
-    const foldResults=[];
-    for(const fold of folds.folds){
-      const trainingVectors=fold.train_indices.map(index=>featureVectors[index]);
-      const validationVectors=fold.validation_indices.map(index=>featureVectors[index]);
-      const trainingLabels=fold.train_indices.map(index=>rows[index].target);
-      const validationLabels=fold.validation_indices.map(index=>rows[index].target);
-      const standardizer=fitStandardizer(trainingVectors);
-      const scaledTraining=transformVectors(trainingVectors,standardizer);
-      const scaledValidation=transformVectors(validationVectors,standardizer);
-      const fit=fitLogisticWeights(scaledTraining,trainingLabels,{
-        l2:candidate.l2,learningRate:candidate.learning_rate,maxEpochs
-      });
-      const probabilities=scaledValidation.map(vector=>predictFromScaledVector(vector,fit));
-      foldResults.push({
-        fold:fold.fold,metrics:evaluateBinaryProbabilityMetrics(probabilities,validationLabels),
-        probabilities
-      });
-    }
+    const foldResults=tuningFolds.map(fold=>
+      fitFoldModel(rows,featureVectors,fold,candidate,maxEpochs)
+    );
     const briers=foldResults.map(item=>item.metrics.brier_score);
     const losses=foldResults.map(item=>item.metrics.log_loss);
     candidateResults.push({
@@ -386,16 +485,117 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   if(!selected||!Number.isFinite(selected.mean_fold_brier))
     throw new Error('TEMPORAL_LOGISTIC_NO_VALID_CV_CANDIDATE');
 
+  // These two folds are strictly excluded from candidate hyperparameter choice.
+  const calibrationFitResult=fitFoldModel(rows,featureVectors,
+    calibrationFitFold,selected,maxEpochs);
+  const calibrationCheckResult=fitFoldModel(rows,featureVectors,
+    calibrationCheckFold,selected,maxEpochs);
+  const calibrationFitSupport=counts(calibrationFitFold.validation_indices.map(index=>rows[index]));
+  const calibrationCheckSupport=counts(calibrationCheckFold.validation_indices.map(index=>rows[index]));
+  const minimumCalibrationSupport=50;
+  const calibrationFitLogits=calibrationFitResult.probabilities.map(probability=>
+    Math.log(clamp(probability,1e-9,1-1e-9)/(1-clamp(probability,1e-9,1-1e-9))));
+  const calibrationFitLabels=calibrationFitResult.validation_labels;
+  const platt=fitPlattScaler(calibrationFitLogits,calibrationFitLabels,{
+    minimumPositives:minimumCalibrationSupport,
+    minimumNegatives:minimumCalibrationSupport,
+    iterations:500,regularization:0.05
+  });
+  const isotonic=fitIsotonicCalibrator(
+    calibrationFitResult.probabilities,calibrationFitLabels,{
+      minimumPositives:minimumCalibrationSupport,
+      minimumNegatives:minimumCalibrationSupport
+    }
+  );
+  const checkProbabilities=calibrationCheckResult.probabilities;
+  const checkLabels=calibrationCheckResult.validation_labels;
+  const rawCheckMetrics=evaluateBinaryProbabilityMetrics(checkProbabilities,checkLabels);
+  const plattCheckProbabilities=platt.fitted===true
+    ?checkProbabilities.map(probability=>applyCrossFittedCalibrator(probability,platt))
+    :checkProbabilities;
+  const isotonicCheckProbabilities=isotonic.fitted===true
+    ?checkProbabilities.map(probability=>applyCrossFittedCalibrator(probability,isotonic))
+    :checkProbabilities;
+  const plattCheckMetrics=evaluateBinaryProbabilityMetrics(plattCheckProbabilities,checkLabels);
+  const isotonicCheckMetrics=evaluateBinaryProbabilityMetrics(isotonicCheckProbabilities,checkLabels);
+  const methods=[
+    {method:'NO_CALIBRATION',fitted:false,check_metrics:rawCheckMetrics},
+    ...(platt.fitted===true?[{
+      method:'PLATT_SCALING',fitted:true,check_metrics:plattCheckMetrics,
+      calibrator:platt
+    }]:[]),
+    ...(isotonic.fitted===true?[{
+      method:'ISOTONIC_REGRESSION',fitted:true,check_metrics:isotonicCheckMetrics,
+      calibrator:isotonic
+    }]:[])
+  ];
+  const rawCheckBrier=rawCheckMetrics.brier_score;
+  const acceptedCalibration=methods.filter(candidate=>
+    candidate.fitted===true&&
+    candidate.check_metrics.brier_score<rawCheckBrier-1e-12&&
+    candidate.check_metrics.log_loss<rawCheckMetrics.log_loss-1e-12
+  ).sort((a,b)=>
+    a.check_metrics.brier_score-b.check_metrics.brier_score||
+    a.check_metrics.log_loss-b.check_metrics.log_loss||
+    (a.method==='PLATT_SCALING'?-1:1)
+  );
+  const selectedCalibration=acceptedCalibration[0]??methods[0];
+  const selectedCalibrator=selectedCalibration.fitted===true
+    ?selectedCalibration.calibrator
+    :{method:'NO_CALIBRATION',fitted:false};
+  const calibration={
+    schema:'RADARX_TRAIN_ONLY_CROSSFITTED_CALIBRATION_V1',
+    status:selectedCalibration.fitted?'SELECTED_'+selectedCalibration.method:'RAW_FALLBACK',
+    selected_method:selectedCalibration.method,
+    selection_rule:'LATER_DISJOINT_CHECK_FOLD_MUST_IMPROVE_BOTH_BRIER_AND_LOG_LOSS',
+    fit_partition:'PENULTIMATE_PURGED_TRAIN_ONLY_OOF_FOLD',
+    check_partition:'FINAL_PURGED_TRAIN_ONLY_OOF_FOLD',
+    fit_fold:calibrationFitFold.fold,
+    check_fold:calibrationCheckFold.fold,
+    fit_support:calibrationFitSupport,
+    check_support:calibrationCheckSupport,
+    minimum_positive_and_negative_support:minimumCalibrationSupport,
+    platt_fit:{
+      status:platt.status??null,fitted:platt.fitted===true,
+      slope:platt.slope??null,intercept:platt.intercept??null,
+      fit_samples:platt.sample_count??calibrationFitSupport.rows,
+      fit_positives:platt.positive_count??calibrationFitSupport.positive,
+      fit_negatives:platt.negative_count??calibrationFitSupport.negative
+    },
+    isotonic_fit:{
+      status:isotonic.status??null,fitted:isotonic.fitted===true,
+      fit_samples:isotonic.sample_count,
+      fit_positives:isotonic.positive_count,
+      fit_negatives:isotonic.negative_count,
+      block_count:isotonic.block_count??0
+    },
+    check_metrics:{
+      no_calibration:rawCheckMetrics,
+      platt:platt.fitted===true?plattCheckMetrics:null,
+      isotonic:isotonic.fitted===true?isotonicCheckMetrics:null
+    },
+    method_trials:methods.map(candidate=>({
+      method:candidate.method,fitted:candidate.fitted,
+      check_brier:candidate.check_metrics.brier_score,
+      check_log_loss:candidate.check_metrics.log_loss,
+      accepted:selectedCalibration.method===candidate.method&&selectedCalibration.fitted===true
+    })),
+    applied_to_final_model:selectedCalibration.fitted===true,
+    training_partition_only:true,
+    outer_validation_used_for_calibrator_fit:false,
+    outer_validation_used_for_calibrator_selection:false,
+    holdout_used_for_calibration:false
+  };
+
   const finalStandardizer=fitStandardizer(featureVectors);
   const scaledAllTraining=transformVectors(featureVectors,finalStandardizer);
   const finalLabels=rows.map(row=>row.target);
   const finalFit=fitLogisticWeights(scaledAllTraining,finalLabels,{
     l2:selected.l2,learningRate:selected.learning_rate,maxEpochs
   });
-  const selectedFoldReports=selected.folds.map((item,index)=>{
-    const fold=folds.folds[index];
+  const buildFoldReport=(fold,result,role)=>{
     const report={
-      fold:fold.fold,
+      fold:fold.fold,role,
       training_period:fold.training_period,
       validation_period:fold.validation_period,
       purge_period:fold.purge_period,
@@ -404,17 +604,23 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
       training_support:fold.training_support,
       validation_support:fold.validation_support,
       maximum_training_label_resolved_at:fold.maximum_training_label_resolved_at,
-      metrics:item.metrics,
+      metrics:result.metrics,
       execution_metrics:null,
       execution_reference_threshold:0.15,
       execution_threshold_tuned_on_fold:false
     };
     if(executionEvaluator){
       const foldRows=fold.validation_indices.map(rowIndex=>rows[rowIndex]);
-      report.execution_metrics=executionEvaluator(foldRows,item.probabilities);
+      report.execution_metrics=executionEvaluator(foldRows,result.probabilities);
     }
     return report;
-  });
+  };
+  const selectedFoldReports=[
+    ...selected.folds.map((result,index)=>
+      buildFoldReport(tuningFolds[index],result,'HYPERPARAMETER_SELECTION')),
+    buildFoldReport(calibrationFitFold,calibrationFitResult,'CALIBRATION_FIT'),
+    buildFoldReport(calibrationCheckFold,calibrationCheckResult,'CALIBRATION_CHECK')
+  ];
   const publicCandidates=candidateResults.map(candidate=>({
     candidate_index:candidate.candidate_index,l2:candidate.l2,
     learning_rate:candidate.learning_rate,
@@ -425,7 +631,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     mean_fold_roc_auc:candidate.mean_fold_roc_auc
   }));
   const report={
-    schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V1',
+    schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
     status:'COMPLETE',
     model:'LOGISTIC_REGRESSION_TUNED_TEMPORAL',
     training_partition_only:true,
@@ -435,11 +641,15 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     solver:'FULL_BATCH_GRADIENT_DESCENT',
     feature_normalization:'PER_FOLD_Z_SCORE_FIT_ON_FOLD_TRAINING_ROWS_ONLY',
     class_weighting:'NONE_UNWEIGHTED_PROPER_PROBABILITY_OBJECTIVE',
-    random_seed:seed,
-    deterministic_full_batch_solver:true,
+    random_seed:null,
+    deterministic_solver_id:'FULL_BATCH_GD_DETERMINISTIC_V1',
+    unused_seed_parameter:seed,
     purge_policy:'ONE_COMPLETE_UTC_DAY_BEFORE_EACH_VALIDATION_BLOCK',
     fold_schema:folds.schema,
     fold_count:folds.fold_count,
+    hyperparameter_selection_folds:tuningFolds.length,
+    calibration_fit_fold:calibrationFitFold.fold,
+    calibration_check_fold:calibrationCheckFold.fold,
     folds:selectedFoldReports,
     candidate_grid:normalizedGrid,
     candidate_results:publicCandidates,
@@ -454,6 +664,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
       selected_mean_fold_pr_auc:selected.mean_fold_pr_auc,
       selected_mean_fold_roc_auc:selected.mean_fold_roc_auc
     },
+    calibration,
     final_fit:{
       training_rows:finalFit.training_rows,
       training_positive:finalFit.training_positive,
@@ -462,8 +673,10 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
       gradient_norm:finalFit.gradient_norm,
       solver:finalFit.solver
     },
-    all_candidate_selection_used_only_training_folds:true,
+    all_candidate_selection_used_only_early_training_folds:true,
+    calibration_fit_and_check_inside_outer_train:true,
     outer_validation_used_for_hyperparameter_selection:false,
+    outer_validation_used_for_calibrator_selection:false,
     execution_metrics_used_for_hyperparameter_selection:false,
     threshold_or_top_k_selected_by_cv:false,
     holdout_opened:false
@@ -472,7 +685,15 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     standardizer:finalStandardizer,
     fit:finalFit,
     configuration:report.selected_configuration,
+    calibration,
+    calibrator:selectedCalibrator,
     training_partition_only:true
   };
   return {model,report};
+}
+
+/** Predict using the final train-only cross-fitted calibration artifact. */
+export function predictCrossFittedCalibratedTemporalLogisticProbability(featureVector,model) {
+  const raw=predictTemporalLogisticProbability(featureVector,model);
+  return applyCrossFittedCalibrator(raw,model?.calibrator);
 }
