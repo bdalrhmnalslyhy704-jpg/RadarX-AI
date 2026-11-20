@@ -9,6 +9,14 @@ on:
       - 'phase2/core/temporal-logistic-baseline.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-logistic-cv-ci-base
+    paths:
+      - '.github/workflows/logistic-baseline-temporal-cv-tests.yml'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
 
 permissions:
   contents: read
