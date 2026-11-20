@@ -346,14 +346,20 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
     'the third ensemble member must retain the 1.5x epoch profile');
 
-  // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
-  // exceeds its existing 30-epoch cap or changes the inner-selection margin.
+  // The bounded eight-candidate recurrent grid retains the plain and Focal
+  // anchors plus 6 shared-classifier ranking weights. Every candidate stays
+  // within the existing 30-epoch cap and the same inner-selection margin.
   assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
-  assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
-  assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
   assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
   assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
-  assert.match(trainer,/4H_FOCAL_LR_0025_L2_0015_DROP10_E16/);
+  for(const name of [
+    '4H_SHARED_RANK_W030_LR_0015_E16',
+    '4H_SHARED_RANK_W040_LR_0015_E16',
+    '4H_SHARED_RANK_W050_LR_0015_E16',
+    '4H_SHARED_RANK_W035_LR_0025_E16',
+    '4H_SHARED_RANK_W045_LR_0025_E16',
+    '4H_SHARED_RANK_W050_LR_0025_E16'
+  ]) assert.ok(trainer.includes(name),'missing bounded shared-ranking challenger '+name);
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
   assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
   assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
