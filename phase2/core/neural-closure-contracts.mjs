@@ -3351,6 +3351,9 @@ export function runNeuralClosureBenchmark({
         :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
       selected_method:calibrationMetadata?.selected_method??'NO_CALIBRATION',
       applied_to_final_model:calibrationApplied,
+      fit_rows:calibrationMetadata?.fit_rows??calibrationMetadata?.fit_samples??0,
+      fit_positive:calibrationMetadata?.fit_positive??calibrationMetadata?.fit_positives??0,
+      fit_negative:calibrationMetadata?.fit_negative??calibrationMetadata?.fit_negatives??0,
       fit_partition:calibrationMetadata?.fit_partition??
         (calibrationApplied?'TRAIN_ONLY_CROSSFITTED':'NONE_IDENTITY'),
       outer_validation_used_for_calibrator_fit:false,
@@ -3524,6 +3527,7 @@ export function runNeuralClosureBenchmark({
       raw_classification_metrics:rawProbabilityMetrics,
       calibrated_classification_metrics:calibratedProbabilityMetrics,
       reliability_diagnostics:reliabilityDiagnostics,
+      calibration,
       probability_evaluation_method:calibrationApplied
         ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
         :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
