@@ -3372,6 +3372,16 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
+    const rawProbabilityMetrics=evaluateOuterBinaryProbabilityMetrics(
+      rawValidation,validationLabels
+    );
+    const calibratedProbabilityMetrics=evaluateOuterBinaryProbabilityMetrics(
+      calibratedValidation,validationLabels
+    );
+    const reliabilityDiagnostics={
+      raw:buildOuterReliabilityDiagnostics(validationRows,rawValidation),
+      calibrated:buildOuterReliabilityDiagnostics(validationRows,calibratedValidation)
+    };
     const walkForwardCalibrationDiagnostics={
       schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
       status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
@@ -3503,10 +3513,24 @@ export function runNeuralClosureBenchmark({
       positive_count:validationSupport.positive,
       negative_count:validationSupport.negative,
       raw_brier_score:validationBrier,
-      calibrated_brier_score:null,
+      calibrated_brier_score:calibratedValidationBrier,
       evaluation_brier_score:validationBrier,
-      probability_evaluation_method:'MODEL_NATIVE_OUTPUT_NO_OUTER_CALIBRATION',
-      calibration_applied:false,
+      raw_log_loss:rawProbabilityMetrics.log_loss??null,
+      calibrated_log_loss:calibratedProbabilityMetrics.log_loss??null,
+      raw_pr_auc:rawProbabilityMetrics.pr_auc_average_precision??null,
+      calibrated_pr_auc:calibratedProbabilityMetrics.pr_auc_average_precision??null,
+      raw_roc_auc:rawProbabilityMetrics.roc_auc??null,
+      calibrated_roc_auc:calibratedProbabilityMetrics.roc_auc??null,
+      raw_classification_metrics:rawProbabilityMetrics,
+      calibrated_classification_metrics:calibratedProbabilityMetrics,
+      reliability_diagnostics:reliabilityDiagnostics,
+      probability_evaluation_method:calibrationApplied
+        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
+        :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
+      execution_probability_stage:calibrationApplied
+        ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
+        :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
+      calibration_applied:calibrationApplied,
       threshold_selection_sample_count:thresholdSelectionRows.length,
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
