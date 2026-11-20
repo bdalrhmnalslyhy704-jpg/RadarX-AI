@@ -1175,6 +1175,36 @@ test('exported Platt fitting accepts only supplied calibration rows and reports 
 });
 
 
+test('internal TCN-LSTM Platt calibration learns inverse direction from calibration rows only',()=>{
+  const calibrationRows=makeRows(900,60,'inverse-four-hour-calibration');
+  const calibrator=fitTcnLstmHybridCalibration(
+    calibrationRows,
+    sequence=>sequence[0][0]>=0?0.28:0.72,
+    {minimumSamples:30,minimumPositive:8,minimumNegative:8,iterations:240,
+      learningRate:0.03,regularization:0.02}
+  );
+  assert.equal(calibrator.fitted,true);
+  assert.equal(calibrator.fit_boundary,'CALIBRATION_PARTITION_ONLY');
+  assert.equal(calibrator.method,'CALIBRATION_BLOCK_SIGNED_PLATT_LOGISTIC_NLL_V2');
+  assert.equal(calibrator.slope_orientation,'NEGATIVE');
+  assert.ok(calibrator.slope<0);
+  assert.ok(Number.isFinite(calibrator.baseline_objective));
+  assert.ok(calibrator.orientation_trials.some(row=>
+    row.orientation==='POSITIVE'&&Number.isFinite(row.objective)));
+  assert.ok(calibrator.orientation_trials.some(row=>
+    row.orientation==='NEGATIVE'&&Number.isFinite(row.objective)));
+  const logit=value=>Math.log(value/(1-value));
+  const sigmoid=value=>1/(1+Math.exp(-value));
+  const positiveProbability=sigmoid(
+    calibrator.slope*logit(0.28)+calibrator.intercept
+  );
+  const negativeProbability=sigmoid(
+    calibrator.slope*logit(0.72)+calibrator.intercept
+  );
+  assert.ok(positiveProbability>negativeProbability,
+    'calibration-fit labels must be able to reverse an inverted raw score');
+});
+
 test('four-hour TCN-LSTM splitter keeps fit, selection and calibration inside outer train and purges every 4h boundary',()=>{
   const fourHourRows=makeRows(0,120,'outer-train').map(row=>({
     ...row,resolved_at:row.at+4*60*60*1000
