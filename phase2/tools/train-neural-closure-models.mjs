@@ -1171,30 +1171,31 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          rankingPairsPerTimestamp:4,
+          rankingPairsPerTimestamp:12,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
           candidates:[
-            // Isolate probability learning with the two anchors, then test the
-            // previously untested Focal + shared-classifier ranking combination.
-            // All six mixed-loss candidates use one optimizer profile so the
-            // ranking-weight effect is directly comparable.
-            {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
-            {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_FOCAL_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.005},
-            {name:'4H_FOCAL_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.01},
-            {name:'4H_FOCAL_SHARED_RANK_W015_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.015},
-            {name:'4H_FOCAL_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.02},
-            {name:'4H_FOCAL_SHARED_RANK_W025_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.025},
-            {name:'4H_FOCAL_SHARED_RANK_W030_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.03}
+            // Keep the proper-scoring Brier objective fixed while sweeping a
+            // wider shared-classifier ranking-loss range. The previous Focal
+            // sweep improved the sidecar rank score but degraded inner Brier;
+            // this grid tests joint probability quality and return ordering.
+            {name:'4H_BRIER_BASE_LR0015_L2_0005_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              objective:'BRIER'},
+            {name:'4H_BRIER_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.005},
+            {name:'4H_BRIER_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.01},
+            {name:'4H_BRIER_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.02},
+            {name:'4H_BRIER_SHARED_RANK_W040_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.04},
+            {name:'4H_BRIER_SHARED_RANK_W060_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.06},
+            {name:'4H_BRIER_SHARED_RANK_W080_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.08},
+            {name:'4H_BRIER_SHARED_RANK_W120_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.12}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
