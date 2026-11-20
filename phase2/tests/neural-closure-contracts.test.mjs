@@ -20,8 +20,34 @@ import {
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
   NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,
-  evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark
+  evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark,
+  NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS,
+  evaluateNeuralClosureHoldoutOpeningProtocol
 } from '../core/neural-closure-contracts.mjs';
+
+test('holdout opening protocol fails closed unless all fourteen research checks are explicitly true',()=>{
+  const locked=evaluateNeuralClosureHoldoutOpeningProtocol({});
+  assert.equal(locked.schema,'RADARX_NEURAL_CLOSURE_HOLDOUT_OPENING_PROTOCOL_V1');
+  assert.equal(locked.status,'LOCKED');
+  assert.equal(locked.passed,false);
+  assert.equal(locked.holdout_metrics_read,false);
+  assert.equal(locked.missing_checks.length,14);
+  assert.equal(NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.length,14);
+
+  const allTrue=Object.fromEntries(
+    NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.map(name=>[name,true])
+  );
+  const approved=evaluateNeuralClosureHoldoutOpeningProtocol(allTrue);
+  assert.equal(approved.status,'APPROVED');
+  assert.equal(approved.passed,true);
+  assert.deepEqual(approved.missing_checks,[]);
+  const oneFalse={...allTrue,confidence_intervals_and_robustness_reported:false};
+  const rejected=evaluateNeuralClosureHoldoutOpeningProtocol(oneFalse);
+  assert.equal(rejected.status,'LOCKED');
+  assert.deepEqual(rejected.missing_checks,[
+    'confidence_intervals_and_robustness_reported'
+  ]);
+});
 
 const BASE=Date.UTC(2026,0,1);
 const assertClose=(actual,expected,message='')=>
@@ -1222,9 +1248,13 @@ test('a frozen Logistic threshold remains comparable when Logistic fails on the 
       passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
     }])
   );
+  const approvedHoldoutProtocol=Object.fromEntries(
+    NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.map(name=>[name,true])
+  );
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    sourceCommitSha,qualificationByModel,
+    holdoutOpeningProtocol:approvedHoldoutProtocol
   });
   const logistic=report.models.LOGISTIC_REGRESSION.validation;
   const neural=report.models.TCN_LSTM_HYBRID.validation.outer_validation_gate;
