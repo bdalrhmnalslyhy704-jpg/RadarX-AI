@@ -651,6 +651,70 @@ test('raw Brier remains the primary model comparison while train-only calibrated
   assert.equal(invalid.holdout_access.opened,false);
 });
 
+test('per-regime calibration metadata may vary while every profile remains train-only and leak-free',()=>{
+  const rows=makeRows(),sourceCommitSha='d'.repeat(40);
+  const artifacts=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,artifacts);
+  const family='TCN_V11';
+  const rawPredictions=predictions[family];
+  predictions[family]=rawPredictions.map((item,index)=>{
+    const applied=index%2===0;
+    const metadata={
+      schema:'RADARX_TEMPORAL_TRAIN_ONLY_CALIBRATION_PROVENANCE_V1',
+      status:applied?'TRAIN_ONLY_CALIBRATED':'RAW_UNCALIBRATED',
+      selected_method:applied?'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2':'NO_CALIBRATION',
+      applied_to_final_model:applied,
+      fit_partition:applied?'BTC_REGIME_INNER_SELECTION':'NONE_IDENTITY',
+      fit_rows:applied?120:0,
+      fit_positive:applied?50:0,
+      fit_negative:applied?70:0,
+      training_partition_only:true,
+      outer_validation_used_for_calibrator_fit:false,
+      outer_validation_used_for_calibrator_selection:false,
+      holdout_used_for_calibration:false
+    };
+    return {
+      ...item,
+      raw_probability:item.probability,
+      calibrated_probability:applied
+        ?Math.min(0.999999,item.probability*0.9)
+        :item.probability,
+      calibration_metadata:metadata
+    };
+  });
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel:artifacts,sourceCommitSha
+  });
+  const model=report.models[family];
+  assert.notEqual(model.status,'NOT_EVALUATED',
+    'legitimate independent BTC-regime calibration profiles must not fail row alignment');
+  assert.equal(model.validation.calibration.status,
+    'MIXED_TRAIN_ONLY_CALIBRATED_AND_RAW_REGIMES');
+  assert.equal(model.validation.calibration.applied_to_final_model,true);
+  assert.equal(model.validation.calibration.fully_applied_to_all_scored_rows,false);
+  assert.equal(model.validation.calibration.partially_applied_to_final_model,true);
+  assert.equal(model.validation.calibration.profiles.length,2);
+  assert.equal(model.validation.calibration.outer_validation_used_for_calibrator_fit,false);
+  assert.equal(model.validation.calibration.outer_validation_used_for_calibrator_selection,false);
+  assert.equal(model.validation.probability_evaluation_method,
+    'RAW_PRIMARY_WITH_TRAIN_ONLY_PER_REGIME_CALIBRATION_STAGE');
+  assert.equal(model.validation.execution_probability_stage,
+    'TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME');
+  assert.equal(report.holdout_access.opened,false);
+
+  predictions[family]=predictions[family].map((item,index)=>index===0?{
+    ...item,calibration_metadata:{
+      ...item.calibration_metadata,outer_validation_used_for_calibrator_fit:true
+    }
+  }:item);
+  const rejected=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel:artifacts,sourceCommitSha
+  });
+  assert.equal(rejected.models[family].status,'NOT_EVALUATED');
+  assert.equal(rejected.models[family].reason,'MODEL_CALIBRATION_PROVENANCE_INVALID:'+family);
+  assert.equal(rejected.holdout_access.opened,false);
+});
+
 test('outer probability distributions report native model scores without calibration or policy selection',()=>{
   const rows=makeRows(),sourceCommitSha='c'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);

@@ -1589,15 +1589,16 @@ export function predictFourHourCognitiveMlpProbability(features,fitOrModelState)
   return predictFourHourCognitiveChallengerProbability(features,fit);
 }
 
-function predictFromFit(features, fit, residualScale=1) {
+function predictFromFit(features, fit, residualScale=1,applyCalibration=true) {
   if(fit?.kind==='RESIDUAL_GBDT_LOGISTIC_ANCHOR_V1'){
-    return applyAcceptedProbabilityCalibration(
-      predictResidualBoostedTrees(features,fit),fit.probability_calibrator
-    );
+    const raw=predictResidualBoostedTrees(features,fit);
+    return applyCalibration
+      ?applyAcceptedProbabilityCalibration(raw,fit.probability_calibrator)
+      :clamp(raw,0.02,0.98);
   }
   if(fit?.kind==='BLENDED_GBDT_MLP_V1'){
-    const boosted=predictFromFit(features,fit.boosted_fit);
-    const neural=predictFromFit(features,fit.neural_fit);
+    const boosted=predictFromFit(features,fit.boosted_fit,1,applyCalibration);
+    const neural=predictFromFit(features,fit.neural_fit,1,applyCalibration);
     if(!Number.isFinite(boosted)||!Number.isFinite(neural))return null;
     const weight=clamp(Number(fit.boosted_weight)||0,0,1);
     return clamp(weight*boosted+(1-weight)*neural,0.02,0.98);
@@ -1605,21 +1606,25 @@ function predictFromFit(features, fit, residualScale=1) {
   if(fit?.kind==='RESIDUAL_FACTOR_CROSS_V1'){
     const vector=normalizedFeatures(features,fit.feature_schema||COGNITIVE_FEATURE_SCHEMA);
     if(vector.length!==Number(fit.input_size))return null;
-    return applyAcceptedProbabilityCalibration(
-      predictFactorizationMachineProbability(
-        vector,fit,finite(fit.residual_scale)??finite(residualScale)??1
-      ),fit.probability_calibrator
+    const raw=predictFactorizationMachineProbability(
+      vector,fit,finite(fit.residual_scale)??finite(residualScale)??1
     );
+    return applyCalibration
+      ?applyAcceptedProbabilityCalibration(raw,fit.probability_calibrator)
+      :clamp(raw,0.02,0.98);
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_ENSEMBLE_V3'){
     if(!hasSelectedNeuralResidual(fit))return null;
     const expectedMembers=fit.seeds.length;
     if(fit.members.length!==expectedMembers)return null;
     const rawPrediction=predictFromFit(
-      features,fit.members[fit.selected_member_index],fit.selected_residual_scale
+      features,fit.members[fit.selected_member_index],fit.selected_residual_scale,
+      applyCalibration
     );
     if(!Number.isFinite(rawPrediction))return null;
-    return applyAcceptedProbabilityCalibration(rawPrediction,fit.probability_calibrator);
+    return applyCalibration
+      ?applyAcceptedProbabilityCalibration(rawPrediction,fit.probability_calibrator)
+      :clamp(rawPrediction,0.02,0.98);
   }
   if(fit?.kind==='RESIDUAL_DEEP_MLP_V2'){
     const inputSize=Number(fit.input_size)||fit.feature_names?.length||FEATURE_NAMES.length;
@@ -1670,7 +1675,94 @@ function predictFromFit(features, fit, residualScale=1) {
   if(vector.length!==fit.weights.length)return null;
   let value = Number(fit.intercept) || 0;
   for (let i = 0; i < fit.weights.length; i++) value += Number(fit.weights[i] || 0) * vector[i];
-  return applyAcceptedProbabilityCalibration(clamp(logistic(value),0.02,0.98),fit.probability_calibrator);
+  const raw=clamp(logistic(value),0.02,0.98);
+  return applyCalibration
+    ?applyAcceptedProbabilityCalibration(raw,fit.probability_calibrator)
+    :raw;
+}
+
+
+
+function collectAcceptedCognitiveCalibrators(fit,seen=new Set(),output=[]) {
+  if(!fit||typeof fit!=='object'||seen.has(fit))return output;
+  seen.add(fit);
+  if(fit.probability_calibrator?.accepted===true)
+    output.push(fit.probability_calibrator);
+  for(const key of ['fit','boosted_fit','neural_fit'])
+    if(fit[key]&&typeof fit[key]==='object')
+      collectAcceptedCognitiveCalibrators(fit[key],seen,output);
+  if(Array.isArray(fit.members))
+    for(const member of fit.members)
+      collectAcceptedCognitiveCalibrators(member,seen,output);
+  return output;
+}
+
+function cognitiveCalibrationMetadata(fit) {
+  const calibrators=collectAcceptedCognitiveCalibrators(fit);
+  const methods=[...new Set(calibrators.map(item=>String(item.method??'UNKNOWN_CALIBRATOR')))];
+  const partitions=[...new Set(calibrators.map(item=>
+    String(item.fit_on??'TRAIN_ONLY_CALIBRATION_BLOCK')
+  ))];
+  return {
+    schema:'RADARX_COGNITIVE_TRAIN_ONLY_CALIBRATION_PROVENANCE_V1',
+    status:calibrators.length?'TRAIN_ONLY_CALIBRATED':'RAW_UNCALIBRATED',
+    selected_method:calibrators.length?methods.join('+'):'NO_CALIBRATION',
+    applied_to_final_model:calibrators.length>0,
+    fit_partition:calibrators.length?partitions.join('+'):'NONE_IDENTITY',
+    fit_rows:calibrators.length===1?Number(calibrators[0].fit_samples??0):0,
+    fit_positive:calibrators.length===1?Number(calibrators[0].fit_positive??0):0,
+    fit_negative:calibrators.length===1?Number(calibrators[0].fit_negative??0):0,
+    training_partition_only:true,
+    outer_validation_used_for_calibrator_fit:false,
+    outer_validation_used_for_calibrator_selection:false,
+    holdout_used_for_calibration:false,
+    nested_calibrator_count:calibrators.length
+  };
+}
+
+/** Emit genuinely separate pre-calibration and applied calibration scores. */
+export function predictFourHourCognitiveResearchProbabilityStages(features,fitOrModelState) {
+  const state=fitOrModelState?.fit??fitOrModelState;
+  const fit=state?.fit??state;
+  const inference=state?.research_inference??fitOrModelState?.research_inference;
+  if(!fit||typeof fit!=='object')return null;
+  let rawProbability=null,calibratedProbability=null,scoringFit=fit;
+  if(inference?.mode==='INNER_SELECTED_MEMBER'){
+    rawProbability=predictFromFit(features,fit,1,false);
+    calibratedProbability=predictFromFit(features,fit,1,true);
+  }else if(inference?.mode==='INNER_BEST_DIAGNOSTIC_MEMBER'){
+    const index=Number(inference.index),scale=finite(inference.residual_scale);
+    if(!Number.isInteger(index)||index<0||index>=fit.members?.length||
+      scale===null||scale<=0)return null;
+    scoringFit=fit.members[index];
+    rawProbability=predictFromFit(features,scoringFit,scale,false);
+    calibratedProbability=predictFromFit(features,scoringFit,scale,true);
+  }else return null;
+  if(!finite(rawProbability)||rawProbability<0||rawProbability>1||
+    !finite(calibratedProbability)||calibratedProbability<0||calibratedProbability>1)
+    return null;
+  return {
+    probability:Number(calibratedProbability),
+    raw_probability:Number(rawProbability),
+    calibrated_probability:Number(calibratedProbability),
+    calibration_metadata:cognitiveCalibrationMetadata(scoringFit)
+  };
+}
+
+export function predictFourHourCognitiveChallengerProbabilityStages(features,fitOrModelState) {
+  const fit=fitOrModelState?.fit??fitOrModelState;
+  if(!fit||typeof fit!=='object')return null;
+  const rawProbability=predictFromFit(features,fit,1,false);
+  const calibratedProbability=predictFromFit(features,fit,1,true);
+  if(!finite(rawProbability)||rawProbability<0||rawProbability>1||
+    !finite(calibratedProbability)||calibratedProbability<0||calibratedProbability>1)
+    return null;
+  return {
+    probability:Number(calibratedProbability),
+    raw_probability:Number(rawProbability),
+    calibrated_probability:Number(calibratedProbability),
+    calibration_metadata:cognitiveCalibrationMetadata(fit)
+  };
 }
 
 

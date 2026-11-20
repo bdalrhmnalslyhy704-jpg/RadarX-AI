@@ -1739,6 +1739,28 @@ function calibratedProbability(rawProbability, calibrator) {
   ),0.02,0.98);
 }
 
+function temporalCalibrationMetadata(calibrator) {
+  const applied=calibrator?.fitted===true;
+  return {
+    schema:'RADARX_TEMPORAL_TRAIN_ONLY_CALIBRATION_PROVENANCE_V1',
+    status:applied?'TRAIN_ONLY_CALIBRATED':'RAW_UNCALIBRATED',
+    selected_method:applied
+      ?String(calibrator.method??'CALIBRATION_BLOCK_SHRUNK_BRIER_PLATT_V2')
+      :'NO_CALIBRATION',
+    applied_to_final_model:applied,
+    fit_partition:applied
+      ?String(calibrator.fit_on??'DISJOINT_INNER_TRAINING_SELECTION_BLOCK')
+      :'NONE_IDENTITY',
+    fit_rows:applied?Number(calibrator.sample_count??0):0,
+    fit_positive:applied?Number(calibrator.positive_count??0):0,
+    fit_negative:applied?Number(calibrator.negative_count??0):0,
+    training_partition_only:true,
+    outer_validation_used_for_calibrator_fit:false,
+    outer_validation_used_for_calibrator_selection:false,
+    holdout_used_for_calibration:false
+  };
+}
+
 // A small two-parameter Brier calibrator is fitted only on the disjoint
 // chronological regime-selection block. Validation and final holdout are
 // never used to fit the slope/intercept. Strong shrinkage keeps small samples
@@ -4395,11 +4417,18 @@ export function predictTemporalResearchOutput(sequence,profile={},{
   if(Number.isInteger(selectedIndex)&&selectedIndex>=0&&
     selectedIndex<specialist.members.length&&
     selectedScale!==null&&selectedScale>0){
-    const probability=predict(sequence,fitted);
-    return Number.isFinite(probability)?{
-      probability,mode:'INNER_SELECTED_TCN_MEMBER',regime,
-      member_index:selectedIndex,
-      residual_scale:Number(specialist.selected_residual_scale)
+    const rawProbability=forward(
+      sequence,specialist.members[selectedIndex],selectedScale
+    ).probability;
+    const probability=calibratedProbability(
+      rawProbability,specialist.probability_calibrator
+    );
+    return Number.isFinite(probability)&&Number.isFinite(rawProbability)?{
+      probability,raw_probability:rawProbability,
+      calibrated_probability:probability,
+      calibration_metadata:temporalCalibrationMetadata(specialist.probability_calibrator),
+      mode:'INNER_SELECTED_TCN_MEMBER',regime,
+      member_index:selectedIndex,residual_scale:selectedScale
     }:null;
   }
   if(!allowDiagnostic)return null;
@@ -4410,8 +4439,10 @@ export function predictTemporalResearchOutput(sequence,profile={},{
     diagnosticScale===null||diagnosticScale<=0)return null;
   const raw=forward(sequence,specialist.members[diagnosticIndex],diagnosticScale).probability;
   const probability=calibratedProbability(raw,specialist.probability_calibrator);
-  return Number.isFinite(probability)?{
-    probability,mode:'INNER_BEST_DIAGNOSTIC_TCN_MEMBER',regime,
+  return Number.isFinite(probability)&&Number.isFinite(raw)?{
+    probability,raw_probability:raw,calibrated_probability:probability,
+    calibration_metadata:temporalCalibrationMetadata(specialist.probability_calibrator),
+    mode:'INNER_BEST_DIAGNOSTIC_TCN_MEMBER',regime,
     member_index:diagnosticIndex,residual_scale:diagnosticScale
   }:null;
 }
@@ -4524,8 +4555,10 @@ export function predictTemporalAttentionResearchOutput(sequence,profile={},{
   const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
-  return Number.isFinite(probability)?{
-    probability,mode:state.inference_mode,regime,
+  return Number.isFinite(probability)&&Number.isFinite(raw)?{
+    probability,raw_probability:raw,calibrated_probability:probability,
+    calibration_metadata:temporalCalibrationMetadata(state.probability_calibrator),
+    mode:state.inference_mode,regime,
     member_index:Number(state.member_index),residual_scale:residualScale
   }:null;
 }
@@ -4598,8 +4631,10 @@ export function predictTemporalVariantResearchOutput(sequence,profile={},{
   const residualScale=Number(state.residual_scale);
   const raw=forward(sequence,state.model,residualScale).probability;
   const probability=calibratedProbability(raw,state.probability_calibrator);
-  return Number.isFinite(probability)?{
-    probability,mode:state.inference_mode,regime,
+  return Number.isFinite(probability)&&Number.isFinite(raw)?{
+    probability,raw_probability:raw,calibrated_probability:probability,
+    calibration_metadata:temporalCalibrationMetadata(state.probability_calibrator),
+    mode:state.inference_mode,regime,
     pooling_mode:state.temporal_pooling,architecture:state.architecture,
     member_index:Number(state.member_index),residual_scale:residualScale
   }:null;

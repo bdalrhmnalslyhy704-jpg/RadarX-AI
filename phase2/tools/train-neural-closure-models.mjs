@@ -18,6 +18,8 @@ import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
   predictFourHourCognitiveResearchProbability,
   predictFourHourCognitiveChallengerProbability,
+  predictFourHourCognitiveResearchProbabilityStages,
+  predictFourHourCognitiveChallengerProbabilityStages,
   COGNITIVE_FEATURE_SCHEMA,COGNITIVE_FEATURE_NAMES
 } from '../core/cognitive-brain.mjs';
 import {
@@ -187,17 +189,23 @@ function predictionRows(rows,predictor,{sourceCommitSha,targetDefinition=NEURAL_
   artifactSha256=null,modelName}={}){
   const result=[];
   for(const row of rows){
-    const probability=predictor(row);
-    if(!finite(probability)||probability<0||probability>1)
+    const prediction=predictor(row);
+    const staged=prediction&&typeof prediction==='object'?prediction:null;
+    const rawProbability=staged?.raw_probability??staged?.probability??prediction;
+    const calibratedProbability=staged?.calibrated_probability??rawProbability;
+    if(!finite(rawProbability)||rawProbability<0||rawProbability>1||
+      !finite(calibratedProbability)||calibratedProbability<0||calibratedProbability>1)
       throw new Error('MODEL_PREDICTION_UNAVAILABLE:'+modelName+':'+row.id);
     const item={
-      id:row.id,probability:Number(probability),
-      raw_probability:Number(probability),
-      calibrated_probability:Number(probability),
+      id:row.id,probability:Number(rawProbability),
+      raw_probability:Number(rawProbability),
+      calibrated_probability:Number(calibratedProbability),
       source_commit_sha:sourceCommitSha,
       target_definition:targetDefinition,
       target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS
     };
+    if(staged?.calibration_metadata&&typeof staged.calibration_metadata==='object')
+      item.calibration_metadata=staged.calibration_metadata;
     if(artifactSha256)item.artifact_sha256=artifactSha256;
     result.push(item);
   }
@@ -517,7 +525,7 @@ async function main(){
   if(mlpArtifact){
     const decoded=decodeArtifactState(mlpArtifact,'COGNITIVE_MLP_V5',sourceCommitSha);
     const scored=predictionAttempt(eventRows,
-      row=>predictFourHourCognitiveResearchProbability(row.features,decoded.state),{
+      row=>predictFourHourCognitiveResearchProbabilityStages(row.features,decoded.state),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'COGNITIVE_MLP_V5'
       });
     if(scored.valid){
@@ -546,7 +554,7 @@ async function main(){
   if(hybridMlpArtifact){
     const decoded=decodeArtifactState(hybridMlpArtifact,'MLP_GBDT_HYBRID',sourceCommitSha);
     const scored=predictionAttempt(eventRows,
-      row=>predictFourHourCognitiveChallengerProbability(row.features,decoded.state.fit),{
+      row=>predictFourHourCognitiveChallengerProbabilityStages(row.features,decoded.state.fit),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'MLP_GBDT_HYBRID'
       });
     if(scored.valid){
@@ -983,7 +991,7 @@ async function main(){
         }
       );
       if(output?.mode)outputModes[output.mode]=(outputModes[output.mode]||0)+1;
-      return output?.probability??null;
+      return output??null;
     },{
       sourceCommitSha,artifactSha256:artifact.artifact_sha256,modelName:family
     });
@@ -1877,10 +1885,12 @@ async function main(){
     command_line:process.argv.slice(2),
     configuration:{...args},
     random_seed_policy:{
-      logistic_solver:'FULL_BATCH_GD_DETERMINISTIC_NO_RANDOM_SEED',
+      logistic_solver:'FULL_BATCH_GD_WITH_PURGED_EXPANDING_CV_TUNING',
       logistic_cv_seed:null,
       logistic_optimizer_deterministic:true,
-      logistic_unused_seed_parameter:22429,
+      logistic_optimizer_seed_used:false,
+      logistic_cv_fold_count:logisticTuning.report.fold_count,
+      logistic_cv_candidate_count:logisticTuning.report.candidate_results.length,
       tcn_lstm_seed:22429,
       dense_mlp_seed:1337,
       bootstrap_seed:22429,
@@ -1899,8 +1909,10 @@ async function main(){
     },
     models:Object.fromEntries(Object.entries(benchmark.models).map(([name,model])=>[
       name,{
-        training_status:trainingArtifacts[name]?'COMPLETE':
-          unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
+        training_status:name==='LOGISTIC_REGRESSION'
+          ?(logisticTuning.report.status==='COMPLETE'?'COMPLETE':'FAILED')
+          :trainingArtifacts[name]?'COMPLETE'
+            :unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
         evaluation_status:model.status,
         raw_brier:model.validation?.raw_brier_score??null,
         calibrated_brier:model.validation?.calibrated_brier_score??null,
@@ -1935,7 +1947,11 @@ async function main(){
       dataset_source_commit_sha:datasetSourceCommitSha,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
-      row_count:rows.length
+      row_count:rows.length,
+      validation_scored_rows:split.validation.length,
+      holdout_scored_rows:eventRows.filter(row=>
+        !split.validation.some(validationRow=>String(validationRow.id)===String(row.id))
+      ).length
     },
     training,
     dataset_scope:datasetScope,

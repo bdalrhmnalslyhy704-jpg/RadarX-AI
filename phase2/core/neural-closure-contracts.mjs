@@ -1523,7 +1523,8 @@ function predictionMap(predictions,modelName,requiredIds,{
   if(!Array.isArray(predictions))
     return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
   const map=new Map(),calibratedMap=new Map();
-  let calibrationMetadata=null,calibrationMetadataJson=null;
+  const calibrationMetadataProfiles=new Map();
+  let calibrationMetadataPresent=false;
   for(const item of predictions){
     const id=String(item?.id||'');
     const rawValue=item?.raw_probability??item?.probability;
@@ -1546,19 +1547,16 @@ function predictionMap(predictions,modelName,requiredIds,{
       :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
       return {valid:false,reason:'MODEL_PREDICTION_ARTIFACT_SHA_MISMATCH:'+modelName,map};
     const metadata=item?.calibration_metadata??null;
-    const metadataJson=metadata===null?null:JSON.stringify(metadata);
-    if(calibrationMetadataJson===null&&map.size===0){
-      calibrationMetadataJson=metadataJson;
-      calibrationMetadata=metadata;
-    }else if(metadataJson!==calibrationMetadataJson){
-      return {valid:false,reason:'MODEL_PREDICTION_CALIBRATION_METADATA_MISMATCH:'+modelName,map};
+    if(metadata!==null){
+      calibrationMetadataPresent=true;
+      if(typeof metadata!=='object'||Array.isArray(metadata)||
+        metadata.training_partition_only!==true||
+        metadata.outer_validation_used_for_calibrator_fit!==false||
+        metadata.outer_validation_used_for_calibrator_selection!==false||
+        metadata.holdout_used_for_calibration!==false)
+        return {valid:false,reason:'MODEL_CALIBRATION_PROVENANCE_INVALID:'+modelName,map};
+      calibrationMetadataProfiles.set(JSON.stringify(metadata),metadata);
     }
-    if(metadata?.applied_to_final_model===true&&(
-      metadata.training_partition_only!==true||
-      metadata.outer_validation_used_for_calibrator_fit!==false||
-      metadata.outer_validation_used_for_calibrator_selection!==false||
-      metadata.holdout_used_for_calibration!==false
-    ))return {valid:false,reason:'MODEL_CALIBRATION_PROVENANCE_INVALID:'+modelName,map};
     map.set(id,Number(rawValue));
     calibratedMap.set(id,Number(calibratedValue));
   }
@@ -1567,6 +1565,34 @@ function predictionMap(predictions,modelName,requiredIds,{
   if(missing.length||extra.length)
     return {valid:false,reason:'MODEL_PREDICTION_ROW_SET_MISMATCH:'+modelName,
       missing_count:missing.length,extra_count:extra.length,map};
+  const profiles=[...calibrationMetadataProfiles.values()];
+  const methods=[...new Set(profiles.map(item=>String(item.selected_method??'NO_CALIBRATION')))];
+  const statuses=[...new Set(profiles.map(item=>String(item.status??'UNKNOWN')))];
+  const fitPartitions=[...new Set(profiles.map(item=>String(item.fit_partition??'UNKNOWN')))];
+  const appliedCount=profiles.filter(item=>item.applied_to_final_model===true).length;
+  const calibrationMetadata=!calibrationMetadataPresent?null:profiles.length<=1
+    ?(profiles[0]??null)
+    :{
+      schema:'RADARX_PER_REGIME_TRAIN_ONLY_CALIBRATION_PROFILES_V1',
+      status:appliedCount===profiles.length
+        ?'TRAIN_ONLY_CALIBRATED_PER_REGIME'
+        :appliedCount>0?'MIXED_TRAIN_ONLY_CALIBRATED_AND_RAW_REGIMES':'RAW_UNCALIBRATED',
+      selected_method:methods.join('+'),
+      applied_to_final_model:appliedCount===profiles.length&&profiles.length>0,
+      partially_applied_to_final_model:appliedCount>0&&appliedCount<profiles.length,
+      fit_partition:fitPartitions.join('+'),
+      fit_rows:profiles.reduce((sum,item)=>sum+Number(item.fit_rows??0),0),
+      fit_positive:profiles.reduce((sum,item)=>sum+Number(item.fit_positive??0),0),
+      fit_negative:profiles.reduce((sum,item)=>sum+Number(item.fit_negative??0),0),
+      training_partition_only:true,
+      outer_validation_used_for_calibrator_fit:false,
+      outer_validation_used_for_calibrator_selection:false,
+      holdout_used_for_calibration:false,
+      profile_count:profiles.length,
+      applied_profile_count:appliedCount,
+      profile_statuses:statuses,
+      profiles
+    };
   return {valid:true,map,calibratedMap,calibrationMetadata};
 }
 function probabilitiesFor(rows,map,calibrator=null) {
@@ -3318,6 +3344,9 @@ export function runNeuralClosureBenchmark({
     const calibratedMap=verified.calibratedMap??rawMap;
     const calibrationMetadata=verified.calibrationMetadata??null;
     const calibrationApplied=calibrationMetadata?.applied_to_final_model===true;
+    const calibrationPartiallyApplied=
+      calibrationMetadata?.partially_applied_to_final_model===true;
+    const calibrationStageAvailable=calibrationApplied||calibrationPartiallyApplied;
     const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmAuxiliaryRankingMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -3346,11 +3375,15 @@ export function runNeuralClosureBenchmark({
     const calibration={
       ...(calibrationMetadata??{}),
       schema:calibrationMetadata?.schema??'RADARX_OUTER_VALIDATION_IDENTITY_PROBABILITY_STAGE_V1',
-      status:calibrationApplied
-        ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
-        :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
+      status:calibrationPartiallyApplied
+        ?'MIXED_TRAIN_ONLY_CALIBRATED_AND_RAW_REGIMES'
+        :calibrationApplied
+          ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
+          :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
       selected_method:calibrationMetadata?.selected_method??'NO_CALIBRATION',
-      applied_to_final_model:calibrationApplied,
+      applied_to_final_model:calibrationStageAvailable,
+      fully_applied_to_all_scored_rows:calibrationApplied,
+      partially_applied_to_final_model:calibrationPartiallyApplied,
       fit_rows:calibrationMetadata?.fit_rows??calibrationMetadata?.fit_samples??0,
       fit_positive:calibrationMetadata?.fit_positive??calibrationMetadata?.fit_positives??0,
       fit_negative:calibrationMetadata?.fit_negative??calibrationMetadata?.fit_negatives??0,
@@ -3528,13 +3561,17 @@ export function runNeuralClosureBenchmark({
       calibrated_classification_metrics:calibratedProbabilityMetrics,
       reliability_diagnostics:reliabilityDiagnostics,
       calibration,
-      probability_evaluation_method:calibrationApplied
-        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
-        :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
-      execution_probability_stage:calibrationApplied
-        ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
-        :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
-      calibration_applied:calibrationApplied,
+      probability_evaluation_method:calibrationPartiallyApplied
+        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_PER_REGIME_CALIBRATION_STAGE'
+        :calibrationApplied
+          ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
+          :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
+      execution_probability_stage:calibrationPartiallyApplied
+        ?'TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME'
+        :calibrationApplied
+          ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
+          :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
+      calibration_applied:calibrationStageAvailable,
       threshold_selection_sample_count:thresholdSelectionRows.length,
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
