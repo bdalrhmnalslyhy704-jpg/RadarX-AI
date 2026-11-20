@@ -1185,8 +1185,10 @@ async function main(){
               objective:'FOCAL_ASYMMETRIC_BRIER'},
             {name:'4H_AUX_RANK_HEAD_LR015_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
               rankingHeadLearningRate:0.015},
-            {name:'4H_AUX_RANK_HEAD_LR045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingHeadLearningRate:0.045}
+            {name:'4H_SHARED_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              rankingWeight:0.02},
+            {name:'4H_SHARED_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingWeight:0.05}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1334,10 +1336,21 @@ async function main(){
               row.name===selection.selected_configuration)?.pairwise_ranking??null,
             selected_pairwise_ranking_head:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.ranking_head??null,
+            selected_shared_classifier_loss:{
+              method:'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1',
+              enabled:Number(selection.candidates.find(row=>
+                row.name===selection.selected_configuration)?.config?.rankingWeight??0)>0,
+              weight:Number(selection.candidates.find(row=>
+                row.name===selection.selected_configuration)?.config?.rankingWeight??0),
+              training_pair_support:selection.training_return_pair_support??null,
+              candidate_count_requested:selection.candidate_count_requested??null,
+              candidate_count_evaluated:selection.candidate_count_evaluated??null,
+              skipped_candidates:selection.skipped_candidates??[]
+            },
             ranking_head_selection_qualification:selection.ranking_head_selection_qualification??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
-            ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
+            ranking_head_role:'AUXILIARY_CROSS_SECTIONAL_RANKING_WITH_OPTIONAL_SHARED_CLASSIFIER_PAIRWISE_TRAINING',
             ranking_scores_emitted_for:'OUTER_VALIDATION_ONLY',
             holdout_ranking_scores_emitted:false,
             ranking_anchor_scores_emitted_for:'OUTER_VALIDATION_ONLY',
