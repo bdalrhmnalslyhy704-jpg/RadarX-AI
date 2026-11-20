@@ -1935,7 +1935,11 @@ async function main(){
       dataset_source_commit_sha:datasetSourceCommitSha,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
-      row_count:rows.length
+      row_count:rows.length,
+      validation_scored_rows:split.validation.length,
+      holdout_scored_rows:eventRows.filter(row=>
+        !split.validation.some(validationRow=>String(validationRow.id)===String(row.id))
+      ).length
     },
     training,
     dataset_scope:datasetScope,
