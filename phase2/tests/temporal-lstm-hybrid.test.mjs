@@ -498,7 +498,9 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
   const shared=trainTcnLstmHybrid(fitRows,{...common,rankingWeight:0.05});
   const loss=shared.training.shared_classifier_loss;
   assert.equal(loss.enabled,true);
-  assert.equal(loss.method,'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1');
+  assert.equal(loss.method,'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_PCGRAD_V2');
+  assert.equal(loss.conflict_resolution,'PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT');
+  assert.ok(Number.isFinite(loss.mean_gradient_cosine_before_projection));
   assert.equal(loss.source_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(loss.comparison_pairs,10);
   assert.ok(loss.gradient_batches_applied>0);
