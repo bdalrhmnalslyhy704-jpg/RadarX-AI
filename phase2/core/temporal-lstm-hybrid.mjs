@@ -237,6 +237,122 @@ export function selectChronologicalTcnLstmTrainingRows(
     selected_bucket_max_rows:Math.max(...selectedBuckets.map(([,group])=>group.length))
   }};
 }
+export function splitTcnLstmTrainingRowsForExecutionHead(rows,{
+  executionHeadFraction=0.25,minimumModelTrainingRows=20,minimumExecutionHeadRows=20
+}={}){
+  if(!Array.isArray(rows)||!finite(executionHeadFraction)||
+    executionHeadFraction<=0||executionHeadFraction>=0.5||
+    !Number.isInteger(minimumModelTrainingRows)||minimumModelTrainingRows<20||
+    !Number.isInteger(minimumExecutionHeadRows)||minimumExecutionHeadRows<20)
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_SPLIT_CONFIGURATION_INVALID');
+  const ordered=[...rows].sort((a,b)=>
+    Number(a.at)-Number(b.at)||
+    String(a.symbol??a.id??'').localeCompare(String(b.symbol??b.id??''))||
+    String(a.id??'').localeCompare(String(b.id??''))
+  );
+  ordered.forEach((row,index)=>validateRow(row,index));
+  const groups=new Map();
+  for(const row of ordered){
+    const bucketAt=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
+      TCN_LSTM_RANKING_BUCKET_MS;
+    if(!groups.has(bucketAt))groups.set(bucketAt,[]);
+    groups.get(bucketAt).push(row);
+  }
+  const buckets=[...groups.entries()].sort((a,b)=>a[0]-b[0]);
+  const baseDiagnostics={
+    schema:'RADARX_TCN_LSTM_PURGED_EXECUTION_HEAD_SPLIT_V1',
+    execution_head_fraction:Number(executionHeadFraction),
+    available_rows:ordered.length,
+    available_decision_groups:buckets.length,
+    split_method:'LATEST_COMPLETE_15M_GROUPS_WITH_FORWARD_LABEL_PURGE',
+    source_partition:'INNER_TRAINING_PARTITION_ONLY',
+    validation_or_holdout_used:false
+  };
+  const unavailable=(reason,extra={})=>({
+    status:'UNAVAILABLE',
+    reason,
+    model_training_rows:ordered,
+    execution_head_rows:null,
+    purged_rows:[],
+    diagnostics:{
+      ...baseDiagnostics,status:'UNAVAILABLE',reason,
+      model_training_rows:ordered.length,execution_head_rows:0,
+      purged_rows:0,chronology_valid:false,representation_out_of_sample:false,
+      ...extra
+    }
+  });
+  if(buckets.length<2)
+    return unavailable('INSUFFICIENT_DECISION_GROUPS_FOR_TEMPORAL_HEAD_FIT');
+  const executionGroupCount=Math.max(1,Math.ceil(
+    buckets.length*executionHeadFraction
+  ));
+  const splitIndex=buckets.length-executionGroupCount;
+  if(splitIndex<1)
+    return unavailable('INSUFFICIENT_EARLIER_GROUPS_FOR_MODEL_FIT');
+  const executionHeadRows=buckets.slice(splitIndex).flatMap(([,group])=>group);
+  if(executionHeadRows.some(row=>!finite(row.realized_return_pct)||
+    !finite(row.max_adverse_excursion_pct)))
+    return unavailable('EXECUTION_HEAD_OUTCOMES_INCOMPLETE');
+  const executionHeadStartAt=Math.min(...executionHeadRows.map(row=>Number(row.at)));
+  const earlierBuckets=buckets.slice(0,splitIndex);
+  const retainedModelBuckets=earlierBuckets.filter(([,group])=>
+    group.every(row=>Number(row.resolved_at)<executionHeadStartAt)
+  );
+  const purgedModelBuckets=earlierBuckets.filter(([,group])=>
+    !group.every(row=>Number(row.resolved_at)<executionHeadStartAt)
+  );
+  const modelTrainingRows=retainedModelBuckets.flatMap(([,group])=>group);
+  const purgedRows=purgedModelBuckets.flatMap(([,group])=>group);
+  const modelSupport={
+    rows:modelTrainingRows.length,
+    positives:modelTrainingRows.filter(row=>row.target===1).length,
+    negatives:modelTrainingRows.filter(row=>row.target===0).length
+  };
+  const headSupport={
+    rows:executionHeadRows.length,
+    positives:executionHeadRows.filter(row=>row.target===1).length,
+    negatives:executionHeadRows.filter(row=>row.target===0).length
+  };
+  const modelMaxResolvedAt=modelTrainingRows.length
+    ?Math.max(...modelTrainingRows.map(row=>Number(row.resolved_at))):null;
+  const headMinAt=executionHeadRows.length
+    ?Math.min(...executionHeadRows.map(row=>Number(row.at))):null;
+  const ready=modelTrainingRows.length>=minimumModelTrainingRows&&
+    headSupport.rows>=minimumExecutionHeadRows&&
+    modelSupport.positives>=2&&modelSupport.negatives>=2&&
+    headSupport.positives>=2&&headSupport.negatives>=2&&
+    finite(modelMaxResolvedAt)&&finite(headMinAt)&&modelMaxResolvedAt<headMinAt;
+  const diagnostics={
+    ...baseDiagnostics,status:ready?'READY':'UNAVAILABLE',
+    decision_boundary_at:headMinAt,
+    model_training_rows:modelSupport.rows,
+    execution_head_rows:headSupport.rows,
+    purged_rows:purgedRows.length,
+    model_training_support:modelSupport,
+    execution_head_support:headSupport,
+    model_training_max_resolved_at:modelMaxResolvedAt,
+    execution_head_min_at:headMinAt,
+    purge_gap_ms:finite(modelMaxResolvedAt)&&finite(headMinAt)
+      ?headMinAt-modelMaxResolvedAt:null,
+    chronology_valid:ready,
+    complete_decision_groups:true,
+    representation_out_of_sample:ready,
+    disjoint_sample_identities:!modelTrainingRows.some(row=>
+      executionHeadRows.some(head=>sampleIdentity(row)===sampleIdentity(head))
+    )
+  };
+  if(!ready)
+    return unavailable('EXECUTION_HEAD_SPLIT_SUPPORT_OR_PURGE_FAILED',diagnostics);
+  if(modelTrainingRows.some(row=>
+    executionHeadRows.some(head=>sampleIdentity(row)===sampleIdentity(head))
+  ))
+    return unavailable('EXECUTION_HEAD_SPLIT_IDENTITY_OVERLAP',diagnostics);
+  return {
+    status:'READY',reason:null,model_training_rows:modelTrainingRows,
+    execution_head_rows:executionHeadRows,purged_rows:purgedRows,diagnostics
+  };
+}
+
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -LOGIT_LIMIT, LOGIT_LIMIT)));
 const tanh = Math.tanh;
@@ -1921,6 +2037,21 @@ export function trainTcnLstmHybrid(trainingRows, {
     (finite(a.at) ? a.at : 0) - (finite(b.at) ? b.at : 0));
   const rows = ordered.slice(-Math.min(maxTrainingSamples, ordered.length));
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
+  if(executionRows!==null){
+    if(!Array.isArray(executionRows))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_ROWS_INVALID');
+    assertRows(executionRows,'EXECUTION_HEAD_TRAINING');
+    if(executionRows.some(row=>!finite(row.realized_return_pct)||
+      !finite(row.max_adverse_excursion_pct)))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_OUTCOMES_INCOMPLETE');
+    const modelTrainingIds=new Set(rows.map(sampleIdentity));
+    if(executionRows.some(row=>modelTrainingIds.has(sampleIdentity(row))))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_TRAINING_IDENTITY_OVERLAP');
+    const modelTrainingMaxResolvedAt=Math.max(...rows.map(row=>Number(row.resolved_at)));
+    const executionHeadMinAt=Math.min(...executionRows.map(row=>Number(row.at)));
+    if(!(modelTrainingMaxResolvedAt<executionHeadMinAt))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_TRAINING_PURGE_VIOLATION');
+  }
   const classWeights=objective==='FOCAL_ASYMMETRIC_BRIER'
     ?deriveTrainingClassWeights(rows.map(row=>row.target)):null;
   if(rankingRows!==null&&!Array.isArray(rankingRows))
@@ -2145,14 +2276,23 @@ export function trainTcnLstmHybrid(trainingRows, {
       fitted:false,reason:'NO_TRAINING_PARTITION_RETURN_PAIRS',
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
   const executionHeadFit=Array.isArray(executionRows)
-    ?fitTcnLstmExecutionRegressionHeads(rows,executionRows,model,anchor,{
-      roundTripCostBps:executionHeadRoundTripCostBps,
-      learningRate:executionHeadLearningRate,epochs:executionHeadEpochs,l2:executionHeadL2
-    })
-    :{schema:'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2',
-      fitted:false,reason:'MATURED_TRAINING_EXECUTION_EVIDENCE_NOT_SUPPLIED',
+    ?{
+      ...fitTcnLstmExecutionRegressionHeads(executionRows,executionRows,model,anchor,{
+        roundTripCostBps:executionHeadRoundTripCostBps,
+        learningRate:executionHeadLearningRate,epochs:executionHeadEpochs,l2:executionHeadL2
+      }),
+      model_training_rows:rows.length,
+      model_training_max_resolved_at:Math.max(...rows.map(row=>Number(row.resolved_at))),
+      execution_head_min_at:Math.min(...executionRows.map(row=>Number(row.at))),
+      source_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      representation_out_of_sample:true,
+      training_and_execution_head_identities_disjoint:true
+    }
+    :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3',
+      fitted:false,reason:'PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE',
       input_feature_schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
-      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
+      fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false,
+      representation_out_of_sample:false};
   const finalBrier=evaluateBrier(rows,model,anchor);
   const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
   const finalSharedRankingLoss=rankingWeight>0
@@ -2543,10 +2683,6 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const effectiveTrainingRows=trainingSampleSelection.rows;
   // Realized returns belong only to the separate selection diagnostic; strip
   // them before either the Logistic anchor or neural optimizer sees fit rows.
-  const effectiveTrainingRowsForFit=effectiveTrainingRows.map(row=>{
-    const {realized_return_pct,...fitRow}=row;
-    return fitRow;
-  });
   const trainAt = effectiveTrainingRows.map(row => row.at);
   const trainResolved = effectiveTrainingRows.map(row => row.resolved_at);
   const selectionAt = selectionRows.map(row => row.at);
@@ -2560,7 +2696,30 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const trainingIds = new Set(effectiveTrainingRows.map(sampleIdentity));
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
-  const rankingTrainingEvidenceComplete=effectiveTrainingRows.every(row=>
+  const executionEvidenceComplete=effectiveTrainingRows.every(row=>
+    finite(row.realized_return_pct)&&finite(row.max_adverse_excursion_pct)
+  );
+  const executionHeadSplit=executionEvidenceComplete
+    ?splitTcnLstmTrainingRowsForExecutionHead(effectiveTrainingRows)
+    :{
+      status:'UNAVAILABLE',reason:'EXECUTION_HEAD_OUTCOMES_INCOMPLETE',
+      model_training_rows:effectiveTrainingRows,execution_head_rows:null,purged_rows:[],
+      diagnostics:{
+        schema:'RADARX_TCN_LSTM_PURGED_EXECUTION_HEAD_SPLIT_V1',
+        status:'UNAVAILABLE',reason:'EXECUTION_HEAD_OUTCOMES_INCOMPLETE',
+        available_rows:effectiveTrainingRows.length,
+        model_training_rows:effectiveTrainingRows.length,execution_head_rows:0,
+        purged_rows:0,chronology_valid:false,representation_out_of_sample:false,
+        validation_or_holdout_used:false
+      }
+    };
+  const modelTrainingRows=executionHeadSplit.model_training_rows;
+  const executionHeadRows=executionHeadSplit.execution_head_rows;
+  const effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
+    const {realized_return_pct,...fitRow}=row;
+    return fitRow;
+  });
+  const rankingTrainingEvidenceComplete=modelTrainingRows.every(row=>
     finite(row.realized_return_pct)
   );
   let rankingRowsForFit=null;
@@ -2575,7 +2734,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   if(rankingTrainingEvidenceComplete){
     try{
       const support=buildTcnLstmReturnRankingPairs(
-        effectiveTrainingRowsForFit,effectiveTrainingRows,{
+        effectiveTrainingRowsForFit,modelTrainingRows,{
           roundTripCostBps,
           minimumReturnGapPct:rankingMinimumReturnGapPct,
           maxPairsPerTimestamp:rankingPairsPerTimestamp
@@ -2589,7 +2748,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         source_partition:'TRAINING_PARTITION_ONLY'
       };
       if(support.comparison_pairs>=10)
-        rankingRowsForFit=effectiveTrainingRows;
+        rankingRowsForFit=modelTrainingRows;
     }catch(error){
       rankingTrainingPairSupport={
         status:'UNAVAILABLE',reason:String(error?.message||error),
@@ -2650,11 +2809,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       dropout:candidateDropout,
       objective:candidateObjective,
       seed: seed + index * 101,
-      maxTrainingSamples: effectiveTrainingRows.length,
+      maxTrainingSamples: modelTrainingRows.length,
       baselineFit: anchor,
       rankingRows:rankingRowsForFit,
-      executionRows:effectiveTrainingRows.every(row=>finite(row.realized_return_pct)&&
-        finite(row.max_adverse_excursion_pct))?effectiveTrainingRows:null,
+      executionRows:executionHeadRows,
       rankingWeight:Number(config.rankingWeight??0),
       rankingHeadLearningRate:candidateRankingHeadLearningRate,
       rankingHeadEpochs,rankingHeadL2,
@@ -2861,7 +3019,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     selection_support: selectionSupport,
     effective_training_budget:effectiveTrainingBudget,
     effective_training_rows:effectiveTrainingRows.length,
-    training_sample_selection:trainingSampleSelection.diagnostics,
+    model_training_rows:modelTrainingRows.length,
+    execution_head_training_rows:executionHeadRows?.length??0,
+    training_sample_selection:{
+      ...trainingSampleSelection.diagnostics,
+      execution_head_split:executionHeadSplit.diagnostics
+    },
     ranking_training_pair_support:rankingTrainingPairSupport,
     baseline: {
       kind:anchor.kind,training_rows:anchor.training_rows,
