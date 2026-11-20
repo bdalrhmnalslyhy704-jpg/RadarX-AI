@@ -370,6 +370,27 @@ test('temperature and Platt scaling fit only with 50+ positive and negative supp
   assert.throws(()=>applyProbabilityCalibrator(NaN,platt),/LOGIT_NON_FINITE/);
 });
 
+test('Platt calibration can learn an inverse score orientation using calibration-fit labels only',()=>{
+  const labels=Array.from({length:240},(_,index)=>index%2);
+  const logits=labels.map((target,index)=>target
+    ?-1.1-(index%5)*0.03
+    :0.9+(index%7)*0.02);
+  const fitted=fitPlattScaler(logits,labels);
+  assert.equal(fitted.status,'FITTED');
+  assert.equal(fitted.fitted,true);
+  assert.equal(fitted.accepted,true);
+  assert.equal(fitted.slope_orientation,'NEGATIVE');
+  assert.ok(fitted.slope<0);
+  assert.ok(fitted.fit_nll_after<fitted.fit_nll_before);
+  assert.ok(fitted.orientation_trials.some(row=>
+    row.orientation==='POSITIVE'&&Number.isFinite(row.fit_nll_after)));
+  assert.ok(fitted.orientation_trials.some(row=>
+    row.orientation==='NEGATIVE'&&Number.isFinite(row.fit_nll_after)));
+  assert.ok(applyProbabilityCalibrator(0.8,fitted)<
+    applyProbabilityCalibrator(0.2,fitted),
+    'an accepted negative Platt slope must reverse probability order');
+});
+
 test('realized PnL uses actual first-touch fills and prices opening gaps conservatively',()=>{
   const up={
     outcome:'UP',execution_return_contract:NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT,
