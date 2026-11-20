@@ -21,10 +21,12 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
-  assert.match(workflow,/cancel-in-progress: false/,
-    'a newer candidate replay must queue instead of cancelling the active fixed-cohort benchmark');
-  assert.ok(workflow.includes('github.sha'),
-    'each immutable candidate commit must have its own fixed-cohort replay slot');
+  assert.match(workflow,/cancel-in-progress: true/,
+    'a newer research SHA must supersede an older full-cohort training job on the same branch');
+  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\$\{\{ github\.ref \}\}/,
+    'the replay concurrency key must be scoped to one branch, not each commit SHA');
+  assert.ok(workflow.includes('research/build224-tcn-lstm-score-head-oos-ablation-20261120'),
+    'the matched score-conditioned head ablation branch must trigger the fixed-cohort replay');
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
@@ -457,4 +459,21 @@ test('matched Logistic threshold is frozen on selection and risk comparison is s
   assert.match(closure,/drawdown_no_worse_than_logistic/);
   assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
+});
+
+test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with one frozen lambda',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
+  assert.match(trainer,/variant:'POOLED_ONLY'/);
+  assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
+  assert.match(trainer,/evaluateExternalExecutionRiskTopK\([\s\S]*?pooledScores[\s\S]*?pooledLambdas/);
+  assert.match(trainer,/same_outer_validation_opportunities:true/);
+  assert.match(trainer,/same_frozen_lambda_for_both_variants:true/);
+  assert.match(trainer,/outer_validation_used_for_lambda_or_top_k_selection:false/);
+  assert.match(trainer,/holdout_rows_or_scores_used:false/);
+  assert.match(trainer,/context_minus_pooled_only/);
+  assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
+  assert.match(recurrent,/variant='LOGIT_CONTEXT_AUGMENTED'/);
+  assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
