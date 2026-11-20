@@ -653,10 +653,31 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
   const trainingRows=makeRankedRows(0,10,'selector-train');
   const selectionRows=makeRankedRows(20,10,'selector-selection');
+  let externalContextProviderCalls=0;
+  let externalContextPurgeVerified=false;
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
     requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    externalLogisticExecutionContextProvider:(modelRows,scoringRows)=>{
+      externalContextProviderCalls++;
+      externalContextPurgeVerified=
+        Math.max(...modelRows.map(row=>row.resolved_at))<
+        Math.min(...scoringRows.map(row=>row.at));
+      return {
+        model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
+        report:{
+          schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
+          status:'COMPLETE',training_partition_only:true,
+          outer_validation_rows_used:false,holdout_rows_or_labels_used:false,
+          selected_configuration:{l2:0.01,learning_rate:0.01},
+          calibration:{status:'RAW_FALLBACK'}
+        },
+        predictions:scoringRows.map(row=>({
+          id:String(row.id),at:Number(row.at),logit:row.target?0.35:-0.25
+        }))
+      };
+    },
     candidates:[
       {name:'BRIER_ONLY',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
       {name:'PAIRWISE_RANK',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1,rankingWeight:0.02}
@@ -670,6 +691,15 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.candidate_count_requested,2);
   assert.equal(result.candidate_count_evaluated,2);
   assert.equal(result.training_return_pair_support.status,'AVAILABLE');
+  assert.equal(externalContextProviderCalls,1,
+    'one frozen temporal Logistic fit must score both the execution-head and later selection rows');
+  assert.equal(externalContextPurgeVerified,true,
+    'the provider training labels must all resolve before any score-context row');
+  assert.equal(result.execution_logistic_context.status,'AVAILABLE');
+  assert.equal(result.execution_logistic_context.validation_or_holdout_used,false);
+  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
+  assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
+    'TEST_PURGED_TEMPORAL_LOGISTIC');
   assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0.02);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
