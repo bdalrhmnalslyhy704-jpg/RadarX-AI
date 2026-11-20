@@ -477,8 +477,8 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   const logisticScore=Math.tanh(anchorLogit/4);
   const neuralScore=Math.tanh(neuralLogit/4);
   const rankingScore=Math.tanh(rankingResidualLogit/4);
-  assert.ok(Math.abs(contextInputs.features.at(-4)-externalLogisticScore)<1e-12);
-  assert.ok(Math.abs(contextInputs.features.at(-3)-logisticScore)<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-4)-logisticScore)<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-3)-externalLogisticScore)<1e-12);
   assert.ok(Math.abs(contextInputs.features.at(-2)-neuralScore)<1e-12);
   assert.ok(Math.abs(contextInputs.features.at(-1)-rankingScore)<1e-12);
   for(let index=0;index<TCN_LSTM_HIDDEN;index++){
