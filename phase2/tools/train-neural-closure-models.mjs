@@ -1319,6 +1319,7 @@ async function main(){
             return {
               model:temporalLogisticContext.model,
               report:temporalLogisticContext.report,
+              feature_schema_id:COGNITIVE_FEATURE_SCHEMA,
               predictions
             };
           },
@@ -1397,13 +1398,13 @@ async function main(){
         if(selectedFit!==null&&calibrator.fitted===true){
           const artifact=makeArtifact({
             name:'RADARX_TCN_LSTM_HYBRID_FIRST_TOUCH_4H',
-            family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V1',
+            family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V2',
             sourceCommitSha,
             featureSchemaId:'RADARX_TEMPORAL_TCN_LSTM_ATTENTION_SEQUENCE_24X29_V1',
             featureNames:temporalNames,
             normalization:{mean:temporalNames.map(()=>0),std:temporalNames.map(()=>1)},
             modelState:{
-              schema:'RADARX_TCN_LSTM_FOUR_HOUR_MODEL_STATE_V1',
+              schema:'RADARX_TCN_LSTM_FOUR_HOUR_MODEL_STATE_V2',
               architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
               input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
               fit:selectedFit,calibrator,
