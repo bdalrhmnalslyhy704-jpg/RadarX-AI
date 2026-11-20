@@ -8,6 +8,7 @@ on:
       - research/build224-tcn-lstm-shared-loss-20261120
       - research/build224-tcn-lstm-score-head-oos-ablation-20261120
       - research/build224-temporal-logistic-cv-20261120
+      - research/build224-final-stage-corrected-replay-20261121
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
