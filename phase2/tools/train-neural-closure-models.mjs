@@ -1176,26 +1176,25 @@ async function main(){
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
           candidates:[
-            // Keep the sweep within the selector's hard cap (8). The baseline
-            // and Focal anchors isolate probability learning; the remaining
-            // six candidates concentrate on the shared-classifier ranking
-            // weight transition, including the prior best high-LR reference.
+            // Isolate probability learning with the two anchors, then test the
+            // previously untested Focal + shared-classifier ranking combination.
+            // All six mixed-loss candidates use one optimizer profile so the
+            // ranking-weight effect is directly comparable.
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
             {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_SHARED_RANK_W030_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              rankingWeight:0.03},
-            {name:'4H_SHARED_RANK_W040_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              rankingWeight:0.04},
-            {name:'4H_SHARED_RANK_W050_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              rankingWeight:0.05},
-            {name:'4H_SHARED_RANK_W035_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.035},
-            {name:'4H_SHARED_RANK_W045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.045},
-            {name:'4H_SHARED_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingWeight:0.05}
-
+            {name:'4H_FOCAL_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.005},
+            {name:'4H_FOCAL_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.01},
+            {name:'4H_FOCAL_SHARED_RANK_W015_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.015},
+            {name:'4H_FOCAL_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.02},
+            {name:'4H_FOCAL_SHARED_RANK_W025_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.025},
+            {name:'4H_FOCAL_SHARED_RANK_W030_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:0.03}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
