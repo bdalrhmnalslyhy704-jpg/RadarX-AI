@@ -2323,9 +2323,18 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const selectedBlend=blendPool[0];
     fit.ranking_probability_blend_weight=selectedBlend.weight;
     const predictions=selectedBlend.probabilities;
+    const selectedCombinedLogits=selectionLogits.map((logit,index)=>
+      logit+selectedBlend.weight*selectionRankingLogits[index]
+    );
     const score=selectedBlend.score;
     const pairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
-      selectionRows,selectionRankingLogits,{
+      selectionRows,selectedCombinedLogits,{
+        roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
+        maxPairsPerTimestamp:rankingPairsPerTimestamp
+      }
+    );
+    const sharedClassifierPairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
+      selectionRows,selectionLogits,{
         roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
         maxPairsPerTimestamp:rankingPairsPerTimestamp
       }
@@ -2338,8 +2347,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const pairwiseRankingImprovement=rankingScoreAvailable&&
       pairwiseRanking.status==='AVAILABLE'
         ?baselineRanking.pairwise_log_loss-pairwiseRanking.pairwise_log_loss:null;
+    const sharedClassifierPairwiseRankingImprovement=rankingScoreAvailable&&
+      sharedClassifierPairwiseRanking.status==='AVAILABLE'
+        ?baselineRanking.pairwise_log_loss-sharedClassifierPairwiseRanking.pairwise_log_loss:null;
     const rankingExecutionSelection=summarizeTcnLstmRankingExecutionSelection(
-      selectionRows,selectionRankingLogits,baselineLogits,{
+      selectionRows,selectedCombinedLogits,baselineLogits,{
         roundTripCostBps,minimumTrades:minimumReturnTrades,
         minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
       }
@@ -2359,6 +2371,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       brier_improvement:brierImprovement,
       pairwise_ranking:pairwiseRanking,logistic_pairwise_ranking:baselineRanking,
       pairwise_ranking_improvement:pairwiseRankingImprovement,
+      shared_classifier_pairwise_ranking:sharedClassifierPairwiseRanking,
+      shared_classifier_pairwise_ranking_improvement:sharedClassifierPairwiseRankingImprovement,
       ranking_execution_selection:rankingExecutionSelection,
       execution_risk_policy:executionRiskPolicy,
       execution_risk_penalty_weight:finite(fit.execution_risk_penalty_weight)
@@ -2387,6 +2401,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const isInnerQualified=item=>
     item.brier_improvement>requiredImprovement&&
     item.composite_improvement>requiredImprovement&&
+    (Number(item.config.rankingWeight??0)<=0||
+      (finite(item.shared_classifier_pairwise_ranking_improvement)&&
+        item.shared_classifier_pairwise_ranking_improvement>0))&&
     item.execution_heads_fitted===true&&
     item.execution_risk_policy?.status==='EVALUATED'&&
     item.execution_risk_policy?.passed===true&&
@@ -2400,6 +2417,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const rankingGatePassed=!rankingScoreAvailable||
     (finite(winner.pairwise_ranking_improvement)&&winner.pairwise_ranking_improvement>0);
   const compositeGatePassed=winner.composite_improvement>requiredImprovement;
+  const sharedClassifierRankingGateRequired=Number(winner.config.rankingWeight??0)>0;
+  const sharedClassifierRankingGatePassed=!sharedClassifierRankingGateRequired||
+    (finite(winner.shared_classifier_pairwise_ranking_improvement)&&
+      winner.shared_classifier_pairwise_ranking_improvement>0);
   const passed=isInnerQualified(winner);
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
@@ -2421,8 +2442,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     selection_scoring:{
       method:rankingScoreAvailable
-        ?'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_AND_PAIRWISE_RANK_V2'
-        :'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_V2',
+        ?'INNER_RETURN_SCREENED_BRIER_PLUS_FINAL_COMBINED_LOGIT_AND_SHARED_CLASSIFIER_RANK_V3'
+        :'INNER_RETURN_SCREENED_BRIER_PLUS_FINAL_COMBINED_LOGIT_V3',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
@@ -2430,6 +2451,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       gate_results:{
         brier_improvement:brierGatePassed?'PASS':'FAIL',
         pairwise_ranking_improvement:rankingGatePassed?'PASS':'FAIL',
+        shared_classifier_pairwise_ranking_improvement:
+          !sharedClassifierRankingGateRequired?'NOT_REQUIRED':
+            sharedClassifierRankingGatePassed?'PASS':'FAIL',
         composite_improvement:compositeGatePassed?'PASS':'FAIL'
       },
       ranking_uses_inner_selection_partition_only:true,
@@ -2438,7 +2462,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     candidates:evaluated.map(({name,config,ranking_probability_blend_weight,
       ranking_blend_search,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
-      pairwise_ranking_improvement,ranking_execution_selection,execution_risk_policy,
+      pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
+      shared_classifier_pairwise_ranking_improvement,
+      ranking_execution_selection,execution_risk_policy,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
       name,config,ranking_probability_blend_weight,ranking_blend_search,
@@ -2448,6 +2474,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement:finite(pairwise_ranking_improvement)
         ?Number(pairwise_ranking_improvement.toFixed(8)):null,
+      shared_classifier_pairwise_ranking,
+      shared_classifier_pairwise_ranking_improvement:
+        finite(shared_classifier_pairwise_ranking_improvement)
+          ?Number(shared_classifier_pairwise_ranking_improvement.toFixed(8)):null,
       ranking_execution_selection,
       execution_risk_policy,execution_risk_penalty_weight,
       ranking_head_selection_qualified,
