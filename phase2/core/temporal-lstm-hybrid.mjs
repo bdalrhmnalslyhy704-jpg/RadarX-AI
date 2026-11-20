@@ -2335,7 +2335,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       representation_out_of_sample:true,
       training_and_execution_head_identities_disjoint:true
     }
-    :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V4',
+    :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5',
       fitted:false,reason:'PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE',
       input_feature_schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false,
@@ -2370,19 +2370,19 @@ export function trainTcnLstmHybrid(trainingRows, {
     ranking_head_parameter_count:rankingHeadFit.fitted
       ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
     execution_regression_head_parameter_count:executionHeadFit.fitted
-      ?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0,
+      ?2*(TCN_LSTM_HIDDEN+1)+2*(5*TCN_LSTM_HIDDEN+5):0,
     total_parameter_count:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
       (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0),
+      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(5*TCN_LSTM_HIDDEN+5):0),
     parameter_count_contract:{
       classifier_bptt_parameters:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
       auxiliary_ranking_head_parameters:rankingHeadFit.fitted
         ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
       execution_regression_head_parameters:executionHeadFit.fitted
-        ?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0,
+        ?2*(TCN_LSTM_HIDDEN+1)+2*(5*TCN_LSTM_HIDDEN+5):0,
       total:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
         (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0)
+        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(5*TCN_LSTM_HIDDEN+5):0)
     },
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
