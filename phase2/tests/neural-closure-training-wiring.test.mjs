@@ -23,7 +23,7 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: true/,
     'a newer push to the same branch must supersede an older full-cohort replay');
-  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\\$\\{\\{ github\\.head_ref \\|\\| github\\.ref_name \\}\\}/,
+  assert.ok(workflow.includes('build224-neural-closure-fixed-cohort-replay-${{ github.head_ref || github.ref_name }}'),
     'the replay concurrency key must be normalized by branch name');
   assert.doesNotMatch(workflow,/^  pull_request:/m,
     'expensive full-cohort replay must not run on pull requests');
@@ -43,9 +43,9 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   assert.match(trainer,/holdout_metrics_read:false/);
   assert.ok(trainer.includes('const eventRows=[...split.validation];'));
   assert.match(trainer,/experiment_manifest:experimentManifest/);
-  assert.match(trainer,/experiment-manifest\\.json/);
-  assert.match(trainer,/node_version:process\\.version/);
-  assert.match(trainer,/command_line:process\\.argv\\.slice\\(2\\)/);
+  assert.ok(trainer.includes('experiment-manifest.json'));
+  assert.ok(trainer.includes('node_version:process.version'));
+  assert.ok(trainer.includes('command_line:process.argv.slice(2)'));
   assert.match(trainer,/predictions_generated:false/);
   assert.match(trainer,/rows_included_in_scored_predictions:0/);
   assert.ok(contracts.includes('const eventRows=holdoutOpeningProtocolStatus.passed'));
