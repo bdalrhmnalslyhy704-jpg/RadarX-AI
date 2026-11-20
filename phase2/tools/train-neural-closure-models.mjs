@@ -1885,10 +1885,12 @@ async function main(){
     command_line:process.argv.slice(2),
     configuration:{...args},
     random_seed_policy:{
-      logistic_solver:'FULL_BATCH_GD_DETERMINISTIC_NO_RANDOM_SEED',
+      logistic_solver:'FULL_BATCH_GD_WITH_PURGED_EXPANDING_CV_TUNING',
       logistic_cv_seed:null,
       logistic_optimizer_deterministic:true,
-      logistic_unused_seed_parameter:22429,
+      logistic_optimizer_seed_used:false,
+      logistic_cv_fold_count:logisticTuning.report.fold_count,
+      logistic_cv_candidate_count:logisticTuning.report.candidate_results.length,
       tcn_lstm_seed:22429,
       dense_mlp_seed:1337,
       bootstrap_seed:22429,
@@ -1907,8 +1909,10 @@ async function main(){
     },
     models:Object.fromEntries(Object.entries(benchmark.models).map(([name,model])=>[
       name,{
-        training_status:trainingArtifacts[name]?'COMPLETE':
-          unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
+        training_status:name==='LOGISTIC_REGRESSION'
+          ?(logisticTuning.report.status==='COMPLETE'?'COMPLETE':'FAILED')
+          :trainingArtifacts[name]?'COMPLETE'
+            :unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
         evaluation_status:model.status,
         raw_brier:model.validation?.raw_brier_score??null,
         calibrated_brier:model.validation?.calibrated_brier_score??null,
