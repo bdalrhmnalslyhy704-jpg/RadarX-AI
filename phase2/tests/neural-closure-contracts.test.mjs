@@ -511,6 +511,7 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
   assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
   assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
+  assert.equal(report.integrity.row_identity_sha256.length,64);
   assert.ok(['VALIDATION_EVALUATED','EVALUATED'].includes(report.models.LOGISTIC_REGRESSION.status),
     'Logistic is evaluated on validation and only gets holdout metrics after a neural validation pass');
   assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
@@ -577,6 +578,16 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
       family+' must be validation-scored or holdout-evaluated, never silently skipped');
     if(model.status==='EVALUATED'){
       assert.equal(model.holdout.sample_count,2200);
+      assert.equal(model.holdout.threshold,
+        report.models.LOGISTIC_REGRESSION.holdout.threshold,
+        family+' and Logistic must execute with the exact same frozen entry threshold');
+      assert.equal(model.holdout.threshold,
+        report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
+        family+' holdout threshold must equal the Logistic threshold selected before holdout');
+      assert.equal(model.holdout.execution_threshold_source,
+        'LOGISTIC_REGRESSION_FROZEN_THRESHOLD',family);
+      assert.equal(model.acceptance.execution_reference,
+        'MATCHED_LOGISTIC_EXECUTION_THRESHOLD',family);
     }else{
       assert.equal(model.holdout.evaluated,false);
       assert.ok(model.acceptance.status==='HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
@@ -1095,7 +1106,7 @@ test('fixed-SHA evaluator never opens holdout when every validation entry thresh
   assert.equal(report.holdout_access.opened_for_models.length,0);
 });
 
-test('a neural candidate can pass its own execution gates when Logistic has no trade threshold',()=>{
+test('a neural candidate cannot claim matched execution or open holdout when Logistic has no frozen trade threshold',()=>{
   const rows=makeRows(),sourceCommitSha='f'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const outerSplit=splitFourHourRows(rows);
@@ -1124,26 +1135,21 @@ test('a neural candidate can pass its own execution gates when Logistic has no t
     sourceCommitSha,qualificationByModel
   });
   assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,null);
-  assert.equal(report.holdout_access.opened,true);
-  assert.equal(report.holdout_access.execution_reference,
-    'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY');
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opened_for_models.length,0);
+  assert.equal(report.holdout_access.reason,'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES');
   assert.equal(report.models.LOGISTIC_REGRESSION.holdout.execution_evaluated,false);
   assert.equal(report.models.LOGISTIC_REGRESSION.holdout.net_pnl_pct,null);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
-    assert.equal(model.validation.outer_validation_gate.gates.threshold_selection_qualified,'PASS',family);
-    assert.equal(model.validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,'PASS',family);
-    assert.equal(model.status,'EVALUATED',family);
-    assert.equal(model.holdout.execution_evaluated,true,family);
-    assert.ok(model.holdout.sample_count>=2000,family);
-    assert.ok(model.holdout.trade_count>=100,family);
-    assert.ok(model.holdout.net_pnl_pct>0,family);
-    assert.ok(model.holdout.max_drawdown_pct<=8,family);
-    assert.equal(model.acceptance.execution_reference,
-      'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY',family);
-    assert.equal(model.acceptance.passed,true,family);
+    assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL',family);
+    assert.equal(model.validation.outer_validation_gate.execution_reference,
+      'UNAVAILABLE_NO_QUALIFIED_LOGISTIC_THRESHOLD',family);
+    assert.equal(model.status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(model.holdout.evaluated,false,family);
+    assert.equal(model.acceptance.status,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
   }
-  assert.equal(report.status,'NEURAL_SUPERIORITY_PROVEN');
+  assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
