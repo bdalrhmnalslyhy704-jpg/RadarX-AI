@@ -178,73 +178,25 @@ test('top-K ranking merges millisecond-skewed closes into the shared 15-minute d
     /NEURAL_TOP_K_TIMESTAMP_INPUT_INVALID/);
 });
 
-test('top-K per timestamp selection is frozen before the later validation block and cannot open Holdout',()=>{
-  // 140 days produce at least eight outer-check days after the two UTC purges,
-  // allowing K=3 to exercise the unchanged 20-trade minimum in both blocks.
-  const sourceRows=makeRows({days:140,rowsPerDay:120});
-  const rows=sourceRows.map(row=>{
-    const dayStart=Math.floor((row.at-BASE)/NEURAL_CLOSURE_PURGE_MS)*
-      NEURAL_CLOSURE_PURGE_MS+BASE;
-    const sourceIndex=Number(String(row.id).split(':E').at(-1));
-    // Different symbol files can close a few milliseconds/minutes apart yet
-    // belong to the same 15m decision candle.
-    const decisionAt=dayStart+12*60*60_000+(sourceIndex%3)*60_000;
-    const shift=decisionAt-row.at;
-    const sourceAudit={...row.source_audit,
-      received_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS+60_000};
-    const firstTouch={
-      ...row.first_touch,
-      first_touch_at:row.first_touch.first_touch_at+shift,
-      exit_candle:{
-        ...row.first_touch.exit_candle,
-        open_time:row.first_touch.exit_candle.open_time+shift,
-        close_time:row.first_touch.exit_candle.close_time+shift
-      }
-    };
-    return {
-      ...row,at:decisionAt,resolved_at:decisionAt+NEURAL_CLOSURE_HORIZON_MS,
-      feature_information_cutoff_at:decisionAt,source_audit:sourceAudit,
-      max_adverse_excursion_at:row.max_adverse_excursion_at+shift,
-      max_favorable_excursion_at:row.max_favorable_excursion_at+shift,
-      first_touch:firstTouch
-    };
-  }).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
-  const sourceCommitSha='8'.repeat(40);
+test('outer validation never selects Top-K and the holdout remains locked',()=>{
+  const rows=makeRows(),sourceCommitSha='8'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'TOP_K_COUNTERFACTUAL_TEST_ONLY',diagnostic_only:true
-    }])
-  );
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
   });
   assert.equal(report.holdout_access.opened,false);
-  const policy=report.models.TCN_LSTM_HYBRID.validation
-    .expanded_threshold_window_counterfactual.rank_based_top_k_policy;
-  assert.equal(policy.status,'EVALUATED');
-  assert.equal(policy.diagnostic_only,true);
-  assert.ok(policy.selection.trials.every(item=>
-    item.metrics.return_data_status==='COMPLETE'));
-  assert.equal(policy.selection.selected_top_k_per_timestamp,3,
-    'K=1 and K=2 do not reach 20 trades; K=3 should be selected on the earlier block');
-  const selected=policy.selection.trials.find(item=>item.top_k_per_timestamp===3);
-  assert.equal(selected.qualified,true);
-  assert.ok(selected.metrics.trade_count>=20);
-  assert.ok(selected.metrics.win_rate_pct>=55);
-  assert.ok(selected.metrics.net_pnl_pct>0);
-  assert.ok(selected.metrics.max_drawdown_pct<=8);
-  assert.equal(policy.outer_validation.frozen_top_k_per_timestamp,3);
-  assert.equal(policy.outer_validation.labels_used_for_k_selection,false);
-  assert.equal(policy.outer_validation.metrics.return_data_status,'COMPLETE');
-  assert.ok(policy.outer_validation.metrics.trade_count>=20);
-  assert.ok(policy.outer_validation.risk_gates_passed);
-  assert.equal(policy.affects_primary_probabilities,false);
-  assert.equal(policy.affects_primary_threshold,false);
-  assert.equal(policy.affects_acceptance_gates,false);
-  assert.equal(policy.holdout_values_used,false);
+  const validation=report.models.TCN_LSTM_HYBRID.validation;
+  assert.equal(validation.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+  assert.equal(validation.selected_threshold,0.15);
+  assert.equal(validation.threshold_selection_sample_count,0);
+  assert.deepEqual(validation.threshold_trials,[]);
+  assert.equal(validation.expanded_threshold_window_counterfactual.status,
+    'DISABLED_STRICT_OUTER_EVALUATION_ONLY');
+  assert.equal(validation.expanded_threshold_window_counterfactual.affects_primary_threshold,false);
+  assert.equal(validation.expanded_threshold_window_counterfactual.holdout_values_used,false);
+  assert.equal(validation.expanded_threshold_window_counterfactual.rank_based_top_k_policy,undefined);
+  assert.equal(report.holdout_access.opening_protocol.status,'LOCKED');
 });
 
 test('Focal-Asymmetric Brier analytic probability/logit gradients match central differences',()=>{
@@ -541,117 +493,54 @@ test('event-driven Spot portfolio caps overlapping exposure and marks MAE before
   assert.equal(NEURAL_CLOSURE_PORTFOLIO_POLICY.same_timestamp_exit_before_entry,true);
 });
 
-test('fixed-SHA evaluator compares identical event identities and refuses false superiority',()=>{
+test('fixed-SHA evaluator scores the full outer block with identity calibration and a predeclared threshold',()=>{
   const rows=makeRows(),sourceCommitSha='a'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictionsByModel=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const split=splitFourHourRows(rows);
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
   });
   assert.equal(report.schema,'RADARX_BUILD224_FIXED_SHA_NEURAL_CLOSURE_BENCHMARK_V3');
   assert.equal(report.target.definition,NEURAL_CLOSURE_TARGET_DEFINITION);
   assert.equal(report.target.horizon_ms,NEURAL_CLOSURE_HORIZON_MS);
-  assert.equal(report.integrity.row_count,12000);
+  assert.equal(report.integrity.row_count,rows.length);
   assert.match(report.integrity.dataset_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.fixed_benchmark_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.model_artifacts_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.prediction_matrix_sha256,/^[a-f0-9]{64}$/);
   assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
-  assert.ok(report.models.TCN_V11.model_artifact_sha256===modelArtifactsByModel.TCN_V11.artifact_sha256);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
-  assert.equal(report.integrity.row_identity_sha256.length,64);
-  assert.ok(['VALIDATION_EVALUATED','EVALUATED'].includes(report.models.LOGISTIC_REGRESSION.status),
-    'Logistic is evaluated on validation and only gets holdout metrics after a neural validation pass');
-  assert.equal(report.models.LOGISTIC_REGRESSION.calibration.status,'EVALUATED');
-  const baselineCalibration=report.models.LOGISTIC_REGRESSION.calibration;
-  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
-    const calibration=report.models[family].calibration;
-    assert.equal(calibration.status,'EVALUATED',family+' calibration must be evaluated');
-    assert.equal(calibration.calibration_fit_rows,baselineCalibration.calibration_fit_rows,
-      family+' fit-row count must match Logistic');
-    assert.equal(calibration.calibration_purged_rows,baselineCalibration.calibration_purged_rows,
-      family+' purge-row count must match Logistic');
-    assert.equal(calibration.threshold_selection_rows,baselineCalibration.threshold_selection_rows,
-      family+' threshold-selection row count must match Logistic');
-    assert.equal(calibration.threshold_purged_rows,baselineCalibration.threshold_purged_rows,
-      family+' threshold purge row count must match Logistic');
-    assert.equal(calibration.calibration_check_rows,baselineCalibration.calibration_check_rows,
-      family+' outer-validation row count must match Logistic');
-    assert.deepEqual(calibration.calibration_days,baselineCalibration.calibration_days,
-      family+' must use identical fit, purge, threshold-selection and outer-validation UTC-day identities');
-    assert.equal(report.models[family].validation.threshold_selection_sample_count,
-      report.models.LOGISTIC_REGRESSION.validation.threshold_selection_sample_count,
-      family+' must use identical threshold-selection rows');
-    assert.equal(report.models[family].validation.matched_execution_threshold,
-      report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
-      family+' must inherit Logistic’s frozen execution threshold');
-    assert.equal(report.models[family].validation.outer_validation_gate.outer_validation_threshold,
-      report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
-      family+' outer validation must score the exact Logistic threshold');
-    assert.equal(report.models[family].validation.outer_validation_gate.model_specific_outer_validation_threshold,
-      report.models[family].validation.selected_threshold,
-      family+' own threshold is retained separately for audit only');
-    assert.deepEqual(report.models[family].validation.threshold_trials.map(x=>x.threshold),
-      report.models.LOGISTIC_REGRESSION.validation.threshold_trials.map(x=>x.threshold),
-      family+' must use the exact same predeclared threshold grid');
-  }
-  assert.deepEqual(report.calibration_policy,{
-    schema:'DISJOINT_CALIBRATION_THRESHOLD_SELECTION_OUTER_VALIDATION_V1',
-    method:'PREDECLARED_PLATT_SCALING_WITH_RAW_FALLBACK',
-    fit_partition:'CALIBRATION_FIT_ONLY',
-    threshold_selection_partition:'EARLIER_DISJOINT_PURGED_BLOCK',
-    outer_validation_partition:'LATER_DISJOINT_PURGED_CHECK_BLOCK',
-    fallback:'RAW_IF_PLATT_NOT_ACCEPTED',
-    temperature_scaling:'NOT_FIT_PREDECLARED_PLATT_ONLY',
-    selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
-    check_block_used_for_calibrator_selection:false,
-    threshold_selection_rows_used_for_outer_validation_metrics:false,
-    same_fit_purge_threshold_and_check_rows_for_logistic_and_neural_models:true,
-    calibration_fit_rows:baselineCalibration.calibration_fit_rows,
-    calibration_purged_rows:baselineCalibration.calibration_purged_rows,
-    threshold_selection_rows:baselineCalibration.threshold_selection_rows,
-    threshold_purged_rows:baselineCalibration.threshold_purged_rows,
-    calibration_check_rows:baselineCalibration.calibration_check_rows,
-    holdout_used_for_calibration:false,
-    threshold_selection_risk_gates_unchanged:true,
-    outer_validation_rechecks_frozen_threshold:true
-  });
-  assert.equal(report.models.TCN_V11.calibration.calibration_fit_rows,1000);
-  assert.equal(report.models.TCN_V11.calibration.calibration_purged_rows,200);
-  assert.equal(report.models.TCN_V11.calibration.threshold_selection_rows,400);
-  assert.equal(report.models.TCN_V11.calibration.threshold_purged_rows,200);
-  assert.equal(report.models.TCN_V11.calibration.calibration_check_rows,400);
-  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.purge,
-    [BASE+42*NEURAL_CLOSURE_PURGE_MS]);
-  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.threshold_selection,
-    [BASE+43*NEURAL_CLOSURE_PURGE_MS,BASE+44*NEURAL_CLOSURE_PURGE_MS]);
-  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.threshold_purge,
-    [BASE+45*NEURAL_CLOSURE_PURGE_MS]);
-  assert.deepEqual(report.models.TCN_V11.calibration.calibration_days.check,
-    [BASE+46*NEURAL_CLOSURE_PURGE_MS,BASE+47*NEURAL_CLOSURE_PURGE_MS]);
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.sample_count,split.validation.length);
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,0.15);
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.threshold_selection,
+    'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.brier_score,null);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
-    assert.ok(['VALIDATION_EVALUATED_HOLDOUT_LOCKED','EVALUATED'].includes(model.status),
-      family+' must be validation-scored or holdout-evaluated, never silently skipped');
-    if(model.status==='EVALUATED'){
-      assert.equal(model.holdout.sample_count,2200);
-      assert.equal(model.holdout.threshold,
-        report.models.LOGISTIC_REGRESSION.holdout.threshold,
-        family+' and Logistic must execute with the exact same frozen entry threshold');
-      assert.equal(model.holdout.threshold,
-        report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
-        family+' holdout threshold must equal the Logistic threshold selected before holdout');
-      assert.equal(model.holdout.execution_threshold_source,
-        'LOGISTIC_REGRESSION_FROZEN_THRESHOLD',family);
-      assert.equal(model.acceptance.execution_reference,
-        'MATCHED_LOGISTIC_EXECUTION_THRESHOLD',family);
-    }else{
-      assert.equal(model.holdout.evaluated,false);
-      assert.ok(model.acceptance.status==='HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
-    }
-    assert.equal(model.acceptance.passed,false,
-      'a candidate that does not clear all validation and holdout gates must not be promoted');
+    assert.equal(model.model_artifact_sha256,modelArtifactsByModel[family].artifact_sha256);
+    assert.equal(model.calibration.schema,'RADARX_OUTER_VALIDATION_NO_CALIBRATION_V1');
+    assert.equal(model.calibration.status,'NOT_APPLIED_PREDECLARED_IDENTITY');
+    assert.equal(model.calibration.selected_method,'IDENTITY_NO_CALIBRATION');
+    assert.equal(model.calibration.fit_rows,0);
+    assert.equal(model.calibration.outer_validation_labels_used_for_calibrator_fit,false);
+    assert.equal(model.validation.sample_count,split.validation.length);
+    assert.equal(model.validation.calibration_applied,false);
+    assert.equal(model.validation.calibrated_brier_score,null);
+    assert.ok(Number.isFinite(model.validation.raw_brier_score));
+    assert.equal(model.validation.evaluation_brier_score,model.validation.raw_brier_score);
+    assert.equal(model.validation.selected_threshold,0.15);
+    assert.equal(model.validation.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+    assert.equal(model.validation.threshold_selection_sample_count,0);
+    assert.deepEqual(model.validation.threshold_trials,[]);
+    assert.equal(model.holdout.evaluated,false);
+    assert.equal(model.holdout.brier_score,null);
+    assert.equal(model.acceptance.passed,false);
   }
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opening_protocol.status,'LOCKED');
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
@@ -695,145 +584,79 @@ test('fixed-SHA evaluator keeps every holdout metric locked when the required va
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
-test('entry probability distribution diagnostics expose raw and calibrated tails without selecting thresholds',()=>{
+test('outer probability distributions report native model scores without calibration or policy selection',()=>{
   const rows=makeRows(),sourceCommitSha='c'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const split=splitFourHourRows(rows);
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+  });
+  for(const family of ['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES]){
+    const validation=report.models[family].validation;
+    const emptySelection=validation.threshold_selection_probability_distribution;
+    assert.equal(validation.threshold_selection_sample_count,0,family);
+    assert.equal(emptySelection.raw.sample_count,0,family);
+    assert.equal(emptySelection.calibrated.sample_count,0,family);
+    const outer=validation.outer_validation_probability_distribution;
+    assert.equal(outer.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(outer.calibrated.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
+    assert.equal(outer.raw.status,'AVAILABLE',family);
+    assert.equal(outer.calibrated.status,'AVAILABLE',family);
+    assert.equal(outer.raw.sample_count,split.validation.length,family);
+    assert.equal(outer.calibrated.sample_count,split.validation.length,family);
+    assert.equal(outer.raw.minimum,outer.calibrated.minimum,family);
+    assert.equal(outer.raw.maximum,outer.calibrated.maximum,family);
+    assert.equal(validation.calibration_applied,false,family);
+    assert.equal(validation.selected_threshold,0.15,family);
+    assert.deepEqual(validation.threshold_trials,[],family);
+  }
+});
+
+test('chronological stability diagnostics are evaluation-only on the full outer block',()=>{
+  const rows=makeRows(),sourceCommitSha='d'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  const split=splitFourHourRows(rows);
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
+  });
+  const diagnostic=report.models.TCN_LSTM_HYBRID.validation.chronological_stability_diagnostics;
+  assert.equal(diagnostic.schema,'RADARX_MODEL_CHRONOLOGICAL_STABILITY_V1');
+  assert.equal(diagnostic.threshold_selection.status,'NOT_EVALUATED_NO_OUTER_POLICY_SELECTION');
+  const outer=diagnostic.outer_validation;
+  assert.equal(outer.schema,'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1');
+  assert.equal(outer.status,'AVAILABLE');
+  assert.equal(outer.labels_used_for_scoring,true);
+  assert.equal(outer.labels_used_for_fit,false);
+  assert.equal(outer.labels_used_for_threshold_selection,false);
+  assert.equal(outer.affects_primary_probabilities,false);
+  assert.equal(outer.affects_acceptance_gates,false);
+  assert.equal(outer.holdout_values_used,false);
+  assert.equal(outer.sample_count,split.validation.length);
+  assert.equal(outer.blocks.reduce((sum,block)=>sum+block.sample_count,0),split.validation.length);
+  assert.ok(outer.block_count>=2);
+  assert.equal(report.holdout_access.opened,false);
+});
+
+test('chronological stability partitions do not split equal decision timestamps',()=>{
+  const rows=makeRows({days:60,rowsPerDay:200}),sourceCommitSha='5'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
   const report=runNeuralClosureBenchmark({
     rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
   });
-  const expectedGrid=[0.05,0.10,0.15,0.20,0.25,0.30,0.305,0.310,0.315,0.320,0.325,0.330,0.335,0.340,0.345,0.350,0.355,0.360,0.365,0.370,0.375,0.380,0.385,0.390,0.395,0.40,0.45,0.50,0.55,0.60,0.65,0.70,0.75,0.80];
-  for(const family of ['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES]){
-    const diagnostic=report.models[family].validation.threshold_selection_probability_distribution;
-    assert.equal(diagnostic.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
-    assert.equal(diagnostic.calibrated.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
-    assert.equal(diagnostic.raw.status,'AVAILABLE',family);
-    assert.equal(diagnostic.calibrated.status,'AVAILABLE',family);
-    assert.equal(diagnostic.raw.sample_count,
-      report.models[family].validation.threshold_selection_sample_count,family);
-    assert.equal(diagnostic.calibrated.sample_count,
-      report.models[family].validation.threshold_selection_sample_count,family);
-    const outerDiagnostic=
-      report.models[family].validation.outer_validation_probability_distribution;
-    assert.equal(outerDiagnostic.raw.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
-    assert.equal(outerDiagnostic.calibrated.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1',family);
-    assert.equal(outerDiagnostic.raw.sample_count,
-      report.models[family].validation.sample_count,family);
-    assert.equal(outerDiagnostic.calibrated.sample_count,
-      report.models[family].validation.sample_count,family);
-    for(const series of [diagnostic.raw,diagnostic.calibrated]){
-      assert.ok(series.minimum>=0&&series.maximum<=1,family);
-      assert.ok(series.minimum<=series.p50&&series.p50<=series.p75&&
-        series.p75<=series.p90&&series.p90<=series.p95&&
-        series.p95<=series.p99&&series.p99<=series.maximum,family);
-      assert.deepEqual(Object.keys(series.at_or_above_threshold).map(Number),expectedGrid);
-      const counts=Object.values(series.at_or_above_threshold);
-      for(let index=1;index<counts.length;index++)
-        assert.ok(counts[index]<=counts[index-1],family+' threshold counts must be monotone');
-      assert.equal(series.diagnostic_only,true);
-      assert.equal(series.used_to_select_threshold,false);
-      assert.equal(series.labels_used,false);
-    }
+  const blocks=report.models.TCN_LSTM_HYBRID.validation
+    .chronological_stability_diagnostics.outer_validation.blocks;
+  assert.ok(blocks.length>=2);
+  for(let index=0;index<blocks.length;index++){
+    assert.ok(blocks[index].first_at<=blocks[index].last_at);
+    if(index>0)assert.ok(blocks[index-1].last_at<blocks[index].first_at,
+      'one timestamp group cannot straddle two adjacent chronological blocks');
   }
-});
-
-test('chronological stability diagnostics expose contiguous labelled evaluation slices without affecting gates',()=>{
-  const rows=makeRows(),sourceCommitSha='d'.repeat(40);
-  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
-  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'STABILITY_DIAGNOSTIC_TEST_ONLY',diagnostic_only:true
-    }])
-  );
-  const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
-  });
   assert.equal(report.holdout_access.opened,false);
-  for(const family of ['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES]){
-    const validation=report.models[family].validation;
-    const diagnostics=validation.chronological_stability_diagnostics;
-    assert.equal(diagnostics.schema,'RADARX_MODEL_CHRONOLOGICAL_STABILITY_V1');
-    assert.equal(diagnostics.diagnostic_only,true);
-    for(const blockName of ['threshold_selection','outer_validation']){
-      const block=diagnostics[blockName];
-      assert.equal(block.schema,'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1');
-      assert.equal(block.status,'AVAILABLE');
-      assert.equal(block.diagnostic_only,true);
-      assert.equal(block.labels_used_for_scoring,true);
-      assert.equal(block.labels_used_for_fit,false);
-      assert.equal(block.labels_used_for_threshold_selection,false);
-      assert.equal(block.affects_primary_probabilities,false);
-      assert.equal(block.affects_threshold_selection,false);
-      assert.equal(block.affects_acceptance_gates,false);
-      assert.equal(block.holdout_values_used,false);
-      assert.equal(block.block_count,4);
-      assert.equal(block.blocks.reduce((sum,item)=>sum+item.sample_count,0),
-        block.sample_count);
-      for(let index=0;index<block.blocks.length;index++){
-        const item=block.blocks[index];
-        assert.ok(item.sample_count>0);
-        assert.ok(item.first_at<=item.last_at);
-        assert.ok(item.positive_count+item.negative_count===item.sample_count);
-        assert.ok(item.positive_rate_pct>=0&&item.positive_rate_pct<=100);
-        assert.ok(item.mean_probability>=0&&item.mean_probability<=1);
-        assert.ok(item.brier_score>=0&&item.brier_score<=1);
-        assert.deepEqual(Object.keys(item.scores_at_or_above),[
-          '0.15','0.2','0.25','0.3','0.35'
-        ]);
-        if(index>0)
-          assert.ok(block.blocks[index-1].last_at<item.first_at,
-            'chronological slices must be strictly ordered and non-overlapping');
-      }
-    }
-    const selection=diagnostics.threshold_selection.blocks;
-    const outer=diagnostics.outer_validation.blocks;
-    assert.ok(selection.at(-1).last_at<outer[0].first_at,
-      'outer validation must follow the threshold-selection partition');
-    assert.equal(validation.selected_threshold,
-      report.models[family].validation.selected_threshold,
-      'diagnostics must not mutate the selected threshold');
-  }
 });
 
-test('chronological stability slices keep simultaneous multi-symbol rows together',()=>{
-  const baseRows=makeRows({days:60,rowsPerDay:200});
-  const duplicates=baseRows.filter((_,index)=>index%97===0).map((row,index)=>{
-    const symbol='T'+String(index).padStart(5,'0')+'USDT';
-    return {
-      ...row,
-      id:row.id+':SIMULTANEOUS',
-      symbol,
-      source_audit:{...row.source_audit,symbol}
-    };
-  });
-  const rows=[...baseRows,...duplicates].sort((a,b)=>a.at-b.at||
-    a.symbol.localeCompare(b.symbol));
-  const sourceCommitSha='f'.repeat(40);
-  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
-  const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'SIMULTANEOUS_TIMESTAMP_DIAGNOSTIC_TEST',diagnostic_only:true
-    }])
-  );
-  const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
-  });
-  assert.equal(report.holdout_access.opened,false);
-  const stability=report.models.TCN_LSTM_HYBRID.validation.chronological_stability_diagnostics;
-  for(const name of ['threshold_selection','outer_validation']){
-    const blocks=stability[name].blocks;
-    for(let index=1;index<blocks.length;index++)
-      assert.ok(blocks[index-1].last_at<blocks[index].first_at,
-        'a timestamp shared by multiple symbols must not cross a block boundary');
-  }
-});
-
-// [RUN-NEURAL-REBENCHMARK] Evaluate the matured-label walk-forward calibration diagnostic on the immutable run-99 cohort.
-// Initial and adaptive calibrators must both exclude labels not mature at their scoring boundary.
 test('walk-forward recalibration uses only prior matured labels and keeps one-day purges',()=>{
   const rows=makeRows({days:60,rowsPerDay:200});
   const rawMap=new Map(rows.map(row=>[
@@ -987,192 +810,62 @@ test('walk-forward recalibration fails closed when the probability map is incomp
   assert.equal(result.reason,'WALK_FORWARD_MODEL_SCORE_INVALID');
 });
 
-test('expanded threshold-window counterfactual uses larger disjoint blocks without changing primary gates',()=>{
-  const rows=makeRows(),sourceCommitSha='9'.repeat(40);
+test('expanded threshold and Top-K counterfactuals are disabled rather than selected on outer validation',()=>{
+  const rows=makeRows(),sourceCommitSha='6'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'EXPANDED_WINDOW_DIAGNOSTIC_ONLY',diagnostic_only:true
-    }])
-  );
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,
-    qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha
   });
-  assert.equal(report.holdout_access.opened,false);
-  const logistic=report.models.LOGISTIC_REGRESSION.validation;
-  const candidate=report.models.TCN_LSTM_HYBRID.validation;
-  for(const validation of [logistic,candidate]){
+  for(const family of ['LOGISTIC_REGRESSION','TCN_LSTM_HYBRID']){
+    const validation=report.models[family].validation;
     const diagnostic=validation.expanded_threshold_window_counterfactual;
     assert.equal(diagnostic.schema,'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1');
-    assert.equal(diagnostic.status,'EVALUATED');
+    assert.equal(diagnostic.status,'DISABLED_STRICT_OUTER_EVALUATION_ONLY');
     assert.equal(diagnostic.diagnostic_only,true);
-    assert.equal(diagnostic.fit_fraction,0.35);
     assert.equal(diagnostic.affects_primary_probabilities,false);
     assert.equal(diagnostic.affects_primary_threshold,false);
     assert.equal(diagnostic.affects_acceptance_gates,false);
     assert.equal(diagnostic.holdout_values_used,false);
-    assert.equal(diagnostic.threshold_selection_labels_used_for_calibrator_fit,false);
-    assert.equal(diagnostic.outer_validation_labels_used_for_calibrator_fit,false);
-    assert.equal(diagnostic.threshold_selection.grid_scope,
-      'DIAGNOSTIC_FINE_THRESHOLD_SWEEP_ONLY');
-    assert.equal(diagnostic.threshold_selection.threshold_grid.length,51);
-    assert.deepEqual(diagnostic.threshold_selection.threshold_grid,
-      Array.from({length:51},(_,index)=>Number((0.280+index*0.001).toFixed(3))));
-    assert.equal(diagnostic.threshold_selection.trials.length,51,
-      'fine sweep must cover every diagnostic-only threshold exactly once');
-    assert.equal(validation.threshold_trials.length,34,
-      'the primary threshold grid must remain unchanged');
-    const p=diagnostic.partitions;
-    const transfer=diagnostic.outer_validation.threshold_signal_transfer;
-    const distributions=diagnostic.outer_validation.probability_distribution;
-    const rankPolicy=diagnostic.rank_based_top_k_policy;
-    assert.equal(rankPolicy.schema,'RADARX_TOP_K_PER_TIMESTAMP_POLICY_COUNTERFACTUAL_V1');
-    assert.equal(rankPolicy.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
-    assert.equal(rankPolicy.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
-    assert.equal(rankPolicy.selection.singleton_buckets_excluded,0);
-    assert.equal(rankPolicy.outer_validation.singleton_buckets_excluded,0);
-    assert.equal(rankPolicy.status,'EVALUATED');
-    assert.equal(rankPolicy.diagnostic_only,true);
-    assert.equal(rankPolicy.affects_primary_probabilities,false);
-    assert.equal(rankPolicy.affects_primary_threshold,false);
-    assert.equal(rankPolicy.affects_acceptance_gates,false);
-    assert.equal(rankPolicy.holdout_values_used,false);
-    assert.deepEqual(rankPolicy.top_k_grid,[1,2,3]);
-    assert.equal(rankPolicy.selection.trials.length,3);
-    for(const trial of rankPolicy.selection.trials){
-      assert.equal(trial.decision_bucket_ms,NEURAL_CLOSURE_RANKING_BUCKET_MS);
-      assert.equal(trial.decision_grouping,'FLOOR_UNIX_EPOCH_15M_BUCKET');
-      assert.equal(trial.total_time_buckets,
-        trial.decision_group_count+trial.singleton_buckets_excluded,
-        'every 15m bucket must be reported as either multi-symbol eligible or singleton-excluded');
-    }
-    assert.equal(rankPolicy.selection.total_time_buckets,
-      rankPolicy.selection.trials[0].total_time_buckets,
-      'selection summary must carry the actual 15m bucket count instead of defaulting to zero');
-    assert.equal(rankPolicy.selection.singleton_buckets_excluded,
-      rankPolicy.selection.trials[0].singleton_buckets_excluded);
-    assert.equal(rankPolicy.selection.selected_top_k_per_timestamp,
-      rankPolicy.outer_validation.frozen_top_k_per_timestamp);
-    assert.equal(rankPolicy.outer_validation.labels_used_for_k_selection,false);
-    assert.equal(rankPolicy.outer_validation.metrics===null,
-      rankPolicy.outer_validation.frozen_top_k_per_timestamp===null);
-    if(rankPolicy.selection.selected_top_k_per_timestamp!==null){
-      const selectedTrial=rankPolicy.selection.trials.find(item=>
-        item.top_k_per_timestamp===rankPolicy.selection.selected_top_k_per_timestamp);
-      assert.equal(selectedTrial?.qualified,true);
-      assert.ok(rankPolicy.outer_validation.signal_count<=
-        rankPolicy.outer_validation.decision_group_count*
-        rankPolicy.selection.selected_top_k_per_timestamp);
-    }
-    assert.equal(distributions.threshold_selection.sample_count,p.rows.threshold_selection);
-    assert.equal(distributions.outer_validation.sample_count,p.rows.outer_validation);
-    assert.equal(distributions.threshold_selection.frozen_threshold,
-      diagnostic.threshold_selection.selected_threshold);
-    assert.equal(distributions.outer_validation.frozen_threshold,
-      diagnostic.threshold_selection.selected_threshold);
-    assert.equal(distributions.threshold_selection.frozen_threshold_signal_count,
-      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
-    assert.equal(distributions.outer_validation.frozen_threshold_signal_count,
-      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
-    assert.equal(transfer.frozen_threshold,diagnostic.threshold_selection.selected_threshold);
-    assert.equal(transfer.selection_signal_count,
-      diagnostic.threshold_selection.selected_metrics?.signal_count??null);
-    assert.equal(transfer.outer_validation_signal_count,
-      diagnostic.outer_validation.threshold_metrics?.signal_count??null);
-    if(Number.isFinite(transfer.selection_signal_count)&&transfer.selection_signal_count>0){
-      assert.equal(transfer.selection_to_outer_signal_retention_pct,
-        Number((100*transfer.outer_validation_signal_count/
-          transfer.selection_signal_count).toFixed(6)));
-    }else{
-      assert.equal(transfer.selection_to_outer_signal_retention_pct,null);
-    }
-    assert.equal(distributions.threshold_selection.diagnostic_only,true);
-    assert.equal(distributions.outer_validation.diagnostic_only,true);
-    assert.equal(distributions.threshold_selection.score_values_only,true);
-    assert.equal(distributions.outer_validation.score_values_only,true);
-    assert.ok(p.rows.threshold_selection>validation.threshold_selection_sample_count);
-    assert.ok(p.rows.outer_validation>validation.sample_count);
-    assert.equal(p.rows.fit,diagnostic.calibration.fit_rows);
-    assert.ok(p.support.fit.positive>=50&&p.support.fit.negative>=50);
-    assert.ok(p.support.outer_validation.positive+p.support.outer_validation.negative===
-      p.rows.outer_validation);
-    const days=p.days;
-    assert.ok(days.fit.at(-1)<days.threshold_selection[0]);
-    assert.ok(days.threshold_selection.at(-1)<days.outer_validation[0]);
-    assert.ok(days.purge.length===1&&days.threshold_purge.length===1);
-    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_trades,20);
-    assert.equal(diagnostic.threshold_selection.acceptance_gates.minimum_win_rate_pct,55);
-    assert.equal(diagnostic.threshold_selection.acceptance_gates.require_positive_net_pnl,true);
-    assert.equal(diagnostic.threshold_selection.acceptance_gates.maximum_drawdown_pct,8);
+    assert.equal(validation.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+    assert.equal(validation.selected_threshold,0.15);
   }
-  assert.equal(candidate.outer_validation_gate.model_specific_outer_validation_threshold,
-    candidate.selected_threshold,
-    'the model-specific threshold remains a diagnostic, not the matched execution threshold');
-  assert.equal(candidate.outer_validation_gate.outer_validation_threshold,
-    report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
-    'the outer-validation execution threshold must come from Logistic, not the neural candidate');
-  assert.equal(candidate.outer_validation_gate.passed,false,
-    'diagnostic-only qualification fixture must keep the primary candidate locked');
   assert.equal(report.holdout_access.opened,false);
-  assert.equal(candidate.expanded_threshold_window_counterfactual.affects_acceptance_gates,false);
 });
 
-test('fixed-SHA evaluator never opens holdout when every validation entry threshold fails risk gates',()=>{
+test('fixed reference threshold failure and incomplete protocol keep every holdout metric locked',()=>{
   const rows=makeRows(),sourceCommitSha='e'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const outerSplit=splitFourHourRows(rows);
-  const evaluated=[...outerSplit.validation,...outerSplit.holdout];
+  const evaluated=[...splitFourHourRows(rows).validation,...splitFourHourRows(rows).holdout];
   const build=(positive,negative,artifactSha256=null)=>evaluated.map(row=>({
-    id:row.id,
-    probability:row.target===1?positive:negative,
-    source_commit_sha:sourceCommitSha,
-    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
-    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
-    artifact_sha256:artifactSha256
+    id:row.id,probability:row.target===1?positive:negative,
+    source_commit_sha:sourceCommitSha,target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,artifact_sha256:artifactSha256
   }));
-  // Logistic is deliberately inverted. The neural probabilities have excellent
-  // ranking/Brier relative to this baseline, but every threshold that trades
-  // selects the majority negative class; a higher threshold selects no trades.
   predictions.LOGISTIC_REGRESSION=build(0.10,0.90,null);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     predictions[family]=build(0.43,0.41,modelArtifactsByModel[family].artifact_sha256);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
-    }])
-  );
+  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
+    family,{passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false}
+  ]));
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
-  const logistic=report.models.LOGISTIC_REGRESSION.validation;
-  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_REFERENCE_ONLY');
-  assert.equal(logistic.threshold_selection_gates.acceptance_qualified,false);
-  assert.ok(Number.isFinite(logistic.selected_threshold));
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,0.15);
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation.threshold_selection,
+    'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
-    assert.ok(Number.isFinite(model.validation.calibrated_brier_score),family,
-      'the calibrated probability score must remain measurable');
-    assert.ok(Number.isFinite(
-      report.models.LOGISTIC_REGRESSION.validation.calibrated_brier_score
-    ),'the Logistic probability reference must remain measurable');
-    assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'PASS',family);
-    assert.equal(model.validation.outer_validation_gate.execution_reference,
-      'MATCHED_LOGISTIC_EXECUTION_THRESHOLD',family);
-    assert.equal(model.validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,'FAIL',family);
-    assert.equal(model.validation.threshold_selection,'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',family);
-    assert.equal(model.validation.validation_threshold_metrics,null,family);
-    assert.equal(model.validation.selected_threshold,null,family);
-    assert.equal(model.status,'VALIDATION_EVALUATED_HOLDOUT_LOCKED',family);
+    assert.equal(model.validation.selected_threshold,0.15,family);
+    assert.equal(model.validation.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD',family);
     assert.equal(model.holdout.evaluated,false,family);
-    assert.equal(model.holdout.trade_count,0,family);
-    assert.equal(model.acceptance.status,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',family);
+    assert.equal(model.holdout.brier_score,null,family);
+    assert.equal(model.acceptance.passed,false,family);
   }
   assert.equal(report.holdout_access.opened,false);
-  assert.equal(report.holdout_access.opened_for_models.length,0);
+  assert.equal(report.holdout_access.opening_protocol.status,'LOCKED');
+  assert.equal(report.holdout_access.opening_protocol.holdout_metrics_read,false);
 });
 
 test('a neural candidate cannot claim matched execution or open holdout when Logistic has no frozen trade threshold',()=>{
@@ -1220,61 +913,36 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
-test('a frozen Logistic threshold remains comparable when Logistic fails on the later outer block',()=>{
-  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+test('predeclared Logistic threshold remains matched even when its outer execution is weak',()=>{
+  const rows=makeRows(),sourceCommitSha='7'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const split=splitFourHourRows(rows);
-  const calibrationBlocks=buildNeuralClosureCalibrationBlocks(split.validation);
-  const laterCheckIds=new Set(calibrationBlocks.check.map(row=>row.id));
-  const rowById=new Map([...split.validation,...split.holdout].map(row=>[row.id,row]));
-  // Logistic is intentionally a weak reference here: every row scores
-  // 0.05, so the earlier selection block can freeze a threshold with enough
-  // trades but cannot satisfy the 55%/positive-return qualification gates.
-  // The later block must still evaluate the neural challenger at that exact
-  // reference threshold rather than abstaining because Logistic is weak.
-  for(const prediction of predictions.LOGISTIC_REGRESSION)
-    prediction.probability=0.05;
-  // The neural challenger separates positives from negatives. At Logistic's
-  // frozen 0.05 reference threshold it should trade only the positive cohort.
+  const rowById=new Map([...splitFourHourRows(rows).validation,...splitFourHourRows(rows).holdout]
+    .map(row=>[row.id,row]));
+  for(const prediction of predictions.LOGISTIC_REGRESSION)prediction.probability=0.05;
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     for(const prediction of predictions[family]){
       const row=rowById.get(prediction.id);
       prediction.probability=row.target===1?0.90:0.01;
     }
   }
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false
-    }])
-  );
-  const approvedHoldoutProtocol=Object.fromEntries(
-    NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.map(name=>[name,true])
-  );
+  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
+    family,{passed:true,reason:'TEST_INNER_SELECTION_PASSED',diagnostic_only:false}
+  ]));
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel,
-    holdoutOpeningProtocol:approvedHoldoutProtocol
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
   const logistic=report.models.LOGISTIC_REGRESSION.validation;
   const neural=report.models.TCN_LSTM_HYBRID.validation.outer_validation_gate;
-  assert.equal(logistic.threshold_selection,'SELECTED_ON_VALIDATION_REFERENCE_ONLY');
-  assert.equal(logistic.threshold_selection_gates.selection_role,'LOGISTIC_BASELINE_REFERENCE_ONLY');
-  assert.equal(logistic.threshold_selection_gates.minimum_threshold_selection_win_rate_enforced,false);
-  assert.equal(logistic.threshold_selection_gates.require_positive_threshold_selection_net_pnl,false);
+  assert.equal(logistic.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+  assert.equal(logistic.selected_threshold,0.15);
+  assert.equal(logistic.threshold_selection_gates.selection_role,'PREDECLARED_POLICY_NO_OUTER_SELECTION');
   assert.equal(logistic.threshold_selection_gates.acceptance_qualified,false);
-  assert.equal(logistic.selected_threshold,0.05);
-  assert.equal(logistic.validation_threshold_metrics.return_data_status,'COMPLETE');
-  assert.equal(logistic.validation_threshold_risk_gates.minimum_validation_win_rate,'FAIL',
-    'a frozen reference can be unprofitable without blocking the matched comparison');
-  assert.equal(logistic.validation_threshold_risk_gates.minimum_validation_win_rate,'FAIL',
-    'the fixture intentionally makes Logistic fail on the later outer block');
-  assert.equal(neural.gates.matched_execution_threshold_available,'PASS');
+  assert.equal(neural.outer_validation_threshold,0.15);
   assert.equal(neural.execution_reference,'MATCHED_LOGISTIC_EXECUTION_THRESHOLD');
-  assert.equal(neural.outer_validation_threshold,logistic.selected_threshold);
-  assert.equal(neural.gates.matched_outer_validation_execution_risk_gates,'PASS');
-  assert.equal(neural.passed,true);
-  assert.equal(report.holdout_access.opened,true);
+  assert.equal(neural.gates.matched_execution_threshold_available,'PASS');
+  assert.equal(neural.threshold_selection_method,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD_0_15_NO_OUTER_FIT');
+  assert.equal(report.holdout_access.opened,false);
 });
 
 test('fixed-SHA evaluator fails a family closed when any same-cohort prediction is missing',()=>{
@@ -1435,84 +1103,31 @@ test('mapped canonical array hashing matches canonical full-array hashing withou
   assert.equal(mapped,materialized);
 });
 
-test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without changing gates',()=>{
+test('TCN-LSTM diagnostics explicitly disable outer-validation calibration stages',()=>{
   const rows=makeRows(),sourceCommitSha='1'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true
-    }])
-  );
+  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
+    family,{passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true}
+  ]));
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
-  const model=report.models.TCN_LSTM_HYBRID;
-  const diagnostics=model.validation.probability_stage_diagnostics;
-  assert.equal(diagnostics.schema,'RADARX_TCN_LSTM_PROBABILITY_STAGE_DISTRIBUTIONS_V1');
-  assert.equal(diagnostics.status,'AVAILABLE');
+  const validation=report.models.TCN_LSTM_HYBRID.validation;
+  const diagnostics=validation.probability_stage_diagnostics;
+  assert.equal(diagnostics.schema,'RADARX_TCN_LSTM_PROBABILITY_STAGE_DIAGNOSTICS_V1');
+  assert.equal(diagnostics.status,'DISABLED_STRICT_OUTER_EVALUATION_ONLY');
   assert.equal(diagnostics.diagnostic_only,true);
   assert.equal(diagnostics.labels_used,false);
   assert.equal(diagnostics.holdout_values_used,false);
   assert.equal(diagnostics.affects_primary_probabilities,false);
   assert.equal(diagnostics.affects_threshold_selection,false);
-  const counterfactual=diagnostics.single_stage_shared_calibration_counterfactual;
-  assert.equal(counterfactual.schema,
-    'RADARX_TCN_LSTM_SINGLE_STAGE_SHARED_PLATT_COUNTERFACTUAL_V1');
-  assert.equal(counterfactual.diagnostic_only,true);
-  assert.equal(counterfactual.affects_primary_probabilities,false);
-  assert.equal(counterfactual.affects_threshold_selection,false);
-  assert.equal(counterfactual.holdout_values_used,false);
-  assert.equal(counterfactual.fit_partition,'CALIBRATION_FIT_ONLY');
-  assert.equal(counterfactual.fit_rows,model.calibration.calibration_fit_rows);
-  assert.equal(counterfactual.shared_calibrator.samples,counterfactual.fit_rows);
-  assert.equal(counterfactual.threshold_selection.labels_used_for_calibrator_fit,false);
-  assert.equal(counterfactual.outer_validation.labels_used_for_calibrator_fit,false);
-  assert.equal(counterfactual.outer_validation.evaluation_labels_used,true);
-  assert.equal(counterfactual.outer_validation.single_stage_shared_calibration.sample_count,
-    diagnostics.outer_validation.sample_count);
-  assert.ok(diagnostics.chronological_stages);
-  for(const blockName of ['threshold_selection','outer_validation']){
-    const stages=diagnostics.chronological_stages[blockName];
-    for(const stageName of [
-      'network_output_before_inner_platt',
-      'inner_platt_output_before_shared_evaluator',
-      'shared_evaluator_output_after_selected_calibration',
-      'single_stage_shared_calibration_counterfactual'
-    ]){
-      const stability=stages[stageName];
-      assert.equal(stability.schema,'RADARX_CHRONOLOGICAL_STABILITY_DIAGNOSTICS_V1');
-      assert.equal(stability.status,'AVAILABLE');
-      assert.equal(stability.diagnostic_only,true);
-      assert.equal(stability.affects_acceptance_gates,false);
-      assert.equal(stability.holdout_values_used,false);
-      assert.equal(stability.block_count,4);
-      assert.equal(stability.blocks.reduce((sum,item)=>sum+item.sample_count,0),
-        stability.sample_count);
-    }
-  }
-  for(const blockName of ['threshold_selection','outer_validation']){
-    const block=diagnostics[blockName];
-    assert.ok(block.sample_count>0);
-    for(const stageName of [
-      'network_output_before_inner_platt',
-      'inner_platt_output_before_shared_evaluator',
-      'shared_evaluator_output_after_selected_calibration'
-    ]){
-      const stage=block[stageName];
-      assert.equal(stage.schema,'NEURAL_ENTRY_PROBABILITY_DISTRIBUTION_V1');
-      assert.equal(stage.status,'AVAILABLE');
-      assert.equal(stage.sample_count,block.sample_count);
-      assert.equal(stage.labels_used,false);
-      assert.equal(stage.used_to_select_threshold,false);
-    }
-  }
+  assert.equal(validation.calibration_applied,false);
+  assert.equal(validation.calibrated_brier_score,null);
+  assert.ok(Number.isFinite(validation.raw_brier_score));
+  assert.equal(validation.threshold_selection_sample_count,0);
   assert.equal(report.holdout_access.opened,false);
 
-  // Deliberately alter only the diagnostic side channel. Primary calibrated
-  // probabilities, Brier, frozen threshold trials and gate outcomes must not
-  // change as a result.
   const altered=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
   const validationIds=new Set(splitFourHourRows(rows).validation.map(row=>row.id));
   altered.TCN_LSTM_HYBRID=altered.TCN_LSTM_HYBRID.map(item=>
@@ -1521,93 +1136,59 @@ test('TCN-LSTM probability-stage diagnostics isolate pre-inner scores without ch
       :item
   );
   const alteredReport=runNeuralClosureBenchmark({
-    rows,predictionsByModel:altered,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:altered,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
-  const alteredModel=alteredReport.models.TCN_LSTM_HYBRID;
-  assert.equal(alteredModel.validation.calibrated_brier_score,
-    model.validation.calibrated_brier_score);
-  assert.deepEqual(alteredModel.validation.threshold_trials,
-    model.validation.threshold_trials);
-  assert.deepEqual(alteredModel.validation.outer_validation_gate,
-    model.validation.outer_validation_gate);
-  assert.notDeepEqual(
-    alteredModel.validation.probability_stage_diagnostics.threshold_selection
-      .network_output_before_inner_platt,
-    diagnostics.threshold_selection.network_output_before_inner_platt
-  );
-  assert.notDeepEqual(
-    alteredModel.validation.probability_stage_diagnostics
-      .single_stage_shared_calibration_counterfactual.outer_validation
-      .single_stage_shared_calibration,
-    counterfactual.outer_validation.single_stage_shared_calibration
-  );
+  const alteredValidation=alteredReport.models.TCN_LSTM_HYBRID.validation;
+  assert.equal(alteredValidation.raw_brier_score,validation.raw_brier_score);
+  assert.equal(alteredValidation.evaluation_brier_score,validation.evaluation_brier_score);
+  assert.deepEqual(alteredValidation.outer_validation_gate,validation.outer_validation_gate);
+  assert.deepEqual(alteredValidation.threshold_trials,[]);
 });
 
-test('TCN-LSTM pre-inner diagnostic rejects any final-holdout score payload',()=>{
+test('TCN-LSTM stage diagnostics never expose a holdout calibration score',()=>{
   const rows=makeRows(),sourceCommitSha='2'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
   const holdoutId=splitFourHourRows(rows).holdout[0].id;
   predictions.TCN_LSTM_HYBRID=predictions.TCN_LSTM_HYBRID.map(item=>
-    item.id===holdoutId
-      ?{...item,pre_inner_calibration_probability:0.77}
-      :item
+    item.id===holdoutId?{...item,pre_inner_calibration_probability:0.77}:item
   );
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true
-    }])
-  );
+  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
+    family,{passed:false,reason:'TEST_DIAGNOSTIC_ONLY',diagnostic_only:true}
+  ]));
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
   const diagnostics=report.models.TCN_LSTM_HYBRID.validation.probability_stage_diagnostics;
-  assert.equal(diagnostics.status,'REJECTED_HOLDOUT_DIAGNOSTIC_EXPOSURE');
+  assert.equal(diagnostics.status,'DISABLED_STRICT_OUTER_EVALUATION_ONLY');
   assert.equal(diagnostics.holdout_values_used,false);
+  assert.equal(diagnostics.holdout_score_count,undefined);
   assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.holdout_access.opening_protocol.holdout_metrics_read,false);
 });
 
-
-
-test('unselected threshold reports outer execution risk as NOT_EVALUATED, not missing data',()=>{
-  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+test('missing Logistic predictions prevent a matched comparison without changing the frozen policy',()=>{
+  const rows=makeRows(),sourceCommitSha='3'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
   const predictions=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
-  // No Logistic reference stream means no frozen comparator threshold, so the
-  // matched outer execution-risk gates must remain NOT_EVALUATED.
   delete predictions.LOGISTIC_REGRESSION;
-  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     predictions[family]=predictions[family].map(row=>({
-      ...row,probability:0.05,
-      artifact_sha256:modelArtifactsByModel[family].artifact_sha256
+      ...row,probability:0.05,artifact_sha256:modelArtifactsByModel[family].artifact_sha256
     }));
-  }
-  const qualificationByModel=Object.fromEntries(
-    NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[family,{
-      passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false
-    }])
-  );
+  const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
+    family,{passed:true,reason:'TEST_INNER_QUALIFICATION_PASSED',diagnostic_only:false}
+  ]));
   const report=runNeuralClosureBenchmark({
-    rows,predictionsByModel:predictions,modelArtifactsByModel,
-    sourceCommitSha,qualificationByModel
+    rows,predictionsByModel:predictions,modelArtifactsByModel,sourceCommitSha,qualificationByModel
   });
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'NOT_EVALUATED');
   const validation=report.models.TCN_LSTM_HYBRID.validation;
-  assert.equal(validation.threshold_selection,
-    'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES');
-  assert.equal(validation.selected_threshold,null);
-  assert.equal(validation.validation_threshold_metrics,null);
-  assert.deepEqual(validation.validation_threshold_risk_gates,{
-    return_data_complete:'NOT_EVALUATED',
-    minimum_validation_trades:'NOT_EVALUATED',
-    minimum_validation_win_rate:'NOT_EVALUATED',
-    positive_validation_net_pnl:'NOT_EVALUATED',
-    maximum_validation_drawdown:'NOT_EVALUATED'
-  });
+  assert.equal(validation.threshold_selection,'PREDECLARED_FROZEN_REFERENCE_THRESHOLD');
+  assert.equal(validation.selected_threshold,0.15);
+  assert.ok(validation.validation_threshold_metrics);
   assert.equal(validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL');
-  assert.equal(validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,
-    'NOT_EVALUATED');
+  assert.equal(validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,'NOT_EVALUATED');
   assert.equal(report.holdout_access.opened,false);
 });
 
