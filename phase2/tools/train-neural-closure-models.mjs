@@ -1164,29 +1164,38 @@ async function main(){
         const selection=selectTcnLstmHybridHyperparameters(
           trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
-          maxTrainingSamples:4096,
+          maxTrainingSamples:6144,
           seed:22429,
           roundTripCostBps:args.roundTripCostBps,
           minimumReturnTrades:20,
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          rankingPairsPerTimestamp:4,
+          rankingPairsPerTimestamp:12,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
           candidates:[
-            {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
-            {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
-            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20},
-            {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_AUX_RANK_HEAD_LR015_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingHeadLearningRate:0.015},
-            {name:'4H_AUX_RANK_HEAD_LR045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              rankingHeadLearningRate:0.045}
+            // Keep the proper-scoring Brier objective fixed while sweeping a
+            // wider shared-classifier ranking-loss range. The previous Focal
+            // sweep improved the sidecar rank score but degraded inner Brier;
+            // this grid tests joint probability quality and return ordering.
+            {name:'4H_BRIER_BASE_LR0015_L2_0005_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              objective:'BRIER'},
+            {name:'4H_BRIER_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.005},
+            {name:'4H_BRIER_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.01},
+            {name:'4H_BRIER_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.02},
+            {name:'4H_BRIER_SHARED_RANK_W040_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.04},
+            {name:'4H_BRIER_SHARED_RANK_W060_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.06},
+            {name:'4H_BRIER_SHARED_RANK_W080_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.08},
+            {name:'4H_BRIER_SHARED_RANK_W120_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              objective:'BRIER',rankingWeight:0.12}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
@@ -1212,8 +1221,9 @@ async function main(){
           chronology_valid:internalChronologyValid,
           internal_split_schema:internalSplit.schema??null,
           internal_split_boundaries:internalSplit.split_boundaries??null,
-          max_training_samples:4096,
+          max_training_samples:6144,
           effective_training_rows:selection.effective_training_rows??null,
+          training_sample_selection:selection.training_sample_selection??null,
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
           diagnostic_configuration:selection.diagnostic_configuration??null,
           required_inner_brier_improvement:0.00025,
@@ -1334,10 +1344,25 @@ async function main(){
               row.name===selection.selected_configuration)?.pairwise_ranking??null,
             selected_pairwise_ranking_head:selection.candidates.find(row=>
               row.name===selection.selected_configuration)?.ranking_head??null,
+            selected_shared_classifier_loss:{
+              method:'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1',
+              enabled:Number(selection.candidates.find(row=>
+                row.name===selection.selected_configuration)?.config?.rankingWeight??0)>0,
+              weight:Number(selection.candidates.find(row=>
+                row.name===selection.selected_configuration)?.config?.rankingWeight??0),
+              training_pair_support:selection.training_return_pair_support??null,
+              candidate_count_requested:selection.candidate_count_requested??null,
+              candidate_count_evaluated:selection.candidate_count_evaluated??null,
+              skipped_candidates:selection.skipped_candidates??[]
+            },
             ranking_head_selection_qualification:selection.ranking_head_selection_qualification??null,
+            execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
+            execution_head_context_ablation_required_for_inner_qualification:true,
+            execution_head_input_feature_schema:
+              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4',
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
-            ranking_head_role:'CROSS_SECTIONAL_RANKING_ONLY_CLASSIFICATION_PROBABILITIES_UNCHANGED',
+            ranking_head_role:'AUXILIARY_CROSS_SECTIONAL_RANKING_WITH_OPTIONAL_SHARED_CLASSIFIER_PAIRWISE_TRAINING',
             ranking_scores_emitted_for:'OUTER_VALIDATION_ONLY',
             holdout_ranking_scores_emitted:false,
             ranking_anchor_scores_emitted_for:'OUTER_VALIDATION_ONLY',

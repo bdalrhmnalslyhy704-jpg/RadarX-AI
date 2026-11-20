@@ -5,30 +5,37 @@ on:
     branches:
       - research/build224-point-in-time-liquidity-20261117
       - research/build224-tcn-lstm-pairwise-rank-20261118
+      - research/build224-tcn-lstm-shared-loss-20261120
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
   pull_request:
     branches:
       - research/build224-point-in-time-liquidity-20261117
+      - research/build224-neural-universe-expansion-20261119
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  # Keep each immutable candidate-SHA replay independent; a stale run must not block the latest benchmark.
-  group: build224-neural-closure-fixed-cohort-replay-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Each immutable commit gets its own replay slot; older candidates must not block
+  # the scientific benchmark for the current head after an engineering fix.
+  group: build224-neural-closure-fixed-cohort-replay-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   replay:
@@ -74,7 +81,7 @@ jobs:
             --output artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json \
             --epochs 8 \
             --denseEpochs 36 \
-            --minimumHoldoutTrades 20 \
+            --minimumHoldoutTrades 100 \
             --minimumWinRatePct 55 \
             --maximumDrawdownPct 8 \
             --roundTripCostBps 30
@@ -93,6 +100,69 @@ jobs:
             console.log(JSON.stringify({dataset_sha256:report.integrity.dataset_sha256,row_count:report.integrity.row_count,model_source_commit_sha:report.integrity.model_source_commit_sha,status:report.status}));
           "
 
+      - name: Enforce TCN-LSTM scientific superiority, profitability and drawdown gates
+        env:
+          EXPECTED_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
+          EXPECTED_ROW_COUNT: '32300'
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const path='artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json';
+          const report=JSON.parse(fs.readFileSync(path,'utf8'));
+          const model=report.benchmark?.models?.TCN_LSTM_HYBRID;
+          const logistic=report.benchmark?.models?.LOGISTIC_REGRESSION;
+          const acceptance=model?.acceptance;
+          const gates=acceptance?.gates??{};
+          const validation=model?.validation?.outer_validation_gate;
+          const holdout=model?.holdout;
+          const logisticHoldout=logistic?.holdout;
+          const failures=[];
+          if(report.status!=='NEURAL_SUPERIORITY_PROVEN') failures.push('GLOBAL_NEURAL_SUPERIORITY_NOT_PROVEN');
+          if(report.integrity?.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) failures.push('FIXED_COHORT_SHA_MISMATCH');
+          if(Number(report.integrity?.row_count)!==Number(process.env.EXPECTED_ROW_COUNT)) failures.push('FIXED_COHORT_ROW_COUNT_MISMATCH');
+          if(report.integrity?.model_source_commit_sha!==process.env.GITHUB_SHA) failures.push('MODEL_SOURCE_SHA_MISMATCH');
+          if(model?.status!=='EVALUATED') failures.push('TCN_LSTM_HOLDOUT_NOT_EVALUATED');
+          if(logistic?.status!=='EVALUATED') failures.push('LOGISTIC_HOLDOUT_REFERENCE_NOT_EVALUATED');
+          if(acceptance?.passed!==true||acceptance?.status!=='PASS') failures.push('TCN_LSTM_ACCEPTANCE_NOT_PASSED');
+          if(acceptance?.execution_reference!=='MATCHED_LOGISTIC_EXECUTION_THRESHOLD') failures.push('LOGISTIC_EXECUTION_REFERENCE_NOT_COMPARABLE');
+          if(validation?.passed!==true) failures.push('TCN_LSTM_OUTER_VALIDATION_GATE_FAILED');
+          if(!Number.isFinite(validation?.brier_improvement_vs_logistic)||
+             validation.brier_improvement_vs_logistic<=0.003) failures.push('TCN_LSTM_OUTER_BRIER_MARGIN_NOT_ABOVE_0_003');
+          if(report.benchmark?.holdout_access?.opened!==true||
+             !report.benchmark?.holdout_access?.opened_for_models?.includes('TCN_LSTM_HYBRID')) failures.push('TCN_LSTM_HOLDOUT_ACCESS_NOT_GRANTED_BY_VALIDATION');
+          if(holdout?.execution_evaluated!==true||holdout?.return_data_status!=='COMPLETE') failures.push('TCN_LSTM_HOLDOUT_RETURN_DATA_INCOMPLETE');
+          if(Number(holdout?.trade_count)<100) failures.push('TCN_LSTM_HOLDOUT_TRADES_BELOW_100');
+          if(!Number.isFinite(holdout?.win_rate_pct)||holdout.win_rate_pct<55) failures.push('TCN_LSTM_HOLDOUT_WIN_RATE_BELOW_55');
+          if(!Number.isFinite(holdout?.net_pnl_pct)||holdout.net_pnl_pct<=0) failures.push('TCN_LSTM_HOLDOUT_NET_PNL_NOT_POSITIVE');
+          if(!Number.isFinite(holdout?.max_drawdown_pct)||holdout.max_drawdown_pct>8) failures.push('TCN_LSTM_HOLDOUT_DRAWDOWN_ABOVE_8');
+          if(!Number.isFinite(logisticHoldout?.net_pnl_pct)||
+             holdout?.net_pnl_pct<=logisticHoldout.net_pnl_pct) failures.push('TCN_LSTM_DID_NOT_BEAT_LOGISTIC_NET_PNL');
+          if(!Number.isFinite(logisticHoldout?.max_drawdown_pct)||
+             holdout?.max_drawdown_pct>logisticHoldout.max_drawdown_pct) failures.push('TCN_LSTM_DRAWDOWN_WORSE_THAN_LOGISTIC');
+          for (const [name,value] of Object.entries(gates)) {
+            if(value!=='PASS') failures.push('TCN_LSTM_GATE_NOT_PASS:'+name+':'+String(value));
+          }
+          const summary={
+            status:failures.length?'TCN_LSTM_SUPERIORITY_GATE_FAILED':'TCN_LSTM_SUPERIORITY_PROVEN',
+            dataset_sha256:report.integrity?.dataset_sha256??null,
+            row_count:report.integrity?.row_count??null,
+            model_source_commit_sha:report.integrity?.model_source_commit_sha??null,
+            model:'TCN_LSTM_HYBRID',
+            validation_brier:validation?.candidate_validation_brier??null,
+            logistic_validation_brier:validation?.baseline_logistic_brier??null,
+            validation_brier_improvement:validation?.brier_improvement_vs_logistic??null,
+            holdout_trade_count:holdout?.trade_count??null,
+            holdout_win_rate_pct:holdout?.win_rate_pct??null,
+            holdout_net_pnl_pct:holdout?.net_pnl_pct??null,
+            logistic_holdout_net_pnl_pct:logisticHoldout?.net_pnl_pct??null,
+            holdout_max_drawdown_pct:holdout?.max_drawdown_pct??null,
+            logistic_holdout_max_drawdown_pct:logisticHoldout?.max_drawdown_pct??null,
+            acceptance_gates:gates,
+            failures
+          };
+          console.log(JSON.stringify(summary,null,2));
+          if(failures.length) process.exitCode=1;
+          NODE
       - name: Upload fixed-cohort rebenchmark report and model artifacts
         if: always()
         uses: actions/upload-artifact@v4
