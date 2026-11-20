@@ -52,7 +52,7 @@ test('expanding folds are chronological, non-overlapping and purge a complete UT
   const firstValidation=new Set(result.folds[0].validation_indices);
   const secondValidation=new Set(result.folds[1].validation_indices);
   assert.equal([...firstValidation].some(index=>secondValidation.has(index)),false);
-  assert.ok(result.folds[1].training_indices.length>result.folds[0].training_indices.length);
+  assert.ok(result.folds[1].train_indices.length>result.folds[0].train_indices.length);
 });
 
 test('CV rejects rows whose outcomes are not matured or whose identities are duplicated',()=>{
