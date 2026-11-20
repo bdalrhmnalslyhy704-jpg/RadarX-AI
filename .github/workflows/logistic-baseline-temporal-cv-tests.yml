@@ -1,0 +1,54 @@
+name: Build 224 Purged Temporal Logistic Baseline Tests
+
+on:
+  push:
+    branches:
+      - research/build224-temporal-logistic-cv-20261120
+    paths:
+      - '.github/workflows/logistic-baseline-temporal-cv-tests.yml'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-logistic-cv-ci-base
+    paths:
+      - '.github/workflows/logistic-baseline-temporal-cv-tests.yml'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-temporal-logistic-cv-tests-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  temporal-logistic-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check baseline module and integrated trainer
+        run: |
+          node --check phase2/core/temporal-logistic-baseline.mjs
+          node --check phase2/tools/train-neural-closure-models.mjs
+          node --check phase2/tests/logistic-temporal-cv.test.mjs
+      - name: Run purged temporal Logistic CV regression suite
+        run: node --test --test-timeout=180000 phase2/tests/logistic-temporal-cv.test.mjs
+      - name: Run existing closure contracts and trainer-isolation tests
+        run: |
+          node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
+          node --test --test-timeout=180000 phase2/tests/neural-closure-training-wiring.test.mjs
