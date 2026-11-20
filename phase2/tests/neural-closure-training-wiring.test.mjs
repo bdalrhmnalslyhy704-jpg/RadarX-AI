@@ -447,16 +447,18 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
 
-test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{
+test('Logistic reference threshold and probability evaluation are strictly predeclared and outer-only',async()=>{
   const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(closure,/referenceOnly:modelName==='LOGISTIC_REGRESSION'/);
-  assert.match(closure,/status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY'/);
-  assert.match(closure,/selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY'/);
-  assert.match(closure,/logisticThresholdSelectionReady=\[\s*'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'/);
-  assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\s\S]*?Object\.values\(logisticReferenceRiskGates\)\.every/);
+  assert.match(closure,/status:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD'/);
+  assert.match(closure,/threshold:0\.15/);
+  assert.match(closure,/selected_method:'IDENTITY_NO_CALIBRATION'/);
+  assert.match(closure,/outer_validation_labels_used_for_calibrator_fit:false/);
+  assert.match(closure,/probability_evaluation_method:'MODEL_NATIVE_OUTPUT_NO_OUTER_CALIBRATION'/);
+  assert.match(closure,/logisticThresholdSelectionReady=[\s\S]*?PREDECLARED_FROZEN_REFERENCE_THRESHOLD'[\s\S]*?===0\.15/);
   assert.match(closure,/strictly_beats_logistic_net_pnl/);
   assert.match(closure,/drawdown_no_worse_than_logistic/);
+  assert.doesNotMatch(closure,/const thresholdSelection=selectThreshold\(thresholdSelectionRows/);
   assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
 });
