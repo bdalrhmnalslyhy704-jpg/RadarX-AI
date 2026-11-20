@@ -11,6 +11,8 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
       - 'phase2/tests/neural-closure-probability-stages.test.mjs'
   pull_request:
@@ -22,6 +24,8 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/core/cognitive-brain.mjs'
       - 'phase2/core/temporal-neural-brain.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
       - 'phase2/tests/neural-closure-probability-stages.test.mjs'
 
@@ -54,6 +58,8 @@ jobs:
           node --check phase2/tools/train-neural-closure-models.mjs
           node --check phase2/core/cognitive-brain.mjs
           node --check phase2/core/temporal-neural-brain.mjs
+          node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/tests/neural-closure-contracts.test.mjs
           node --check phase2/tests/logistic-temporal-cv.test.mjs
           node --check phase2/tests/neural-closure-probability-stages.test.mjs
       - name: Run purged temporal Logistic CV regression suite
