@@ -15,6 +15,7 @@ import {
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
+  predictTcnLstmHybridRankingProbability,
   predictTcnLstmHybridRankingLogit,
   predictTcnLstmHybridRankingAnchorLogit,
   predictTcnLstmHybridExecutionHeads,
@@ -445,12 +446,12 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     profile.training.execution_regression_heads.execution_head_min_at);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
-    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3');
+    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V4');
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
-    3*TCN_LSTM_HIDDEN+2);
+    4*TCN_LSTM_HIDDEN+3);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
     TCN_LSTM_HIDDEN);
-  assert.equal(profile.model.executionReturnHeadWeights.length,3*TCN_LSTM_HIDDEN+2);
+  assert.equal(profile.model.executionReturnHeadWeights.length,4*TCN_LSTM_HIDDEN+3);
   assert.equal(profile.model.executionReturnHeadPooledOnlyWeights.length,TCN_LSTM_HIDDEN);
   const contextInputs=buildTcnLstmExecutionHeadInputFeatures(
     evidence[0].sequence,profile.model,profile.baseline_fit
@@ -459,28 +460,32 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     evidence[0].sequence,profile.model,profile.baseline_fit,{variant:'POOLED_ONLY'}
   );
   const anchorLogit=predictTcnLstmLogisticLogit(evidence[0].sequence,profile.baseline_fit);
-  const neuralLogit=inspectTcnLstmForward(
-    evidence[0].sequence,profile.model,anchorLogit
-  ).logit;
+  const forward=inspectTcnLstmForward(evidence[0].sequence,profile.model,anchorLogit);
+  const neuralLogit=forward.logit;
+  const rankingResidualLogit=forward.ranking_residual_logit;
   assert.equal(contextInputs.schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(contextInputs.features.length,3*TCN_LSTM_HIDDEN+2);
+  assert.equal(contextInputs.features.length,4*TCN_LSTM_HIDDEN+3);
   assert.equal(pooledInputs.features.length,TCN_LSTM_HIDDEN);
-  assert.ok(Math.abs(contextInputs.features.at(-2)-Math.tanh(anchorLogit/4))<1e-12);
-  assert.ok(Math.abs(contextInputs.features.at(-1)-Math.tanh(neuralLogit/4))<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-3)-Math.tanh(anchorLogit/4))<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-2)-Math.tanh(neuralLogit/4))<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-1)-Math.tanh(rankingResidualLogit/4))<1e-12);
   const logisticScore=Math.tanh(anchorLogit/4);
   const neuralScore=Math.tanh(neuralLogit/4);
+  const rankingScore=Math.tanh(rankingResidualLogit/4);
   for(let index=0;index<TCN_LSTM_HIDDEN;index++){
     assert.ok(Math.abs(contextInputs.features[TCN_LSTM_HIDDEN+index]-
       pooledInputs.features[index]*logisticScore)<1e-12);
     assert.ok(Math.abs(contextInputs.features[2*TCN_LSTM_HIDDEN+index]-
       pooledInputs.features[index]*neuralScore)<1e-12);
+    assert.ok(Math.abs(contextInputs.features[3*TCN_LSTM_HIDDEN+index]-
+      pooledInputs.features[index]*rankingScore)<1e-12);
   }
-  assert.ok(contextInputs.features.at(-2)>=-1&&contextInputs.features.at(-2)<=1);
-  assert.ok(contextInputs.features.at(-1)>=-1&&contextInputs.features.at(-1)<=1);
+  for(const score of contextInputs.features.slice(-3))
+    assert.ok(score>=-1&&score<=1);
   const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
   assert.equal(prediction.variant,'LOGIT_CONTEXT_AUGMENTED');
   assert.equal(prediction.input_feature_schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(prediction.input_feature_count,3*TCN_LSTM_HIDDEN+2);
+  assert.equal(prediction.input_feature_count,4*TCN_LSTM_HIDDEN+3);
   const pooledOnlyPrediction=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,profile,{variant:'POOLED_ONLY'}
   );
@@ -779,7 +784,7 @@ test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and p
   assert.equal(profile.live_eligibility_ready,false);
 });
 
-test('ranking blend adds only the ranking residual and never duplicates the frozen Logistic anchor',()=>{
+test('classifier probability is independent of the separate ranking sidecar',()=>{
   const rows=makeRows(0,32,'blend-residual');
   const profile=trainTcnLstmHybrid(rows,{
     epochs:2,learningRate:0.0015,l2:0.001,
@@ -787,27 +792,27 @@ test('ranking blend adds only the ranking residual and never duplicates the froz
   });
   const sequence=rows[0].sequence;
   const baselineLogit=predictTcnLstmHybridRankingAnchorLogit(sequence,profile);
-  const initial=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
-  const hidden=initial.cache.pooled.length;
+  const hidden=profile.model.rankingHeadWeights.length;
   const sigmoid=value=>1/(1+Math.exp(-value));
-
-  // A zero ranking residual must be a true no-op at every frozen blend weight.
-  profile.model.rankingHeadWeights=Array(hidden).fill(0);
-  profile.ranking_probability_blend_weight=0.75;
-  const zeroResidual=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
-  assert.equal(
-    predictTcnLstmHybridProbability(sequence,profile),
-    sigmoid(zeroResidual.logit)
-  );
-
-  // A non-zero head contributes only its residual, not the Logistic anchor a second time.
   profile.model.rankingHeadWeights=Array(hidden).fill(0.01);
-  const residualForward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
-  const expected=sigmoid(
-    residualForward.logit+
-    profile.ranking_probability_blend_weight*residualForward.ranking_residual_logit
+  const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
+  const classifierProbability=sigmoid(forward.logit);
+  profile.ranking_probability_blend_weight=0.75;
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-
+    classifierProbability)<1e-12);
+  const expectedRankingProbability=sigmoid(
+    forward.logit+0.75*forward.ranking_residual_logit
   );
-  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-expected)<1e-12);
+  assert.ok(Math.abs(predictTcnLstmHybridRankingProbability(sequence,profile)-
+    expectedRankingProbability)<1e-12);
+  profile.ranking_probability_blend_weight=1.5;
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-
+    classifierProbability)<1e-12,
+    'changing ranking weight must never alter classifier probability');
+  assert.notEqual(
+    predictTcnLstmHybridRankingProbability(sequence,profile),
+    expectedRankingProbability
+  );
 });
 
 test('execution-head split uses a later complete 15m block and purges forward labels',()=>{
@@ -817,8 +822,8 @@ test('execution-head split uses a later complete 15m block and purges forward la
   const split=splitTcnLstmTrainingRowsForExecutionHead(rows);
   assert.equal(split.status,'READY');
   assert.equal(split.diagnostics.schema,'RADARX_TCN_LSTM_PURGED_EXECUTION_HEAD_SPLIT_V1');
-  assert.equal(split.model_training_rows.length,74);
-  assert.equal(split.execution_head_rows.length,25);
+  assert.equal(split.model_training_rows.length,59);
+  assert.equal(split.execution_head_rows.length,40);
   assert.equal(split.purged_rows.length,1);
   assert.ok(Math.max(...split.model_training_rows.map(row=>row.resolved_at))<
     Math.min(...split.execution_head_rows.map(row=>row.at)));
@@ -851,8 +856,8 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
     requiredImprovement:0.00025,seed:7,maxTrainingSamples:100
   });
   assert.equal(result.training_support.rows,100);
-  assert.equal(result.model_training_rows,74);
-  assert.equal(result.execution_head_training_rows,25);
+  assert.equal(result.model_training_rows,59);
+  assert.equal(result.execution_head_training_rows,40);
   assert.equal(result.training_sample_selection.execution_head_split.status,'READY');
   assert.equal(result.training_sample_selection.execution_head_split.purged_rows,1);
   assert.equal(result.selection_support.rows,20);
@@ -1089,14 +1094,14 @@ test('TCN receptive field covers all two-tap causal dilations',()=>{
 });
 
 
-test('recurrent training budget uses up to 4,096 available training rows without touching later partitions',()=>{
-  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,36102),4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,1200),1200);
+test('recurrent training budget uses up to 6,144 available training rows without touching later partitions',()=>{
+  assert.equal(TCN_LSTM_MAX_TRAINING_SAMPLES,6144);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,36102),6144);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,1200),1200);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(512,36102),512);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),4096);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
-  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(8192,36102),6144);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(6144,20),20);
+  assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),6144);
 });
 
 test('recurrent fit budget preserves recent regimes and anchors older complete 15m groups',()=>{
