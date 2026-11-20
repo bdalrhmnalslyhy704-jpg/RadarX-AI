@@ -115,7 +115,7 @@ jobs:
           if(report.status!=='NEURAL_SUPERIORITY_PROVEN') failures.push('GLOBAL_NEURAL_SUPERIORITY_NOT_PROVEN');
           if(report.integrity?.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) failures.push('FIXED_COHORT_SHA_MISMATCH');
           if(Number(report.integrity?.row_count)!==Number(process.env.EXPECTED_ROW_COUNT)) failures.push('FIXED_COHORT_ROW_COUNT_MISMATCH');
-          if(report.integrity?.source_commit_sha!==process.env.GITHUB_SHA) failures.push('MODEL_SOURCE_SHA_MISMATCH');
+          if(report.integrity?.model_source_commit_sha!==process.env.GITHUB_SHA) failures.push('MODEL_SOURCE_SHA_MISMATCH');
           if(model?.status!=='EVALUATED') failures.push('TCN_LSTM_HOLDOUT_NOT_EVALUATED');
           if(logistic?.status!=='EVALUATED') failures.push('LOGISTIC_HOLDOUT_REFERENCE_NOT_EVALUATED');
           if(acceptance?.passed!==true||acceptance?.status!=='PASS') failures.push('TCN_LSTM_ACCEPTANCE_NOT_PASSED');
@@ -141,7 +141,7 @@ jobs:
             status:failures.length?'TCN_LSTM_SUPERIORITY_GATE_FAILED':'TCN_LSTM_SUPERIORITY_PROVEN',
             dataset_sha256:report.integrity?.dataset_sha256??null,
             row_count:report.integrity?.row_count??null,
-            source_commit_sha:report.integrity?.source_commit_sha??null,
+            model_source_commit_sha:report.integrity?.model_source_commit_sha??null,
             model:'TCN_LSTM_HYBRID',
             validation_brier:validation?.candidate_validation_brier??null,
             logistic_validation_brier:validation?.baseline_logistic_brier??null,
