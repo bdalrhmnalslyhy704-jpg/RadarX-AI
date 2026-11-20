@@ -3344,6 +3344,9 @@ export function runNeuralClosureBenchmark({
     const calibratedMap=verified.calibratedMap??rawMap;
     const calibrationMetadata=verified.calibrationMetadata??null;
     const calibrationApplied=calibrationMetadata?.applied_to_final_model===true;
+    const calibrationPartiallyApplied=
+      calibrationMetadata?.partially_applied_to_final_model===true;
+    const calibrationStageAvailable=calibrationApplied||calibrationPartiallyApplied;
     const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmAuxiliaryRankingMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -3372,11 +3375,15 @@ export function runNeuralClosureBenchmark({
     const calibration={
       ...(calibrationMetadata??{}),
       schema:calibrationMetadata?.schema??'RADARX_OUTER_VALIDATION_IDENTITY_PROBABILITY_STAGE_V1',
-      status:calibrationApplied
-        ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
-        :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
+      status:calibrationPartiallyApplied
+        ?'MIXED_TRAIN_ONLY_CALIBRATED_AND_RAW_REGIMES'
+        :calibrationApplied
+          ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
+          :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
       selected_method:calibrationMetadata?.selected_method??'NO_CALIBRATION',
-      applied_to_final_model:calibrationApplied,
+      applied_to_final_model:calibrationStageAvailable,
+      fully_applied_to_all_scored_rows:calibrationApplied,
+      partially_applied_to_final_model:calibrationPartiallyApplied,
       fit_rows:calibrationMetadata?.fit_rows??calibrationMetadata?.fit_samples??0,
       fit_positive:calibrationMetadata?.fit_positive??calibrationMetadata?.fit_positives??0,
       fit_negative:calibrationMetadata?.fit_negative??calibrationMetadata?.fit_negatives??0,
@@ -3554,13 +3561,17 @@ export function runNeuralClosureBenchmark({
       calibrated_classification_metrics:calibratedProbabilityMetrics,
       reliability_diagnostics:reliabilityDiagnostics,
       calibration,
-      probability_evaluation_method:calibrationApplied
-        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
-        :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
-      execution_probability_stage:calibrationApplied
-        ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
-        :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
-      calibration_applied:calibrationApplied,
+      probability_evaluation_method:calibrationPartiallyApplied
+        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_PER_REGIME_CALIBRATION_STAGE'
+        :calibrationApplied
+          ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
+          :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
+      execution_probability_stage:calibrationPartiallyApplied
+        ?'TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME'
+        :calibrationApplied
+          ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
+          :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
+      calibration_applied:calibrationStageAvailable,
       threshold_selection_sample_count:thresholdSelectionRows.length,
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
