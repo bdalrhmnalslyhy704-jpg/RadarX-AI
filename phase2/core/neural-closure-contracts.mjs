@@ -2731,7 +2731,10 @@ export function runNeuralClosureBenchmark({
     realized_return_pct:row.realized_return_pct??null,
     features:row.features??null,temporal_sequence:row.temporal_sequence??null
   })));
-  const calibrationBlocks=chronologicalValidationBlocks(split.validation);
+  // Strict external protocol: outer validation is evaluation-only. No
+  // calibrator, threshold, Top-K, lambda or hyperparameter is fit/selected here.
+  // Calibration is deliberately identity/no-calibration until a train-only
+  // cross-fitted calibration artifact is supplied by each model trainer.
   const modelNames=['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES];
   const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
   for(const modelName of modelNames){
@@ -2784,27 +2787,35 @@ export function runNeuralClosureBenchmark({
         predictionsByModel[modelName],split.validation,split.holdout
       ):null;
     verifiedPredictions.set(modelName,rawMap);
-    // The Logistic anchor and every neural challenger receive the same
-    // chronological calibration fit/purge/check rows and the same candidate
-    // calibrators. This prevents raw-vs-calibrated Brier comparisons.
-    const thresholdSelectionRows=calibrationBlocks.threshold_selection;
-    const validationRows=calibrationBlocks.check;
-    const calibration=chooseCalibration(rawMap,
-      calibrationBlocks.fit,validationRows,minimumClassSupport,{
-        purgedRows:calibrationBlocks.purged,
-        thresholdSelectionRows,
-        thresholdPurgedRows:calibrationBlocks.threshold_purged,
-        calibrationDays:calibrationBlocks.days
-      });
+    // All 6,282 outer-validation opportunities are scored once with the
+    // model's native output. This block is never used to fit/select calibration.
+    const thresholdSelectionRows=[];
+    const validationRows=split.validation;
     const rawValidation=probabilitiesFor(validationRows,rawMap);
-    const calibratedValidation=probabilitiesFor(validationRows,rawMap,
-      calibration.selected_calibrator);
+    const calibratedValidation=rawValidation;
     const validationLabels=validationRows.map(row=>row.target);
     const validationSupport=classCounts(validationLabels);
-    const validationBrier=brier(calibratedValidation,validationLabels);
-    const rawThresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,rawMap);
-    const thresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,
-      rawMap,calibration.selected_calibrator);
+    const validationBrier=brier(rawValidation,validationLabels);
+    const rawThresholdSelectionProbabilities=[];
+    const thresholdSelectionProbabilities=[];
+    const calibration={
+      schema:'RADARX_OUTER_VALIDATION_NO_CALIBRATION_V1',
+      status:'NOT_APPLIED_PREDECLARED_IDENTITY',
+      selected_method:'IDENTITY_NO_CALIBRATION',
+      selection_scope:'PREDECLARED_NO_OUTER_VALIDATION_FIT_OR_SELECTION',
+      selected_calibrator:null,
+      fit_partition:'NONE',
+      fit_rows:0,
+      check_block_rows:validationRows.length,
+      raw_check_brier:validationBrier,
+      selected_check_brier:null,
+      improvement:null,
+      check_block_used_for_calibrator_selection:false,
+      outer_validation_labels_used_for_calibrator_fit:false,
+      support_ready:true,
+      holdout_values_used:false,
+      reason:'NO_TRAIN_ONLY_CROSS_FITTED_CALIBRATOR_WAS_SUPPLIED'
+    };
     const thresholdSelectionProbabilityDistribution={
       raw:summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
       calibrated:summarizeProbabilityDistribution(thresholdSelectionProbabilities)
@@ -2813,40 +2824,41 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
-    const walkForwardBaselineRawMap=modelName==='LOGISTIC_REGRESSION'
-      ?null:(verifiedPredictions.get('LOGISTIC_REGRESSION')??null);
-    const walkForwardCalibrationDiagnostics=
-      buildWalkForwardCalibrationDiagnostics(split.validation,rawMap,{
-        minimumClassSupport,baselineRawMap:walkForwardBaselineRawMap,
-        roundTripCostBps,minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
-      });
-    const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
-      ?buildTcnLstmProbabilityStageDiagnostics({
-        preInner:tcnLstmPreInnerCalibration,
-        calibrationFitRows:calibrationBlocks.fit,
-        thresholdSelectionRows,validationRows,
-        minimumClassSupport,
-        innerCalibratedThresholdSelection:
-          summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
-        innerCalibratedValidation:
-          summarizeProbabilityDistribution(rawValidation),
-        innerCalibratedThresholdSelectionProbabilities:rawThresholdSelectionProbabilities,
-        innerCalibratedValidationProbabilities:rawValidation,
-        sharedCalibratedThresholdSelection:
-          summarizeProbabilityDistribution(thresholdSelectionProbabilities),
-        sharedCalibratedValidation:
-          summarizeProbabilityDistribution(calibratedValidation),
-        sharedCalibratedThresholdSelectionProbabilities:thresholdSelectionProbabilities,
-        sharedCalibratedValidationProbabilities:calibratedValidation,
-        sharedCalibrationMethod:calibration.selected_method
-      }):null;
-    const thresholdSelection=selectThreshold(thresholdSelectionRows,
-      thresholdSelectionProbabilities,roundTripCostBps,{
-        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct,
-        referenceOnly:modelName==='LOGISTIC_REGRESSION'
-      });
-    // The threshold is chosen only on the earlier threshold-selection block.
-    // The later outer-validation block evaluates that frozen threshold once.
+    const walkForwardCalibrationDiagnostics={
+      schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
+      status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+      diagnostic_only:true,
+      holdout_values_used:false,
+      outer_validation_labels_used_for_calibrator_fit:false,
+      reason:'OUTER_VALIDATION_MUST_NOT_FIT_OR_SELECT_CALIBRATION'
+    };
+    const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'?{
+      schema:'RADARX_TCN_LSTM_PROBABILITY_STAGE_DIAGNOSTICS_V1',
+      status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+      diagnostic_only:true,
+      labels_used:false,
+      holdout_values_used:false,
+      affects_primary_probabilities:false,
+      affects_threshold_selection:false,
+      reason:'NO_OUTER_VALIDATION_CALIBRATION_OR_THRESHOLD_SELECTION'
+    }:null;
+    const thresholdSelection={
+      threshold:0.15,
+      status:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD',
+      selected:null,
+      eligible_count:1,
+      selection_role:'PREDECLARED_POLICY_NO_OUTER_SELECTION',
+      selection_objective:'FIXED_REFERENCE_THRESHOLD_0_15',
+      minimum_validation_trades:20,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false,
+      trials:[]
+    };
+    // The 0.15 reference threshold was frozen before this outer evaluation;
+    // no outer-validation row is used to choose or adjust it.
     const validationThresholdMetrics=finite(thresholdSelection.threshold)
       ?portfolioMetrics(validationRows,calibratedValidation,
         thresholdSelection.threshold,roundTripCostBps)
@@ -2872,11 +2884,8 @@ export function runNeuralClosureBenchmark({
     };
     const validationThresholdRiskPassed=validationThresholdMetrics!==null&&
       Object.values(validationThresholdRiskGates).every(value=>value===true);
-    // The execution comparison is anchored to Logistic's frozen threshold,
-    // selected on the same earlier disjoint block. A neural model cannot claim
-    // matched execution merely because its own independently selected
-    // threshold passes; it must also pass the outer-validation risk gates at
-    // this exact shared threshold.
+    // Every model is compared at the same predeclared 0.15 threshold.
+    // Outer validation only scores this frozen policy; it never chooses it.
     const logisticValidationReference=modelName==='LOGISTIC_REGRESSION'
       ?null:models.LOGISTIC_REGRESSION?.validation??null;
     const matchedExecutionThreshold=logisticValidationReference?.selected_threshold??null;
@@ -2885,10 +2894,9 @@ export function runNeuralClosureBenchmark({
     // Eligibility is determined on the earlier disjoint threshold-selection block.
     // Do not require Logistic to win again on the later outer-validation block:
     // that block exists precisely to compare the neural challenger against it.
-    const logisticThresholdSelectionReady=[
-      'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'
-    ].includes(logisticValidationReference?.threshold_selection)&&
-      Number(logisticValidationReference?.threshold_selection_eligible_count??0)>0;
+    const logisticThresholdSelectionReady=
+      logisticValidationReference?.threshold_selection==='PREDECLARED_FROZEN_REFERENCE_THRESHOLD'&&
+      Number(logisticValidationReference?.selected_threshold)===0.15;
     const matchedExecutionThresholdReady=finite(matchedExecutionThreshold)&&
       logisticThresholdSelectionReady&&
       logisticReferenceMetrics?.return_data_status==='COMPLETE';
@@ -2946,8 +2954,11 @@ export function runNeuralClosureBenchmark({
       sample_count:validationRows.length,
       positive_count:validationSupport.positive,
       negative_count:validationSupport.negative,
-      raw_brier_score:brier(rawValidation,validationLabels),
-      calibrated_brier_score:validationBrier,
+      raw_brier_score:validationBrier,
+      calibrated_brier_score:null,
+      evaluation_brier_score:validationBrier,
+      probability_evaluation_method:'MODEL_NATIVE_OUTPUT_NO_OUTER_CALIBRATION',
+      calibration_applied:false,
       threshold_selection_sample_count:thresholdSelectionRows.length,
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
@@ -2956,26 +2967,26 @@ export function runNeuralClosureBenchmark({
       chronological_stability_diagnostics:{
         schema:'RADARX_MODEL_CHRONOLOGICAL_STABILITY_V1',
         diagnostic_only:true,
-        threshold_selection:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,thresholdSelectionProbabilities
-        ),
+        threshold_selection:{
+          status:'NOT_EVALUATED_NO_OUTER_POLICY_SELECTION',
+          labels_used_for_threshold_selection:false
+        },
         outer_validation:buildChronologicalStabilityDiagnostics(
-          validationRows,calibratedValidation
+          validationRows,rawValidation
         )
       },
-      expanded_threshold_window_counterfactual:
-        buildExpandedThresholdWindowCounterfactual(
-          split.validation,rawMap,roundTripCostBps,{
-            minimumClassSupport,minimumTrades:20,
-            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35,
-            rankingScoreMap:modelName==='TCN_LSTM_HYBRID'&&
-              auxiliaryRankingMap?.status==='AVAILABLE'
-                ?auxiliaryRankingMap.map:null,
-            rankingAnchorScoreMap:modelName==='TCN_LSTM_HYBRID'&&
-              auxiliaryRankingAnchorMap?.status==='AVAILABLE'
-                ?auxiliaryRankingAnchorMap.map:null
-          }
-        ),
+      expanded_threshold_window_counterfactual:{
+        schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
+        status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+        diagnostic_only:true,
+        affects_primary_probabilities:false,
+        affects_primary_threshold:false,
+        affects_acceptance_gates:false,
+        holdout_values_used:false,
+        outer_validation_labels_used_for_calibrator_fit:false,
+        outer_validation_labels_used_for_threshold_selection:false,
+        reason:'OUTER_VALIDATION_MUST_NOT_FIT_CALIBRATION_OR_SELECT_POLICY'
+      },
       ...(modelName==='TCN_LSTM_HYBRID'
         ?{auxiliary_ranking_map_status:auxiliaryRankingMap?.status??'NOT_AVAILABLE',
           auxiliary_ranking_map_reason:auxiliaryRankingMap?.reason??null,
@@ -3054,7 +3065,7 @@ export function runNeuralClosureBenchmark({
       continue;
     }
 
-    const baselineValidationBrier=models.LOGISTIC_REGRESSION.validation?.calibrated_brier_score??null;
+    const baselineValidationBrier=models.LOGISTIC_REGRESSION.validation?.evaluation_brier_score??null;
     const improvement=finite(baselineValidationBrier)&&finite(validationBrier)
       ?baselineValidationBrier-validationBrier:null;
     const qualification=qualificationByModel?.[modelName]??{
@@ -3062,7 +3073,8 @@ export function runNeuralClosureBenchmark({
     };
     const validationGates={
       inner_selection_qualified:qualification.passed===true,
-      calibration_class_support:calibration.support_ready===true,
+      probability_output_available:rawValidation.length===validationRows.length&&
+        rawValidation.every(value=>finite(value)&&value>=0&&value<=1),
       minimum_validation_positive_support:validationSupport.positive>=minimumClassSupport,
       minimum_validation_negative_support:validationSupport.negative>=minimumClassSupport,
       brier_improvement_vs_logistic:finite(improvement)&&improvement>requiredBrierImprovement,
@@ -3073,8 +3085,8 @@ export function runNeuralClosureBenchmark({
     const validationPassed=Object.values(validationGates).every(value=>value===true);
     const validationReason=!validationGates.inner_selection_qualified
       ?'INNER_SELECTION_NOT_QUALIFIED'
-      :!validationGates.calibration_class_support
-        ?'CALIBRATION_CLASS_SUPPORT_NOT_MET'
+      :!validationGates.probability_output_available
+        ?'MODEL_PROBABILITY_OUTPUT_INVALID'
         :!validationGates.minimum_validation_positive_support||
           !validationGates.minimum_validation_negative_support
           ?'OUTER_VALIDATION_CLASS_SUPPORT_NOT_MET'
@@ -3090,7 +3102,7 @@ export function runNeuralClosureBenchmark({
       candidate_validation_brier:validationBrier,
       brier_improvement_vs_logistic:improvement,
       required_brier_improvement:requiredBrierImprovement,
-      threshold_selection_method:'LOGISTIC_FROZEN_ON_EARLIER_DISJOINT_PURGED_BLOCK',
+      threshold_selection_method:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD_0_15_NO_OUTER_FIT',
       outer_validation_threshold:matchedExecutionThreshold,
       model_specific_outer_validation_threshold:thresholdSelection.threshold,
       outer_validation_threshold_metrics:matchedValidationMetricsSummary,
