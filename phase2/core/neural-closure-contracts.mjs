@@ -2432,7 +2432,8 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
     }
   };
 }
-\n/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
+
+/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
 export function topKRankingSignals(rows,scores,topK) {
   if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
     !Number.isInteger(topK)||topK<1)
