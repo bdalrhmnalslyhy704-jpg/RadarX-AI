@@ -646,31 +646,63 @@ export function fitPlattScaler(logits, labels, {
     slope:null,intercept:null};
   if(supportFailure(counts,minimumPositives,minimumNegatives))
     return {...base,status:'INSUFFICIENT_CLASS_SUPPORT'};
-  let slope=1,intercept=0;
-  for(let iteration=0;iteration<iterations;iteration++){
-    let g0=regularization*(slope-1),g1=regularization*intercept;
-    let h00=regularization,h01=0,h11=regularization;
-    for(let i=0;i<logits.length;i++){
-      const x=Number(logits[i]),p=sigmoid(slope*x+intercept);
-      const error=p-labels[i],weight=p*(1-p);
-      g0+=error*x;g1+=error;
-      h00+=weight*x*x;h01+=weight*x;h11+=weight;
-    }
-    const determinant=h00*h11-h01*h01;
-    if(!Number.isFinite(determinant)||determinant<=1e-18)
-      return {...base,status:'SINGULAR_HESSIAN'};
-    const deltaSlope=(h11*g0-h01*g1)/determinant;
-    const deltaIntercept=(-h01*g0+h00*g1)/determinant;
-    slope=clamp(slope-deltaSlope,0.05,20);
-    intercept=clamp(intercept-deltaIntercept,-12,12);
-    if(!Number.isFinite(slope)||!Number.isFinite(intercept))
-      return {...base,status:'NON_FINITE_OPTIMIZER_STATE'};
-    if(Math.max(Math.abs(deltaSlope),Math.abs(deltaIntercept))<1e-9)break;
-  }
+
   const before=binaryNll(logits,labels,sigmoid);
-  const after=binaryNll(logits,labels,value=>sigmoid(slope*value+intercept));
-  return {...base,status:'FITTED',fitted:true,accepted:after<before,
-    slope,intercept,fit_nll_before:before,fit_nll_after:after};
+  const steps=Math.max(1,Math.min(2000,Math.trunc(iterations)));
+  const fitOrientation=orientation=>{
+    let slope=orientation,intercept=0;
+    const lower=orientation>0?0.05:-20;
+    const upper=orientation>0?20:-0.05;
+    for(let iteration=0;iteration<steps;iteration++){
+      let g0=regularization*(slope-orientation),g1=regularization*intercept;
+      let h00=regularization,h01=0,h11=regularization;
+      for(let i=0;i<logits.length;i++){
+        const x=Number(logits[i]),p=sigmoid(slope*x+intercept);
+        const error=p-labels[i],weight=p*(1-p);
+        g0+=error*x;g1+=error;
+        h00+=weight*x*x;h01+=weight*x;h11+=weight;
+      }
+      const determinant=h00*h11-h01*h01;
+      if(!Number.isFinite(determinant)||determinant<=1e-18)
+        return {orientation,status:'SINGULAR_HESSIAN'};
+      const deltaSlope=(h11*g0-h01*g1)/determinant;
+      const deltaIntercept=(-h01*g0+h00*g1)/determinant;
+      slope=clamp(slope-deltaSlope,lower,upper);
+      intercept=clamp(intercept-deltaIntercept,-12,12);
+      if(!Number.isFinite(slope)||!Number.isFinite(intercept))
+        return {orientation,status:'NON_FINITE_OPTIMIZER_STATE'};
+      if(Math.max(Math.abs(deltaSlope),Math.abs(deltaIntercept))<1e-9)break;
+    }
+    const after=binaryNll(logits,labels,value=>sigmoid(slope*value+intercept));
+    if(!Number.isFinite(after))
+      return {orientation,status:'NON_FINITE_OBJECTIVE'};
+    return {orientation,status:'FITTED',slope,intercept,fit_nll_after:after,
+      accepted:after<before};
+  };
+
+  // Platt orientation is selected only on the declared calibration-fit rows.
+  // The held-out calibration-check and outer-validation blocks never choose
+  // the sign; they remain independent tests of the selected transform.
+  const orientationTrials=[fitOrientation(1),fitOrientation(-1)];
+  const fitted=orientationTrials.filter(candidate=>candidate.status==='FITTED');
+  if(!fitted.length)
+    return {...base,status:'OPTIMIZER_FAILED',orientation_trials:orientationTrials};
+  fitted.sort((a,b)=>a.fit_nll_after-b.fit_nll_after||
+    (b.orientation-a.orientation));
+  const best=fitted[0];
+  return {...base,status:'FITTED',fitted:true,accepted:best.accepted===true,
+    slope:best.slope,intercept:best.intercept,
+    slope_orientation:best.orientation>0?'POSITIVE':'NEGATIVE',
+    fit_nll_before:before,fit_nll_after:best.fit_nll_after,
+    orientation_trials:orientationTrials.map(candidate=>({
+      orientation:candidate.orientation>0?'POSITIVE':'NEGATIVE',
+      status:candidate.status,
+      accepted:candidate.accepted??false,
+      slope:candidate.slope??null,
+      intercept:candidate.intercept??null,
+      fit_nll_after:candidate.fit_nll_after??null
+    }))
+  };
 }
 export function applyProbabilityCalibrator(logitValue, calibrator) {
   if(!finite(logitValue))throw new TypeError('NEURAL_CALIBRATION_LOGIT_NON_FINITE');
@@ -1874,12 +1906,48 @@ function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4
 }
 function selectThreshold(rows,probabilities,roundTripCostBps,{
   minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  thresholdGrid=ENTRY_THRESHOLD_GRID
+  referenceOnly=false,thresholdGrid=ENTRY_THRESHOLD_GRID
 }={}) {
   if(!Array.isArray(thresholdGrid)||thresholdGrid.length===0||
     thresholdGrid.some(value=>!finite(value)||Number(value)<=0||Number(value)>=1))
     throw new TypeError('NEURAL_CLOSURE_THRESHOLD_GRID_INVALID');
   const trials=thresholdGrid.map(threshold=>portfolioMetrics(rows,probabilities,threshold,roundTripCostBps));
+  if(referenceOnly){
+    // A comparator does not need to pass promotion gates. Freeze its threshold
+    // on this earlier disjoint block using net return after fees, but require
+    // complete evidence and the same minimum sample support as the challenger.
+    const eligible=trials.filter(item=>item.return_data_status==='COMPLETE'&&
+      Number(item.trade_count)>=minimumTrades&&
+      finite(item.net_pnl_pct)&&finite(item.max_drawdown_pct)&&
+      finite(item.win_rate_pct));
+    if(!eligible.length)return {
+      threshold:null,status:'ABSTAINED_NO_REFERENCE_THRESHOLD_WITH_MINIMUM_TRADES',
+      selected:null,trials,eligible_count:0,
+      selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY',
+      selection_objective:'MAX_NET_PNL_AFTER_COST_WITH_MINIMUM_TRADES_ON_EARLIER_DISJOINT_BLOCK',
+      minimum_validation_trades:minimumTrades,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false
+    };
+    eligible.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
+      a.max_drawdown_pct-b.max_drawdown_pct||
+      b.win_rate_pct-a.win_rate_pct||b.trade_count-a.trade_count);
+    return {
+      threshold:eligible[0].threshold,status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY',
+      trials,eligible_count:eligible.length,selected:eligible[0],
+      selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY',
+      selection_objective:'MAX_NET_PNL_AFTER_COST_WITH_MINIMUM_TRADES_ON_EARLIER_DISJOINT_BLOCK',
+      minimum_validation_trades:minimumTrades,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false
+    };
+  }
   const ready=trials.filter(item=>item.return_data_status==='COMPLETE'&&
     item.trade_count>=minimumTrades&&
     finite(item.win_rate_pct)&&item.win_rate_pct>=minimumWinRatePct&&
@@ -1888,20 +1956,26 @@ function selectThreshold(rows,probabilities,roundTripCostBps,{
   if(!ready.length)return {
     threshold:null,status:'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',
     selected:null,trials,eligible_count:0,
+    selection_role:'NEURAL_OR_CANDIDATE_QUALIFICATION',
     minimum_validation_trades:minimumTrades,
     minimum_validation_win_rate_pct:minimumWinRatePct,
+    minimum_validation_win_rate_enforced:true,
     require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
+    maximum_validation_drawdown_pct:maximumDrawdownPct,
+    acceptance_qualified:false
   };
   ready.sort((a,b)=>b.net_pnl_pct-a.net_pnl_pct||
     a.max_drawdown_pct-b.max_drawdown_pct||b.trade_count-a.trade_count);
   return {
     threshold:ready[0].threshold,status:'SELECTED_ON_VALIDATION_ONLY',
     trials,eligible_count:ready.length,selected:ready[0],
+    selection_role:'NEURAL_OR_CANDIDATE_QUALIFICATION',
     minimum_validation_trades:minimumTrades,
     minimum_validation_win_rate_pct:minimumWinRatePct,
+    minimum_validation_win_rate_enforced:true,
     require_positive_validation_net_pnl:true,
-    maximum_validation_drawdown_pct:maximumDrawdownPct
+    maximum_validation_drawdown_pct:maximumDrawdownPct,
+    acceptance_qualified:true
   };
 }
 
@@ -2727,7 +2801,8 @@ export function runNeuralClosureBenchmark({
       }):null;
     const thresholdSelection=selectThreshold(thresholdSelectionRows,
       thresholdSelectionProbabilities,roundTripCostBps,{
-        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
+        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct,
+        referenceOnly:modelName==='LOGISTIC_REGRESSION'
       });
     // The threshold is chosen only on the earlier threshold-selection block.
     // The later outer-validation block evaluates that frozen threshold once.
@@ -2756,6 +2831,69 @@ export function runNeuralClosureBenchmark({
     };
     const validationThresholdRiskPassed=validationThresholdMetrics!==null&&
       Object.values(validationThresholdRiskGates).every(value=>value===true);
+    // The execution comparison is anchored to Logistic's frozen threshold,
+    // selected on the same earlier disjoint block. A neural model cannot claim
+    // matched execution merely because its own independently selected
+    // threshold passes; it must also pass the outer-validation risk gates at
+    // this exact shared threshold.
+    const logisticValidationReference=modelName==='LOGISTIC_REGRESSION'
+      ?null:models.LOGISTIC_REGRESSION?.validation??null;
+    const matchedExecutionThreshold=logisticValidationReference?.selected_threshold??null;
+    const logisticReferenceMetrics=
+      logisticValidationReference?.validation_threshold_metrics??null;
+    // Eligibility is determined on the earlier disjoint threshold-selection block.
+    // Do not require Logistic to win again on the later outer-validation block:
+    // that block exists precisely to compare the neural challenger against it.
+    const logisticThresholdSelectionReady=[
+      'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'
+    ].includes(logisticValidationReference?.threshold_selection)&&
+      Number(logisticValidationReference?.threshold_selection_eligible_count??0)>0;
+    const matchedExecutionThresholdReady=finite(matchedExecutionThreshold)&&
+      logisticThresholdSelectionReady&&
+      logisticReferenceMetrics?.return_data_status==='COMPLETE';
+    const matchedValidationMetrics=modelName!=='LOGISTIC_REGRESSION'&&
+      matchedExecutionThresholdReady
+      ?portfolioMetrics(validationRows,calibratedValidation,
+        Number(matchedExecutionThreshold),roundTripCostBps)
+      :null;
+    const matchedValidationRiskGates=matchedValidationMetrics?{
+      return_data_complete:matchedValidationMetrics.return_data_status==='COMPLETE',
+      minimum_validation_trades:matchedValidationMetrics.trade_count>=20,
+      minimum_validation_win_rate:finite(matchedValidationMetrics.win_rate_pct)&&
+        matchedValidationMetrics.win_rate_pct>=minimumWinRatePct,
+      positive_validation_net_pnl:finite(matchedValidationMetrics.net_pnl_pct)&&
+        matchedValidationMetrics.net_pnl_pct>0,
+      maximum_validation_drawdown:finite(matchedValidationMetrics.max_drawdown_pct)&&
+        matchedValidationMetrics.max_drawdown_pct<=maximumDrawdownPct,
+      strictly_beats_logistic_net_pnl:finite(matchedValidationMetrics.net_pnl_pct)&&
+        finite(logisticReferenceMetrics?.net_pnl_pct)&&
+        matchedValidationMetrics.net_pnl_pct>logisticReferenceMetrics.net_pnl_pct,
+      drawdown_no_worse_than_logistic:finite(matchedValidationMetrics.max_drawdown_pct)&&
+        finite(logisticReferenceMetrics?.max_drawdown_pct)&&
+        matchedValidationMetrics.max_drawdown_pct<=logisticReferenceMetrics.max_drawdown_pct
+    }:{
+      return_data_complete:null,minimum_validation_trades:null,
+      minimum_validation_win_rate:null,positive_validation_net_pnl:null,
+      maximum_validation_drawdown:null
+    };
+    const matchedValidationRiskPassed=matchedValidationMetrics!==null&&
+      Object.values(matchedValidationRiskGates).every(value=>value===true);
+    const matchedValidationMetricsSummary=matchedValidationMetrics?{
+      threshold:Number(matchedExecutionThreshold),
+      signal_count:matchedValidationMetrics.signal_count,
+      trade_count:matchedValidationMetrics.trade_count,
+      win_rate_pct:matchedValidationMetrics.win_rate_pct,
+      net_pnl_pct:matchedValidationMetrics.net_pnl_pct,
+      max_drawdown_pct:matchedValidationMetrics.max_drawdown_pct,
+      return_data_status:matchedValidationMetrics.return_data_status,
+      skipped_capacity:matchedValidationMetrics.skipped_capacity,
+      skipped_same_symbol:matchedValidationMetrics.skipped_same_symbol
+    }:null;
+    const matchedValidationRiskGateSummary=Object.fromEntries(
+      Object.entries(matchedValidationRiskGates).map(([key,value])=>[
+        key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+      ])
+    );
     const thresholdSelectionSupport=classCounts(thresholdSelectionRows.map(row=>row.target));
     const metricWeights={
       positiveWeight:trainingWeights.positiveWeight,
@@ -2808,10 +2946,14 @@ export function runNeuralClosureBenchmark({
       selected_threshold:thresholdSelection.threshold,
       threshold_selection_eligible_count:thresholdSelection.eligible_count??0,
       threshold_selection_gates:{
+        selection_role:thresholdSelection.selection_role??'MODEL_QUALIFICATION',
+        selection_objective:thresholdSelection.selection_objective??'RISK_GATED_NET_RETURN',
         minimum_threshold_selection_trades:thresholdSelection.minimum_validation_trades??20,
         minimum_threshold_selection_win_rate_pct:thresholdSelection.minimum_validation_win_rate_pct??minimumWinRatePct,
+        minimum_threshold_selection_win_rate_enforced:thresholdSelection.minimum_validation_win_rate_enforced!==false,
         require_positive_threshold_selection_net_pnl:thresholdSelection.require_positive_validation_net_pnl===true,
-        maximum_threshold_selection_drawdown_pct:thresholdSelection.maximum_validation_drawdown_pct??maximumDrawdownPct
+        maximum_threshold_selection_drawdown_pct:thresholdSelection.maximum_validation_drawdown_pct??maximumDrawdownPct,
+        acceptance_qualified:thresholdSelection.acceptance_qualified===true
       },
       threshold_trials:thresholdSelection.trials.map(item=>({
         threshold:item.threshold,signal_count:item.signal_count,trade_count:item.trade_count,
@@ -2834,7 +2976,20 @@ export function runNeuralClosureBenchmark({
         Object.entries(validationThresholdRiskGates).map(([key,value])=>[
           key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
         ])
-      )
+      ),
+      matched_execution_reference:modelName==='LOGISTIC_REGRESSION'
+        ?'LOGISTIC_REFERENCE_THRESHOLD'
+        :matchedExecutionThresholdReady?'MATCHED_LOGISTIC_EXECUTION_THRESHOLD'
+          :'UNAVAILABLE_NO_QUALIFIED_LOGISTIC_THRESHOLD',
+      matched_execution_threshold:modelName==='LOGISTIC_REGRESSION'
+        ?thresholdSelection.threshold:matchedExecutionThreshold,
+      matched_execution_validation_metrics:modelName==='LOGISTIC_REGRESSION'
+        ?(validationThresholdMetrics?{threshold:thresholdSelection.threshold,signal_count:validationThresholdMetrics.signal_count,trade_count:validationThresholdMetrics.trade_count,win_rate_pct:validationThresholdMetrics.win_rate_pct,net_pnl_pct:validationThresholdMetrics.net_pnl_pct,max_drawdown_pct:validationThresholdMetrics.max_drawdown_pct,return_data_status:validationThresholdMetrics.return_data_status}:null):matchedValidationMetricsSummary,
+      matched_execution_validation_risk_gates:modelName==='LOGISTIC_REGRESSION'
+        ?Object.fromEntries(Object.entries(validationThresholdRiskGates).map(([key,value])=>[
+          key,value===null?'NOT_EVALUATED':value?'PASS':'FAIL'
+        ]))
+        :matchedValidationRiskGateSummary
     };
 
     if(modelName==='LOGISTIC_REGRESSION'){
@@ -2870,11 +3025,9 @@ export function runNeuralClosureBenchmark({
       minimum_validation_positive_support:validationSupport.positive>=minimumClassSupport,
       minimum_validation_negative_support:validationSupport.negative>=minimumClassSupport,
       brier_improvement_vs_logistic:finite(improvement)&&improvement>requiredBrierImprovement,
-      threshold_selection_qualified:
-        thresholdSelection.status==='SELECTED_ON_VALIDATION_ONLY'&&
-        finite(thresholdSelection.threshold)&&thresholdSelection.eligible_count>0,
-      outer_validation_threshold_risk_gates:
-        validationThresholdMetrics===null?null:validationThresholdRiskPassed
+      matched_execution_threshold_available:matchedExecutionThresholdReady,
+      matched_outer_validation_execution_risk_gates:
+        matchedValidationMetrics===null?null:matchedValidationRiskPassed
     };
     const validationPassed=Object.values(validationGates).every(value=>value===true);
     const validationReason=!validationGates.inner_selection_qualified
@@ -2886,20 +3039,25 @@ export function runNeuralClosureBenchmark({
           ?'OUTER_VALIDATION_CLASS_SUPPORT_NOT_MET'
           :!validationGates.brier_improvement_vs_logistic
             ?'OUTER_VALIDATION_DID_NOT_BEAT_LOGISTIC_BY_REQUIRED_MARGIN'
-            :!validationGates.threshold_selection_qualified
-              ?'THRESHOLD_SELECTION_BLOCK_DID_NOT_QUALIFY'
-              :!validationGates.outer_validation_threshold_risk_gates
-                ?'OUTER_VALIDATION_THRESHOLD_RISK_GATES_FAILED':null;
+            :!validationGates.matched_execution_threshold_available
+              ?'LOGISTIC_MATCHED_EXECUTION_THRESHOLD_NOT_AVAILABLE'
+              :!validationGates.matched_outer_validation_execution_risk_gates
+                ?'OUTER_VALIDATION_MATCHED_EXECUTION_RISK_GATES_FAILED':null;
     const validationGate={
       passed:validationPassed,
       baseline_logistic_brier:baselineValidationBrier,
       candidate_validation_brier:validationBrier,
       brier_improvement_vs_logistic:improvement,
       required_brier_improvement:requiredBrierImprovement,
-      threshold_selection_method:'EARLIER_DISJOINT_PURGED_BLOCK',
-      outer_validation_threshold:thresholdSelection.threshold,
-      outer_validation_threshold_metrics:baseValidation.validation_threshold_metrics,
-      outer_validation_threshold_risk_gates:baseValidation.validation_threshold_risk_gates,
+      threshold_selection_method:'LOGISTIC_FROZEN_ON_EARLIER_DISJOINT_PURGED_BLOCK',
+      outer_validation_threshold:matchedExecutionThreshold,
+      model_specific_outer_validation_threshold:thresholdSelection.threshold,
+      outer_validation_threshold_metrics:matchedValidationMetricsSummary,
+      outer_validation_threshold_risk_gates:matchedValidationRiskGateSummary,
+      model_specific_outer_validation_threshold_metrics:baseValidation.validation_threshold_metrics,
+      execution_reference:matchedExecutionThresholdReady
+        ?'MATCHED_LOGISTIC_EXECUTION_THRESHOLD'
+        :'UNAVAILABLE_NO_QUALIFIED_LOGISTIC_THRESHOLD',
       inner_qualification:{
         passed:qualification.passed===true,
         reason:qualification.reason??null,
@@ -2984,8 +3142,10 @@ export function runNeuralClosureBenchmark({
       calibration.selected_calibrator);
     const metrics={
       ...holdoutMetrics(split.holdout,holdoutProbabilities,
-        thresholdSelection.threshold,roundTripCostBps,metricWeights),
-      execution_evaluated:true
+        Number(matchedExecutionThreshold),roundTripCostBps,metricWeights),
+      execution_evaluated:true,
+      execution_threshold_source:'LOGISTIC_REGRESSION_FROZEN_THRESHOLD',
+      model_specific_selected_threshold:thresholdSelection.threshold
     };
     models[modelName]={
       status:'EVALUATED',
@@ -3028,9 +3188,12 @@ export function runNeuralClosureBenchmark({
     }
     const candidate=model.holdout,anchor=baseline.holdout;
     const improvement=anchor.brier_score-candidate.brier_score;
-    const logisticExecutionComparable=baseline.validation?.selected_threshold!==null&&
-      baseline.validation?.selected_threshold!==undefined&&
-      anchor.execution_evaluated===true&&
+    const matchedThreshold=baseline.validation?.selected_threshold;
+    const logisticExecutionComparable=finite(matchedThreshold)&&
+      anchor.execution_evaluated===true&&candidate.execution_evaluated===true&&
+      finite(anchor.threshold)&&finite(candidate.threshold)&&
+      Number(anchor.threshold)===Number(matchedThreshold)&&
+      Number(candidate.threshold)===Number(matchedThreshold)&&
       finite(anchor.net_pnl_pct)&&finite(anchor.max_drawdown_pct);
     const qualification=qualificationByModel?.[modelName]??{
       passed:true,reason:'NO_ADDITIONAL_INNER_QUALIFICATION_CONFIGURED'
@@ -3043,12 +3206,11 @@ export function runNeuralClosureBenchmark({
       minimum_net_win_rate:finite(candidate.win_rate_pct)&&candidate.win_rate_pct>=minimumWinRatePct,
       positive_net_pnl:finite(candidate.net_pnl_pct)&&candidate.net_pnl_pct>0,
       maximum_drawdown:finite(candidate.max_drawdown_pct)&&candidate.max_drawdown_pct<=maximumDrawdownPct,
-      ...(logisticExecutionComparable?{
-        beat_logistic_net_pnl:finite(candidate.net_pnl_pct)&&
-          candidate.net_pnl_pct>anchor.net_pnl_pct,
-        no_higher_drawdown_than_logistic:finite(candidate.max_drawdown_pct)&&
-          candidate.max_drawdown_pct<=anchor.max_drawdown_pct
-      }:{}),
+      matched_logistic_execution_threshold:logisticExecutionComparable,
+      beat_logistic_net_pnl:logisticExecutionComparable&&
+        finite(candidate.net_pnl_pct)&&candidate.net_pnl_pct>anchor.net_pnl_pct,
+      no_higher_drawdown_than_logistic:logisticExecutionComparable&&
+        finite(candidate.max_drawdown_pct)&&candidate.max_drawdown_pct<=anchor.max_drawdown_pct,
       return_data_complete:candidate.return_data_status==='COMPLETE',
       inner_selection_qualified:qualification.passed===true
     };
@@ -3057,7 +3219,7 @@ export function runNeuralClosureBenchmark({
       passed:Object.values(gates).every(Boolean),
       execution_reference:logisticExecutionComparable
         ?'MATCHED_LOGISTIC_EXECUTION_THRESHOLD'
-        :'ABSOLUTE_CANDIDATE_RISK_GATES_LOGISTIC_BRIER_ONLY',
+        :'MATCHED_LOGISTIC_EXECUTION_THRESHOLD_NOT_VERIFIED',
       inner_qualification:{
         passed:qualification.passed===true,
         reason:qualification.reason??null,

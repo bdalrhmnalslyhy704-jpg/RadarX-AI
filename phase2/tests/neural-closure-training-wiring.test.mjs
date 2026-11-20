@@ -21,8 +21,12 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/EXPECTED_ROW_COUNT: '32300'/);
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
-  assert.match(workflow,/cancel-in-progress: true/);
-  assert.match(workflow,/github\.event\.pull_request\.number \|\| github\.ref/);
+  assert.match(workflow,/cancel-in-progress: true/,
+    'a newer research SHA must supersede an older full-cohort training job on the same branch');
+  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\$\{\{ github\.ref \}\}/,
+    'the replay concurrency key must be scoped to one branch, not each commit SHA');
+  assert.ok(workflow.includes('research/build224-tcn-lstm-score-head-oos-ablation-20261120'),
+    'the matched score-conditioned head ablation branch must trigger the fixed-cohort replay');
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
@@ -281,14 +285,45 @@ test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
 
 test('fixed-SHA summary exposes disjoint threshold-selection and outer-validation risk evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  const temporal=await readFile(lstmModuleUrl,'utf8');
   assert.match(trainer,/validation:model\.validation\?\{/,
     'the report must retain the complete validation evidence object');
   assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
     'the console and model-comparison summary must expose the full staged calibration diagnostics');
-  assert.match(trainer,/maxTrainingSamples:4096/,
-    'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
-  assert.match(trainer,/max_training_samples:4096/,
+  assert.match(trainer,/maxTrainingSamples:6144/,
+    'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
+  assert.match(trainer,/max_training_samples:6144/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
+    'the active execution head must include normalized Logistic and neural classifier scores');
+  assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
+    'the score-conditioned head must be the default execution path');
+  assert.match(temporal,/pooled_latent_'\+index/,
+    'score conditioning must expose pooled-channel multiplicative interactions');
+  assert.match(temporal,/x_logistic_anchor_score/,
+    'each pooled channel must be gated by the Logistic score');
+  assert.match(temporal,/x_neural_classifier_score/,
+    'each pooled channel must be gated by the neural classifier score');
+  assert.match(temporal,/x_ranking_residual_score/,
+    'each pooled channel must also receive the train-only ranking residual score');
+  assert.match(temporal,/POOLED_ONLY/,
+    'the pooled-only head must be retained as a matched ablation control');
+  assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
+    'inner qualification must require a matched execution-head ablation pass');
+  assert.match(temporal,/splitTcnLstmTrainingRowsForExecutionHead/,
+    'the execution regression heads must use a purged later training-only block');
+  assert.match(temporal,/TCN_LSTM_EXECUTION_HEAD_TRAINING_PURGE_VIOLATION/,
+    'encoder and execution-head training rows must satisfy a strict forward-label purge');
+  assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(executionRows,executionRows,model,anchor/,
+    'execution-head latent features must be produced by a model that did not fit those rows');
+  assert.match(temporal,/representation_out_of_sample:true/,
+    'the fitted execution head must attest to out-of-sample representations');
+  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
+    'the report must publish the exact active V4 score-gated execution-head schema');
+  assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
+    'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
+  assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
+    'the public benchmark must expose recurrent training-sample selection provenance');
   assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
   assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
   assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);
@@ -346,14 +381,20 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/Math\.ceil\(baseEpochs\*1\.5\)/,
     'the third ensemble member must retain the 1.5x epoch profile');
 
-  // Recurrent challenger moves from four to 12/16/20 epochs; no configuration
-  // exceeds its existing 30-epoch cap or changes the inner-selection margin.
-  assert.match(trainer,/4H_LR_0015_L2_0005_DROP00_E12[\s\S]*?epochs:12/);
-  assert.match(trainer,/4H_LR_0025_L2_0015_DROP10_E16[\s\S]*?epochs:16/);
-  assert.match(trainer,/4H_LR_0035_L2_0035_DROP20_E20[\s\S]*?epochs:20/);
-  assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
-  assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
-  assert.match(trainer,/4H_FOCAL_LR_0025_L2_0015_DROP10_E16/);
+  // The bounded eight-candidate recurrent grid keeps the plain Brier anchor
+  // and seven Brier + shared-classifier ranking weights. Focal is excluded
+  // because the prior replay showed a Brier/ranking tradeoff.
+  assert.match(trainer,/4H_BRIER_BASE_LR0015_L2_0005_E12[\s\S]*?epochs:12/);
+  assert.match(trainer,/objective:'BRIER'/);
+  for(const name of [
+    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
+  ]) assert.ok(trainer.includes(name),'missing Brier + shared-ranking challenger '+name);
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
   assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
   assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
@@ -362,4 +403,77 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
   assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
   assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
+});
+
+
+test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selector cap',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const candidateBlock=trainer.match(/candidates:\[([\s\S]*?)\n\s+\]\n\s+\}\);/);
+  assert.ok(candidateBlock,'TCN-LSTM candidate grid must be discoverable');
+  const candidateNames=[...candidateBlock[1].matchAll(/name:'([^']+)'/g)]
+    .map(match=>match[1]);
+  assert.equal(candidateNames.length,8,'grid must stay within the selector hard cap');
+  assert.ok(candidateNames.includes('4H_BRIER_BASE_LR0015_L2_0005_E12'));
+  for(const name of [
+    '4H_BRIER_SHARED_RANK_W005_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W010_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W020_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W040_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W060_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W080_LR0015_E16',
+    '4H_BRIER_SHARED_RANK_W120_LR0015_E16'
+  ]) assert.ok(candidateNames.includes(name),'missing Brier + shared-ranking candidate '+name);
+  for(const weight of ['0.005','0.01','0.02','0.04','0.06','0.08','0.12']){
+    assert.ok(trainer.includes('rankingWeight:'+weight),'missing combined ranking weight '+weight);
+  }
+  assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:/g)||[]).length,7,
+    'all seven ranking candidates must retain the proper-scoring Brier objective');
+  assert.match(trainer,/rankingPairsPerTimestamp:12/,
+    'ranking supervision must use a broader bounded set of same-time return pairs');
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(trainer,/minimumReturnWinRatePct:55/);
+  assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
+  const classifierProbabilityImplementation=recurrent.match(
+    /export function predictTcnLstmHybridProbability\([\s\S]*?\n}/
+  )?.[0]??'';
+  assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
+  assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
+    'the proper-scoring classifier probability must remain independent of ranking features');
+  assert.match(recurrent,/function predictTcnLstmHybridRankingProbability[\s\S]*?forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
+  assert.match(recurrent,/SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1/);
+  assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
+  assert.match(recurrent,/projectTcnLstmAuxiliaryGradient/);
+  assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
+});
+
+test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{
+  const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(closure,/referenceOnly:modelName==='LOGISTIC_REGRESSION'/);
+  assert.match(closure,/status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY'/);
+  assert.match(closure,/selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY'/);
+  assert.match(closure,/logisticThresholdSelectionReady=\[\s*'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'/);
+  assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\s\S]*?Object\.values\(logisticReferenceRiskGates\)\.every/);
+  assert.match(closure,/strictly_beats_logistic_net_pnl/);
+  assert.match(closure,/drawdown_no_worse_than_logistic/);
+  assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
+  assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
+});
+
+test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with one frozen lambda',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
+  assert.match(trainer,/variant:'POOLED_ONLY'/);
+  assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
+  assert.match(trainer,/evaluateExternalExecutionRiskTopK\([\s\S]*?pooledScores[\s\S]*?pooledLambdas/);
+  assert.match(trainer,/same_outer_validation_opportunities:true/);
+  assert.match(trainer,/same_frozen_lambda_for_both_variants:true/);
+  assert.match(trainer,/outer_validation_used_for_lambda_or_top_k_selection:false/);
+  assert.match(trainer,/holdout_rows_or_scores_used:false/);
+  assert.match(trainer,/context_minus_pooled_only/);
+  assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
+  assert.match(recurrent,/variant='LOGIT_CONTEXT_AUGMENTED'/);
+  assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
