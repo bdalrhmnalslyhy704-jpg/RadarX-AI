@@ -1187,6 +1187,16 @@ async function main(){
               rankingHeadLearningRate:0.015},
             {name:'4H_SHARED_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
               rankingWeight:0.02},
+            {name:'4H_SHARED_RANK_W030_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              rankingWeight:0.03},
+            {name:'4H_SHARED_RANK_W040_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              rankingWeight:0.04},
+            {name:'4H_SHARED_RANK_W050_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
+              rankingWeight:0.05},
+            {name:'4H_SHARED_RANK_W035_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingWeight:0.035},
+            {name:'4H_SHARED_RANK_W045_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
+              rankingWeight:0.045},
             {name:'4H_SHARED_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
               rankingWeight:0.05}
           ]
