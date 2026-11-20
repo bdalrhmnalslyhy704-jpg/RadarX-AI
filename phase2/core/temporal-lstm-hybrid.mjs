@@ -3446,48 +3446,73 @@ function fitPlattCalibration(rows, predictor, {
   });
   const slopePenalty = clamp(regularization, 0.001, 2);
   const interceptPenalty = slopePenalty * 0.25;
-  let slope = 1, intercept = 0;
   const steps = Math.max(100, Math.min(2000, Math.trunc(iterations)));
   const rate = clamp(learningRate, 0.001, 0.15);
-  let bestLoss = Infinity, best = { slope, intercept };
-  let wait = 0;
-  for (let step = 0; step < steps; step++) {
-    let loss = 0, gradSlope = 0, gradIntercept = 0;
-    for (let index = 0; index < rows.length; index++) {
-      const target = rows[index].target;
-      const probability = sigmoid(slope * logits[index] + intercept);
-      const error = probability - target;
-      loss += -(target * Math.log(Math.max(1e-12, probability)) +
-        (1 - target) * Math.log(Math.max(1e-12, 1 - probability)));
-      gradSlope += error * logits[index];
-      gradIntercept += error;
+  const baselineLoss=rows.reduce((sum,row,index)=>{
+    const probability=clamp(predictor(row.sequence),1e-12,1-1e-12);
+    return sum-(row.target*Math.log(probability)+
+      (1-row.target)*Math.log(1-probability));
+  },0)/rows.length;
+
+  const fitOrientation=orientation=>{
+    let slope=orientation,intercept=0;
+    let bestLoss=Infinity,best={slope,intercept},wait=0;
+    const lower=orientation>0?0.05:-8;
+    const upper=orientation>0?8:-0.05;
+    for(let step=0;step<steps;step++){
+      let loss=0,gradSlope=0,gradIntercept=0;
+      for(let index=0;index<rows.length;index++){
+        const target=rows[index].target;
+        const probability=sigmoid(slope*logits[index]+intercept);
+        const error=probability-target;
+        loss+=-(target*Math.log(Math.max(1e-12,probability))+
+          (1-target)*Math.log(Math.max(1e-12,1-probability)));
+        gradSlope+=error*logits[index];
+        gradIntercept+=error;
+      }
+      loss=loss/rows.length+slopePenalty*(slope-orientation)**2+
+        interceptPenalty*intercept*intercept;
+      gradSlope=gradSlope/rows.length+
+        2*slopePenalty*(slope-orientation);
+      gradIntercept=gradIntercept/rows.length+
+        2*interceptPenalty*intercept;
+      if(![loss,gradSlope,gradIntercept].every(finite))
+        throw new TypeError('TCN_LSTM_CALIBRATION_NON_FINITE_OBJECTIVE');
+      if(loss<bestLoss-1e-10){
+        bestLoss=loss;best={slope,intercept};wait=0;
+      }else wait++;
+      const decay=0.15+0.85*0.5*(1+Math.cos(
+        Math.PI*step/Math.max(1,steps-1)
+      ));
+      slope=clamp(slope-rate*decay*gradSlope,lower,upper);
+      intercept=clamp(intercept-rate*decay*gradIntercept,-8,8);
+      if(wait>=80)break;
     }
-    loss = loss / rows.length + slopePenalty * (slope - 1) ** 2 +
-      interceptPenalty * intercept * intercept;
-    gradSlope = gradSlope / rows.length + 2 * slopePenalty * (slope - 1);
-    gradIntercept = gradIntercept / rows.length + 2 * interceptPenalty * intercept;
-    if (![loss, gradSlope, gradIntercept].every(finite))
-      throw new TypeError('TCN_LSTM_CALIBRATION_NON_FINITE_OBJECTIVE');
-    if (loss < bestLoss - 1e-10) {
-      bestLoss = loss;
-      best = { slope, intercept };
-      wait = 0;
-    } else wait++;
-    const decay = 0.15 + 0.85 * 0.5 * (1 + Math.cos(Math.PI * step / Math.max(1, steps - 1)));
-    slope = clamp(slope - rate * decay * gradSlope, 0.05, 8);
-    intercept = clamp(intercept - rate * decay * gradIntercept, -8, 8);
-    if (wait >= 80) break;
-  }
-  if (![best.slope, best.intercept, bestLoss].every(finite))
-    throw new TypeError('TCN_LSTM_CALIBRATION_BEST_STATE_INVALID');
+    if(![best.slope,best.intercept,bestLoss].every(finite))
+      throw new TypeError('TCN_LSTM_CALIBRATION_BEST_STATE_INVALID');
+    return {orientation,...best,objective:bestLoss};
+  };
+
+  // Both orientations are fit on the supplied calibration partition only.
+  // Calibration-check, threshold-selection, outer-validation, and holdout
+  // labels never participate in choosing the sign.
+  const trials=[fitOrientation(1),fitOrientation(-1)];
+  trials.sort((a,b)=>a.objective-b.objective||
+    (b.orientation-a.orientation));
+  const best=trials[0];
   return {
-    fitted: true, method: 'CALIBRATION_BLOCK_REGULARIZED_PLATT_LOGISTIC_NLL_V1',
-    fit_boundary: 'CALIBRATION_PARTITION_ONLY',
-    samples: rows.length, positive, negative,
-    slope: best.slope, intercept: best.intercept,
-    objective: bestLoss, iterations: steps,
-    raw_logits_clipped: true,
-    slope_bounds: [0.05, 8], intercept_bounds: [-8, 8]
+    fitted:true,method:'CALIBRATION_BLOCK_SIGNED_PLATT_LOGISTIC_NLL_V2',
+    fit_boundary:'CALIBRATION_PARTITION_ONLY',
+    samples:rows.length,positive,negative,
+    slope:best.slope,intercept:best.intercept,
+    slope_orientation:best.orientation>0?'POSITIVE':'NEGATIVE',
+    objective:best.objective,baseline_objective:baselineLoss,iterations:steps,
+    orientation_trials:trials.map(item=>({
+      orientation:item.orientation>0?'POSITIVE':'NEGATIVE',
+      slope:item.slope,intercept:item.intercept,objective:item.objective
+    })),
+    raw_logits_clipped:true,
+    slope_bounds:'[-8,-0.05] OR [0.05,8]',intercept_bounds:[-8,8]
   };
 }
 
