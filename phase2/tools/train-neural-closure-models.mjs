@@ -18,6 +18,8 @@ import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
   predictFourHourCognitiveResearchProbability,
   predictFourHourCognitiveChallengerProbability,
+  predictFourHourCognitiveResearchProbabilityStages,
+  predictFourHourCognitiveChallengerProbabilityStages,
   COGNITIVE_FEATURE_SCHEMA,COGNITIVE_FEATURE_NAMES
 } from '../core/cognitive-brain.mjs';
 import {
@@ -523,7 +525,7 @@ async function main(){
   if(mlpArtifact){
     const decoded=decodeArtifactState(mlpArtifact,'COGNITIVE_MLP_V5',sourceCommitSha);
     const scored=predictionAttempt(eventRows,
-      row=>predictFourHourCognitiveResearchProbability(row.features,decoded.state),{
+      row=>predictFourHourCognitiveResearchProbabilityStages(row.features,decoded.state),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'COGNITIVE_MLP_V5'
       });
     if(scored.valid){
@@ -552,7 +554,7 @@ async function main(){
   if(hybridMlpArtifact){
     const decoded=decodeArtifactState(hybridMlpArtifact,'MLP_GBDT_HYBRID',sourceCommitSha);
     const scored=predictionAttempt(eventRows,
-      row=>predictFourHourCognitiveChallengerProbability(row.features,decoded.state.fit),{
+      row=>predictFourHourCognitiveChallengerProbabilityStages(row.features,decoded.state.fit),{
         sourceCommitSha,artifactSha256:decoded.artifactSha256,modelName:'MLP_GBDT_HYBRID'
       });
     if(scored.valid){
