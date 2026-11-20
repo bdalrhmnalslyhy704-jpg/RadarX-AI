@@ -5,6 +5,7 @@ import {
   buildPurgedExpandingLogisticFolds,
   fitTunedTemporalLogisticBaseline,
   predictTemporalLogisticProbability,
+  predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
 } from '../core/temporal-logistic-baseline.mjs';
 
@@ -32,8 +33,8 @@ function cohort(days=90,rowsPerDay=10){
 test('expanding folds are chronological, non-overlapping and purge a complete UTC day',()=>{
   const {rows}=cohort();
   const result=buildPurgedExpandingLogisticFolds(rows,{
-    foldCount:3,purgeMs:86_400_000,initialTrainingFraction:0.5,
-    validationFraction:0.15,minimumTrainingRows:100,
+    foldCount:5,purgeMs:86_400_000,initialTrainingFraction:0.32,
+    validationFraction:0.12,minimumTrainingRows:100,
     minimumValidationRows:50,minimumClassCount:5
   });
   assert.equal(result.status,undefined);
@@ -93,7 +94,21 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
     }
   });
   assert.equal(result.report.status,'COMPLETE');
-  assert.equal(result.report.fold_count,3);
+  assert.equal(result.report.fold_count,5);
+  assert.equal(result.report.hyperparameter_selection_folds,3);
+  assert.equal(result.report.folds[0].role,'HYPERPARAMETER_SELECTION');
+  assert.equal(result.report.folds[2].role,'HYPERPARAMETER_SELECTION');
+  assert.equal(result.report.folds[3].role,'CALIBRATION_FIT');
+  assert.equal(result.report.folds[4].role,'CALIBRATION_CHECK');
+  assert.equal(result.report.calibration.fit_fold,4);
+  assert.equal(result.report.calibration.check_fold,5);
+  assert.equal(result.report.calibration.training_partition_only,true);
+  assert.equal(result.report.calibration.outer_validation_used_for_calibrator_fit,false);
+  assert.equal(result.report.calibration.outer_validation_used_for_calibrator_selection,false);
+  assert.equal(result.report.calibration.holdout_used_for_calibration,false);
+  assert.deepEqual(result.report.calibration.method_trials.map(item=>item.method),
+    ['NO_CALIBRATION',...(result.report.calibration.platt_fit.fitted?['PLATT_SCALING']:[]),
+      ...(result.report.calibration.isotonic_fit.fitted?['ISOTONIC_REGRESSION']:[])]);
   assert.equal(result.report.training_partition_only,true);
   assert.equal(result.report.outer_validation_rows_used,false);
   assert.equal(result.report.holdout_rows_or_labels_used,false);
@@ -103,18 +118,27 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   assert.equal(result.report.candidate_results.length,2);
   assert.ok(result.report.selected_configuration.l2===0.001||
     result.report.selected_configuration.l2===0.1);
-  assert.equal(executionCalls.length,3);
+  assert.equal(executionCalls.length,5);
   assert.ok(result.report.folds.every(fold=>fold.execution_metrics!==null));
   assert.equal(result.model.standardizer.fit_partition,'CURRENT_TRAINING_FOLD_ONLY');
   assert.equal(result.model.standardizer.fit_rows,rows.length);
   const probability=predictTemporalLogisticProbability(vectors[0],result.model);
   assert.ok(probability>0&&probability<1);
+  const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(vectors[0],result.model);
+  assert.ok(calibratedProbability>0&&calibratedProbability<1);
+  assert.equal(result.report.random_seed,null,
+    'full-batch deterministic optimization must not claim an unused random seed');
+  assert.equal(result.report.deterministic_solver_id,'FULL_BATCH_GD_DETERMINISTIC_V1');
 });
 
 test('trainer wires tuned Logistic on split.train only and retains legacy fixed reference diagnostics',async()=>{
   const trainer=await readFile(new URL('../tools/train-neural-closure-models.mjs',import.meta.url),'utf8');
   assert.match(trainer,/fitTunedTemporalLogisticBaseline\(\s*split\.train,logisticTrainingVectors/);
   assert.match(trainer,/predictTemporalLogisticProbability/);
+  assert.match(trainer,/predictCrossFittedCalibratedTemporalLogisticProbability/);
+  assert.match(trainer,/foldCount:5,purgeMs:86_400_000/);
+  assert.match(trainer,/initialTrainingFraction:0\.32,validationFraction:0\.12/);
+  assert.match(trainer,/calibration_metadata:logisticTuning\.report\.calibration/);
   assert.match(trainer,/logistic_baseline_temporal_cv=logisticTuning\.report/);
   assert.match(trainer,/fixedLogisticFit=fitLogisticBaseline\(split\.train\)/);
   assert.match(trainer,/outer_validation_used_for_hyperparameter_selection:false/);
