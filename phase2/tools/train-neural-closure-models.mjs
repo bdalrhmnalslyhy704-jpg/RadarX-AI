@@ -11,7 +11,8 @@ import {
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
   runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
-  evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio
+  evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio,
+  bootstrapOuterValidationUncertainty
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -1696,11 +1697,65 @@ async function main(){
         expected_validation_rows:alignedRows.length};
     }
   }
+  // Paired moving-block bootstrap over the outer-validation days.
+  // It estimates uncertainty only; it never selects thresholds, Top-K, lambda,
+  // calibration, hyperparameters or a candidate. The final holdout is excluded.
+  let outerValidationUncertaintyBootstrap={
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'UNAVAILABLE',reason:'OUTER_VALIDATION_BOOTSTRAP_INPUTS_UNAVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
+  };
+  const bootstrapRows=[...split.validation].sort((a,b)=>a.at-b.at||
+    String(a.symbol).localeCompare(String(b.symbol))||
+    String(a.id).localeCompare(String(b.id)));
+  const bootstrapIds=bootstrapRows.map(row=>String(row.id));
+  const bootstrapProbabilityByModel={};
+  for(const [name,predictionRowsForModel] of Object.entries(predictionsByModel)){
+    if(!Array.isArray(predictionRowsForModel))continue;
+    const map=new Map(predictionRowsForModel.filter(item=>
+      bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),Number(item.probability)]));
+    if(map.size===bootstrapIds.length&&bootstrapIds.every(id=>finite(map.get(id))))
+      bootstrapProbabilityByModel[name]=bootstrapIds.map(id=>map.get(id));
+  }
+  if(bootstrapProbabilityByModel.LOGISTIC_REGRESSION&&
+    Array.isArray(lstmExternalPredictions)){
+    const riskById=new Map(lstmExternalPredictions.filter(item=>
+      bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),item]));
+    const contextComplete=bootstrapIds.every(id=>
+      finite(riskById.get(id)?.execution_risk_adjusted_score));
+    const pooledComplete=bootstrapIds.every(id=>
+      finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score));
+    if(contextComplete&&pooledComplete){
+      const executionScoresByPolicy={
+        LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
+          riskById.get(id).execution_risk_adjusted_score),
+        POOLED_ONLY:bootstrapIds.map(id=>
+          riskById.get(id).pooled_only_execution_risk_adjusted_score),
+        LOGISTIC_REGRESSION:bootstrapProbabilityByModel.LOGISTIC_REGRESSION
+      };
+      outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
+        bootstrapRows,bootstrapProbabilityByModel,{
+          executionScoresByPolicy,topKGrid:[1,2,3],
+          roundTripCostBps:args.roundTripCostBps,
+          repetitions:250,blockLengthDays:3,seed:22429,
+          maxConcurrentPositions:30
+        }
+      );
+    }else{
+      outerValidationUncertaintyBootstrap={
+        ...outerValidationUncertaintyBootstrap,
+        reason:'CONTEXT_OR_POOLED_ONLY_EXECUTION_SCORE_ALIGNMENT_INCOMPLETE',
+        expected_outer_validation_rows:bootstrapRows.length
+      };
+    }
+  }
+  training.outer_validation_uncertainty_bootstrap=outerValidationUncertaintyBootstrap;
   training.model_internal_diagnostics.TCN_LSTM_HYBRID={
     ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
     external_validation_execution_risk_top_k:externalExecutionRiskTopK,
     pooled_only_external_validation_execution_risk_top_k:pooledOnlyExternalExecutionRiskTopK,
-    score_conditioned_external_ablation:executionHeadExternalAblation
+    score_conditioned_external_ablation:executionHeadExternalAblation,
+    outer_validation_uncertainty_bootstrap:outerValidationUncertaintyBootstrap
   };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
