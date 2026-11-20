@@ -1821,6 +1821,186 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
  * labels are used only to score Brier/prevalence; they never fit calibration,
  * choose a threshold, update weights, change gates, or unlock the holdout.
  */
+function evaluateOuterBinaryProbabilityMetrics(probabilities,labels,{
+  classificationThreshold=0.5
+}={}) {
+  if(!Array.isArray(probabilities)||!Array.isArray(labels)||!labels.length||
+    probabilities.length!==labels.length||
+    probabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1)||
+    labels.some(value=>value!==0&&value!==1))
+    return {schema:'RADARX_OUTER_BINARY_PROBABILITY_METRICS_V1',
+      status:'UNAVAILABLE',sample_count:Array.isArray(labels)?labels.length:0};
+  const positives=labels.reduce((sum,value)=>sum+value,0);
+  const negatives=labels.length-positives;
+  const logLossValues=probabilities.map((value,index)=>{
+    const p=clamp(Number(value),1e-12,1-1e-12);
+    return -(labels[index]*Math.log(p)+(1-labels[index])*Math.log(1-p));
+  });
+  const brierValues=probabilities.map((value,index)=>
+    (Number(value)-labels[index])**2);
+  const sorted=probabilities.map((probability,index)=>({
+    probability:Number(probability),label:labels[index],index
+  })).sort((a,b)=>b.probability-a.probability||a.index-b.index);
+  let tpRank=0,fpRank=0,previousRecall=0,prAuc=0,cursor=0;
+  while(cursor<sorted.length){
+    let end=cursor+1;
+    while(end<sorted.length&&sorted[end].probability===sorted[cursor].probability)end++;
+    for(let i=cursor;i<end;i++){
+      if(sorted[i].label===1)tpRank++;
+      else fpRank++;
+    }
+    if(positives>0){
+      const recall=tpRank/positives;
+      const precision=tpRank/(tpRank+fpRank);
+      prAuc+=(recall-previousRecall)*precision;
+      previousRecall=recall;
+    }
+    cursor=end;
+  }
+  const ascending=[...sorted].reverse();
+  let positiveRankSum=0;
+  cursor=0;
+  while(cursor<ascending.length){
+    let end=cursor+1;
+    while(end<ascending.length&&ascending[end].probability===ascending[cursor].probability)end++;
+    const averageRank=((cursor+1)+end)/2;
+    for(let i=cursor;i<end;i++)
+      if(ascending[i].label===1)positiveRankSum+=averageRank;
+    cursor=end;
+  }
+  const rocAuc=positives>0&&negatives>0
+    ?(positiveRankSum-positives*(positives+1)/2)/(positives*negatives):null;
+  let truePositive=0,falsePositive=0,trueNegative=0,falseNegative=0;
+  for(let i=0;i<labels.length;i++){
+    const predicted=Number(probabilities[i])>=classificationThreshold?1:0;
+    if(predicted===1&&labels[i]===1)truePositive++;
+    else if(predicted===1)falsePositive++;
+    else if(labels[i]===0)trueNegative++;
+    else falseNegative++;
+  }
+  const precision=truePositive+falsePositive
+    ?truePositive/(truePositive+falsePositive):0;
+  const recall=truePositive+falseNegative
+    ?truePositive/(truePositive+falseNegative):0;
+  return {
+    schema:'RADARX_OUTER_BINARY_PROBABILITY_METRICS_V1',
+    status:'AVAILABLE',
+    sample_count:labels.length,positive_count:positives,negative_count:negatives,
+    positive_rate_pct:Number((100*positives/labels.length).toFixed(6)),
+    brier_score:Number((brierValues.reduce((sum,value)=>sum+value,0)/labels.length).toFixed(8)),
+    log_loss:Number((logLossValues.reduce((sum,value)=>sum+value,0)/labels.length).toFixed(8)),
+    pr_auc_average_precision:positives>0?Number(prAuc.toFixed(8)):null,
+    roc_auc:Number.isFinite(rocAuc)?Number(rocAuc.toFixed(8)):null,
+    classification_threshold:classificationThreshold,
+    precision:Number(precision.toFixed(8)),recall:Number(recall.toFixed(8)),
+    f1_score:precision+recall?Number((2*precision*recall/(precision+recall)).toFixed(8)):0,
+    confusion_matrix:{
+      true_positive:truePositive,false_positive:falsePositive,
+      true_negative:trueNegative,false_negative:falseNegative
+    },
+    accuracy_not_used_as_primary_selection_metric:true
+  };
+}
+
+function buildOuterReliabilityDiagnostics(rows,probabilities,{
+  binCount=10,classificationThreshold=0.5
+}={}) {
+  const unavailable=reason=>({
+    schema:'RADARX_OUTER_RELIABILITY_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,reason,
+    labels_used_for_training:false,labels_used_for_calibrator_fit:false,
+    labels_used_for_selection:false,affects_acceptance_gates:false
+  });
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||!rows.length||
+    rows.length!==probabilities.length||!Number.isInteger(binCount)||binCount<2||
+    probabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1)||
+    rows.some(row=>row?.target!==0&&row?.target!==1))
+    return unavailable('RELIABILITY_ROWS_OR_PROBABILITIES_INVALID');
+  const labels=rows.map(row=>row.target);
+  const bins=Array.from({length:binCount},(_,index)=>({
+    bin:index+1,lower_bound:index/binCount,upper_bound:(index+1)/binCount,
+    sample_count:0,positive_count:0,mean_predicted_probability:null,
+    observed_positive_rate:null,absolute_gap:null
+  }));
+  for(let index=0;index<probabilities.length;index++){
+    const p=Number(probabilities[index]);
+    const binIndex=Math.min(binCount-1,Math.floor(p*binCount));
+    const bin=bins[binIndex];
+    bin.sample_count++;
+    bin.positive_count+=labels[index];
+  }
+  let ece=0,mce=0;
+  for(const bin of bins){
+    if(!bin.sample_count)continue;
+    const selected=[];
+    for(let index=0;index<probabilities.length;index++){
+      const p=Number(probabilities[index]);
+      const belongs=Math.min(binCount-1,Math.floor(p*binCount))===bin.bin-1;
+      if(belongs)selected.push(p);
+    }
+    const meanProbability=selected.reduce((sum,value)=>sum+value,0)/selected.length;
+    const observed=bin.positive_count/bin.sample_count;
+    const gap=Math.abs(meanProbability-observed);
+    bin.mean_predicted_probability=Number(meanProbability.toFixed(8));
+    bin.observed_positive_rate=Number(observed.toFixed(8));
+    bin.absolute_gap=Number(gap.toFixed(8));
+    ece+=(bin.sample_count/probabilities.length)*gap;
+    mce=Math.max(mce,gap);
+  }
+
+  // Diagnostic logistic recalibration regression on outer labels only.
+  // These coefficients are reported but NEVER applied to any prediction.
+  const x=probabilities.map(value=>logit(value));
+  let intercept=0,slope=1,fitStatus='FITTED';
+  for(let iteration=0;iteration<80;iteration++){
+    let g0=0,g1=0,h00=0,h01=0,h11=0;
+    for(let index=0;index<x.length;index++){
+      const predicted=sigmoid(intercept+slope*x[index]);
+      const error=predicted-labels[index];
+      const weight=predicted*(1-predicted);
+      g0+=error;g1+=error*x[index];
+      h00+=weight;h01+=weight*x[index];h11+=weight*x[index]*x[index];
+    }
+    const determinant=h00*h11-h01*h01;
+    if(!Number.isFinite(determinant)||determinant<=1e-14){
+      fitStatus='SINGULAR_DIAGNOSTIC_FIT';break;
+    }
+    const deltaIntercept=(h11*g0-h01*g1)/determinant;
+    const deltaSlope=(-h01*g0+h00*g1)/determinant;
+    intercept=clamp(intercept-deltaIntercept,-20,20);
+    slope=clamp(slope-deltaSlope,-20,20);
+    if(!Number.isFinite(intercept)||!Number.isFinite(slope)){
+      fitStatus='NON_FINITE_DIAGNOSTIC_FIT';break;
+    }
+    if(Math.max(Math.abs(deltaIntercept),Math.abs(deltaSlope))<1e-8)break;
+  }
+  return {
+    schema:'RADARX_OUTER_RELIABILITY_DIAGNOSTICS_V1',
+    status:'AVAILABLE',diagnostic_only:true,
+    sample_count:rows.length,positive_count:labels.reduce((sum,value)=>sum+value,0),
+    negative_count:labels.filter(value=>value===0).length,
+    binning:'EQUAL_WIDTH_PROBABILITY_BINS',
+    bin_count:binCount,bins,
+    expected_calibration_error:Number(ece.toFixed(8)),
+    maximum_calibration_error:Number(mce.toFixed(8)),
+    calibration_slope_intercept:{
+      status:fitStatus,
+      intercept:fitStatus==='FITTED'?Number(intercept.toFixed(8)):null,
+      slope:fitStatus==='FITTED'?Number(slope.toFixed(8)):null,
+      regression:'OUTER_LABELS_ON_LOGIT_OF_FROZEN_PROBABILITIES',
+      diagnostic_only:true,
+      probabilities_transformed:false,
+      calibrator_fitted_or_selected:false,
+      affects_primary_probabilities:false,
+      affects_acceptance_gates:false
+    },
+    classification_threshold:classificationThreshold,
+    labels_used_for_scoring:true,labels_used_for_calibrator_fit:false,
+    labels_used_for_selection:false,affects_acceptance_gates:false,
+    holdout_values_used:false
+  };
+}
+
 function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4}={}) {
   if(!Array.isArray(rows)||!Array.isArray(probabilities)||
     rows.length===0||rows.length!==probabilities.length||
