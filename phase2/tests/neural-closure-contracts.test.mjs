@@ -534,6 +534,15 @@ test('fixed-SHA evaluator compares identical event identities and refuses false 
     assert.equal(report.models[family].validation.threshold_selection_sample_count,
       report.models.LOGISTIC_REGRESSION.validation.threshold_selection_sample_count,
       family+' must use identical threshold-selection rows');
+    assert.equal(report.models[family].validation.matched_execution_threshold,
+      report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
+      family+' must inherit Logistic’s frozen execution threshold');
+    assert.equal(report.models[family].validation.outer_validation_gate.outer_validation_threshold,
+      report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
+      family+' outer validation must score the exact Logistic threshold');
+    assert.equal(report.models[family].validation.outer_validation_gate.model_specific_outer_validation_threshold,
+      report.models[family].validation.selected_threshold,
+      family+' own threshold is retained separately for audit only');
     assert.deepEqual(report.models[family].validation.threshold_trials.map(x=>x.threshold),
       report.models.LOGISTIC_REGRESSION.validation.threshold_trials.map(x=>x.threshold),
       family+' must use the exact same predeclared threshold grid');
@@ -1050,9 +1059,12 @@ test('expanded threshold-window counterfactual uses larger disjoint blocks witho
     assert.equal(diagnostic.threshold_selection.acceptance_gates.require_positive_net_pnl,true);
     assert.equal(diagnostic.threshold_selection.acceptance_gates.maximum_drawdown_pct,8);
   }
-  assert.equal(candidate.selected_threshold,
-    candidate.outer_validation_gate.outer_validation_threshold,
-    'the diagnostic must not replace the primary selected threshold');
+  assert.equal(candidate.outer_validation_gate.model_specific_outer_validation_threshold,
+    candidate.selected_threshold,
+    'the model-specific threshold remains a diagnostic, not the matched execution threshold');
+  assert.equal(candidate.outer_validation_gate.outer_validation_threshold,
+    report.models.LOGISTIC_REGRESSION.validation.selected_threshold,
+    'the outer-validation execution threshold must come from Logistic, not the neural candidate');
   assert.equal(candidate.outer_validation_gate.passed,false,
     'diagnostic-only qualification fixture must keep the primary candidate locked');
   assert.equal(report.holdout_access.opened,false);
@@ -1093,7 +1105,7 @@ test('fixed-SHA evaluator never opens holdout when every validation entry thresh
     assert.ok(model.validation.calibrated_brier_score<
       report.models.LOGISTIC_REGRESSION.validation.calibrated_brier_score,
     family+' should demonstrate that Brier improvement alone is not enough');
-    assert.equal(model.validation.outer_validation_gate.gates.threshold_selection_qualified,'FAIL',family);
+    assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL',family);
     assert.equal(model.validation.threshold_selection,'ABSTAINED_NO_VALIDATION_THRESHOLD_PASSED_RISK_GATES',family);
     assert.equal(model.validation.validation_threshold_metrics,null,family);
     assert.equal(model.validation.selected_threshold,null,family);
@@ -1480,8 +1492,8 @@ test('unselected threshold reports outer execution risk as NOT_EVALUATED, not mi
     positive_validation_net_pnl:'NOT_EVALUATED',
     maximum_validation_drawdown:'NOT_EVALUATED'
   });
-  assert.equal(validation.outer_validation_gate.gates.threshold_selection_qualified,'FAIL');
-  assert.equal(validation.outer_validation_gate.gates.outer_validation_threshold_risk_gates,
+  assert.equal(validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL');
+  assert.equal(validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,
     'NOT_EVALUATED');
   assert.equal(report.holdout_access.opened,false);
 });
