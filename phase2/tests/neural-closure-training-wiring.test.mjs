@@ -452,9 +452,11 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   assert.match(closure,/status:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD'/);
   assert.match(closure,/threshold:0\.15/);
-  assert.match(closure,/selected_method:'IDENTITY_NO_CALIBRATION'/);
+  assert.match(closure,/selected_method:calibrationMetadata\?\.selected_method\?\?'NO_CALIBRATION'/);
   assert.match(closure,/outer_validation_labels_used_for_calibrator_fit:false/);
-  assert.match(closure,/probability_evaluation_method:'MODEL_NATIVE_OUTPUT_NO_OUTER_CALIBRATION'/);
+  assert.match(closure,/probability_evaluation_method:calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
+  assert.match(closure,/eventRows=holdoutOpeningProtocolStatus\.passed[\s\S]*?\[\.\.\.split\.validation,\.\.\.split\.holdout\][\s\S]*?:\[\.\.\.split\.validation\]/);
+  assert.match(closure,/MODEL_PREDICTION_ROW_SET_MISMATCH/);
   assert.match(closure,/logisticThresholdSelectionReady=[\s\S]*?PREDECLARED_FROZEN_REFERENCE_THRESHOLD'[\s\S]*?===0\.15/);
   assert.match(closure,/strictly_beats_logistic_net_pnl/);
   assert.match(closure,/drawdown_no_worse_than_logistic/);
