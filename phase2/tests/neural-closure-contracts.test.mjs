@@ -522,14 +522,15 @@ test('fixed-SHA evaluator scores the full outer block with identity calibration 
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
     assert.equal(model.model_artifact_sha256,modelArtifactsByModel[family].artifact_sha256);
-    assert.equal(model.calibration.schema,'RADARX_OUTER_VALIDATION_NO_CALIBRATION_V1');
-    assert.equal(model.calibration.status,'NOT_APPLIED_PREDECLARED_IDENTITY');
-    assert.equal(model.calibration.selected_method,'IDENTITY_NO_CALIBRATION');
+    assert.equal(model.calibration.schema,'RADARX_OUTER_VALIDATION_IDENTITY_PROBABILITY_STAGE_V1');
+    assert.equal(model.calibration.status,'RAW_FALLBACK_NO_CALIBRATION_APPLIED');
+    assert.equal(model.calibration.selected_method,'NO_CALIBRATION');
+    assert.equal(model.calibration.applied_to_final_model,false);
     assert.equal(model.calibration.fit_rows,0);
     assert.equal(model.calibration.outer_validation_labels_used_for_calibrator_fit,false);
     assert.equal(model.validation.sample_count,split.validation.length);
     assert.equal(model.validation.calibration_applied,false);
-    assert.equal(model.validation.calibrated_brier_score,null);
+    assert.equal(model.validation.calibrated_brier_score,model.validation.raw_brier_score);
     assert.ok(Number.isFinite(model.validation.raw_brier_score));
     assert.equal(model.validation.evaluation_brier_score,model.validation.raw_brier_score);
     assert.equal(model.validation.selected_threshold,0.15);
@@ -1189,7 +1190,7 @@ test('TCN-LSTM diagnostics explicitly disable outer-validation calibration stage
   assert.equal(diagnostics.affects_primary_probabilities,false);
   assert.equal(diagnostics.affects_threshold_selection,false);
   assert.equal(validation.calibration_applied,false);
-  assert.equal(validation.calibrated_brier_score,null);
+  assert.equal(validation.calibrated_brier_score,validation.raw_brier_score);
   assert.ok(Number.isFinite(validation.raw_brier_score));
   assert.equal(validation.threshold_selection_sample_count,0);
   assert.equal(report.holdout_access.opened,false);
