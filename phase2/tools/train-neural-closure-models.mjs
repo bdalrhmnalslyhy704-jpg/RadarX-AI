@@ -187,17 +187,23 @@ function predictionRows(rows,predictor,{sourceCommitSha,targetDefinition=NEURAL_
   artifactSha256=null,modelName}={}){
   const result=[];
   for(const row of rows){
-    const probability=predictor(row);
-    if(!finite(probability)||probability<0||probability>1)
+    const prediction=predictor(row);
+    const staged=prediction&&typeof prediction==='object'?prediction:null;
+    const rawProbability=staged?.raw_probability??staged?.probability??prediction;
+    const calibratedProbability=staged?.calibrated_probability??rawProbability;
+    if(!finite(rawProbability)||rawProbability<0||rawProbability>1||
+      !finite(calibratedProbability)||calibratedProbability<0||calibratedProbability>1)
       throw new Error('MODEL_PREDICTION_UNAVAILABLE:'+modelName+':'+row.id);
     const item={
-      id:row.id,probability:Number(probability),
-      raw_probability:Number(probability),
-      calibrated_probability:Number(probability),
+      id:row.id,probability:Number(rawProbability),
+      raw_probability:Number(rawProbability),
+      calibrated_probability:Number(calibratedProbability),
       source_commit_sha:sourceCommitSha,
       target_definition:targetDefinition,
       target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS
     };
+    if(staged?.calibration_metadata&&typeof staged.calibration_metadata==='object')
+      item.calibration_metadata=staged.calibration_metadata;
     if(artifactSha256)item.artifact_sha256=artifactSha256;
     result.push(item);
   }
@@ -983,7 +989,7 @@ async function main(){
         }
       );
       if(output?.mode)outputModes[output.mode]=(outputModes[output.mode]||0)+1;
-      return output?.probability??null;
+      return output??null;
     },{
       sourceCommitSha,artifactSha256:artifact.artifact_sha256,modelName:family
     });
