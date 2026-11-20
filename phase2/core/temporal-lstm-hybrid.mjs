@@ -1396,7 +1396,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
         positive_net_pnl:finite(modelMetrics.net_pnl_pct)&&modelMetrics.net_pnl_pct>0,
         maximum_drawdown:finite(modelMetrics.max_drawdown_pct)&&modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
         beats_logistic_anchor:complete&&modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
-          modelMetrics.win_rate_pct>anchorMetrics.win_rate_pct
+          modelMetrics.max_drawdown_pct<=anchorMetrics.max_drawdown_pct
       };
       trials.push({risk_penalty_weight:lambda,top_k_per_timestamp:topK,
         model_metrics:modelMetrics,logistic_anchor_metrics:anchorMetrics,
