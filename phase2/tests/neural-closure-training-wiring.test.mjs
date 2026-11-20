@@ -365,21 +365,29 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
 });
 
 
-test('TCN-LSTM shared-classifier ranking sweep covers intermediate weights without relaxing return gates',async()=>{
+test('TCN-LSTM shared-classifier ranking sweep stays within the selector cap and preserves intermediate weights',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  const candidateBlock=trainer.match(/candidates:\[([\\s\\S]*?)\\n\\s+\\]\\n\\s+\\}\\);/);
+  assert.ok(candidateBlock,'TCN-LSTM candidate grid must be discoverable');
+  const candidateNames=[...candidateBlock[1].matchAll(/name:'([^']+)'/g)]
+    .map(match=>match[1]);
+  assert.equal(candidateNames.length,8,'grid must stay within the selector hard cap');
+  assert.ok(candidateNames.includes('4H_LR_0015_L2_0005_DROP00_E12'));
+  assert.ok(candidateNames.includes('4H_FOCAL_LR_0015_L2_0005_DROP00_E12'));
   for(const name of [
     '4H_SHARED_RANK_W030_LR_0015_E16',
     '4H_SHARED_RANK_W040_LR_0015_E16',
     '4H_SHARED_RANK_W050_LR_0015_E16',
     '4H_SHARED_RANK_W035_LR_0025_E16',
-    '4H_SHARED_RANK_W045_LR_0025_E16'
-  ]) assert.ok(trainer.includes(name),'missing shared-ranking candidate '+name);
-  assert.match(trainer,/rankingWeight:0\.03/);
-  assert.match(trainer,/rankingWeight:0\.035/);
-  assert.match(trainer,/rankingWeight:0\.04/);
-  assert.match(trainer,/rankingWeight:0\.045/);
-  assert.match(trainer,/rankingWeight:0\.05/);
-  assert.match(trainer,/requiredImprovement:0\.00025/);
+    '4H_SHARED_RANK_W045_LR_0025_E16',
+    '4H_SHARED_RANK_W050_LR_0025_E16'
+  ]) assert.ok(candidateNames.includes(name),'missing shared-ranking candidate '+name);
+  assert.match(trainer,/rankingWeight:0\\.03/);
+  assert.match(trainer,/rankingWeight:0\\.035/);
+  assert.match(trainer,/rankingWeight:0\\.04/);
+  assert.match(trainer,/rankingWeight:0\\.045/);
+  assert.match(trainer,/rankingWeight:0\\.05/);
+  assert.match(trainer,/requiredImprovement:0\\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
-  assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
+  assert.match(trainer,/rankingMinimumReturnGapPct:0\\.50/);
 });
