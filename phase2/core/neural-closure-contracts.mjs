@@ -2099,7 +2099,340 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
   };
 }
 
-/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
+/**
+ * Moving-block bootstrap for outer-validation probability and frozen execution
+ * policies. Blocks are contiguous UTC-day clusters (longer than the 4h label
+ * horizon); one empty UTC day is inserted between sampled blocks so events
+ * from separate resampled blocks cannot overlap. All candidate/baseline
+ * policies share the exact same sampled blocks.
+ *
+ * This is uncertainty estimation only: no parameter, threshold, Top-K or
+ * execution lambda is fitted or selected by this function.
+ */
+export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
+  executionScoresByPolicy={},
+  topKGrid=[1,2,3],
+  roundTripCostBps=30,
+  repetitions=250,
+  blockLengthDays=3,
+  seed=22429,
+  maxConcurrentPositions=NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions
+}={}) {
+  const unavailable=(reason,extra={})=>({
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,reason,
+    evaluation_partition:'OUTER_VALIDATION_ONLY',
+    holdout_rows_or_scores_used:false,
+    affects_model_fit:false,affects_threshold_selection:false,
+    affects_top_k_selection:false,affects_lambda_selection:false,
+    affects_acceptance_gates:false,...extra
+  });
+  if(!Array.isArray(rows)||rows.length===0||
+    !probabilitiesByModel||typeof probabilitiesByModel!=='object'||
+    !Array.isArray(probabilitiesByModel.LOGISTIC_REGRESSION)||
+    probabilitiesByModel.LOGISTIC_REGRESSION.length!==rows.length||
+    !executionScoresByPolicy||typeof executionScoresByPolicy!=='object'||
+    !Array.isArray(topKGrid)||!topKGrid.length||
+    topKGrid.some(k=>!Number.isInteger(k)||k<1||k>100)||
+    !Number.isInteger(repetitions)||repetitions<100||repetitions>5000||
+    !Number.isInteger(blockLengthDays)||blockLengthDays<1||blockLengthDays>10||
+    !Number.isInteger(seed)||seed<1||
+    !finite(roundTripCostBps)||Number(roundTripCostBps)<0||
+    !Number.isInteger(maxConcurrentPositions)||maxConcurrentPositions<1)
+    return unavailable('BOOTSTRAP_CONFIGURATION_OR_INPUT_INVALID');
+
+  const rowIds=new Set();
+  for(let i=0;i<rows.length;i++){
+    const row=rows[i];
+    if(!row?.id||rowIds.has(String(row.id))||!finite(row.at)||
+      (row.target!==0&&row.target!==1)||
+      !finite(probabilitiesByModel.LOGISTIC_REGRESSION[i])||
+      Number(probabilitiesByModel.LOGISTIC_REGRESSION[i])<0||
+      Number(probabilitiesByModel.LOGISTIC_REGRESSION[i])>1)
+      return unavailable('BOOTSTRAP_BASELINE_OR_ROW_ALIGNMENT_INVALID',{invalid_row_index:i});
+    rowIds.add(String(row.id));
+  }
+  const modelNames=Object.keys(probabilitiesByModel);
+  for(const name of modelNames){
+    const values=probabilitiesByModel[name];
+    if(!Array.isArray(values)||values.length!==rows.length||
+      values.some(value=>!finite(value)||Number(value)<0||Number(value)>1))
+      return unavailable('BOOTSTRAP_MODEL_PROBABILITY_ALIGNMENT_INVALID',{model:name});
+  }
+  const policyNames=Object.keys(executionScoresByPolicy);
+  if(!policyNames.length)return unavailable('BOOTSTRAP_EXECUTION_POLICIES_EMPTY');
+  for(const name of policyNames){
+    const values=executionScoresByPolicy[name];
+    if(!Array.isArray(values)||values.length!==rows.length||
+      values.some(value=>!finite(value)))
+      return unavailable('BOOTSTRAP_EXECUTION_SCORE_ALIGNMENT_INVALID',{policy:name});
+  }
+
+  const dayMap=new Map();
+  for(let index=0;index<rows.length;index++){
+    const day=Math.floor(Number(rows[index].at)/86_400_000)*86_400_000;
+    if(!dayMap.has(day))dayMap.set(day,[]);
+    dayMap.get(day).push(index);
+  }
+  const days=[...dayMap.keys()].sort((a,b)=>a-b);
+  if(days.length<blockLengthDays*4)
+    return unavailable('BOOTSTRAP_TOO_FEW_INDEPENDENT_TIME_BLOCKS',{
+      utc_day_count:days.length,block_length_days:blockLengthDays,
+      minimum_required_days:blockLengthDays*4
+    });
+  if(rows.some((row,index)=>index>0&&Number(row.at)<Number(rows[index-1].at)))
+    return unavailable('BOOTSTRAP_ROWS_MUST_BE_CHRONOLOGICALLY_ORDERED');
+
+  for(const [name,values] of Object.entries(probabilitiesByModel)){
+    if(name==='LOGISTIC_REGRESSION')continue;
+    if(values.some((value,index)=>!finite(value)||Number(value)<0||Number(value)>1))
+      return unavailable('BOOTSTRAP_MODEL_PROBABILITY_INVALID',{model:name});
+  }
+
+  const selectedMasks={};
+  try{
+    for(const topK of topKGrid){
+      for(const [policyName,scores] of Object.entries(executionScoresByPolicy)){
+        selectedMasks[policyName+'|'+topK]=topKRankingSignals(rows,scores,topK).probabilities;
+      }
+    }
+  }catch(error){
+    return unavailable('BOOTSTRAP_TOP_K_POLICY_PREPARATION_FAILED',{
+      detail:String(error?.message||error)
+    });
+  }
+
+  let randomState=(seed>>>0)||0x9e3779b9;
+  const random=()=>{
+    randomState^=randomState<<13;
+    randomState^=randomState>>>17;
+    randomState^=randomState<<5;
+    return (randomState>>>0)/4294967296;
+  };
+  const quantile=(values,p)=>{
+    if(!values.length)return null;
+    const sorted=[...values].sort((a,b)=>a-b);
+    const position=(sorted.length-1)*p;
+    const lower=Math.floor(position),upper=Math.ceil(position);
+    if(lower===upper)return sorted[lower];
+    return sorted[lower]+(sorted[upper]-sorted[lower])*(position-lower);
+  };
+  const summarize=values=>{
+    const usable=values.filter(finite).map(Number);
+    if(usable.length<Math.ceil(repetitions*0.95))return {
+      status:'UNAVAILABLE',valid_repetitions:usable.length,
+      requested_repetitions:repetitions,lower_95:null,upper_95:null
+    };
+    return {
+      status:'AVAILABLE',valid_repetitions:usable.length,
+      requested_repetitions:repetitions,
+      mean:Number((usable.reduce((sum,value)=>sum+value,0)/usable.length).toFixed(8)),
+      median:Number(quantile(usable,0.5).toFixed(8)),
+      lower_95:Number(quantile(usable,0.025).toFixed(8)),
+      upper_95:Number(quantile(usable,0.975).toFixed(8)),
+      probability_above_zero:Number((usable.filter(value=>value>0).length/usable.length).toFixed(6))
+    };
+  };
+  const modelNamesForBootstrap=modelNames.filter(name=>name!=='LOGISTIC_REGRESSION');
+  const brierSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
+  const logLossSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
+  const metricNames=['trade_count','win_rate_pct','net_pnl_pct',
+    'average_net_return_pct','median_net_return_pct','max_drawdown_pct'];
+  const strategySamples=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(policyNames.map(name=>[name,
+      Object.fromEntries(metricNames.map(metric=>[metric,[]]))
+    ]))
+  ]));
+  const pairNames=[];
+  for(let i=0;i<policyNames.length;i++)
+    for(let j=i+1;j<policyNames.length;j++)
+      pairNames.push([policyNames[i],policyNames[j]]);
+  const pairedSamples=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(pairNames.map(([left,right])=>[
+      left+'_MINUS_'+right,
+      Object.fromEntries(metricNames.map(metric=>[metric,[]]))
+    ]))
+  ]));
+  const baseline=probabilitiesByModel.LOGISTIC_REGRESSION;
+  const firstDay=days[0];
+  const blockStarts=days.slice(0,days.length-blockLengthDays+1);
+  const dayRows=days.map(day=>dayMap.get(day));
+  let completed=0;
+  try{
+    for(let repetition=0;repetition<repetitions;repetition++){
+      const sampledDayIndices=[];
+      while(sampledDayIndices.length<days.length){
+        const startIndex=Math.floor(random()*blockStarts.length);
+        for(let offset=0;offset<blockLengthDays&&sampledDayIndices.length<days.length;offset++)
+          sampledDayIndices.push(startIndex+offset);
+      }
+      const sampledRows=[];
+      const sampledProbabilityByModel=Object.fromEntries(modelNames.map(name=>[name,[]]));
+      const sampledPolicyMasks=Object.fromEntries(
+        Object.entries(selectedMasks).map(([key])=>[key,[]])
+      );
+      let targetDayCursor=0;
+      for(let blockStart=0;blockStart<sampledDayIndices.length;blockStart+=blockLengthDays){
+        const blockEnd=Math.min(sampledDayIndices.length,blockStart+blockLengthDays);
+        for(let sampleDay=blockStart;sampleDay<blockEnd;sampleDay++){
+          const sourceDay=days[sampledDayIndices[sampleDay]];
+          const targetDay=firstDay+targetDayCursor*86_400_000;
+          const shift=targetDay-sourceDay;
+          const indices=dayRows[sampledDayIndices[sampleDay]];
+          for(const sourceIndex of indices){
+            const row=rows[sourceIndex];
+            const firstTouch=row.first_touch?{
+              ...row.first_touch,
+              first_touch_at:Number(row.first_touch.first_touch_at)+shift,
+              ...(row.first_touch.exit_candle?{exit_candle:{
+                ...row.first_touch.exit_candle,
+                open_time:Number(row.first_touch.exit_candle.open_time)+shift,
+                close_time:Number(row.first_touch.exit_candle.close_time)+shift
+              }}:{})
+            }:row.first_touch;
+            const sampledRow={
+              ...row,id:String(row.id)+'#BOOT'+repetition+'_'+sampleDay,
+              at:Number(row.at)+shift,
+              resolved_at:Number(row.resolved_at)+shift,
+              first_touch,
+              max_adverse_excursion_at:Number(row.max_adverse_excursion_at)+shift,
+              max_favorable_excursion_at:Number(row.max_favorable_excursion_at)+shift
+            };
+            sampledRows.push(sampledRow);
+            for(const name of modelNames)
+              sampledProbabilityByModel[name].push(Number(probabilitiesByModel[name][sourceIndex]));
+            for(const [key,mask] of Object.entries(selectedMasks))
+              sampledPolicyMasks[key].push(Number(mask[sourceIndex]));
+          }
+          targetDayCursor++;
+        }
+        // Prevent a first-touch event from one sampled block from interacting
+        // with a position opened in the next independently sampled block.
+        if(blockEnd<sampledDayIndices.length)targetDayCursor++;
+      }
+      const labels=sampledRows.map(row=>row.target);
+      for(const name of modelNamesForBootstrap){
+        const candidate=sampledProbabilityByModel[name];
+        let brierDelta=0,logLossDelta=0;
+        for(let i=0;i<labels.length;i++){
+          const p=clamp(Number(candidate[i]),1e-12,1-1e-12);
+          const q=clamp(Number(sampledProbabilityByModel.LOGISTIC_REGRESSION[i]),1e-12,1-1e-12);
+          const y=labels[i];
+          brierDelta+=(p-y)**2-(q-y)**2;
+          logLossDelta+=-(y*Math.log(p)+(1-y)*Math.log(1-p))+
+            (y*Math.log(q)+(1-y)*Math.log(q===1?1:1-q));
+        }
+        brierSamples[name].push(brierDelta/labels.length);
+        logLossSamples[name].push(logLossDelta/labels.length);
+      }
+      const strategyMetrics={};
+      for(const topK of topKGrid){
+        for(const policyName of policyNames){
+          const simulated=simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[policyName+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          strategyMetrics[policyName]=strategyMetrics[policyName]??{};
+          strategyMetrics[policyName][topK]=simulated;
+          for(const metric of metricNames)
+            strategySamples[String(topK)][policyName][metric].push(
+              finite(simulated?.[metric])?Number(simulated[metric]):null
+            );
+        }
+        for(const [left,right] of pairNames){
+          const a=strategyMetrics[left]?.[topK]??simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[left+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          const b=strategyMetrics[right]?.[topK]??simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[right+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          for(const metric of metricNames){
+            const delta=finite(a?.[metric])&&finite(b?.[metric])
+              ?Number(a[metric])-Number(b[metric]):null;
+            pairedSamples[String(topK)][left+'_MINUS_'+right][metric].push(delta);
+          }
+        }
+      }
+      completed++;
+    }
+  }catch(error){
+    return unavailable('BOOTSTRAP_SIMULATION_FAILED',{
+      completed_repetitions:completed,
+      detail:String(error?.message||error)
+    });
+  }
+
+  const brierComparisons=Object.fromEntries(modelNamesForBootstrap.map(name=>[
+    name,{
+      candidate_minus_logistic_raw_brier:summarize(brierSamples[name]),
+      candidate_minus_logistic_raw_log_loss:summarize(logLossSamples[name]),
+      interpretation:'NEGATIVE_VALUES_FAVOR_CANDIDATE',
+      paired_same_sampled_time_blocks:true
+    }
+  ]));
+  const executionPolicies=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(policyNames.map(name=>[name,
+      Object.fromEntries(metricNames.map(metric=>[
+        metric,summarize(strategySamples[String(k)][name][metric])
+      ]))
+    ]))
+  ]));
+  const pairedExecution=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(pairNames.map(([left,right])=>[
+      left+'_MINUS_'+right,
+      Object.fromEntries(metricNames.map(metric=>[
+        metric,summarize(pairedSamples[String(k)][left+'_MINUS_'+right][metric])
+      ]))
+    ]))
+  ]));
+  return {
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'AVAILABLE',diagnostic_only:true,
+    evaluation_partition:'OUTER_VALIDATION_ONLY',
+    sampling:{
+      method:'MOVING_BLOCK_BOOTSTRAP_WITHOUT_REPLACEMENT_WITHIN_BLOCKS',
+      resampling:'CONTIGUOUS_UTC_DAY_BLOCKS_SAMPLED_WITH_REPLACEMENT',
+      block_length_days:blockLengthDays,
+      utc_day_count:days.length,
+      minimum_independent_blocks:Math.floor(days.length/blockLengthDays),
+      blocks_sampled_per_repetition:Math.ceil(days.length/blockLengthDays),
+      inter_block_gap_ms:86_400_000,
+      repetitions:completed,seed,
+      pairing:'SAME_RESAMPLED_DAY_BLOCKS_FOR_ALL_MODELS_AND_POLICIES',
+      market_dependence_preserved_within_blocks:true,
+      four_hour_event_overlap_between_resampled_blocks:false
+    },
+    probability_quality:{
+      baseline:'LOGISTIC_REGRESSION',
+      metric_source:'NATIVE_MODEL_PREDICTIONS_NO_OUTER_CALIBRATION',
+      comparisons:brierComparisons
+    },
+    execution:{
+      policy_score_source:'FROZEN_OUTER_VALIDATION_RANK_SCORES',
+      top_k_grid:[...topKGrid],
+      round_trip_cost_bps:Number(roundTripCostBps),
+      max_concurrent_positions:maxConcurrentPositions,
+      strategy_confidence_intervals:executionPolicies,
+      paired_strategy_differences:pairedExecution
+    },
+    isolation:{
+      parameters_refitted:false,thresholds_selected:false,top_k_selected:false,
+      lambda_refitted:false,calibration_selected:false,
+      holdout_rows_or_scores_used:false,affects_acceptance_gates:false
+    },
+    summary:{
+      model_probability_comparisons:Object.keys(brierComparisons).length,
+      execution_policies:policyNames,
+      top_k_values:[...topKGrid]
+    }
+  };
+}
+\n/** Rank raw auxiliary logits within each simultaneous closed 15m bucket. */
 export function topKRankingSignals(rows,scores,topK) {
   if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
     !Number.isInteger(topK)||topK<1)
