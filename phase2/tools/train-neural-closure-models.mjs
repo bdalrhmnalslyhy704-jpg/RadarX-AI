@@ -1164,7 +1164,7 @@ async function main(){
         const selection=selectTcnLstmHybridHyperparameters(
           trainingRowsWithExecutionEvidence,selectionRowsWithExecutionEvidence,{
           requiredImprovement:0.00025,
-          maxTrainingSamples:4096,
+          maxTrainingSamples:6144,
           seed:22429,
           roundTripCostBps:args.roundTripCostBps,
           minimumReturnTrades:20,
@@ -1221,7 +1221,7 @@ async function main(){
           chronology_valid:internalChronologyValid,
           internal_split_schema:internalSplit.schema??null,
           internal_split_boundaries:internalSplit.split_boundaries??null,
-          max_training_samples:4096,
+          max_training_samples:6144,
           effective_training_rows:selection.effective_training_rows??null,
           training_sample_selection:selection.training_sample_selection??null,
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
@@ -1359,7 +1359,7 @@ async function main(){
             execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
             execution_head_context_ablation_required_for_inner_qualification:true,
             execution_head_input_feature_schema:
-              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3',
+              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4',
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
             ranking_head_role:'AUXILIARY_CROSS_SECTIONAL_RANKING_WITH_OPTIONAL_SHARED_CLASSIFIER_PAIRWISE_TRAINING',
