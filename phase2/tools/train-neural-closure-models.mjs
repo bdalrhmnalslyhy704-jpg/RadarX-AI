@@ -1356,6 +1356,10 @@ async function main(){
               skipped_candidates:selection.skipped_candidates??[]
             },
             ranking_head_selection_qualification:selection.ranking_head_selection_qualification??null,
+            execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
+            execution_head_context_ablation_required_for_inner_qualification:true,
+            execution_head_input_feature_schema:
+              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_PLUS_LOGISTIC_AND_CLASSIFIER_SCORES_V2',
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
             ranking_head_role:'AUXILIARY_CROSS_SECTIONAL_RANKING_WITH_OPTIONAL_SHARED_CLASSIFIER_PAIRWISE_TRAINING',

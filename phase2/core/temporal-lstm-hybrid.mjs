@@ -25,6 +25,10 @@ import {
  */
 
 export const TCN_LSTM_HYBRID_SCHEMA = 'RADARX_BUILD224_TCN_LSTM_ATTENTION_V1';
+export const TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA =
+  'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_PLUS_LOGISTIC_AND_CLASSIFIER_SCORES_V2';
+const TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE = 4;
+
 export const TCN_LSTM_STEPS = 24;
 export const TCN_LSTM_INPUT_CHANNELS = 29;
 export const TCN_LSTM_HIDDEN = 8;
@@ -534,8 +538,16 @@ function initializeModel(seed = 29) {
     outputBias: [0],
     // Auxiliary rank head is separate from calibrated classification.
     rankingHeadWeights: Array(hidden).fill(0),
-    executionReturnHeadWeights:Array(hidden).fill(0),executionReturnHeadBias:0,
-    executionRiskHeadWeights:Array(hidden).fill(0),executionRiskHeadBias:0
+    // The active execution heads consume pooled state plus normalized frozen
+    // Logistic-anchor and neural-classifier scores.
+    executionReturnHeadWeights:Array(hidden+2).fill(0),executionReturnHeadBias:0,
+    executionRiskHeadWeights:Array(hidden+2).fill(0),executionRiskHeadBias:0,
+    // Matched pooled-only heads are retained as a reference ablation.
+    executionReturnHeadPooledOnlyWeights:Array(hidden).fill(0),
+    executionReturnHeadPooledOnlyBias:0,
+    executionRiskHeadPooledOnlyWeights:Array(hidden).fill(0),
+    executionRiskHeadPooledOnlyBias:0,
+    executionHeadInputFeatureSchema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA
   };
 }
 
@@ -1407,6 +1419,55 @@ function evaluateClassifierTrainingObjective(rows,model,anchor,{
  * Fit independent pointwise execution heads on frozen pooled representations.
  * Targets are derived exclusively from matured TRAINING partition outcomes.
  */
+/**
+ * Build identical execution-head inputs for fitting and inference.
+ * Logistic and neural scores use tanh(logit / 4), keeping them bounded while
+ * preserving their relative ranking signal alongside pooled latent channels.
+ */
+export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
+  variant='LOGIT_CONTEXT_AUGMENTED'
+}={}) {
+  if(!['POOLED_ONLY','LOGIT_CONTEXT_AUGMENTED'].includes(variant))
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_VARIANT_INVALID');
+  const baselineLogit=predictTcnLstmLogisticLogit(sequence,anchor);
+  const forward=inspectTcnLstmForward(sequence,model,baselineLogit);
+  const pooled=Array.from(forward.cache.pooled);
+  const normalizedLogisticScore=Math.tanh(
+    baselineLogit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
+  );
+  const normalizedClassifierScore=Math.tanh(
+    forward.logit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
+  );
+  const features=variant==='POOLED_ONLY'
+    ?pooled
+    :[...pooled,normalizedLogisticScore,normalizedClassifierScore];
+  const featureNames=[
+    ...pooled.map((_,index)=>'pooled_latent_'+index),
+    ...(variant==='POOLED_ONLY'?[]:[
+      'logistic_anchor_logit_tanh_div_4',
+      'neural_classifier_logit_tanh_div_4'
+    ])
+  ];
+  if(features.some(value=>!finite(value)))
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_NON_FINITE');
+  return {
+    variant,
+    schema:variant==='POOLED_ONLY'
+      ?'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_ONLY_V1'
+      :TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
+    features,feature_names:featureNames,
+    pooled_feature_count:pooled.length,
+    normalized_logistic_score:normalizedLogisticScore,
+    normalized_classifier_score:normalizedClassifierScore,
+    baseline_logit:baselineLogit,classifier_logit:forward.logit
+  };
+}
+
+/**
+ * Fit matched pooled-only and score-conditioned return/risk heads on matured
+ * TRAINING outcomes only. The pooled-only model is retained as an ablation
+ * control; the score-conditioned model is the default inference path.
+ */
 function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   roundTripCostBps=30,learningRate=0.015,epochs=100,l2=0.002,huberDelta=1
 }={}) {
@@ -1433,36 +1494,39 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     if(!item||Number(item.at)!==Number(row.at)||
       String(item.symbol??'')!==String(row.symbol??''))
       throw new TypeError('TCN_LSTM_EXECUTION_TRAINING_IDENTITY_MISMATCH');
-    const baseline=predictTcnLstmLogisticLogit(row.sequence,anchor);
-    const pooled=[...inspectTcnLstmForward(row.sequence,model,baseline).cache.pooled];
+    const pooled=buildTcnLstmExecutionHeadInputFeatures(
+      row.sequence,model,anchor,{variant:'POOLED_ONLY'}
+    ).features;
+    const contextual=buildTcnLstmExecutionHeadInputFeatures(
+      row.sequence,model,anchor,{variant:'LOGIT_CONTEXT_AUGMENTED'}
+    ).features;
     const net=Math.max(-30,Math.min(30,Number(item.realized_return_pct)-costPct));
     const downside=Math.max(0,Math.min(30,-Number(item.max_adverse_excursion_pct)));
-    return {pooled,net,downside};
+    return {pooled,contextual,net,downside};
   });
-  const hidden=TCN_LSTM_HIDDEN;
-  const fitHead=targetKey=>{
-    let weights=Array(hidden).fill(0),bias=0;
-    const m=Array(hidden).fill(0),v=Array(hidden).fill(0);
+  const fitHead=(targetKey,featureKey,featureCount)=>{
+    let weights=Array(featureCount).fill(0),bias=0;
+    const m=Array(featureCount).fill(0),v=Array(featureCount).fill(0);
     let mb=0,vb=0,bestLoss=Infinity,best={weights:[...weights],bias},wait=0,done=0;
-    const predict=(item,w,b)=>b+item.pooled.reduce((sum,x,i)=>sum+x*w[i],0);
+    const predict=(item,w,b)=>b+item[featureKey].reduce((sum,x,i)=>sum+x*w[i],0);
     const loss=()=>vectors.reduce((sum,item)=>sum+
       (Math.abs(predict(item,weights,bias)-item[targetKey])<=huberDelta
         ?0.5*Math.pow(predict(item,weights,bias)-item[targetKey],2)
         :huberDelta*(Math.abs(predict(item,weights,bias)-item[targetKey])-0.5*huberDelta)),0)/vectors.length;
     const initial=loss();
     for(let epoch=1;epoch<=epochs;epoch++){
-      const gw=Array(hidden).fill(0);let gb=0;
+      const gw=Array(featureCount).fill(0);let gb=0;
       for(const item of vectors){
         const error=predict(item,weights,bias)-item[targetKey];
         const grad=Math.max(-huberDelta,Math.min(huberDelta,error));
         gb+=grad;
-        for(let i=0;i<hidden;i++)gw[i]+=grad*item.pooled[i];
+        for(let i=0;i<featureCount;i++)gw[i]+=grad*item[featureKey][i];
       }
-      for(let i=0;i<hidden;i++)gw[i]=gw[i]/vectors.length+l2*weights[i];
+      for(let i=0;i<featureCount;i++)gw[i]=gw[i]/vectors.length+l2*weights[i];
       gb/=vectors.length;
       const norm=Math.sqrt(gw.reduce((sum,x)=>sum+x*x,0)+gb*gb);
       const scale=norm>2?2/norm:1;
-      for(let i=0;i<hidden;i++){
+      for(let i=0;i<featureCount;i++){
         const g=gw[i]*scale;
         m[i]=0.9*m[i]+0.1*g;v[i]=0.999*v[i]+0.001*g*g;
         weights[i]-=learningRate*(m[i]/(1-Math.pow(0.9,epoch)))/
@@ -1473,48 +1537,139 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
         (Math.sqrt(vb/(1-Math.pow(0.999,epoch)))+1e-8);
       const current=loss();
       if(!finite(current)||weights.some(x=>!finite(x))||!finite(bias))
-        throw new TypeError('TCN_LSTM_EXECUTION_HEAD_NON_FINITE:'+targetKey);
+        throw new TypeError('TCN_LSTM_EXECUTION_HEAD_NON_FINITE:'+targetKey+':'+featureKey);
       done=epoch;
       if(current<bestLoss-1e-9){bestLoss=current;best={weights:[...weights],bias};wait=0;}
       else if(++wait>=20)break;
     }
     return {weights:best.weights,bias:best.bias,initial_huber_loss:Number(initial.toFixed(8)),
-      final_huber_loss:Number(bestLoss.toFixed(8)),epochs_completed:done};
+      final_huber_loss:Number(bestLoss.toFixed(8)),epochs_completed:done,feature_count:featureCount};
   };
-  const returns=fitHead('net'),risk=fitHead('downside');
-  model.executionReturnHeadWeights=returns.weights;
-  model.executionReturnHeadBias=returns.bias;
-  model.executionRiskHeadWeights=risk.weights;
-  model.executionRiskHeadBias=risk.bias;
+  const hidden=TCN_LSTM_HIDDEN,contextCount=hidden+2;
+  const pooledOnly={
+    net_return:fitHead('net','pooled',hidden),
+    downside_risk:fitHead('downside','pooled',hidden)
+  };
+  const contextual={
+    net_return:fitHead('net','contextual',contextCount),
+    downside_risk:fitHead('downside','contextual',contextCount)
+  };
+  model.executionReturnHeadWeights=contextual.net_return.weights;
+  model.executionReturnHeadBias=contextual.net_return.bias;
+  model.executionRiskHeadWeights=contextual.downside_risk.weights;
+  model.executionRiskHeadBias=contextual.downside_risk.bias;
+  model.executionReturnHeadPooledOnlyWeights=pooledOnly.net_return.weights;
+  model.executionReturnHeadPooledOnlyBias=pooledOnly.net_return.bias;
+  model.executionRiskHeadPooledOnlyWeights=pooledOnly.downside_risk.weights;
+  model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
+  model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
   return {
-    schema:'RADARX_TCN_LSTM_NET_RETURN_DOWNSIDE_REGRESSION_HEADS_V1',
+    schema:'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
     source:'MATURED_REALIZED_RETURN_AND_MAX_ADVERSE_EXCURSION',
     training_rows:rows.length,round_trip_cost_bps:Number(roundTripCostBps),
     net_return_target:'REALIZED_RETURN_PCT_MINUS_ROUND_TRIP_COST',
     downside_target:'MAX_0_NEGATIVE_MAX_ADVERSE_EXCURSION_PCT',
     target_clip_pct:[-30,30],validation_or_holdout_used:false,
-    net_return:returns,downside_risk:risk
+    score_context:{
+      schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
+      features:['LOGISTIC_ANCHOR_LOGIT_TANH_DIV_4','NEURAL_CLASSIFIER_LOGIT_TANH_DIV_4'],
+      normalization:'TANH(LOGIT/4)',
+      score_source:'FROZEN_LOGISTIC_ANCHOR_AND_RAW_TCN_LSTM_CLASSIFIER',
+      score_values_used_for_training:'TRAINING_PARTITION_ONLY'
+    },
+    pooled_only_reference:{
+      variant:'POOLED_ONLY',feature_count:hidden,
+      net_return:pooledOnly.net_return,downside_risk:pooledOnly.downside_risk
+    },
+    logit_context_augmented:{
+      variant:'LOGIT_CONTEXT_AUGMENTED',feature_count:contextCount,
+      net_return:contextual.net_return,downside_risk:contextual.downside_risk
+    }
   };
 }
 
-export function predictTcnLstmHybridExecutionHeads(sequence,profile) {
+export function predictTcnLstmHybridExecutionHeads(sequence,profile,{
+  variant='LOGIT_CONTEXT_AUGMENTED'
+}={}) {
   if(!profile?.model||!profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
-  const baseline=predictTcnLstmLogisticLogit(sequence,profile.baseline_fit);
-  const pooled=inspectTcnLstmForward(sequence,profile.model,baseline).cache.pooled;
-  const dot=(weights,bias)=>Number(bias)+pooled.reduce((sum,x,i)=>sum+x*weights[i],0);
-  const rw=profile.model.executionReturnHeadWeights;
-  const dw=profile.model.executionRiskHeadWeights;
-  if(!Array.isArray(rw)||rw.length!==pooled.length||
-    !Array.isArray(dw)||dw.length!==pooled.length||
-    [...rw,...dw].some(x=>!finite(x))||
-    !finite(profile.model.executionReturnHeadBias)||
-    !finite(profile.model.executionRiskHeadBias))
-    throw new TypeError('TCN_LSTM_EXECUTION_HEADS_NOT_FITTED');
+  if(!['POOLED_ONLY','LOGIT_CONTEXT_AUGMENTED'].includes(variant))
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_VARIANT_INVALID');
+  const input=buildTcnLstmExecutionHeadInputFeatures(
+    sequence,profile.model,profile.baseline_fit,{variant}
+  );
+  const contextual=variant==='LOGIT_CONTEXT_AUGMENTED';
+  const rw=contextual?profile.model.executionReturnHeadWeights:
+    profile.model.executionReturnHeadPooledOnlyWeights;
+  const dw=contextual?profile.model.executionRiskHeadWeights:
+    profile.model.executionRiskHeadPooledOnlyWeights;
+  const rb=contextual?profile.model.executionReturnHeadBias:
+    profile.model.executionReturnHeadPooledOnlyBias;
+  const db=contextual?profile.model.executionRiskHeadBias:
+    profile.model.executionRiskHeadPooledOnlyBias;
+  if(!Array.isArray(rw)||rw.length!==input.features.length||
+    !Array.isArray(dw)||dw.length!==input.features.length||
+    [...rw,...dw].some(x=>!finite(x))||!finite(rb)||!finite(db))
+    throw new TypeError('TCN_LSTM_EXECUTION_HEADS_NOT_FITTED:'+variant);
+  const dot=(weights,bias)=>Number(bias)+input.features.reduce(
+    (sum,x,i)=>sum+x*weights[i],0
+  );
   return {
-    predicted_net_return_pct:dot(rw,profile.model.executionReturnHeadBias),
-    predicted_downside_risk_pct:Math.max(0,dot(dw,profile.model.executionRiskHeadBias))
+    variant,input_feature_schema:input.schema,input_feature_count:input.features.length,
+    predicted_net_return_pct:dot(rw,rb),
+    predicted_downside_risk_pct:Math.max(0,dot(dw,db))
+  };
+}
+
+export function summarizeTcnLstmExecutionHeadContextAblation(
+  pooledOnlyPolicy,contextPolicy
+){
+  const pooledMetrics=pooledOnlyPolicy?.selected_trial?.model_metrics??null;
+  const contextMetrics=contextPolicy?.selected_trial?.model_metrics??null;
+  const available=pooledOnlyPolicy?.status==='EVALUATED'&&
+    contextPolicy?.status==='EVALUATED'&&pooledMetrics!==null&&contextMetrics!==null&&
+    finite(pooledMetrics.net_pnl_pct)&&finite(pooledMetrics.win_rate_pct)&&
+    finite(pooledMetrics.max_drawdown_pct)&&finite(contextMetrics.net_pnl_pct)&&
+    finite(contextMetrics.win_rate_pct)&&finite(contextMetrics.max_drawdown_pct);
+  if(!available)return {
+    schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1',
+    status:'UNAVAILABLE',source_partition:'INNER_SELECTION_ONLY',
+    pooled_only_policy_passed:pooledOnlyPolicy?.passed===true,
+    context_policy_passed:contextPolicy?.passed===true,
+    passed:false,reason:'BOTH_EXECUTION_HEAD_POLICIES_MUST_HAVE_COMPLETE_SELECTION_METRICS',
+    holdout_values_used:false
+  };
+  const gates={
+    context_policy_absolute_gates:contextPolicy.passed===true,
+    net_pnl_strictly_improved:contextMetrics.net_pnl_pct>pooledMetrics.net_pnl_pct,
+    win_rate_not_worse:contextMetrics.win_rate_pct>=pooledMetrics.win_rate_pct,
+    drawdown_not_worse:contextMetrics.max_drawdown_pct<=pooledMetrics.max_drawdown_pct
+  };
+  return {
+    schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1',
+    status:'EVALUATED',source_partition:'INNER_SELECTION_ONLY',
+    baseline_variant:'POOLED_ONLY',
+    candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
+    pooled_only_policy_passed:pooledOnlyPolicy.passed===true,
+    context_policy_passed:contextPolicy.passed===true,
+    pooled_only_metrics:{
+      trade_count:pooledMetrics.trade_count,win_rate_pct:pooledMetrics.win_rate_pct,
+      net_pnl_pct:pooledMetrics.net_pnl_pct,max_drawdown_pct:pooledMetrics.max_drawdown_pct
+    },
+    context_metrics:{
+      trade_count:contextMetrics.trade_count,win_rate_pct:contextMetrics.win_rate_pct,
+      net_pnl_pct:contextMetrics.net_pnl_pct,max_drawdown_pct:contextMetrics.max_drawdown_pct
+    },
+    delta:{
+      trade_count:Number(contextMetrics.trade_count)-Number(pooledMetrics.trade_count),
+      win_rate_percentage_points:Number((contextMetrics.win_rate_pct-pooledMetrics.win_rate_pct).toFixed(6)),
+      net_pnl_percentage_points:Number((contextMetrics.net_pnl_pct-pooledMetrics.net_pnl_pct).toFixed(6)),
+      drawdown_percentage_points:Number((contextMetrics.max_drawdown_pct-pooledMetrics.max_drawdown_pct).toFixed(6))
+    },
+    gates,passed:Object.values(gates).every(Boolean),
+    reason:Object.values(gates).every(Boolean)?null:'CONTEXT_AUGMENTED_HEAD_DID_NOT_STRICTLY_BEAT_POOLED_ONLY_REFERENCE',
+    holdout_values_used:false
   };
 }
 
@@ -2008,19 +2163,19 @@ export function trainTcnLstmHybrid(trainingRows, {
     ranking_head_parameter_count:rankingHeadFit.fitted
       ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
     execution_regression_head_parameter_count:executionHeadFit.fitted
-      ?2*(TCN_LSTM_HIDDEN+1):0,
+      ?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0,
     total_parameter_count:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
       (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1):0),
+      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0),
     parameter_count_contract:{
       classifier_bptt_parameters:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
       auxiliary_ranking_head_parameters:rankingHeadFit.fitted
         ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
       execution_regression_head_parameters:executionHeadFit.fitted
-        ?2*(TCN_LSTM_HIDDEN+1):0,
+        ?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0,
       total:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
         (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1):0)
+        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0)
     },
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
@@ -2490,11 +2645,22 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectionExecutionPredictions=selectionRows.map(row=>
       predictTcnLstmHybridExecutionHeads(row.sequence,fit));
+    const pooledOnlySelectionExecutionPredictions=selectionRows.map(row=>
+      predictTcnLstmHybridExecutionHeads(row.sequence,fit,{variant:'POOLED_ONLY'}));
     const executionRiskPolicy=selectTcnLstmExecutionRiskPolicy(
       selectionRows,selectionExecutionPredictions,baselineLogits,{
         roundTripCostBps,minimumTrades:minimumReturnTrades,
         minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
       }
+    );
+    const pooledOnlyExecutionRiskPolicy=selectTcnLstmExecutionRiskPolicy(
+      selectionRows,pooledOnlySelectionExecutionPredictions,baselineLogits,{
+        roundTripCostBps,minimumTrades:minimumReturnTrades,
+        minimumWinRatePct:minimumReturnWinRatePct,maximumDrawdownPct:8
+      }
+    );
+    const executionHeadContextAblation=summarizeTcnLstmExecutionHeadContextAblation(
+      pooledOnlyExecutionRiskPolicy,executionRiskPolicy
     );
     if(executionRiskPolicy.status==='EVALUATED'&&
       finite(executionRiskPolicy.selected_risk_penalty_weight)){
@@ -2600,6 +2766,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       shared_classifier_pairwise_ranking_improvement:sharedClassifierPairwiseRankingImprovement,
       ranking_execution_selection:rankingExecutionSelection,
       execution_risk_policy:executionRiskPolicy,
+      pooled_only_execution_risk_policy:pooledOnlyExecutionRiskPolicy,
+      execution_head_context_ablation:executionHeadContextAblation,
       execution_risk_penalty_weight:finite(fit.execution_risk_penalty_weight)
         ?fit.execution_risk_penalty_weight:null,
       execution_heads_fitted:fit.training.execution_regression_heads?.fitted===true,
@@ -2632,6 +2800,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     item.execution_heads_fitted===true&&
     item.execution_risk_policy?.status==='EVALUATED'&&
     item.execution_risk_policy?.passed===true&&
+    item.execution_head_context_ablation?.passed===true&&
     item.return_selection_diagnostics?.status==='AVAILABLE'&&
     Number(item.return_selection_diagnostics.preliminary_return_screen_candidates)>0&&
     (!rankingScoreAvailable||
@@ -2681,7 +2850,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         shared_classifier_pairwise_ranking_improvement:
           !sharedClassifierRankingGateRequired?'NOT_REQUIRED':
             sharedClassifierRankingGatePassed?'PASS':'FAIL',
-        composite_improvement:compositeGatePassed?'PASS':'FAIL'
+        composite_improvement:compositeGatePassed?'PASS':'FAIL',
+        execution_head_context_ablation:
+          winner.execution_head_context_ablation?.passed===true?'PASS':'FAIL'
       },
       ranking_uses_inner_selection_partition_only:true,
       outer_validation_or_holdout_used:false
@@ -2692,6 +2863,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
       shared_classifier_pairwise_ranking_improvement,
       ranking_execution_selection,execution_risk_policy,
+      pooled_only_execution_risk_policy,execution_head_context_ablation,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
       name,config,ranking_probability_blend_weight,ranking_probability_blend_method,ranking_blend_search,
@@ -2706,7 +2878,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         finite(shared_classifier_pairwise_ranking_improvement)
           ?Number(shared_classifier_pairwise_ranking_improvement.toFixed(8)):null,
       ranking_execution_selection,
-      execution_risk_policy,execution_risk_penalty_weight,
+      execution_risk_policy,pooled_only_execution_risk_policy,
+      execution_head_context_ablation,
+      execution_risk_penalty_weight,
+      execution_head_context_ablation_passed:execution_head_context_ablation?.passed===true,
       ranking_head_selection_qualified,
       ranking_head:fit.training?.return_ranking?.ranking_head??null,
       selection_score:Number(selection_score.toFixed(8)),
@@ -2729,6 +2904,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
       return_selection_diagnostics
     })),
+    execution_head_context_ablation_qualification:{
+      qualified:winner.execution_head_context_ablation?.passed===true,
+      status:winner.execution_head_context_ablation?.status??'UNAVAILABLE',
+      reason:winner.execution_head_context_ablation?.reason??null,
+      result:winner.execution_head_context_ablation??null,
+      source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false
+    },
     ranking_head_selection_qualification:{
       qualified:winner.ranking_head_selection_qualified===true,
       status:winner.ranking_execution_selection?.status??'UNAVAILABLE',

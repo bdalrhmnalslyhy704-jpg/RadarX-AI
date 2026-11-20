@@ -290,6 +290,14 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
   assert.match(trainer,/max_training_samples:4096/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_PLUS_LOGISTIC_AND_CLASSIFIER_SCORES_V2/,
+    'the active execution head must include normalized Logistic and neural classifier scores');
+  assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
+    'the score-conditioned head must be the default execution path');
+  assert.match(temporal,/POOLED_ONLY/,
+    'the pooled-only head must be retained as a matched ablation control');
+  assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
+    'inner qualification must require a matched execution-head ablation pass');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,

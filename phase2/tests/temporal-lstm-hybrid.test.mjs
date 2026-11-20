@@ -18,6 +18,10 @@ import {
   predictTcnLstmHybridRankingAnchorLogit,
   predictTcnLstmHybridExecutionHeads,
   predictTcnLstmHybridExecutionScore,
+  buildTcnLstmExecutionHeadInputFeatures,
+  TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
+  summarizeTcnLstmExecutionHeadContextAblation,
+  predictTcnLstmLogisticLogit,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
@@ -425,7 +429,41 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   assert.equal(profile.training.execution_regression_heads.fit_boundary,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.training.execution_regression_heads.validation_or_holdout_used,false);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
+  assert.equal(profile.training.execution_regression_heads.schema,
+    'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2');
+  assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
+    TCN_LSTM_HIDDEN+2);
+  assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
+    TCN_LSTM_HIDDEN);
+  assert.equal(profile.model.executionReturnHeadWeights.length,TCN_LSTM_HIDDEN+2);
+  assert.equal(profile.model.executionReturnHeadPooledOnlyWeights.length,TCN_LSTM_HIDDEN);
+  const contextInputs=buildTcnLstmExecutionHeadInputFeatures(
+    evidence[0].sequence,profile.model,profile.baseline_fit
+  );
+  const pooledInputs=buildTcnLstmExecutionHeadInputFeatures(
+    evidence[0].sequence,profile.model,profile.baseline_fit,{variant:'POOLED_ONLY'}
+  );
+  const anchorLogit=predictTcnLstmLogisticLogit(evidence[0].sequence,profile.baseline_fit);
+  const neuralLogit=inspectTcnLstmForward(
+    evidence[0].sequence,profile.model,anchorLogit
+  ).logit;
+  assert.equal(contextInputs.schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
+  assert.equal(contextInputs.features.length,TCN_LSTM_HIDDEN+2);
+  assert.equal(pooledInputs.features.length,TCN_LSTM_HIDDEN);
+  assert.ok(Math.abs(contextInputs.features.at(-2)-Math.tanh(anchorLogit/4))<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-1)-Math.tanh(neuralLogit/4))<1e-12);
+  assert.ok(contextInputs.features.at(-2)>=-1&&contextInputs.features.at(-2)<=1);
+  assert.ok(contextInputs.features.at(-1)>=-1&&contextInputs.features.at(-1)<=1);
   const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
+  assert.equal(prediction.variant,'LOGIT_CONTEXT_AUGMENTED');
+  assert.equal(prediction.input_feature_schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
+  assert.equal(prediction.input_feature_count,TCN_LSTM_HIDDEN+2);
+  const pooledOnlyPrediction=predictTcnLstmHybridExecutionHeads(
+    evidence[0].sequence,profile,{variant:'POOLED_ONLY'}
+  );
+  assert.equal(pooledOnlyPrediction.variant,'POOLED_ONLY');
+  assert.equal(pooledOnlyPrediction.input_feature_count,TCN_LSTM_HIDDEN);
+  assert.ok(Number.isFinite(pooledOnlyPrediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
   assert.ok(prediction.predicted_downside_risk_pct>=0);
@@ -449,6 +487,36 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('score-conditioned execution-head ablation requires strict inner-selection improvement over pooled-only reference',()=>{
+  const policy=(net,win,dd,passed=true)=>({
+    status:'EVALUATED',passed,
+    selected_trial:{model_metrics:{trade_count:80,net_pnl_pct:net,win_rate_pct:win,max_drawdown_pct:dd}}
+  });
+  const improved=summarizeTcnLstmExecutionHeadContextAblation(
+    policy(0.8,56,4.0,false),policy(1.1,57,3.8,true)
+  );
+  assert.equal(improved.status,'EVALUATED');
+  assert.equal(improved.source_partition,'INNER_SELECTION_ONLY');
+  assert.equal(improved.baseline_variant,'POOLED_ONLY');
+  assert.equal(improved.candidate_variant,'LOGIT_CONTEXT_AUGMENTED');
+  assert.equal(improved.passed,true);
+  assert.equal(improved.delta.net_pnl_percentage_points,0.3);
+  const noPnlLift=summarizeTcnLstmExecutionHeadContextAblation(
+    policy(0.8,56,4.0,false),policy(0.8,57,3.0,true)
+  );
+  assert.equal(noPnlLift.passed,false);
+  assert.equal(noPnlLift.gates.net_pnl_strictly_improved,false);
+  const worseWin=summarizeTcnLstmExecutionHeadContextAblation(
+    policy(0.8,56,4.0,false),policy(1.1,55,3.0,true)
+  );
+  assert.equal(worseWin.passed,false);
+  const missing=summarizeTcnLstmExecutionHeadContextAblation(
+    {status:'UNAVAILABLE'},policy(1.1,57,3.8,true)
+  );
+  assert.equal(missing.status,'UNAVAILABLE');
+  assert.equal(missing.passed,false);
 });
 
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
