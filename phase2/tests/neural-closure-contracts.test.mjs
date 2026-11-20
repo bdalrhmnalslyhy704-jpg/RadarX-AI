@@ -1131,10 +1131,9 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
     artifact_sha256:artifactSha256
   }));
-  // Logistic probabilities stay above the complete predeclared threshold grid,
-  // so no reference threshold can meet the minimum trade support. The neural
-  // challenger cannot bypass the missing matched baseline reference.
-  const predictions={LOGISTIC_REGRESSION:build(0.99,0.99,null)};
+  // Without a complete Logistic reference prediction stream there is no
+  // same-threshold comparator. Neural probabilities alone cannot open holdout.
+  const predictions={};
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     predictions[family]=build(0.85,0.05,modelArtifactsByModel[family].artifact_sha256);
   const qualificationByModel=Object.fromEntries(
@@ -1146,12 +1145,12 @@ test('a neural candidate cannot claim matched execution or open holdout when Log
     rows,predictionsByModel:predictions,modelArtifactsByModel,
     sourceCommitSha,qualificationByModel
   });
-  assert.equal(report.models.LOGISTIC_REGRESSION.validation.selected_threshold,null);
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'NOT_EVALUATED');
+  assert.equal(report.models.LOGISTIC_REGRESSION.validation?.selected_threshold??null,null);
   assert.equal(report.holdout_access.opened,false);
   assert.equal(report.holdout_access.opened_for_models.length,0);
   assert.equal(report.holdout_access.reason,'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES');
-  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.evaluated,false);
-  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.net_pnl_pct,null);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout?.evaluated??false,false);
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
     const model=report.models[family];
     assert.equal(model.validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL',family);
