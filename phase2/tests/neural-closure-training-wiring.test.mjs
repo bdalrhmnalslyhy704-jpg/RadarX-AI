@@ -484,9 +484,6 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   assert.match(closure,/probability_evaluation_method:calibrationPartiallyApplied[\s\S]*?calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
   assert.match(closure,/execution_probability_stage:calibrationPartiallyApplied[\s\S]*?TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME/);
   assert.match(closure,/fully_applied_to_all_scored_rows:calibrationApplied/);
-  assert.match(closure,/probability_evaluation_method:calibrationPartiallyApplied[\s\S]*?calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
-  assert.match(closure,/execution_probability_stage:calibrationPartiallyApplied[\s\S]*?TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME/);
-  assert.match(closure,/fully_applied_to_all_scored_rows:calibrationApplied/);
   assert.match(closure,/eventRows=holdoutOpeningProtocolStatus\.passed[\s\S]*?\[\.\.\.split\.validation,\.\.\.split\.holdout\][\s\S]*?:\[\.\.\.split\.validation\]/);
   assert.match(closure,/MODEL_PREDICTION_ROW_SET_MISMATCH/);
   assert.match(closure,/logisticThresholdSelectionReady=[\s\S]*?PREDECLARED_FROZEN_REFERENCE_THRESHOLD'[\s\S]*?===0\.15/);
@@ -495,14 +492,6 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   assert.doesNotMatch(closure,/const thresholdSelection=selectThreshold\(thresholdSelectionRows/);
   assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
-});
-
-test('experiment manifest marks tuned Logistic as trained after complete purged temporal CV',async()=>{
-  const trainer=await readFile(trainerUrl,'utf8');
-  assert.match(trainer,/training_status:name==='LOGISTIC_REGRESSION'[\s\S]*?logisticTuning\.report\.status==='COMPLETE'\?'COMPLETE':'FAILED'/);
-  assert.match(trainer,/logistic_cv_fold_count:logisticTuning\.report\.fold_count/);
-  assert.match(trainer,/logistic_cv_candidate_count:logisticTuning\.report\.candidate_results\.length/);
-  assert.match(trainer,/logistic_optimizer_seed_used:false/);
 });
 
 test('experiment manifest marks tuned Logistic as trained after complete purged temporal CV',async()=>{
