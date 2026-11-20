@@ -6,6 +6,7 @@ import {
   TCN_LSTM_STEPS,
   TCN_LSTM_INPUT_CHANNELS,
   TCN_LSTM_RECEPTIVE_FIELD,
+  TCN_LSTM_HIDDEN,
   buildTcnLstmAnchorFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
@@ -483,6 +484,11 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   const restored=JSON.parse(JSON.stringify(profile));
   const restoredScore=predictTcnLstmHybridExecutionScore(evidence[0].sequence,restored);
   assert.equal(restoredScore.status,'AVAILABLE');
+  const restoredPooledOnly=predictTcnLstmHybridExecutionHeads(
+    evidence[0].sequence,restored,{variant:'POOLED_ONLY'}
+  );
+  assert.equal(restoredPooledOnly.variant,'POOLED_ONLY');
+  assert.equal(restoredPooledOnly.input_feature_count,TCN_LSTM_HIDDEN);
   assert.equal(restoredScore.risk_penalty_weight,2);
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);

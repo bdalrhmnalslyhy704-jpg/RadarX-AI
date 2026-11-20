@@ -547,7 +547,8 @@ function initializeModel(seed = 29) {
     executionReturnHeadPooledOnlyBias:0,
     executionRiskHeadPooledOnlyWeights:Array(hidden).fill(0),
     executionRiskHeadPooledOnlyBias:0,
-    executionHeadInputFeatureSchema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA
+    executionHeadInputFeatureSchema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
+    executionRegressionHeadsFitted:false
   };
 }
 
@@ -1563,6 +1564,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionRiskHeadPooledOnlyWeights=pooledOnly.downside_risk.weights;
   model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
+  model.executionRegressionHeadsFitted=true;
   return {
     schema:'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
@@ -1594,6 +1596,9 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile,{
 }={}) {
   if(!profile?.model||!profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  if(profile.model.executionRegressionHeadsFitted!==true||
+    profile.model.executionHeadInputFeatureSchema!==TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA)
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_FEATURE_SCHEMA_OR_FIT_FLAG_INVALID');
   if(!['POOLED_ONLY','LOGIT_CONTEXT_AUGMENTED'].includes(variant))
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_VARIANT_INVALID');
   const input=buildTcnLstmExecutionHeadInputFeatures(
@@ -2136,8 +2141,9 @@ export function trainTcnLstmHybrid(trainingRows, {
       roundTripCostBps:executionHeadRoundTripCostBps,
       learningRate:executionHeadLearningRate,epochs:executionHeadEpochs,l2:executionHeadL2
     })
-    :{schema:'RADARX_TCN_LSTM_NET_RETURN_DOWNSIDE_REGRESSION_HEADS_V1',
+    :{schema:'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2',
       fitted:false,reason:'MATURED_TRAINING_EXECUTION_EVIDENCE_NOT_SUPPLIED',
+      input_feature_schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false};
   const finalBrier=evaluateBrier(rows,model,anchor);
   const finalRankingLoss=evaluatePairwiseReturnRankingLoss(rows,rankingPairs,model,anchor);
@@ -2145,7 +2151,13 @@ export function trainTcnLstmHybrid(trainingRows, {
     ?evaluateSharedClassifierRankingLoss(rows,rankingPairs,model,anchor):0;
   if(!finite(finalBrier)||!finite(finalRankingLoss)||!finite(finalSharedRankingLoss)||
     !treeFinite(trainableParameters(model))||
-    !Array.isArray(model.rankingHeadWeights)||model.rankingHeadWeights.some(value=>!finite(value)))
+    !Array.isArray(model.rankingHeadWeights)||model.rankingHeadWeights.some(value=>!finite(value))||
+    (executionHeadFit.fitted===true&&[
+      ...model.executionReturnHeadWeights,...model.executionRiskHeadWeights,
+      ...model.executionReturnHeadPooledOnlyWeights,...model.executionRiskHeadPooledOnlyWeights,
+      model.executionReturnHeadBias,model.executionRiskHeadBias,
+      model.executionReturnHeadPooledOnlyBias,model.executionRiskHeadPooledOnlyBias
+    ].some(value=>!finite(value))))
     throw new TypeError('TCN_LSTM_FINAL_MODEL_NON_FINITE');
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
@@ -2901,7 +2913,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
           (finite(shared_classifier_pairwise_ranking_improvement)&&
             shared_classifier_pairwise_ranking_improvement>0))&&
         (!rankingScoreAvailable||
-          (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0)),
+          (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0))&&
+        execution_head_context_ablation?.passed===true,
       return_selection_diagnostics
     })),
     execution_head_context_ablation_qualification:{
