@@ -33,7 +33,7 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/HOLDOUT_WAS_OPENED/);
   assert.match(workflow,/HOLDOUT_PREDICTION_ROWS_NOT_ZERO/);
   assert.match(workflow,/TUNED_LOGISTIC_CV_INCOMPLETE/);
-  assert.match(workflow,/scientific-decision\\.json/);
+  assert.ok(workflow.includes('scientific-decision.json'));
 });
 
 test('trainer emits a reproducible manifest and scores only outer validation while holdout remains locked',async()=>{
@@ -41,15 +41,15 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   const contracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   assert.match(trainer,/holdout_access_status:'LOCKED_NOT_SCORED'/);
   assert.match(trainer,/holdout_metrics_read:false/);
-  assert.match(trainer,/const eventRows=\\[\\.\\.\\.split\\.validation\\]/);
+  assert.ok(trainer.includes('const eventRows=[...split.validation];'));
   assert.match(trainer,/experiment_manifest:experimentManifest/);
   assert.match(trainer,/experiment-manifest\\.json/);
   assert.match(trainer,/node_version:process\\.version/);
   assert.match(trainer,/command_line:process\\.argv\\.slice\\(2\\)/);
   assert.match(trainer,/predictions_generated:false/);
   assert.match(trainer,/rows_included_in_scored_predictions:0/);
-  assert.match(contracts,/eventRows=holdoutOpeningProtocolStatus\\.passed/);
-  assert.match(contracts,/if\\(!holdoutOpeningProtocolStatus\\.passed\\)[\\s\\S]*?HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL/);
+  assert.ok(contracts.includes('const eventRows=holdoutOpeningProtocolStatus.passed'));
+  assert.ok(contracts.includes('if(!holdoutOpeningProtocolStatus.passed)'));\n  assert.ok(contracts.includes('HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'));
   assert.match(contracts,/probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS'/);
   assert.match(contracts,/baseline_logistic_raw_brier:baselineValidationBrier/);
 });
