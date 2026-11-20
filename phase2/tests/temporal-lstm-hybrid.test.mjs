@@ -440,7 +440,11 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
     rankingPairsPerTimestamp:4
   });
   assert.equal(profile.training.return_ranking.enabled,true);
-  assert.equal(profile.training.return_ranking.method,'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1');
+  assert.equal(profile.training.return_ranking.method,
+    'SHARED_CLASSIFIER_PAIRWISE_LOSS_PLUS_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V2');
+  assert.equal(profile.training.shared_classifier_loss.enabled,false);
+  assert.equal(profile.training.shared_classifier_loss.gradient_batches_applied,0);
+  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_shared_ranking_loss,false);
   assert.equal(profile.training.return_ranking.source_partition,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.training.return_ranking.comparison_pairs,10);
   assert.equal(profile.training.return_ranking.ranking_labels_seen_outside_training_partition,false);
@@ -457,6 +461,39 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
   assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
   assert.equal(profile.probability_ready,false);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through the full temporal network',()=>{
+  const rows=makeRankedRows(0,10,'shared-rank-train');
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const common={
+    epochs:2,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:117,maxTrainingSamples:40,rankingRows:rows,
+    rankingHeadLearningRate:0.03,rankingHeadEpochs:20,
+    rankingRoundTripCostBps:30,rankingMinimumReturnGapPct:0.5,
+    rankingPairsPerTimestamp:4
+  };
+  const classifierOnly=trainTcnLstmHybrid(fitRows,{...common,rankingWeight:0});
+  const shared=trainTcnLstmHybrid(fitRows,{...common,rankingWeight:0.05});
+  const loss=shared.training.shared_classifier_loss;
+  assert.equal(loss.enabled,true);
+  assert.equal(loss.method,'SHARED_TCN_LSTM_CLASSIFIER_PAIRWISE_LOGIT_BACKPROP_V1');
+  assert.equal(loss.source_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(loss.comparison_pairs,10);
+  assert.ok(loss.gradient_batches_applied>0);
+  assert.ok(loss.pair_updates_applied>0);
+  assert.equal(loss.classifier_parameters_updated,true);
+  assert.equal(loss.validation_or_holdout_used,false);
+  assert.ok(shared.training.history.some(item=>item.shared_ranking_pairs_used>0));
+  assert.ok(shared.training.history.every(item=>
+    Number.isFinite(item.post_update_shared_classifier_pairwise_rank_loss)&&
+    Number.isFinite(item.post_update_training_composite_objective)
+  ));
+  assert.notDeepEqual(shared.model.outputWeights,classifierOnly.model.outputWeights);
+  assert.equal(shared.training.return_ranking.classifier_parameters_updated_by_ranking_head,false);
+  assert.equal(shared.training.return_ranking.classifier_parameters_updated_by_shared_ranking_loss,true);
+  assert.equal(shared.probability_ready,false);
+  assert.equal(shared.real_order_execution,false);
 });
 
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
@@ -476,6 +513,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
   assert.equal(result.candidates.length,2);
+  assert.equal(result.candidate_count_requested,2);
+  assert.equal(result.candidate_count_evaluated,2);
+  assert.equal(result.training_return_pair_support.status,'AVAILABLE');
+  assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0.02);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
