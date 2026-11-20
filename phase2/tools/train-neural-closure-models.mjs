@@ -61,6 +61,11 @@ import {
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
 const sigmoid=value=>1/(1+Math.exp(-Math.max(-30,Math.min(30,value))));
+const probabilityLogit=value=>{
+  const p=Math.max(1e-9,Math.min(1-1e-9,Number(value)));
+  if(!Number.isFinite(p))throw new TypeError('LOGISTIC_CONTEXT_PROBABILITY_NON_FINITE');
+  return Math.log(p/(1-p));
+};
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V3';
 
@@ -1184,7 +1189,12 @@ async function main(){
     const lstmRows=split.train.map(row=>({
       id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
       target:row.target,sequence:row.temporal_sequence,
-      temporal_sequence_timestamps:row.temporal_sequence_timestamps
+      temporal_sequence_timestamps:row.temporal_sequence_timestamps,
+      // The separate temporal Logistic execution-context model consumes the
+      // same causal cognitive feature vector as the primary Logistic baseline.
+      logistic_feature_vector:buildCognitiveFeatureVector(
+        row.features,COGNITIVE_FEATURE_SCHEMA
+      )
     })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
     const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
       .sort((a,b)=>a-b);
@@ -1274,6 +1284,44 @@ async function main(){
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
+          // Fit a separate purged expanding-window Logistic model on the
+          // recurrent model-training block only. Its predictions are then
+          // generated for the later execution-head and inner-selection rows.
+          // No execution-head/selection/calibration/outer-validation labels can
+          // influence this Logistic context model.
+          externalLogisticExecutionContextProvider:(modelTrainingRows,scoringRows)=>{
+            if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector))||
+              scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)))
+              throw new TypeError('TCN_LSTM_TEMPORAL_LOGISTIC_FEATURE_VECTOR_MISSING');
+            const temporalLogisticContext=fitTunedTemporalLogisticBaseline(
+              modelTrainingRows,
+              modelTrainingRows.map(row=>row.logistic_feature_vector),{
+                foldCount:5,purgeMs:86_400_000,
+                initialTrainingFraction:0.32,validationFraction:0.12,
+                minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
+                candidateGrid:[
+                  {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
+                  {l2:0.1,learningRate:0.01},{l2:1,learningRate:0.01},
+                  {l2:0.001,learningRate:0.03},{l2:0.01,learningRate:0.03},
+                  {l2:0.1,learningRate:0.03},{l2:1,learningRate:0.03}
+                ],
+                maxEpochs:160,seed:22429
+              });
+            const predictions=scoringRows.map(row=>{
+              const probability=predictCrossFittedCalibratedTemporalLogisticProbability(
+                row.logistic_feature_vector,temporalLogisticContext.model
+              );
+              return {
+                id:String(row.id),at:Number(row.at),
+                logit:probabilityLogit(probability)
+              };
+            });
+            return {
+              model:temporalLogisticContext.model,
+              report:temporalLogisticContext.report,
+              predictions
+            };
+          },
           candidates:[
             // Keep the proper-scoring Brier objective fixed while sweeping a
             // wider shared-classifier ranking-loss range. The previous Focal
@@ -1359,6 +1407,8 @@ async function main(){
               architecture:'CAUSAL_DILATED_TCN_UNIDIRECTIONAL_LSTM_SINGLE_HEAD_TEMPORAL_ATTENTION_V1',
               input_shape:[TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS],
               fit:selectedFit,calibrator,
+              execution_logistic_context_metadata:
+                selectedFit.execution_logistic_context_metadata??null,
               execution_risk_policy:selectedFit.execution_risk_policy??null,
               execution_risk_score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
               target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
@@ -1405,8 +1455,17 @@ async function main(){
             );
             if(!finite(auxiliaryRankingAnchorLogit))
               throw new Error('TCN_LSTM_AUXILIARY_RANKING_ANCHOR_DIAGNOSTIC_NON_FINITE:'+item.id);
+            if(!selectedFit.execution_logistic_context_model||
+              selectedFit.execution_logistic_context_metadata?.status!=='AVAILABLE')
+              throw new Error('TCN_LSTM_TEMPORAL_LOGISTIC_EXECUTION_CONTEXT_NOT_AVAILABLE');
+            const externalLogisticContextProbability=
+              predictCrossFittedCalibratedTemporalLogisticProbability(
+                buildCognitiveFeatureVector(sourceRow.features,COGNITIVE_FEATURE_SCHEMA),
+                selectedFit.execution_logistic_context_model
+              );
+            const externalLogisticLogit=probabilityLogit(externalLogisticContextProbability);
             const executionScore=predictTcnLstmHybridExecutionScore(
-              sourceRow.temporal_sequence,selectedFit
+              sourceRow.temporal_sequence,selectedFit,{externalLogisticLogit}
             );
             if(executionScore.status!=='AVAILABLE'||
               !finite(executionScore.risk_adjusted_net_return_score))
@@ -1450,6 +1509,8 @@ async function main(){
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
               execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
+              temporal_logistic_cv_context_probability:Number(externalLogisticContextProbability),
+              temporal_logistic_cv_context_logit:Number(externalLogisticLogit),
               execution_risk_score_semantics:executionScore.score_semantics,
               pooled_only_predicted_net_return_pct:Number(pooledOnlyExecution.predicted_net_return_pct),
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
@@ -1492,7 +1553,8 @@ async function main(){
             execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
             execution_head_context_ablation_required_for_inner_qualification:true,
             execution_head_input_feature_schema:
-              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4',
+              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5',
+          execution_logistic_context:selection.execution_logistic_context??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
             ranking_head_role:'AUXILIARY_CROSS_SECTIONAL_RANKING_WITH_OPTIONAL_SHARED_CLASSIFIER_PAIRWISE_TRAINING',
