@@ -585,6 +585,71 @@ test('fixed-SHA evaluator keeps every holdout metric locked when the required va
   assert.equal(report.status,'NEURAL_SUPERIORITY_NOT_PROVEN');
 });
 
+test('raw Brier remains the primary model comparison while train-only calibrated probabilities drive frozen execution',()=>{
+  const rows=makeRows(),sourceCommitSha='b'.repeat(40);
+  const artifacts=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,artifacts);
+  const logisticMetadata={
+    schema:'TEST_TRAIN_ONLY_CROSSFITTED_CALIBRATION_V1',
+    status:'SELECTED_PLATT_SCALING',selected_method:'PLATT_SCALING',
+    applied_to_final_model:true,training_partition_only:true,
+    fit_partition:'PENULTIMATE_PURGED_TRAIN_ONLY_OOF_FOLD',
+    outer_validation_used_for_calibrator_fit:false,
+    outer_validation_used_for_calibrator_selection:false,
+    holdout_used_for_calibration:false
+  };
+  predictions.LOGISTIC_REGRESSION=predictions.LOGISTIC_REGRESSION.map(item=>({
+    ...item,raw_probability:item.probability,
+    calibrated_probability:item.probability>=0.5?0.10:0.01,
+    calibration_metadata:logisticMetadata
+  }));
+  const split=splitFourHourRows(rows);
+  const byId=new Map(predictions.LOGISTIC_REGRESSION.map(item=>[item.id,item]));
+  const expectedRaw=split.validation.reduce((sum,row)=>{
+    const p=byId.get(row.id).raw_probability;
+    return sum+(p-row.target)**2;
+  },0)/split.validation.length;
+  const expectedCalibrated=split.validation.reduce((sum,row)=>{
+    const p=byId.get(row.id).calibrated_probability;
+    return sum+(p-row.target)**2;
+  },0)/split.validation.length;
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel:artifacts,sourceCommitSha
+  });
+  const validation=report.models.LOGISTIC_REGRESSION.validation;
+  assert.ok(Math.abs(validation.raw_brier_score-expectedRaw)<1e-12);
+  assert.ok(Math.abs(validation.calibrated_brier_score-expectedCalibrated)<1e-12);
+  assert.equal(validation.evaluation_brier_score,validation.raw_brier_score,
+    'neural representation comparison must use native/raw probability outputs');
+  assert.equal(validation.calibration_applied,true);
+  assert.equal(validation.probability_evaluation_method,
+    'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE');
+  assert.equal(validation.execution_probability_stage,'TRAIN_ONLY_CROSSFITTED_CALIBRATED');
+  assert.equal(validation.validation_threshold_metrics.signal_count,0,
+    'fixed threshold execution must consume the train-only calibrated probabilities');
+  assert.equal(validation.reliability_diagnostics.raw.status,'AVAILABLE');
+  assert.equal(validation.reliability_diagnostics.calibrated.status,'AVAILABLE');
+  assert.equal(validation.raw_classification_metrics.sample_count,split.validation.length);
+  assert.equal(validation.calibrated_classification_metrics.sample_count,split.validation.length);
+  assert.equal(validation.calibration.outer_validation_used_for_calibrator_fit,false);
+  assert.equal(validation.calibration.outer_validation_used_for_calibrator_selection,false);
+  assert.equal(report.holdout_access.opened,false);
+  assert.equal(report.models.LOGISTIC_REGRESSION.holdout.brier_score,null);
+
+  predictions.LOGISTIC_REGRESSION=predictions.LOGISTIC_REGRESSION.map(item=>({
+    ...item,calibration_metadata:{
+      ...logisticMetadata,outer_validation_used_for_calibrator_fit:true
+    }
+  }));
+  const invalid=runNeuralClosureBenchmark({
+    rows,predictionsByModel:predictions,modelArtifactsByModel:artifacts,sourceCommitSha
+  });
+  assert.equal(invalid.models.LOGISTIC_REGRESSION.status,'NOT_EVALUATED');
+  assert.equal(invalid.models.LOGISTIC_REGRESSION.reason,
+    'MODEL_CALIBRATION_PROVENANCE_INVALID:LOGISTIC_REGRESSION');
+  assert.equal(invalid.holdout_access.opened,false);
+});
+
 test('outer probability distributions report native model scores without calibration or policy selection',()=>{
   const rows=makeRows(),sourceCommitSha='c'.repeat(40);
   const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
