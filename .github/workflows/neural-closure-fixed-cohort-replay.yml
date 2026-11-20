@@ -32,8 +32,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep each immutable candidate-SHA replay independent; a stale run must not block the latest benchmark.
-  group: build224-neural-closure-fixed-cohort-replay-${{ github.event.pull_request.number || github.ref }}
+  # Push and PR events for the same head branch share one expensive fixed-cohort replay slot.
+  group: build224-neural-closure-fixed-cohort-replay-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
