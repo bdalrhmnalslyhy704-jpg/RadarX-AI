@@ -2237,7 +2237,7 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   const brierSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
   const logLossSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
   const metricNames=['trade_count','win_rate_pct','net_pnl_pct',
-    'average_net_return_pct','median_net_return_pct','max_drawdown_pct'];
+    'average_net_return_pct','sharpe_per_trade','average_holding_minutes','max_drawdown_pct'];
   const strategySamples=Object.fromEntries(topKGrid.map(k=>[String(k),
     Object.fromEntries(policyNames.map(name=>[name,
       Object.fromEntries(metricNames.map(metric=>[metric,[]]))
