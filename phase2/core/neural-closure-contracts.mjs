@@ -660,7 +660,7 @@ export function fitPlattScaler(logits, labels, {
         const x=Number(logits[i]),p=sigmoid(slope*x+intercept);
         const error=p-labels[i],weight=p*(1-p);
         g0+=error*x;g1+=error;
-        h00+=weight*x*x;h01+=weight;h01-=weight;h01+=weight*x;h11+=weight;
+        h00+=weight*x*x;h01+=weight*x;h11+=weight;
       }
       const determinant=h00*h11-h01*h01;
       if(!Number.isFinite(determinant)||determinant<=1e-18)
