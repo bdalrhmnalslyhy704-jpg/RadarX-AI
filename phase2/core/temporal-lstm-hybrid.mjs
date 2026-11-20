@@ -1118,7 +1118,7 @@ export function summarizeTcnLstmRankingExecutionSelection(rows,rankingLogits,anc
         modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
       beats_logistic_anchor:complete&&
         modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
-        modelMetrics.win_rate_pct>anchorMetrics.win_rate_pct
+        modelMetrics.max_drawdown_pct<=anchorMetrics.max_drawdown_pct
     };
     trials.push({
       top_k_per_timestamp:topK,decision_group_count:eligible.length,

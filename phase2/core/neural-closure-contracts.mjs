@@ -2764,14 +2764,17 @@ export function runNeuralClosureBenchmark({
     const logisticValidationReference=modelName==='LOGISTIC_REGRESSION'
       ?null:models.LOGISTIC_REGRESSION?.validation??null;
     const matchedExecutionThreshold=logisticValidationReference?.selected_threshold??null;
-    const logisticReferenceRiskGates=
-      logisticValidationReference?.validation_threshold_risk_gates??{};
     const logisticReferenceMetrics=
       logisticValidationReference?.validation_threshold_metrics??null;
+    // Eligibility is determined on the earlier disjoint threshold-selection block.
+    // Do not require Logistic to win again on the later outer-validation block:
+    // that block exists precisely to compare the neural challenger against it.
+    const logisticThresholdSelectionReady=
+      logisticValidationReference?.threshold_selection==='SELECTED_ON_VALIDATION_ONLY'&&
+      Number(logisticValidationReference?.threshold_selection_eligible_count??0)>0;
     const matchedExecutionThresholdReady=finite(matchedExecutionThreshold)&&
-      logisticReferenceMetrics?.return_data_status==='COMPLETE'&&
-      Object.keys(logisticReferenceRiskGates).length>0&&
-      Object.values(logisticReferenceRiskGates).every(value=>value==='PASS');
+      logisticThresholdSelectionReady&&
+      logisticReferenceMetrics?.return_data_status==='COMPLETE';
     const matchedValidationMetrics=modelName!=='LOGISTIC_REGRESSION'&&
       matchedExecutionThresholdReady
       ?portfolioMetrics(validationRows,calibratedValidation,
@@ -2785,7 +2788,13 @@ export function runNeuralClosureBenchmark({
       positive_validation_net_pnl:finite(matchedValidationMetrics.net_pnl_pct)&&
         matchedValidationMetrics.net_pnl_pct>0,
       maximum_validation_drawdown:finite(matchedValidationMetrics.max_drawdown_pct)&&
-        matchedValidationMetrics.max_drawdown_pct<=maximumDrawdownPct
+        matchedValidationMetrics.max_drawdown_pct<=maximumDrawdownPct,
+      strictly_beats_logistic_net_pnl:finite(matchedValidationMetrics.net_pnl_pct)&&
+        finite(logisticReferenceMetrics?.net_pnl_pct)&&
+        matchedValidationMetrics.net_pnl_pct>logisticReferenceMetrics.net_pnl_pct,
+      drawdown_no_worse_than_logistic:finite(matchedValidationMetrics.max_drawdown_pct)&&
+        finite(logisticReferenceMetrics?.max_drawdown_pct)&&
+        matchedValidationMetrics.max_drawdown_pct<=logisticReferenceMetrics.max_drawdown_pct
     }:{
       return_data_complete:null,minimum_validation_trades:null,
       minimum_validation_win_rate:null,positive_validation_net_pnl:null,
