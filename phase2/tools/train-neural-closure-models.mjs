@@ -37,7 +37,8 @@ import {
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
   predictTcnLstmHybridRankingLogit,
-  predictTcnLstmHybridRankingAnchorLogit,predictTcnLstmHybridExecutionScore
+  predictTcnLstmHybridRankingAnchorLogit,
+  predictTcnLstmHybridExecutionHeads,predictTcnLstmHybridExecutionScore
 } from '../core/temporal-lstm-hybrid.mjs';
 import {
   HYBRID_FEATURE_NAMES,trainHybridTcnAttention,predictHybridTcnAttention
@@ -1312,6 +1313,19 @@ async function main(){
             if(executionScore.status!=='AVAILABLE'||
               !finite(executionScore.risk_adjusted_net_return_score))
               throw new Error('TCN_LSTM_EXECUTION_RISK_ADJUSTED_SCORE_UNAVAILABLE:'+item.id);
+            // Matched outer-validation ablation: run the pooled-only reference
+            // with the SAME risk penalty chosen for the contextual head inside
+            // selection. This isolates score conditioning from lambda selection.
+            const pooledOnlyExecution=predictTcnLstmHybridExecutionHeads(
+              sourceRow.temporal_sequence,selectedFit,{variant:'POOLED_ONLY'}
+            );
+            const pooledOnlyRiskAdjustedScore=
+              pooledOnlyExecution.predicted_net_return_pct-
+              executionScore.risk_penalty_weight*pooledOnlyExecution.predicted_downside_risk_pct;
+            if(!finite(pooledOnlyRiskAdjustedScore)||
+              !finite(pooledOnlyExecution.predicted_net_return_pct)||
+              !finite(pooledOnlyExecution.predicted_downside_risk_pct))
+              throw new Error('TCN_LSTM_POOLED_ONLY_EXECUTION_RISK_SCORE_UNAVAILABLE:'+item.id);
             return {
               ...item,
               pre_inner_calibration_probability:Number(preInnerProbability),
@@ -1321,7 +1335,11 @@ async function main(){
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
               execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
-              execution_risk_score_semantics:executionScore.score_semantics
+              execution_risk_score_semantics:executionScore.score_semantics,
+              pooled_only_predicted_net_return_pct:Number(pooledOnlyExecution.predicted_net_return_pct),
+              pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
+              pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
+              pooled_only_execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight)
             };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
@@ -1524,6 +1542,17 @@ async function main(){
     status:'UNAVAILABLE',reason:'TCN_LSTM_OR_LOGISTIC_EXTERNAL_PREDICTIONS_UNAVAILABLE',
     evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
   };
+  let pooledOnlyExternalExecutionRiskTopK={
+    schema:'RADARX_TCN_LSTM_POOLED_ONLY_FROZEN_EXECUTION_RISK_EXTERNAL_VALIDATION_TOP_K_V1',
+    status:'UNAVAILABLE',reason:'POOLED_ONLY_OR_LOGISTIC_EXTERNAL_PREDICTIONS_UNAVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
+  };
+  let executionHeadExternalAblation={
+    schema:'RADARX_TCN_LSTM_SCORE_CONDITIONED_EXTERNAL_ABLATION_V1',
+    status:'UNAVAILABLE',reason:'CONTEXT_OR_POOLED_ONLY_EXTERNAL_METRICS_UNAVAILABLE',
+    selection_partition_only_for_lambda:true,evaluation_partition:'OUTER_VALIDATION_ONLY',
+    outer_validation_used_for_lambda_or_top_k_selection:false,holdout_rows_or_scores_used:false
+  };
   const lstmExternalPredictions=predictionsByModel.TCN_LSTM_HYBRID;
   const logisticExternalPredictions=predictionsByModel.LOGISTIC_REGRESSION;
   if(Array.isArray(lstmExternalPredictions)&&Array.isArray(logisticExternalPredictions)){
@@ -1538,35 +1567,77 @@ async function main(){
     const complete=alignedRows.every(row=>{
       const neural=riskById.get(String(row.id)),logistic=logisticById.get(String(row.id));
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
-        finite(neural.execution_risk_penalty_weight)&&finite(logistic.probability);
+        finite(neural.execution_risk_penalty_weight)&&
+        finite(neural.pooled_only_execution_risk_adjusted_score)&&
+        finite(neural.pooled_only_execution_risk_penalty_weight)&&finite(logistic.probability);
     });
     if(complete){
+      const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
+      const pooledScores=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_adjusted_score);
+      const logisticScores=alignedRows.map(row=>logisticById.get(String(row.id)).probability);
+      const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
+      const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
-        alignedRows,
-        alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score),
-        alignedRows.map(row=>logisticById.get(String(row.id)).probability),
-        {riskPenaltyWeights:alignedRows.map(row=>
-          riskById.get(String(row.id)).execution_risk_penalty_weight),
-          topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+        alignedRows,contextScores,logisticScores,
+        {riskPenaltyWeights:contextLambdas,topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
       );
-    }else{
-      externalExecutionRiskTopK={
-        ...externalExecutionRiskTopK,
-        reason:'OUTER_VALIDATION_RISK_OR_LOGISTIC_PREDICTION_ALIGNMENT_INCOMPLETE',
-        expected_validation_rows:alignedRows.length,
-        aligned_risk_rows:alignedRows.filter(row=>riskById.has(String(row.id))).length,
-        aligned_logistic_rows:alignedRows.filter(row=>logisticById.has(String(row.id))).length
+      pooledOnlyExternalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
+        alignedRows,pooledScores,logisticScores,
+        {riskPenaltyWeights:pooledLambdas,topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+      );
+      const contextTrials=new Map(externalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
+      const pooledTrials=new Map(pooledOnlyExternalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
+      const pairedTopK=[1,2,3].map(topK=>{
+        const context=contextTrials.get(topK),pooled=pooledTrials.get(topK);
+        const c=context?.neural_metrics,p=pooled?.neural_metrics;
+        const delta=key=>finite(c?.[key])&&finite(p?.[key])
+          ?Number((Number(c[key])-Number(p[key])).toFixed(6)):null;
+        return {
+          top_k_per_timestamp:topK,
+          context_metrics:c??null,pooled_only_metrics:p??null,
+          context_minus_pooled_only:{
+            trade_count:delta('trade_count'),
+            win_rate_percentage_points:delta('win_rate_pct'),
+            net_pnl_percentage_points:delta('net_pnl_pct'),
+            max_drawdown_percentage_points:delta('max_drawdown_pct')
+          }
+        };
+      });
+      executionHeadExternalAblation={
+        schema:'RADARX_TCN_LSTM_SCORE_CONDITIONED_EXTERNAL_ABLATION_V1',
+        status:'AVAILABLE',baseline_variant:'POOLED_ONLY',
+        candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
+        selection_partition_only_for_lambda:true,
+        evaluation_partition:'OUTER_VALIDATION_ONLY',
+        same_outer_validation_opportunities:true,
+        same_frozen_lambda_for_both_variants:true,
+        same_round_trip_cost_bps:args.roundTripCostBps,
+        outer_validation_used_for_lambda_or_top_k_selection:false,
+        holdout_rows_or_scores_used:false,
+        context_risk_penalty_weight:externalExecutionRiskTopK.risk_penalty_weight,
+        pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK.risk_penalty_weight,
+        trials:pairedTopK
       };
+    }else{
+      const reason='OUTER_VALIDATION_CONTEXT_POOLED_OR_LOGISTIC_ALIGNMENT_INCOMPLETE';
+      externalExecutionRiskTopK={...externalExecutionRiskTopK,reason};
+      pooledOnlyExternalExecutionRiskTopK={...pooledOnlyExternalExecutionRiskTopK,reason};
+      executionHeadExternalAblation={...executionHeadExternalAblation,reason,
+        expected_validation_rows:alignedRows.length};
     }
   }
   training.model_internal_diagnostics.TCN_LSTM_HYBRID={
     ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
-    external_validation_execution_risk_top_k:externalExecutionRiskTopK
+    external_validation_execution_risk_top_k:externalExecutionRiskTopK,
+    pooled_only_external_validation_execution_risk_top_k:pooledOnlyExternalExecutionRiskTopK,
+    score_conditioned_external_ablation:executionHeadExternalAblation
   };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
     validation_brier:model.validation?.calibrated_brier_score??null,
     external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?externalExecutionRiskTopK:null,
+    pooled_only_external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?pooledOnlyExternalExecutionRiskTopK:null,
+    score_conditioned_external_ablation:name==='TCN_LSTM_HYBRID'?executionHeadExternalAblation:null,
     probability_stage_diagnostics:
       model.validation?.probability_stage_diagnostics??null,
     validation:model.validation?{
