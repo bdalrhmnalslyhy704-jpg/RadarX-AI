@@ -2716,9 +2716,7 @@ export function runNeuralClosureBenchmark({
   const holdoutAccess={
     opened:false,
     gate:'ALL_14_PREDECLARED_RESEARCH_PROTOCOL_CHECKS_AND_MODEL_QUALIFICATION',
-    reason:holdoutOpeningProtocolStatus.passed
-      ?'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES'
-      :'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+    reason:'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES',
     opening_protocol:holdoutOpeningProtocolStatus,
     opened_for_models:[]
   };
