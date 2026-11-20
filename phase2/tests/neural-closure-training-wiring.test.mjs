@@ -396,21 +396,21 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
     'all seven ranking candidates must retain the proper-scoring Brier objective');
   assert.match(trainer,/rankingPairsPerTimestamp:12/,
     'ranking supervision must use a broader bounded set of same-time return pairs');
-  assert.match(trainer,/requiredImprovement:0\\.00025/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
-  assert.match(trainer,/rankingMinimumReturnGapPct:0\\.50/);
-  assert.match(recurrent,/forward\\.logit\\+blendWeight\\*forward\\.ranking_residual_logit/);
-  assert.doesNotMatch(recurrent,/forward\\.logit\\+blendWeight\\*forward\\.ranking_logit/);
+  assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
+  assert.match(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
+  assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
   assert.match(recurrent,/CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1/);
 });
 
 test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{
   const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(closure,/logisticThresholdSelectionReady=\\s*logisticValidationReference\\?\\.threshold_selection==='SELECTED_ON_VALIDATION_ONLY'/);
-  assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\\s\\S]*?Object\\.values\\(logisticReferenceRiskGates\\)\\.every/);
+  assert.match(closure,/logisticThresholdSelectionReady=\s*logisticValidationReference\?\.threshold_selection==='SELECTED_ON_VALIDATION_ONLY'/);
+  assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\s\S]*?Object\.values\(logisticReferenceRiskGates\)\.every/);
   assert.match(closure,/strictly_beats_logistic_net_pnl/);
   assert.match(closure,/drawdown_no_worse_than_logistic/);
-  assert.match(recurrent,/beats_logistic_anchor:complete&&[\\s\\S]*modelMetrics\\.net_pnl_pct>anchorMetrics\\.net_pnl_pct&&[\\s\\S]*modelMetrics\\.max_drawdown_pct<=anchorMetrics\\.max_drawdown_pct/);
-  assert.doesNotMatch(recurrent,/modelMetrics\\.win_rate_pct>anchorMetrics\\.win_rate_pct/);
+  assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
+  assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
 });
