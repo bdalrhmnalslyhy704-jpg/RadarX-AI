@@ -2644,6 +2644,43 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
  * The model training jobs must emit one prediction for every validation and
  * holdout id. Missing/extra rows fail that family closed.
  */
+export const NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS=Object.freeze([
+  'tuned_logistic_baseline_complete',
+  'fixed_cohort_ablation_complete',
+  'candidate_decision_documented',
+  'calibration_selection_inner_only_or_cross_fitted',
+  'leakage_audit_passed',
+  'checkpoint_selection_mathematically_validated',
+  'outer_execution_gates_passed',
+  'confidence_intervals_and_robustness_reported',
+  'final_model_architecture_frozen',
+  'final_execution_policy_frozen',
+  'threshold_top_k_lambda_calibration_and_hyperparameters_frozen',
+  'holdout_opening_decision_documented',
+  'single_holdout_evaluation_authorized',
+  'no_holdout_feedback_into_tuning'
+]);
+
+export function evaluateNeuralClosureHoldoutOpeningProtocol(protocol={}) {
+  if(!protocol||typeof protocol!=='object'||Array.isArray(protocol))
+    throw new TypeError('NEURAL_CLOSURE_HOLDOUT_PROTOCOL_MUST_BE_AN_OBJECT');
+  const checks=Object.fromEntries(
+    NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.map(name=>[
+      name,protocol[name]===true
+    ])
+  );
+  const missing=Object.entries(checks).filter(([,passed])=>!passed)
+    .map(([name])=>name);
+  return {
+    schema:'RADARX_NEURAL_CLOSURE_HOLDOUT_OPENING_PROTOCOL_V1',
+    status:missing.length?'LOCKED':'APPROVED',
+    passed:missing.length===0,
+    checks,
+    missing_checks:missing,
+    holdout_metrics_read:false
+  };
+}
+
 export function runNeuralClosureBenchmark({
   rows:inputRows,
   predictionsByModel,
@@ -2655,7 +2692,8 @@ export function runNeuralClosureBenchmark({
   minimumWinRatePct=55,
   maximumDrawdownPct=8,
   requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN,
-  qualificationByModel={}
+  qualificationByModel={},
+  holdoutOpeningProtocol={}
 }={}) {
   if(!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha||'')))
     throw new Error('NEURAL_CLOSURE_FULL_SOURCE_SHA_REQUIRED');
@@ -2669,14 +2707,19 @@ export function runNeuralClosureBenchmark({
     throw new Error('NEURAL_CLOSURE_EMPTY_SPLIT');
   const trainCounts=classCounts(split.train.map(row=>row.target));
   const validationCounts=classCounts(split.validation.map(row=>row.target));
-  // Do not derive holdout labels, portfolio outcomes or performance metrics
-  // until a challenger passes inner qualification, the independent outer
-  // validation Brier margin and the preselected-threshold execution risk gates.
+  const holdoutOpeningProtocolStatus=
+    evaluateNeuralClosureHoldoutOpeningProtocol(holdoutOpeningProtocol);
+  // The legacy inner/outer model gates are necessary but no longer sufficient.
+  // The untouched holdout stays locked until every explicit research-protocol
+  // check is true. Missing flags fail closed.
   let holdoutCounts=null;
   const holdoutAccess={
     opened:false,
-    gate:'INNER_QUALIFICATION_AND_DISJOINT_OUTER_VALIDATION_BRIER_AND_EXECUTION_RISK_GATES',
-    reason:'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES',
+    gate:'ALL_14_PREDECLARED_RESEARCH_PROTOCOL_CHECKS_AND_MODEL_QUALIFICATION',
+    reason:holdoutOpeningProtocolStatus.passed
+      ?'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES'
+      :'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+    opening_protocol:holdoutOpeningProtocolStatus,
     opened_for_models:[]
   };
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
@@ -3091,6 +3134,31 @@ export function runNeuralClosureBenchmark({
           reason:validationReason??'OUTER_VALIDATION_GATE_FAILED'
         }
       };
+      continue;
+    }
+
+    if(!holdoutOpeningProtocolStatus.passed){
+      // Keep the model's complete outer-validation result while withholding
+      // every holdout label-derived score and execution statistic.
+      models[modelName]={
+        status:'VALIDATION_EVALUATED_HOLDOUT_LOCKED',
+        ...baseModel,
+        holdout:{
+          evaluated:false,sample_count:split.holdout.length,
+          brier_score:null,trade_count:null,net_pnl_pct:null,
+          max_drawdown_pct:null,return_data_status:'NOT_EVALUATED',
+          reason:'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+          missing_protocol_checks:holdoutOpeningProtocolStatus.missing_checks
+        },
+        acceptance:{
+          status:'HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL',
+          passed:false,
+          reason:'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+          missing_protocol_checks:holdoutOpeningProtocolStatus.missing_checks,
+          validation_gate:validationGate
+        }
+      };
+      holdoutAccess.reason='HOLDOUT_OPENING_PROTOCOL_INCOMPLETE';
       continue;
     }
 
