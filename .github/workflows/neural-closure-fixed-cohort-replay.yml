@@ -104,8 +104,8 @@ jobs:
           import fs from 'node:fs';
           const path='artifacts/neural-closure-replay/fixed-sha-neural-benchmark.json';
           const report=JSON.parse(fs.readFileSync(path,'utf8'));
-          const model=report.models?.TCN_LSTM_HYBRID;
-          const logistic=report.models?.LOGISTIC_REGRESSION;
+          const model=report.benchmark?.models?.TCN_LSTM_HYBRID;
+          const logistic=report.benchmark?.models?.LOGISTIC_REGRESSION;
           const acceptance=model?.acceptance;
           const gates=acceptance?.gates??{};
           const validation=model?.validation?.outer_validation_gate;
@@ -123,8 +123,8 @@ jobs:
           if(validation?.passed!==true) failures.push('TCN_LSTM_OUTER_VALIDATION_GATE_FAILED');
           if(!Number.isFinite(validation?.brier_improvement_vs_logistic)||
              validation.brier_improvement_vs_logistic<=0.003) failures.push('TCN_LSTM_OUTER_BRIER_MARGIN_NOT_ABOVE_0_003');
-          if(report.holdout_access?.opened!==true||
-             !report.holdout_access?.opened_for_models?.includes('TCN_LSTM_HYBRID')) failures.push('TCN_LSTM_HOLDOUT_ACCESS_NOT_GRANTED_BY_VALIDATION');
+          if(report.benchmark?.holdout_access?.opened!==true||
+             !report.benchmark?.holdout_access?.opened_for_models?.includes('TCN_LSTM_HYBRID')) failures.push('TCN_LSTM_HOLDOUT_ACCESS_NOT_GRANTED_BY_VALIDATION');
           if(holdout?.execution_evaluated!==true||holdout?.return_data_status!=='COMPLETE') failures.push('TCN_LSTM_HOLDOUT_RETURN_DATA_INCOMPLETE');
           if(Number(holdout?.trade_count)<100) failures.push('TCN_LSTM_HOLDOUT_TRADES_BELOW_100');
           if(!Number.isFinite(holdout?.win_rate_pct)||holdout.win_rate_pct<55) failures.push('TCN_LSTM_HOLDOUT_WIN_RATE_BELOW_55');
