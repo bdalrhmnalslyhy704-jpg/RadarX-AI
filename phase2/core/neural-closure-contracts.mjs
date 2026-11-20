@@ -1522,11 +1522,18 @@ function predictionMap(predictions,modelName,requiredIds,{
 }={}) {
   if(!Array.isArray(predictions))
     return {valid:false,reason:'MODEL_PREDICTIONS_MISSING',map:new Map()};
-  const map=new Map();
+  const map=new Map(),calibratedMap=new Map();
+  let calibrationMetadata=null,calibrationMetadataJson=null;
   for(const item of predictions){
     const id=String(item?.id||'');
+    const rawValue=item?.raw_probability??item?.probability;
+    const calibratedValue=item?.calibrated_probability??rawValue;
     if(!id||map.has(id)||!finite(item?.probability)||
-      Number(item.probability)<0||Number(item.probability)>1)
+      !finite(rawValue)||!finite(calibratedValue)||
+      Number(item.probability)<0||Number(item.probability)>1||
+      Number(rawValue)<0||Number(rawValue)>1||
+      Number(calibratedValue)<0||Number(calibratedValue)>1||
+      Math.abs(Number(item.probability)-Number(rawValue))>1e-12)
       return {valid:false,reason:'MODEL_PREDICTION_DUPLICATE_OR_INVALID:'+modelName,map};
     if(String(item?.source_commit_sha||'').toLowerCase()!==String(sourceCommitSha).toLowerCase())
       return {valid:false,reason:'MODEL_PREDICTION_SOURCE_SHA_MISMATCH:'+modelName,map};
@@ -1538,14 +1545,29 @@ function predictionMap(predictions,modelName,requiredIds,{
       ?String(item?.artifact_sha256||'').toLowerCase()!==artifactSha256
       :(item?.artifact_sha256!==undefined&&item?.artifact_sha256!==null))
       return {valid:false,reason:'MODEL_PREDICTION_ARTIFACT_SHA_MISMATCH:'+modelName,map};
-    map.set(id,Number(item.probability));
+    const metadata=item?.calibration_metadata??null;
+    const metadataJson=metadata===null?null:JSON.stringify(metadata);
+    if(calibrationMetadataJson===null&&map.size===0){
+      calibrationMetadataJson=metadataJson;
+      calibrationMetadata=metadata;
+    }else if(metadataJson!==calibrationMetadataJson){
+      return {valid:false,reason:'MODEL_PREDICTION_CALIBRATION_METADATA_MISMATCH:'+modelName,map};
+    }
+    if(metadata?.applied_to_final_model===true&&(
+      metadata.training_partition_only!==true||
+      metadata.outer_validation_used_for_calibrator_fit!==false||
+      metadata.outer_validation_used_for_calibrator_selection!==false||
+      metadata.holdout_used_for_calibration!==false
+    ))return {valid:false,reason:'MODEL_CALIBRATION_PROVENANCE_INVALID:'+modelName,map};
+    map.set(id,Number(rawValue));
+    calibratedMap.set(id,Number(calibratedValue));
   }
   const missing=requiredIds.filter(id=>!map.has(id));
   const extra=[...map.keys()].filter(id=>!requiredIds.includes(id));
   if(missing.length||extra.length)
     return {valid:false,reason:'MODEL_PREDICTION_ROW_SET_MISMATCH:'+modelName,
       missing_count:missing.length,extra_count:extra.length,map};
-  return {valid:true,map};
+  return {valid:true,map,calibratedMap,calibrationMetadata};
 }
 function probabilitiesFor(rows,map,calibrator=null) {
   return rows.map(row=>{
@@ -1799,6 +1821,186 @@ function portfolioMetrics(rows,probabilities,threshold,roundTripCostBps) {
  * labels are used only to score Brier/prevalence; they never fit calibration,
  * choose a threshold, update weights, change gates, or unlock the holdout.
  */
+function evaluateOuterBinaryProbabilityMetrics(probabilities,labels,{
+  classificationThreshold=0.5
+}={}) {
+  if(!Array.isArray(probabilities)||!Array.isArray(labels)||!labels.length||
+    probabilities.length!==labels.length||
+    probabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1)||
+    labels.some(value=>value!==0&&value!==1))
+    return {schema:'RADARX_OUTER_BINARY_PROBABILITY_METRICS_V1',
+      status:'UNAVAILABLE',sample_count:Array.isArray(labels)?labels.length:0};
+  const positives=labels.reduce((sum,value)=>sum+value,0);
+  const negatives=labels.length-positives;
+  const logLossValues=probabilities.map((value,index)=>{
+    const p=clamp(Number(value),1e-12,1-1e-12);
+    return -(labels[index]*Math.log(p)+(1-labels[index])*Math.log(1-p));
+  });
+  const brierValues=probabilities.map((value,index)=>
+    (Number(value)-labels[index])**2);
+  const sorted=probabilities.map((probability,index)=>({
+    probability:Number(probability),label:labels[index],index
+  })).sort((a,b)=>b.probability-a.probability||a.index-b.index);
+  let tpRank=0,fpRank=0,previousRecall=0,prAuc=0,cursor=0;
+  while(cursor<sorted.length){
+    let end=cursor+1;
+    while(end<sorted.length&&sorted[end].probability===sorted[cursor].probability)end++;
+    for(let i=cursor;i<end;i++){
+      if(sorted[i].label===1)tpRank++;
+      else fpRank++;
+    }
+    if(positives>0){
+      const recall=tpRank/positives;
+      const precision=tpRank/(tpRank+fpRank);
+      prAuc+=(recall-previousRecall)*precision;
+      previousRecall=recall;
+    }
+    cursor=end;
+  }
+  const ascending=[...sorted].reverse();
+  let positiveRankSum=0;
+  cursor=0;
+  while(cursor<ascending.length){
+    let end=cursor+1;
+    while(end<ascending.length&&ascending[end].probability===ascending[cursor].probability)end++;
+    const averageRank=((cursor+1)+end)/2;
+    for(let i=cursor;i<end;i++)
+      if(ascending[i].label===1)positiveRankSum+=averageRank;
+    cursor=end;
+  }
+  const rocAuc=positives>0&&negatives>0
+    ?(positiveRankSum-positives*(positives+1)/2)/(positives*negatives):null;
+  let truePositive=0,falsePositive=0,trueNegative=0,falseNegative=0;
+  for(let i=0;i<labels.length;i++){
+    const predicted=Number(probabilities[i])>=classificationThreshold?1:0;
+    if(predicted===1&&labels[i]===1)truePositive++;
+    else if(predicted===1)falsePositive++;
+    else if(labels[i]===0)trueNegative++;
+    else falseNegative++;
+  }
+  const precision=truePositive+falsePositive
+    ?truePositive/(truePositive+falsePositive):0;
+  const recall=truePositive+falseNegative
+    ?truePositive/(truePositive+falseNegative):0;
+  return {
+    schema:'RADARX_OUTER_BINARY_PROBABILITY_METRICS_V1',
+    status:'AVAILABLE',
+    sample_count:labels.length,positive_count:positives,negative_count:negatives,
+    positive_rate_pct:Number((100*positives/labels.length).toFixed(6)),
+    brier_score:Number((brierValues.reduce((sum,value)=>sum+value,0)/labels.length).toFixed(8)),
+    log_loss:Number((logLossValues.reduce((sum,value)=>sum+value,0)/labels.length).toFixed(8)),
+    pr_auc_average_precision:positives>0?Number(prAuc.toFixed(8)):null,
+    roc_auc:Number.isFinite(rocAuc)?Number(rocAuc.toFixed(8)):null,
+    classification_threshold:classificationThreshold,
+    precision:Number(precision.toFixed(8)),recall:Number(recall.toFixed(8)),
+    f1_score:precision+recall?Number((2*precision*recall/(precision+recall)).toFixed(8)):0,
+    confusion_matrix:{
+      true_positive:truePositive,false_positive:falsePositive,
+      true_negative:trueNegative,false_negative:falseNegative
+    },
+    accuracy_not_used_as_primary_selection_metric:true
+  };
+}
+
+function buildOuterReliabilityDiagnostics(rows,probabilities,{
+  binCount=10,classificationThreshold=0.5
+}={}) {
+  const unavailable=reason=>({
+    schema:'RADARX_OUTER_RELIABILITY_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,reason,
+    labels_used_for_training:false,labels_used_for_calibrator_fit:false,
+    labels_used_for_selection:false,affects_acceptance_gates:false
+  });
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||!rows.length||
+    rows.length!==probabilities.length||!Number.isInteger(binCount)||binCount<2||
+    probabilities.some(value=>!finite(value)||Number(value)<0||Number(value)>1)||
+    rows.some(row=>row?.target!==0&&row?.target!==1))
+    return unavailable('RELIABILITY_ROWS_OR_PROBABILITIES_INVALID');
+  const labels=rows.map(row=>row.target);
+  const bins=Array.from({length:binCount},(_,index)=>({
+    bin:index+1,lower_bound:index/binCount,upper_bound:(index+1)/binCount,
+    sample_count:0,positive_count:0,mean_predicted_probability:null,
+    observed_positive_rate:null,absolute_gap:null
+  }));
+  for(let index=0;index<probabilities.length;index++){
+    const p=Number(probabilities[index]);
+    const binIndex=Math.min(binCount-1,Math.floor(p*binCount));
+    const bin=bins[binIndex];
+    bin.sample_count++;
+    bin.positive_count+=labels[index];
+  }
+  let ece=0,mce=0;
+  for(const bin of bins){
+    if(!bin.sample_count)continue;
+    const selected=[];
+    for(let index=0;index<probabilities.length;index++){
+      const p=Number(probabilities[index]);
+      const belongs=Math.min(binCount-1,Math.floor(p*binCount))===bin.bin-1;
+      if(belongs)selected.push(p);
+    }
+    const meanProbability=selected.reduce((sum,value)=>sum+value,0)/selected.length;
+    const observed=bin.positive_count/bin.sample_count;
+    const gap=Math.abs(meanProbability-observed);
+    bin.mean_predicted_probability=Number(meanProbability.toFixed(8));
+    bin.observed_positive_rate=Number(observed.toFixed(8));
+    bin.absolute_gap=Number(gap.toFixed(8));
+    ece+=(bin.sample_count/probabilities.length)*gap;
+    mce=Math.max(mce,gap);
+  }
+
+  // Diagnostic logistic recalibration regression on outer labels only.
+  // These coefficients are reported but NEVER applied to any prediction.
+  const x=probabilities.map(value=>logit(value));
+  let intercept=0,slope=1,fitStatus='FITTED';
+  for(let iteration=0;iteration<80;iteration++){
+    let g0=0,g1=0,h00=0,h01=0,h11=0;
+    for(let index=0;index<x.length;index++){
+      const predicted=sigmoid(intercept+slope*x[index]);
+      const error=predicted-labels[index];
+      const weight=predicted*(1-predicted);
+      g0+=error;g1+=error*x[index];
+      h00+=weight;h01+=weight*x[index];h11+=weight*x[index]*x[index];
+    }
+    const determinant=h00*h11-h01*h01;
+    if(!Number.isFinite(determinant)||determinant<=1e-14){
+      fitStatus='SINGULAR_DIAGNOSTIC_FIT';break;
+    }
+    const deltaIntercept=(h11*g0-h01*g1)/determinant;
+    const deltaSlope=(-h01*g0+h00*g1)/determinant;
+    intercept=clamp(intercept-deltaIntercept,-20,20);
+    slope=clamp(slope-deltaSlope,-20,20);
+    if(!Number.isFinite(intercept)||!Number.isFinite(slope)){
+      fitStatus='NON_FINITE_DIAGNOSTIC_FIT';break;
+    }
+    if(Math.max(Math.abs(deltaIntercept),Math.abs(deltaSlope))<1e-8)break;
+  }
+  return {
+    schema:'RADARX_OUTER_RELIABILITY_DIAGNOSTICS_V1',
+    status:'AVAILABLE',diagnostic_only:true,
+    sample_count:rows.length,positive_count:labels.reduce((sum,value)=>sum+value,0),
+    negative_count:labels.filter(value=>value===0).length,
+    binning:'EQUAL_WIDTH_PROBABILITY_BINS',
+    bin_count:binCount,bins,
+    expected_calibration_error:Number(ece.toFixed(8)),
+    maximum_calibration_error:Number(mce.toFixed(8)),
+    calibration_slope_intercept:{
+      status:fitStatus,
+      intercept:fitStatus==='FITTED'?Number(intercept.toFixed(8)):null,
+      slope:fitStatus==='FITTED'?Number(slope.toFixed(8)):null,
+      regression:'OUTER_LABELS_ON_LOGIT_OF_FROZEN_PROBABILITIES',
+      diagnostic_only:true,
+      probabilities_transformed:false,
+      calibrator_fitted_or_selected:false,
+      affects_primary_probabilities:false,
+      affects_acceptance_gates:false
+    },
+    classification_threshold:classificationThreshold,
+    labels_used_for_scoring:true,labels_used_for_calibrator_fit:false,
+    labels_used_for_selection:false,affects_acceptance_gates:false,
+    holdout_values_used:false
+  };
+}
+
 function buildChronologicalStabilityDiagnostics(rows,probabilities,{blockCount=4}={}) {
   if(!Array.isArray(rows)||!Array.isArray(probabilities)||
     rows.length===0||rows.length!==probabilities.length||
@@ -2096,6 +2298,340 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     holdout_rows_or_scores_used:false,
     thresholds_or_lambda_tuned_on_outer_validation:false,
     trials
+  };
+}
+
+/**
+ * Moving-block bootstrap for outer-validation probability and frozen execution
+ * policies. Blocks are contiguous UTC-day clusters (longer than the 4h label
+ * horizon); one empty UTC day is inserted between sampled blocks so events
+ * from separate resampled blocks cannot overlap. All candidate/baseline
+ * policies share the exact same sampled blocks.
+ *
+ * This is uncertainty estimation only: no parameter, threshold, Top-K or
+ * execution lambda is fitted or selected by this function.
+ */
+export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
+  executionScoresByPolicy={},
+  topKGrid=[1,2,3],
+  roundTripCostBps=30,
+  repetitions=250,
+  blockLengthDays=3,
+  seed=22429,
+  maxConcurrentPositions=NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions
+}={}) {
+  const unavailable=(reason,extra={})=>({
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'UNAVAILABLE',diagnostic_only:true,reason,
+    evaluation_partition:'OUTER_VALIDATION_ONLY',
+    holdout_rows_or_scores_used:false,
+    affects_model_fit:false,affects_threshold_selection:false,
+    affects_top_k_selection:false,affects_lambda_selection:false,
+    affects_acceptance_gates:false,...extra
+  });
+  if(!Array.isArray(rows)||rows.length===0||
+    !probabilitiesByModel||typeof probabilitiesByModel!=='object'||
+    !Array.isArray(probabilitiesByModel.LOGISTIC_REGRESSION)||
+    probabilitiesByModel.LOGISTIC_REGRESSION.length!==rows.length||
+    !executionScoresByPolicy||typeof executionScoresByPolicy!=='object'||
+    !Array.isArray(topKGrid)||!topKGrid.length||
+    topKGrid.some(k=>!Number.isInteger(k)||k<1||k>100)||
+    !Number.isInteger(repetitions)||repetitions<100||repetitions>5000||
+    !Number.isInteger(blockLengthDays)||blockLengthDays<1||blockLengthDays>10||
+    !Number.isInteger(seed)||seed<1||
+    !finite(roundTripCostBps)||Number(roundTripCostBps)<0||
+    !Number.isInteger(maxConcurrentPositions)||maxConcurrentPositions<1)
+    return unavailable('BOOTSTRAP_CONFIGURATION_OR_INPUT_INVALID');
+
+  const rowIds=new Set();
+  for(let i=0;i<rows.length;i++){
+    const row=rows[i];
+    if(!row?.id||rowIds.has(String(row.id))||!finite(row.at)||
+      (row.target!==0&&row.target!==1)||
+      !finite(probabilitiesByModel.LOGISTIC_REGRESSION[i])||
+      Number(probabilitiesByModel.LOGISTIC_REGRESSION[i])<0||
+      Number(probabilitiesByModel.LOGISTIC_REGRESSION[i])>1)
+      return unavailable('BOOTSTRAP_BASELINE_OR_ROW_ALIGNMENT_INVALID',{invalid_row_index:i});
+    rowIds.add(String(row.id));
+  }
+  const modelNames=Object.keys(probabilitiesByModel);
+  for(const name of modelNames){
+    const values=probabilitiesByModel[name];
+    if(!Array.isArray(values)||values.length!==rows.length||
+      values.some(value=>!finite(value)||Number(value)<0||Number(value)>1))
+      return unavailable('BOOTSTRAP_MODEL_PROBABILITY_ALIGNMENT_INVALID',{model:name});
+  }
+  const policyNames=Object.keys(executionScoresByPolicy);
+  if(!policyNames.length)return unavailable('BOOTSTRAP_EXECUTION_POLICIES_EMPTY');
+  for(const name of policyNames){
+    const values=executionScoresByPolicy[name];
+    if(!Array.isArray(values)||values.length!==rows.length||
+      values.some(value=>!finite(value)))
+      return unavailable('BOOTSTRAP_EXECUTION_SCORE_ALIGNMENT_INVALID',{policy:name});
+  }
+
+  const dayMap=new Map();
+  for(let index=0;index<rows.length;index++){
+    const day=Math.floor(Number(rows[index].at)/86_400_000)*86_400_000;
+    if(!dayMap.has(day))dayMap.set(day,[]);
+    dayMap.get(day).push(index);
+  }
+  const days=[...dayMap.keys()].sort((a,b)=>a-b);
+  if(days.length<blockLengthDays*4)
+    return unavailable('BOOTSTRAP_TOO_FEW_INDEPENDENT_TIME_BLOCKS',{
+      utc_day_count:days.length,block_length_days:blockLengthDays,
+      minimum_required_days:blockLengthDays*4
+    });
+  if(rows.some((row,index)=>index>0&&Number(row.at)<Number(rows[index-1].at)))
+    return unavailable('BOOTSTRAP_ROWS_MUST_BE_CHRONOLOGICALLY_ORDERED');
+
+  for(const [name,values] of Object.entries(probabilitiesByModel)){
+    if(name==='LOGISTIC_REGRESSION')continue;
+    if(values.some((value,index)=>!finite(value)||Number(value)<0||Number(value)>1))
+      return unavailable('BOOTSTRAP_MODEL_PROBABILITY_INVALID',{model:name});
+  }
+
+  const selectedMasks={};
+  try{
+    for(const topK of topKGrid){
+      for(const [policyName,scores] of Object.entries(executionScoresByPolicy)){
+        selectedMasks[policyName+'|'+topK]=topKRankingSignals(rows,scores,topK).probabilities;
+      }
+    }
+  }catch(error){
+    return unavailable('BOOTSTRAP_TOP_K_POLICY_PREPARATION_FAILED',{
+      detail:String(error?.message||error)
+    });
+  }
+
+  let randomState=(seed>>>0)||0x9e3779b9;
+  const random=()=>{
+    randomState^=randomState<<13;
+    randomState^=randomState>>>17;
+    randomState^=randomState<<5;
+    return (randomState>>>0)/4294967296;
+  };
+  const quantile=(values,p)=>{
+    if(!values.length)return null;
+    const sorted=[...values].sort((a,b)=>a-b);
+    const position=(sorted.length-1)*p;
+    const lower=Math.floor(position),upper=Math.ceil(position);
+    if(lower===upper)return sorted[lower];
+    return sorted[lower]+(sorted[upper]-sorted[lower])*(position-lower);
+  };
+  const summarize=values=>{
+    const usable=values.filter(finite).map(Number);
+    if(usable.length<Math.ceil(repetitions*0.95))return {
+      status:'UNAVAILABLE',valid_repetitions:usable.length,
+      requested_repetitions:repetitions,lower_95:null,upper_95:null
+    };
+    return {
+      status:'AVAILABLE',valid_repetitions:usable.length,
+      requested_repetitions:repetitions,
+      mean:Number((usable.reduce((sum,value)=>sum+value,0)/usable.length).toFixed(8)),
+      median:Number(quantile(usable,0.5).toFixed(8)),
+      lower_95:Number(quantile(usable,0.025).toFixed(8)),
+      upper_95:Number(quantile(usable,0.975).toFixed(8)),
+      probability_above_zero:Number((usable.filter(value=>value>0).length/usable.length).toFixed(6))
+    };
+  };
+  const modelNamesForBootstrap=modelNames.filter(name=>name!=='LOGISTIC_REGRESSION');
+  const brierSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
+  const logLossSamples=Object.fromEntries(modelNamesForBootstrap.map(name=>[name,[]]));
+  const metricNames=['trade_count','win_rate_pct','net_pnl_pct',
+    'average_net_return_pct','sharpe_per_trade','average_holding_minutes','max_drawdown_pct'];
+  const strategySamples=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(policyNames.map(name=>[name,
+      Object.fromEntries(metricNames.map(metric=>[metric,[]]))
+    ]))
+  ]));
+  const pairNames=[];
+  for(let i=0;i<policyNames.length;i++)
+    for(let j=i+1;j<policyNames.length;j++)
+      pairNames.push([policyNames[i],policyNames[j]]);
+  const pairedSamples=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(pairNames.map(([left,right])=>[
+      left+'_MINUS_'+right,
+      Object.fromEntries(metricNames.map(metric=>[metric,[]]))
+    ]))
+  ]));
+  const baseline=probabilitiesByModel.LOGISTIC_REGRESSION;
+  const firstDay=days[0];
+  const blockStarts=days.slice(0,days.length-blockLengthDays+1);
+  const dayRows=days.map(day=>dayMap.get(day));
+  let completed=0;
+  try{
+    for(let repetition=0;repetition<repetitions;repetition++){
+      const sampledDayIndices=[];
+      while(sampledDayIndices.length<days.length){
+        const startIndex=Math.floor(random()*blockStarts.length);
+        for(let offset=0;offset<blockLengthDays&&sampledDayIndices.length<days.length;offset++)
+          sampledDayIndices.push(startIndex+offset);
+      }
+      const sampledRows=[];
+      const sampledProbabilityByModel=Object.fromEntries(modelNames.map(name=>[name,[]]));
+      const sampledPolicyMasks=Object.fromEntries(
+        Object.entries(selectedMasks).map(([key])=>[key,[]])
+      );
+      let targetDayCursor=0;
+      for(let blockStart=0;blockStart<sampledDayIndices.length;blockStart+=blockLengthDays){
+        const blockEnd=Math.min(sampledDayIndices.length,blockStart+blockLengthDays);
+        for(let sampleDay=blockStart;sampleDay<blockEnd;sampleDay++){
+          const sourceDay=days[sampledDayIndices[sampleDay]];
+          const targetDay=firstDay+targetDayCursor*86_400_000;
+          const shift=targetDay-sourceDay;
+          const indices=dayRows[sampledDayIndices[sampleDay]];
+          for(const sourceIndex of indices){
+            const row=rows[sourceIndex];
+            const firstTouch=row.first_touch?{
+              ...row.first_touch,
+              first_touch_at:Number(row.first_touch.first_touch_at)+shift,
+              ...(row.first_touch.exit_candle?{exit_candle:{
+                ...row.first_touch.exit_candle,
+                open_time:Number(row.first_touch.exit_candle.open_time)+shift,
+                close_time:Number(row.first_touch.exit_candle.close_time)+shift
+              }}:{})
+            }:row.first_touch;
+            const sampledRow={
+              ...row,id:String(row.id)+'#BOOT'+repetition+'_'+sampleDay,
+              at:Number(row.at)+shift,
+              resolved_at:Number(row.resolved_at)+shift,
+              first_touch:firstTouch,
+              max_adverse_excursion_at:Number(row.max_adverse_excursion_at)+shift,
+              max_favorable_excursion_at:Number(row.max_favorable_excursion_at)+shift
+            };
+            sampledRows.push(sampledRow);
+            for(const name of modelNames)
+              sampledProbabilityByModel[name].push(Number(probabilitiesByModel[name][sourceIndex]));
+            for(const [key,mask] of Object.entries(selectedMasks))
+              sampledPolicyMasks[key].push(Number(mask[sourceIndex]));
+          }
+          targetDayCursor++;
+        }
+        // Prevent a first-touch event from one sampled block from interacting
+        // with a position opened in the next independently sampled block.
+        if(blockEnd<sampledDayIndices.length)targetDayCursor++;
+      }
+      const labels=sampledRows.map(row=>row.target);
+      for(const name of modelNamesForBootstrap){
+        const candidate=sampledProbabilityByModel[name];
+        let brierDelta=0,logLossDelta=0;
+        for(let i=0;i<labels.length;i++){
+          const p=clamp(Number(candidate[i]),1e-12,1-1e-12);
+          const q=clamp(Number(sampledProbabilityByModel.LOGISTIC_REGRESSION[i]),1e-12,1-1e-12);
+          const y=labels[i];
+          brierDelta+=(p-y)**2-(q-y)**2;
+          logLossDelta+=-(y*Math.log(p)+(1-y)*Math.log(1-p))+
+            (y*Math.log(q)+(1-y)*Math.log(q===1?1:1-q));
+        }
+        brierSamples[name].push(brierDelta/labels.length);
+        logLossSamples[name].push(logLossDelta/labels.length);
+      }
+      const strategyMetrics={};
+      for(const topK of topKGrid){
+        for(const policyName of policyNames){
+          const simulated=simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[policyName+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          strategyMetrics[policyName]=strategyMetrics[policyName]??{};
+          strategyMetrics[policyName][topK]=simulated;
+          for(const metric of metricNames)
+            strategySamples[String(topK)][policyName][metric].push(
+              finite(simulated?.[metric])?Number(simulated[metric]):null
+            );
+        }
+        for(const [left,right] of pairNames){
+          const a=strategyMetrics[left]?.[topK]??simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[left+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          const b=strategyMetrics[right]?.[topK]??simulateFirstTouchPaperPortfolio(
+            sampledRows,sampledPolicyMasks[right+'|'+topK],{
+              threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
+              maxConcurrentPositions,initialEquity:100
+            });
+          for(const metric of metricNames){
+            const delta=finite(a?.[metric])&&finite(b?.[metric])
+              ?Number(a[metric])-Number(b[metric]):null;
+            pairedSamples[String(topK)][left+'_MINUS_'+right][metric].push(delta);
+          }
+        }
+      }
+      completed++;
+    }
+  }catch(error){
+    return unavailable('BOOTSTRAP_SIMULATION_FAILED',{
+      completed_repetitions:completed,
+      detail:String(error?.message||error)
+    });
+  }
+
+  const brierComparisons=Object.fromEntries(modelNamesForBootstrap.map(name=>[
+    name,{
+      candidate_minus_logistic_raw_brier:summarize(brierSamples[name]),
+      candidate_minus_logistic_raw_log_loss:summarize(logLossSamples[name]),
+      interpretation:'NEGATIVE_VALUES_FAVOR_CANDIDATE',
+      paired_same_sampled_time_blocks:true
+    }
+  ]));
+  const executionPolicies=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(policyNames.map(name=>[name,
+      Object.fromEntries(metricNames.map(metric=>[
+        metric,summarize(strategySamples[String(k)][name][metric])
+      ]))
+    ]))
+  ]));
+  const pairedExecution=Object.fromEntries(topKGrid.map(k=>[String(k),
+    Object.fromEntries(pairNames.map(([left,right])=>[
+      left+'_MINUS_'+right,
+      Object.fromEntries(metricNames.map(metric=>[
+        metric,summarize(pairedSamples[String(k)][left+'_MINUS_'+right][metric])
+      ]))
+    ]))
+  ]));
+  return {
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'AVAILABLE',diagnostic_only:true,
+    evaluation_partition:'OUTER_VALIDATION_ONLY',
+    sampling:{
+      method:'MOVING_BLOCK_BOOTSTRAP_WITHOUT_REPLACEMENT_WITHIN_BLOCKS',
+      resampling:'CONTIGUOUS_UTC_DAY_BLOCKS_SAMPLED_WITH_REPLACEMENT',
+      block_length_days:blockLengthDays,
+      utc_day_count:days.length,
+      minimum_independent_blocks:Math.floor(days.length/blockLengthDays),
+      blocks_sampled_per_repetition:Math.ceil(days.length/blockLengthDays),
+      inter_block_gap_ms:86_400_000,
+      repetitions:completed,seed,
+      pairing:'SAME_RESAMPLED_DAY_BLOCKS_FOR_ALL_MODELS_AND_POLICIES',
+      market_dependence_preserved_within_blocks:true,
+      four_hour_event_overlap_between_resampled_blocks:false
+    },
+    probability_quality:{
+      baseline:'LOGISTIC_REGRESSION',
+      metric_source:'NATIVE_MODEL_PREDICTIONS_NO_OUTER_CALIBRATION',
+      comparisons:brierComparisons
+    },
+    execution:{
+      policy_score_source:'FROZEN_OUTER_VALIDATION_RANK_SCORES',
+      top_k_grid:[...topKGrid],
+      round_trip_cost_bps:Number(roundTripCostBps),
+      max_concurrent_positions:maxConcurrentPositions,
+      strategy_confidence_intervals:executionPolicies,
+      paired_strategy_differences:pairedExecution
+    },
+    isolation:{
+      parameters_refitted:false,thresholds_selected:false,top_k_selected:false,
+      lambda_refitted:false,calibration_selected:false,
+      holdout_rows_or_scores_used:false,affects_acceptance_gates:false
+    },
+    summary:{
+      model_probability_comparisons:Object.keys(brierComparisons).length,
+      execution_policies:policyNames,
+      top_k_values:[...topKGrid]
+    }
   };
 }
 
@@ -2644,6 +3180,43 @@ function buildExpandedThresholdWindowCounterfactual(rows,rawMap,roundTripCostBps
  * The model training jobs must emit one prediction for every validation and
  * holdout id. Missing/extra rows fail that family closed.
  */
+export const NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS=Object.freeze([
+  'tuned_logistic_baseline_complete',
+  'fixed_cohort_ablation_complete',
+  'candidate_decision_documented',
+  'calibration_selection_inner_only_or_cross_fitted',
+  'leakage_audit_passed',
+  'checkpoint_selection_mathematically_validated',
+  'outer_execution_gates_passed',
+  'confidence_intervals_and_robustness_reported',
+  'final_model_architecture_frozen',
+  'final_execution_policy_frozen',
+  'threshold_top_k_lambda_calibration_and_hyperparameters_frozen',
+  'holdout_opening_decision_documented',
+  'single_holdout_evaluation_authorized',
+  'no_holdout_feedback_into_tuning'
+]);
+
+export function evaluateNeuralClosureHoldoutOpeningProtocol(protocol={}) {
+  if(!protocol||typeof protocol!=='object'||Array.isArray(protocol))
+    throw new TypeError('NEURAL_CLOSURE_HOLDOUT_PROTOCOL_MUST_BE_AN_OBJECT');
+  const checks=Object.fromEntries(
+    NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS.map(name=>[
+      name,protocol[name]===true
+    ])
+  );
+  const missing=Object.entries(checks).filter(([,passed])=>!passed)
+    .map(([name])=>name);
+  return {
+    schema:'RADARX_NEURAL_CLOSURE_HOLDOUT_OPENING_PROTOCOL_V1',
+    status:missing.length?'LOCKED':'APPROVED',
+    passed:missing.length===0,
+    checks,
+    missing_checks:missing,
+    holdout_metrics_read:false
+  };
+}
+
 export function runNeuralClosureBenchmark({
   rows:inputRows,
   predictionsByModel,
@@ -2655,7 +3228,8 @@ export function runNeuralClosureBenchmark({
   minimumWinRatePct=55,
   maximumDrawdownPct=8,
   requiredBrierImprovement=NEURAL_CLOSURE_BRIER_MARGIN,
-  qualificationByModel={}
+  qualificationByModel={},
+  holdoutOpeningProtocol={}
 }={}) {
   if(!/^[a-f0-9]{40}$/i.test(String(sourceCommitSha||'')))
     throw new Error('NEURAL_CLOSURE_FULL_SOURCE_SHA_REQUIRED');
@@ -2669,18 +3243,26 @@ export function runNeuralClosureBenchmark({
     throw new Error('NEURAL_CLOSURE_EMPTY_SPLIT');
   const trainCounts=classCounts(split.train.map(row=>row.target));
   const validationCounts=classCounts(split.validation.map(row=>row.target));
-  // Do not derive holdout labels, portfolio outcomes or performance metrics
-  // until a challenger passes inner qualification, the independent outer
-  // validation Brier margin and the preselected-threshold execution risk gates.
+  const holdoutOpeningProtocolStatus=
+    evaluateNeuralClosureHoldoutOpeningProtocol(holdoutOpeningProtocol);
+  // The legacy inner/outer model gates are necessary but no longer sufficient.
+  // The untouched holdout stays locked until every explicit research-protocol
+  // check is true. Missing flags fail closed.
   let holdoutCounts=null;
   const holdoutAccess={
     opened:false,
-    gate:'INNER_QUALIFICATION_AND_DISJOINT_OUTER_VALIDATION_BRIER_AND_EXECUTION_RISK_GATES',
+    gate:'ALL_14_PREDECLARED_RESEARCH_PROTOCOL_CHECKS_AND_MODEL_QUALIFICATION',
     reason:'NO_MODEL_PASSED_INNER_AND_OUTER_VALIDATION_GATES',
+    opening_protocol:holdoutOpeningProtocolStatus,
     opened_for_models:[]
   };
   const trainingWeights=deriveTrainingClassWeights(split.train.map(row=>row.target));
-  const eventRows=[...split.validation,...split.holdout];
+  // Scores for the untouched holdout are not even requested until the
+  // explicit fourteen-check opening protocol has been approved. In the normal
+  // research run this remains outer-validation-only.
+  const eventRows=holdoutOpeningProtocolStatus.passed
+    ?[...split.validation,...split.holdout]
+    :[...split.validation];
   const requiredIds=eventRows.map(row=>row.id);
   const datasetSha=sha256Canonical(rows.map(row=>({
     id:row.id,symbol:row.symbol,at:row.at,resolved_at:row.resolved_at,
@@ -2690,7 +3272,10 @@ export function runNeuralClosureBenchmark({
     realized_return_pct:row.realized_return_pct??null,
     features:row.features??null,temporal_sequence:row.temporal_sequence??null
   })));
-  const calibrationBlocks=chronologicalValidationBlocks(split.validation);
+  // Strict external protocol: outer validation is evaluation-only. No
+  // calibrator, threshold, Top-K, lambda or hyperparameter is fit/selected here.
+  // Calibration is deliberately identity/no-calibration until a train-only
+  // cross-fitted calibration artifact is supplied by each model trainer.
   const modelNames=['LOGISTIC_REGRESSION',...NEURAL_CLOSURE_MODEL_FAMILIES];
   const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
   for(const modelName of modelNames){
@@ -2730,6 +3315,9 @@ export function runNeuralClosureBenchmark({
     }
 
     const rawMap=verified.map;
+    const calibratedMap=verified.calibratedMap??rawMap;
+    const calibrationMetadata=verified.calibrationMetadata??null;
+    const calibrationApplied=calibrationMetadata?.applied_to_final_model===true;
     const auxiliaryRankingMap=modelName==='TCN_LSTM_HYBRID'
       ?collectTcnLstmAuxiliaryRankingMap(
         predictionsByModel[modelName],split.validation,split.holdout
@@ -2743,27 +3331,42 @@ export function runNeuralClosureBenchmark({
         predictionsByModel[modelName],split.validation,split.holdout
       ):null;
     verifiedPredictions.set(modelName,rawMap);
-    // The Logistic anchor and every neural challenger receive the same
-    // chronological calibration fit/purge/check rows and the same candidate
-    // calibrators. This prevents raw-vs-calibrated Brier comparisons.
-    const thresholdSelectionRows=calibrationBlocks.threshold_selection;
-    const validationRows=calibrationBlocks.check;
-    const calibration=chooseCalibration(rawMap,
-      calibrationBlocks.fit,validationRows,minimumClassSupport,{
-        purgedRows:calibrationBlocks.purged,
-        thresholdSelectionRows,
-        thresholdPurgedRows:calibrationBlocks.threshold_purged,
-        calibrationDays:calibrationBlocks.days
-      });
+    // Outer validation scores frozen raw/calibrated probability stages only.
+    // All calibration fitting and method selection must already be train-only.
+    const thresholdSelectionRows=[];
+    const validationRows=split.validation;
     const rawValidation=probabilitiesFor(validationRows,rawMap);
-    const calibratedValidation=probabilitiesFor(validationRows,rawMap,
-      calibration.selected_calibrator);
+    const calibratedValidation=probabilitiesFor(validationRows,calibratedMap);
     const validationLabels=validationRows.map(row=>row.target);
     const validationSupport=classCounts(validationLabels);
-    const validationBrier=brier(calibratedValidation,validationLabels);
-    const rawThresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,rawMap);
-    const thresholdSelectionProbabilities=probabilitiesFor(thresholdSelectionRows,
-      rawMap,calibration.selected_calibrator);
+    const validationBrier=brier(rawValidation,validationLabels);
+    const calibratedValidationBrier=brier(calibratedValidation,validationLabels);
+    const rawThresholdSelectionProbabilities=[];
+    const thresholdSelectionProbabilities=[];
+    const calibration={
+      ...(calibrationMetadata??{}),
+      schema:calibrationMetadata?.schema??'RADARX_OUTER_VALIDATION_IDENTITY_PROBABILITY_STAGE_V1',
+      status:calibrationApplied
+        ?(calibrationMetadata?.status??'TRAIN_ONLY_CROSSFITTED_CALIBRATION_APPLIED')
+        :'RAW_FALLBACK_NO_CALIBRATION_APPLIED',
+      selected_method:calibrationMetadata?.selected_method??'NO_CALIBRATION',
+      applied_to_final_model:calibrationApplied,
+      fit_rows:calibrationMetadata?.fit_rows??calibrationMetadata?.fit_samples??0,
+      fit_positive:calibrationMetadata?.fit_positive??calibrationMetadata?.fit_positives??0,
+      fit_negative:calibrationMetadata?.fit_negative??calibrationMetadata?.fit_negatives??0,
+      fit_partition:calibrationMetadata?.fit_partition??
+        (calibrationApplied?'TRAIN_ONLY_CROSSFITTED':'NONE_IDENTITY'),
+      outer_validation_used_for_calibrator_fit:false,
+      outer_validation_used_for_calibrator_selection:false,
+      outer_validation_labels_used_for_calibrator_fit:false,
+      outer_validation_labels_used_for_calibrator_selection:false,
+      holdout_used_for_calibration:false,
+      holdout_values_used:false,
+      check_block_used_for_calibrator_selection:false,
+      support_ready:true,
+      raw_outer_validation_brier:validationBrier,
+      calibrated_outer_validation_brier:calibratedValidationBrier
+    };
     const thresholdSelectionProbabilityDistribution={
       raw:summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
       calibrated:summarizeProbabilityDistribution(thresholdSelectionProbabilities)
@@ -2772,40 +3375,51 @@ export function runNeuralClosureBenchmark({
       raw:summarizeProbabilityDistribution(rawValidation),
       calibrated:summarizeProbabilityDistribution(calibratedValidation)
     };
-    const walkForwardBaselineRawMap=modelName==='LOGISTIC_REGRESSION'
-      ?null:(verifiedPredictions.get('LOGISTIC_REGRESSION')??null);
-    const walkForwardCalibrationDiagnostics=
-      buildWalkForwardCalibrationDiagnostics(split.validation,rawMap,{
-        minimumClassSupport,baselineRawMap:walkForwardBaselineRawMap,
-        roundTripCostBps,minimumTrades:20,minimumWinRatePct,maximumDrawdownPct
-      });
-    const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'
-      ?buildTcnLstmProbabilityStageDiagnostics({
-        preInner:tcnLstmPreInnerCalibration,
-        calibrationFitRows:calibrationBlocks.fit,
-        thresholdSelectionRows,validationRows,
-        minimumClassSupport,
-        innerCalibratedThresholdSelection:
-          summarizeProbabilityDistribution(rawThresholdSelectionProbabilities),
-        innerCalibratedValidation:
-          summarizeProbabilityDistribution(rawValidation),
-        innerCalibratedThresholdSelectionProbabilities:rawThresholdSelectionProbabilities,
-        innerCalibratedValidationProbabilities:rawValidation,
-        sharedCalibratedThresholdSelection:
-          summarizeProbabilityDistribution(thresholdSelectionProbabilities),
-        sharedCalibratedValidation:
-          summarizeProbabilityDistribution(calibratedValidation),
-        sharedCalibratedThresholdSelectionProbabilities:thresholdSelectionProbabilities,
-        sharedCalibratedValidationProbabilities:calibratedValidation,
-        sharedCalibrationMethod:calibration.selected_method
-      }):null;
-    const thresholdSelection=selectThreshold(thresholdSelectionRows,
-      thresholdSelectionProbabilities,roundTripCostBps,{
-        minimumTrades:20,minimumWinRatePct,maximumDrawdownPct,
-        referenceOnly:modelName==='LOGISTIC_REGRESSION'
-      });
-    // The threshold is chosen only on the earlier threshold-selection block.
-    // The later outer-validation block evaluates that frozen threshold once.
+    const rawProbabilityMetrics=evaluateOuterBinaryProbabilityMetrics(
+      rawValidation,validationLabels
+    );
+    const calibratedProbabilityMetrics=evaluateOuterBinaryProbabilityMetrics(
+      calibratedValidation,validationLabels
+    );
+    const reliabilityDiagnostics={
+      raw:buildOuterReliabilityDiagnostics(validationRows,rawValidation),
+      calibrated:buildOuterReliabilityDiagnostics(validationRows,calibratedValidation)
+    };
+    const walkForwardCalibrationDiagnostics={
+      schema:'RADARX_WALK_FORWARD_CALIBRATION_DIAGNOSTICS_V1',
+      status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+      diagnostic_only:true,
+      holdout_values_used:false,
+      outer_validation_labels_used_for_calibrator_fit:false,
+      reason:'OUTER_VALIDATION_MUST_NOT_FIT_OR_SELECT_CALIBRATION'
+    };
+    const probabilityStageDiagnostics=modelName==='TCN_LSTM_HYBRID'?{
+      schema:'RADARX_TCN_LSTM_PROBABILITY_STAGE_DIAGNOSTICS_V1',
+      status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+      diagnostic_only:true,
+      labels_used:false,
+      holdout_values_used:false,
+      affects_primary_probabilities:false,
+      affects_threshold_selection:false,
+      reason:'NO_OUTER_VALIDATION_CALIBRATION_OR_THRESHOLD_SELECTION'
+    }:null;
+    const thresholdSelection={
+      threshold:0.15,
+      status:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD',
+      selected:null,
+      eligible_count:1,
+      selection_role:'PREDECLARED_POLICY_NO_OUTER_SELECTION',
+      selection_objective:'FIXED_REFERENCE_THRESHOLD_0_15',
+      minimum_validation_trades:20,
+      minimum_validation_win_rate_pct:minimumWinRatePct,
+      minimum_validation_win_rate_enforced:false,
+      require_positive_validation_net_pnl:false,
+      maximum_validation_drawdown_pct:maximumDrawdownPct,
+      acceptance_qualified:false,
+      trials:[]
+    };
+    // The 0.15 reference threshold was frozen before this outer evaluation;
+    // no outer-validation row is used to choose or adjust it.
     const validationThresholdMetrics=finite(thresholdSelection.threshold)
       ?portfolioMetrics(validationRows,calibratedValidation,
         thresholdSelection.threshold,roundTripCostBps)
@@ -2831,11 +3445,8 @@ export function runNeuralClosureBenchmark({
     };
     const validationThresholdRiskPassed=validationThresholdMetrics!==null&&
       Object.values(validationThresholdRiskGates).every(value=>value===true);
-    // The execution comparison is anchored to Logistic's frozen threshold,
-    // selected on the same earlier disjoint block. A neural model cannot claim
-    // matched execution merely because its own independently selected
-    // threshold passes; it must also pass the outer-validation risk gates at
-    // this exact shared threshold.
+    // Every model is compared at the same predeclared 0.15 threshold.
+    // Outer validation only scores this frozen policy; it never chooses it.
     const logisticValidationReference=modelName==='LOGISTIC_REGRESSION'
       ?null:models.LOGISTIC_REGRESSION?.validation??null;
     const matchedExecutionThreshold=logisticValidationReference?.selected_threshold??null;
@@ -2844,10 +3455,9 @@ export function runNeuralClosureBenchmark({
     // Eligibility is determined on the earlier disjoint threshold-selection block.
     // Do not require Logistic to win again on the later outer-validation block:
     // that block exists precisely to compare the neural challenger against it.
-    const logisticThresholdSelectionReady=[
-      'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'
-    ].includes(logisticValidationReference?.threshold_selection)&&
-      Number(logisticValidationReference?.threshold_selection_eligible_count??0)>0;
+    const logisticThresholdSelectionReady=
+      logisticValidationReference?.threshold_selection==='PREDECLARED_FROZEN_REFERENCE_THRESHOLD'&&
+      Number(logisticValidationReference?.selected_threshold)===0.15;
     const matchedExecutionThresholdReady=finite(matchedExecutionThreshold)&&
       logisticThresholdSelectionReady&&
       logisticReferenceMetrics?.return_data_status==='COMPLETE';
@@ -2905,8 +3515,26 @@ export function runNeuralClosureBenchmark({
       sample_count:validationRows.length,
       positive_count:validationSupport.positive,
       negative_count:validationSupport.negative,
-      raw_brier_score:brier(rawValidation,validationLabels),
-      calibrated_brier_score:validationBrier,
+      raw_brier_score:validationBrier,
+      calibrated_brier_score:calibratedValidationBrier,
+      evaluation_brier_score:validationBrier,
+      raw_log_loss:rawProbabilityMetrics.log_loss??null,
+      calibrated_log_loss:calibratedProbabilityMetrics.log_loss??null,
+      raw_pr_auc:rawProbabilityMetrics.pr_auc_average_precision??null,
+      calibrated_pr_auc:calibratedProbabilityMetrics.pr_auc_average_precision??null,
+      raw_roc_auc:rawProbabilityMetrics.roc_auc??null,
+      calibrated_roc_auc:calibratedProbabilityMetrics.roc_auc??null,
+      raw_classification_metrics:rawProbabilityMetrics,
+      calibrated_classification_metrics:calibratedProbabilityMetrics,
+      reliability_diagnostics:reliabilityDiagnostics,
+      calibration,
+      probability_evaluation_method:calibrationApplied
+        ?'RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE'
+        :'MODEL_NATIVE_OUTPUT_NO_CALIBRATION_STAGE',
+      execution_probability_stage:calibrationApplied
+        ?'TRAIN_ONLY_CROSSFITTED_CALIBRATED'
+        :'MODEL_NATIVE_OUTPUT_IDENTITY_STAGE',
+      calibration_applied:calibrationApplied,
       threshold_selection_sample_count:thresholdSelectionRows.length,
       threshold_selection_probability_distribution:thresholdSelectionProbabilityDistribution,
       threshold_selection_positive_count:thresholdSelectionSupport.positive,
@@ -2915,26 +3543,26 @@ export function runNeuralClosureBenchmark({
       chronological_stability_diagnostics:{
         schema:'RADARX_MODEL_CHRONOLOGICAL_STABILITY_V1',
         diagnostic_only:true,
-        threshold_selection:buildChronologicalStabilityDiagnostics(
-          thresholdSelectionRows,thresholdSelectionProbabilities
-        ),
+        threshold_selection:{
+          status:'NOT_EVALUATED_NO_OUTER_POLICY_SELECTION',
+          labels_used_for_threshold_selection:false
+        },
         outer_validation:buildChronologicalStabilityDiagnostics(
-          validationRows,calibratedValidation
+          validationRows,rawValidation
         )
       },
-      expanded_threshold_window_counterfactual:
-        buildExpandedThresholdWindowCounterfactual(
-          split.validation,rawMap,roundTripCostBps,{
-            minimumClassSupport,minimumTrades:20,
-            minimumWinRatePct,maximumDrawdownPct,fitFraction:0.35,
-            rankingScoreMap:modelName==='TCN_LSTM_HYBRID'&&
-              auxiliaryRankingMap?.status==='AVAILABLE'
-                ?auxiliaryRankingMap.map:null,
-            rankingAnchorScoreMap:modelName==='TCN_LSTM_HYBRID'&&
-              auxiliaryRankingAnchorMap?.status==='AVAILABLE'
-                ?auxiliaryRankingAnchorMap.map:null
-          }
-        ),
+      expanded_threshold_window_counterfactual:{
+        schema:'RADARX_EXPANDED_THRESHOLD_WINDOW_COUNTERFACTUAL_V1',
+        status:'DISABLED_STRICT_OUTER_EVALUATION_ONLY',
+        diagnostic_only:true,
+        affects_primary_probabilities:false,
+        affects_primary_threshold:false,
+        affects_acceptance_gates:false,
+        holdout_values_used:false,
+        outer_validation_labels_used_for_calibrator_fit:false,
+        outer_validation_labels_used_for_threshold_selection:false,
+        reason:'OUTER_VALIDATION_MUST_NOT_FIT_CALIBRATION_OR_SELECT_POLICY'
+      },
       ...(modelName==='TCN_LSTM_HYBRID'
         ?{auxiliary_ranking_map_status:auxiliaryRankingMap?.status??'NOT_AVAILABLE',
           auxiliary_ranking_map_reason:auxiliaryRankingMap?.reason??null,
@@ -3013,7 +3641,7 @@ export function runNeuralClosureBenchmark({
       continue;
     }
 
-    const baselineValidationBrier=models.LOGISTIC_REGRESSION.validation?.calibrated_brier_score??null;
+    const baselineValidationBrier=models.LOGISTIC_REGRESSION.validation?.evaluation_brier_score??null;
     const improvement=finite(baselineValidationBrier)&&finite(validationBrier)
       ?baselineValidationBrier-validationBrier:null;
     const qualification=qualificationByModel?.[modelName]??{
@@ -3021,7 +3649,8 @@ export function runNeuralClosureBenchmark({
     };
     const validationGates={
       inner_selection_qualified:qualification.passed===true,
-      calibration_class_support:calibration.support_ready===true,
+      probability_output_available:rawValidation.length===validationRows.length&&
+        rawValidation.every(value=>finite(value)&&value>=0&&value<=1),
       minimum_validation_positive_support:validationSupport.positive>=minimumClassSupport,
       minimum_validation_negative_support:validationSupport.negative>=minimumClassSupport,
       brier_improvement_vs_logistic:finite(improvement)&&improvement>requiredBrierImprovement,
@@ -3032,8 +3661,8 @@ export function runNeuralClosureBenchmark({
     const validationPassed=Object.values(validationGates).every(value=>value===true);
     const validationReason=!validationGates.inner_selection_qualified
       ?'INNER_SELECTION_NOT_QUALIFIED'
-      :!validationGates.calibration_class_support
-        ?'CALIBRATION_CLASS_SUPPORT_NOT_MET'
+      :!validationGates.probability_output_available
+        ?'MODEL_PROBABILITY_OUTPUT_INVALID'
         :!validationGates.minimum_validation_positive_support||
           !validationGates.minimum_validation_negative_support
           ?'OUTER_VALIDATION_CLASS_SUPPORT_NOT_MET'
@@ -3045,11 +3674,17 @@ export function runNeuralClosureBenchmark({
                 ?'OUTER_VALIDATION_MATCHED_EXECUTION_RISK_GATES_FAILED':null;
     const validationGate={
       passed:validationPassed,
+      probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS',
+      baseline_logistic_raw_brier:baselineValidationBrier,
+      baseline_logistic_calibrated_brier:
+        models.LOGISTIC_REGRESSION.validation?.calibrated_brier_score??null,
+      candidate_validation_raw_brier:validationBrier,
+      candidate_validation_calibrated_brier:calibratedValidationBrier,
       baseline_logistic_brier:baselineValidationBrier,
       candidate_validation_brier:validationBrier,
       brier_improvement_vs_logistic:improvement,
       required_brier_improvement:requiredBrierImprovement,
-      threshold_selection_method:'LOGISTIC_FROZEN_ON_EARLIER_DISJOINT_PURGED_BLOCK',
+      threshold_selection_method:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD_0_15_NO_OUTER_FIT',
       outer_validation_threshold:matchedExecutionThreshold,
       model_specific_outer_validation_threshold:thresholdSelection.threshold,
       outer_validation_threshold_metrics:matchedValidationMetricsSummary,
@@ -3091,6 +3726,31 @@ export function runNeuralClosureBenchmark({
           reason:validationReason??'OUTER_VALIDATION_GATE_FAILED'
         }
       };
+      continue;
+    }
+
+    if(!holdoutOpeningProtocolStatus.passed){
+      // Keep the model's complete outer-validation result while withholding
+      // every holdout label-derived score and execution statistic.
+      models[modelName]={
+        status:'VALIDATION_EVALUATED_HOLDOUT_LOCKED',
+        ...baseModel,
+        holdout:{
+          evaluated:false,sample_count:split.holdout.length,
+          brier_score:null,trade_count:null,net_pnl_pct:null,
+          max_drawdown_pct:null,return_data_status:'NOT_EVALUATED',
+          reason:'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+          missing_protocol_checks:holdoutOpeningProtocolStatus.missing_checks
+        },
+        acceptance:{
+          status:'HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL',
+          passed:false,
+          reason:'HOLDOUT_OPENING_PROTOCOL_INCOMPLETE',
+          missing_protocol_checks:holdoutOpeningProtocolStatus.missing_checks,
+          validation_gate:validationGate
+        }
+      };
+      holdoutAccess.reason='HOLDOUT_OPENING_PROTOCOL_INCOMPLETE';
       continue;
     }
 
@@ -3173,10 +3833,15 @@ export function runNeuralClosureBenchmark({
     }
     const model=models[modelName];
     if(model.status==='VALIDATION_EVALUATED_HOLDOUT_LOCKED'){
+      const protocolBlocked=model.holdout.reason==='HOLDOUT_OPENING_PROTOCOL_INCOMPLETE';
       model.acceptance={
-        status:'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',
+        status:protocolBlocked
+          ?'HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'
+          :'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES',
         passed:false,
         reason:model.holdout.reason,
+        missing_protocol_checks:protocolBlocked
+          ?model.holdout.missing_protocol_checks??[]:[],
         validation_gate:model.validation.outer_validation_gate
       };
       continue;
@@ -3258,7 +3923,10 @@ export function runNeuralClosureBenchmark({
       prediction_matrix_sha256:predictionMatrixSha,
       verified_model_artifacts:Object.keys(verifiedArtifactShaByModel).length,
       row_count:rows.length,
-      validation_plus_holdout_rows:eventRows.length,
+      external_scored_rows:eventRows.length,
+      outer_validation_scored_rows:split.validation.length,
+      holdout_scored_rows:Math.max(0,eventRows.length-split.validation.length),
+      holdout_predictions_required:holdoutOpeningProtocolStatus.passed,
       row_identity_sha256:sha256Canonical(requiredIds)
     },
     target:{
@@ -3275,30 +3943,47 @@ export function runNeuralClosureBenchmark({
       train_support:trainCounts,validation_support:validationCounts,
       holdout_support:holdoutCounts,
       holdout_support_opened:holdoutAccess.opened,
-      calibration_fit_rows:calibrationBlocks.fit.length,
-      calibration_check_rows:calibrationBlocks.check.length
+      calibration_fit_rows:0,
+      calibration_check_rows:0,
+      outer_validation_evaluation_rows:split.validation.length
     },
     holdout_access:holdoutAccess,
     calibration_policy:{
-      schema:'DISJOINT_CALIBRATION_THRESHOLD_SELECTION_OUTER_VALIDATION_V1',
-      method:'PREDECLARED_PLATT_SCALING_WITH_RAW_FALLBACK',
-      fit_partition:'CALIBRATION_FIT_ONLY',
-      threshold_selection_partition:'EARLIER_DISJOINT_PURGED_BLOCK',
-      outer_validation_partition:'LATER_DISJOINT_PURGED_CHECK_BLOCK',
-      fallback:'RAW_IF_PLATT_NOT_ACCEPTED',
-      temperature_scaling:'NOT_FIT_PREDECLARED_PLATT_ONLY',
-      selection_scope:'PREDECLARED_PLATT_FIT_ON_CALIBRATION_FIT_ONLY',
-      check_block_used_for_calibrator_selection:false,
-      threshold_selection_rows_used_for_outer_validation_metrics:false,
-      same_fit_purge_threshold_and_check_rows_for_logistic_and_neural_models:true,
-      calibration_fit_rows:calibrationBlocks.fit.length,
-      calibration_purged_rows:calibrationBlocks.purged.length,
-      threshold_selection_rows:calibrationBlocks.threshold_selection.length,
-      threshold_purged_rows:calibrationBlocks.threshold_purged.length,
-      calibration_check_rows:calibrationBlocks.check.length,
+      schema:'RADARX_MODEL_SPECIFIC_TRAIN_ONLY_CALIBRATION_AND_RAW_PRIMARY_EVALUATION_V1',
+      method:'TRAIN_ONLY_CROSSFITTED_PLATT_OR_ISOTONIC_WITH_RAW_FALLBACK',
+      fit_partition:'MODEL_TRAINING_PARTITION_ONLY',
+      threshold_selection_partition:'NONE_PREDECLARED_FROZEN_POLICY',
+      outer_validation_partition:'ALL_OUTER_VALIDATION_ROWS_EVALUATED_ONCE',
+      reference_threshold:0.15,
+      threshold_selection_scope:'PREDECLARED_BEFORE_OUTER_VALIDATION',
+      calibrator_selection_scope:'INNER_OOF_FIT_AND_LATER_DISJOINT_TRAIN_OOF_CHECK',
+      outer_validation_used_to_fit_calibrator:false,
+      outer_validation_used_to_select_calibrator:false,
+      outer_validation_used_to_select_threshold:false,
+      outer_validation_used_to_select_top_k:false,
+      outer_validation_used_to_select_risk_penalty:false,
+      same_fixed_policy_for_logistic_and_neural_models:true,
+      raw_probability_is_primary_for_representation_comparison:true,
+      train_only_calibrated_probability_is_used_for_execution_when_supplied:true,
+      per_model_calibration:Object.fromEntries(Object.entries(models).map(([name,model])=>[
+        name,{
+          schema:model.calibration?.schema??null,
+          selected_method:model.calibration?.selected_method??null,
+          applied_to_final_model:model.calibration?.applied_to_final_model===true,
+          fit_partition:model.calibration?.fit_partition??null,
+          outer_validation_used_for_calibrator_fit:false,
+          outer_validation_used_for_calibrator_selection:false,
+          holdout_used_for_calibration:false
+        }
+      ])),
+      outer_validation_calibration_fit_rows:0,
+      outer_validation_calibration_purged_rows:0,
+      outer_validation_threshold_selection_rows:0,
+      outer_validation_threshold_purged_rows:0,
+      outer_validation_calibration_check_rows:0,
+      outer_validation_evaluation_rows:split.validation.length,
       holdout_used_for_calibration:false,
-      threshold_selection_risk_gates_unchanged:true,
-      outer_validation_rechecks_frozen_threshold:true
+      outer_validation_only_scores_frozen_models_and_policy:true
     },
     policy:{
       round_trip_cost_bps:roundTripCostBps,

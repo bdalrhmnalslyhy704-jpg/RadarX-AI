@@ -22,11 +22,37 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: true/,
-    'a newer research SHA must supersede an older full-cohort training job on the same branch');
-  assert.match(workflow,/build224-neural-closure-fixed-cohort-replay-\$\{\{ github\.ref \}\}/,
-    'the replay concurrency key must be scoped to one branch, not each commit SHA');
-  assert.ok(workflow.includes('research/build224-tcn-lstm-score-head-oos-ablation-20261120'),
-    'the matched score-conditioned head ablation branch must trigger the fixed-cohort replay');
+    'a newer push to the same branch must supersede an older full-cohort replay');
+  assert.ok(workflow.includes('build224-neural-closure-fixed-cohort-replay-${{ github.head_ref || github.ref_name }}'),
+    'the replay concurrency key must be normalized by branch name');
+  assert.doesNotMatch(workflow,/^  pull_request:/m,
+    'expensive full-cohort replay must not run on pull requests');
+  assert.ok(workflow.includes('research/build224-temporal-logistic-cv-20261120'),
+    'the tuned Logistic research branch must trigger the fixed-cohort replay');
+  assert.match(workflow,/RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1/);
+  assert.match(workflow,/HOLDOUT_WAS_OPENED/);
+  assert.match(workflow,/HOLDOUT_PREDICTION_ROWS_NOT_ZERO/);
+  assert.match(workflow,/TUNED_LOGISTIC_CV_INCOMPLETE/);
+  assert.ok(workflow.includes('scientific-decision.json'));
+});
+
+test('trainer emits a reproducible manifest and scores only outer validation while holdout remains locked',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  const contracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
+  assert.match(trainer,/holdout_access_status:'LOCKED_NOT_SCORED'/);
+  assert.match(trainer,/holdout_metrics_read:false/);
+  assert.ok(trainer.includes('const eventRows=[...split.validation];'));
+  assert.match(trainer,/experiment_manifest:experimentManifest/);
+  assert.ok(trainer.includes('experiment-manifest.json'));
+  assert.ok(trainer.includes('node_version:process.version'));
+  assert.ok(trainer.includes('command_line:process.argv.slice(2)'));
+  assert.match(trainer,/predictions_generated:false/);
+  assert.match(trainer,/rows_included_in_scored_predictions:0/);
+  assert.ok(contracts.includes('const eventRows=holdoutOpeningProtocolStatus.passed'));
+  assert.ok(contracts.includes('if(!holdoutOpeningProtocolStatus.passed)'));
+  assert.ok(contracts.includes('HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'));
+  assert.match(contracts,/probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS'/);
+  assert.match(contracts,/baseline_logistic_raw_brier:baselineValidationBrier/);
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
@@ -447,16 +473,20 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
 
-test('matched Logistic threshold is frozen on selection and risk comparison is symmetric',async()=>{
+test('Logistic reference threshold and probability evaluation are strictly predeclared and outer-only',async()=>{
   const closure=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(closure,/referenceOnly:modelName==='LOGISTIC_REGRESSION'/);
-  assert.match(closure,/status:'SELECTED_ON_VALIDATION_REFERENCE_ONLY'/);
-  assert.match(closure,/selection_role:'LOGISTIC_BASELINE_REFERENCE_ONLY'/);
-  assert.match(closure,/logisticThresholdSelectionReady=\[\s*'SELECTED_ON_VALIDATION_REFERENCE_ONLY','SELECTED_ON_VALIDATION_ONLY'/);
-  assert.doesNotMatch(closure,/matchedExecutionThresholdReady=[\s\S]*?Object\.values\(logisticReferenceRiskGates\)\.every/);
+  assert.match(closure,/status:'PREDECLARED_FROZEN_REFERENCE_THRESHOLD'/);
+  assert.match(closure,/threshold:0\.15/);
+  assert.match(closure,/selected_method:calibrationMetadata\?\.selected_method\?\?'NO_CALIBRATION'/);
+  assert.match(closure,/outer_validation_labels_used_for_calibrator_fit:false/);
+  assert.match(closure,/probability_evaluation_method:calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
+  assert.match(closure,/eventRows=holdoutOpeningProtocolStatus\.passed[\s\S]*?\[\.\.\.split\.validation,\.\.\.split\.holdout\][\s\S]*?:\[\.\.\.split\.validation\]/);
+  assert.match(closure,/MODEL_PREDICTION_ROW_SET_MISMATCH/);
+  assert.match(closure,/logisticThresholdSelectionReady=[\s\S]*?PREDECLARED_FROZEN_REFERENCE_THRESHOLD'[\s\S]*?===0\.15/);
   assert.match(closure,/strictly_beats_logistic_net_pnl/);
   assert.match(closure,/drawdown_no_worse_than_logistic/);
+  assert.doesNotMatch(closure,/const thresholdSelection=selectThreshold\(thresholdSelectionRows/);
   assert.match(recurrent,/beats_logistic_anchor:complete&&[\s\S]*modelMetrics\.net_pnl_pct>anchorMetrics\.net_pnl_pct&&[\s\S]*modelMetrics\.max_drawdown_pct<=anchorMetrics\.max_drawdown_pct/);
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
 });

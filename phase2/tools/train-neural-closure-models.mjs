@@ -11,7 +11,8 @@ import {
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
   runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
-  evaluateExternalExecutionRiskTopK
+  evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio,
+  bootstrapOuterValidationUncertainty
 } from '../core/neural-closure-contracts.mjs';
 import {
   buildFourHourCognitiveLearningProfile,buildCognitiveFeatureVector,
@@ -51,6 +52,11 @@ import {
 import {
   createVersionedModelArtifact,verifyVersionedModelArtifact
 } from '../core/model-artifact-guardian.mjs';
+import {
+  fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
+  predictCrossFittedCalibratedTemporalLogisticProbability,
+  evaluateBinaryProbabilityMetrics
+} from '../core/temporal-logistic-baseline.mjs';
 
 const finite=value=>value!==null&&value!==undefined&&value!==''&&
   typeof value!=='boolean'&&Number.isFinite(Number(value));
@@ -186,6 +192,8 @@ function predictionRows(rows,predictor,{sourceCommitSha,targetDefinition=NEURAL_
       throw new Error('MODEL_PREDICTION_UNAVAILABLE:'+modelName+':'+row.id);
     const item={
       id:row.id,probability:Number(probability),
+      raw_probability:Number(probability),
+      calibrated_probability:Number(probability),
       source_commit_sha:sourceCommitSha,
       target_definition:targetDefinition,
       target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS
@@ -320,10 +328,11 @@ async function main(){
   const split=splitFourHourRows(rows);
   const supports={
     train:assertMinimumClassSupport('train',split.train),
-    validation:assertMinimumClassSupport('validation',split.validation),
-    holdout:assertMinimumClassSupport('holdout',split.holdout)
+    validation:assertMinimumClassSupport('validation',split.validation)
   };
-  const eventRows=[...split.validation,...split.holdout];
+  // The untouched holdout is present only as a row-count/integrity boundary.
+  // No holdout labels, features, predictions, returns or metrics are consumed.
+  const eventRows=[...split.validation];
   if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
   const training={
     model_source_commit_sha:sourceCommitSha,
@@ -332,16 +341,105 @@ async function main(){
     source_rows:rows.length,training_rows:split.train.length,
     validation_rows:split.validation.length,holdout_rows:split.holdout.length,
     partition_class_support:supports,
+    holdout_access_status:'LOCKED_NOT_SCORED',
+    holdout_metrics_read:false,
     dataset_scope:datasetScope
   };
 
-  // Proper-scoring logistic baseline: same exact train rows, 18 decision features.
-  const logisticFit=fitLogisticBaseline(split.train);
+  // Preserve the previous fixed Logistic fit as a diagnostic comparator,
+  // but use a purged expanding-window tuned Logistic fit as the primary baseline.
+  // Every fold standardizer and every hyperparameter choice is train-fold only.
+  const logisticTrainingVectors=split.train.map(row=>
+    buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA));
+  const fixedLogisticFit=fitLogisticBaseline(split.train);
+  const fixedLogisticValidationProbabilities=split.validation.map(row=>
+    predictLogistic(row.features,fixedLogisticFit));
+  const logisticTuning=fitTunedTemporalLogisticBaseline(
+    split.train,logisticTrainingVectors,{
+      foldCount:5,purgeMs:86_400_000,
+      initialTrainingFraction:0.32,validationFraction:0.12,
+      minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
+      candidateGrid:[
+        {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
+        {l2:0.1,learningRate:0.01},{l2:1,learningRate:0.01},
+        {l2:0.001,learningRate:0.03},{l2:0.01,learningRate:0.03},
+        {l2:0.1,learningRate:0.03},{l2:1,learningRate:0.03}
+      ],
+      maxEpochs:160,seed:22429,
+      // This is a predeclared, fixed-threshold diagnostic only. It is not
+      // included in the Brier-based hyperparameter selection objective.
+      executionEvaluator:(foldRows,probabilities)=>
+        simulateFirstTouchPaperPortfolio(foldRows,probabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    });
+  const logisticFit=logisticTuning.model;
+  const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
+    predictTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ));
+  const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
+    predictCrossFittedCalibratedTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ));
+  const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  const rawTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    rawTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  const calibratedTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
+    calibratedTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
+  );
+  training.logistic_baseline_temporal_cv=logisticTuning.report;
+  training.logistic_baseline_comparison={
+    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V1',
+    outer_validation_rows:split.validation.length,
+    same_outer_validation_rows:true,
+    fixed_reference:{
+      solver:'FULL_BATCH_GRADIENT_DESCENT',
+      epochs:1200,learning_rate:0.08,l2:0.05,
+      feature_normalization:'LEGACY_FEATURE_TRANSFORM_ONLY',
+      raw_probability_metrics:fixedLogisticValidationMetrics,
+      execution_metrics_at_frozen_reference_threshold:simulateFirstTouchPaperPortfolio(
+        split.validation,fixedLogisticValidationProbabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    },
+    tuned_temporal_cv:{
+      selected_configuration:logisticTuning.report.selected_configuration,
+      calibration:logisticTuning.report.calibration,
+      raw_probability_metrics:rawTunedLogisticValidationMetrics,
+      calibrated_probability_metrics:calibratedTunedLogisticValidationMetrics,
+      execution_metrics_at_frozen_reference_threshold:simulateFirstTouchPaperPortfolio(
+        split.validation,calibratedTunedLogisticValidationProbabilities,{
+          threshold:0.15,roundTripCostBps:args.roundTripCostBps
+        })
+    },
+    calibration_is_evaluated_separately_by_shared_benchmark:true,
+    outer_validation_used_for_hyperparameter_selection:false,
+    outer_validation_used_for_threshold_selection:false,
+    holdout_used:false
+  };
+  const logisticRawPredictionRows=predictionRows(eventRows,
+    row=>predictTemporalLogisticProbability(
+      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+    ),{
+      sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
+    });
+  const eventRowsById=new Map(eventRows.map(row=>[String(row.id),row]));
   const predictionsByModel={
-    LOGISTIC_REGRESSION:predictionRows(eventRows,
-      row=>predictLogistic(row.features,logisticFit),{
-        sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
-      })
+    LOGISTIC_REGRESSION:logisticRawPredictionRows.map(item=>{
+      const row=eventRowsById.get(String(item.id));
+      const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
+        buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+      );
+      return {
+        ...item,
+        calibrated_probability:Number(calibratedProbability),
+        calibration_metadata:logisticTuning.report.calibration
+      };
+    })
   };
   const modelArtifactsByModel={};
   const trainingArtifacts={};
@@ -1328,6 +1426,23 @@ async function main(){
               throw new Error('TCN_LSTM_POOLED_ONLY_EXECUTION_RISK_SCORE_UNAVAILABLE:'+item.id);
             return {
               ...item,
+              probability:Number(preInnerProbability),
+              raw_probability:Number(preInnerProbability),
+              calibrated_probability:Number(item.probability),
+              calibration_metadata:{
+                schema:'RADARX_TCN_LSTM_TRAIN_ONLY_INTERNAL_CALIBRATION_V1',
+                status:'TRAIN_ONLY_CALIBRATED',
+                selected_method:calibrator.method??'UNKNOWN',
+                applied_to_final_model:true,
+                fit_partition:'OUTER_TRAIN_INTERNAL_CALIBRATION_BLOCK',
+                fit_rows:calibrationRows.length,
+                fit_positive:calibrator.positive??null,
+                fit_negative:calibrator.negative??null,
+                training_partition_only:true,
+                outer_validation_used_for_calibrator_fit:false,
+                outer_validation_used_for_calibrator_selection:false,
+                holdout_used_for_calibration:false
+              },
               pre_inner_calibration_probability:Number(preInnerProbability),
               auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
               auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit),
@@ -1574,7 +1689,9 @@ async function main(){
     if(complete){
       const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
       const pooledScores=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_adjusted_score);
-      const logisticScores=alignedRows.map(row=>logisticById.get(String(row.id)).probability);
+      const logisticScores=alignedRows.map(row=>
+        logisticById.get(String(row.id)).calibrated_probability??
+        logisticById.get(String(row.id)).probability);
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
@@ -1626,15 +1743,82 @@ async function main(){
         expected_validation_rows:alignedRows.length};
     }
   }
+  // Paired moving-block bootstrap over the outer-validation days.
+  // It estimates uncertainty only; it never selects thresholds, Top-K, lambda,
+  // calibration, hyperparameters or a candidate. The final holdout is excluded.
+  let outerValidationUncertaintyBootstrap={
+    schema:'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1',
+    status:'UNAVAILABLE',reason:'OUTER_VALIDATION_BOOTSTRAP_INPUTS_UNAVAILABLE',
+    evaluation_partition:'OUTER_VALIDATION_ONLY',holdout_rows_or_scores_used:false
+  };
+  const bootstrapRows=[...split.validation].sort((a,b)=>a.at-b.at||
+    String(a.symbol).localeCompare(String(b.symbol))||
+    String(a.id).localeCompare(String(b.id)));
+  const bootstrapIds=bootstrapRows.map(row=>String(row.id));
+  const bootstrapProbabilityByModel={};
+  for(const [name,predictionRowsForModel] of Object.entries(predictionsByModel)){
+    if(!Array.isArray(predictionRowsForModel))continue;
+    const map=new Map(predictionRowsForModel.filter(item=>
+      bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),Number(item.probability)]));
+    if(map.size===bootstrapIds.length&&bootstrapIds.every(id=>finite(map.get(id))))
+      bootstrapProbabilityByModel[name]=bootstrapIds.map(id=>map.get(id));
+  }
+  if(bootstrapProbabilityByModel.LOGISTIC_REGRESSION&&
+    Array.isArray(lstmExternalPredictions)){
+    const riskById=new Map(lstmExternalPredictions.filter(item=>
+      bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),item]));
+    const contextComplete=bootstrapIds.every(id=>
+      finite(riskById.get(id)?.execution_risk_adjusted_score));
+    const pooledComplete=bootstrapIds.every(id=>
+      finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score));
+    if(contextComplete&&pooledComplete){
+      const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
+        .map(item=>[String(item.id),Number(item.calibrated_probability??item.probability)]));
+      const executionScoresByPolicy={
+        LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
+          riskById.get(id).execution_risk_adjusted_score),
+        POOLED_ONLY:bootstrapIds.map(id=>
+          riskById.get(id).pooled_only_execution_risk_adjusted_score),
+        LOGISTIC_REGRESSION:bootstrapIds.map(id=>logisticExecutionById.get(id))
+      };
+      outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
+        bootstrapRows,bootstrapProbabilityByModel,{
+          executionScoresByPolicy,topKGrid:[1,2,3],
+          roundTripCostBps:args.roundTripCostBps,
+          repetitions:250,blockLengthDays:3,seed:22429,
+          maxConcurrentPositions:30
+        }
+      );
+    }else{
+      outerValidationUncertaintyBootstrap={
+        ...outerValidationUncertaintyBootstrap,
+        reason:'CONTEXT_OR_POOLED_ONLY_EXECUTION_SCORE_ALIGNMENT_INCOMPLETE',
+        expected_outer_validation_rows:bootstrapRows.length
+      };
+    }
+  }
+  training.outer_validation_uncertainty_bootstrap=outerValidationUncertaintyBootstrap;
   training.model_internal_diagnostics.TCN_LSTM_HYBRID={
     ...(training.model_internal_diagnostics.TCN_LSTM_HYBRID??{}),
     external_validation_execution_risk_top_k:externalExecutionRiskTopK,
     pooled_only_external_validation_execution_risk_top_k:pooledOnlyExternalExecutionRiskTopK,
-    score_conditioned_external_ablation:executionHeadExternalAblation
+    score_conditioned_external_ablation:executionHeadExternalAblation,
+    outer_validation_uncertainty_bootstrap:outerValidationUncertaintyBootstrap
   };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
-    validation_brier:model.validation?.calibrated_brier_score??null,
+    validation_brier:model.validation?.raw_brier_score??null,
+    raw_validation_brier:model.validation?.raw_brier_score??null,
+    calibrated_validation_brier:model.validation?.calibrated_brier_score??null,
+    raw_validation_log_loss:model.validation?.raw_log_loss??null,
+    calibrated_validation_log_loss:model.validation?.calibrated_log_loss??null,
+    raw_validation_pr_auc:model.validation?.raw_pr_auc??null,
+    calibrated_validation_pr_auc:model.validation?.calibrated_pr_auc??null,
+    raw_validation_roc_auc:model.validation?.raw_roc_auc??null,
+    calibrated_validation_roc_auc:model.validation?.calibrated_roc_auc??null,
+    raw_confusion_matrix:model.validation?.raw_classification_metrics?.confusion_matrix??null,
+    calibrated_confusion_matrix:model.validation?.calibrated_classification_metrics?.confusion_matrix??null,
+    reliability_diagnostics:model.validation?.reliability_diagnostics??null,
     external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?externalExecutionRiskTopK:null,
     pooled_only_external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?pooledOnlyExternalExecutionRiskTopK:null,
     score_conditioned_external_ablation:name==='TCN_LSTM_HYBRID'?executionHeadExternalAblation:null,
@@ -1677,9 +1861,75 @@ async function main(){
     acceptance_gates:model.acceptance?.gates??null,
     inner_qualification:model.acceptance?.inner_qualification??null
   }));
+  const experimentManifest={
+    schema:'RADARX_BUILD224_NEURAL_CLOSURE_EXPERIMENT_MANIFEST_V1',
+    artifact_status:'COMPLETE',
+    run_status:'COMPLETE',
+    scientific_status:benchmark.status,
+    code_commit_sha:sourceCommitSha,
+    dataset_sha256:datasetSha,
+    input_file_sha256:inputFileSha256,
+    dataset_source_commit_sha:datasetSourceCommitSha,
+    dataset_row_count:rows.length,
+    scored_row_count:eventRows.length,
+    node_version:process.version,
+    node_abi:process.versions.modules,
+    command_line:process.argv.slice(2),
+    configuration:{...args},
+    random_seed_policy:{
+      logistic_solver:'FULL_BATCH_GD_DETERMINISTIC_NO_RANDOM_SEED',
+      logistic_cv_seed:null,
+      logistic_optimizer_deterministic:true,
+      logistic_unused_seed_parameter:22429,
+      tcn_lstm_seed:22429,
+      dense_mlp_seed:1337,
+      bootstrap_seed:22429,
+      bootstrap_repetitions:250,
+      bootstrap_block_length_days:3
+    },
+    split:{
+      schema:split.schema,
+      purge_ms:split.purge_ms,
+      utc_day_boundaries:split.boundaries,
+      counts:split.counts,
+      training_rows:split.train.length,
+      outer_validation_rows:split.validation.length,
+      untouched_holdout_rows:split.holdout.length,
+      holdout_scored_rows:0
+    },
+    models:Object.fromEntries(Object.entries(benchmark.models).map(([name,model])=>[
+      name,{
+        training_status:trainingArtifacts[name]?'COMPLETE':
+          unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
+        evaluation_status:model.status,
+        raw_brier:model.validation?.raw_brier_score??null,
+        calibrated_brier:model.validation?.calibrated_brier_score??null,
+        execution_status:model.validation?.outer_validation_gate?.passed===true
+          ?'OUTER_EXECUTION_GATES_PASS':'NOT_APPROVED',
+        acceptance_status:model.acceptance?.status??'NOT_EVALUATED'
+      }
+    ])),
+    holdout:{
+      status:'LOCKED',
+      opened:false,
+      predictions_generated:false,
+      metrics_read:false,
+      rows_included_in_scored_predictions:0,
+      reasons:'FOURTEEN_CHECK_OPENING_PROTOCOL_NOT_APPROVED'
+    },
+    safety:{
+      market:'BINANCE_SPOT_ONLY',
+      round_trip_cost_bps:args.roundTripCostBps,
+      paper_trading:true,
+      real_order_execution:false,
+      production_touched:false,
+      deployment_triggered:false
+    }
+  };
   const report={
     schema:MODEL_SCHEMA,
     status:benchmark.status,
+    experiment_manifest:experimentManifest,
     integrity:{
       model_source_commit_sha:sourceCommitSha,
       dataset_source_commit_sha:datasetSourceCommitSha,
@@ -1701,6 +1951,7 @@ async function main(){
     }
   };
   await atomicJson(outputPath,report);
+  await atomicJson(join(dirname(outputPath),'experiment-manifest.json'),experimentManifest);
   const artifactDirectory=join(dirname(outputPath),'model-artifacts');
   for(const [family,artifact] of Object.entries(modelArtifactsByModel))
     await atomicJson(join(artifactDirectory,family+'.json'),artifact);
