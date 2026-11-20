@@ -49,7 +49,8 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   assert.match(trainer,/predictions_generated:false/);
   assert.match(trainer,/rows_included_in_scored_predictions:0/);
   assert.ok(contracts.includes('const eventRows=holdoutOpeningProtocolStatus.passed'));
-  assert.ok(contracts.includes('if(!holdoutOpeningProtocolStatus.passed)'));\n  assert.ok(contracts.includes('HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'));
+  assert.ok(contracts.includes('if(!holdoutOpeningProtocolStatus.passed)'));
+  assert.ok(contracts.includes('HOLDOUT_LOCKED_PENDING_COMPLETE_RESEARCH_PROTOCOL'));
   assert.match(contracts,/probability_metric_stage:'RAW_UNCALIBRATED_MODEL_OUTPUTS'/);
   assert.match(contracts,/baseline_logistic_raw_brier:baselineValidationBrier/);
 });
