@@ -22,7 +22,7 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
   assert.match(workflow,/FIXED_COHORT_SHA_MISMATCH/);
   assert.match(workflow,/MODEL_SOURCE_SHA_MISMATCH/);
   assert.match(workflow,/cancel-in-progress: true/);
-  assert.match(workflow,/github\.event\.pull_request\.number \|\| github\.ref/);
+  assert.match(workflow,/github\.head_ref \|\| github\.ref_name/);
 });
 
 test('fixed-SHA collector and trainer accept expanded current top-100 candidate prefilters without relaxing historical gates',async()=>{
@@ -362,4 +362,24 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(temporal,/export const TEMPORAL_BRIER_SUPERIORITY_MARGIN = 0\.003/);
   assert.match(closure,/export const NEURAL_CLOSURE_BRIER_MARGIN = 0\.003/);
   assert.match(trainer,/validation_or_holdout_rows_seen_by_fit:0/);
+});
+
+
+test('TCN-LSTM shared-classifier ranking sweep covers intermediate weights without relaxing return gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  for(const name of [
+    '4H_SHARED_RANK_W030_LR_0015_E16',
+    '4H_SHARED_RANK_W040_LR_0015_E16',
+    '4H_SHARED_RANK_W050_LR_0015_E16',
+    '4H_SHARED_RANK_W035_LR_0025_E16',
+    '4H_SHARED_RANK_W045_LR_0025_E16'
+  ]) assert.ok(trainer.includes(name),'missing shared-ranking candidate '+name);
+  assert.match(trainer,/rankingWeight:0\.03/);
+  assert.match(trainer,/rankingWeight:0\.035/);
+  assert.match(trainer,/rankingWeight:0\.04/);
+  assert.match(trainer,/rankingWeight:0\.045/);
+  assert.match(trainer,/rankingWeight:0\.05/);
+  assert.match(trainer,/requiredImprovement:0\.00025/);
+  assert.match(trainer,/minimumReturnWinRatePct:55/);
+  assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
 });
