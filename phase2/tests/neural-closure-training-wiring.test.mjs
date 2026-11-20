@@ -480,7 +480,10 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   assert.match(closure,/threshold:0\.15/);
   assert.match(closure,/selected_method:calibrationMetadata\?\.selected_method\?\?'NO_CALIBRATION'/);
   assert.match(closure,/outer_validation_labels_used_for_calibrator_fit:false/);
-  assert.match(closure,/probability_evaluation_method:calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
+  assert.match(closure,/probability_evaluation_method:calibrationPartiallyApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_PER_REGIME_CALIBRATION_STAGE/);
+  assert.match(closure,/probability_evaluation_method:calibrationPartiallyApplied[\s\S]*?calibrationApplied[\s\S]*?RAW_PRIMARY_WITH_TRAIN_ONLY_CROSSFITTED_CALIBRATED_EXECUTION_STAGE/);
+  assert.match(closure,/execution_probability_stage:calibrationPartiallyApplied[\s\S]*?TRAIN_ONLY_CALIBRATED_OR_RAW_BY_REGIME/);
+  assert.match(closure,/fully_applied_to_all_scored_rows:calibrationApplied/);
   assert.match(closure,/eventRows=holdoutOpeningProtocolStatus\.passed[\s\S]*?\[\.\.\.split\.validation,\.\.\.split\.holdout\][\s\S]*?:\[\.\.\.split\.validation\]/);
   assert.match(closure,/MODEL_PREDICTION_ROW_SET_MISMATCH/);
   assert.match(closure,/logisticThresholdSelectionReady=[\s\S]*?PREDECLARED_FROZEN_REFERENCE_THRESHOLD'[\s\S]*?===0\.15/);
