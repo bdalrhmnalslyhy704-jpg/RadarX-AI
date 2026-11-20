@@ -1878,7 +1878,9 @@ async function main(){
     configuration:{...args},
     random_seed_policy:{
       logistic_solver:'FULL_BATCH_GD_DETERMINISTIC_NO_RANDOM_SEED',
-      logistic_cv_seed:null,\n      logistic_optimizer_deterministic:true,\n      logistic_unused_seed_parameter:22429,
+      logistic_cv_seed:null,
+      logistic_optimizer_deterministic:true,
+      logistic_unused_seed_parameter:22429,
       tcn_lstm_seed:22429,
       dense_mlp_seed:1337,
       bootstrap_seed:22429,
