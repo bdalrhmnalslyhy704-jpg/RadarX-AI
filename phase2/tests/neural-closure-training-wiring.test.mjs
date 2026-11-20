@@ -281,6 +281,7 @@ test('TCN V8 failure paths and V11 output keys remain isolated',async()=>{
 
 test('fixed-SHA summary exposes disjoint threshold-selection and outer-validation risk evidence',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  const temporal=await readFile(lstmModuleUrl,'utf8');
   assert.match(trainer,/validation:model\.validation\?\{/,
     'the report must retain the complete validation evidence object');
   assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
@@ -289,6 +290,10 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
   assert.match(trainer,/max_training_samples:4096/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
+  assert.match(temporal,/EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1/,
+    'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
+  assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
+    'the public benchmark must expose recurrent training-sample selection provenance');
   assert.match(trainer,/threshold_selection_sample_count:model\.validation\.threshold_selection_sample_count\?\?0/);
   assert.match(trainer,/threshold_selection_probability_distribution:\s*model\.validation\.threshold_selection_probability_distribution\?\?null/);
   assert.match(trainer,/outer_validation_probability_distribution:\s*model\.validation\.outer_validation_probability_distribution\?\?null/);

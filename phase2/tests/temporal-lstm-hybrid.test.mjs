@@ -34,6 +34,7 @@ import {
   benchmarkTcnLstmHybridInference,
   createTcnLstmHybridModelForAudit,
   effectiveTcnLstmTrainingSampleBudget,
+  selectChronologicalTcnLstmTrainingRows,
   TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
@@ -967,6 +968,37 @@ test('recurrent training budget uses up to 4,096 available training rows without
   assert.equal(effectiveTcnLstmTrainingSampleBudget(4096,20),20);
   assert.equal(effectiveTcnLstmTrainingSampleBudget(undefined,36102),4096);
 });
+
+test('recurrent fit budget samples complete 15m decision groups across the full training chronology',()=>{
+  const bucketMs=15*60*1000;
+  const rows=Array.from({length:12},(_,groupIndex)=>{
+    const at=Math.floor((BASE+groupIndex*bucketMs)/bucketMs)*bucketMs;
+    return Array.from({length:30},(_,symbolIndex)=>({
+      id:`g${groupIndex}-s${symbolIndex}`,
+      symbol:`S${String(symbolIndex).padStart(2,'0')}`,
+      at
+    }));
+  }).flat();
+  const selected=selectChronologicalTcnLstmTrainingRows(rows,120);
+  const repeated=selectChronologicalTcnLstmTrainingRows(rows,120);
+  assert.equal(selected.rows.length,120);
+  assert.equal(selected.diagnostics.effective_budget,120);
+  assert.equal(selected.diagnostics.method,'EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1');
+  assert.equal(selected.diagnostics.available_decision_groups,12);
+  assert.equal(selected.diagnostics.selected_decision_groups,4);
+  assert.equal(selected.diagnostics.sampled_across_full_training_chronology,true);
+  assert.equal(selected.diagnostics.complete_decision_groups,true);
+  const selectedGroupCounts=new Map();
+  for(const row of selected.rows){
+    const key=Math.floor(row.at/bucketMs)*bucketMs;
+    selectedGroupCounts.set(key,(selectedGroupCounts.get(key)||0)+1);
+  }
+  assert.deepEqual([...selectedGroupCounts.values()],[30,30,30,30]);
+  assert.deepEqual(selected.rows.map(row=>row.id),repeated.rows.map(row=>row.id));
+  assert.equal(selected.rows[0].at,rows[0].at);
+  assert.equal(selected.rows.at(-1).at,rows.at(-1).at);
+});
+
 
 
 test('exported Platt fitting accepts only supplied calibration rows and reports its fit boundary',()=>{

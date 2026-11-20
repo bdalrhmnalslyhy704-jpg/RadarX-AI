@@ -79,6 +79,116 @@ export function effectiveTcnLstmTrainingSampleBudget(
     TCN_LSTM_MAX_TRAINING_SAMPLES,desired,capacity
   ));
 }
+
+/**
+ * Spread the bounded recurrent fit budget over the complete inner-training
+ * chronology. Sampling keeps whole 15-minute decision buckets together so
+ * cross-sectional ranking pairs remain valid. Later partitions are never read.
+ */
+export function selectChronologicalTcnLstmTrainingRows(
+  trainingRows,
+  maxTrainingSamples=TCN_LSTM_MAX_TRAINING_SAMPLES
+){
+  if(!Array.isArray(trainingRows))
+    throw new TypeError('TCN_LSTM_TRAINING_ROWS_INVALID');
+  const budget=effectiveTcnLstmTrainingSampleBudget(
+    maxTrainingSamples,trainingRows.length
+  );
+  const ordered=[...trainingRows].sort((a,b)=>
+    Number(a.at)-Number(b.at)||
+    String(a.symbol??a.id??'').localeCompare(String(b.symbol??b.id??''))||
+    String(a.id??'').localeCompare(String(b.id??''))
+  );
+  if(ordered.some(row=>!finite(row?.at)))
+    throw new TypeError('TCN_LSTM_TRAINING_ROW_TIMESTAMP_INVALID');
+  const bucketMap=new Map();
+  for(const row of ordered){
+    const bucketAt=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
+      TCN_LSTM_RANKING_BUCKET_MS;
+    if(!bucketMap.has(bucketAt))bucketMap.set(bucketAt,[]);
+    bucketMap.get(bucketAt).push(row);
+  }
+  const buckets=[...bucketMap.entries()].sort((a,b)=>a[0]-b[0]);
+  const diagnostics={
+    method:'ALL_AVAILABLE_ROWS_WITHIN_BUDGET_V1',
+    requested_budget:finite(maxTrainingSamples)?Number(maxTrainingSamples):TCN_LSTM_MAX_TRAINING_SAMPLES,
+    effective_budget:budget,
+    available_rows:ordered.length,
+    selected_rows:ordered.length,
+    available_decision_groups:buckets.length,
+    selected_decision_groups:buckets.length,
+    first_selected_bucket_at:buckets[0]?.[0]??null,
+    last_selected_bucket_at:buckets.at(-1)?.[0]??null,
+    sampled_across_full_training_chronology:true,
+    complete_decision_groups:true,
+    selected_bucket_min_rows:buckets.length?Math.min(...buckets.map(([,group])=>group.length)):0,
+    selected_bucket_max_rows:buckets.length?Math.max(...buckets.map(([,group])=>group.length)):0
+  };
+  if(ordered.length<=budget)return {rows:ordered,diagnostics};
+  if(budget===0)return {rows:[],diagnostics:{
+    ...diagnostics,method:'ZERO_BUDGET_V1',selected_rows:0,
+    selected_decision_groups:0,first_selected_bucket_at:null,
+    last_selected_bucket_at:null,sampled_across_full_training_chronology:false,
+    complete_decision_groups:false,selected_bucket_min_rows:0,
+    selected_bucket_max_rows:0
+  }};
+
+  const averageBucketSize=ordered.length/Math.max(1,buckets.length);
+  let targetGroups=Math.max(1,Math.min(
+    buckets.length,Math.floor(budget/averageBucketSize)
+  ));
+  let selectedBuckets=[];
+  let selectedRows=[];
+  while(targetGroups>=1){
+    const indices=targetGroups===1
+      ?[buckets.length-1]
+      :Array.from({length:targetGroups},(_,index)=>
+        Math.round(index*(buckets.length-1)/(targetGroups-1))
+      );
+    selectedBuckets=[...new Set(indices)].map(index=>buckets[index]);
+    selectedRows=selectedBuckets.flatMap(([,group])=>group);
+    if(selectedRows.length<=budget)break;
+    targetGroups--;
+  }
+  if(!selectedRows.length||selectedRows.length>budget){
+    selectedRows=ordered.slice(-budget);
+    const fallbackGroups=new Map();
+    for(const row of selectedRows){
+      const key=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS)*
+        TCN_LSTM_RANKING_BUCKET_MS;
+      if(!fallbackGroups.has(key))fallbackGroups.set(key,[]);
+      fallbackGroups.get(key).push(row);
+    }
+    const fallback=[...fallbackGroups.entries()].sort((a,b)=>a[0]-b[0]);
+    return {rows:selectedRows,diagnostics:{
+      ...diagnostics,method:'RECENT_PARTIAL_BUCKET_FALLBACK_V1',
+      selected_rows:selectedRows.length,selected_decision_groups:fallback.length,
+      first_selected_bucket_at:fallback[0]?.[0]??null,
+      last_selected_bucket_at:fallback.at(-1)?.[0]??null,
+      sampled_across_full_training_chronology:false,complete_decision_groups:false,
+      selected_bucket_min_rows:fallback.length?Math.min(...fallback.map(([,g])=>g.length)):0,
+      selected_bucket_max_rows:fallback.length?Math.max(...fallback.map(([,g])=>g.length)):0
+    }};
+  }
+  selectedRows.sort((a,b)=>Number(a.at)-Number(b.at)||
+    String(a.symbol??a.id??'').localeCompare(String(b.symbol??b.id??''))||
+    String(a.id??'').localeCompare(String(b.id??''))
+  );
+  return {rows:selectedRows,diagnostics:{
+    ...diagnostics,
+    method:'EVENLY_SPACED_COMPLETE_15M_DECISION_BUCKETS_V1',
+    selected_rows:selectedRows.length,
+    selected_decision_groups:selectedBuckets.length,
+    first_selected_bucket_at:selectedBuckets[0]?.[0]??null,
+    last_selected_bucket_at:selectedBuckets.at(-1)?.[0]??null,
+    sampled_across_full_training_chronology:
+      selectedBuckets.length>1&&selectedBuckets[0]?.[0]===buckets[0]?.[0]&&
+      selectedBuckets.at(-1)?.[0]===buckets.at(-1)?.[0],
+    complete_decision_groups:true,
+    selected_bucket_min_rows:Math.min(...selectedBuckets.map(([,group])=>group.length)),
+    selected_bucket_max_rows:Math.max(...selectedBuckets.map(([,group])=>group.length))
+  }};
+}
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
 const sigmoid = value => 1 / (1 + Math.exp(-clamp(value, -LOGIT_LIMIT, LOGIT_LIMIT)));
 const tanh = Math.tanh;
@@ -2207,11 +2317,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1)
     throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
-  const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
-    maxTrainingSamples,trainingRows.length
+  const trainingSampleSelection=selectChronologicalTcnLstmTrainingRows(
+    trainingRows,maxTrainingSamples
   );
-  const effectiveTrainingRows = [...trainingRows].sort((a, b) => a.at - b.at)
-    .slice(-effectiveTrainingBudget);
+  const effectiveTrainingBudget=trainingSampleSelection.diagnostics.effective_budget;
+  const effectiveTrainingRows=trainingSampleSelection.rows;
   // Realized returns belong only to the separate selection diagnostic; strip
   // them before either the Logistic anchor or neural optimizer sees fit rows.
   const effectiveTrainingRowsForFit=effectiveTrainingRows.map(row=>{
@@ -2504,6 +2614,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     selection_support: selectionSupport,
     effective_training_budget:effectiveTrainingBudget,
     effective_training_rows:effectiveTrainingRows.length,
+    training_sample_selection:trainingSampleSelection.diagnostics,
     ranking_training_pair_support:rankingTrainingPairSupport,
     baseline: {
       kind:anchor.kind,training_rows:anchor.training_rows,

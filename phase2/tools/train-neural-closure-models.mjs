@@ -1223,6 +1223,7 @@ async function main(){
           internal_split_boundaries:internalSplit.split_boundaries??null,
           max_training_samples:4096,
           effective_training_rows:selection.effective_training_rows??null,
+          training_sample_selection:selection.training_sample_selection??null,
           diagnostic_fit_available:selection.diagnostic_fit!==null&&selection.diagnostic_fit!==undefined,
           diagnostic_configuration:selection.diagnostic_configuration??null,
           required_inner_brier_improvement:0.00025,
