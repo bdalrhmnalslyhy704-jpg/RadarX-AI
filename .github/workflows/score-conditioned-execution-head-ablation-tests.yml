@@ -1,0 +1,64 @@
+name: Build 224 Score-Conditioned Execution Head Ablation Tests
+
+on:
+  push:
+    branches:
+      - research/build224-tcn-lstm-score-head-oos-ablation-20261120
+    paths:
+      - '.github/workflows/score-conditioned-execution-head-ablation-tests.yml'
+      - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+  pull_request:
+    branches:
+      - research/build224-point-in-time-liquidity-20261117
+      - research/build224-neural-universe-expansion-20261119
+    paths:
+      - '.github/workflows/score-conditioned-execution-head-ablation-tests.yml'
+      - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
+      - 'phase2/tools/train-neural-closure-models.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build224-score-conditioned-ablation-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  targeted-regressions:
+    name: Syntax, fixed-cohort wiring, recurrent head and external Top-K contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Syntax-check changed training and evaluation modules
+        run: |
+          node --check phase2/tools/train-neural-closure-models.mjs
+          node --check phase2/core/temporal-lstm-hybrid.mjs
+          node --check phase2/core/neural-closure-contracts.mjs
+          node --check phase2/tests/neural-closure-training-wiring.test.mjs
+          node --check phase2/tests/neural-closure-contracts.test.mjs
+      - name: Run recurrent model and numerical-gradient regressions
+        run: node --test --test-timeout=180000 phase2/tests/temporal-lstm-hybrid.test.mjs
+      - name: Run closure metrics and frozen external execution Top-K regressions
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-contracts.test.mjs
+      - name: Run trainer wiring and holdout-isolation regressions
+        run: node --test --test-timeout=180000 phase2/tests/neural-closure-training-wiring.test.mjs
