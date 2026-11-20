@@ -1176,17 +1176,13 @@ async function main(){
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
           candidates:[
+            // Keep the sweep within the selector's hard cap (8). The baseline
+            // and Focal anchors isolate probability learning; the remaining
+            // six candidates concentrate on the shared-classifier ranking
+            // weight transition, including the prior best high-LR reference.
             {name:'4H_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12},
-            {name:'4H_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16},
-            {name:'4H_LR_0035_L2_0035_DROP20_E20',learningRate:0.0035,l2:0.0035,dropout:0.20,epochs:20},
             {name:'4H_FOCAL_LR_0015_L2_0005_DROP00_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
               objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_FOCAL_LR_0025_L2_0015_DROP10_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
-              objective:'FOCAL_ASYMMETRIC_BRIER'},
-            {name:'4H_AUX_RANK_HEAD_LR015_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingHeadLearningRate:0.015},
-            {name:'4H_SHARED_RANK_W020_LR_0015_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              rankingWeight:0.02},
             {name:'4H_SHARED_RANK_W030_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
               rankingWeight:0.03},
             {name:'4H_SHARED_RANK_W040_LR_0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
@@ -1199,6 +1195,7 @@ async function main(){
               rankingWeight:0.045},
             {name:'4H_SHARED_RANK_W050_LR_0025_E16',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:16,
               rankingWeight:0.05}
+
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
