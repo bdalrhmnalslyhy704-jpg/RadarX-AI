@@ -1221,7 +1221,7 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
     repetitions:100,blockLengthDays:2,seed:22429,maxConcurrentPositions:30
   });
   assert.equal(result.schema,'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1');
-  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
   assert.equal(result.evaluation_partition,'OUTER_VALIDATION_ONLY');
   assert.equal(result.sampling.repetitions,100);
   assert.equal(result.sampling.block_length_days,2);
