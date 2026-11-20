@@ -1807,7 +1807,18 @@ async function main(){
   };
   const evaluated=Object.entries(benchmark.models).map(([name,model])=>({
     model:name,status:model.status,
-    validation_brier:model.validation?.calibrated_brier_score??null,
+    validation_brier:model.validation?.raw_brier_score??null,
+    raw_validation_brier:model.validation?.raw_brier_score??null,
+    calibrated_validation_brier:model.validation?.calibrated_brier_score??null,
+    raw_validation_log_loss:model.validation?.raw_log_loss??null,
+    calibrated_validation_log_loss:model.validation?.calibrated_log_loss??null,
+    raw_validation_pr_auc:model.validation?.raw_pr_auc??null,
+    calibrated_validation_pr_auc:model.validation?.calibrated_pr_auc??null,
+    raw_validation_roc_auc:model.validation?.raw_roc_auc??null,
+    calibrated_validation_roc_auc:model.validation?.calibrated_roc_auc??null,
+    raw_confusion_matrix:model.validation?.raw_classification_metrics?.confusion_matrix??null,
+    calibrated_confusion_matrix:model.validation?.calibrated_classification_metrics?.confusion_matrix??null,
+    reliability_diagnostics:model.validation?.reliability_diagnostics??null,
     external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?externalExecutionRiskTopK:null,
     pooled_only_external_validation_execution_risk_top_k:name==='TCN_LSTM_HYBRID'?pooledOnlyExternalExecutionRiskTopK:null,
     score_conditioned_external_ablation:name==='TCN_LSTM_HYBRID'?executionHeadExternalAblation:null,
@@ -1850,9 +1861,73 @@ async function main(){
     acceptance_gates:model.acceptance?.gates??null,
     inner_qualification:model.acceptance?.inner_qualification??null
   }));
+  const experimentManifest={
+    schema:'RADARX_BUILD224_NEURAL_CLOSURE_EXPERIMENT_MANIFEST_V1',
+    artifact_status:'COMPLETE',
+    run_status:'COMPLETE',
+    scientific_status:benchmark.status,
+    code_commit_sha:sourceCommitSha,
+    dataset_sha256:datasetSha,
+    input_file_sha256:inputFileSha256,
+    dataset_source_commit_sha:datasetSourceCommitSha,
+    dataset_row_count:rows.length,
+    scored_row_count:eventRows.length,
+    node_version:process.version,
+    node_abi:process.versions.modules,
+    command_line:process.argv.slice(2),
+    configuration:{...args},
+    random_seed_policy:{
+      logistic_solver:'FULL_BATCH_GD_DETERMINISTIC_NO_RANDOM_SEED',
+      logistic_cv_seed:22429,
+      tcn_lstm_seed:22429,
+      dense_mlp_seed:1337,
+      bootstrap_seed:22429,
+      bootstrap_repetitions:250,
+      bootstrap_block_length_days:3
+    },
+    split:{
+      schema:split.schema,
+      purge_ms:split.purge_ms,
+      utc_day_boundaries:split.boundaries,
+      counts:split.counts,
+      training_rows:split.train.length,
+      outer_validation_rows:split.validation.length,
+      untouched_holdout_rows:split.holdout.length,
+      holdout_scored_rows:0
+    },
+    models:Object.fromEntries(Object.entries(benchmark.models).map(([name,model])=>[
+      name,{
+        training_status:trainingArtifacts[name]?'COMPLETE':
+          unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
+        evaluation_status:model.status,
+        raw_brier:model.validation?.raw_brier_score??null,
+        calibrated_brier:model.validation?.calibrated_brier_score??null,
+        execution_status:model.validation?.outer_validation_gate?.passed===true
+          ?'OUTER_EXECUTION_GATES_PASS':'NOT_APPROVED',
+        acceptance_status:model.acceptance?.status??'NOT_EVALUATED'
+      }
+    ])),
+    holdout:{
+      status:'LOCKED',
+      opened:false,
+      predictions_generated:false,
+      metrics_read:false,
+      rows_included_in_scored_predictions:0,
+      reasons:'FOURTEEN_CHECK_OPENING_PROTOCOL_NOT_APPROVED'
+    },
+    safety:{
+      market:'BINANCE_SPOT_ONLY',
+      round_trip_cost_bps:args.roundTripCostBps,
+      paper_trading:true,
+      real_order_execution:false,
+      production_touched:false,
+      deployment_triggered:false
+    }
+  };
   const report={
     schema:MODEL_SCHEMA,
     status:benchmark.status,
+    experiment_manifest:experimentManifest,
     integrity:{
       model_source_commit_sha:sourceCommitSha,
       dataset_source_commit_sha:datasetSourceCommitSha,
@@ -1874,6 +1949,7 @@ async function main(){
     }
   };
   await atomicJson(outputPath,report);
+  await atomicJson(join(dirname(outputPath),'experiment-manifest.json'),experimentManifest);
   const artifactDirectory=join(dirname(outputPath),'model-artifacts');
   for(const [family,artifact] of Object.entries(modelArtifactsByModel))
     await atomicJson(join(artifactDirectory,family+'.json'),artifact);
