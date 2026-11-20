@@ -353,13 +353,13 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
   assert.match(trainer,/objective:'FOCAL_ASYMMETRIC_BRIER'/);
   assert.match(trainer,/4H_FOCAL_LR_0015_L2_0005_DROP00_E12/);
   for(const name of [
-    '4H_SHARED_RANK_W030_LR_0015_E16',
-    '4H_SHARED_RANK_W040_LR_0015_E16',
-    '4H_SHARED_RANK_W050_LR_0015_E16',
-    '4H_SHARED_RANK_W035_LR_0025_E16',
-    '4H_SHARED_RANK_W045_LR_0025_E16',
-    '4H_SHARED_RANK_W050_LR_0025_E16'
-  ]) assert.ok(trainer.includes(name),'missing bounded shared-ranking challenger '+name);
+    '4H_FOCAL_SHARED_RANK_W005_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W010_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W015_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W020_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W025_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W030_LR0015_E16'
+  ]) assert.ok(trainer.includes(name),'missing bounded Focal + shared-ranking challenger '+name);
   assert.match(recurrent,/config\.epochs\s*>\s*30/);
   assert.match(recurrent,/deriveTrainingClassWeights\(rows\.map\(row=>row\.target\)\)/);
   assert.match(recurrent,/FOCAL_ASYMMETRIC_BRIER/);
@@ -381,18 +381,18 @@ test('TCN-LSTM shared-classifier ranking sweep stays within the selector cap and
   assert.ok(candidateNames.includes('4H_LR_0015_L2_0005_DROP00_E12'));
   assert.ok(candidateNames.includes('4H_FOCAL_LR_0015_L2_0005_DROP00_E12'));
   for(const name of [
-    '4H_SHARED_RANK_W030_LR_0015_E16',
-    '4H_SHARED_RANK_W040_LR_0015_E16',
-    '4H_SHARED_RANK_W050_LR_0015_E16',
-    '4H_SHARED_RANK_W035_LR_0025_E16',
-    '4H_SHARED_RANK_W045_LR_0025_E16',
-    '4H_SHARED_RANK_W050_LR_0025_E16'
-  ]) assert.ok(candidateNames.includes(name),'missing shared-ranking candidate '+name);
-  assert.match(trainer,/rankingWeight:0\.03/);
-  assert.match(trainer,/rankingWeight:0\.035/);
-  assert.match(trainer,/rankingWeight:0\.04/);
-  assert.match(trainer,/rankingWeight:0\.045/);
-  assert.match(trainer,/rankingWeight:0\.05/);
+    '4H_FOCAL_SHARED_RANK_W005_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W010_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W015_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W020_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W025_LR0015_E16',
+    '4H_FOCAL_SHARED_RANK_W030_LR0015_E16'
+  ]) assert.ok(candidateNames.includes(name),'missing Focal + shared-ranking candidate '+name);
+  for(const weight of ['0.005','0.01','0.015','0.02','0.025','0.03']){
+    assert.ok(trainer.includes('rankingWeight:'+weight),'missing combined ranking weight '+weight);
+  }
+  assert.equal((candidateBlock[1].match(/objective:'FOCAL_ASYMMETRIC_BRIER',rankingWeight:/g)||[]).length,6,
+    'all six ranking candidates must combine Focal and shared-classifier ranking loss');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
