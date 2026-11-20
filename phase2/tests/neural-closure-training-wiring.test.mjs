@@ -373,6 +373,7 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
 
 test('TCN-LSTM shared-classifier ranking sweep stays within the selector cap and preserves intermediate weights',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
   const candidateBlock=trainer.match(/candidates:\[([\s\S]*?)\n\s+\]\n\s+\}\);/);
   assert.ok(candidateBlock,'TCN-LSTM candidate grid must be discoverable');
   const candidateNames=[...candidateBlock[1].matchAll(/name:'([^']+)'/g)]
@@ -396,4 +397,7 @@ test('TCN-LSTM shared-classifier ranking sweep stays within the selector cap and
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
+  assert.match(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
+  assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
+  assert.match(recurrent,/CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1/);
 });
