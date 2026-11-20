@@ -2214,9 +2214,21 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const rankingScoreAvailable=baselineRanking.status==='AVAILABLE';
   const baselineSelectionScore=baselineBrier+
     (rankingScoreAvailable?rankingScoreWeight*baselineRanking.pairwise_log_loss:0);
+  const effectiveCandidates=candidates.filter(config=>
+    Number(config?.rankingWeight??0)<=0||rankingRowsForFit!==null
+  );
+  const skippedCandidates=candidates.filter(config=>
+    Number(config?.rankingWeight??0)>0&&rankingRowsForFit===null
+  ).map(config=>({
+    name:config?.name??null,
+    ranking_weight:Number(config?.rankingWeight),
+    reason:'TRAINING_RETURN_PAIR_SUPPORT_UNAVAILABLE'
+  }));
+  if(effectiveCandidates.length<2)
+    throw new TypeError('TCN_LSTM_EFFECTIVE_HYPERPARAMETER_GRID_TOO_SMALL');
   const evaluated = [];
-  for (let index = 0; index < candidates.length; index++) {
-    const config = candidates[index];
+  for (let index = 0; index < effectiveCandidates.length; index++) {
+    const config = effectiveCandidates[index];
     const candidateDropout = config?.dropout === undefined ? 0 : config.dropout;
     const candidateObjective=config?.objective??'BRIER';
     if (!config || typeof config.name !== 'string' ||
@@ -2392,6 +2404,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   return {
     schema: TCN_LSTM_HYBRID_SCHEMA,
     status: passed ? 'INNER_SELECTION_QUALIFIED_RESEARCH_ONLY' : 'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY',
+    candidate_count_requested:candidates.length,
+    candidate_count_evaluated:evaluated.length,
+    skipped_candidates:skippedCandidates,
+    training_return_pair_support:rankingTrainingPairSupport,
     training_support: trainSupport,
     selection_support: selectionSupport,
     effective_training_budget:effectiveTrainingBudget,
