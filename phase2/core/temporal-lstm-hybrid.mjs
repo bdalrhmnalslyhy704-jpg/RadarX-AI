@@ -2853,6 +2853,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       provided?.report?.training_partition_only!==true||
       provided?.report?.outer_validation_rows_used!==false||
       provided?.report?.holdout_rows_or_labels_used!==false||
+      typeof provided?.feature_schema_id!=='string'||!provided.feature_schema_id||
       !Array.isArray(provided?.predictions)||
       provided.predictions.length!==externalLogisticScoringRows.length)
       throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_PROVIDER_CONTRACT_INVALID');
@@ -2885,6 +2886,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       scoring_min_at:externalLogisticScoringMinAt,
       purge_gap_ms:externalLogisticScoringMinAt-modelTrainingMaxResolvedAt,
       logistic_cv_schema:provided.report.schema,
+      logistic_feature_schema_id:provided.feature_schema_id,
       logistic_cv_selected_configuration:provided.report.selected_configuration,
       logistic_cv_calibration:provided.report.calibration,
       predictions_are_out_of_sample_for_scoring_rows:true,
