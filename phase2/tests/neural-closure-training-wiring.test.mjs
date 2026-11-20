@@ -288,11 +288,11 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the report must retain the complete validation evidence object');
   assert.match(trainer,/probability_stage_diagnostics:\s*model\.validation\?\.probability_stage_diagnostics\?\?null/,
     'the console and model-comparison summary must expose the full staged calibration diagnostics');
-  assert.match(trainer,/maxTrainingSamples:4096/,
-    'the TCN-LSTM research ablation must use the existing supported 4096-row training budget');
-  assert.match(trainer,/max_training_samples:4096/,
+  assert.match(trainer,/maxTrainingSamples:6144/,
+    'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
+  assert.match(trainer,/max_training_samples:6144/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
-  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3/,
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
     'the active execution head must include normalized Logistic and neural classifier scores');
   assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
     'the score-conditioned head must be the default execution path');
@@ -302,6 +302,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'each pooled channel must be gated by the Logistic score');
   assert.match(temporal,/x_neural_classifier_score/,
     'each pooled channel must be gated by the neural classifier score');
+  assert.match(temporal,/x_ranking_residual_score/,
+    'each pooled channel must also receive the train-only ranking residual score');
   assert.match(temporal,/POOLED_ONLY/,
     'the pooled-only head must be retained as a matched ablation control');
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
@@ -314,8 +316,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'execution-head latent features must be produced by a model that did not fit those rows');
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
-  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3/,
-    'the report must publish the exact active V3 score-gated execution-head schema');
+  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
+    'the report must publish the exact active V4 score-gated execution-head schema');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
