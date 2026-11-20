@@ -1897,7 +1897,7 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
   // behavior for legacy artifacts.
   const blendWeight=finite(profile.ranking_probability_blend_weight)
     ?clamp(Number(profile.ranking_probability_blend_weight),0,2):0;
-  return sigmoid(forward.logit+blendWeight*forward.ranking_logit);
+  return sigmoid(forward.logit+blendWeight*forward.ranking_residual_logit);
 }
 export function predictTcnLstmHybridRankingLogit(sequence, profile) {
   if (!profile?.model || !profile?.baseline_fit)
@@ -2284,7 +2284,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectionRankingLogits = selectionRows.map(row => {
       const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
-      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_logit;
+      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_residual_logit;
     });
     // Search a small, predeclared blend grid using only the purged inner-
     // selection partition. The ranking head is no longer stranded as a
@@ -2322,6 +2322,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectedBlend=blendPool[0];
     fit.ranking_probability_blend_weight=selectedBlend.weight;
+    fit.ranking_probability_blend_method='CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1';
     const predictions=selectedBlend.probabilities;
     const selectedCombinedLogits=selectionLogits.map((logit,index)=>
       logit+selectedBlend.weight*selectionRankingLogits[index]
@@ -2362,6 +2363,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         rankingWeight:Number(config.rankingWeight??0),
         rankingHeadLearningRate:candidateRankingHeadLearningRate},
       ranking_probability_blend_weight:selectedBlend.weight,
+      ranking_probability_blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
       ranking_blend_search:blendTrials.map(item=>({
         weight:item.weight,selection_brier:Number(item.score.toFixed(8)),
         preliminary_return_screen_candidates:item.returns.preliminary_return_screen_candidates??0,
@@ -2442,8 +2444,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     selection_scoring:{
       method:rankingScoreAvailable
-        ?'INNER_RETURN_SCREENED_BRIER_PLUS_FINAL_COMBINED_LOGIT_AND_SHARED_CLASSIFIER_RANK_V3'
-        :'INNER_RETURN_SCREENED_BRIER_PLUS_FINAL_COMBINED_LOGIT_V3',
+        ?'INNER_RETURN_SCREENED_BRIER_PLUS_CLASSIFIER_AND_RANKING_RESIDUAL_LOGIT_V4'
+        :'INNER_RETURN_SCREENED_BRIER_CLASSIFIER_LOGIT_V4',
+      blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
@@ -2460,14 +2463,14 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       outer_validation_or_holdout_used:false
     },
     candidates:evaluated.map(({name,config,ranking_probability_blend_weight,
-      ranking_blend_search,selection_brier,logistic_selection_brier,
+      ranking_probability_blend_method,ranking_blend_search,selection_brier,logistic_selection_brier,
       brier_improvement,pairwise_ranking,logistic_pairwise_ranking,
       pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
       shared_classifier_pairwise_ranking_improvement,
       ranking_execution_selection,execution_risk_policy,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
-      name,config,ranking_probability_blend_weight,ranking_blend_search,
+      name,config,ranking_probability_blend_weight,ranking_probability_blend_method,ranking_blend_search,
       selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
       brier_improvement:Number(brier_improvement.toFixed(8)),
