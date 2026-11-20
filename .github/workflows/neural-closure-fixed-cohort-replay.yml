@@ -12,6 +12,8 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
   pull_request:
     branches:
       - research/build224-point-in-time-liquidity-20261117
@@ -22,6 +24,8 @@ on:
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
 
 permissions:
   actions: read
