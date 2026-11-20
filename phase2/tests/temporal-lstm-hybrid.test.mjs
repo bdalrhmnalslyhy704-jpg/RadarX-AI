@@ -431,12 +431,12 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
   assert.equal(profile.training.execution_regression_heads.validation_or_holdout_used,false);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
-    'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2');
+    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3');
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
-    TCN_LSTM_HIDDEN+2);
+    3*TCN_LSTM_HIDDEN+2);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
     TCN_LSTM_HIDDEN);
-  assert.equal(profile.model.executionReturnHeadWeights.length,TCN_LSTM_HIDDEN+2);
+  assert.equal(profile.model.executionReturnHeadWeights.length,3*TCN_LSTM_HIDDEN+2);
   assert.equal(profile.model.executionReturnHeadPooledOnlyWeights.length,TCN_LSTM_HIDDEN);
   const contextInputs=buildTcnLstmExecutionHeadInputFeatures(
     evidence[0].sequence,profile.model,profile.baseline_fit
@@ -449,16 +449,24 @@ test('TCN-LSTM fits separate net-return and downside regression heads on trainin
     evidence[0].sequence,profile.model,anchorLogit
   ).logit;
   assert.equal(contextInputs.schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(contextInputs.features.length,TCN_LSTM_HIDDEN+2);
+  assert.equal(contextInputs.features.length,3*TCN_LSTM_HIDDEN+2);
   assert.equal(pooledInputs.features.length,TCN_LSTM_HIDDEN);
   assert.ok(Math.abs(contextInputs.features.at(-2)-Math.tanh(anchorLogit/4))<1e-12);
   assert.ok(Math.abs(contextInputs.features.at(-1)-Math.tanh(neuralLogit/4))<1e-12);
+  const logisticScore=Math.tanh(anchorLogit/4);
+  const neuralScore=Math.tanh(neuralLogit/4);
+  for(let index=0;index<TCN_LSTM_HIDDEN;index++){
+    assert.ok(Math.abs(contextInputs.features[TCN_LSTM_HIDDEN+index]-
+      pooledInputs.features[index]*logisticScore)<1e-12);
+    assert.ok(Math.abs(contextInputs.features[2*TCN_LSTM_HIDDEN+index]-
+      pooledInputs.features[index]*neuralScore)<1e-12);
+  }
   assert.ok(contextInputs.features.at(-2)>=-1&&contextInputs.features.at(-2)<=1);
   assert.ok(contextInputs.features.at(-1)>=-1&&contextInputs.features.at(-1)<=1);
   const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
   assert.equal(prediction.variant,'LOGIT_CONTEXT_AUGMENTED');
   assert.equal(prediction.input_feature_schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(prediction.input_feature_count,TCN_LSTM_HIDDEN+2);
+  assert.equal(prediction.input_feature_count,3*TCN_LSTM_HIDDEN+2);
   const pooledOnlyPrediction=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,profile,{variant:'POOLED_ONLY'}
   );

@@ -26,7 +26,7 @@ import {
 
 export const TCN_LSTM_HYBRID_SCHEMA = 'RADARX_BUILD224_TCN_LSTM_ATTENTION_V1';
 export const TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA =
-  'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_PLUS_LOGISTIC_AND_CLASSIFIER_SCORES_V2';
+  'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3';
 const TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE = 4;
 
 export const TCN_LSTM_STEPS = 24;
@@ -1439,12 +1439,19 @@ export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
   const normalizedClassifierScore=Math.tanh(
     forward.logit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
   );
+  const logisticGatedPooled=pooled.map(value=>value*normalizedLogisticScore);
+  const classifierGatedPooled=pooled.map(value=>value*normalizedClassifierScore);
+  // Multiplicative score gates let the regression head interpret each pooled
+  // temporal channel differently under Logistic and neural score contexts.
   const features=variant==='POOLED_ONLY'
     ?pooled
-    :[...pooled,normalizedLogisticScore,normalizedClassifierScore];
+    :[...pooled,...logisticGatedPooled,...classifierGatedPooled,
+      normalizedLogisticScore,normalizedClassifierScore];
   const featureNames=[
     ...pooled.map((_,index)=>'pooled_latent_'+index),
     ...(variant==='POOLED_ONLY'?[]:[
+      ...pooled.map((_,index)=>'pooled_latent_'+index+'_x_logistic_anchor_score'),
+      ...pooled.map((_,index)=>'pooled_latent_'+index+'_x_neural_classifier_score'),
       'logistic_anchor_logit_tanh_div_4',
       'neural_classifier_logit_tanh_div_4'
     ])
@@ -1546,7 +1553,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     return {weights:best.weights,bias:best.bias,initial_huber_loss:Number(initial.toFixed(8)),
       final_huber_loss:Number(bestLoss.toFixed(8)),epochs_completed:done,feature_count:featureCount};
   };
-  const hidden=TCN_LSTM_HIDDEN,contextCount=hidden+2;
+  const hidden=TCN_LSTM_HIDDEN,contextCount=3*hidden+2
   const pooledOnly={
     net_return:fitHead('net','pooled',hidden),
     downside_risk:fitHead('downside','pooled',hidden)
@@ -1566,7 +1573,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
   model.executionRegressionHeadsFitted=true;
   return {
-    schema:'RADARX_TCN_LSTM_CONTEXT_CONDITIONED_RETURN_DOWNSIDE_HEADS_V2',
+    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
     source:'MATURED_REALIZED_RETURN_AND_MAX_ADVERSE_EXCURSION',
     training_rows:rows.length,round_trip_cost_bps:Number(roundTripCostBps),
@@ -1576,7 +1583,8 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     score_context:{
       schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       features:['LOGISTIC_ANCHOR_LOGIT_TANH_DIV_4','NEURAL_CLASSIFIER_LOGIT_TANH_DIV_4'],
-      normalization:'TANH(LOGIT/4)',
+      interaction_features:['POOLED_LATENT_X_LOGISTIC_ANCHOR_SCORE','POOLED_LATENT_X_NEURAL_CLASSIFIER_SCORE'],
+      normalization:'TANH(LOGIT/4); MULTIPLICATIVE_GATING_OF_EACH_POOLED_CHANNEL',
       score_source:'FROZEN_LOGISTIC_ANCHOR_AND_RAW_TCN_LSTM_CLASSIFIER',
       score_values_used_for_training:'TRAINING_PARTITION_ONLY'
     },
@@ -2175,19 +2183,19 @@ export function trainTcnLstmHybrid(trainingRows, {
     ranking_head_parameter_count:rankingHeadFit.fitted
       ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
     execution_regression_head_parameter_count:executionHeadFit.fitted
-      ?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0,
+      ?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0,
     total_parameter_count:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
       (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0),
+      (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0),
     parameter_count_contract:{
       classifier_bptt_parameters:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT,
       auxiliary_ranking_head_parameters:rankingHeadFit.fitted
         ?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0,
       execution_regression_head_parameters:executionHeadFit.fitted
-        ?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0,
+        ?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0,
       total:TCN_LSTM_CLASSIFIER_PARAMETER_COUNT+
         (rankingHeadFit.fitted?TCN_LSTM_RANKING_HEAD_PARAMETER_COUNT:0)+
-        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(TCN_LSTM_HIDDEN+3):0)
+        (executionHeadFit.fitted?2*(TCN_LSTM_HIDDEN+1)+2*(3*TCN_LSTM_HIDDEN+3):0)
     },
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
