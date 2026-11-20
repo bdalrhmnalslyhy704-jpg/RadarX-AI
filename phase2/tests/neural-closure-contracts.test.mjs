@@ -21,6 +21,7 @@ import {
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
   NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,
   evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark,
+  bootstrapOuterValidationUncertainty,
   NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS,
   evaluateNeuralClosureHoldoutOpeningProtocol
 } from '../core/neural-closure-contracts.mjs';
@@ -1190,6 +1191,75 @@ test('missing Logistic predictions prevent a matched comparison without changing
   assert.equal(validation.outer_validation_gate.gates.matched_execution_threshold_available,'FAIL');
   assert.equal(validation.outer_validation_gate.gates.matched_outer_validation_execution_risk_gates,'NOT_EVALUATED');
   assert.equal(report.holdout_access.opened,false);
+});
+
+test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
+  const rows=makeRows({days:60,rowsPerDay:80});
+  const sourceCommitSha='9'.repeat(40);
+  const artifacts=makeArtifacts(sourceCommitSha);
+  const predictions=makePredictions(rows,sourceCommitSha,artifacts);
+  const validation=splitFourHourRows(rows).validation
+    .sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol));
+  const ids=validation.map(row=>row.id);
+  const probabilityByModel={};
+  for(const name of ['LOGISTIC_REGRESSION','TCN_LSTM_HYBRID']){
+    const byId=new Map(predictions[name].map(item=>[item.id,item.probability]));
+    probabilityByModel[name]=ids.map(id=>byId.get(id));
+  }
+  const contextScores=validation.map((row,index)=>
+    Number((0.2+(index%11)/100).toFixed(5)));
+  const pooledScores=validation.map((row,index)=>
+    Number((0.2+((index*7)%11)/100).toFixed(5)));
+  const logisticScores=probabilityByModel.LOGISTIC_REGRESSION;
+  const result=bootstrapOuterValidationUncertainty(validation,probabilityByModel,{
+    executionScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:contextScores,
+      POOLED_ONLY:pooledScores,
+      LOGISTIC_REGRESSION:logisticScores
+    },
+    topKGrid:[1],roundTripCostBps:30,
+    repetitions:100,blockLengthDays:2,seed:22429,maxConcurrentPositions:30
+  });
+  assert.equal(result.schema,'RADARX_OUTER_VALIDATION_MOVING_BLOCK_BOOTSTRAP_V1');
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(result.sampling.repetitions,100);
+  assert.equal(result.sampling.block_length_days,2);
+  assert.equal(result.sampling.seed,22429);
+  assert.equal(result.sampling.four_hour_event_overlap_between_resampled_blocks,false);
+  assert.equal(result.isolation.parameters_refitted,false);
+  assert.equal(result.isolation.thresholds_selected,false);
+  assert.equal(result.isolation.top_k_selected,false);
+  assert.equal(result.isolation.lambda_refitted,false);
+  assert.equal(result.isolation.holdout_rows_or_scores_used,false);
+  assert.equal(result.isolation.affects_acceptance_gates,false);
+  const brier=result.probability_quality.comparisons.TCN_LSTM_HYBRID
+    .candidate_minus_logistic_raw_brier;
+  assert.equal(brier.status,'AVAILABLE');
+  assert.equal(brier.valid_repetitions,100);
+  assert.ok(Number.isFinite(brier.lower_95)&&Number.isFinite(brier.upper_95));
+  const context=result.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_POOLED_ONLY.net_pnl_pct;
+  assert.equal(context.status,'AVAILABLE');
+  assert.equal(context.valid_repetitions,100);
+  assert.ok(Number.isFinite(context.lower_95)&&Number.isFinite(context.upper_95));
+  const drawdown=result.execution.strategy_confidence_intervals['1']
+    .LOGIT_CONTEXT_AUGMENTED.max_drawdown_pct;
+  assert.equal(drawdown.status,'AVAILABLE');
+  assert.ok(drawdown.lower_95<=drawdown.upper_95);
+});
+
+test('outer-validation bootstrap fails closed when there are too few UTC-day blocks',()=>{
+  const rows=makeRows({days:10,rowsPerDay:10});
+  const result=bootstrapOuterValidationUncertainty(rows,{
+    LOGISTIC_REGRESSION:rows.map(row=>row.target?0.7:0.3)
+  },{
+    executionScoresByPolicy:{LOGISTIC_REGRESSION:rows.map(row=>row.target?0.7:0.3)},
+    repetitions:100,blockLengthDays:3,seed:22429
+  });
+  assert.equal(result.status,'UNAVAILABLE');
+  assert.equal(result.reason,'BOOTSTRAP_TOO_FEW_INDEPENDENT_TIME_BLOCKS');
+  assert.equal(result.holdout_rows_or_scores_used,false);
 });
 
 test('external execution Top-K compares identical opportunities and rejects unfrozen risk penalties',()=>{
