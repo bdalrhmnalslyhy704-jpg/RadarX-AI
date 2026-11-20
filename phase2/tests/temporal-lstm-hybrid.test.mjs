@@ -576,6 +576,9 @@ test('TCN-LSTM pairwise ranking updates only the auxiliary head from training re
   assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
     profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
   assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
+  // Direct trainer fixture has no inner selector; freeze a representative
+  // selection-only blend weight before testing the outer inference contract.
+  profile.ranking_probability_blend_weight=0.75;
   const rankingLogit=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
   const anchorLogit=predictTcnLstmHybridRankingAnchorLogit(rows[0].sequence,profile);
   const forward=inspectTcnLstmForward(rows[0].sequence,profile.model,anchorLogit);
