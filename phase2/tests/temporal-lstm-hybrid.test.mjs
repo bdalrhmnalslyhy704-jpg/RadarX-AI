@@ -26,6 +26,7 @@ import {
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
+  splitTcnLstmTrainingRowsForExecutionHead,
   selectTcnLstmHybridHyperparameters,
   summarizeTcnLstmSelectionReturns,
   tcnLstmPairwiseReturnRankingLoss,
@@ -412,23 +413,36 @@ test('rank-head execution diagnostics quantify lift against the same frozen Logi
   });
 });
 
-test('TCN-LSTM fits separate net-return and downside regression heads on training outcomes only',()=>{
-  const evidence=makeRankedRows(0,10,'execution-train').map((row,index)=>({
+test('TCN-LSTM fits return and downside heads on later purged rows unseen by the encoder',()=>{
+  const addDownside=(rows)=>rows.map((row,index)=>({
     ...row,
     max_adverse_excursion_pct:index%4===0?-0.35:index%4===1?-0.75:
       index%4===2?-1.4:-2.1,
     max_adverse_excursion_at:row.at+60*60*1000
   }));
-  const fitRows=evidence.map(({realized_return_pct,...row})=>row);
+  const modelTrainingEvidence=addDownside(
+    makeRankedRows(0,10,'execution-model-train')
+  );
+  const evidence=addDownside(
+    makeRankedRows(20,10,'execution-head-train')
+  );
+  const fitRows=modelTrainingEvidence.map(({realized_return_pct,...row})=>row);
   const profile=trainTcnLstmHybrid(fitRows,{
     epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
-    seed:771,maxTrainingSamples:40,rankingRows:evidence,executionRows:evidence,
+    seed:771,maxTrainingSamples:40,rankingRows:modelTrainingEvidence,executionRows:evidence,
     rankingHeadEpochs:12,executionHeadEpochs:20,
     executionHeadRoundTripCostBps:30
   });
   assert.equal(profile.training.execution_regression_heads.fitted,true);
   assert.equal(profile.training.execution_regression_heads.fit_boundary,'TRAINING_PARTITION_ONLY');
   assert.equal(profile.training.execution_regression_heads.validation_or_holdout_used,false);
+  assert.equal(profile.training.execution_regression_heads.representation_out_of_sample,true);
+  assert.equal(profile.training.execution_regression_heads.training_and_execution_head_identities_disjoint,true);
+  assert.equal(profile.training.execution_regression_heads.source_partition,
+    'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK');
+  assert.equal(profile.training.execution_regression_heads.model_training_rows,40);
+  assert.ok(profile.training.execution_regression_heads.model_training_max_resolved_at<
+    profile.training.execution_regression_heads.execution_head_min_at);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
     'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3');
@@ -796,17 +810,51 @@ test('ranking blend adds only the ranking residual and never duplicates the froz
   assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-expected)<1e-12);
 });
 
+test('execution-head split uses a later complete 15m block and purges forward labels',()=>{
+  const rows=makeRows(0,100,'execution-split').map((row,index)=>({
+    ...row,max_adverse_excursion_pct:index%2===0?-0.35:-1.2
+  }));
+  const split=splitTcnLstmTrainingRowsForExecutionHead(rows);
+  assert.equal(split.status,'READY');
+  assert.equal(split.diagnostics.schema,'RADARX_TCN_LSTM_PURGED_EXECUTION_HEAD_SPLIT_V1');
+  assert.equal(split.model_training_rows.length,74);
+  assert.equal(split.execution_head_rows.length,25);
+  assert.equal(split.purged_rows.length,1);
+  assert.ok(Math.max(...split.model_training_rows.map(row=>row.resolved_at))<
+    Math.min(...split.execution_head_rows.map(row=>row.at)));
+  assert.equal(split.diagnostics.representation_out_of_sample,true);
+  assert.equal(split.diagnostics.validation_or_holdout_used,false);
+  const modelIds=new Set(split.model_training_rows.map(row=>row.id));
+  assert.ok(split.execution_head_rows.every(row=>!modelIds.has(row.id)));
+});
+
+test('execution-head split abstains when a complete purged training block lacks support',()=>{
+  const rows=makeRows(0,30,'small-execution-split').map((row,index)=>({
+    ...row,max_adverse_excursion_pct:index%2===0?-0.35:-1.2
+  }));
+  const split=splitTcnLstmTrainingRowsForExecutionHead(rows);
+  assert.equal(split.status,'UNAVAILABLE');
+  assert.equal(split.execution_head_rows,null);
+  assert.equal(split.diagnostics.representation_out_of_sample,false);
+});
+
 test('hyper-parameter selection uses only a purged chronological inner-selection block',()=>{
-  const training=makeRows(0,40,'train');
-  const selection=makeRows(41,20,'selection');
+  const training=makeRows(0,100,'train').map((row,index)=>({
+    ...row,max_adverse_excursion_pct:index%2===0?-0.35:-1.2
+  }));
+  const selection=makeRows(101,20,'selection');
   const result=selectTcnLstmHybridHyperparameters(training,selection,{
     candidates:[
       {name:'LOW_RATE',learningRate:0.0015,l2:0.0005,epochs:2},
       {name:'MID_RATE',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:2}
     ],
-    requiredImprovement:0.00025,seed:7,maxTrainingSamples:40
+    requiredImprovement:0.00025,seed:7,maxTrainingSamples:100
   });
-  assert.equal(result.training_support.rows,40);
+  assert.equal(result.training_support.rows,100);
+  assert.equal(result.model_training_rows,74);
+  assert.equal(result.execution_head_training_rows,25);
+  assert.equal(result.training_sample_selection.execution_head_split.status,'READY');
+  assert.equal(result.training_sample_selection.execution_head_split.purged_rows,1);
   assert.equal(result.selection_support.rows,20);
   assert.equal(result.candidates.length,2);
   assert.ok(result.candidates.every(row=>
