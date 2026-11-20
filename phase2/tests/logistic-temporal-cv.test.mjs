@@ -145,5 +145,8 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
   assert.match(trainer,/fixedLogisticFit=fitLogisticBaseline\(split\.train\)/);
   assert.match(trainer,/outer_validation_used_for_hyperparameter_selection:false/);
   assert.match(trainer,/holdout_used:false/);
+  assert.match(trainer,/validation_scored_rows:split\.validation\.length/);
+  assert.match(trainer,/holdout_scored_rows:eventRows\.filter\(/);
+  assert.match(trainer,/rows_included_in_scored_predictions:0/);
   assert.match(trainer,/threshold:0\.15,roundTripCostBps:args\.roundTripCostBps/);
 });
