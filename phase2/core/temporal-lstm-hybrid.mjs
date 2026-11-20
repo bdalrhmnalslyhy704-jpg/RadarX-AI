@@ -26,7 +26,7 @@ import {
 
 export const TCN_LSTM_HYBRID_SCHEMA = 'RADARX_BUILD224_TCN_LSTM_ATTENTION_V1';
 export const TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA =
-  'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_AND_CLASSIFIER_V3';
+  'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4';
 const TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE = 4;
 
 export const TCN_LSTM_STEPS = 24;
@@ -70,7 +70,7 @@ const finite = value => typeof value === 'number' && Number.isFinite(value);
  * only the recent training window; selection, calibration, validation and
  * untouched holdout partitions remain disjoint and unchanged.
  */
-export const TCN_LSTM_MAX_TRAINING_SAMPLES = 4096;
+export const TCN_LSTM_MAX_TRAINING_SAMPLES = 6144;
 export function effectiveTcnLstmTrainingSampleBudget(
   requested=TCN_LSTM_MAX_TRAINING_SAMPLES,
   available=TCN_LSTM_MAX_TRAINING_SAMPLES
@@ -238,7 +238,7 @@ export function selectChronologicalTcnLstmTrainingRows(
   }};
 }
 export function splitTcnLstmTrainingRowsForExecutionHead(rows,{
-  executionHeadFraction=0.25,minimumModelTrainingRows=20,minimumExecutionHeadRows=20
+  executionHeadFraction=0.40,minimumModelTrainingRows=20,minimumExecutionHeadRows=20
 }={}){
   if(!Array.isArray(rows)||!finite(executionHeadFraction)||
     executionHeadFraction<=0||executionHeadFraction>=0.5||
@@ -1555,21 +1555,29 @@ export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
   const normalizedClassifierScore=Math.tanh(
     forward.logit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
   );
+  const normalizedRankingScore=Math.tanh(
+    forward.ranking_residual_logit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
+  );
   const logisticGatedPooled=pooled.map(value=>value*normalizedLogisticScore);
   const classifierGatedPooled=pooled.map(value=>value*normalizedClassifierScore);
-  // Multiplicative score gates let the regression head interpret each pooled
-  // temporal channel differently under Logistic and neural score contexts.
+  const rankingGatedPooled=pooled.map(value=>value*normalizedRankingScore);
+  // The return/downside head receives three frozen contexts independently:
+  // Logistic anchor, classifier score, and train-only ranking residual.
+  // This lets it exploit rank evidence without blending that evidence into
+  // the calibrated classifier probability.
   const features=variant==='POOLED_ONLY'
     ?pooled
-    :[...pooled,...logisticGatedPooled,...classifierGatedPooled,
-      normalizedLogisticScore,normalizedClassifierScore];
+    :[...pooled,...logisticGatedPooled,...classifierGatedPooled,...rankingGatedPooled,
+      normalizedLogisticScore,normalizedClassifierScore,normalizedRankingScore];
   const featureNames=[
     ...pooled.map((_,index)=>'pooled_latent_'+index),
     ...(variant==='POOLED_ONLY'?[]:[
       ...pooled.map((_,index)=>'pooled_latent_'+index+'_x_logistic_anchor_score'),
       ...pooled.map((_,index)=>'pooled_latent_'+index+'_x_neural_classifier_score'),
+      ...pooled.map((_,index)=>'pooled_latent_'+index+'_x_ranking_residual_score'),
       'logistic_anchor_logit_tanh_div_4',
-      'neural_classifier_logit_tanh_div_4'
+      'neural_classifier_logit_tanh_div_4',
+      'ranking_residual_logit_tanh_div_4'
     ])
   ];
   if(features.some(value=>!finite(value)))
@@ -1583,6 +1591,8 @@ export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
     pooled_feature_count:pooled.length,
     normalized_logistic_score:normalizedLogisticScore,
     normalized_classifier_score:normalizedClassifierScore,
+    normalized_ranking_score:normalizedRankingScore,
+    ranking_residual_logit:forward.ranking_residual_logit,
     baseline_logit:baselineLogit,classifier_logit:forward.logit
   };
 }
@@ -1689,7 +1699,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
   model.executionRegressionHeadsFitted=true;
   return {
-    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3',
+    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V4',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
     source:'MATURED_REALIZED_RETURN_AND_MAX_ADVERSE_EXCURSION',
     training_rows:rows.length,round_trip_cost_bps:Number(roundTripCostBps),
@@ -2288,7 +2298,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       representation_out_of_sample:true,
       training_and_execution_head_identities_disjoint:true
     }
-    :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V3',
+    :{schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V4',
       fitted:false,reason:'PURGED_EXECUTION_HEAD_TRAINING_BLOCK_NOT_AVAILABLE',
       input_feature_schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       fit_boundary:'TRAINING_PARTITION_ONLY',validation_or_holdout_used:false,
@@ -2429,10 +2439,17 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
   const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
   const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
-  // The return-ranking head is fitted on TRAINING rows only. Its blend weight
-  // is selected on the disjoint inner-selection partition, then frozen before
-  // calibration and outer validation. A zero weight preserves classifier-only
-  // behavior for legacy artifacts.
+  // Primary classifier probability only. Ranking residuals stay independent
+  // and cannot change Brier, calibration, or the Logistic entry-threshold gate.
+  return sigmoid(forward.logit);
+}
+
+/** Separate ranking-sidecar probability, never used as classifier output. */
+export function predictTcnLstmHybridRankingProbability(sequence,profile){
+  if(!profile?.model||!profile?.baseline_fit)
+    throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
+  const baselineLogit=predictTcnLstmLogisticLogit(sequence,profile.baseline_fit);
+  const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
   const blendWeight=finite(profile.ranking_probability_blend_weight)
     ?clamp(Number(profile.ranking_probability_blend_weight),0,2):0;
   return sigmoid(forward.logit+blendWeight*forward.ranking_residual_logit);
@@ -2903,12 +2920,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     });
     const selectedBlend=blendPool[0];
     fit.ranking_probability_blend_weight=selectedBlend.weight;
-    fit.ranking_probability_blend_method='CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1';
-    const predictions=selectedBlend.probabilities;
+    fit.ranking_probability_blend_method=
+      'SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1';
+    // Preserve a pure classifier probability for proper scoring. The selected
+    // residual blend is used only for return/ranking diagnostics.
+    const predictions=selectionLogits.map(logit=>sigmoid(logit));
     const selectedCombinedLogits=selectionLogits.map((logit,index)=>
       logit+selectedBlend.weight*selectionRankingLogits[index]
     );
-    const score=selectedBlend.score;
+    const score=brierFrom(selectionRows,predictions);
     const pairwiseRanking=summarizeTcnLstmPairwiseLogitRanking(
       selectionRows,selectedCombinedLogits,{
         roundTripCostBps,minimumReturnGapPct:rankingMinimumReturnGapPct,
@@ -2944,7 +2964,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         rankingWeight:Number(config.rankingWeight??0),
         rankingHeadLearningRate:candidateRankingHeadLearningRate},
       ranking_probability_blend_weight:selectedBlend.weight,
-      ranking_probability_blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
+      ranking_probability_blend_method:'SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1',
       ranking_blend_search:blendTrials.map(item=>({
         weight:item.weight,selection_brier:Number(item.score.toFixed(8)),
         preliminary_return_screen_candidates:item.returns.preliminary_return_screen_candidates??0,
@@ -3034,9 +3054,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     selection_scoring:{
       method:rankingScoreAvailable
-        ?'INNER_RETURN_SCREENED_BRIER_PLUS_CLASSIFIER_AND_RANKING_RESIDUAL_LOGIT_V4'
-        :'INNER_RETURN_SCREENED_BRIER_CLASSIFIER_LOGIT_V4',
-      blend_method:'CLASSIFIER_LOGIT_PLUS_RANKING_RESIDUAL_LOGIT_V1',
+        ?'INNER_CLASSIFIER_BRIER_PLUS_SEPARATE_RETURN_RANKING_V5'
+        :'INNER_CLASSIFIER_BRIER_SEPARATE_RANKING_V5',
+      blend_method:'SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1',
       pairwise_score_weight:rankingScoreAvailable?rankingScoreWeight:0,
       required_inner_brier_improvement:requiredImprovement,
       required_composite_improvement:requiredImprovement,
