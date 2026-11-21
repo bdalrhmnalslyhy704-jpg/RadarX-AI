@@ -1556,10 +1556,10 @@ async function main(){
             );
             if(!finite(preInnerProbability)||preInnerProbability<0||preInnerProbability>1)
               throw new Error('TCN_LSTM_PRE_INNER_DIAGNOSTIC_NON_FINITE:'+item.id);
-            const auxiliaryRankingLogit=predictTcnLstmHybridRankingLogit(
+            const auxiliaryRankingScore=predictTcnLstmHybridRankingLogit(
               sourceRow.temporal_sequence,selectedFit
             );
-            if(!finite(auxiliaryRankingLogit))
+            if(!finite(auxiliaryRankingScore))
               throw new Error('TCN_LSTM_AUXILIARY_RANKING_DIAGNOSTIC_NON_FINITE:'+item.id);
             const auxiliaryRankingAnchorLogit=predictTcnLstmHybridRankingAnchorLogit(
               sourceRow.temporal_sequence,selectedFit
@@ -1630,7 +1630,7 @@ async function main(){
                 holdout_used_for_calibration:false
               },
               pre_inner_calibration_probability:Number(preInnerProbability),
-              auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
+              auxiliary_ranking_score:Number(auxiliaryRankingScore),
               auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit),
               predicted_net_return_pct:Number(executionScore.predicted_net_return_pct),
               predicted_pointwise_net_return_pct:Number(executionScore.predicted_pointwise_net_return_pct),
