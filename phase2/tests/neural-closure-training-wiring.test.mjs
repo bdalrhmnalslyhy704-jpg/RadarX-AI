@@ -358,6 +358,14 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'execution-head latent features must be produced by a model that did not fit those rows');
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
+  assert.match(temporal,/fitHurdleReturnHead/,
+    'a train-only hurdle return estimator must be fitted as a challenger');
+  assert.match(temporal,/HURDLE_EXPECTED_VALUE/,
+    'pointwise and hurdle return estimates must be compared during inner selection');
+  assert.match(temporal,/selected_return_estimator/,
+    'the selected return estimator must be frozen before outer validation');
+  assert.match(trainer,/pooledOnlyExpectedNetReturnPct/,
+    'the pooled-only outer comparator must use its own inner-selected return estimator');
   assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
     'the report must publish the exact active V5 score-gated execution-head schema');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
