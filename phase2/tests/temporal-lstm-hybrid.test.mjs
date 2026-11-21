@@ -577,6 +577,9 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.equal(policy.threshold_frozen_before_outer_validation,true);
   assert.equal(policy.holdout_values_used,false);
   assert.equal(policy.selected_top_k_per_timestamp,1);
+  assert.equal(policy.positive_score_floor_enforced,true);
+  assert.equal(policy.selected_threshold_floor_rule,'MAX_ZERO_AND_INNER_SELECTION_QUANTILE');
+  assert.ok(policy.selected_minimum_risk_adjusted_score>=0);
   assert.ok(policy.selected_risk_penalty_weight>0);
   assert.ok(Number.isFinite(policy.selected_minimum_risk_adjusted_score));
   assert.ok(policy.selected_abstention_percentile>0);
