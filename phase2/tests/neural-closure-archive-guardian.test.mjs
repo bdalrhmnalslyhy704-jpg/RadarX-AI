@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp,rm,writeFile,symlink } from 'node:fs/promises';
+import { mkdtemp,rm,writeFile,symlink,readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
@@ -110,4 +110,21 @@ test('rejects an archive whose decompressed bytes do not match the recorded raw 
       archiveDirectory:f.directory,archiveRecords:[mismatched],expectedCount:1
     }),/RAW_ARCHIVE_CONTENT_SHA_MISMATCH/);
   }finally{await f.cleanup();}
+});
+
+
+test('dataset collector verifies every completed raw archive on disk before publishing the cohort',async()=>{
+  const collector=await readFile(
+    new URL('../tools/build-neural-closure-dataset.mjs',import.meta.url),'utf8'
+  );
+  assert.match(collector,/import \{verifyBinanceRawArchives\} from '\.\.\/core\/neural-closure-archive-guardian\.mjs'/);
+  const manifestCount=collector.indexOf('RAW_ARCHIVE_INTERVAL_COUNT_MISMATCH');
+  const verifyCall=collector.indexOf('const rawArchiveVerification=await verifyBinanceRawArchives(');
+  const datasetWrite=collector.indexOf('writeJsonObjectWithArrayStreaming(outputPath');
+  assert.ok(manifestCount>=0&&verifyCall>manifestCount&&datasetWrite>verifyCall,
+    'archive verification must follow complete interval collection and precede dataset publication');
+  assert.match(collector,/archiveRecords:rawArchiveRecords/);
+  assert.match(collector,/expectedCount:included\.length\*3/);
+  assert.match(collector,/raw_archive_verification:rawArchiveVerification/);
+  assert.match(collector,/RAW_ARCHIVE_POST_WRITE_VERIFICATION_INCOMPLETE/);
 });
