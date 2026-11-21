@@ -558,6 +558,18 @@ export function buildTcnLstmAnchorFeatures(sequence) {
   return means.concat(variances.map(value => Math.sqrt(Math.max(0, value))));
 }
 
+/**
+ * Preserve every closed temporal input value in chronological row-major order.
+ * This is the full-information linear Logistic comparator for the 24x29 TCN
+ * input; unlike the 58-value pooled anchor it does not discard within-window
+ * time position. The caller fits normalization separately inside each
+ * chronological training fold.
+ */
+export function buildTcnLstmFlattenedFeatures(sequence) {
+  validateSequence(sequence);
+  return sequence.flatMap(row=>row.map(Number));
+}
+
 export function fitTcnLstmLogisticAnchor(rows, {
   iterations = 300, learningRate = 0.04, l2 = 0.04
 } = {}) {
