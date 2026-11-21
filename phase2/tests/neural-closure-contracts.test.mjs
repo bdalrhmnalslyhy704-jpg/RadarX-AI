@@ -524,7 +524,7 @@ test('fixed-SHA evaluator scores the full outer block with identity calibration 
   assert.match(report.integrity.fixed_benchmark_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.model_artifacts_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.prediction_matrix_sha256,/^[a-f0-9]{64}$/);
-  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length+1);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
   assert.equal(report.models.LOGISTIC_REGRESSION.validation.sample_count,split.validation.length);
@@ -1149,7 +1149,7 @@ test('fixed-SHA evaluator refuses candidate predictions without an exact version
   assert.equal(report.models.TCN_V11.status,'NOT_EVALUATED');
   assert.equal(report.models.TCN_V11.reason,'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING');
   assert.equal(report.models.TCN_V11.acceptance.passed,false);
-  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length-1);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
 });
 
 
