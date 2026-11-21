@@ -35,7 +35,7 @@ import {
 } from '../core/temporal-neural-brain.mjs';
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
-  buildTcnLstmAnchorFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
+  buildTcnLstmFlattenedFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
   predictTcnLstmHybridRankingLogit,
@@ -70,14 +70,15 @@ const probabilityLogit=value=>{
 };
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V3';
-const LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA =
-  'RADARX_TCN_LSTM_LOGISTIC_SEQUENCE_CHANNEL_MEAN_STD_58_V1';
-const LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES = Object.freeze([
-  ...HYBRID_FEATURE_NAMES.map(name=>'MEAN_'+name),
-  ...HYBRID_FEATURE_NAMES.map(name=>'STD_'+name)
-]);
+const LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA =
+  'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1';
+const LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES = Object.freeze(
+  Array.from({length:TCN_LSTM_STEPS},(_,step)=>
+    HYBRID_FEATURE_NAMES.map(name=>'STEP_'+String(step).padStart(2,'0')+'_'+name)
+  ).flat()
+);
 if(HYBRID_FEATURE_NAMES.length!==TCN_LSTM_INPUT_CHANNELS||
-  LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES.length!==2*TCN_LSTM_INPUT_CHANNELS)
+  LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length!==TCN_LSTM_STEPS*TCN_LSTM_INPUT_CHANNELS)
   throw new Error('LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA_WIDTH_MISMATCH');
 
 function argsMap(argv){
@@ -371,7 +372,7 @@ async function main(){
   const trainingArtifacts={};
   const unavailable={};
   const logisticTrainingVectors=split.train.map(row=>
-    buildTcnLstmAnchorFeatures(row.temporal_sequence));
+    buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
   const fixedLogisticValidationProbabilities=split.validation.map(row=>
     predictLogistic(row.features,fixedLogisticFit));
@@ -397,17 +398,17 @@ async function main(){
   const logisticFit=logisticTuning.model;
   const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
     predictTemporalLogisticProbability(
-      buildTcnLstmAnchorFeatures(row.temporal_sequence),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ));
   const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
     predictCrossFittedCalibratedTemporalLogisticProbability(
-      buildTcnLstmAnchorFeatures(row.temporal_sequence),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ));
   const logisticArtifact=makeArtifact({
-    name:'RADARX_LOGISTIC_TCN_LSTM_MATCHED_SEQUENCE_BASELINE',
-    family:'LOGISTIC_REGRESSION',version:'TEMPORAL_SEQUENCE_MEAN_STD_58_V1',
-    sourceCommitSha,featureSchemaId:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA,
-    featureNames:[...LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES],
+    name:'RADARX_LOGISTIC_TCN_LSTM_FULL_ORDERED_SEQUENCE_BASELINE',
+    family:'LOGISTIC_REGRESSION',version:'FULL_ORDERED_TEMPORAL_SEQUENCE_696_V1',
+    sourceCommitSha,featureSchemaId:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    featureNames:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
     normalization:{mean:logisticFit.standardizer.means,std:logisticFit.standardizer.scales},
     modelState:{
       schema:'RADARX_TRAINED_TEMPORAL_LOGISTIC_SEQUENCE_SUMMARY_STATE_V1',
@@ -426,9 +427,9 @@ async function main(){
   modelArtifactsByModel.LOGISTIC_REGRESSION=logisticArtifact;
   trainingArtifacts.LOGISTIC_REGRESSION={
     artifact_sha256:logisticArtifact.artifact_sha256,
-    feature_schema_id:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA,
-    feature_count:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES.length,
-    feature_transform:'24X29_CHANNEL_MEAN_AND_STANDARD_DEVIATION',
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
+    feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
     cv_status:logisticTuning.report.status,
     fold_count:logisticTuning.report.fold_count,
     selected_configuration:logisticTuning.report.selected_configuration,
@@ -447,17 +448,17 @@ async function main(){
   );
   training.logistic_baseline_temporal_cv={
     ...logisticTuning.report,
-    feature_schema_id:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA,
-    feature_names:[...LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES],
-    feature_transform:'24X29_CHANNEL_MEAN_AND_STANDARD_DEVIATION',
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    feature_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
+    feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
     feature_source:'SAME_CLOSED_24X29_TEMPORAL_SEQUENCE_AS_TCN_LSTM'
   };
   training.logistic_baseline_comparison={
     schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V2',
     primary_promotion_baseline:{
-      feature_schema_id:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA,
-      feature_count:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES.length,
-      feature_transform:'24X29_CHANNEL_MEAN_AND_STANDARD_DEVIATION',
+      feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+      feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
+      feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
       same_temporal_channel_source_as_tcn_lstm:true
     },
     legacy_fixed_reference_role:'DIAGNOSTIC_ONLY_18_FEATURE_COGNITIVE_REPRESENTATION',
@@ -491,7 +492,7 @@ async function main(){
   };
   const logisticRawPredictionRows=predictionRows(eventRows,
     row=>predictTemporalLogisticProbability(
-      buildTcnLstmAnchorFeatures(row.temporal_sequence),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ),{
       sourceCommitSha,artifactSha256:logisticArtifact.artifact_sha256,
       modelName:'LOGISTIC_REGRESSION'
@@ -501,7 +502,7 @@ async function main(){
     LOGISTIC_REGRESSION:logisticRawPredictionRows.map(item=>{
       const row=eventRowsById.get(String(item.id));
       const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
-        buildTcnLstmAnchorFeatures(row.temporal_sequence),logisticFit
+        buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
       );
       return {
         ...item,
@@ -1251,8 +1252,8 @@ async function main(){
       target:row.target,sequence:row.temporal_sequence,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps,
       // The separate temporal Logistic execution-context model consumes the
-      // identical channel-mean/std transform used by the primary Logistic baseline.
-      logistic_feature_vector:buildTcnLstmAnchorFeatures(row.temporal_sequence)
+      // identical full ordered 24x29 flattened transform used by the primary Logistic baseline.
+      logistic_feature_vector:buildTcnLstmFlattenedFeatures(row.temporal_sequence)
     })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
     const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
       .sort((a,b)=>a-b);
@@ -1349,9 +1350,9 @@ async function main(){
           // influence this Logistic context model.
           externalLogisticExecutionContextProvider:(modelTrainingRows,scoringRows)=>{
             if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
-                row.logistic_feature_vector.length!==LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES.length)||
+                row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length)||
               scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
-                row.logistic_feature_vector.length!==LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES.length))
+                row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length))
               throw new TypeError('TCN_LSTM_TEMPORAL_LOGISTIC_FEATURE_VECTOR_MISSING');
             const temporalLogisticContext=fitTunedTemporalLogisticBaseline(
               modelTrainingRows,
@@ -1379,8 +1380,8 @@ async function main(){
             return {
               model:temporalLogisticContext.model,
               report:temporalLogisticContext.report,
-              feature_schema_id:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA,
-              feature_schema_names:[...LOGISTIC_SEQUENCE_SUMMARY_FEATURE_NAMES],
+              feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+              feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
               predictions
             };
           },
@@ -1522,7 +1523,7 @@ async function main(){
               throw new Error('TCN_LSTM_TEMPORAL_LOGISTIC_EXECUTION_CONTEXT_NOT_AVAILABLE');
             const externalLogisticContextProbability=
               predictCrossFittedCalibratedTemporalLogisticProbability(
-                buildTcnLstmAnchorFeatures(sourceRow.temporal_sequence),
+                buildTcnLstmFlattenedFeatures(sourceRow.temporal_sequence),
                 selectedFit.execution_logistic_context_model
               );
             const externalLogisticLogit=probabilityLogit(externalLogisticContextProbability);
