@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
   topKProbabilitySignals,topKThresholdSignals,topKMatchedCountSignals,
@@ -1745,6 +1746,27 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionRiskHeadPooledOnlyWeights=pooledOnly.downside_risk.weights;
   model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
+  const fitHurdleVariant=featureKey=>{
+    const netReturns=vectors.map(item=>Number(item.net));
+    const positiveCount=netReturns.filter(value=>value>0).length;
+    const nonPositiveCount=netReturns.length-positiveCount;
+    if(positiveCount<8||nonPositiveCount<8)return {
+      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1',fitted:false,
+      reason:'HURDLE_RETURN_HEAD_CLASS_SUPPORT_TOO_SMALL',
+      positive_rows:positiveCount,non_positive_rows:nonPositiveCount,
+      fit_boundary:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+      validation_or_holdout_used:false
+    };
+    return fitHurdleReturnHead(
+      vectors.map(item=>item[featureKey]),netReturns,
+      {learningRate:0.02,epochs:200,l2:0.05,minimumClassRows:8}
+    );
+  };
+  const hurdleReturnHeads={
+    LOGIT_CONTEXT_AUGMENTED:fitHurdleVariant('contextual'),
+    POOLED_ONLY:fitHurdleVariant('pooled')
+  };
+  model.executionHurdleReturnHeads=hurdleReturnHeads;
   model.executionHeadNormalizers={
     LOGIT_CONTEXT_AUGMENTED:{
       net_return:{feature_mean:contextual.net_return.feature_mean,
@@ -1781,6 +1803,26 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     net_return_target:'REALIZED_RETURN_PCT_MINUS_ROUND_TRIP_COST',
     downside_target:'MAX_0_NEGATIVE_MAX_ADVERSE_EXCURSION_PCT',
     target_clip_pct:[-30,30],validation_or_holdout_used:false,
+    hurdle_return_head:{
+      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1',
+      return_estimators:['POINTWISE_HUBER','HURDLE_EXPECTED_VALUE'],
+      pooled_only:{
+        fitted:hurdleReturnHeads.POOLED_ONLY?.fitted===true,
+        positive_rows:hurdleReturnHeads.POOLED_ONLY?.positive_rows??0,
+        non_positive_rows:hurdleReturnHeads.POOLED_ONLY?.non_positive_rows??0,
+        empirical_positive_rate:hurdleReturnHeads.POOLED_ONLY?.empirical_positive_rate??null,
+        class_reweighting_used:hurdleReturnHeads.POOLED_ONLY?.class_reweighting_used??false
+      },
+      logit_context_augmented:{
+        fitted:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.fitted===true,
+        positive_rows:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.positive_rows??0,
+        non_positive_rows:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.non_positive_rows??0,
+        empirical_positive_rate:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.empirical_positive_rate??null,
+        class_reweighting_used:hurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED?.class_reweighting_used??false
+      },
+      fit_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+      validation_or_holdout_used:false
+    },
     score_context:{
       schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       features:[
@@ -1877,9 +1919,19 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile,{
     Number(normalizers.downside_risk.target_mean);
   if(!finite(predictedNet)||!finite(predictedRisk))
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_PREDICTION_NON_FINITE:'+normalizationVariant);
+  const hurdleModel=profile.model.executionHurdleReturnHeads?.[normalizationVariant];
+  const hurdlePrediction=hurdleModel?.fitted===true
+    ?predictHurdleExpectedNetReturn(input.features,hurdleModel):null;
   return {
     variant,input_feature_schema:input.schema,input_feature_count:input.features.length,
     predicted_net_return_pct:Number(predictedNet),
+    predicted_hurdle_net_return_pct:hurdlePrediction?.expected_net_return_pct??null,
+    predicted_positive_net_return_probability:
+      hurdlePrediction?.probability_positive_net_return??null,
+    hurdle_positive_net_return_mean_pct:
+      hurdlePrediction?.positive_net_return_mean_pct??null,
+    hurdle_non_positive_net_return_mean_pct:
+      hurdlePrediction?.non_positive_net_return_mean_pct??null,
     predicted_downside_risk_pct:Math.max(0,Number(predictedRisk))
   };
 }
@@ -1961,27 +2013,43 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
  * deliberately separate from this return/risk score.
  */
 export function predictTcnLstmHybridExecutionScore(sequence,profile,{
-  externalLogisticLogit=null
+  externalLogisticLogit=null,variant='LOGIT_CONTEXT_AUGMENTED'
 }={}) {
   const prediction=predictTcnLstmHybridExecutionHeads(sequence,profile,{
-    externalLogisticLogit
+    externalLogisticLogit,variant
   });
+  const contextual=variant==='LOGIT_CONTEXT_AUGMENTED';
+  const returnEstimator=contextual
+    ?profile?.execution_return_estimator??'POINTWISE_HUBER'
+    :profile?.pooled_only_execution_return_estimator??'POINTWISE_HUBER';
+  const predictedNetReturn=returnEstimator==='HURDLE_EXPECTED_VALUE'
+    ?prediction.predicted_hurdle_net_return_pct:prediction.predicted_net_return_pct;
   const lambda=finite(profile?.execution_risk_penalty_weight)
     ?clamp(Number(profile.execution_risk_penalty_weight),0,8):null;
-  if(lambda===null)
-    return {status:'UNAVAILABLE',reason:'FROZEN_EXECUTION_RISK_PENALTY_NOT_SELECTED',
-      predicted_net_return_pct:prediction.predicted_net_return_pct,
-      predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
-      risk_penalty_weight:null,risk_adjusted_net_return_score:null};
-  const score=prediction.predicted_net_return_pct-
-    lambda*prediction.predicted_downside_risk_pct;
-  if(!finite(score))
-    return {status:'UNAVAILABLE',reason:'EXECUTION_RISK_ADJUSTED_SCORE_NON_FINITE',
-      predicted_net_return_pct:prediction.predicted_net_return_pct,
+  if(lambda===null||!finite(predictedNetReturn))
+    return {status:'UNAVAILABLE',
+      reason:lambda===null?'FROZEN_EXECUTION_RISK_PENALTY_NOT_SELECTED':
+        'SELECTED_RETURN_ESTIMATOR_UNAVAILABLE',
+      return_estimator:returnEstimator,
+      predicted_net_return_pct:finite(predictedNetReturn)?Number(predictedNetReturn):null,
+      predicted_pointwise_net_return_pct:prediction.predicted_net_return_pct,
+      predicted_hurdle_net_return_pct:prediction.predicted_hurdle_net_return_pct,
+      predicted_positive_net_return_probability:prediction.predicted_positive_net_return_probability,
       predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
       risk_penalty_weight:lambda,risk_adjusted_net_return_score:null};
-  return {status:'AVAILABLE',score_semantics:'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
-    predicted_net_return_pct:Number(prediction.predicted_net_return_pct),
+  const score=Number(predictedNetReturn)-lambda*prediction.predicted_downside_risk_pct;
+  if(!finite(score))
+    return {status:'UNAVAILABLE',reason:'EXECUTION_RISK_ADJUSTED_SCORE_NON_FINITE',
+      return_estimator:returnEstimator,predicted_net_return_pct:Number(predictedNetReturn),
+      predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
+      risk_penalty_weight:lambda,risk_adjusted_net_return_score:null};
+  return {status:'AVAILABLE',
+    score_semantics:'SELECTED_PREDICTED_NET_RETURN_ESTIMATOR_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+    return_estimator:returnEstimator,
+    predicted_net_return_pct:Number(predictedNetReturn),
+    predicted_pointwise_net_return_pct:Number(prediction.predicted_net_return_pct),
+    predicted_hurdle_net_return_pct:prediction.predicted_hurdle_net_return_pct,
+    predicted_positive_net_return_probability:prediction.predicted_positive_net_return_probability,
     predicted_downside_risk_pct:Number(prediction.predicted_downside_risk_pct),
     risk_penalty_weight:lambda,
     risk_adjusted_net_return_score:Number(score)};
@@ -2002,6 +2070,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     rows.some(row=>!finite(row?.at)||!row?.first_touch||
       !finite(row?.realized_return_pct)||!finite(row?.max_adverse_excursion_pct))||
     executionPredictions.some(x=>!finite(x?.predicted_net_return_pct)||
+      (x?.predicted_hurdle_net_return_pct!==null&&
+        x?.predicted_hurdle_net_return_pct!==undefined&&
+        !finite(x.predicted_hurdle_net_return_pct))||
       !finite(x?.predicted_downside_risk_pct)||x.predicted_downside_risk_pct<0)||
     logisticLogits.some(x=>!finite(x)))
     return unavailable('INNER_SELECTION_EXECUTION_EVIDENCE_INVALID');
@@ -2027,13 +2098,19 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
   // Top-K=1 is fixed in advance. Only the score cut-off is selected here;
   // the threshold is computed from the best candidate score in each inner
   // selection bucket, then frozen for the untouched outer-validation block.
-  for(const lambda of [0.1,0.25,0.5,1,2,4,8]){
-    const riskScores=executionPredictions.map(item=>
-      Number(item.predicted_net_return_pct)-lambda*Number(item.predicted_downside_risk_pct));
-    const bestScoreByGroup=eligible.map(indices=>
-      Math.max(...indices.map(index=>riskScores[index])));
-    const sortedBestScores=[...bestScoreByGroup].sort((a,b)=>a-b);
-    for(const percentile of abstentionPercentileGrid){
+  const returnEstimators=[
+    {name:'POINTWISE_HUBER',field:'predicted_net_return_pct'},
+    ...(executionPredictions.every(item=>finite(item?.predicted_hurdle_net_return_pct))
+      ?[{name:'HURDLE_EXPECTED_VALUE',field:'predicted_hurdle_net_return_pct'}]:[])
+  ];
+  for(const returnEstimator of returnEstimators){
+    for(const lambda of [0.1,0.25,0.5,1,2,4,8]){
+      const riskScores=executionPredictions.map(item=>
+        Number(item[returnEstimator.field])-lambda*Number(item.predicted_downside_risk_pct));
+      const bestScoreByGroup=eligible.map(indices=>
+        Math.max(...indices.map(index=>riskScores[index])));
+      const sortedBestScores=[...bestScoreByGroup].sort((a,b)=>a-b);
+      for(const percentile of abstentionPercentileGrid){
       const position=(sortedBestScores.length-1)*Number(percentile);
       const lower=Math.floor(position),upper=Math.ceil(position);
       const innerQuantileThreshold=lower===upper?sortedBestScores[lower]:
@@ -2079,6 +2156,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
           modelMetrics.max_drawdown_pct<=anchorMetrics.max_drawdown_pct
       };
       trials.push({
+        return_estimator:returnEstimator.name,
         risk_penalty_weight:lambda,
         top_k_per_timestamp:1,
         minimum_risk_adjusted_score:Number(threshold),
@@ -2099,6 +2177,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
           ?Number((modelMetrics.net_pnl_pct-anchorMetrics.net_pnl_pct).toFixed(6)):null,
         gates,passed:Object.values(gates).every(Boolean)
       });
+      }
     }
   }
   trials.sort((a,b)=>Number(b.passed)-Number(a.passed)||
@@ -2127,6 +2206,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     maximum_drawdown_pct:maximumDrawdownPct,
     top_k_per_timestamp:1,
     passed,
+    selected_return_estimator:best?.return_estimator??'POINTWISE_HUBER',
     selected_risk_penalty_weight:best?.risk_penalty_weight??null,
     selected_top_k_per_timestamp:1,
     selected_minimum_risk_adjusted_score:best?.minimum_risk_adjusted_score??null,
@@ -3211,11 +3291,15 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       finite(executionRiskPolicy.selected_risk_penalty_weight)&&
       finite(executionRiskPolicy.selected_minimum_risk_adjusted_score)){
       fit.execution_risk_penalty_weight=executionRiskPolicy.selected_risk_penalty_weight;
+      fit.execution_return_estimator=executionRiskPolicy.selected_return_estimator??'POINTWISE_HUBER';
       fit.execution_risk_policy=executionRiskPolicy;
     }
     if(pooledOnlyExecutionRiskPolicy.status!=='UNAVAILABLE'&&
       finite(pooledOnlyExecutionRiskPolicy.selected_risk_penalty_weight)&&
       finite(pooledOnlyExecutionRiskPolicy.selected_minimum_risk_adjusted_score)){
+      fit.pooled_only_execution_risk_penalty_weight=pooledOnlyExecutionRiskPolicy.selected_risk_penalty_weight;
+      fit.pooled_only_execution_return_estimator=
+        pooledOnlyExecutionRiskPolicy.selected_return_estimator??'POINTWISE_HUBER';
       fit.pooled_only_execution_risk_policy=pooledOnlyExecutionRiskPolicy;
     }
     const selectionLogits = selectionRows.map(row => {
