@@ -3746,7 +3746,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       execution_heads_fitted,return_selection_diagnostics,
       pooled_only_execution_risk_policy,execution_head_context_ablation,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
-      composite_improvement,return_selection_diagnostics,fit})=>({
+      composite_improvement,fit})=>({
       name,config,ranking_score_method,ranking_score_domain,
       selection_brier:Number(selection_brier.toFixed(8)),
       logistic_selection_brier:Number(logistic_selection_brier.toFixed(8)),
