@@ -78,8 +78,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: build224-neural-closure-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  # Push and pull_request for the same candidate branch share a lock.
+  group: build224-neural-closure-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   regression:
