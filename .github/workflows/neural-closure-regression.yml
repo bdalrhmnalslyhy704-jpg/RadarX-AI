@@ -39,6 +39,7 @@ on:
       - 'phase2/tests/dense-four-hour-generalization.test.mjs'
   pull_request:
     branches:
+      - research/build224-point-in-time-liquidity-20261117
       - research/daily-early-riser-mlp-budget-20261113
       - research/build224-tcn-v11-inference-coverage-20261116
       - research/build224-neural-closure-calibration-parity-20261116
