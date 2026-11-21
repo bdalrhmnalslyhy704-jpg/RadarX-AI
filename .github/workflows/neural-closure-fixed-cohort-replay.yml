@@ -178,11 +178,17 @@ jobs:
             context_abstention_threshold_frozen:contextualAbstention?.enabled===true&&
               Number.isFinite(contextualAbstention?.minimum_risk_adjusted_score)&&
               contextualAbstention?.source_partition==='INNER_SELECTION_ONLY'&&
-              contextualAbstention?.threshold_refitted_on_outer_validation===false,
+              contextualAbstention?.threshold_refitted_on_outer_validation===false&&
+               contextualAbstention?.strictly_positive_score_required===true&&
+               contextualAbstention?.score_floor_rule===
+                 'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
             pooled_abstention_threshold_frozen:pooledAbstention?.enabled===true&&
               Number.isFinite(pooledAbstention?.minimum_risk_adjusted_score)&&
               pooledAbstention?.source_partition==='INNER_SELECTION_ONLY'&&
-              pooledAbstention?.threshold_refitted_on_outer_validation===false,
+              pooledAbstention?.threshold_refitted_on_outer_validation===false&&
+               pooledAbstention?.strictly_positive_score_required===true&&
+               pooledAbstention?.score_floor_rule===
+                 'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
             genuine_context_abstention:contextualTrial?.abstention_active===true&&
               Number(contextualTrial?.abstained_decision_group_count)>0,
             genuine_pooled_abstention:pooledTrial?.abstention_active===true&&
