@@ -586,7 +586,9 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
   assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
   assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.logistic_anchor_signal_counts_matched,true);
   assert.equal(policy.selected_trial.logistic_anchor_trade_counts_matched,true);
+  assert.equal(policy.selected_trial.gates.matched_logistic_executed_trade_count,true);
 });
 
 test('score-conditioned execution-head ablation requires strict inner-selection improvement over pooled-only reference',()=>{
