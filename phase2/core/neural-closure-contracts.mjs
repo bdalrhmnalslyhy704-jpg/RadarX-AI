@@ -2416,7 +2416,10 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       strictly_positive_score_required:minimumRiskAdjustedScore!==null,
       score_floor_rule:minimumRiskAdjustedScore===null?null:
         'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
-      baseline_trade_counts_matched:true
+      baseline_signal_counts_matched:trials.every(row=>
+        row.logistic_matched_candidate_signal_counts===true),
+      baseline_executed_trade_counts_matched:trials.every(row=>
+        row.logistic_matched_candidate_trade_counts===true)
     },
     portfolio_policy:NEURAL_CLOSURE_PORTFOLIO_POLICY,
     lambda_refitted_on_outer_validation:false,
