@@ -176,7 +176,7 @@ test('fixed-cohort promotion Logistic consumes and persists the full ordered 24x
   assert.match(trainer,/logisticTrainingVectors=split\.train\.map\(row=>\s*buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)\)/);
   assert.match(trainer,/predictTemporalLogisticProbability\([\s\S]*?buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/);
   assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA/);
-  assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES\.length===TCN_LSTM_STEPS\*TCN_LSTM_INPUT_CHANNELS/);
+  assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES\.length!==TCN_LSTM_STEPS\*TCN_LSTM_INPUT_CHANNELS/);
   assert.match(trainer,/modelArtifactsByModel\.LOGISTIC_REGRESSION=logisticArtifact/);
   assert.match(trainer,/trainingArtifacts\.LOGISTIC_REGRESSION=/);
   assert.match(trainer,/feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE'/);
