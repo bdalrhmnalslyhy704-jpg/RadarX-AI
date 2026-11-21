@@ -47,9 +47,37 @@ import {
 } from '../core/temporal-lstm-hybrid.mjs';
 import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
   evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
+import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from '../core/hurdle-return-head.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
+
+test('hurdle return head estimates probability-weighted net return without class reweighting',()=>{
+  const features=[],returns=[];
+  for(let index=0;index<200;index++){
+    const profitable=index%10<2;
+    features.push([profitable?1:-1,Math.sin(index*0.17)]);
+    returns.push(profitable?1.5:-0.6);
+  }
+  const head=fitHurdleReturnHead(features,returns,{
+    learningRate:0.02,epochs:200,l2:0.05,minimumClassRows:10
+  });
+  assert.equal(head.schema,'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1');
+  assert.equal(head.fitted,true);
+  assert.equal(head.positive_rows,40);
+  assert.equal(head.non_positive_rows,160);
+  assert.equal(head.class_reweighting_used,false);
+  assert.equal(head.positive_probability_class_weight,1);
+  assert.equal(head.negative_probability_class_weight,1);
+  assert.equal(head.validation_or_holdout_used,false);
+  const high=predictHurdleExpectedNetReturn([1,0],head);
+  const low=predictHurdleExpectedNetReturn([-1,0],head);
+  assert.ok(high.probability_positive_net_return>low.probability_positive_net_return);
+  assert.ok(high.expected_net_return_pct>0);
+  assert.ok(low.expected_net_return_pct<0);
+  const restored=JSON.parse(JSON.stringify(head));
+  assert.deepEqual(predictHurdleExpectedNetReturn([1,0],restored),high);
+});
 
 test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
   const bucketMs=15*60*1000;
@@ -449,6 +477,14 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
     'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE');
+  assert.equal(profile.training.execution_regression_heads.hurdle_return_head.fit_partition,
+    'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY');
+  assert.equal(profile.training.execution_regression_heads.hurdle_return_head.validation_or_holdout_used,
+    false);
+  assert.equal(profile.training.execution_regression_heads.hurdle_return_head.logit_context_augmented.fitted,
+    true);
+  assert.equal(profile.model.executionHurdleReturnHeads.LOGIT_CONTEXT_AUGMENTED.fitted,true);
+  assert.equal(profile.model.executionHurdleReturnHeads.POOLED_ONLY.fitted,true);
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
     5*TCN_LSTM_HIDDEN+4);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
@@ -520,6 +556,9 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.equal(pooledOnlyPrediction.input_feature_count,TCN_LSTM_HIDDEN);
   assert.ok(Number.isFinite(pooledOnlyPrediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
+  assert.ok(Number.isFinite(prediction.predicted_hurdle_net_return_pct));
+  assert.ok(Number.isFinite(prediction.predicted_positive_net_return_probability));
+  assert.ok(Number.isFinite(pooledOnlyPrediction.predicted_hurdle_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
   const normalizedReturnFeatures=contextInputs.features.map((value,index)=>
     (value-contextualNormalizers.net_return.feature_mean[index])/
@@ -616,6 +655,20 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.equal(policy.selected_trial.logistic_anchor_signal_counts_matched,true);
   assert.equal(policy.selected_trial.logistic_anchor_trade_counts_matched,true);
   assert.equal(policy.selected_trial.gates.matched_logistic_executed_trade_count,true);
+
+  const hurdleOnlyPredictions=predictions.map(item=>({
+    ...item,predicted_net_return_pct:-0.2,
+    predicted_hurdle_net_return_pct:item.predicted_net_return_pct
+  }));
+  const hurdlePolicy=selectTcnLstmExecutionRiskPolicy(rows,hurdleOnlyPredictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8
+  });
+  assert.equal(hurdlePolicy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(hurdlePolicy.selected_return_estimator,'HURDLE_EXPECTED_VALUE');
+  assert.equal(hurdlePolicy.selected_trial.return_estimator,'HURDLE_EXPECTED_VALUE');
+  assert.equal(hurdlePolicy.selection_partition_only,true);
+  assert.equal(hurdlePolicy.holdout_values_used,false);
 });
 
 test('selective execution policy stays abstained when every predicted risk-adjusted net-return score is nonpositive',()=>{
