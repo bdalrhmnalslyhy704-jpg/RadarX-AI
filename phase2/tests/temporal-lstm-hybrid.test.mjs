@@ -434,7 +434,8 @@ test('separate auxiliary rank head changes ranking logits without changing class
   assert.equal(after.logit,before.logit);
   assert.notEqual(after.ranking_score,before.ranking_score);
   assert.equal(after.ranking_score,after.ranking_logit);
-  assert.equal(after.ranking_residual_logit,after.ranking_score);
+  assert.equal(Object.hasOwn(after,'ranking_residual_logit'),false,
+    'the independent rank head must not be exposed as a classifier residual');
 });
 
 
