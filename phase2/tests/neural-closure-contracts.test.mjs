@@ -20,6 +20,7 @@ import {
   realizedExecutionGrossReturnPct,realizedExecutionNetReturnPct,
   simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY,
   NEURAL_CLOSURE_RANKING_BUCKET_MS,topKProbabilitySignals,
+  topKThresholdSignals,topKMatchedCountSignals,
   evaluateExternalExecutionRiskTopK,runNeuralClosureBenchmark,
   bootstrapOuterValidationUncertainty,
   NEURAL_CLOSURE_HOLDOUT_OPENING_REQUIRED_CHECKS,
@@ -1261,6 +1262,38 @@ test('missing Logistic predictions prevent a matched comparison without changing
   assert.equal(report.holdout_access.opened,false);
 });
 
+test('score threshold policy abstains per bucket and Logistic matches its trade count',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const scores=rows.map((row,index)=>{
+    const group=Math.floor(index/15),within=index%15;
+    if(within===0)return group===0?1.0:0.1;
+    return group===0?0.2:0.05;
+  });
+  const logistic=rows.map((row,index)=>{
+    const within=index%15;
+    return within===1?0.99:within===0?0.5:0.1;
+  });
+  const selected=topKThresholdSignals(rows,scores,1,0.5);
+  assert.equal(selected.signal_count,1);
+  assert.equal(selected.decision_group_count,2);
+  assert.equal(selected.abstained_decision_group_count,1);
+  assert.equal(selected.abstention_active,true);
+  const matched=topKMatchedCountSignals(rows,logistic,selected);
+  assert.equal(matched.signal_count,selected.signal_count);
+  assert.equal(matched.matches_target_counts_by_bucket,true);
+  const report=evaluateExternalExecutionRiskTopK(rows,scores,logistic,{
+    riskPenaltyWeights:rows.map(()=>0.5),topKGrid:[1],
+    roundTripCostBps:30,minimumRiskAdjustedScore:0.5,abstentionPercentile:0.4
+  });
+  assert.equal(report.status,'AVAILABLE');
+  assert.equal(report.frozen_abstention_policy.enabled,true);
+  assert.equal(report.frozen_abstention_policy.threshold_refitted_on_outer_validation,false);
+  assert.equal(report.trials[0].neural_selected_count,1);
+  assert.equal(report.trials[0].logistic_selected_count,1);
+  assert.equal(report.trials[0].abstention_active,true);
+  assert.equal(report.trials[0].logistic_matched_candidate_trade_counts,true);
+});
+
 test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
   const rows=makeRows({days:60,rowsPerDay:80});
   const sourceCommitSha='9'.repeat(40);
@@ -1283,7 +1316,15 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
     executionScoresByPolicy:{
       LOGIT_CONTEXT_AUGMENTED:contextScores,
       POOLED_ONLY:pooledScores,
+      LOGISTIC_MATCHED_CONTEXT:logisticScores,
+      LOGISTIC_MATCHED_POOLED:logisticScores,
       LOGISTIC_REGRESSION:logisticScores
+    },
+    executionPolicyConfigurations:{
+      LOGIT_CONTEXT_AUGMENTED:{minimum_score:0.29},
+      POOLED_ONLY:{minimum_score:0.29},
+      LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
+      LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
     },
     topKGrid:[1],roundTripCostBps:30,
     repetitions:100,blockLengthDays:2,seed:22429,maxConcurrentPositions:30
@@ -1311,6 +1352,12 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
   assert.equal(context.status,'AVAILABLE');
   assert.equal(context.valid_repetitions,100);
   assert.ok(Number.isFinite(context.lower_95)&&Number.isFinite(context.upper_95));
+  const contextVsMatchedLogistic=result.execution.paired_strategy_differences['1']
+    .LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT.net_pnl_pct;
+  assert.equal(contextVsMatchedLogistic.status,'AVAILABLE');
+  assert.equal(contextVsMatchedLogistic.valid_repetitions,100);
+  assert.equal(result.execution.matched_comparator_trade_counts_by_decision_bucket,true);
+  assert.equal(result.execution.selective_policies_use_inner_selection_thresholds_only,true);
   const drawdown=result.execution.strategy_confidence_intervals['1']
     .LOGIT_CONTEXT_AUGMENTED.max_drawdown_pct;
   assert.equal(drawdown.status,'AVAILABLE');
