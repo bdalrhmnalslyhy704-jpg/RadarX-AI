@@ -926,7 +926,7 @@ export function inspectTcnLstmForward(sequence, model, baselineLogit = 0, {
   const rankingLogit = rankingScore;
   return {
     probability, logit, ranking_score: rankingScore, ranking_logit: rankingLogit,
-    ranking_residual_logit: rankingScore, residual_logit: residualLogit,
+    residual_logit: residualLogit,
     ranking_features: rankingFeatures, normalized_ranking_features: normalizedRankingFeatures,
     attention_weights: attentionWeights,
     tcn_latent_sequence: current,
@@ -1600,10 +1600,8 @@ function evaluatePairwiseReturnRankingLoss(rows,pairs,model,anchor) {
   let total=0;
   for(const pair of pairs){
     const high=rows[pair.high_index],low=rows[pair.low_index];
-    const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
-    const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
-    const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).ranking_score;
-    const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).ranking_score;
+    const highLogit=inspectTcnLstmForward(high.sequence,model,0).ranking_score;
+    const lowLogit=inspectTcnLstmForward(low.sequence,model,0).ranking_score;
     total+=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit).loss;
   }
   return total/pairs.length;
@@ -2384,9 +2382,8 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
 }
 
 /**
- * Fit a linear residual ranking head on frozen TCN-LSTM pooled representations.
- * It starts from the training-only Logistic anchor, and never backpropagates
- * into classifier/encoder weights, isolating the calibrated probability path.
+ * Fit an independent linear rank head on frozen multi-scale TCN-LSTM states.
+ * Its score is not initialized from or added to any Logistic/classifier logit.
  */
 function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
   learningRate=0.03,epochs=40,l2=0.001,patience=10
@@ -2398,10 +2395,9 @@ function fitTcnLstmPairwiseRankingHead(rows,pairs,model,anchor,{
     !finite(l2)||l2<0||l2>1||
     !Number.isInteger(patience)||patience<1||patience>50)
     throw new TypeError('TCN_LSTM_RANKING_HEAD_CONFIGURATION_INVALID');
-  const rawVectors=rows.map(row=>{
-    const baselineLogit=predictTcnLstmLogisticLogit(row.sequence,anchor);
-    return inspectTcnLstmForward(row.sequence,model,baselineLogit).ranking_features;
-  });
+  const rawVectors=rows.map(row=>
+    inspectTcnLstmForward(row.sequence,model,0).ranking_features
+  );
   const featureCount=TCN_LSTM_RANKING_FEATURE_COUNT;
   if(rawVectors.some(row=>!Array.isArray(row)||row.length!==featureCount||row.some(value=>!finite(value))))
     throw new TypeError('TCN_LSTM_RANKING_FEATURE_MATRIX_INVALID');
@@ -2943,8 +2939,7 @@ export function predictTcnLstmHybridProbability(sequence, profile) {
 export function predictTcnLstmHybridRankingScore(sequence,profile){
   if(!profile?.model||!profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
-  const baselineLogit=predictTcnLstmLogisticLogit(sequence,profile.baseline_fit);
-  const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
+  const forward=inspectTcnLstmForward(sequence,profile.model,0);
   return Number(forward.ranking_score);
 }
 // Legacy name retained as an alias for the raw independent rank score.
@@ -3480,8 +3475,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).logit;
     });
     const selectionRankingScores = selectionRows.map(row => {
-      const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
-      return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).ranking_score;
+      return inspectTcnLstmForward(row.sequence,fit.model,0).ranking_score;
     });
     // Classification and return ranking are evaluated from independent heads.
     // No ranking score is sigmoid-transformed or added to a classifier/Logistic logit.
