@@ -847,7 +847,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         },
         predictions:scoringRows.map(row=>({
           id:String(row.id),at:Number(row.at),
-          raw_logit:Number(row.sequence[0][1]),
+          raw_logit:(Number(row.at)%997)/997-0.5,
           logit:-0.25
         }))
       };
@@ -867,7 +867,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.training_residual_anchor.kind,
     'TCN_LSTM_FROZEN_POOLED_LOGISTIC_ANCHOR_V1');
   const expectedRawProbabilities=selectionRows.map(row=>
-    1/(1+Math.exp(-Number(row.sequence[0][1])))
+    1/(1+Math.exp(-((Number(row.at)%997)/997-0.5)))
   );
   const expectedRawBrier=selectionRows.reduce((sum,row,index)=>
     sum+(expectedRawProbabilities[index]-row.target)**2,0
