@@ -10,6 +10,7 @@ on:
       - research/build224-temporal-logistic-cv-20261120
       - research/build224-tcn-lstm-external-logistic-execution-context-20261121
       - research/build224-tcn-lstm-execution-head-gates-20261121
+      - research/build224-tcn-lstm-selective-abstention-20261121
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
@@ -164,14 +165,37 @@ jobs:
           const contextVsPooledLower95=bootstrap?.execution?.paired_strategy_differences?.['1']?.
             LOGIT_CONTEXT_AUGMENTED_MINUS_POOLED_ONLY?.net_pnl_pct?.lower_95??null;
           const contextVsLogisticLower95=bootstrap?.execution?.paired_strategy_differences?.['1']?.
-            LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_REGRESSION?.net_pnl_pct?.lower_95??null;
+            LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_MATCHED_CONTEXT?.net_pnl_pct?.lower_95??null;
+          const contextualAbstention=contextualRisk?.frozen_abstention_policy??null;
+          const pooledAbstention=pooledOnlyRisk?.frozen_abstention_policy??null;
           const contextualExecutionHeadGates={
             tcn_lstm_probability_outer_gate:tcn?.validation?.outer_validation_gate?.passed===true,
             ablation_available:ablation?.status==='AVAILABLE',
             exact_matched_opportunities:ablation?.same_outer_validation_opportunities===true,
-            same_frozen_risk_penalty:ablation?.same_frozen_lambda_for_both_variants===true,
-            positive_frozen_risk_penalty:Number(contextualRisk?.risk_penalty_weight)>0,
-            outer_validation_selection_isolation:ablation?.outer_validation_used_for_lambda_or_top_k_selection===false,
+            both_policies_frozen_on_inner_selection:ablation?.both_policies_frozen_on_selection===true,
+            separate_positive_risk_penalties:Number(contextualRisk?.risk_penalty_weight)>0&&
+              Number(pooledOnlyRisk?.risk_penalty_weight)>0,
+            context_abstention_threshold_frozen:contextualAbstention?.enabled===true&&
+              Number.isFinite(contextualAbstention?.minimum_risk_adjusted_score)&&
+              contextualAbstention?.source_partition==='INNER_SELECTION_ONLY'&&
+              contextualAbstention?.threshold_refitted_on_outer_validation===false,
+            pooled_abstention_threshold_frozen:pooledAbstention?.enabled===true&&
+              Number.isFinite(pooledAbstention?.minimum_risk_adjusted_score)&&
+              pooledAbstention?.source_partition==='INNER_SELECTION_ONLY'&&
+              pooledAbstention?.threshold_refitted_on_outer_validation===false,
+            genuine_context_abstention:contextualTrial?.abstention_active===true&&
+              Number(contextualTrial?.abstained_decision_group_count)>0,
+            genuine_pooled_abstention:pooledTrial?.abstention_active===true&&
+              Number(pooledTrial?.abstained_decision_group_count)>0,
+            logistic_comparator_matches_context_trade_counts:
+              contextualTrial?.logistic_matched_candidate_trade_counts===true&&
+              contextualMetrics?.trade_count===logisticMetrics?.trade_count,
+            logistic_comparator_matches_pooled_trade_counts:
+              pooledTrial?.logistic_matched_candidate_trade_counts===true&&
+              pooledMetrics?.trade_count===pooledTrial?.logistic_metrics?.trade_count,
+            outer_validation_selection_isolation:
+              ablation?.outer_validation_used_for_lambda_or_top_k_or_threshold_selection===false&&
+              ablation?.outer_validation_used_for_lambda_or_top_k_selection===false,
             holdout_isolation:ablation?.holdout_rows_or_scores_used===false,
             round_trip_cost_30_bps:contextualRisk?.round_trip_cost_bps===30&&
               pooledOnlyRisk?.round_trip_cost_bps===30&&ablation?.same_round_trip_cost_bps===30,
@@ -190,7 +214,7 @@ jobs:
               completeMetrics(logisticMetrics)&&contextualMetrics.max_drawdown_pct<=logisticMetrics.max_drawdown_pct,
             paired_95pct_net_pnl_superiority_vs_previous_head:Number.isFinite(contextVsPooledLower95)&&
               contextVsPooledLower95>0,
-            paired_95pct_net_pnl_superiority_vs_logistic:Number.isFinite(contextVsLogisticLower95)&&
+            paired_95pct_net_pnl_superiority_vs_matched_logistic:Number.isFinite(contextVsLogisticLower95)&&
               contextVsLogisticLower95>0
           };
           const executionHeadPassed=Object.values(contextualExecutionHeadGates).every(value=>value===true);
@@ -200,7 +224,15 @@ jobs:
               ?'EXECUTION_HEAD_SUPERIORITY_PROVEN_OUTER_VALIDATION_ONLY_HOLDOUT_STILL_LOCKED'
               :'EXECUTION_HEAD_SUPERIORITY_NOT_PROVEN_HOLDOUT_LOCKED',
             passed:executionHeadPassed,
-            primary_policy:{top_k_per_timestamp:primaryTopK,decision_bucket:'CLOSED_15M',selection:'PREDECLARED_NOT_SELECTED_ON_OUTER_VALIDATION'},
+            primary_policy:{
+              top_k_per_timestamp:primaryTopK,decision_bucket:'CLOSED_15M',
+              selection:'TOP_K_1_WITH_INNER_SELECTED_ABSTENTION_THRESHOLD',
+              abstention_threshold_source:'INNER_SELECTION_ONLY',
+              contextual_abstention_threshold:contextualAbstention?.minimum_risk_adjusted_score??null,
+              contextual_abstention_percentile:contextualAbstention?.percentile_selected_on_inner_selection??null,
+              pooled_only_abstention_threshold:pooledAbstention?.minimum_risk_adjusted_score??null,
+              pooled_only_abstention_percentile:pooledAbstention?.percentile_selected_on_inner_selection??null
+            },
             acceptance_gates:contextualExecutionHeadGates,
             metrics:{
               round_trip_cost_bps:contextualRisk?.round_trip_cost_bps??null,
@@ -209,7 +241,7 @@ jobs:
               logistic_regression:logisticMetrics,
               paired_net_pnl_difference_lower_95:{
                 contextual_minus_pooled_only:contextVsPooledLower95,
-                contextual_minus_logistic:contextVsLogisticLower95
+                contextual_minus_matched_logistic:contextVsLogisticLower95
               }
             },
             comparisons:{
@@ -219,7 +251,8 @@ jobs:
               pooled_only_risk_penalty_weight:pooledOnlyRisk?.risk_penalty_weight??null,
               bootstrap_status:bootstrap?.status??'UNAVAILABLE'
             },
-            diagnostic_top_k_trials:[2,3]
+            diagnostic_top_k_trials:[],
+            note:'Top-K=1 is fixed; abstention is the only inner-selected execution policy variable'
           };
           const scientificDecision={
             schema:'RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1',
