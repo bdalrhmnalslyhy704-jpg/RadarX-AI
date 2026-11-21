@@ -734,6 +734,64 @@ test('score-conditioned execution-head ablation requires strict inner-selection 
   assert.equal(missing.passed,false);
 });
 
+
+test('execution-head ablation treats a fully abstaining pooled policy as a zero-exposure reference',()=>{
+  const noExposure={
+    status:'ABSTAIN_NO_SELECTIVE_EXECUTION_POLICY_PASSED',
+    passed:false,threshold_frozen_before_outer_validation:true,
+    selected_trial:{
+      logistic_anchor_trade_counts_matched:true,
+      model_metrics:{
+        signal_count:0,trade_count:0,win_rate_pct:null,
+        net_pnl_pct:0,max_drawdown_pct:0,return_data_status:'COMPLETE'
+      }
+    }
+  };
+  const contextPolicy={
+    status:'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION',
+    passed:true,threshold_frozen_before_outer_validation:true,
+    minimum_win_rate_pct:55,maximum_drawdown_pct:8,
+    selected_trial:{
+      logistic_anchor_trade_counts_matched:true,
+      model_metrics:{
+        signal_count:30,trade_count:30,win_rate_pct:60,
+        net_pnl_pct:0.8,max_drawdown_pct:4,
+        return_data_status:'COMPLETE'
+      }
+    }
+  };
+  const evaluated=summarizeTcnLstmExecutionHeadContextAblation(noExposure,contextPolicy);
+  assert.equal(evaluated.status,'EVALUATED');
+  assert.equal(evaluated.pooled_only_no_exposure,true);
+  assert.equal(evaluated.comparison_reference_mode,'NO_EXPOSURE_ZERO_TRADE_REFERENCE');
+  assert.equal(evaluated.pooled_only_metrics.win_rate_pct,null);
+  assert.equal(evaluated.delta.win_rate_percentage_points,null);
+  assert.equal(evaluated.delta.drawdown_percentage_points,null);
+  assert.equal(evaluated.gates.context_policy_absolute_gates,true);
+  assert.equal(evaluated.gates.net_pnl_strictly_improved,true);
+  assert.equal(evaluated.gates.win_rate_not_worse,true);
+  assert.equal(evaluated.gates.drawdown_not_worse,true);
+  assert.equal(evaluated.passed,true);
+
+  const failedContext={
+    ...contextPolicy,passed:false,
+    selected_trial:{
+      ...contextPolicy.selected_trial,
+      model_metrics:{
+        signal_count:30,trade_count:30,win_rate_pct:54,
+        net_pnl_pct:0.8,max_drawdown_pct:9,
+        return_data_status:'COMPLETE'
+      }
+    }
+  };
+  const rejected=summarizeTcnLstmExecutionHeadContextAblation(noExposure,failedContext);
+  assert.equal(rejected.status,'EVALUATED');
+  assert.equal(rejected.passed,false);
+  assert.equal(rejected.gates.context_policy_absolute_gates,false);
+  assert.equal(rejected.gates.win_rate_not_worse,false);
+  assert.equal(rejected.gates.drawdown_not_worse,false);
+});
+
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
