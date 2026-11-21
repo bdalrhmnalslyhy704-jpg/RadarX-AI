@@ -1,0 +1,33 @@
+name: Build 224 Selective Abstention Focused Tests
+
+on:
+  push:
+    branches:
+      - phase2-selective-abstention-ci-20261121
+    paths:
+      - 'phase2/core/neural-closure-contracts.mjs'
+      - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/tests/neural-closure-contracts.test.mjs'
+      - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
+      - '.github/workflows/selective-abstention-focused-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  selective-abstention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run selective execution policy and frozen outer-validation tests
+        run: >-
+          node --test --test-timeout=120000
+          phase2/tests/neural-closure-contracts.test.mjs
+          phase2/tests/temporal-lstm-hybrid.test.mjs
