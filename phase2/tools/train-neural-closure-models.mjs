@@ -1349,6 +1349,7 @@ async function main(){
           // No execution-head/selection/calibration/outer-validation labels can
           // influence this Logistic context model.
           externalLogisticExecutionContextProvider:(modelTrainingRows,scoringRows)=>{
+          requireExternalLogisticSelectionBaseline:true,
             if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
                 row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length)||
               scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
@@ -1369,12 +1370,16 @@ async function main(){
                 maxEpochs:160,seed:22429
               });
             const predictions=scoringRows.map(row=>{
-              const probability=predictCrossFittedCalibratedTemporalLogisticProbability(
+              const rawProbability=predictTemporalLogisticProbability(
+                row.logistic_feature_vector,temporalLogisticContext.model
+              );
+              const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
                 row.logistic_feature_vector,temporalLogisticContext.model
               );
               return {
                 id:String(row.id),at:Number(row.at),
-                logit:probabilityLogit(probability)
+                raw_logit:probabilityLogit(rawProbability),
+                logit:probabilityLogit(calibratedProbability)
               };
             });
             return {
