@@ -11,7 +11,6 @@ on:
       - research/build224-tcn-lstm-external-logistic-execution-context-20261121
       - research/build224-tcn-lstm-execution-head-gates-20261121
     paths:
-      - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/core/temporal-logistic-baseline.mjs'
@@ -123,10 +122,17 @@ jobs:
           if(holdout?.opened!==false) failures.push('HOLDOUT_WAS_OPENED');
           if(holdout?.opening_protocol?.status!=='LOCKED') failures.push('HOLDOUT_PROTOCOL_NOT_LOCKED');
           if(holdout?.opening_protocol?.passed!==false) failures.push('HOLDOUT_PROTOCOL_UNEXPECTEDLY_APPROVED');
-          if((holdout?.opened_for_models??[]).length!==0) failures.push('HOLDOUT_SCORING_MODEL_LIST_NOT_EMPTY');
-          if(Number(report.integrity?.holdout_scored_rows)!==0) failures.push('HOLDOUT_PREDICTION_ROWS_NOT_ZERO');
-          if(manifest?.holdout?.opened!==false||manifest?.holdout?.metrics_read!==false||
-             Number(manifest?.holdout?.rows_included_in_scored_predictions)!==0) failures.push('MANIFEST_HOLDOUT_LOCK_MISMATCH');
+          if(!Array.isArray(holdout?.opened_for_models)||holdout.opened_for_models.length!==0)
+             failures.push('HOLDOUT_SCORING_MODEL_LIST_NOT_EMPTY');
+          // The fixed benchmark schema has no integrity.holdout_scored_rows field.
+          // Verify holdout isolation from the authoritative access state and manifest.
+          if(holdout?.opening_protocol?.holdout_metrics_read!==false)
+             failures.push('HOLDOUT_METRICS_READ_FLAG_INVALID');
+          if(manifest?.holdout?.opened!==false||
+             manifest?.holdout?.predictions_generated!==false||
+             manifest?.holdout?.metrics_read!==false||
+             Number(manifest?.holdout?.rows_included_in_scored_predictions)!==0)
+             failures.push('MANIFEST_HOLDOUT_LOCK_MISMATCH');
           if(Object.values(models).some(model=>model?.holdout?.evaluated===true||
              model?.holdout?.brier_score!==null&&model?.holdout?.brier_score!==undefined||
              model?.holdout?.net_pnl_pct!==null&&model?.holdout?.net_pnl_pct!==undefined)) {
@@ -163,6 +169,7 @@ jobs:
             ablation_available:ablation?.status==='AVAILABLE',
             exact_matched_opportunities:ablation?.same_outer_validation_opportunities===true,
             same_frozen_risk_penalty:ablation?.same_frozen_lambda_for_both_variants===true,
+            positive_frozen_risk_penalty:Number(contextualRisk?.risk_penalty_weight)>0,
             outer_validation_selection_isolation:ablation?.outer_validation_used_for_lambda_or_top_k_selection===false,
             holdout_isolation:ablation?.holdout_rows_or_scores_used===false,
             round_trip_cost_30_bps:contextualRisk?.round_trip_cost_bps===30&&
@@ -233,6 +240,18 @@ jobs:
               raw_brier:tcn?.validation?.raw_brier_score??null,
               calibrated_brier:tcn?.validation?.calibrated_brier_score??null,
               outer_validation_gate:tcn?.validation?.outer_validation_gate??null
+            },
+            inner_selection:{
+              status:tcnDiagnostics.selection_status??tcnDiagnostics.status??null,
+              baseline_selection_brier:tcnDiagnostics.baseline_selection_brier??null,
+              gate_results:tcnDiagnostics.selection_scoring?.gate_results??null,
+              candidates:(tcnDiagnostics.candidates??[]).map(candidate=>({
+                name:candidate.name??null,
+                selection_brier:candidate.selection_brier??null,
+                brier_improvement:candidate.brier_improvement??null,
+                pairwise_ranking_improvement:candidate.pairwise_ranking_improvement??null,
+                execution_head_context_ablation:candidate.execution_head_context_ablation??null
+              }))
             },
             execution_head_decision:executionHeadDecision,
             score_conditioned_vs_pooled_only_ablation:ablation,
