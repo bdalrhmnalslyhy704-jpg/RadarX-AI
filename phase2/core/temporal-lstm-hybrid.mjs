@@ -1825,6 +1825,24 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
     candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
     pooled_only_policy_passed:pooledOnlyPolicy.passed===true,
     context_policy_passed:contextPolicy.passed===true,
+    both_policies_frozen_on_selection:
+      pooledOnlyPolicy.threshold_frozen_before_outer_validation===true&&
+      contextPolicy.threshold_frozen_before_outer_validation===true,
+    baseline_and_candidate_use_matched_logistic_trade_counts:
+      pooledOnlyPolicy.selected_trial?.logistic_anchor_trade_counts_matched===true&&
+      contextPolicy.selected_trial?.logistic_anchor_trade_counts_matched===true,
+    pooled_only_frozen_policy:{
+      risk_penalty_weight:pooledOnlyPolicy.selected_risk_penalty_weight??null,
+      minimum_risk_adjusted_score:pooledOnlyPolicy.selected_minimum_risk_adjusted_score??null,
+      abstention_percentile:pooledOnlyPolicy.selected_abstention_percentile??null,
+      top_k_per_timestamp:pooledOnlyPolicy.selected_top_k_per_timestamp??null
+    },
+    context_frozen_policy:{
+      risk_penalty_weight:contextPolicy.selected_risk_penalty_weight??null,
+      minimum_risk_adjusted_score:contextPolicy.selected_minimum_risk_adjusted_score??null,
+      abstention_percentile:contextPolicy.selected_abstention_percentile??null,
+      top_k_per_timestamp:contextPolicy.selected_top_k_per_timestamp??null
+    },
     pooled_only_metrics:{
       trade_count:pooledMetrics.trade_count,win_rate_pct:pooledMetrics.win_rate_pct,
       net_pnl_pct:pooledMetrics.net_pnl_pct,max_drawdown_pct:pooledMetrics.max_drawdown_pct
@@ -1980,6 +1998,7 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     }
   }
   trials.sort((a,b)=>Number(b.passed)-Number(a.passed)||
+    Number(b.abstained_decision_group_count>0)-Number(a.abstained_decision_group_count>0)||
     Number(b.model_metrics.trade_count>=minimumTrades)-
       Number(a.model_metrics.trade_count>=minimumTrades)||
     Number(b.model_metrics.net_pnl_pct??-Infinity)-
@@ -3226,7 +3245,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       (finite(item.shared_classifier_pairwise_ranking_improvement)&&
         item.shared_classifier_pairwise_ranking_improvement>0))&&
     item.execution_heads_fitted===true&&
-    item.execution_risk_policy?.status==='EVALUATED'&&
+    item.execution_risk_policy?.status!=='UNAVAILABLE'&&
     item.execution_risk_policy?.passed===true&&
     item.execution_head_context_ablation?.passed===true&&
     item.return_selection_diagnostics?.status==='AVAILABLE'&&
