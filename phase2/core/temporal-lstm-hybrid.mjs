@@ -1619,7 +1619,7 @@ export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
  */
 function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   roundTripCostBps=30,learningRate=0.015,epochs=100,l2=0.002,huberDelta=1,
-  positiveNetReturnWeight=3
+  positiveNetReturnWeight=3.0
 }={}) {
   if(!Array.isArray(rows)||!Array.isArray(evidenceRows)||rows.length<20||
     rows.length!==evidenceRows.length||!finite(roundTripCostBps)||
