@@ -447,8 +447,23 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.ok(profile.training.execution_regression_heads.model_training_max_resolved_at<
     profile.training.execution_regression_heads.execution_head_min_at);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
+  const objective=profile.training.execution_regression_heads.objective_weighting;
+  assert.equal(objective.method,'POSITIVE_NET_RETURN_WEIGHTED_HUBER_TRAINING_ONLY_V1');
+  assert.equal(objective.positive_net_return_weight,3);
+  assert.equal(objective.weighted_target,
+    'REALIZED_RETURN_PCT_MINUS_ROUND_TRIP_COST_GREATER_THAN_ZERO');
+  assert.equal(objective.downside_objective,'UNWEIGHTED_HUBER_TRAINING_ONLY_V1');
+  assert.equal(objective.fit_partition,'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK');
+  assert.equal(objective.selection_or_validation_or_holdout_used_for_fit,false);
+  assert.equal(objective.contextual_net_return.positive_target_rows,20);
+  assert.equal(objective.contextual_net_return.nonpositive_target_rows,20);
+  assert.equal(objective.contextual_net_return.positive_target_weight,3);
+  assert.ok(objective.contextual_net_return.effective_sample_size<40);
+  assert.equal(objective.contextual_downside_risk.method,'UNWEIGHTED_HUBER_TRAINING_ONLY_V1');
+  assert.equal(profile.model.executionHeadObjectiveMetadata.positive_net_return_weight,3);
+  assert.equal(profile.model.executionHeadObjectiveMetadata.validation_or_holdout_used,false);
   assert.equal(profile.training.execution_regression_heads.schema,
-    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE');
+    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V7_POSITIVE_NET_WEIGHTED_TRAIN_ONLY_ZSCORE');
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
     5*TCN_LSTM_HIDDEN+4);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
@@ -557,6 +572,8 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   );
   assert.equal(restoredScore.status,'AVAILABLE');
   assert.deepEqual(restored.model.executionHeadNormalizers,profile.model.executionHeadNormalizers);
+  assert.deepEqual(restored.model.executionHeadObjectiveMetadata,
+    profile.model.executionHeadObjectiveMetadata);
   const restoredPooledOnly=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,restored,{variant:'POOLED_ONLY'}
   );

@@ -29,6 +29,15 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
     'expensive full-cohort replay must not run on pull requests');
   assert.ok(workflow.includes('research/build224-tcn-lstm-return-head-normalization-20261121'),
     'the normalized execution-return-head challenger must trigger its exact fixed-cohort replay');
+  assert.ok(workflow.includes('research/build224-tcn-lstm-positive-return-weighting-20261121'),
+    'the positive-net-return weighted challenger must trigger its exact fixed-cohort replay');
+  const temporal=await readFile(lstmModuleUrl,'utf8');
+  assert.match(temporal,/POSITIVE_NET_RETURN_WEIGHTED_HUBER_TRAINING_ONLY_V1/,
+    'positive net-return emphasis must be implemented in the training objective');
+  assert.match(temporal,/sampleWeightTotal/,
+    'weighted loss and gradients must normalize by the train-only sample-weight sum');
+  assert.match(temporal,/validation_or_holdout_used:false/,
+    'the weighted objective must declare its training-only fit boundary');
   assert.ok(workflow.includes('research/build224-temporal-logistic-cv-20261120'),
     'the tuned Logistic research branch must trigger the fixed-cohort replay');
   assert.match(workflow,/RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1/);
