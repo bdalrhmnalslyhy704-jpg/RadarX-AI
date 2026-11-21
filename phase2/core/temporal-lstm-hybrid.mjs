@@ -1944,8 +1944,11 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     for(const percentile of abstentionPercentileGrid){
       const position=(sortedBestScores.length-1)*Number(percentile);
       const lower=Math.floor(position),upper=Math.ceil(position);
-      const threshold=lower===upper?sortedBestScores[lower]:
+      const innerQuantileThreshold=lower===upper?sortedBestScores[lower]:
         sortedBestScores[lower]+(sortedBestScores[upper]-sortedBestScores[lower])*(position-lower);
+      // Non-negotiable economic guard: never enter when the predicted
+      // risk-adjusted net-return score is zero or negative.
+      const threshold=Math.max(0,innerQuantileThreshold);
       const modelSelection=topKThresholdSignals(rows,riskScores,1,threshold);
       const logisticSelection=topKMatchedCountSignals(rows,logisticLogits,modelSelection);
       const options={threshold:0.5,roundTripCostBps,
@@ -1987,6 +1990,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
         risk_penalty_weight:lambda,
         top_k_per_timestamp:1,
         minimum_risk_adjusted_score:Number(threshold),
+        inner_quantile_score_threshold:Number(innerQuantileThreshold),
+        positive_score_floor_enforced:true,
+        threshold_floor_rule:'MAX_ZERO_AND_INNER_SELECTION_QUANTILE',
         abstention_percentile:Number(percentile),
         selected_trade_count:modelSelection.signal_count,
         decision_group_count:modelSelection.decision_group_count,
@@ -2032,6 +2038,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     selected_risk_penalty_weight:best?.risk_penalty_weight??null,
     selected_top_k_per_timestamp:1,
     selected_minimum_risk_adjusted_score:best?.minimum_risk_adjusted_score??null,
+    selected_inner_quantile_score_threshold:best?.inner_quantile_score_threshold??null,
+    positive_score_floor_enforced:true,
+    selected_threshold_floor_rule:best?.threshold_floor_rule??'MAX_ZERO_AND_INNER_SELECTION_QUANTILE',
     selected_abstention_percentile:best?.abstention_percentile??null,
     selected_abstention_rate_pct:best?.abstention_rate_pct??null,
     selected_trade_count:best?.selected_trade_count??0,
