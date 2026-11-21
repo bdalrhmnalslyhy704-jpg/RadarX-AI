@@ -9,6 +9,7 @@ on:
       - research/build224-tcn-lstm-score-head-oos-ablation-20261120
       - research/build224-temporal-logistic-cv-20261120
       - research/build224-tcn-lstm-external-logistic-execution-context-20261121
+      - research/build224-tcn-lstm-execution-head-gates-20261121
     paths:
       - '.github/workflows/neural-closure-fixed-cohort-replay.yml'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -135,13 +136,87 @@ jobs:
           const outerPassed=candidateNames.filter(name=>
             models[name]?.validation?.outer_validation_gate?.passed===true);
           const tcn=benchmark?.models?.TCN_LSTM_HYBRID;
-          const ablation=report.training?.model_internal_diagnostics?.TCN_LSTM_HYBRID?.score_conditioned_external_ablation??null;
+          const tcnDiagnostics=report.training?.model_internal_diagnostics?.TCN_LSTM_HYBRID??{};
+          const ablation=tcnDiagnostics.score_conditioned_external_ablation??null;
+          const contextualRisk=tcnDiagnostics.external_validation_execution_risk_top_k??null;
+          const pooledOnlyRisk=tcnDiagnostics.pooled_only_external_validation_execution_risk_top_k??null;
           const bootstrap=report.training?.outer_validation_uncertainty_bootstrap??null;
+
+          // Top-K=1 is the predeclared primary policy (one ranked opportunity
+          // per simultaneous closed 15m bucket). K=2 and K=3 remain diagnostics:
+          // they cannot be selected after seeing outer-validation outcomes.
+          const primaryTopK=1;
+          const contextualTrial=contextualRisk?.trials?.find(item=>item.top_k_per_timestamp===primaryTopK)??null;
+          const pooledTrial=pooledOnlyRisk?.trials?.find(item=>item.top_k_per_timestamp===primaryTopK)??null;
+          const contextualMetrics=contextualTrial?.neural_metrics??null;
+          const pooledMetrics=pooledTrial?.neural_metrics??null;
+          const logisticMetrics=contextualTrial?.logistic_metrics??null;
+          const completeMetrics=metrics=>Boolean(metrics&&metrics.return_data_status==='COMPLETE'&&
+            Number.isFinite(metrics.trade_count)&&Number.isFinite(metrics.win_rate_pct)&&
+            Number.isFinite(metrics.net_pnl_pct)&&Number.isFinite(metrics.max_drawdown_pct));
+          const contextVsPooledLower95=bootstrap?.execution?.paired_strategy_differences?.['1']?.
+            LOGIT_CONTEXT_AUGMENTED_MINUS_POOLED_ONLY?.net_pnl_pct?.lower_95??null;
+          const contextVsLogisticLower95=bootstrap?.execution?.paired_strategy_differences?.['1']?.
+            LOGIT_CONTEXT_AUGMENTED_MINUS_LOGISTIC_REGRESSION?.net_pnl_pct?.lower_95??null;
+          const contextualExecutionHeadGates={
+            tcn_lstm_probability_outer_gate:tcn?.validation?.outer_validation_gate?.passed===true,
+            ablation_available:ablation?.status==='AVAILABLE',
+            exact_matched_opportunities:ablation?.same_outer_validation_opportunities===true,
+            same_frozen_risk_penalty:ablation?.same_frozen_lambda_for_both_variants===true,
+            outer_validation_used_for_selection:ablation?.outer_validation_used_for_lambda_or_top_k_selection!==false,
+            holdout_used:ablation?.holdout_rows_or_scores_used!==false,
+            round_trip_cost_30_bps:contextualRisk?.round_trip_cost_bps===30&&
+              pooledOnlyRisk?.round_trip_cost_bps===30&&ablation?.same_round_trip_cost_bps===30,
+            complete_contextual_metrics:completeMetrics(contextualMetrics),
+            minimum_100_trades:completeMetrics(contextualMetrics)&&contextualMetrics.trade_count>=100,
+            minimum_55pct_win_rate:completeMetrics(contextualMetrics)&&contextualMetrics.win_rate_pct>=55,
+            positive_net_pnl:completeMetrics(contextualMetrics)&&contextualMetrics.net_pnl_pct>0,
+            maximum_8pct_drawdown:completeMetrics(contextualMetrics)&&contextualMetrics.max_drawdown_pct<=8,
+            beats_previous_pooled_head:completeMetrics(contextualMetrics)&&completeMetrics(pooledMetrics)&&
+              contextualMetrics.net_pnl_pct>pooledMetrics.net_pnl_pct,
+            beats_logistic:completeMetrics(contextualMetrics)&&completeMetrics(logisticMetrics)&&
+              contextualMetrics.net_pnl_pct>logisticMetrics.net_pnl_pct,
+            drawdown_no_worse_than_previous_head:completeMetrics(contextualMetrics)&&
+              completeMetrics(pooledMetrics)&&contextualMetrics.max_drawdown_pct<=pooledMetrics.max_drawdown_pct,
+            drawdown_no_worse_than_logistic:completeMetrics(contextualMetrics)&&
+              completeMetrics(logisticMetrics)&&contextualMetrics.max_drawdown_pct<=logisticMetrics.max_drawdown_pct,
+            paired_95pct_net_pnl_superiority_vs_previous_head:Number.isFinite(contextVsPooledLower95)&&
+              contextVsPooledLower95>0,
+            paired_95pct_net_pnl_superiority_vs_logistic:Number.isFinite(contextVsLogisticLower95)&&
+              contextVsLogisticLower95>0
+          };
+          const executionHeadPassed=Object.values(contextualExecutionHeadGates).every(value=>value===true);
+          const executionHeadDecision={
+            schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_OUTER_VALIDATION_GATE_V1',
+            status:executionHeadPassed
+              ?'EXECUTION_HEAD_SUPERIORITY_PROVEN_OUTER_VALIDATION_ONLY_HOLDOUT_STILL_LOCKED'
+              :'EXECUTION_HEAD_SUPERIORITY_NOT_PROVEN_HOLDOUT_LOCKED',
+            passed:executionHeadPassed,
+            primary_policy:{top_k_per_timestamp:primaryTopK,decision_bucket:'CLOSED_15M',selection:'PREDECLARED_NOT_SELECTED_ON_OUTER_VALIDATION'},
+            acceptance_gates:contextualExecutionHeadGates,
+            metrics:{
+              round_trip_cost_bps:contextualRisk?.round_trip_cost_bps??null,
+              contextual_head:contextualMetrics,
+              previous_pooled_only_head:pooledMetrics,
+              logistic_regression:logisticMetrics,
+              paired_net_pnl_difference_lower_95:{
+                contextual_minus_pooled_only:contextVsPooledLower95,
+                contextual_minus_logistic:contextVsLogisticLower95
+              }
+            },
+            comparisons:{
+              contextual_vs_pooled_only:contextualTrial?.neural_minus_logistic??null,
+              contextual_risk_penalty_weight:contextualRisk?.risk_penalty_weight??null,
+              pooled_only_risk_penalty_weight:pooledOnlyRisk?.risk_penalty_weight??null,
+              bootstrap_status:bootstrap?.status??'UNAVAILABLE'
+            },
+            diagnostic_top_k_trials:[2,3]
+          };
           const scientificDecision={
             schema:'RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1',
-            status:outerPassed.length
-              ?'OUTER_VALIDATION_GATES_PASSED_HOLDOUT_STILL_LOCKED'
-              :'NEURAL_SUPERIORITY_NOT_PROVEN_HOLDOUT_LOCKED',
+            status:executionHeadPassed
+              ?'EXECUTION_HEAD_SUPERIORITY_PROVEN_OUTER_VALIDATION_ONLY_HOLDOUT_STILL_LOCKED'
+              :'NEURAL_OR_EXECUTION_HEAD_SUPERIORITY_NOT_PROVEN_HOLDOUT_LOCKED',
             code_commit_sha:report.integrity?.model_source_commit_sha??null,
             dataset_sha256:report.integrity?.dataset_sha256??null,
             row_count:report.integrity?.row_count??null,
@@ -159,6 +234,7 @@ jobs:
               calibrated_brier:tcn?.validation?.calibrated_brier_score??null,
               outer_validation_gate:tcn?.validation?.outer_validation_gate??null
             },
+            execution_head_decision:executionHeadDecision,
             score_conditioned_vs_pooled_only_ablation:ablation,
             uncertainty_bootstrap:bootstrap,
             holdout:{
