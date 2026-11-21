@@ -28,6 +28,10 @@ on:
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
       - '.github/workflows/neural-attention-regression.yml'
 
 permissions:
