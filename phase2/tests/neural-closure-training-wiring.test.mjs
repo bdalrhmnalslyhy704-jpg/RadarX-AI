@@ -556,3 +556,21 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(recurrent,/variant='LOGIT_CONTEXT_AUGMENTED'/);
   assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
+
+
+test('neural candidates cannot open outer validation before passing their purged inner-selection and calibration gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/function markOuterValidationSuppressed\([\s\S]*?outer_validation_opened:false[\s\S]*?holdout_rows_or_scores_used:false/);
+  assert.match(trainer,/if\(cognitiveProfile\.neural_network\?\.probability_ready===true\)/);
+  assert.match(trainer,/if\(cognitiveProfile\.hybrid_model\?\.probability_ready===true\)/);
+  assert.match(trainer,/if\(temporalProfile\?\._research_fit&&v8Coverage\.complete&&v8PerformanceQualified\)/);
+  assert.match(trainer,/if\(!qualificationPassed\)[\s\S]*?INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED[\s\S]*?return;/);
+  assert.match(trainer,/if\(attentionInnerQualified&&[\s\S]*?missingAttentionRegimes\.length===0\)/);
+  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.match(trainer,/INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.doesNotMatch(trainer,/predictionsByModel\.HYBRID_TCN_ATTENTION\s*=/);
+  assert.doesNotMatch(trainer,/predictionsByModel\.DENSE_MLP\s*=/);
+  assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{\s*passed:false/);
+  assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{\s*passed:false/);
+});
