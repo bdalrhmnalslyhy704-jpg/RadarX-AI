@@ -2820,9 +2820,22 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     }
   }
   const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
-  const externalLogisticScoringRows=[
+  const externalLogisticScoringSourceRows=[
     ...(Array.isArray(executionHeadRows)?executionHeadRows:[]),...selectionRows
   ];
+  // The Logistic context provider receives no realized return, excursion, or
+  // target labels for rows whose scores it generates. Only the earlier model
+  // fitting partition carries labels, and only its binary classifier target.
+  const externalLogisticTrainingRows=modelTrainingRows.map(row=>({
+    id:row.id,symbol:row.symbol,at:Number(row.at),
+    resolved_at:Number(row.resolved_at),target:row.target,
+    logistic_feature_vector:row.logistic_feature_vector
+  }));
+  const externalLogisticScoringRows=externalLogisticScoringSourceRows.map(row=>({
+    id:row.id,symbol:row.symbol,at:Number(row.at),
+    resolved_at:Number(row.resolved_at),
+    logistic_feature_vector:row.logistic_feature_vector
+  }));
   const modelTrainingMaxResolvedAt=Math.max(
     ...modelTrainingRows.map(row=>Number(row.resolved_at))
   );
@@ -2848,7 +2861,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   let selectionRowsWithLogisticContext=selectionRows;
   if(externalLogisticExecutionContextProvider){
     const provided=externalLogisticExecutionContextProvider(
-      modelTrainingRows,externalLogisticScoringRows
+      externalLogisticTrainingRows,externalLogisticScoringRows
     );
     if(!provided?.model||provided?.model?.training_partition_only!==true||
       provided?.report?.schema!=='RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2'||
