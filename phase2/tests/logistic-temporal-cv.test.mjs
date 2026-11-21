@@ -143,7 +143,7 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
   assert.match(trainer,/foldCount:5,purgeMs:86_400_000/);
   assert.match(trainer,/initialTrainingFraction:0\.32,validationFraction:0\.12/);
   assert.match(trainer,/calibration_metadata:logisticTuning\.report\.calibration/);
-  assert.match(trainer,/logistic_baseline_temporal_cv=logisticTuning\.report/);
+  assert.match(trainer,/logistic_baseline_temporal_cv=\{\s*\.\.\.logisticTuning\.report/);
   assert.match(trainer,/fixedLogisticFit=fitLogisticBaseline\(split\.train\)/);
   assert.match(trainer,/outer_validation_used_for_hyperparameter_selection:false/);
   assert.match(trainer,/holdout_used:false/);
