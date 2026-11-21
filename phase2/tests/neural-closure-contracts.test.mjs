@@ -1443,7 +1443,8 @@ test('external selective execution abstains below its frozen inner-selection sco
   assert.equal(report.frozen_abstention_policy.minimum_risk_adjusted_score,0.33);
   assert.equal(report.frozen_abstention_policy.percentile_selected_on_inner_selection,0.5);
   assert.equal(report.frozen_abstention_policy.threshold_refitted_on_outer_validation,false);
-  assert.equal(report.frozen_abstention_policy.baseline_trade_counts_matched,true);
+  assert.equal(report.frozen_abstention_policy.baseline_signal_counts_matched,true);
+  assert.equal(report.frozen_abstention_policy.baseline_executed_trade_counts_matched,true);
   assert.equal(report.trials[0].abstention_active,true);
   assert.equal(report.trials[0].abstained_decision_group_count,1);
   assert.equal(report.trials[0].neural_selected_count,1);
