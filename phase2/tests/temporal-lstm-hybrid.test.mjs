@@ -28,6 +28,7 @@ import {
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   splitTcnLstmTrainingRowsForExecutionHead,
+  selectTcnLstmExecutionRiskPolicy,
   selectTcnLstmHybridHyperparameters,
   summarizeTcnLstmSelectionReturns,
   tcnLstmPairwiseReturnRankingLoss,
@@ -541,6 +542,51 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.equal(restoredScore.risk_adjusted_net_return_score,
     higherPenalty.risk_adjusted_net_return_score);
   assert.equal(profile.real_order_execution,false);
+});
+
+test('selective execution policy chooses a real abstention threshold only from inner-selection rows',()=>{
+  const groupCount=50;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const outcome=group<35&&rank===0?'UP':'DOWN';
+    const at=BASE+group*DAY+rank*75;
+    return makeExecutionRow(index,outcome,at);
+  });
+  const predictions=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const profitable=group<35&&rank===0;
+    return {
+      predicted_net_return_pct:profitable
+        ?2.9-(group%7)*0.08:rank===0?-2.0:-2.4,
+      predicted_downside_risk_pct:profitable?0.25:1.8+(group%3)*0.1
+    };
+  });
+  const logisticLogits=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    if(group<35)return group<25?(rank===0?3:1):(rank===0?1:3);
+    return rank===0?3:1;
+  });
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8
+  });
+  assert.equal(policy.status,'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION');
+  assert.equal(policy.passed,true);
+  assert.equal(policy.selection_partition_only,true);
+  assert.equal(policy.threshold_selected_on_inner_selection,true);
+  assert.equal(policy.threshold_frozen_before_outer_validation,true);
+  assert.equal(policy.holdout_values_used,false);
+  assert.equal(policy.selected_top_k_per_timestamp,1);
+  assert.ok(policy.selected_risk_penalty_weight>0);
+  assert.ok(Number.isFinite(policy.selected_minimum_risk_adjusted_score));
+  assert.ok(policy.selected_abstention_percentile>0);
+  assert.ok(policy.selected_trial.abstained_decision_group_count>0);
+  assert.ok(policy.selected_trial.selected_trade_count<policy.selected_trial.decision_group_count);
+  assert.ok(policy.selected_trial.model_metrics.trade_count>=20);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.equal(policy.selected_trial.logistic_anchor_trade_counts_matched,true);
 });
 
 test('score-conditioned execution-head ablation requires strict inner-selection improvement over pooled-only reference',()=>{
