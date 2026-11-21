@@ -173,15 +173,16 @@ test('TCN-LSTM pooled anchor retains the 29-channel mean and standard deviation'
 
 test('fixed-cohort promotion Logistic consumes and persists the full ordered 24x29 tensor',async()=>{
   const trainer=await readFile(new URL('../tools/train-neural-closure-models.mjs',import.meta.url),'utf8');
-  assert.match(trainer,/logisticTrainingVectors=split\.train\.map\(row=>\s*buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)\)/);
-  assert.match(trainer,/predictTemporalLogisticProbability\([\s\S]*?buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/logisticTrainingVectors=split\.train\.map\(row=>\s*buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)\)/);
+  assert.match(trainer,/predictTemporalLogisticProbability\([\s\S]*?buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/);
   assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA/);
+  assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES\.length===TCN_LSTM_STEPS\*TCN_LSTM_INPUT_CHANNELS/);
   assert.match(trainer,/modelArtifactsByModel\.LOGISTIC_REGRESSION=logisticArtifact/);
   assert.match(trainer,/trainingArtifacts\.LOGISTIC_REGRESSION=/);
   assert.match(trainer,/feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE'/);
   assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/);
-  assert.match(trainer,/logistic_feature_vector:buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)/);
-  assert.match(trainer,/buildTcnLstmAnchorFeatures\(sourceRow\.temporal_sequence\)/);
+  assert.match(trainer,/logistic_feature_vector:buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/buildTcnLstmFlattenedFeatures\(sourceRow\.temporal_sequence\)/);
 });
 
 test('matched Logistic baseline preserves all 696 ordered values from the closed 24x29 TCN-LSTM tensor',()=>{
