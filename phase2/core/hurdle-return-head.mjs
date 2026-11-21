@@ -3,18 +3,161 @@ const sigmoid = value => 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, value))))
 const softplus = value => Math.max(0, value) + Math.log1p(Math.exp(-Math.abs(value)));
 
 export const HURDLE_RETURN_HEAD_SCHEMA =
-  'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1';
+  'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2';
+
+const CONDITIONAL_MEAN_SCHEMA = 'RADARX_HURDLE_CONDITIONAL_MEAN_HUBER_V1';
+
+function huberLoss(residual, delta) {
+  const absolute = Math.abs(residual);
+  return absolute <= delta
+    ? 0.5 * residual * residual
+    : delta * (absolute - 0.5 * delta);
+}
+
+/**
+ * Fit a feature-conditional mean return model on one outcome class only.
+ * Inputs have already been standardized from the full training-only block.
+ */
+function fitConditionalMeanHead(rows, targets, {
+  learningRate = 0.01,
+  epochs = 240,
+  l2 = 0.1,
+  huberDelta = 1
+} = {}) {
+  if (!Array.isArray(rows) || !Array.isArray(targets) ||
+      rows.length !== targets.length || rows.length < 8 ||
+      !Number.isInteger(epochs) || epochs < 20 || epochs > 1000 ||
+      !finite(learningRate) || learningRate <= 0 || learningRate > 0.1 ||
+      !finite(l2) || l2 < 0 || l2 > 10 ||
+      !finite(huberDelta) || huberDelta <= 0 || huberDelta > 10) {
+    throw new TypeError('HURDLE_CONDITIONAL_MEAN_CONFIGURATION_INVALID');
+  }
+  const featureCount = rows[0]?.length;
+  if (!Number.isInteger(featureCount) || featureCount < 1 ||
+      rows.some(row => !Array.isArray(row) || row.length !== featureCount ||
+        row.some(value => !finite(value))) ||
+      targets.some(value => !finite(value))) {
+    throw new TypeError('HURDLE_CONDITIONAL_MEAN_TRAINING_DATA_INVALID');
+  }
+
+  let bias = targets.reduce((sum, value) => sum + Number(value), 0) / targets.length;
+  let weights = Array(featureCount).fill(0);
+  const firstMoment = Array(featureCount).fill(0);
+  const secondMoment = Array(featureCount).fill(0);
+  let biasFirstMoment = 0;
+  let biasSecondMoment = 0;
+  let bestLoss = Infinity;
+  let best = { weights: [...weights], bias };
+  let wait = 0;
+  let completedEpochs = 0;
+  const beta1 = 0.9;
+  const beta2 = 0.999;
+  const epsilon = 1e-8;
+  const loss = () => {
+    let total = 0;
+    for (let index = 0; index < rows.length; index++) {
+      const prediction = bias + rows[index].reduce(
+        (sum, value, column) => sum + value * weights[column], 0
+      );
+      total += huberLoss(prediction - Number(targets[index]), huberDelta);
+    }
+    const penalty = weights.reduce((sum, value) => sum + value * value, 0);
+    return total / rows.length + 0.5 * l2 * penalty;
+  };
+
+  const initialLoss = loss();
+  for (let epoch = 1; epoch <= epochs; epoch++) {
+    const gradient = Array(featureCount).fill(0);
+    let biasGradient = 0;
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
+      const residual = bias + row.reduce(
+        (sum, value, column) => sum + value * weights[column], 0
+      ) - Number(targets[index]);
+      const absolute = Math.abs(residual);
+      const error = absolute <= huberDelta
+        ? residual
+        : Math.sign(residual) * huberDelta;
+      biasGradient += error;
+      for (let column = 0; column < featureCount; column++) {
+        gradient[column] += error * row[column];
+      }
+    }
+    for (let column = 0; column < featureCount; column++) {
+      gradient[column] = gradient[column] / rows.length + l2 * weights[column];
+    }
+    biasGradient /= rows.length;
+    for (let column = 0; column < featureCount; column++) {
+      const g = gradient[column];
+      firstMoment[column] = beta1 * firstMoment[column] + (1 - beta1) * g;
+      secondMoment[column] = beta2 * secondMoment[column] + (1 - beta2) * g * g;
+      const m = firstMoment[column] / (1 - Math.pow(beta1, epoch));
+      const v = secondMoment[column] / (1 - Math.pow(beta2, epoch));
+      weights[column] -= learningRate * m / (Math.sqrt(v) + epsilon);
+    }
+    biasFirstMoment = beta1 * biasFirstMoment + (1 - beta1) * biasGradient;
+    biasSecondMoment = beta2 * biasSecondMoment +
+      (1 - beta2) * biasGradient * biasGradient;
+    const mb = biasFirstMoment / (1 - Math.pow(beta1, epoch));
+    const vb = biasSecondMoment / (1 - Math.pow(beta2, epoch));
+    bias -= learningRate * mb / (Math.sqrt(vb) + epsilon);
+
+    const currentLoss = loss();
+    if (!finite(currentLoss) || !finite(bias) || weights.some(value => !finite(value))) {
+      throw new TypeError('HURDLE_CONDITIONAL_MEAN_NON_FINITE');
+    }
+    completedEpochs = epoch;
+    if (currentLoss < bestLoss - 1e-9) {
+      bestLoss = currentLoss;
+      best = { weights: [...weights], bias };
+      wait = 0;
+    } else if (++wait >= 40) {
+      break;
+    }
+  }
+
+  const minimum = Math.min(...targets.map(Number));
+  const maximum = Math.max(...targets.map(Number));
+  return {
+    schema: CONDITIONAL_MEAN_SCHEMA,
+    fitted: true,
+    rows: rows.length,
+    weights: best.weights,
+    bias: Number(best.bias),
+    training_target_min_pct: minimum,
+    training_target_max_pct: maximum,
+    huber_delta: Number(huberDelta),
+    initial_huber_loss: Number(initialLoss.toFixed(8)),
+    final_huber_loss: Number(bestLoss.toFixed(8)),
+    epochs_completed: completedEpochs,
+    requested_epochs: epochs,
+    learning_rate: Number(learningRate),
+    l2: Number(l2),
+    fit_partition: 'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
+    validation_or_holdout_used: false
+  };
+}
+
+function predictConditionalMean(normalized, model) {
+  const raw = Number(model.bias) + normalized.reduce(
+    (sum, value, index) => sum + value * Number(model.weights[index]), 0
+  );
+  // Keep each conditional mean within the observed training-only target range.
+  return Math.max(
+    Number(model.training_target_min_pct),
+    Math.min(Number(model.training_target_max_pct), raw)
+  );
+}
 
 /**
  * Two-part expected-return estimator:
  *   1) unweighted logistic probability that net return after fees is positive;
- *   2) training-only conditional mean net return for positive and non-positive
- *      outcomes.
+ *   2) separate feature-conditional Huber regressions for positive and
+ *      non-positive net-return magnitudes.
  *
- * The class probability is deliberately not reweighted: it must retain its
- * empirical prior to make the probability × conditional-mean decomposition
- * interpretable as an expected net return. Features and coefficients are
- * fitted only on the purged execution-head training partition supplied here.
+ * The class probability is deliberately not reweighted: it retains the
+ * empirical prior. All normalizers, coefficients and target bounds are fitted
+ * only on the purged execution-head training partition supplied here.
  */
 export function fitHurdleReturnHead(featureRows, netReturns, {
   learningRate = 0.02,
@@ -39,8 +182,12 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
   }
 
   const positive = netReturns.map(value => Number(value) > 0 ? 1 : 0);
-  const positiveCount = positive.reduce((sum, value) => sum + value, 0);
-  const nonPositiveCount = positive.length - positiveCount;
+  const positiveIndexes = positive.map((value, index) => value ? index : -1)
+    .filter(index => index >= 0);
+  const nonPositiveIndexes = positive.map((value, index) => value ? -1 : index)
+    .filter(index => index >= 0);
+  const positiveCount = positiveIndexes.length;
+  const nonPositiveCount = nonPositiveIndexes.length;
   if (positiveCount < minimumClassRows || nonPositiveCount < minimumClassRows) {
     throw new TypeError('HURDLE_RETURN_HEAD_CLASS_SUPPORT_TOO_SMALL:' +
       positiveCount + ':' + nonPositiveCount);
@@ -62,8 +209,7 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
     throw new TypeError('HURDLE_RETURN_HEAD_STANDARDIZATION_NON_FINITE');
   }
 
-  // Start from the empirical prior instead of 0.5. This is important for the
-  // rare-positive regime and avoids any hidden class reweighting.
+  // Start from the empirical prior instead of 0.5. No class weighting is used.
   let weights = Array(featureCount).fill(0);
   let bias = Math.log(positiveCount / nonPositiveCount);
   const firstMoment = Array(featureCount).fill(0);
@@ -83,8 +229,7 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
       const logit = bias + normalized[index].reduce(
         (sum, value, column) => sum + value * weights[column], 0
       );
-      const y = positive[index];
-      total += softplus(logit) - y * logit;
+      total += softplus(logit) - positive[index] * logit;
     }
     const penalty = weights.reduce((sum, value) => sum + value * value, 0);
     return total / normalized.length + 0.5 * l2 * penalty;
@@ -137,12 +282,20 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
     }
   }
 
-  const positiveReturns = netReturns.filter(value => Number(value) > 0);
-  const nonPositiveReturns = netReturns.filter(value => Number(value) <= 0);
-  const meanPositive = positiveReturns.reduce((sum, value) => sum + Number(value), 0) /
+  const positiveReturns = positiveIndexes.map(index => Number(netReturns[index]));
+  const nonPositiveReturns = nonPositiveIndexes.map(index => Number(netReturns[index]));
+  const meanPositive = positiveReturns.reduce((sum, value) => sum + value, 0) /
     positiveReturns.length;
-  const meanNonPositive = nonPositiveReturns.reduce((sum, value) => sum + Number(value), 0) /
+  const meanNonPositive = nonPositiveReturns.reduce((sum, value) => sum + value, 0) /
     nonPositiveReturns.length;
+  const positiveConditionalRows = positiveIndexes.map(index => normalized[index]);
+  const nonPositiveConditionalRows = nonPositiveIndexes.map(index => normalized[index]);
+  const positiveConditionalMean = fitConditionalMeanHead(
+    positiveConditionalRows, positiveReturns
+  );
+  const nonPositiveConditionalMean = fitConditionalMeanHead(
+    nonPositiveConditionalRows, nonPositiveReturns
+  );
   const prevalence = positiveCount / netReturns.length;
   return {
     schema: HURDLE_RETURN_HEAD_SCHEMA,
@@ -153,8 +306,11 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
     zero_variance_feature_count: moments.filter(item => item.constant).length,
     weights: best.weights,
     bias: Number(best.bias),
-    positive_net_return_mean_pct: Number(meanPositive),
-    non_positive_net_return_mean_pct: Number(meanNonPositive),
+    positive_class_mean_net_return_pct: Number(meanPositive),
+    non_positive_class_mean_net_return_pct: Number(meanNonPositive),
+    positive_conditional_mean_model: positiveConditionalMean,
+    non_positive_conditional_mean_model: nonPositiveConditionalMean,
+    conditional_mean_type: 'FEATURE_CONDITIONAL_HUBER_REGRESSION_V1',
     positive_rows: positiveCount,
     non_positive_rows: nonPositiveCount,
     empirical_positive_rate: Number(prevalence),
@@ -174,18 +330,29 @@ export function fitHurdleReturnHead(featureRows, netReturns, {
 }
 
 export function predictHurdleExpectedNetReturn(features, model) {
+  const featureCount = features?.length;
+  const positiveMeanModel = model?.positive_conditional_mean_model;
+  const nonPositiveMeanModel = model?.non_positive_conditional_mean_model;
+  const validMeanModel = (item, positive) =>
+    item?.schema === CONDITIONAL_MEAN_SCHEMA && item?.fitted === true &&
+    Array.isArray(item.weights) && item.weights.length === featureCount &&
+    item.weights.every(finite) && finite(item.bias) &&
+    finite(item.training_target_min_pct) && finite(item.training_target_max_pct) &&
+    item.training_target_min_pct <= item.training_target_max_pct &&
+    (positive
+      ? item.training_target_min_pct > 0
+      : item.training_target_max_pct <= 0);
   if (!Array.isArray(features) || !features.length || features.some(value => !finite(value)) ||
       model?.schema !== HURDLE_RETURN_HEAD_SCHEMA || model?.fitted !== true ||
       !Array.isArray(model.feature_mean) || !Array.isArray(model.feature_std) ||
-      !Array.isArray(model.weights) || model.feature_mean.length !== features.length ||
-      model.feature_std.length !== features.length || model.weights.length !== features.length ||
+      !Array.isArray(model.weights) || model.feature_mean.length !== featureCount ||
+      model.feature_std.length !== featureCount || model.weights.length !== featureCount ||
       model.feature_mean.some(value => !finite(value)) ||
       model.feature_std.some(value => !finite(value) || Number(value) <= 0) ||
       model.weights.some(value => !finite(value)) || !finite(model.bias) ||
-      !finite(model.positive_net_return_mean_pct) ||
-      !finite(model.non_positive_net_return_mean_pct) ||
-      Number(model.positive_net_return_mean_pct) <= 0 ||
-      Number(model.non_positive_net_return_mean_pct) > 0) {
+      model.conditional_mean_type !== 'FEATURE_CONDITIONAL_HUBER_REGRESSION_V1' ||
+      !validMeanModel(positiveMeanModel, true) ||
+      !validMeanModel(nonPositiveMeanModel, false)) {
     throw new TypeError('HURDLE_RETURN_HEAD_INFERENCE_STATE_INVALID');
   }
   const normalized = features.map((value, index) =>
@@ -194,15 +361,22 @@ export function predictHurdleExpectedNetReturn(features, model) {
   const probability = sigmoid(Number(model.bias) + normalized.reduce(
     (sum, value, index) => sum + value * Number(model.weights[index]), 0
   ));
-  const expected = probability * Number(model.positive_net_return_mean_pct) +
-    (1 - probability) * Number(model.non_positive_net_return_mean_pct);
-  if (!finite(probability) || !finite(expected)) {
+  const positiveMean = predictConditionalMean(normalized, positiveMeanModel);
+  const nonPositiveMean = predictConditionalMean(normalized, nonPositiveMeanModel);
+  const expected = probability * positiveMean + (1 - probability) * nonPositiveMean;
+  if (!finite(probability) || !finite(expected) ||
+      !finite(positiveMean) || !finite(nonPositiveMean)) {
     throw new TypeError('HURDLE_RETURN_HEAD_EXPECTATION_NON_FINITE');
   }
   return {
     probability_positive_net_return: Number(probability),
     expected_net_return_pct: Number(expected),
-    positive_net_return_mean_pct: Number(model.positive_net_return_mean_pct),
-    non_positive_net_return_mean_pct: Number(model.non_positive_net_return_mean_pct)
+    positive_net_return_mean_pct: Number(positiveMean),
+    non_positive_net_return_mean_pct: Number(nonPositiveMean),
+    positive_net_return_class_mean_pct:
+      Number(model.positive_class_mean_net_return_pct),
+    non_positive_net_return_class_mean_pct:
+      Number(model.non_positive_class_mean_net_return_pct),
+    conditional_mean_type: model.conditional_mean_type
   };
 }

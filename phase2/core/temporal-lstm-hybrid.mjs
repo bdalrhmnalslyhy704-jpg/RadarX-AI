@@ -1751,7 +1751,7 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     const positiveCount=netReturns.filter(value=>value>0).length;
     const nonPositiveCount=netReturns.length-positiveCount;
     if(positiveCount<8||nonPositiveCount<8)return {
-      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1',fitted:false,
+      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2',fitted:false,
       reason:'HURDLE_RETURN_HEAD_CLASS_SUPPORT_TOO_SMALL',
       positive_rows:positiveCount,non_positive_rows:nonPositiveCount,
       fit_boundary:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK_ONLY',
@@ -1804,7 +1804,8 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     downside_target:'MAX_0_NEGATIVE_MAX_ADVERSE_EXCURSION_PCT',
     target_clip_pct:[-30,30],validation_or_holdout_used:false,
     hurdle_return_head:{
-      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1',
+      schema:'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2',
+      conditional_mean_type:'FEATURE_CONDITIONAL_HUBER_REGRESSION_V1',
       return_estimators:['POINTWISE_HUBER','HURDLE_EXPECTED_VALUE'],
       pooled_only:{
         fitted:hurdleReturnHeads.POOLED_ONLY?.fitted===true,
