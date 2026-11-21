@@ -3716,7 +3716,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         'RADARX_TCN_LSTM_POOLED_ANCHOR_MEAN_STD_58_V1',
       probability_stage:anchor.probability_stage??'RAW_UNCALIBRATED',
       training_rows:anchor.training_rows,
-      role:'TCN_LSTM_RESIDUAL_INITIALIZATION_AND_FIT_OBJECTIVE_ONLY'
+      role:'FROZEN_LOGISTIC_BASELINE_LOGIT_PLUS_TCN_LSTM_RESIDUAL_FOR_TRAINING_AND_INFERENCE'
     },
     selection_scoring:{
       method:rankingScoreAvailable
