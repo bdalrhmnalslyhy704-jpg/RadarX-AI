@@ -594,6 +594,32 @@ test('selective execution policy chooses a real abstention threshold only from i
   assert.equal(policy.selected_trial.gates.matched_logistic_executed_trade_count,true);
 });
 
+test('selective execution policy stays abstained when every predicted risk-adjusted net-return score is nonpositive',()=>{
+  const groupCount=30;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    return makeExecutionRow(index,'UP',BASE+group*DAY+rank*75);
+  });
+  const predictions=rows.map(()=>({
+    predicted_net_return_pct:-0.1,
+    predicted_downside_risk_pct:0.2
+  }));
+  const logisticLogits=rows.map((row,index)=>index%2===0?1:0);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8
+  });
+  assert.equal(policy.status,'ABSTAIN_NO_SELECTIVE_EXECUTION_POLICY_PASSED');
+  assert.equal(policy.passed,false);
+  assert.equal(policy.positive_score_floor_enforced,true);
+  assert.equal(policy.selected_minimum_risk_adjusted_score,0);
+  assert.equal(policy.selected_trade_count,0);
+  assert.equal(policy.selected_trial.model_metrics.trade_count,0);
+  assert.equal(policy.selected_trial.gates.minimum_trades,false);
+  assert.equal(policy.selected_trial.gates.positive_net_pnl,false);
+  assert.equal(policy.holdout_values_used,false);
+});
+
 test('score-conditioned execution-head ablation requires strict inner-selection improvement over pooled-only reference',()=>{
   const policy=(net,win,dd,passed=true)=>({
     status:'EVALUATED',passed,
