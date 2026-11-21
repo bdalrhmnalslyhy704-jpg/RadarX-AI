@@ -203,16 +203,21 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
     'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
 });
 
-test('fixed-SHA trainer exports failed-inner TCN-LSTM candidates only as diagnostic outer predictions',async()=>{
+test('fixed-SHA trainer keeps failed-inner TCN-LSTM diagnostic fits out of outer validation',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/);
-  assert.match(trainer,/selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
-  assert.match(trainer,/if\(selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/,
+    'the selector may retain a diagnostic fit for inner audit only');
+  assert.match(trainer,/const selectedFit=selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
+  assert.match(trainer,/const innerQualified=selection\.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'[\s\S]*?calibrator\.fitted===true/);
+  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
+    'only an inner-qualified model with supported calibration may create an outer-scored artifact');
   assert.match(trainer,/passed:innerQualified/);
   assert.match(trainer,/inner_selection_qualified:innerQualified/);
   assert.match(trainer,/diagnostic_only:!innerQualified/);
   assert.match(trainer,/INNER_BEST_DIAGNOSTIC_ONLY/);
+  assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.match(trainer,/outer_validation_opened:false/);
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.doesNotMatch(trainer,/qualificationByModel\.TCN_LSTM_HYBRID=\{\s*passed:true/,
     'trainer must never force-pass a diagnostic-only LSTM');
