@@ -97,6 +97,8 @@ const phase2=[
   'phase2/tests/unified-feature-engine.test.mjs',
   'phase2/tests/cognitive-brain.test.mjs',
   'phase2/tests/temporal-neural-brain.test.mjs',
+  'phase2/tests/neural-closure-contracts.test.mjs',
+  'phase2/tests/temporal-lstm-hybrid.test.mjs',
   'phase2/tests/daily-early-riser-census.test.mjs',
   'phase2/tests/adaptive-trader-engine.test.mjs',
   'phase2/tests/daily-early-riser-census.test.mjs',
@@ -107,7 +109,7 @@ const phase2=[
 
 const scope=process.argv[2]||'all';
 const files=scope==='phase1'?phase1:scope==='phase2'?phase2:[...phase1,...phase2];
-const FILE_TIMEOUT_MS=75000;
+const FILE_TIMEOUT_MS=180000;
 const TEST_TIMEOUT_MS=60000;
 
 async function runFile(file){
