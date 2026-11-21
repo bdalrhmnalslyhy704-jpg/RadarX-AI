@@ -1974,12 +1974,14 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
       pooledOnlyPolicy.selected_trial?.logistic_anchor_trade_counts_matched===true&&
       contextPolicy.selected_trial?.logistic_anchor_trade_counts_matched===true,
     pooled_only_frozen_policy:{
+      return_estimator:pooledOnlyPolicy.selected_return_estimator??'POINTWISE_HUBER',
       risk_penalty_weight:pooledOnlyPolicy.selected_risk_penalty_weight??null,
       minimum_risk_adjusted_score:pooledOnlyPolicy.selected_minimum_risk_adjusted_score??null,
       abstention_percentile:pooledOnlyPolicy.selected_abstention_percentile??null,
       top_k_per_timestamp:pooledOnlyPolicy.selected_top_k_per_timestamp??null
     },
     context_frozen_policy:{
+      return_estimator:contextPolicy.selected_return_estimator??'POINTWISE_HUBER',
       risk_penalty_weight:contextPolicy.selected_risk_penalty_weight??null,
       minimum_risk_adjusted_score:contextPolicy.selected_minimum_risk_adjusted_score??null,
       abstention_percentile:contextPolicy.selected_abstention_percentile??null,
@@ -2024,8 +2026,11 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
     :profile?.pooled_only_execution_return_estimator??'POINTWISE_HUBER';
   const predictedNetReturn=returnEstimator==='HURDLE_EXPECTED_VALUE'
     ?prediction.predicted_hurdle_net_return_pct:prediction.predicted_net_return_pct;
-  const lambda=finite(profile?.execution_risk_penalty_weight)
-    ?clamp(Number(profile.execution_risk_penalty_weight),0,8):null;
+  const configuredLambda=contextual
+    ?profile?.execution_risk_penalty_weight
+    :profile?.pooled_only_execution_risk_penalty_weight;
+  const lambda=finite(configuredLambda)
+    ?clamp(Number(configuredLambda),0,8):null;
   if(lambda===null||!finite(predictedNetReturn))
     return {status:'UNAVAILABLE',
       reason:lambda===null?'FROZEN_EXECUTION_RISK_PENALTY_NOT_SELECTED':
