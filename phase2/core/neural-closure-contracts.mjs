@@ -2354,8 +2354,9 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     throw new TypeError('EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN');
   if(new Set(rows.map(row=>String(row.id))).size!==rows.length)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_DUPLICATE_ROW_ID');
-  if(minimumRiskAdjustedScore!==null&&!finite(minimumRiskAdjustedScore))
-    throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_THRESHOLD_INVALID');
+  if(minimumRiskAdjustedScore!==null&&
+    (!finite(minimumRiskAdjustedScore)||Number(minimumRiskAdjustedScore)<0))
+    throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_THRESHOLD_MUST_BE_NONNEGATIVE');
   if(abstentionPercentile!==null&&
     (!finite(abstentionPercentile)||Number(abstentionPercentile)<=0||Number(abstentionPercentile)>=1))
     throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_PERCENTILE_INVALID');
@@ -2412,6 +2413,9 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       percentile_selected_on_inner_selection:abstentionPercentile,
       source_partition:'INNER_SELECTION_ONLY',
       threshold_refitted_on_outer_validation:false,
+      strictly_positive_score_required:minimumRiskAdjustedScore!==null,
+      score_floor_rule:minimumRiskAdjustedScore===null?null:
+        'INNER_SELECTION_QUANTILE_CLAMPED_AT_ZERO_WITH_STRICT_GREATER_THAN',
       baseline_trade_counts_matched:true
     },
     portfolio_policy:NEURAL_CLOSURE_PORTFOLIO_POLICY,
