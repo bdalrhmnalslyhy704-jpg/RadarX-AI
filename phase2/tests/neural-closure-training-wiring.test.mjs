@@ -530,6 +530,12 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
   assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/,
     'the main trainer must fit a separate Logistic context only after the recurrent pre-head training block is fixed');
+  assert.match(trainer,/logistic_feature_vector:buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)/,
+    'the external Logistic context must be derived from the same 24x29 TCN-LSTM sequence channels');
+  assert.match(trainer,/feature_schema_id:LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA/,
+    'the external context must publish its matched temporal feature schema');
+  assert.match(trainer,/buildTcnLstmAnchorFeatures\(sourceRow\.temporal_sequence\)/,
+    'outer inference must apply the exact same sequence-to-Logistic transformation');
   assert.match(trainer,/fitTunedTemporalLogisticBaseline\([\s\S]*?modelTrainingRows/);
   assert.match(trainer,/selectedFit\.execution_logistic_context_model/,
     'outer-validation inference must reuse the exact frozen pre-head Logistic model');
