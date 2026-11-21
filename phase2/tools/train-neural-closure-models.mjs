@@ -1487,11 +1487,17 @@ async function main(){
             const pooledOnlyRiskPenaltyWeight=Number(
               pooledOnlyRiskPolicy.selected_risk_penalty_weight
             );
+            const pooledOnlyReturnEstimator=
+              pooledOnlyRiskPolicy.selected_return_estimator??'POINTWISE_HUBER';
+            const pooledOnlyExpectedNetReturnPct=
+              pooledOnlyReturnEstimator==='HURDLE_EXPECTED_VALUE'
+                ?pooledOnlyExecution.predicted_hurdle_net_return_pct
+                :pooledOnlyExecution.predicted_net_return_pct;
             const pooledOnlyRiskAdjustedScore=
-              pooledOnlyExecution.predicted_net_return_pct-
+              pooledOnlyExpectedNetReturnPct-
               pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct;
             if(!finite(pooledOnlyRiskAdjustedScore)||
-              !finite(pooledOnlyExecution.predicted_net_return_pct)||
+              !finite(pooledOnlyExpectedNetReturnPct)||
               !finite(pooledOnlyExecution.predicted_downside_risk_pct))
               throw new Error('TCN_LSTM_POOLED_ONLY_EXECUTION_RISK_SCORE_UNAVAILABLE:'+item.id);
             return {
@@ -1517,6 +1523,11 @@ async function main(){
               auxiliary_ranking_logit:Number(auxiliaryRankingLogit),
               auxiliary_ranking_anchor_logit:Number(auxiliaryRankingAnchorLogit),
               predicted_net_return_pct:Number(executionScore.predicted_net_return_pct),
+              predicted_pointwise_net_return_pct:Number(executionScore.predicted_pointwise_net_return_pct),
+              predicted_hurdle_net_return_pct:executionScore.predicted_hurdle_net_return_pct,
+              predicted_positive_net_return_probability:
+                executionScore.predicted_positive_net_return_probability,
+              execution_return_estimator:executionScore.return_estimator,
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
               execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
@@ -1526,7 +1537,12 @@ async function main(){
               temporal_logistic_cv_context_probability:Number(externalLogisticContextProbability),
               temporal_logistic_cv_context_logit:Number(externalLogisticLogit),
               execution_risk_score_semantics:executionScore.score_semantics,
-              pooled_only_predicted_net_return_pct:Number(pooledOnlyExecution.predicted_net_return_pct),
+              pooled_only_predicted_net_return_pct:Number(pooledOnlyExpectedNetReturnPct),
+              pooled_only_pointwise_net_return_pct:Number(pooledOnlyExecution.predicted_net_return_pct),
+              pooled_only_hurdle_net_return_pct:pooledOnlyExecution.predicted_hurdle_net_return_pct,
+              pooled_only_positive_net_return_probability:
+                pooledOnlyExecution.predicted_positive_net_return_probability,
+              pooled_only_execution_return_estimator:pooledOnlyReturnEstimator,
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
               pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
