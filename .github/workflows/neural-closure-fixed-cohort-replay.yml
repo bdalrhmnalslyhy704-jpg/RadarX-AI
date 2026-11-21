@@ -13,8 +13,10 @@ on:
       - research/build224-tcn-lstm-selective-abstention-20261121
       - research/build224-tcn-lstm-return-head-normalization-20261121
       - research/build224-tcn-lstm-hurdle-return-head-20261121
+      - research/build224-tcn-lstm-hurdle-conditional-means-20261121
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
+      - 'phase2/core/hurdle-return-head.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
       - 'phase2/core/temporal-logistic-baseline.mjs'
       - 'phase2/core/neural-closure-contracts.mjs'
