@@ -2380,7 +2380,11 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       abstention_active:neuralMask.abstention_active===true,
       minimum_risk_adjusted_score:minimumRiskAdjustedScore,
       abstention_percentile:abstentionPercentile,
-      logistic_matched_candidate_trade_counts:minimumRiskAdjustedScore!==null,
+      logistic_matched_candidate_signal_counts:
+        logisticMask.signal_count===neuralMask.signal_count,
+      logistic_matched_candidate_trade_counts:
+        logisticMask.signal_count===neuralMask.signal_count&&
+        Number(logistic.trade_count)===Number(neural.trade_count),
       neural_metrics:neural,logistic_metrics:logistic,
       neural_minus_logistic:{
         executed_trade_count:delta(neural,logistic,'trade_count'),
