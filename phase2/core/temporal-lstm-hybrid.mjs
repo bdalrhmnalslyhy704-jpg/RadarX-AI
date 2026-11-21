@@ -2049,7 +2049,9 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
       predicted_downside_risk_pct:prediction.predicted_downside_risk_pct,
       risk_penalty_weight:lambda,risk_adjusted_net_return_score:null};
   return {status:'AVAILABLE',
-    score_semantics:'SELECTED_PREDICTED_NET_RETURN_ESTIMATOR_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
+    score_semantics:returnEstimator==='HURDLE_EXPECTED_VALUE'
+      ?'HURDLE_EXPECTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK'
+      :'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK',
     return_estimator:returnEstimator,
     predicted_net_return_pct:Number(predictedNetReturn),
     predicted_pointwise_net_return_pct:Number(prediction.predicted_net_return_pct),
