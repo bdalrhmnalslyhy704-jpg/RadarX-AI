@@ -14,6 +14,8 @@ on:
       - research/build224-tcn-lstm-return-head-normalization-20261121
       - research/build224-tcn-lstm-hurdle-return-head-20261121
       - research/build224-tcn-lstm-hurdle-conditional-means-20261121
+      - research/build224-neural-closure-parity-manifest-20261121
+      - research/build224-tcn-lstm-inner-logistic-parity-20261121
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/core/hurdle-return-head.mjs'
@@ -99,6 +101,11 @@ jobs:
         env:
           EXPECTED_DATASET_SHA256: f9923205db04e0356b0df078c138b8862987b42bbf81b7e329d29179392f8a77
           EXPECTED_ROW_COUNT: '32300'
+          EXPECTED_TARGET_DEFINITION: FIRST_TOUCH_PLUS_3_PCT_BEFORE_MINUS_2_PCT_WITHIN_4H_1M_V1
+          EXPECTED_TARGET_SEMANTICS: UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1
+          EXPECTED_FEATURE_SCHEMA: RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1
+          EXPECTED_COST_MODEL_ID: FIXED_LINEAR_ROUND_TRIP_BPS_V1
+          EXPECTED_SPLIT_ID: RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -108,6 +115,11 @@ jobs:
           const manifest=report.experiment_manifest;
           const logistic=benchmark?.models?.LOGISTIC_REGRESSION;
           const logisticCv=report.training?.logistic_baseline_temporal_cv;
+          const logisticManifest=manifest?.models?.LOGISTIC_REGRESSION;
+          const logisticTraining=report.model_artifacts?.LOGISTIC_REGRESSION;
+          const logisticArtifactPath='artifacts/neural-closure-replay/model-artifacts/LOGISTIC_REGRESSION.json';
+          const logisticArtifact=fs.existsSync(logisticArtifactPath)
+            ?JSON.parse(fs.readFileSync(logisticArtifactPath,'utf8')):null;
           const models=benchmark?.models??{};
           const holdout=benchmark?.holdout_access;
           const failures=[];
@@ -125,6 +137,40 @@ jobs:
              logisticCv?.calibration?.outer_validation_used_for_calibrator_selection!==false||
              logisticCv?.calibration?.holdout_used_for_calibration!==false) failures.push('LOGISTIC_CALIBRATION_PROVENANCE_INVALID');
           if(!Number.isFinite(logistic?.validation?.raw_brier_score)) failures.push('TUNED_LOGISTIC_RAW_BRIER_MISSING');
+          // Promotion Logistic must be the persisted full-information 696D model,
+          // not the legacy 18D Cognitive diagnostic or pooled 58D anchor.
+          if(logisticManifest?.training_status!=='COMPLETE') failures.push('LOGISTIC_MANIFEST_NOT_TRAINED');
+          if(logisticManifest?.feature_schema_id!==process.env.EXPECTED_FEATURE_SCHEMA||
+             manifest?.feature_schema_ids?.LOGISTIC_REGRESSION!==process.env.EXPECTED_FEATURE_SCHEMA||
+             logisticCv?.feature_schema_id!==process.env.EXPECTED_FEATURE_SCHEMA)
+            failures.push('LOGISTIC_FEATURE_SCHEMA_MISMATCH');
+          if(logisticCv?.feature_transform!=='24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE'||
+             Number(logisticTraining?.feature_count)!==696||
+             Number(logisticArtifact?.feature_names?.length)!==696)
+            failures.push('LOGISTIC_FULL_SEQUENCE_FEATURE_WIDTH_MISMATCH');
+          if(!logisticArtifact||logisticArtifact?.schema!=='RADARX_VERSIONED_NEURAL_MODEL_ARTIFACT_V1')
+            failures.push('LOGISTIC_VERSIONED_ARTIFACT_MISSING');
+          if(!logisticManifest?.artifact_sha256||
+             logisticManifest?.artifact_sha256!==logisticTraining?.artifact_sha256||
+             logisticManifest?.artifact_sha256!==logisticArtifact?.artifact_sha256)
+            failures.push('LOGISTIC_ARTIFACT_SHA_MISMATCH');
+          const lineage=logisticArtifact?.research_lineage;
+          if(lineage?.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256||
+             lineage?.target_definition!==process.env.EXPECTED_TARGET_DEFINITION||
+             lineage?.target_semantics!==process.env.EXPECTED_TARGET_SEMANTICS||
+             lineage?.feature_schema_id!==process.env.EXPECTED_FEATURE_SCHEMA||
+             lineage?.cost_model_id!==process.env.EXPECTED_COST_MODEL_ID||
+             Number(lineage?.round_trip_cost_bps)!==30||
+             Number(lineage?.horizon_ms)!==14_400_000||
+             lineage?.split_id!==process.env.EXPECTED_SPLIT_ID)
+            failures.push('LOGISTIC_ARTIFACT_RESEARCH_LINEAGE_MISMATCH');
+          if(manifest?.target_definition!==process.env.EXPECTED_TARGET_DEFINITION||
+             manifest?.target_semantics!==process.env.EXPECTED_TARGET_SEMANTICS||
+             Number(manifest?.horizon_ms)!==14_400_000||
+             manifest?.cost_model_id!==process.env.EXPECTED_COST_MODEL_ID||
+             Number(manifest?.round_trip_cost_bps)!==30||
+             manifest?.split_id!==process.env.EXPECTED_SPLIT_ID)
+            failures.push('TOP_LEVEL_EXPERIMENT_CONTRACT_MISMATCH');
           if(holdout?.opened!==false) failures.push('HOLDOUT_WAS_OPENED');
           if(holdout?.opening_protocol?.status!=='LOCKED') failures.push('HOLDOUT_PROTOCOL_NOT_LOCKED');
           if(holdout?.opening_protocol?.passed!==false) failures.push('HOLDOUT_PROTOCOL_UNEXPECTEDLY_APPROVED');

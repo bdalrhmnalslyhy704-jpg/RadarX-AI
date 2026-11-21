@@ -558,6 +558,18 @@ export function buildTcnLstmAnchorFeatures(sequence) {
   return means.concat(variances.map(value => Math.sqrt(Math.max(0, value))));
 }
 
+/**
+ * Preserve every closed temporal input value in chronological row-major order.
+ * This is the full-information linear Logistic comparator for the 24x29 TCN
+ * input; unlike the 58-value pooled anchor it does not discard within-window
+ * time position. The caller fits normalization separately inside each
+ * chronological training fold.
+ */
+export function buildTcnLstmFlattenedFeatures(sequence) {
+  validateSequence(sequence);
+  return sequence.flatMap(row=>row.map(Number));
+}
+
 export function fitTcnLstmLogisticAnchor(rows, {
   iterations = 300, learningRate = 0.04, l2 = 0.04
 } = {}) {
@@ -620,6 +632,75 @@ export function predictTcnLstmLogisticLogit(sequence, anchor) {
     logit += anchor.weights[feature] * features[feature];
   if (!finite(logit)) throw new TypeError('TCN_LSTM_LOGISTIC_LOGIT_NON_FINITE');
   return clamp(logit, -LOGIT_LIMIT, LOGIT_LIMIT);
+}
+
+export const TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID =
+  'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1';
+export const TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT =
+  TCN_LSTM_STEPS * TCN_LSTM_INPUT_CHANNELS;
+
+/**
+ * Resolve the inner-selection Logistic reference without substituting the
+ * older pooled 58-value anchor when promotion requires the full 696-value
+ * ordered temporal representation. External raw logits are produced only by
+ * a Logistic model fitted on the earlier purged model-training partition.
+ */
+export function resolveTcnLstmInnerSelectionLogisticBaseline(selectionRows,
+  scoringRows,{
+    anchor=null,featureSchemaId=null,featureNames=null,
+    requireFullSequenceLogistic=false
+  }={}
+){
+  if(!Array.isArray(selectionRows)||selectionRows.length===0||
+    !Array.isArray(scoringRows))
+    throw new TypeError('TCN_LSTM_INNER_LOGISTIC_BASELINE_ROWS_INVALID');
+  const fullSequenceContract=
+    featureSchemaId===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID&&
+    Array.isArray(featureNames)&&
+    featureNames.length===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT&&
+    scoringRows.length===selectionRows.length;
+  if(fullSequenceContract){
+    const byId=new Map();
+    for(const row of scoringRows){
+      const id=String(row?.id??'');
+      if(!id||byId.has(id)||!finite(row?.at)||
+        !finite(row?.external_logistic_raw_logit))
+        throw new TypeError('TCN_LSTM_INNER_LOGISTIC_RAW_SCORE_INVALID:'+id);
+      byId.set(id,{
+        at:Number(row.at),logit:Number(row.external_logistic_raw_logit)
+      });
+    }
+    const logits=selectionRows.map(row=>{
+      const id=String(row?.id??''),score=byId.get(id);
+      if(!score||score.at!==Number(row.at))
+        throw new TypeError('TCN_LSTM_INNER_LOGISTIC_ROW_ALIGNMENT_FAILED:'+id);
+      return score.logit;
+    });
+    return {
+      source:'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW',
+      feature_schema_id:featureSchemaId,
+      feature_count:TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT,
+      probability_stage:'RAW_UNCALIBRATED',
+      fit_partition:'PRE_EXECUTION_HEAD_MODEL_TRAINING_ROWS_ONLY',
+      scoring_partition:'PURGED_INNER_SELECTION_ONLY',
+      holdout_values_used:false,
+      logits
+    };
+  }
+  if(requireFullSequenceLogistic)
+    throw new Error('TCN_LSTM_FULL_ORDERED_LOGISTIC_SELECTION_BASELINE_REQUIRED');
+  if(!anchor)
+    throw new TypeError('TCN_LSTM_INNER_LOGISTIC_FALLBACK_ANCHOR_REQUIRED');
+  return {
+    source:'FROZEN_POOLED_LOGISTIC_ANCHOR_58_FALLBACK',
+    feature_schema_id:'RADARX_TCN_LSTM_POOLED_ANCHOR_MEAN_STD_58_V1',
+    feature_count:BASELINE_FEATURES,
+    probability_stage:'RAW_UNCALIBRATED',
+    fit_partition:'INNER_TRAINING_PARTITION_ONLY',
+    scoring_partition:'PURGED_INNER_SELECTION_ONLY',
+    holdout_values_used:false,
+    logits:selectionRows.map(row=>predictTcnLstmLogisticLogit(row.sequence,anchor))
+  };
 }
 
 function initializeModel(seed = 29) {
@@ -2992,7 +3073,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55,
   rankingScoreWeight=0.01,rankingMinimumReturnGapPct=0.50,rankingPairsPerTimestamp=4,
   rankingHeadLearningRate=0.03,rankingHeadEpochs=40,rankingHeadL2=0.001,
-  externalLogisticExecutionContextProvider=null
+  externalLogisticExecutionContextProvider=null,
+  requireExternalLogisticSelectionBaseline=false
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -3010,7 +3092,10 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     !Number.isInteger(rankingHeadEpochs)||rankingHeadEpochs<1||rankingHeadEpochs>200||
     !finite(rankingHeadL2)||rankingHeadL2<0||rankingHeadL2>1||
     typeof externalLogisticExecutionContextProvider!=='function'&&
-      externalLogisticExecutionContextProvider!==null)
+      externalLogisticExecutionContextProvider!==null||
+    typeof requireExternalLogisticSelectionBaseline!=='boolean'||
+    requireExternalLogisticSelectionBaseline&&
+      typeof externalLogisticExecutionContextProvider!=='function')
     throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
   const trainingSampleSelection=selectChronologicalTcnLstmTrainingRows(
     trainingRows,maxTrainingSamples
@@ -3145,23 +3230,32 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       provided?.report?.holdout_rows_or_labels_used!==false||
       typeof provided?.feature_schema_id!=='string'||!provided.feature_schema_id||
       !Array.isArray(provided?.predictions)||
-      provided.predictions.length!==externalLogisticScoringRows.length)
+      provided.predictions.length!==externalLogisticScoringRows.length||
+      requireExternalLogisticSelectionBaseline&&
+        (provided.feature_schema_id!==TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID||
+          !Array.isArray(provided.feature_schema_names)||
+          provided.feature_schema_names.length!==TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT))
       throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_PROVIDER_CONTRACT_INVALID');
     const predictedById=new Map();
     for(const prediction of provided.predictions){
       const id=String(prediction?.id??'');
       if(!id||predictedById.has(id)||!finite(prediction?.at)||
-        !finite(prediction?.logit))
+        !finite(prediction?.logit)||
+        requireExternalLogisticSelectionBaseline&&!finite(prediction?.raw_logit))
         throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_PREDICTION_INVALID:'+id);
       predictedById.set(id,{
-        at:Number(prediction.at),logit:Number(prediction.logit)
+        at:Number(prediction.at),logit:Number(prediction.logit),
+        rawLogit:finite(prediction?.raw_logit)?Number(prediction.raw_logit):null
       });
     }
     const enrichRows=sourceRows=>sourceRows.map(row=>{
       const prediction=predictedById.get(sampleIdentity(row));
       if(!prediction||prediction.at!==Number(row.at))
         throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_ROW_ALIGNMENT_FAILED:'+row.id);
-      return {...row,external_logistic_logit:prediction.logit};
+      return {...row,
+        external_logistic_logit:prediction.logit,
+        external_logistic_raw_logit:prediction.rawLogit
+      };
     });
     executionHeadRowsWithLogisticContext=Array.isArray(executionHeadRows)
       ?enrichRows(executionHeadRows):null;
@@ -3178,6 +3272,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       purge_gap_ms:externalLogisticScoringMinAt-modelTrainingMaxResolvedAt,
       logistic_cv_schema:provided.report.schema,
       logistic_feature_schema_id:provided.feature_schema_id,
+      logistic_feature_schema_names:provided.feature_schema_names??null,
       logistic_cv_selected_configuration:provided.report.selected_configuration,
       logistic_cv_calibration:provided.report.calibration,
       predictions_are_out_of_sample_for_scoring_rows:true,
@@ -3186,15 +3281,31 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   }else{
     const enrichRows=sourceRows=>sourceRows.map(row=>({
       ...row,
-      external_logistic_logit:predictTcnLstmLogisticLogit(row.sequence,anchor)
+      external_logistic_logit:predictTcnLstmLogisticLogit(row.sequence,anchor),
+      external_logistic_raw_logit:null
     }));
     executionHeadRowsWithLogisticContext=Array.isArray(executionHeadRows)
       ?enrichRows(executionHeadRows):null;
     selectionRowsWithLogisticContext=enrichRows(selectionRows);
   }
-  const baselineLogits = selectionRows.map(row =>
-    predictTcnLstmLogisticLogit(row.sequence, anchor));
-  const baselinePredictions = baselineLogits.map(sigmoid);
+  const innerSelectionBaseline=resolveTcnLstmInnerSelectionLogisticBaseline(
+    selectionRows,selectionRowsWithLogisticContext,{
+      anchor,
+      featureSchemaId:externalLogisticContextMetadata.logistic_feature_schema_id??null,
+      featureNames:externalLogisticContextMetadata.logistic_feature_schema_names??null,
+      requireFullSequenceLogistic:requireExternalLogisticSelectionBaseline
+    }
+  );
+  const baselineLogits=innerSelectionBaseline.logits;
+  const baselinePredictions=baselineLogits.map(sigmoid);
+  externalLogisticContextMetadata.inner_selection_baseline_source=
+    innerSelectionBaseline.source;
+  externalLogisticContextMetadata.inner_selection_baseline_feature_schema_id=
+    innerSelectionBaseline.feature_schema_id;
+  externalLogisticContextMetadata.inner_selection_baseline_feature_count=
+    innerSelectionBaseline.feature_count;
+  externalLogisticContextMetadata.inner_selection_baseline_probability_stage=
+    innerSelectionBaseline.probability_stage;
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
   const baselineRanking=summarizeTcnLstmPairwiseLogitRanking(
     selectionRows,baselineLogits,{
@@ -3482,10 +3593,23 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     },
     ranking_training_pair_support:rankingTrainingPairSupport,
     baseline: {
-      kind:anchor.kind,training_rows:anchor.training_rows,
+      kind:innerSelectionBaseline.source,
+      training_rows:innerSelectionBaseline.source==='TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
+        ?modelTrainingRows.length:anchor.training_rows,
+      feature_schema_id:innerSelectionBaseline.feature_schema_id,
+      feature_count:innerSelectionBaseline.feature_count,
+      probability_stage:innerSelectionBaseline.probability_stage,
+      fit_partition:innerSelectionBaseline.fit_partition,
+      scoring_partition:innerSelectionBaseline.scoring_partition,
+      holdout_values_used:innerSelectionBaseline.holdout_values_used,
       selection_brier:Number(baselineBrier.toFixed(8)),
       pairwise_ranking:baselineRanking,
       selection_score:Number(baselineSelectionScore.toFixed(8))
+    },
+    training_residual_anchor:{
+      kind:anchor.kind,feature_count:BASELINE_FEATURES,
+      training_rows:anchor.training_rows,
+      role:'TCN_LSTM_RESIDUAL_INITIALIZATION_AND_FIT_OBJECTIVE_ONLY'
     },
     selection_scoring:{
       method:rankingScoreAvailable

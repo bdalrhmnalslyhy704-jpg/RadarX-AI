@@ -9,6 +9,7 @@ import {
 import {
   NEURAL_CLOSURE_HORIZON_MS,NEURAL_CLOSURE_TARGET_DEFINITION,
   NEURAL_CLOSURE_TARGET_SEMANTICS,NEURAL_CLOSURE_MIN_CLASS_SUPPORT,
+  NEURAL_CLOSURE_COST_MODEL_ID,
   NEURAL_CLOSURE_MODEL_FAMILIES,validateFourHourRows,splitFourHourRows,
   runNeuralClosureBenchmark,sha256CanonicalArrayMapped,
   evaluateExternalExecutionRiskTopK,simulateFirstTouchPaperPortfolio,
@@ -34,7 +35,7 @@ import {
 } from '../core/temporal-neural-brain.mjs';
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
-  selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
+  buildTcnLstmFlattenedFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
   predictTcnLstmHybridRankingLogit,
@@ -50,7 +51,8 @@ import {
   fitDenseGeneralizationProjection,predictDenseProjectionProbability
 } from '../core/dense-generalization-projection.mjs';
 import {
-  createVersionedModelArtifact,verifyVersionedModelArtifact
+  createVersionedModelArtifact,verifyVersionedModelArtifact,
+  attachResearchLineageToModelArtifact
 } from '../core/model-artifact-guardian.mjs';
 import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
@@ -68,6 +70,16 @@ const probabilityLogit=value=>{
 };
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 const MODEL_SCHEMA='RADARX_BUILD224_NEURAL_MODEL_TRAINING_V3';
+const LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA =
+  'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1';
+const LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES = Object.freeze(
+  Array.from({length:TCN_LSTM_STEPS},(_,step)=>
+    HYBRID_FEATURE_NAMES.map(name=>'STEP_'+String(step).padStart(2,'0')+'_'+name)
+  ).flat()
+);
+if(HYBRID_FEATURE_NAMES.length!==TCN_LSTM_INPUT_CHANNELS||
+  LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length!==TCN_LSTM_STEPS*TCN_LSTM_INPUT_CHANNELS)
+  throw new Error('LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA_WIDTH_MISMATCH');
 
 function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
@@ -351,11 +363,16 @@ async function main(){
     dataset_scope:datasetScope
   };
 
-  // Preserve the previous fixed Logistic fit as a diagnostic comparator,
-  // but use a purged expanding-window tuned Logistic fit as the primary baseline.
-  // Every fold standardizer and every hyperparameter choice is train-fold only.
+  // Promotion baseline is trained on the same 29 temporal channels consumed by
+  // TCN-LSTM. Each channel contributes its 24-step mean and standard deviation;
+  // this deterministic 58-feature reduction is also the frozen Logistic anchor
+  // representation used inside TCN-LSTM, rather than the separate 18-feature
+  // Cognitive vector used by the legacy comparator below.
+  const modelArtifactsByModel={};
+  const trainingArtifacts={};
+  const unavailable={};
   const logisticTrainingVectors=split.train.map(row=>
-    buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA));
+    buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
   const fixedLogisticValidationProbabilities=split.validation.map(row=>
     predictLogistic(row.features,fixedLogisticFit));
@@ -381,12 +398,45 @@ async function main(){
   const logisticFit=logisticTuning.model;
   const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
     predictTemporalLogisticProbability(
-      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ));
   const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
     predictCrossFittedCalibratedTemporalLogisticProbability(
-      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ));
+  const logisticArtifact=makeArtifact({
+    name:'RADARX_LOGISTIC_TCN_LSTM_FULL_ORDERED_SEQUENCE_BASELINE',
+    family:'LOGISTIC_REGRESSION',version:'FULL_ORDERED_TEMPORAL_SEQUENCE_696_V1',
+    sourceCommitSha,featureSchemaId:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    featureNames:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
+    normalization:{mean:logisticFit.standardizer.means,std:logisticFit.standardizer.scales},
+    modelState:{
+      schema:'RADARX_TRAINED_TEMPORAL_LOGISTIC_FULL_SEQUENCE_STATE_V1',
+      standardizer:logisticFit.standardizer,fit:logisticFit.fit,
+      calibration:logisticFit.calibration,calibrator:logisticFit.calibrator,
+      selected_configuration:logisticTuning.report.selected_configuration,
+      cv_status:logisticTuning.report.status,
+      fit_partition:'FIXED_SHA_OUTER_TRAIN_ONLY'
+    }
+  });
+  const verifiedLogisticArtifact=verifyVersionedModelArtifact(logisticArtifact,{
+    expectedSourceCommitSha:sourceCommitSha
+  });
+  if(!verifiedLogisticArtifact.valid)
+    throw new Error('TUNED_LOGISTIC_MODEL_ARTIFACT_INVALID:'+verifiedLogisticArtifact.reason);
+  modelArtifactsByModel.LOGISTIC_REGRESSION=logisticArtifact;
+  trainingArtifacts.LOGISTIC_REGRESSION={
+    artifact_sha256:logisticArtifact.artifact_sha256,
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
+    feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
+    cv_status:logisticTuning.report.status,
+    fold_count:logisticTuning.report.fold_count,
+    selected_configuration:logisticTuning.report.selected_configuration,
+    calibration:logisticTuning.report.calibration,
+    fit_partition:'FIXED_SHA_OUTER_TRAIN_ONLY',
+    training_rows:split.train.length
+  };
   const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
     fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
   );
@@ -396,9 +446,23 @@ async function main(){
   const calibratedTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
     calibratedTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
   );
-  training.logistic_baseline_temporal_cv=logisticTuning.report;
+  training.logistic_baseline_temporal_cv={
+    ...logisticTuning.report,
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    feature_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
+    feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
+    feature_source:'SAME_CLOSED_24X29_TEMPORAL_SEQUENCE_AS_TCN_LSTM'
+  };
   training.logistic_baseline_comparison={
-    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V1',
+    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V2',
+    primary_promotion_baseline:{
+      feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+      feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
+      feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
+      same_temporal_channel_source_as_tcn_lstm:true
+    },
+    legacy_fixed_reference_role:'DIAGNOSTIC_ONLY_18_FEATURE_COGNITIVE_REPRESENTATION',
+    legacy_fixed_reference_feature_schema_id:COGNITIVE_FEATURE_SCHEMA,
     outer_validation_rows:split.validation.length,
     same_outer_validation_rows:true,
     fixed_reference:{
@@ -428,16 +492,17 @@ async function main(){
   };
   const logisticRawPredictionRows=predictionRows(eventRows,
     row=>predictTemporalLogisticProbability(
-      buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ),{
-      sourceCommitSha,modelName:'LOGISTIC_REGRESSION'
+      sourceCommitSha,artifactSha256:logisticArtifact.artifact_sha256,
+      modelName:'LOGISTIC_REGRESSION'
     });
   const eventRowsById=new Map(eventRows.map(row=>[String(row.id),row]));
   const predictionsByModel={
     LOGISTIC_REGRESSION:logisticRawPredictionRows.map(item=>{
       const row=eventRowsById.get(String(item.id));
       const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
-        buildCognitiveFeatureVector(row.features,COGNITIVE_FEATURE_SCHEMA),logisticFit
+        buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
       );
       return {
         ...item,
@@ -446,10 +511,6 @@ async function main(){
       };
     })
   };
-  const modelArtifactsByModel={};
-  const trainingArtifacts={};
-  const unavailable={};
-
   // Train the Cognitive V5 MLP and the shared 24x29 TCN once on the same
   // matured first-touch cohort. The inner selection blocks remain chronological.
   const cognitiveProfile=buildFourHourCognitiveLearningProfile(split.train,{
@@ -1191,10 +1252,8 @@ async function main(){
       target:row.target,sequence:row.temporal_sequence,
       temporal_sequence_timestamps:row.temporal_sequence_timestamps,
       // The separate temporal Logistic execution-context model consumes the
-      // same causal cognitive feature vector as the primary Logistic baseline.
-      logistic_feature_vector:buildCognitiveFeatureVector(
-        row.features,COGNITIVE_FEATURE_SCHEMA
-      )
+      // identical full ordered 24x29 flattened transform used by the primary Logistic baseline.
+      logistic_feature_vector:buildTcnLstmFlattenedFeatures(row.temporal_sequence)
     })).sort((a,b)=>a.at-b.at||a.symbol.localeCompare(b.symbol)||a.id.localeCompare(b.id));
     const lstmDays=[...new Set(lstmRows.map(row=>Math.floor(row.at/86_400_000)*86_400_000))]
       .sort((a,b)=>a-b);
@@ -1284,14 +1343,17 @@ async function main(){
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
+          requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
           // recurrent model-training block only. Its predictions are then
           // generated for the later execution-head and inner-selection rows.
           // No execution-head/selection/calibration/outer-validation labels can
           // influence this Logistic context model.
           externalLogisticExecutionContextProvider:(modelTrainingRows,scoringRows)=>{
-            if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector))||
-              scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)))
+            if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
+                row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length)||
+              scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
+                row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length))
               throw new TypeError('TCN_LSTM_TEMPORAL_LOGISTIC_FEATURE_VECTOR_MISSING');
             const temporalLogisticContext=fitTunedTemporalLogisticBaseline(
               modelTrainingRows,
@@ -1308,18 +1370,23 @@ async function main(){
                 maxEpochs:160,seed:22429
               });
             const predictions=scoringRows.map(row=>{
-              const probability=predictCrossFittedCalibratedTemporalLogisticProbability(
+              const rawProbability=predictTemporalLogisticProbability(
+                row.logistic_feature_vector,temporalLogisticContext.model
+              );
+              const calibratedProbability=predictCrossFittedCalibratedTemporalLogisticProbability(
                 row.logistic_feature_vector,temporalLogisticContext.model
               );
               return {
                 id:String(row.id),at:Number(row.at),
-                logit:probabilityLogit(probability)
+                raw_logit:probabilityLogit(rawProbability),
+                logit:probabilityLogit(calibratedProbability)
               };
             });
             return {
               model:temporalLogisticContext.model,
               report:temporalLogisticContext.report,
-              feature_schema_id:COGNITIVE_FEATURE_SCHEMA,
+              feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+              feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
               predictions
             };
           },
@@ -1461,7 +1528,7 @@ async function main(){
               throw new Error('TCN_LSTM_TEMPORAL_LOGISTIC_EXECUTION_CONTEXT_NOT_AVAILABLE');
             const externalLogisticContextProbability=
               predictCrossFittedCalibratedTemporalLogisticProbability(
-                buildCognitiveFeatureVector(sourceRow.features,COGNITIVE_FEATURE_SCHEMA),
+                buildTcnLstmFlattenedFeatures(sourceRow.temporal_sequence),
                 selectedFit.execution_logistic_context_model
               );
             const externalLogisticLogit=probabilityLogit(externalLogisticContextProbability);
@@ -1739,6 +1806,36 @@ async function main(){
       :'DENSE_MLP_TRAINING_UNAVAILABLE',
     diagnostic_only:false
   };
+  // Bind every serialized model to the exact data, target, feature, cost and
+  // chronological split contract before hashing the final benchmark artifact.
+  const modelArtifactResearchLineage={};
+  for(const [modelName,artifact] of Object.entries(modelArtifactsByModel)){
+    const enriched=attachResearchLineageToModelArtifact(artifact,{
+      datasetSha256:datasetSha,
+      inputFileSha256,
+      datasetSourceCommitSha,
+      targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+      featureSchemaId:artifact.feature_schema_id,
+      horizonMs:NEURAL_CLOSURE_HORIZON_MS,
+      costModelId:NEURAL_CLOSURE_COST_MODEL_ID,
+      roundTripCostBps:args.roundTripCostBps,
+      splitId:split.schema
+    });
+    const verified=verifyVersionedModelArtifact(enriched,{
+      expectedSourceCommitSha:sourceCommitSha,requireResearchLineage:true
+    });
+    if(!verified.valid)
+      throw new Error('MODEL_ARTIFACT_RESEARCH_LINEAGE_VERIFY_FAILED:'+modelName+':'+verified.reason);
+    modelArtifactsByModel[modelName]=enriched;
+    modelArtifactResearchLineage[modelName]=enriched.research_lineage;
+    for(const prediction of predictionsByModel[modelName]??[])
+      prediction.artifact_sha256=enriched.artifact_sha256;
+    if(trainingArtifacts[modelName])
+      trainingArtifacts[modelName].artifact_sha256=enriched.artifact_sha256;
+  }
+  training.model_artifact_research_lineage=modelArtifactResearchLineage;
+
   const benchmark=runNeuralClosureBenchmark({
     rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha,
     qualificationByModel,
@@ -2006,6 +2103,16 @@ async function main(){
     code_commit_sha:sourceCommitSha,
     dataset_sha256:datasetSha,
     input_file_sha256:inputFileSha256,
+    target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    horizon_ms:NEURAL_CLOSURE_HORIZON_MS,
+    cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,
+    round_trip_cost_bps:args.roundTripCostBps,
+    split_id:split.schema,
+    feature_schema_ids:Object.fromEntries(Object.entries(benchmark.models).map(([name])=>[
+      name,modelArtifactsByModel[name]?.feature_schema_id??
+        (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null)
+    ])),
     dataset_source_commit_sha:datasetSourceCommitSha,
     dataset_row_count:rows.length,
     scored_row_count:eventRows.length,
@@ -2038,6 +2145,9 @@ async function main(){
       name,{
         training_status:trainingArtifacts[name]?'COMPLETE':
           unavailable[name]?'UNAVAILABLE':'NOT_TRAINED',
+        feature_schema_id:modelArtifactsByModel[name]?.feature_schema_id??
+          (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null),
+        artifact_sha256:modelArtifactsByModel[name]?.artifact_sha256??null,
         evaluation_status:model.status,
         raw_brier:model.validation?.raw_brier_score??null,
         calibrated_brier:model.validation?.calibrated_brier_score??null,

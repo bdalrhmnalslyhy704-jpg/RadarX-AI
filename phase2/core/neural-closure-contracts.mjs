@@ -16,6 +16,8 @@ export const NEURAL_CLOSURE_MIN_CLASS_SUPPORT = 50;
 export const NEURAL_CLOSURE_BRIER_MARGIN = 0.003;
 export const NEURAL_CLOSURE_EXECUTION_RETURN_CONTRACT =
   'FIRST_TOUCH_PRICE_WITH_OPEN_GAP_AWARE_EXITS_V1';
+export const NEURAL_CLOSURE_COST_MODEL_ID =
+  'FIXED_LINEAR_ROUND_TRIP_BPS_V1';
 export const NEURAL_CLOSURE_MODEL_FAMILIES = Object.freeze([
   'COGNITIVE_MLP_V5',
   'TCN_V6',
@@ -3439,25 +3441,27 @@ export function runNeuralClosureBenchmark({
   const models={},verifiedPredictions=new Map(),verifiedArtifactShaByModel={};
   for(const modelName of modelNames){
     let artifactSha256=null,artifactVerification=null;
-    if(modelName!=='LOGISTIC_REGRESSION'){
-      const artifact=modelArtifactsByModel[modelName];
-      if(!artifact){
-        models[modelName]={status:'NOT_EVALUATED',
-          reason:'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING'};
-        continue;
-      }
-      artifactVerification=verifyVersionedModelArtifact(artifact,{
-        expectedSourceCommitSha:String(sourceCommitSha).toLowerCase()
-      });
-      if(!artifactVerification.valid||artifact.model_family!==modelName){
-        models[modelName]={status:'NOT_EVALUATED',
-          reason:'EXACT_VERSIONED_MODEL_ARTIFACT_INVALID_OR_FAMILY_MISMATCH',
-          artifact_validation_reason:artifactVerification.reason??'MODEL_FAMILY_MISMATCH'};
-        continue;
-      }
-      artifactSha256=artifactVerification.artifact_sha256;
-      verifiedArtifactShaByModel[modelName]=artifactSha256;
+    // Every scored model, including Logistic Regression, must carry a
+    // checksummed versioned artifact. Previously Logistic predictions carried
+    // an artifact SHA while this loop deliberately passed null to predictionMap,
+    // which made the benchmark reject its own valid Logistic predictions.
+    const artifact=modelArtifactsByModel[modelName];
+    if(!artifact){
+      models[modelName]={status:'NOT_EVALUATED',
+        reason:'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING'};
+      continue;
     }
+    artifactVerification=verifyVersionedModelArtifact(artifact,{
+      expectedSourceCommitSha:String(sourceCommitSha).toLowerCase()
+    });
+    if(!artifactVerification.valid||artifact.model_family!==modelName){
+      models[modelName]={status:'NOT_EVALUATED',
+        reason:'EXACT_VERSIONED_MODEL_ARTIFACT_INVALID_OR_FAMILY_MISMATCH',
+        artifact_validation_reason:artifactVerification.reason??'MODEL_FAMILY_MISMATCH'};
+      continue;
+    }
+    artifactSha256=artifactVerification.artifact_sha256;
+    verifiedArtifactShaByModel[modelName]=artifactSha256;
     const verified=predictionMap(predictionsByModel[modelName],modelName,requiredIds,{
       sourceCommitSha:String(sourceCommitSha).toLowerCase(),
       targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,

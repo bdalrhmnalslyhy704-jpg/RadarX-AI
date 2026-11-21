@@ -110,7 +110,17 @@ function makeRows({days=60,rowsPerDay=200}={}){
   return rows;
 }
 function makeArtifacts(sourceCommitSha){
-  return Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map((family,index)=>[
+  const logistic=createVersionedModelArtifact({
+    modelName:'LOGISTIC_REGRESSION',modelFamily:'LOGISTIC_REGRESSION',
+    modelVersion:'1.0.0',sourceCommitSha,
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    featureSchemaId:'RADARX_LOGISTIC_TEST_FEATURES_V1',
+    featureNames:['feature_a','feature_b'],
+    featureIndexMap:{feature_a:0,feature_b:1},
+    normalization:{mean:[0,0],std:[1,1]},
+    modelState:{weights:[0.12,0.24],bias:0}
+  });
+  const neural=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map((family,index)=>[
     family,createVersionedModelArtifact({
       modelName:family,modelFamily:family,modelVersion:'1.0.0',
       sourceCommitSha,targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
@@ -121,6 +131,7 @@ function makeArtifacts(sourceCommitSha){
       modelState:{weights:[index/100+0.1,0.2],bias:0}
     })
   ]));
+  return {LOGISTIC_REGRESSION:logistic,...neural};
 }
 function makePredictions(rows,sourceCommitSha,artifacts){
   // Always derive predictions from the current outer split. This keeps the
@@ -138,7 +149,9 @@ function makePredictions(rows,sourceCommitSha,artifacts){
     ...(modelName==='TCN_LSTM_HYBRID'&&validationIds.has(row.id)
       ?{pre_inner_calibration_probability:row.target?0.61:0.39}:{})
   }));
-  const output={LOGISTIC_REGRESSION:make(0.72,0.24,null)};
+  const output={LOGISTIC_REGRESSION:make(
+    0.72,0.24,artifacts.LOGISTIC_REGRESSION.artifact_sha256
+  )};
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     output[family]=make(0.73,0.23,artifacts[family].artifact_sha256,family);
   return output;
@@ -511,7 +524,7 @@ test('fixed-SHA evaluator scores the full outer block with identity calibration 
   assert.match(report.integrity.fixed_benchmark_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.model_artifacts_sha256,/^[a-f0-9]{64}$/);
   assert.match(report.integrity.prediction_matrix_sha256,/^[a-f0-9]{64}$/);
-  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length+1);
   assert.equal(report.split.purge_ms,NEURAL_CLOSURE_PURGE_MS);
   assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
   assert.equal(report.models.LOGISTIC_REGRESSION.validation.sample_count,split.validation.length);
@@ -911,7 +924,9 @@ test('fixed reference threshold failure and incomplete protocol keep every holdo
     source_commit_sha:sourceCommitSha,target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
     target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,artifact_sha256:artifactSha256
   }));
-  predictions.LOGISTIC_REGRESSION=build(0.10,0.90,null);
+  predictions.LOGISTIC_REGRESSION=build(
+    0.10,0.90,modelArtifactsByModel.LOGISTIC_REGRESSION.artifact_sha256
+  );
   for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
     predictions[family]=build(0.43,0.41,modelArtifactsByModel[family].artifact_sha256);
   const qualificationByModel=Object.fromEntries(NEURAL_CLOSURE_MODEL_FAMILIES.map(family=>[
@@ -1134,7 +1149,7 @@ test('fixed-SHA evaluator refuses candidate predictions without an exact version
   assert.equal(report.models.TCN_V11.status,'NOT_EVALUATED');
   assert.equal(report.models.TCN_V11.reason,'EXACT_VERSIONED_MODEL_ARTIFACT_MISSING');
   assert.equal(report.models.TCN_V11.acceptance.passed,false);
-  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length-1);
+  assert.equal(report.integrity.verified_model_artifacts,NEURAL_CLOSURE_MODEL_FAMILIES.length);
 });
 
 

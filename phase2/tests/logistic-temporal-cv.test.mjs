@@ -8,6 +8,9 @@ import {
   predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
 } from '../core/temporal-logistic-baseline.mjs';
+import {buildTcnLstmAnchorFeatures,buildTcnLstmFlattenedFeatures,
+  TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_STEPS}
+  from '../core/temporal-lstm-hybrid.mjs';
 
 function cohort(days=90,rowsPerDay=10){
   const rows=[],vectors=[];
@@ -141,9 +144,59 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
   assert.match(trainer,/foldCount:5,purgeMs:86_400_000/);
   assert.match(trainer,/initialTrainingFraction:0\.32,validationFraction:0\.12/);
   assert.match(trainer,/calibration_metadata:logisticTuning\.report\.calibration/);
-  assert.match(trainer,/logistic_baseline_temporal_cv=logisticTuning\.report/);
+  assert.match(trainer,/logistic_baseline_temporal_cv=\{\s*\.\.\.logisticTuning\.report/);
   assert.match(trainer,/fixedLogisticFit=fitLogisticBaseline\(split\.train\)/);
   assert.match(trainer,/outer_validation_used_for_hyperparameter_selection:false/);
   assert.match(trainer,/holdout_used:false/);
   assert.match(trainer,/threshold:0\.15,roundTripCostBps:args\.roundTripCostBps/);
+});
+
+
+
+test('TCN-LSTM pooled anchor retains the 29-channel mean and standard deviation',()=>{
+  const sequence=Array.from({length:24},(_,step)=>
+    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>
+      (step-11.5)/12+channel*0.01));
+  const vector=buildTcnLstmAnchorFeatures(sequence);
+  assert.equal(TCN_LSTM_INPUT_CHANNELS,29);
+  assert.equal(vector.length,58);
+  assert.ok(sequence.flat().every(value=>Math.abs(value)<=4));
+  for(let channel=0;channel<TCN_LSTM_INPUT_CHANNELS;channel++){
+    assert.ok(Math.abs(vector[channel]-channel*0.01)<1e-12);
+    assert.ok(Math.abs(vector[TCN_LSTM_INPUT_CHANNELS+channel]-
+      Math.sqrt(47.916666666666664/144))<1e-12);
+  }
+  const malformed=sequence.map(row=>[...row]);
+  malformed[23].pop();
+  assert.throws(()=>buildTcnLstmAnchorFeatures(malformed));
+});
+
+test('fixed-cohort promotion Logistic consumes and persists the full ordered 24x29 tensor',async()=>{
+  const trainer=await readFile(new URL('../tools/train-neural-closure-models.mjs',import.meta.url),'utf8');
+  assert.match(trainer,/logisticTrainingVectors=split\.train\.map\(row=>\s*buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)\)/);
+  assert.match(trainer,/predictTemporalLogisticProbability\([\s\S]*?buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA/);
+  assert.match(trainer,/LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES\.length!==TCN_LSTM_STEPS\*TCN_LSTM_INPUT_CHANNELS/);
+  assert.match(trainer,/modelArtifactsByModel\.LOGISTIC_REGRESSION=logisticArtifact/);
+  assert.match(trainer,/trainingArtifacts\.LOGISTIC_REGRESSION=/);
+  assert.match(trainer,/feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE'/);
+  assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/);
+  assert.match(trainer,/logistic_feature_vector:buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/buildTcnLstmFlattenedFeatures\(sourceRow\.temporal_sequence\)/);
+});
+
+test('matched Logistic baseline preserves all 696 ordered values from the closed 24x29 TCN-LSTM tensor',()=>{
+  const sequence=Array.from({length:TCN_LSTM_STEPS},(_,step)=>
+    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>
+      (step*TCN_LSTM_INPUT_CHANNELS+channel-348)/100));
+  const vector=buildTcnLstmFlattenedFeatures(sequence);
+  assert.equal(TCN_LSTM_STEPS,24);
+  assert.equal(TCN_LSTM_INPUT_CHANNELS,29);
+  assert.equal(vector.length,24*29);
+  assert.deepEqual(vector,sequence.flat());
+  assert.equal(vector[0],sequence[0][0]);
+  assert.equal(vector[29],sequence[1][0]);
+  assert.equal(vector[695],sequence[23][28]);
+  assert.ok(vector.every(value=>Math.abs(value)<=4));
+  assert.throws(()=>buildTcnLstmFlattenedFeatures(sequence.slice(1)));
 });

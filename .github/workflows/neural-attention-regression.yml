@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - research/neural-closure-streaming-writer-20261114
+      - research/build224-tcn-lstm-inner-logistic-parity-20261121
     paths:
       - 'phase2/core/temporal-neural-brain.mjs'
       - 'phase2/core/temporal-lstm-hybrid.mjs'
@@ -13,6 +14,10 @@ on:
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
       - '.github/workflows/neural-attention-regression.yml'
   pull_request:
     paths:
@@ -24,6 +29,10 @@ on:
       - 'phase2/tests/temporal-lstm-hybrid.test.mjs'
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
+      - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/tests/model-artifact-feature-parity.test.mjs'
+      - 'phase2/tests/logistic-temporal-cv.test.mjs'
+      - 'phase2/core/temporal-logistic-baseline.mjs'
       - '.github/workflows/neural-attention-regression.yml'
 
 permissions:
@@ -55,5 +64,9 @@ jobs:
         run: node --test phase2/tests/temporal-lstm-hybrid.test.mjs
       - name: Verify fixed-SHA benchmark and holdout lock protocol
         run: node --test phase2/tests/neural-closure-contracts.test.mjs
+      - name: Verify tuned Logistic CV and matched temporal-feature baseline
+        run: node --test --test-timeout=180000 phase2/tests/logistic-temporal-cv.test.mjs
+      - name: Verify checksummed model artifacts and experiment lineage
+        run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Verify temporal training and exact artifact inference round-trip
         run: node --test phase2/tests/temporal-neural-brain.test.mjs
