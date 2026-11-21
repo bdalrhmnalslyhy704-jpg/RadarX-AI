@@ -135,6 +135,8 @@ jobs:
              manifest?.holdout?.metrics_read!==false||
              Number(manifest?.holdout?.rows_included_in_scored_predictions)!==0)
              failures.push('MANIFEST_HOLDOUT_LOCK_MISMATCH');
+          if(Number(manifest?.holdout?.rows_included_in_scored_predictions)!==0)
+             failures.push('HOLDOUT_PREDICTION_ROWS_NOT_ZERO');
           if(Object.values(models).some(model=>model?.holdout?.evaluated===true||
              model?.holdout?.brier_score!==null&&model?.holdout?.brier_score!==undefined||
              model?.holdout?.net_pnl_pct!==null&&model?.holdout?.net_pnl_pct!==undefined)) {
