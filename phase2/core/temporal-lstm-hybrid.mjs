@@ -1618,14 +1618,17 @@ export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
  * control; the score-conditioned model is the default inference path.
  */
 function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
-  roundTripCostBps=30,learningRate=0.015,epochs=100,l2=0.002,huberDelta=1
+  roundTripCostBps=30,learningRate=0.015,epochs=100,l2=0.002,huberDelta=1,
+  positiveNetReturnWeight=3
 }={}) {
   if(!Array.isArray(rows)||!Array.isArray(evidenceRows)||rows.length<20||
     rows.length!==evidenceRows.length||!finite(roundTripCostBps)||
     roundTripCostBps<0||roundTripCostBps>300||
     !finite(learningRate)||learningRate<=0||learningRate>0.1||
     !Number.isInteger(epochs)||epochs<10||epochs>300||
-    !finite(l2)||l2<0||l2>1||!finite(huberDelta)||huberDelta<=0)
+    !finite(l2)||l2<0||l2>1||!finite(huberDelta)||huberDelta<=0||
+    !finite(positiveNetReturnWeight)||positiveNetReturnWeight<1||
+    positiveNetReturnWeight>10)
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_CONFIGURATION_INVALID');
   const evidence=new Map();
   for(const row of evidenceRows){
@@ -1670,13 +1673,24 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     const featureMoments=Array.from({length:featureCount},(_,index)=>
       moments(rawFeatures.map(row=>row[index])));
     const targetMoments=moments(rawTargets);
+    const rawSampleWeights=rawTargets.map(value=>
+      targetKey==='net'&&Number(value)>0?Number(positiveNetReturnWeight):1
+    );
+    const sampleWeightMean=rawSampleWeights.reduce((sum,value)=>sum+value,0)/
+      rawSampleWeights.length;
+    const sampleWeights=rawSampleWeights.map(value=>value/sampleWeightMean);
+    const sampleWeightTotal=sampleWeights.reduce((sum,value)=>sum+value,0);
+    const sampleWeightSquares=sampleWeights.reduce((sum,value)=>sum+value*value,0);
+    const effectiveSampleSize=sampleWeightSquares>0
+      ?sampleWeightTotal*sampleWeightTotal/sampleWeightSquares:0;
     const normalizedVectors=vectors.map((item,rowIndex)=>({
       features:rawFeatures[rowIndex].map((value,index)=>
         (Number(value)-featureMoments[index].mean)/featureMoments[index].std),
-      target:(rawTargets[rowIndex]-targetMoments.mean)/targetMoments.std
+      target:(rawTargets[rowIndex]-targetMoments.mean)/targetMoments.std,
+      sample_weight:sampleWeights[rowIndex]
     }));
     if(normalizedVectors.some(item=>item.features.some(value=>!finite(value))||
-      !finite(item.target)))
+      !finite(item.target)||!finite(item.sample_weight)||item.sample_weight<=0))
       throw new TypeError('TCN_LSTM_EXECUTION_HEAD_STANDARDIZATION_NON_FINITE:'+targetKey+':'+featureKey);
     let weights=Array(featureCount).fill(0),bias=0;
     const m=Array(featureCount).fill(0),v=Array(featureCount).fill(0);
@@ -1684,20 +1698,21 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     const predict=(item,w,b)=>b+item.features.reduce((sum,x,i)=>sum+x*w[i],0);
     const loss=()=>normalizedVectors.reduce((sum,item)=>{
       const error=predict(item,weights,bias)-item.target;
-      return sum+(Math.abs(error)<=huberDelta
-        ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
-    },0)/normalizedVectors.length;
+      const huber=Math.abs(error)<=huberDelta
+        ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta);
+      return sum+item.sample_weight*huber;
+    },0)/sampleWeightTotal;
     const initial=loss();
     for(let epoch=1;epoch<=epochs;epoch++){
       const gw=Array(featureCount).fill(0);let gb=0;
       for(const item of normalizedVectors){
         const error=predict(item,weights,bias)-item.target;
-        const grad=Math.max(-huberDelta,Math.min(huberDelta,error));
+        const grad=Math.max(-huberDelta,Math.min(huberDelta,error))*item.sample_weight;
         gb+=grad;
         for(let i=0;i<featureCount;i++)gw[i]+=grad*item.features[i];
       }
-      for(let i=0;i<featureCount;i++)gw[i]=gw[i]/normalizedVectors.length+l2*weights[i];
-      gb/=normalizedVectors.length;
+      for(let i=0;i<featureCount;i++)gw[i]=gw[i]/sampleWeightTotal+l2*weights[i];
+      gb/=sampleWeightTotal;
       const gradientNorm=Math.sqrt(gw.reduce((sum,x)=>sum+x*x,0)+gb*gb);
       const clip=gradientNorm>2?2/gradientNorm:1;
       for(let i=0;i<featureCount;i++){
@@ -1724,7 +1739,20 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       zero_variance_feature_count:featureMoments.filter(item=>item.constant).length,
       initial_huber_loss:Number(initial.toFixed(8)),
       final_huber_loss:Number(bestLoss.toFixed(8)),
-      epochs_completed:done,feature_count:featureCount
+      epochs_completed:done,feature_count:featureCount,
+      objective_weighting:{
+        method:targetKey==='net'
+          ?'POSITIVE_NET_RETURN_WEIGHTED_HUBER_TRAINING_ONLY_V1'
+          :'UNWEIGHTED_HUBER_TRAINING_ONLY_V1',
+        positive_target_rows:targetKey==='net'
+          ?rawTargets.filter(value=>Number(value)>0).length:0,
+        nonpositive_target_rows:targetKey==='net'
+          ?rawTargets.filter(value=>Number(value)<=0).length:rawTargets.length,
+        positive_target_weight:targetKey==='net'?Number(positiveNetReturnWeight):1,
+        effective_sample_size:Number(effectiveSampleSize.toFixed(6)),
+        sample_weight_sum:Number(sampleWeightTotal.toFixed(6)),
+        training_rows:rawTargets.length
+      }
     };
   };
   const hidden=TCN_LSTM_HIDDEN,contextCount=5*hidden+4
@@ -1745,6 +1773,14 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionRiskHeadPooledOnlyWeights=pooledOnly.downside_risk.weights;
   model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
+  model.executionHeadObjectiveMetadata={
+    schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_OBJECTIVE_WEIGHTING_V1',
+    net_return_method:'POSITIVE_NET_RETURN_WEIGHTED_HUBER_TRAINING_ONLY_V1',
+    positive_net_return_weight:Number(positiveNetReturnWeight),
+    downside_method:'UNWEIGHTED_HUBER_TRAINING_ONLY_V1',
+    fit_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+    validation_or_holdout_used:false
+  };
   model.executionHeadNormalizers={
     LOGIT_CONTEXT_AUGMENTED:{
       net_return:{feature_mean:contextual.net_return.feature_mean,
@@ -1774,13 +1810,25 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     ]));
   };
   return {
-    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE',
+    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V7_POSITIVE_NET_WEIGHTED_TRAIN_ONLY_ZSCORE',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
     source:'MATURED_REALIZED_RETURN_AND_MAX_ADVERSE_EXCURSION',
     training_rows:rows.length,round_trip_cost_bps:Number(roundTripCostBps),
     net_return_target:'REALIZED_RETURN_PCT_MINUS_ROUND_TRIP_COST',
     downside_target:'MAX_0_NEGATIVE_MAX_ADVERSE_EXCURSION_PCT',
     target_clip_pct:[-30,30],validation_or_holdout_used:false,
+    objective_weighting:{
+      method:'POSITIVE_NET_RETURN_WEIGHTED_HUBER_TRAINING_ONLY_V1',
+      positive_net_return_weight:Number(positiveNetReturnWeight),
+      weighted_target:'REALIZED_RETURN_PCT_MINUS_ROUND_TRIP_COST_GREATER_THAN_ZERO',
+      downside_objective:'UNWEIGHTED_HUBER_TRAINING_ONLY_V1',
+      fit_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      selection_or_validation_or_holdout_used_for_fit:false,
+      contextual_net_return:contextual.net_return.objective_weighting,
+      pooled_only_net_return:pooledOnly.net_return.objective_weighting,
+      contextual_downside_risk:contextual.downside_risk.objective_weighting,
+      pooled_only_downside_risk:pooledOnly.downside_risk.objective_weighting
+    },
     score_context:{
       schema:TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
       features:[
