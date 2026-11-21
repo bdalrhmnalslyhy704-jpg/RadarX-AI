@@ -1940,16 +1940,16 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
         'LOGISTIC_ANCHOR_LOGIT_TANH_DIV_4',
         'PURGED_TEMPORAL_CV_LOGISTIC_LOGIT_TANH_DIV_4',
         'NEURAL_CLASSIFIER_LOGIT_TANH_DIV_4',
-        'TRAIN_ONLY_RANKING_RESIDUAL_LOGIT_TANH_DIV_4'
+        'INDEPENDENT_RETURN_RANK_SCORE_TANH_DIV_4'
       ],
       interaction_features:[
         'POOLED_LATENT_X_LOGISTIC_ANCHOR_SCORE',
         'POOLED_LATENT_X_PURGED_TEMPORAL_CV_LOGISTIC_SCORE',
         'POOLED_LATENT_X_NEURAL_CLASSIFIER_SCORE',
-        'POOLED_LATENT_X_RANKING_RESIDUAL_SCORE'
+        'POOLED_LATENT_X_INDEPENDENT_RETURN_RANK_SCORE'
       ],
       normalization:'TANH(LOGIT/4); MULTIPLICATIVE_GATING_OF_EACH_POOLED_CHANNEL',
-      score_source:'SAME_TRAINING_ROW_TCN_LOGISTIC_ANCHOR_PLUS_SEPARATE_PURGED_TEMPORAL_CV_LOGISTIC_FIT_ON_PRE_EXECUTION_TRAINING_BLOCK_PLUS_RAW_TCN_LSTM_CLASSIFIER_AND_TRAIN_ONLY_RANKER',
+      score_source:'SAME_TRAINING_ROW_TCN_LOGISTIC_ANCHOR_PLUS_SEPARATE_PURGED_TEMPORAL_CV_LOGISTIC_FIT_ON_PRE_EXECUTION_TRAINING_BLOCK_PLUS_RAW_TCN_LSTM_CLASSIFIER_PLUS_INDEPENDENT_TRAIN_ONLY_MULTISCALE_RETURN_RANK_SCORE',
       score_values_used_for_training:'PURGED_OUT_OF_SAMPLE_EXECUTION_HEAD_BLOCK_ONLY',
       temporal_logistic_cv_context_required:true,
       temporal_logistic_cv_context_source:'FROZEN_MODEL_FIT_ONLY_ON_PRE_EXECUTION_HEAD_TRAINING_ROWS',
@@ -3743,6 +3743,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
       shared_classifier_pairwise_ranking_improvement,
       ranking_execution_selection,execution_risk_policy,
+      execution_heads_fitted,return_selection_diagnostics,
       pooled_only_execution_risk_policy,execution_head_context_ablation,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,return_selection_diagnostics,fit})=>({
@@ -3769,16 +3770,22 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       composite_improvement:Number(composite_improvement.toFixed(8)),
       improvement:Number(composite_improvement.toFixed(8)),
       passed_inner_brier_margin:brier_improvement>requiredImprovement,
-      passed_inner_pairwise_ranking_gate:!rankingScoreAvailable||
-        (finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0),
-      passed_inner_shared_classifier_ranking_gate:Number(config.rankingWeight??0)<=0||
-        (finite(shared_classifier_pairwise_ranking_improvement)&&
-          shared_classifier_pairwise_ranking_improvement>0),
-      passed_inner_composite_margin:composite_improvement>requiredImprovement,
+      passed_inner_pairwise_ranking_gate:rankingScoreAvailable&&
+        pairwise_ranking?.status==='AVAILABLE'&&finite(pairwise_ranking_improvement)&&
+        pairwise_ranking_improvement>0,
+      passed_inner_shared_classifier_ranking_gate:null,
+      shared_classifier_pairwise_ranking_is_diagnostic_only:true,
+      passed_inner_composite_margin:brier_improvement>requiredImprovement&&
+        rankingScoreAvailable&&pairwise_ranking?.status==='AVAILABLE'&&
+        finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0,
       passed_inner_margin:brier_improvement>requiredImprovement&&
         rankingScoreAvailable&&pairwise_ranking?.status==='AVAILABLE'&&
         finite(pairwise_ranking_improvement)&&pairwise_ranking_improvement>0&&
-        execution_head_context_ablation?.passed===true,
+        execution_heads_fitted===true&&execution_risk_policy?.passed===true&&
+        execution_head_context_ablation?.passed===true&&
+        return_selection_diagnostics?.status==='AVAILABLE'&&
+        Number(return_selection_diagnostics?.preliminary_return_screen_candidates)>0&&
+        ranking_head_selection_qualified===true,
       return_selection_diagnostics
     })),
     execution_head_context_ablation_qualification:{
@@ -4322,7 +4329,7 @@ export function evaluateTcnLstmHybridGeneralization({
     selection,
     calibration: { fitted: false },
     validation: { evaluated: false },
-    holdout: { evaluated: false, reason: 'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES' },
+    holdout: { evaluated: false, status:'LOCKED', reason: 'HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION' },
     validated_for_research: false,
     holdout_passed: false,
     probability_ready: false,
@@ -4358,23 +4365,25 @@ export function evaluateTcnLstmHybridGeneralization({
       validation
     };
 
-  const holdout = evaluateCalibratedSplit(
-    holdoutRows, selectedFit, modelCalibrator, baselineCalibrator,
-    { bootstrapSeed: seed + 1001, bootstrapIterations, requiredImprovement:requiredOuterImprovement }
-  );
+  // External validation is the final scored partition in this research
+  // round. The holdout remains sealed even when validation passes; a separate
+  // explicit final-authorization procedure is required before any holdout read.
+  const holdout={
+    evaluated:false,status:'LOCKED',
+    reason:'HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION',
+    labels_read:false,predictions_generated:false,metrics_read:false
+  };
   return {
     ...base,
-    status: holdout.passed
-      ? 'HOLDOUT_PASSED_RESEARCH_ONLY_NOT_PRODUCTION_APPROVED'
-      : 'VALIDATION_PASSED_HOLDOUT_NOT_PASSED',
+    status:'VALIDATION_PASSED_HOLDOUT_STILL_LOCKED',
     calibration: {
       model: modelCalibrator, baseline: baselineCalibrator,
       fit_boundary: 'CALIBRATION_PARTITION_ONLY'
     },
     validation,
     holdout,
-    validated_for_research: validationPassed && holdout.passed,
-    holdout_passed: holdout.passed,
+    validated_for_research:false,
+    holdout_passed:false,
     probability_ready: false,
     live_eligibility_ready: false,
     real_order_execution: false
