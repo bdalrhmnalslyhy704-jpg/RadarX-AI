@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
@@ -1581,8 +1582,27 @@ public final class RadarXBackgroundMonitorService extends Service {
         List<ActivityManager.RunningAppProcessInfo> processes = manager.getRunningAppProcesses();
         if (processes == null) return false;
         String expectedProcess = context.getPackageName() + ":radar_background";
+        int serviceProcessPid = -1;
         for (ActivityManager.RunningAppProcessInfo process : processes) {
-            if (process != null && expectedProcess.equals(process.processName)) return true;
+            if (process != null && expectedProcess.equals(process.processName)) {
+                serviceProcessPid = process.pid;
+                break;
+            }
+        }
+        if (serviceProcessPid <= 0) return false;
+
+        // A cached process can outlive its ServiceRecord after ACTION_STOP. Treating
+        // that process alone as "running" prevents an immediate Activity relaunch
+        // from restarting the service. Require Android to still register this exact
+        // service instance in the same isolated PID.
+        List<ActivityManager.RunningServiceInfo> runningServices =
+            manager.getRunningServices(Integer.MAX_VALUE);
+        if (runningServices == null) return false;
+        ComponentName expectedComponent = new ComponentName(
+            context, RadarXBackgroundMonitorService.class);
+        for (ActivityManager.RunningServiceInfo service : runningServices) {
+            if (service != null && expectedComponent.equals(service.service) &&
+                service.pid == serviceProcessPid) return true;
         }
         return false;
     }

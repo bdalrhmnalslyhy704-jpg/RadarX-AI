@@ -1,0 +1,49 @@
+name: Hybrid TCN Attention — Fixed-SHA research checks
+
+on:
+  push:
+    branches:
+      - feature/build224-hybrid-tcn-attention-20261107
+    paths:
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/tools/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/HYBRID_TCN_ATTENTION_BENCHMARK_POLICY.md'
+      - '.github/workflows/hybrid-tcn-attention-benchmark.yml'
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - 'phase2/tools/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/HYBRID_TCN_ATTENTION_BENCHMARK_POLICY.md'
+      - '.github/workflows/hybrid-tcn-attention-benchmark.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hybrid-tcn-attention-research
+  cancel-in-progress: false
+
+jobs:
+  research-regression:
+    name: Causal features, objective gradients, attention and SHA gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check JavaScript syntax
+        run: |
+          node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/tools/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
+      - name: Run isolated research tests
+        run: node --test phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
