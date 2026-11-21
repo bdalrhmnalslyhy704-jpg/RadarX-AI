@@ -1929,7 +1929,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
     if(!groups.has(bucket))groups.set(bucket,[]);
     groups.get(bucket).push(index);
   });
-  const eligible=[...groups.values()].filter(items=>items.length>=2);
+  // A one-candidate 15m bucket is still a valid decision: Top-K=1 may enter
+  // it only when its frozen risk-adjusted score clears the inner-selected floor.
+  const eligible=[...groups.values()];
   if(!eligible.length)return unavailable('NO_SIMULTANEOUS_DECISION_GROUPS');
   const trials=[];
   // Top-K=1 is fixed in advance. Only the score cut-off is selected here;

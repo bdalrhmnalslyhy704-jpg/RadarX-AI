@@ -2255,7 +2255,6 @@ export function topKThresholdSignals(rows,scores,topK,minimumScore=null){
   const selectedCounts={};
   let decisionGroupCount=0,abstainedDecisionGroupCount=0;
   for(const [bucket,indices] of groups){
-    if(indices.length<2)continue;
     decisionGroupCount++;
     const ordered=[...indices].sort((a,b)=>
       Number(scores[b])-Number(scores[a])||
@@ -2307,7 +2306,6 @@ export function topKMatchedCountSignals(rows,scores,targetSelection){
   const selected=Array(rows.length).fill(0);
   let decisionGroupCount=0;
   for(const [bucket,indices] of groups){
-    if(indices.length<2)continue;
     decisionGroupCount++;
     const count=Math.max(0,Math.min(indices.length,
       Number(targetSelection.selected_count_by_bucket[String(bucket)]??0)));

@@ -1403,3 +1403,27 @@ test('failed inner TCN-LSTM selection preserves a diagnostic-only fit without qu
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
 });
+
+test('selective execution policy evaluates singleton 15m buckets without treating them as a Logistic edge',()=>{
+  const groupCount=40;
+  const rows=Array.from({length:groupCount},(_,index)=>
+    makeExecutionRow(index,index<25?'UP':'DOWN',BASE+index*DAY)
+  );
+  const predictions=rows.map((row,index)=>({
+    predicted_net_return_pct:index<25?1.2:-1,
+    predicted_downside_risk_pct:0.1
+  }));
+  const logisticLogits=rows.map((row,index)=>index<25?1:-1);
+  const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    maximumDrawdownPct:8
+  });
+  assert.equal(policy.status,'ABSTAIN_NO_SELECTIVE_EXECUTION_POLICY_PASSED');
+  assert.equal(policy.passed,false);
+  assert.equal(policy.selected_trial.decision_group_count,40);
+  assert.equal(policy.selected_trial.selected_trade_count,25);
+  assert.equal(policy.selected_trial.abstained_decision_group_count,15);
+  assert.equal(policy.holdout_values_used,false);
+  assert.equal(policy.selected_trial.gates.beats_matched_logistic_anchor,false);
+});
+

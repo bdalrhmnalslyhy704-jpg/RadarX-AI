@@ -1479,3 +1479,24 @@ test('external execution Top-K compares identical opportunities and rejects unfr
     topKGrid:[1,2,3],roundTripCostBps:30
   }),/EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN/);
 });
+
+test('selective Top-K treats singleton 15m buckets as valid decisions and matches Logistic counts',()=>{
+  const bucket=Math.floor(BASE/NEURAL_CLOSURE_RANKING_BUCKET_MS)*
+    NEURAL_CLOSURE_RANKING_BUCKET_MS;
+  const rows=[
+    {id:'PAIR_A',symbol:'PAIR_AUSDT',at:bucket},
+    {id:'PAIR_B',symbol:'PAIR_BUSDT',at:bucket+1},
+    {id:'SINGLE_PASS',symbol:'SINGLE_PASSUSDT',at:bucket+NEURAL_CLOSURE_RANKING_BUCKET_MS},
+    {id:'SINGLE_REJECT',symbol:'SINGLE_REJECTUSDT',at:bucket+2*NEURAL_CLOSURE_RANKING_BUCKET_MS}
+  ];
+  const selection=topKThresholdSignals(rows,[0.4,0.1,0.3,0],1,0.05);
+  assert.equal(selection.decision_group_count,3);
+  assert.equal(selection.signal_count,2);
+  assert.equal(selection.abstained_decision_group_count,1);
+  assert.deepEqual(selection.probabilities,[1,0,1,0]);
+  const matched=topKMatchedCountSignals(rows,[0.1,0.9,0.4,0.99],selection);
+  assert.equal(matched.decision_group_count,3);
+  assert.equal(matched.signal_count,2);
+  assert.deepEqual(matched.probabilities,[0,1,1,0]);
+});
+
