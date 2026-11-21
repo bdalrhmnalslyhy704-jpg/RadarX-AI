@@ -1045,7 +1045,7 @@ async function main(){
       };
       return;
     }
-    const variantState={}
+    const variantState={
       schema:'RADARX_BUILD224_TEMPORAL_TCN_VARIANT_ARTIFACT_V1',
       family,architecture,model_kind:modelKind,
       temporal_pooling:expectedPooling,
