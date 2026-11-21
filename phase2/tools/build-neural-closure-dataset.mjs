@@ -29,7 +29,7 @@ const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 function parseArgs(argv){
-  const result={days:180,maxSymbols:50,minSymbols:25,
+  const result={days:180,maxSymbols:100,minSymbols:40,
     minQuoteVolumeUsdt:750_000,
     output:'artifacts/neural-closure/dataset.json',
     archiveDir:'artifacts/neural-closure/raw'};
@@ -48,8 +48,8 @@ function parseArgs(argv){
   }
   if(!Number.isInteger(result.days)||result.days<60||result.days>180)
     throw new Error('DAYS_MUST_BE_AN_INTEGER_FROM_60_TO_180');
-  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>50)
-    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_50');
+  if(!Number.isInteger(result.maxSymbols)||result.maxSymbols<10||result.maxSymbols>100)
+    throw new Error('MAX_SYMBOLS_MUST_BE_FROM_10_TO_100');
   if(!Number.isInteger(result.minSymbols)||result.minSymbols<10||
     result.minSymbols>result.maxSymbols)
     throw new Error('MIN_SYMBOLS_MUST_BE_AT_LEAST_10_AND_NOT_EXCEED_MAX_SYMBOLS');
@@ -442,6 +442,8 @@ async function main(){
     throw new Error('VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM:'+included.length);
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_COHORT_BELOW_600_ROWS:'+rows.length);
 
+  if(rawArchiveRecords.length!==included.length*3)
+    throw new Error('RAW_ARCHIVE_INTERVAL_COUNT_MISMATCH:'+rawArchiveRecords.length+':'+included.length);
   const validated=validateFourHourRows(rows);
   // Validation clones only row envelopes; release the prevalidated envelopes
   // before split/hash/output allocations while preserving shared feature data.
@@ -514,7 +516,7 @@ async function main(){
     },
     schedule,
     universe:{
-      selection:'CURRENT_TOP_50_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
+      selection:'CURRENT_TOP_100_CANDIDATE_PREFILTER_WITH_POINT_IN_TIME_HISTORICAL_24H_EVENT_GATE_V1',
       candidate_prefilter:{
         method:'CURRENT_BINANCE_SPOT_24H_TICKER_AT_COLLECTION_TIME',
         minimum_quote_volume_24h_usdt:args.minQuoteVolumeUsdt,

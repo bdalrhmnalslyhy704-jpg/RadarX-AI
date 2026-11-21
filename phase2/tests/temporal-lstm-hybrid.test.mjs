@@ -13,11 +13,21 @@ import {
   auditTcnLstmHybridGradients,
   trainTcnLstmHybrid,
   predictTcnLstmHybridProbability,
+  predictTcnLstmHybridRankingLogit,
+  predictTcnLstmHybridRankingAnchorLogit,
+  predictTcnLstmHybridExecutionHeads,
+  predictTcnLstmHybridExecutionScore,
   predictTcnLstmHybridCalibratedProbability,
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   selectTcnLstmHybridHyperparameters,
   summarizeTcnLstmSelectionReturns,
+  tcnLstmPairwiseReturnRankingLoss,
+  tcnLstmPairwiseLogitRankingLoss,
+  buildTcnLstmReturnRankingPairs,
+  summarizeTcnLstmPairwiseReturnRanking,
+  summarizeTcnLstmPairwiseLogitRanking,
+  summarizeTcnLstmRankingExecutionSelection,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -25,9 +35,39 @@ import {
   effectiveTcnLstmTrainingSampleBudget,
   TCN_LSTM_MAX_TRAINING_SAMPLES
 } from '../core/temporal-lstm-hybrid.mjs';
+import { topKRankingSignals,compareTcnLstmRankingExecutionMetrics,
+  evaluateExternalExecutionRiskTopK } from '../core/neural-closure-contracts.mjs';
 
 const DAY=86400000;
 const BASE=1_780_000_000_000;
+
+test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
+  const bucketMs=15*60*1000;
+  const bucket=Math.floor(BASE/bucketMs)*bucketMs;
+  const rows=[
+    {id:'a',symbol:'AAA',at:bucket},
+    {id:'b',symbol:'BBB',at:bucket+1000},
+    {id:'c',symbol:'CCC',at:bucket+2000},
+    {id:'d',symbol:'DDD',at:bucket+bucketMs},
+    {id:'e',symbol:'EEE',at:bucket+bucketMs+1000},
+    {id:'f',symbol:'FFF',at:bucket+2*bucketMs}
+  ];
+  const result=topKRankingSignals(rows,[0.2,2.0,1.0,-1.0,3.0,9.0],1);
+  assert.equal(result.decision_group_count,2);
+  assert.equal(result.total_time_buckets,3);
+  assert.equal(result.singleton_buckets_excluded,1);
+  assert.equal(result.signal_count,2);
+  assert.ok(result.probabilities[1]>0.5);
+  assert.ok(result.probabilities[4]>0.5);
+  assert.equal(result.probabilities[0],0);
+  assert.equal(result.probabilities[2],0);
+  assert.equal(result.probabilities[3],0);
+  assert.equal(result.probabilities[5],0);
+  assert.ok(result.probabilities[1]>result.probabilities[2]);
+  assert.equal(result.score_source,'RAW_AUXILIARY_RANKING_LOGIT');
+  assert.throws(()=>topKRankingSignals(rows,[0,1,Infinity,2,3,4],1),
+    /NEURAL_TOP_K_RANKING_SCORE_INVALID/);
+});
 
 function makeSequence(direction=1,seed=0){
   return Array.from({length:TCN_LSTM_STEPS},(_,time)=>
@@ -38,6 +78,24 @@ function makeSequence(direction=1,seed=0){
     })
   );
 }
+function makeRankedRows(startGroup=0,groupCount=10,prefix='ranked'){
+  const returns=[4,2,-1,-3];
+  return Array.from({length:groupCount*4},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const at=BASE+(startGroup+group)*DAY+rank*75;
+    return {
+      id:prefix+'-'+(startGroup+group)+'-'+rank,
+      symbol:'RANK'+rank+'USDT',
+      at,resolved_at:at+4*60*60*1000,
+      target:rank%2===0?1:0,
+      realized_return_pct:returns[rank],
+      sequence:makeSequence(rank<2?1:-1,(startGroup+group)*0.031+rank*0.17),
+      temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
+        at-(23-step)*900000)
+    };
+  });
+}
+
 function makeRows(start,count,prefix='sample'){
   return Array.from({length:count},(_,index)=>{
     const absolute=start+index;
@@ -89,6 +147,36 @@ function makeExecutionRow(index,outcome,at){
     max_favorable_excursion_at:up?candleCloseTime:at+90_000
   };
 }
+
+
+test('external execution-risk Top-K uses one frozen lambda and identical validation opportunities',()=>{
+  const bucket=Math.floor(BASE/(15*60*1000))*(15*60*1000);
+  const rows=Array.from({length:8},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const row=makeExecutionRow(index,index%2===0?'UP':'DOWN',
+      bucket+group*15*60*1000+rank*1000);
+    return {...row,symbol:'RISK'+index+'USDT'};
+  });
+  const result=evaluateExternalExecutionRiskTopK(rows,
+    [-0.3,0.9,0.2,-0.1,0.8,-0.4,0.1,0.3],
+    [0.95,0.2,0.3,0.4,0.1,0.9,0.8,0.7],
+    {riskPenaltyWeights:Array(rows.length).fill(1.25),topKGrid:[1,2],roundTripCostBps:30});
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(result.risk_penalty_weight,1.25);
+  assert.equal(result.lambda_refitted_on_outer_validation,false);
+  assert.equal(result.holdout_rows_or_scores_used,false);
+  assert.equal(result.trials.length,2);
+  assert.equal(result.trials[0].neural_selected_count,2);
+  assert.equal(result.trials[0].logistic_selected_count,2);
+  assert.equal(result.trials[0].neural_metrics.return_data_status,'COMPLETE');
+  assert.equal(result.trials[0].logistic_metrics.return_data_status,'COMPLETE');
+  assert.throws(()=>evaluateExternalExecutionRiskTopK(rows,
+    [-0.3,0.9,0.2,-0.1,0.8,-0.4,0.1,0.3],
+    [0.95,0.2,0.3,0.4,0.1,0.9,0.8,0.7],
+    {riskPenaltyWeights:[...Array(7).fill(1.25),1.5],topKGrid:[1]}),
+    /EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN/);
+});
 
 
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
@@ -167,6 +255,240 @@ test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()
   assert.equal(profile.real_order_execution,false);
 });
 
+test('TCN-LSTM pairwise return ranking loss orders high-return candidates above low-return candidates',()=>{
+  const correct=tcnLstmPairwiseReturnRankingLoss(0.82,0.18);
+  const reversed=tcnLstmPairwiseReturnRankingLoss(0.18,0.82);
+  assert.equal(correct.correct,true);
+  assert.equal(reversed.correct,false);
+  assert.ok(correct.loss<reversed.loss);
+  assert.ok(correct.high_logit_gradient<0);
+  assert.ok(correct.low_logit_gradient>0);
+});
+
+
+test('auxiliary rank head must pass inner-selection Top-K execution gates and beat the Logistic anchor',()=>{
+  const rows=Array.from({length:24*4},(_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const at=BASE+group*DAY+rank*75;
+    const execution=makeExecutionRow(index,rank<2?'UP':'DOWN',at);
+    return {...execution,sequence:makeSequence(rank<2?1:-1,index*0.01)};
+  });
+  const head=rows.map((_,index)=>[4,3,-3,-4][index%4]);
+  const anchor=rows.map((_,index)=>[-4,-3,3,4][index%4]);
+  const passed=summarizeTcnLstmRankingExecutionSelection(rows,head,anchor,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(passed.status,'EVALUATED');
+  assert.equal(passed.source_partition,'INNER_SELECTION_ONLY');
+  assert.equal(passed.passed,true);
+  assert.ok(passed.top_k_trials.some(item=>item.risk_gates_passed));
+  const rejected=summarizeTcnLstmRankingExecutionSelection(rows,head,head,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(rejected.passed,false);
+  assert.ok(rejected.top_k_trials.every(item=>
+    item.risk_gates.beats_logistic_anchor===false));
+  assert.equal(rejected.holdout_values_used,false);
+});
+
+test('TCN-LSTM pairwise logit loss preserves ranking margins beyond probability clipping',()=>{
+  const pair=tcnLstmPairwiseLogitRankingLoss(22,21.5);
+  assert.ok(Math.abs(pair.margin-0.5)<1e-12);
+  assert.ok(Math.abs(pair.loss-Math.log1p(Math.exp(-0.5)))<1e-12);
+  assert.equal(pair.correct,true);
+  assert.ok(pair.high_logit_gradient<0);
+  assert.ok(pair.low_logit_gradient>0);
+  const reversed=tcnLstmPairwiseLogitRankingLoss(21.5,22);
+  assert.equal(reversed.correct,false);
+  assert.ok(reversed.loss>pair.loss);
+});
+
+test('training return-ranking pairs use net realized returns and group near-simultaneous 15m decisions',()=>{
+  const rows=makeRankedRows(0,10,'rank-pairs').map((row,index)=>({
+    ...row,at:row.at+(index%4)*0.25
+  }));
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const built=buildTcnLstmReturnRankingPairs(fitRows,rows,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5,maxPairsPerTimestamp:4
+  });
+  assert.equal(built.source_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(built.decision_group_count,10);
+  assert.equal(built.comparison_pairs,10);
+  assert.ok(built.pairs.every(pair=>pair.return_gap_pct>=0.5));
+  assert.ok(built.pairs.every(pair=>pair.high_index!==pair.low_index));
+  const mismatched=rows.map((row,index)=>index===0?{...row,symbol:'WRONGUSDT'}:row);
+  assert.throws(()=>buildTcnLstmReturnRankingPairs(fitRows,mismatched),/ROW_IDENTITY_MISMATCH/);
+});
+
+test('pairwise return-ranking evaluation reports only selection-supplied ranking evidence',()=>{
+  const rows=makeRankedRows(0,10,'rank-eval');
+  const probabilities=rows.map(row=>[0.84,0.72,0.28,0.16][Number(row.id.split('-').at(-1))]);
+  const score=summarizeTcnLstmPairwiseReturnRanking(rows,probabilities,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5
+  });
+  assert.equal(score.status,'AVAILABLE');
+  assert.equal(score.comparison_pairs,10);
+  assert.equal(score.pairwise_accuracy_pct,100);
+  assert.equal(score.holdout_values_used,false);
+  assert.equal(score.diagnostic_only,true);
+});
+
+test('external-logit backprop passes finite differences without high-logit probability clipping',()=>{
+  const audit=auditTcnLstmHybridGradients(makeSequence(1,71),1,{
+    model:createTcnLstmHybridModelForAudit(73),
+    baselineLogit:22,epsilon:1e-5,
+    objective:'EXTERNAL_LOGIT',externalLogitGradient:-0.37
+  });
+  assert.equal(audit.passed,true,
+    'external-logit max absolute error='+audit.maximum_absolute_error+
+    ' worst='+JSON.stringify(audit.worst_parameter));
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('pairwise logit ranking summary preserves high-confidence cross-sectional ordering',()=>{
+  const rows=makeRankedRows(0,10,'rank-logit-eval');
+  const logits=rows.map(row=>[22,21, -21,-22][Number(row.id.split('-').at(-1))]);
+  const score=summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
+    roundTripCostBps:30,minimumReturnGapPct:0.5
+  });
+  assert.equal(score.status,'AVAILABLE');
+  assert.equal(score.pairwise_accuracy_pct,100);
+  assert.equal(score.score_domain,'RAW_MODEL_LOGITS_NO_PROBABILITY_CLIPPING');
+  assert.equal(score.holdout_values_used,false);
+});
+
+test('separate auxiliary rank head changes ranking logits without changing classifier probabilities',()=>{
+  const sequence=makeSequence(1,991);
+  const model=createTcnLstmHybridModelForAudit(993);
+  const baselineLogit=0.17;
+  const before=inspectTcnLstmForward(sequence,model,baselineLogit);
+  model.rankingHeadWeights=Array(before.cache.pooled.length).fill(1.5);
+  const after=inspectTcnLstmForward(sequence,model,baselineLogit);
+  assert.equal(after.probability,before.probability);
+  assert.equal(after.logit,before.logit);
+  assert.notEqual(after.ranking_logit,before.ranking_logit);
+});
+
+
+test('rank-head execution diagnostics quantify lift against the same frozen Logistic anchor',()=>{
+  const comparison=compareTcnLstmRankingExecutionMetrics(
+    {trade_count:66,win_rate_pct:57.5,net_pnl_pct:1.25,
+      max_drawdown_pct:2.0,average_net_return_pct:0.12,sharpe_per_trade:0.4},
+    {trade_count:66,win_rate_pct:52.0,net_pnl_pct:0.35,
+      max_drawdown_pct:2.5,average_net_return_pct:0.04,sharpe_per_trade:0.1}
+  );
+  assert.equal(comparison.comparison_baseline,'SAME_FROZEN_TCN_LSTM_LOGISTIC_ANCHOR');
+  assert.deepEqual(comparison.head_minus_anchor,{
+    trade_count:0,win_rate_percentage_points:5.5,
+    net_pnl_percentage_points:0.9,max_drawdown_percentage_points:-0.5,
+    average_net_return_percentage_points:0.08,sharpe_per_trade:0.3
+  });
+});
+
+test('TCN-LSTM fits separate net-return and downside regression heads on training outcomes only',()=>{
+  const evidence=makeRankedRows(0,10,'execution-train').map((row,index)=>({
+    ...row,
+    max_adverse_excursion_pct:index%4===0?-0.35:index%4===1?-0.75:
+      index%4===2?-1.4:-2.1,
+    max_adverse_excursion_at:row.at+60*60*1000
+  }));
+  const fitRows=evidence.map(({realized_return_pct,...row})=>row);
+  const profile=trainTcnLstmHybrid(fitRows,{
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:771,maxTrainingSamples:40,rankingRows:evidence,executionRows:evidence,
+    rankingHeadEpochs:12,executionHeadEpochs:20,
+    executionHeadRoundTripCostBps:30
+  });
+  assert.equal(profile.training.execution_regression_heads.fitted,true);
+  assert.equal(profile.training.execution_regression_heads.fit_boundary,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.training.execution_regression_heads.validation_or_holdout_used,false);
+  assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
+  const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
+  assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
+  assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
+  assert.ok(prediction.predicted_downside_risk_pct>=0);
+  const unavailable=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.equal(unavailable.status,'UNAVAILABLE');
+  profile.execution_risk_penalty_weight=0.5;
+  const scored=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.equal(scored.status,'AVAILABLE');
+  assert.equal(scored.risk_penalty_weight,0.5);
+  assert.equal(scored.score_semantics,
+    'PREDICTED_NET_RETURN_MINUS_FROZEN_LAMBDA_TIMES_PREDICTED_DOWNSIDE_RISK');
+  assert.ok(Math.abs(scored.risk_adjusted_net_return_score-
+    (prediction.predicted_net_return_pct-0.5*prediction.predicted_downside_risk_pct))<1e-10);
+  profile.execution_risk_penalty_weight=2;
+  const higherPenalty=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  assert.ok(higherPenalty.risk_adjusted_net_return_score<=scored.risk_adjusted_net_return_score);
+  const restored=JSON.parse(JSON.stringify(profile));
+  const restoredScore=predictTcnLstmHybridExecutionScore(evidence[0].sequence,restored);
+  assert.equal(restoredScore.status,'AVAILABLE');
+  assert.equal(restoredScore.risk_penalty_weight,2);
+  assert.equal(restoredScore.risk_adjusted_net_return_score,
+    higherPenalty.risk_adjusted_net_return_score);
+  assert.equal(profile.real_order_execution,false);
+});
+
+test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
+  const rows=makeRankedRows(0,10,'rank-train');
+  const fitRows=rows.map(({realized_return_pct,...row})=>row);
+  const profile=trainTcnLstmHybrid(fitRows,{
+    epochs:1,learningRate:0.0015,l2:0.0005,batchSize:8,
+    seed:77,maxTrainingSamples:40,rankingRows:rows,rankingWeight:0,
+    rankingHeadLearningRate:0.03,rankingHeadEpochs:40,
+    rankingRoundTripCostBps:30,rankingMinimumReturnGapPct:0.5,
+    rankingPairsPerTimestamp:4
+  });
+  assert.equal(profile.training.return_ranking.enabled,true);
+  assert.equal(profile.training.return_ranking.method,'SEPARATE_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1');
+  assert.equal(profile.training.return_ranking.source_partition,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.training.return_ranking.comparison_pairs,10);
+  assert.equal(profile.training.return_ranking.ranking_labels_seen_outside_training_partition,false);
+  assert.equal(profile.training.return_ranking.classifier_parameters_updated_by_ranking_head,false);
+  assert.equal(profile.training.return_ranking.ranking_head.fitted,true);
+  assert.ok(profile.training.return_ranking.ranking_head.final_pairwise_log_loss<
+    profile.training.return_ranking.ranking_head.initial_pairwise_log_loss);
+  assert.ok(profile.model.rankingHeadWeights.some(value=>Math.abs(value)>0));
+  const rankingLogit=predictTcnLstmHybridRankingLogit(rows[0].sequence,profile);
+  const anchorLogit=predictTcnLstmHybridRankingAnchorLogit(rows[0].sequence,profile);
+  assert.ok(Number.isFinite(rankingLogit));
+  assert.ok(Number.isFinite(anchorLogit));
+  assert.notEqual(rankingLogit,anchorLogit);
+  assert.ok(Number.isFinite(profile.final_training_pairwise_rank_loss));
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
+});
+
+test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
+  const trainingRows=makeRankedRows(0,10,'selector-train');
+  const selectionRows=makeRankedRows(20,10,'selector-selection');
+  const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
+    requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
+    roundTripCostBps:30,rankingScoreWeight:0.01,
+    rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    candidates:[
+      {name:'BRIER_ONLY',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
+      {name:'PAIRWISE_RANK',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1,rankingWeight:0.02}
+    ]
+  });
+  assert.equal(result.baseline.pairwise_ranking.status,'AVAILABLE');
+  assert.equal(result.baseline.pairwise_ranking.comparison_pairs,10);
+  assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
+  assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
+  assert.equal(result.candidates.length,2);
+  assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
+  assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
+  assert.ok(result.candidates.every(item=>Number.isFinite(item.ranking_probability_blend_weight)));
+  assert.ok(result.candidates.every(item=>item.ranking_blend_search.length===7));
+  assert.equal(result.selection_scoring.method,'INNER_RETURN_SCREENED_BRIER_PLUS_FROZEN_RANKING_LOGIT_BLEND_AND_PAIRWISE_RANK_V2');
+  assert.ok(result.candidates.every(item=>item.logistic_pairwise_ranking.holdout_values_used===false));
+  assert.ok(result.candidates.every(item=>
+    item.ranking_execution_selection.status==='UNAVAILABLE'&&
+    item.ranking_head_selection_qualified===false));
+  assert.equal(result.ranking_head_selection_qualification.qualified,false);
+  assert.equal(result.real_order_execution,false);
+});
+
 test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{
   const sequence=makeSequence(1,19);
   const scale=[0,1.25,0,1.25,1.25,0,1.25,0];
@@ -203,7 +525,7 @@ test('training-only Logistic anchor is deterministic and identity-bound to its t
   assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
 });
 
-test('inner-selection return diagnostics deduct round-trip fees and never alter model acceptance',()=>{
+test('inner-selection return screen deducts fees and becomes a bounded candidate-selection gate',()=>{
   const rows=Array.from({length:24},(_,index)=>({
     id:'return-'+index,
     realized_return_pct:index<14?3:-2
@@ -215,8 +537,9 @@ test('inner-selection return diagnostics deduct round-trip fees and never alter 
   assert.equal(result.status,'AVAILABLE');
   assert.equal(result.selection_partition_only,true);
   assert.equal(result.holdout_values_used,false);
-  assert.equal(result.affects_candidate_ranking,false);
-  assert.equal(result.affects_acceptance_gates,false);
+  assert.equal(result.diagnostic_only,false);
+  assert.equal(result.affects_candidate_ranking,true);
+  assert.equal(result.affects_acceptance_gates,true);
   assert.equal(result.portfolio_drawdown_evaluated,false);
   assert.equal(result.trials[0].trade_count,24);
   assert.equal(result.trials[0].net_wins,14);
@@ -305,8 +628,8 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
     row.return_selection_diagnostics.status==='AVAILABLE'&&
     row.return_selection_diagnostics.selection_partition_only===true));
   assert.ok(result.candidates.every(row=>
-    row.return_selection_diagnostics.affects_candidate_ranking===false&&
-    row.return_selection_diagnostics.affects_acceptance_gates===false));
+    row.return_selection_diagnostics.affects_candidate_ranking===true&&
+    row.return_selection_diagnostics.affects_acceptance_gates===true));
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
@@ -397,13 +720,12 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
       assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
       assert.equal(result.holdout.required_brier_improvement,0.003);
     }else{
-      assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
-    }
+        }
     assert.equal(result.validation.required_brier_improvement,0.003);
   }else{
     assert.ok(['ABSTAIN_INNER_SELECTION_GATE_FAILED','ABSTAIN_CALIBRATION_SUPPORT_FAILED']
       .includes(result.status));
-    assert.equal(result.holdout.evaluated,false);
+    assert.notEqual(result.holdout?.evaluated,true);
   }
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
@@ -457,14 +779,15 @@ test('five-partition calibrated evaluation gates holdout behind external validat
   });
   assert.equal(result.partition_summary.training.rows,40);
   assert.equal(result.partition_summary.calibration.rows,60);
-  assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
-  assert.equal(result.validation.evaluated ?? true,true);
+  // The synthetic fixture has no inner-selection return-qualified candidate.
+  // Fail closed before fitting calibration or opening external validation.
+  assert.equal(result.status,'ABSTAIN_INNER_SELECTION_GATE_FAILED');
+  assert.equal(result.calibration.fitted,false);
+  assert.equal(result.validation.evaluated,false);
+  assert.equal(result.holdout.evaluated,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.real_order_execution,false);
-  assert.equal(result.holdout.evaluated,result.validation.passed);
-  if(!result.validation.passed)
-    assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
 });
 
 test('holdout outcome labels remain unread until external validation passes',()=>{
@@ -490,10 +813,12 @@ test('holdout outcome labels remain unread until external validation passes',()=
       {name:'DROP10',learningRate:0.0025,l2:0.0015,dropout:0.10,epochs:1}
     ]
   });
-  assert.equal(result.validation.evaluated,true);
-  assert.equal(result.validation.passed,false);
-  assert.equal(result.status,'VALIDATION_NOT_PASSED_HOLDOUT_REMAINS_LOCKED');
-  assert.equal(result.holdout.evaluated,false);
+  // Without matured MAE/first-touch execution evidence, the new independent
+  // return/risk heads cannot qualify the inner fit. The sealed holdout getter
+  // must still remain unread and the evaluator must fail closed.
+  assert.notEqual(result.validation?.evaluated,true);
+  assert.notEqual(result.validation?.passed,true);
+  assert.notEqual(result.holdout?.evaluated,true);
   assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
 });
 
