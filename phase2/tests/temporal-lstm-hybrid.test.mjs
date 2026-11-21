@@ -52,31 +52,38 @@ import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from '../core/hurd
 const DAY=86400000;
 const BASE=1_780_000_000_000;
 
-test('hurdle return head estimates probability-weighted net return without class reweighting',()=>{
+test('hurdle return head learns feature-conditional class means without class reweighting',()=>{
   const features=[],returns=[];
   for(let index=0;index<200;index++){
     const profitable=index%10<2;
-    features.push([profitable?1:-1,Math.sin(index*0.17)]);
-    returns.push(profitable?1.5:-0.6);
+    const x=(index%20)/10-1;
+    features.push([x,profitable?1:-1]);
+    returns.push(profitable?1.5+0.6*x:-0.8+0.25*x);
   }
   const head=fitHurdleReturnHead(features,returns,{
     learningRate:0.02,epochs:200,l2:0.05,minimumClassRows:10
   });
-  assert.equal(head.schema,'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V1');
+  assert.equal(head.schema,'RADARX_TCN_LSTM_HURDLE_RETURN_HEAD_V2');
   assert.equal(head.fitted,true);
   assert.equal(head.positive_rows,40);
   assert.equal(head.non_positive_rows,160);
   assert.equal(head.class_reweighting_used,false);
   assert.equal(head.positive_probability_class_weight,1);
   assert.equal(head.negative_probability_class_weight,1);
+  assert.equal(head.conditional_mean_type,'FEATURE_CONDITIONAL_HUBER_REGRESSION_V1');
+  assert.equal(head.positive_conditional_mean_model.rows,40);
+  assert.equal(head.non_positive_conditional_mean_model.rows,160);
   assert.equal(head.validation_or_holdout_used,false);
-  const high=predictHurdleExpectedNetReturn([1,0],head);
-  const low=predictHurdleExpectedNetReturn([-1,0],head);
+  const high=predictHurdleExpectedNetReturn([0.9,1],head);
+  const low=predictHurdleExpectedNetReturn([-0.9,-1],head);
   assert.ok(high.probability_positive_net_return>low.probability_positive_net_return);
+  assert.ok(high.positive_net_return_mean_pct>low.positive_net_return_mean_pct);
+  assert.ok(high.non_positive_net_return_mean_pct>low.non_positive_net_return_mean_pct);
+  assert.ok(high.expected_net_return_pct>low.expected_net_return_pct);
   assert.ok(high.expected_net_return_pct>0);
   assert.ok(low.expected_net_return_pct<0);
   const restored=JSON.parse(JSON.stringify(head));
-  assert.deepEqual(predictHurdleExpectedNetReturn([1,0],restored),high);
+  assert.deepEqual(predictHurdleExpectedNetReturn([0.9,1],restored),high);
 });
 
 test('auxiliary raw ranking logits drive deterministic Top-K per 15m bucket',()=>{
