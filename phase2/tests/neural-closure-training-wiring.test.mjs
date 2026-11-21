@@ -27,6 +27,8 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
     'the replay concurrency key must be normalized by branch name');
   assert.doesNotMatch(workflow,/^  pull_request:/m,
     'expensive full-cohort replay must not run on pull requests');
+  assert.ok(workflow.includes('research/build224-tcn-lstm-return-head-normalization-20261121'),
+    'the normalized execution-return-head challenger must trigger its exact fixed-cohort replay');
   assert.ok(workflow.includes('research/build224-temporal-logistic-cv-20261120'),
     'the tuned Logistic research branch must trigger the fixed-cohort replay');
   assert.match(workflow,/RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1/);

@@ -448,7 +448,7 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     profile.training.execution_regression_heads.execution_head_min_at);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
-    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5');
+    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE');
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
     5*TCN_LSTM_HIDDEN+4);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
@@ -494,6 +494,19 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   }
   for(const score of contextInputs.features.slice(-4))
     assert.ok(score>=-1&&score<=1);
+  const normalization=profile.training.execution_regression_heads.normalization;
+  assert.equal(normalization.schema,'RADARX_TCN_LSTM_EXECUTION_HEAD_TRAIN_ONLY_ZSCORE_V1');
+  assert.equal(normalization.method,'TRAIN_ONLY_POPULATION_ZSCORE_FOR_FEATURES_AND_TARGETS');
+  assert.equal(normalization.fit_partition,'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK');
+  assert.equal(normalization.fit_rows,evidence.length);
+  assert.equal(normalization.validation_or_holdout_used,false);
+  const contextualNormalizers=profile.model.executionHeadNormalizers.LOGIT_CONTEXT_AUGMENTED;
+  assert.equal(contextualNormalizers.net_return.feature_mean.length,5*TCN_LSTM_HIDDEN+4);
+  assert.equal(contextualNormalizers.net_return.feature_std.length,5*TCN_LSTM_HIDDEN+4);
+  assert.ok(contextualNormalizers.net_return.feature_std.every(value=>value>0));
+  assert.ok(contextualNormalizers.net_return.target_std>0);
+  assert.equal(profile.model.executionHeadNormalizers.POOLED_ONLY.net_return.feature_mean.length,
+    TCN_LSTM_HIDDEN);
   const prediction=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,profile,{externalLogisticLogit}
   );
@@ -508,6 +521,16 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.ok(Number.isFinite(pooledOnlyPrediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
+  const normalizedReturnFeatures=contextInputs.features.map((value,index)=>
+    (value-contextualNormalizers.net_return.feature_mean[index])/
+      contextualNormalizers.net_return.feature_std[index]);
+  const normalizedExpected=profile.model.executionReturnHeadBias+
+    normalizedReturnFeatures.reduce((sum,value,index)=>
+      sum+value*profile.model.executionReturnHeadWeights[index],0);
+  const restoredExpected=normalizedExpected*contextualNormalizers.net_return.target_std+
+    contextualNormalizers.net_return.target_mean;
+  assert.ok(Math.abs(prediction.predicted_net_return_pct-restoredExpected)<1e-10);
+
   assert.ok(prediction.predicted_downside_risk_pct>=0);
   const unavailable=predictTcnLstmHybridExecutionScore(
     evidence[0].sequence,profile,{externalLogisticLogit}
@@ -533,6 +556,7 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     evidence[0].sequence,restored,{externalLogisticLogit}
   );
   assert.equal(restoredScore.status,'AVAILABLE');
+  assert.deepEqual(restored.model.executionHeadNormalizers,profile.model.executionHeadNormalizers);
   const restoredPooledOnly=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,restored,{variant:'POOLED_ONLY'}
   );
