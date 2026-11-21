@@ -1040,6 +1040,44 @@ test('training-only Logistic anchor is deterministic and identity-bound to its t
   assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
 });
 
+
+test('full-sequence Logistic anchor survives TCN-LSTM JSON artifact inference round-trip',()=>{
+  const rows=makeRows(0,32,'full-anchor-roundtrip').map(row=>({
+    ...row,realized_return_pct:undefined
+  }));
+  const pooled=fitTcnLstmLogisticAnchor(rows);
+  const anchor={
+    kind:'TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1',
+    standardizer:{
+      means:Array(696).fill(0),
+      scales:Array(696).fill(1)
+    },
+    fit:{
+      weights:Array(696).fill(0),
+      bias:pooled.bias
+    },
+    training_rows:rows.length,
+    training_fingerprint:pooled.training_fingerprint,
+    feature_count:696,
+    feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1',
+    fit_partition:'PRE_EXECUTION_HEAD_MODEL_TRAINING_ROWS_ONLY',
+    probability_stage:'RAW_UNCALIBRATED',
+    validation_or_holdout_used:false
+  };
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:2,learningRate:0.0015,l2:0.0005,
+    batchSize:8,seed:607,maxTrainingSamples:32,baselineFit:anchor
+  });
+  const before=predictTcnLstmHybridProbability(rows[0].sequence,profile);
+  const restored=JSON.parse(JSON.stringify(profile));
+  const after=predictTcnLstmHybridProbability(rows[0].sequence,restored);
+  assert.equal(restored.baseline_fit.kind,'TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1');
+  assert.equal(restored.baseline_fit.feature_count,696);
+  assert.ok(Math.abs(before-after)<1e-12);
+  assert.equal(restored.probability_ready,false);
+  assert.equal(restored.real_order_execution,false);
+});
+
 test('inner-selection return screen deducts fees and becomes a bounded candidate-selection gate',()=>{
   const rows=Array.from({length:24},(_,index)=>({
     id:'return-'+index,
