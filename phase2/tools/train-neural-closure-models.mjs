@@ -1821,15 +1821,23 @@ async function main(){
         schema:'RADARX_TCN_LSTM_SCORE_CONDITIONED_EXTERNAL_ABLATION_V1',
         status:'AVAILABLE',baseline_variant:'POOLED_ONLY',
         candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
-        selection_partition_only_for_lambda:true,
+        selection_partition_only_for_lambda_and_abstention:true,
         evaluation_partition:'OUTER_VALIDATION_ONLY',
         same_outer_validation_opportunities:true,
-        same_frozen_lambda_for_both_variants:true,
+        both_policies_frozen_on_selection:true,
+        separate_inner_selected_risk_penalties:true,
         same_round_trip_cost_bps:args.roundTripCostBps,
+        outer_validation_used_for_lambda_or_top_k_or_threshold_selection:false,
         outer_validation_used_for_lambda_or_top_k_selection:false,
         holdout_rows_or_scores_used:false,
         context_risk_penalty_weight:externalExecutionRiskTopK.risk_penalty_weight,
         pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK.risk_penalty_weight,
+        context_abstention_policy:externalExecutionRiskTopK.frozen_abstention_policy,
+        pooled_only_abstention_policy:pooledOnlyExternalExecutionRiskTopK.frozen_abstention_policy,
+        matched_logistic_trade_counts:externalExecutionRiskTopK.trials.every(row=>
+          row.logistic_matched_candidate_trade_counts===true)&&
+          pooledOnlyExternalExecutionRiskTopK.trials.every(row=>
+            row.logistic_matched_candidate_trade_counts===true),
         trials:pairedTopK
       };
     }else{
