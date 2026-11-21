@@ -1659,34 +1659,54 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
     return {pooled,contextual,net,downside};
   });
   const fitHead=(targetKey,featureKey,featureCount)=>{
+    const rawFeatures=vectors.map(item=>item[featureKey]);
+    const rawTargets=vectors.map(item=>Number(item[targetKey]));
+    const moments=values=>{
+      const mean=values.reduce((sum,value)=>sum+Number(value),0)/values.length;
+      const variance=values.reduce((sum,value)=>sum+Math.pow(Number(value)-mean,2),0)/values.length;
+      const rawStd=Math.sqrt(Math.max(0,variance));
+      return {mean,std:rawStd>1e-8?rawStd:1,constant:rawStd<=1e-8};
+    };
+    const featureMoments=Array.from({length:featureCount},(_,index)=>
+      moments(rawFeatures.map(row=>row[index])));
+    const targetMoments=moments(rawTargets);
+    const normalizedVectors=vectors.map((item,rowIndex)=>({
+      features:rawFeatures[rowIndex].map((value,index)=>
+        (Number(value)-featureMoments[index].mean)/featureMoments[index].std),
+      target:(rawTargets[rowIndex]-targetMoments.mean)/targetMoments.std
+    }));
+    if(normalizedVectors.some(item=>item.features.some(value=>!finite(value))||
+      !finite(item.target)))
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_STANDARDIZATION_NON_FINITE:'+targetKey+':'+featureKey);
     let weights=Array(featureCount).fill(0),bias=0;
     const m=Array(featureCount).fill(0),v=Array(featureCount).fill(0);
     let mb=0,vb=0,bestLoss=Infinity,best={weights:[...weights],bias},wait=0,done=0;
-    const predict=(item,w,b)=>b+item[featureKey].reduce((sum,x,i)=>sum+x*w[i],0);
-    const loss=()=>vectors.reduce((sum,item)=>sum+
-      (Math.abs(predict(item,weights,bias)-item[targetKey])<=huberDelta
-        ?0.5*Math.pow(predict(item,weights,bias)-item[targetKey],2)
-        :huberDelta*(Math.abs(predict(item,weights,bias)-item[targetKey])-0.5*huberDelta)),0)/vectors.length;
+    const predict=(item,w,b)=>b+item.features.reduce((sum,x,i)=>sum+x*w[i],0);
+    const loss=()=>normalizedVectors.reduce((sum,item)=>{
+      const error=predict(item,weights,bias)-item.target;
+      return sum+(Math.abs(error)<=huberDelta
+        ?0.5*error*error:huberDelta*(Math.abs(error)-0.5*huberDelta));
+    },0)/normalizedVectors.length;
     const initial=loss();
     for(let epoch=1;epoch<=epochs;epoch++){
       const gw=Array(featureCount).fill(0);let gb=0;
-      for(const item of vectors){
-        const error=predict(item,weights,bias)-item[targetKey];
+      for(const item of normalizedVectors){
+        const error=predict(item,weights,bias)-item.target;
         const grad=Math.max(-huberDelta,Math.min(huberDelta,error));
         gb+=grad;
-        for(let i=0;i<featureCount;i++)gw[i]+=grad*item[featureKey][i];
+        for(let i=0;i<featureCount;i++)gw[i]+=grad*item.features[i];
       }
-      for(let i=0;i<featureCount;i++)gw[i]=gw[i]/vectors.length+l2*weights[i];
-      gb/=vectors.length;
-      const norm=Math.sqrt(gw.reduce((sum,x)=>sum+x*x,0)+gb*gb);
-      const scale=norm>2?2/norm:1;
+      for(let i=0;i<featureCount;i++)gw[i]=gw[i]/normalizedVectors.length+l2*weights[i];
+      gb/=normalizedVectors.length;
+      const gradientNorm=Math.sqrt(gw.reduce((sum,x)=>sum+x*x,0)+gb*gb);
+      const clip=gradientNorm>2?2/gradientNorm:1;
       for(let i=0;i<featureCount;i++){
-        const g=gw[i]*scale;
+        const g=gw[i]*clip;
         m[i]=0.9*m[i]+0.1*g;v[i]=0.999*v[i]+0.001*g*g;
         weights[i]-=learningRate*(m[i]/(1-Math.pow(0.9,epoch)))/
           (Math.sqrt(v[i]/(1-Math.pow(0.999,epoch)))+1e-8);
       }
-      const g=gb*scale;mb=0.9*mb+0.1*g;vb=0.999*vb+0.001*g*g;
+      const g=gb*clip;mb=0.9*mb+0.1*g;vb=0.999*vb+0.001*g*g;
       bias-=learningRate*(mb/(1-Math.pow(0.9,epoch)))/
         (Math.sqrt(vb/(1-Math.pow(0.999,epoch)))+1e-8);
       const current=loss();
@@ -1696,8 +1716,16 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       if(current<bestLoss-1e-9){bestLoss=current;best={weights:[...weights],bias};wait=0;}
       else if(++wait>=20)break;
     }
-    return {weights:best.weights,bias:best.bias,initial_huber_loss:Number(initial.toFixed(8)),
-      final_huber_loss:Number(bestLoss.toFixed(8)),epochs_completed:done,feature_count:featureCount};
+    return {
+      weights:best.weights,bias:best.bias,
+      feature_mean:featureMoments.map(item=>Number(item.mean)),
+      feature_std:featureMoments.map(item=>Number(item.std)),
+      target_mean:Number(targetMoments.mean),target_std:Number(targetMoments.std),
+      zero_variance_feature_count:featureMoments.filter(item=>item.constant).length,
+      initial_huber_loss:Number(initial.toFixed(8)),
+      final_huber_loss:Number(bestLoss.toFixed(8)),
+      epochs_completed:done,feature_count:featureCount
+    };
   };
   const hidden=TCN_LSTM_HIDDEN,contextCount=5*hidden+4
   const pooledOnly={
@@ -1717,9 +1745,36 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
   model.executionRiskHeadPooledOnlyWeights=pooledOnly.downside_risk.weights;
   model.executionRiskHeadPooledOnlyBias=pooledOnly.downside_risk.bias;
   model.executionHeadInputFeatureSchema=TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA;
+  model.executionHeadNormalizers={
+    LOGIT_CONTEXT_AUGMENTED:{
+      net_return:{feature_mean:contextual.net_return.feature_mean,
+        feature_std:contextual.net_return.feature_std,
+        target_mean:contextual.net_return.target_mean,target_std:contextual.net_return.target_std},
+      downside_risk:{feature_mean:contextual.downside_risk.feature_mean,
+        feature_std:contextual.downside_risk.feature_std,
+        target_mean:contextual.downside_risk.target_mean,target_std:contextual.downside_risk.target_std}
+    },
+    POOLED_ONLY:{
+      net_return:{feature_mean:pooledOnly.net_return.feature_mean,
+        feature_std:pooledOnly.net_return.feature_std,
+        target_mean:pooledOnly.net_return.target_mean,target_std:pooledOnly.net_return.target_std},
+      downside_risk:{feature_mean:pooledOnly.downside_risk.feature_mean,
+        feature_std:pooledOnly.downside_risk.feature_std,
+        target_mean:pooledOnly.downside_risk.target_mean,target_std:pooledOnly.downside_risk.target_std}
+    }
+  };
   model.executionRegressionHeadsFitted=true;
+  const normalizationSummary=head=>{
+    const values=Object.values(head);
+    return Object.fromEntries(values.map((item,index)=>[
+      index===0?'net_return':'downside_risk',
+      {feature_count:item.feature_count,
+       zero_variance_feature_count:item.zero_variance_feature_count,
+       target_mean:item.target_mean,target_std:item.target_std}
+    ]));
+  };
   return {
-    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5',
+    schema:'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V6_TRAIN_ONLY_ZSCORE',
     fitted:true,fit_boundary:'TRAINING_PARTITION_ONLY',
     source:'MATURED_REALIZED_RETURN_AND_MAX_ADVERSE_EXCURSION',
     training_rows:rows.length,round_trip_cost_bps:Number(roundTripCostBps),
@@ -1746,6 +1801,19 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       temporal_logistic_cv_context_required:true,
       temporal_logistic_cv_context_source:'FROZEN_MODEL_FIT_ONLY_ON_PRE_EXECUTION_HEAD_TRAINING_ROWS',
       validation_or_holdout_labels_used_for_context_fit:false
+    },
+    normalization:{
+      schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_TRAIN_ONLY_ZSCORE_V1',
+      method:'TRAIN_ONLY_POPULATION_ZSCORE_FOR_FEATURES_AND_TARGETS',
+      fit_partition:'PURGED_INNER_TRAINING_EXECUTION_HEAD_BLOCK',
+      fit_rows:rows.length,
+      validation_or_holdout_used:false,
+      pooled_only_reference:normalizationSummary({
+        net_return:pooledOnly.net_return,downside_risk:pooledOnly.downside_risk
+      }),
+      logit_context_augmented:normalizationSummary({
+        net_return:contextual.net_return,downside_risk:contextual.downside_risk
+      })
     },
     pooled_only_reference:{
       variant:'POOLED_ONLY',feature_count:hidden,
@@ -1784,13 +1852,35 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile,{
     !Array.isArray(dw)||dw.length!==input.features.length||
     [...rw,...dw].some(x=>!finite(x))||!finite(rb)||!finite(db))
     throw new TypeError('TCN_LSTM_EXECUTION_HEADS_NOT_FITTED:'+variant);
-  const dot=(weights,bias)=>Number(bias)+input.features.reduce(
+  const normalizationVariant=variant==='POOLED_ONLY'?'POOLED_ONLY':'LOGIT_CONTEXT_AUGMENTED';
+  const normalizers=profile.model.executionHeadNormalizers?.[normalizationVariant];
+  const normalizeHead=(head,features)=>{
+    if(!head||!Array.isArray(head.feature_mean)||!Array.isArray(head.feature_std)||
+      head.feature_mean.length!==features.length||head.feature_std.length!==features.length||
+      head.feature_mean.some(x=>!finite(x))||
+      head.feature_std.some(x=>!finite(x)||Number(x)<=0)||
+      !finite(head.target_mean)||!finite(head.target_std)||Number(head.target_std)<=0)
+      throw new TypeError('TCN_LSTM_EXECUTION_HEAD_NORMALIZER_INVALID:'+normalizationVariant);
+    return features.map((value,index)=>(Number(value)-Number(head.feature_mean[index]))/
+      Number(head.feature_std[index]));
+  };
+  if(!normalizers?.net_return||!normalizers?.downside_risk)
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_NORMALIZERS_MISSING:'+normalizationVariant);
+  const dot=(weights,bias,features)=>Number(bias)+features.reduce(
     (sum,x,i)=>sum+x*weights[i],0
   );
+  const returnFeatures=normalizeHead(normalizers.net_return,input.features);
+  const riskFeatures=normalizeHead(normalizers.downside_risk,input.features);
+  const predictedNet=dot(rw,rb,returnFeatures)*Number(normalizers.net_return.target_std)+
+    Number(normalizers.net_return.target_mean);
+  const predictedRisk=dot(dw,db,riskFeatures)*Number(normalizers.downside_risk.target_std)+
+    Number(normalizers.downside_risk.target_mean);
+  if(!finite(predictedNet)||!finite(predictedRisk))
+    throw new TypeError('TCN_LSTM_EXECUTION_HEAD_PREDICTION_NON_FINITE:'+normalizationVariant);
   return {
     variant,input_feature_schema:input.schema,input_feature_count:input.features.length,
-    predicted_net_return_pct:dot(rw,rb),
-    predicted_downside_risk_pct:Math.max(0,dot(dw,db))
+    predicted_net_return_pct:Number(predictedNet),
+    predicted_downside_risk_pct:Math.max(0,Number(predictedRisk))
   };
 }
 

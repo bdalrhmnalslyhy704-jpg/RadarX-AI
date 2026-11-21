@@ -11,6 +11,7 @@ on:
       - research/build224-tcn-lstm-external-logistic-execution-context-20261121
       - research/build224-tcn-lstm-execution-head-gates-20261121
       - research/build224-tcn-lstm-selective-abstention-20261121
+      - research/build224-tcn-lstm-return-head-normalization-20261121
     paths:
       - 'phase2/core/temporal-lstm-hybrid.mjs'
       - 'phase2/tools/train-neural-closure-models.mjs'
