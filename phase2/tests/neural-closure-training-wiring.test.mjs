@@ -493,9 +493,13 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
   assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
     'the proper-scoring classifier probability must remain independent of ranking features');
-  assert.match(recurrent,/function predictTcnLstmHybridRankingProbability[\s\S]*?forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
-  assert.match(recurrent,/SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1/);
-  assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
+  assert.match(recurrent,/export function predictTcnLstmHybridRankingScore[\s\S]*?return Number\(forward\.ranking_score\)/);
+  assert.match(recurrent,/RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2/);
+  assert.match(recurrent,/FULL_WINDOW_ATTENTION_POOL[\s\S]*LATEST_LSTM_STATE[\s\S]*TRAILING_4_STEP_MEAN_STATE[\s\S]*TRAILING_8_STEP_MEAN_STATE/);
+  assert.doesNotMatch(recurrent,/forward\.logit\s*\+\s*blendWeight\s*\*/);
+  assert.doesNotMatch(recurrent,/predictTcnLstmHybridRankingProbability/);
+  assert.match(recurrent,/INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6/);
+  assert.match(recurrent,/DEFERRED_UNTIL_DUAL_INNER_GATE/);
   assert.match(recurrent,/projectTcnLstmAuxiliaryGradient/);
   assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
