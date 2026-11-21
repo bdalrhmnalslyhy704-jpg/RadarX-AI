@@ -87,10 +87,48 @@ export function createVersionedModelArtifact({
   return {...manifest,artifact_sha256:artifactSha256};
 }
 
+export function attachResearchLineageToModelArtifact(artifact,lineage={}){
+  const initial=verifyVersionedModelArtifact(artifact);
+  if(!initial.valid)throw new Error('MODEL_ARTIFACT_LINEAGE_SOURCE_INVALID:'+initial.reason);
+  const researchLineage={
+    dataset_sha256:String(lineage.datasetSha256||'').toLowerCase(),
+    input_file_sha256:String(lineage.inputFileSha256||'').toLowerCase(),
+    dataset_source_commit_sha:String(lineage.datasetSourceCommitSha||'').toLowerCase(),
+    target_definition:String(lineage.targetDefinition||''),
+    target_semantics:String(lineage.targetSemantics||''),
+    feature_schema_id:String(lineage.featureSchemaId||''),
+    feature_names_sha256:hashBytes(Buffer.from(canonicalJson(artifact.feature_names),'utf8')),
+    horizon_ms:Number(lineage.horizonMs),
+    cost_model_id:String(lineage.costModelId||''),
+    round_trip_cost_bps:Number(lineage.roundTripCostBps),
+    split_id:String(lineage.splitId||'')
+  };
+  if(!SHA256.test(researchLineage.dataset_sha256)||
+    !SHA256.test(researchLineage.input_file_sha256)||
+    !COMMIT.test(researchLineage.dataset_source_commit_sha)||
+    researchLineage.target_definition!==artifact.target_definition||
+    researchLineage.target_semantics!==artifact.target_semantics||
+    researchLineage.feature_schema_id!==artifact.feature_schema_id||
+    !finite(researchLineage.horizon_ms)||researchLineage.horizon_ms<=0||
+    !researchLineage.cost_model_id.trim()||
+    !finite(researchLineage.round_trip_cost_bps)||researchLineage.round_trip_cost_bps<0||
+    !researchLineage.split_id.trim())
+    throw new TypeError('MODEL_ARTIFACT_RESEARCH_LINEAGE_INVALID');
+  const manifest={...artifact,research_lineage:researchLineage};
+  delete manifest.artifact_sha256;
+  manifest.artifact_sha256=hashBytes(Buffer.from(canonicalJson(manifest),'utf8'));
+  const verified=verifyVersionedModelArtifact(manifest,{
+    expectedSourceCommitSha:artifact.source_commit_sha,requireResearchLineage:true
+  });
+  if(!verified.valid)throw new Error('MODEL_ARTIFACT_RESEARCH_LINEAGE_VERIFY_FAILED:'+verified.reason);
+  return manifest;
+}
+
 export function verifyVersionedModelArtifact(artifact,{
   expectedTargetDefinition=NEURAL_CLOSURE_TARGET_DEFINITION,
   expectedTargetSemantics=NEURAL_CLOSURE_TARGET_SEMANTICS,
-  expectedSourceCommitSha=null
+  expectedSourceCommitSha=null,
+  requireResearchLineage=false
 }={}){
   const fail=reason=>({valid:false,reason});
   if(!artifact||artifact.schema!=='RADARX_VERSIONED_NEURAL_MODEL_ARTIFACT_V1')
@@ -103,6 +141,22 @@ export function verifyVersionedModelArtifact(artifact,{
     return fail('MODEL_ARTIFACT_SOURCE_SHA_INVALID');
   if(expectedSourceCommitSha&&artifact.source_commit_sha!==String(expectedSourceCommitSha).toLowerCase())
     return fail('MODEL_ARTIFACT_SOURCE_SHA_MISMATCH');
+  const lineage=artifact.research_lineage;
+  if(requireResearchLineage&&!lineage)return fail('MODEL_ARTIFACT_RESEARCH_LINEAGE_MISSING');
+  if(lineage){
+    if(!SHA256.test(String(lineage.dataset_sha256||''))||
+      !SHA256.test(String(lineage.input_file_sha256||''))||
+      !COMMIT.test(String(lineage.dataset_source_commit_sha||''))||
+      lineage.target_definition!==artifact.target_definition||
+      lineage.target_semantics!==artifact.target_semantics||
+      lineage.feature_schema_id!==artifact.feature_schema_id||
+      lineage.feature_names_sha256!==hashBytes(Buffer.from(canonicalJson(artifact.feature_names),'utf8'))||
+      !finite(lineage.horizon_ms)||Number(lineage.horizon_ms)<=0||
+      typeof lineage.cost_model_id!=='string'||!lineage.cost_model_id.trim()||
+      !finite(lineage.round_trip_cost_bps)||Number(lineage.round_trip_cost_bps)<0||
+      typeof lineage.split_id!=='string'||!lineage.split_id.trim())
+      return fail('MODEL_ARTIFACT_RESEARCH_LINEAGE_INVALID');
+  }
   try{
     normalizeFeatureMap(artifact.feature_names,artifact.feature_index_map);
     if(!artifact.normalization||artifact.normalization.mean.length!==artifact.feature_names.length||
