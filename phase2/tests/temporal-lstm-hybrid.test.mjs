@@ -548,13 +548,13 @@ test('selective execution policy chooses a real abstention threshold only from i
   const groupCount=50;
   const rows=Array.from({length:groupCount*2},(_,index)=>{
     const group=Math.floor(index/2),rank=index%2;
-    const outcome=group<35&&rank===0?'UP':'DOWN';
+    const outcome=group<42&&rank===0?'UP':'DOWN';
     const at=BASE+group*DAY+rank*75;
     return makeExecutionRow(index,outcome,at);
   });
   const predictions=rows.map((row,index)=>{
     const group=Math.floor(index/2),rank=index%2;
-    const profitable=group<35&&rank===0;
+    const profitable=group<42&&rank===0;
     return {
       predicted_net_return_pct:profitable
         ?2.9-(group%7)*0.08:rank===0?-2.0:-2.4,
@@ -563,7 +563,7 @@ test('selective execution policy chooses a real abstention threshold only from i
   });
   const logisticLogits=rows.map((row,index)=>{
     const group=Math.floor(index/2),rank=index%2;
-    if(group<35)return group<25?(rank===0?3:1):(rank===0?1:3);
+    if(group<42)return group<30?(rank===0?3:1):(rank===0?1:3);
     return rank===0?3:1;
   });
   const policy=selectTcnLstmExecutionRiskPolicy(rows,predictions,logisticLogits,{
