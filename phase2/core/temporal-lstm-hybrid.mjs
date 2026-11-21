@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
-  topKProbabilitySignals,simulateFirstTouchPaperPortfolio,
-  NEURAL_CLOSURE_PORTFOLIO_POLICY
+  topKProbabilitySignals,topKThresholdSignals,topKMatchedCountSignals,
+  simulateFirstTouchPaperPortfolio,NEURAL_CLOSURE_PORTFOLIO_POLICY
 } from './neural-closure-contracts.mjs';
 
 /**
@@ -1880,10 +1880,14 @@ export function predictTcnLstmHybridExecutionScore(sequence,profile,{
 }
 
 export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logisticLogits,{
-  roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8
+  roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
+  abstentionPercentileGrid=[0.20,0.35,0.50,0.65,0.80,0.90]
 }={}) {
-  const unavailable=reason=>({schema:'RADARX_TCN_LSTM_EXECUTION_RISK_POLICY_V1',
-    status:'UNAVAILABLE',reason,selection_partition_only:true,holdout_values_used:false,passed:false});
+  const unavailable=reason=>({
+    schema:'RADARX_TCN_LSTM_SELECTIVE_EXECUTION_POLICY_V2',
+    status:'UNAVAILABLE',reason,selection_partition_only:true,
+    threshold_selected_on_inner_selection:false,holdout_values_used:false,passed:false
+  });
   if(!Array.isArray(rows)||rows.length<20||!Array.isArray(executionPredictions)||
     executionPredictions.length!==rows.length||!Array.isArray(logisticLogits)||
     logisticLogits.length!==rows.length||
@@ -1893,6 +1897,14 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
       !finite(x?.predicted_downside_risk_pct)||x.predicted_downside_risk_pct<0)||
     logisticLogits.some(x=>!finite(x)))
     return unavailable('INNER_SELECTION_EXECUTION_EVIDENCE_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||
+    !Number.isInteger(minimumTrades)||minimumTrades<1||
+    !finite(minimumWinRatePct)||minimumWinRatePct<0||minimumWinRatePct>100||
+    !finite(maximumDrawdownPct)||maximumDrawdownPct<=0||
+    !Array.isArray(abstentionPercentileGrid)||!abstentionPercentileGrid.length||
+    abstentionPercentileGrid.some(value=>!finite(value)||value<=0||value>=1)||
+    new Set(abstentionPercentileGrid).size!==abstentionPercentileGrid.length)
+    return unavailable('SELECTIVE_EXECUTION_POLICY_CONFIGURATION_INVALID');
   const groups=new Map();
   rows.forEach((row,index)=>{
     const bucket=Math.floor(Number(row.at)/TCN_LSTM_RANKING_BUCKET_MS);
@@ -1901,58 +1913,106 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
   });
   const eligible=[...groups.values()].filter(items=>items.length>=2);
   if(!eligible.length)return unavailable('NO_SIMULTANEOUS_DECISION_GROUPS');
-  const costPct=Number(roundTripCostBps)/100;
   const trials=[];
-  for(const lambda of [0,0.1,0.25,0.5,1,2,4,8]){
-    for(const topK of [1,2,3]){
-      const modelMask=Array(rows.length).fill(0),anchorMask=Array(rows.length).fill(0);
-      for(const indices of eligible){
-        const ordered=[...indices].sort((a,b)=>
-          (executionPredictions[b].predicted_net_return_pct-
-            lambda*executionPredictions[b].predicted_downside_risk_pct)-
-          (executionPredictions[a].predicted_net_return_pct-
-            lambda*executionPredictions[a].predicted_downside_risk_pct)||
-          String(rows[a].symbol??'').localeCompare(String(rows[b].symbol??'')));
-        for(const i of ordered.slice(0,Math.min(topK,ordered.length)))modelMask[i]=1;
-        const anchor=[...indices].sort((a,b)=>logisticLogits[b]-logisticLogits[a]||
-          String(rows[a].symbol??'').localeCompare(String(rows[b].symbol??'')));
-        for(const i of anchor.slice(0,Math.min(topK,anchor.length)))anchorMask[i]=1;
-      }
+  // Top-K=1 is fixed in advance. Only the score cut-off is selected here;
+  // the threshold is computed from the best candidate score in each inner
+  // selection bucket, then frozen for the untouched outer-validation block.
+  for(const lambda of [0.1,0.25,0.5,1,2,4,8]){
+    const riskScores=executionPredictions.map(item=>
+      Number(item.predicted_net_return_pct)-lambda*Number(item.predicted_downside_risk_pct));
+    const bestScoreByGroup=eligible.map(indices=>
+      Math.max(...indices.map(index=>riskScores[index])));
+    const sortedBestScores=[...bestScoreByGroup].sort((a,b)=>a-b);
+    for(const percentile of abstentionPercentileGrid){
+      const position=(sortedBestScores.length-1)*Number(percentile);
+      const lower=Math.floor(position),upper=Math.ceil(position);
+      const threshold=lower===upper?sortedBestScores[lower]:
+        sortedBestScores[lower]+(sortedBestScores[upper]-sortedBestScores[lower])*(position-lower);
+      const modelSelection=topKThresholdSignals(rows,riskScores,1,threshold);
+      const logisticSelection=topKMatchedCountSignals(rows,logisticLogits,modelSelection);
       const options={threshold:0.5,roundTripCostBps,
         maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
         initialEquity:100};
-      const modelMetrics=simulateFirstTouchPaperPortfolio(rows,modelMask,options);
-      const anchorMetrics=simulateFirstTouchPaperPortfolio(rows,anchorMask,options);
+      let modelMetrics,anchorMetrics;
+      try{
+        modelMetrics=simulateFirstTouchPaperPortfolio(rows,modelSelection.probabilities,options);
+        anchorMetrics=simulateFirstTouchPaperPortfolio(rows,logisticSelection.probabilities,options);
+      }catch(error){
+        return unavailable('SELECTIVE_EXECUTION_SIMULATION_FAILED:'+String(error?.message||error));
+      }
       const complete=modelMetrics.return_data_status==='COMPLETE'&&
         anchorMetrics.return_data_status==='COMPLETE';
+      const abstainedDecisionGroups=modelSelection.abstained_decision_group_count;
+      const abstentionRate=eligible.length
+        ?100*abstainedDecisionGroups/eligible.length:0;
       const gates={
+        positive_risk_penalty_weight:lambda>0,
         return_data_complete:complete,
         minimum_trades:Number(modelMetrics.trade_count)>=minimumTrades,
-        minimum_win_rate:finite(modelMetrics.win_rate_pct)&&modelMetrics.win_rate_pct>=minimumWinRatePct,
+        minimum_win_rate:finite(modelMetrics.win_rate_pct)&&
+          modelMetrics.win_rate_pct>=minimumWinRatePct,
         positive_net_pnl:finite(modelMetrics.net_pnl_pct)&&modelMetrics.net_pnl_pct>0,
-        maximum_drawdown:finite(modelMetrics.max_drawdown_pct)&&modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
-        beats_logistic_anchor:complete&&modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
+        maximum_drawdown:finite(modelMetrics.max_drawdown_pct)&&
+          modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
+        genuine_abstention:abstainedDecisionGroups>0&&
+          modelSelection.signal_count<eligible.length,
+        beats_matched_logistic_anchor:complete&&
+          modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
           modelMetrics.max_drawdown_pct<=anchorMetrics.max_drawdown_pct
       };
-      trials.push({risk_penalty_weight:lambda,top_k_per_timestamp:topK,
-        model_metrics:modelMetrics,logistic_anchor_metrics:anchorMetrics,
-        model_minus_logistic_net_pnl_pct:finite(modelMetrics.net_pnl_pct)&&finite(anchorMetrics.net_pnl_pct)
+      trials.push({
+        risk_penalty_weight:lambda,
+        top_k_per_timestamp:1,
+        minimum_risk_adjusted_score:Number(threshold),
+        abstention_percentile:Number(percentile),
+        selected_trade_count:modelSelection.signal_count,
+        decision_group_count:modelSelection.decision_group_count,
+        abstained_decision_group_count:abstainedDecisionGroups,
+        abstention_rate_pct:Number(abstentionRate.toFixed(4)),
+        model_metrics:modelMetrics,
+        logistic_anchor_metrics:anchorMetrics,
+        logistic_anchor_trade_counts_matched:true,
+        model_minus_logistic_net_pnl_pct:finite(modelMetrics.net_pnl_pct)&&
+          finite(anchorMetrics.net_pnl_pct)
           ?Number((modelMetrics.net_pnl_pct-anchorMetrics.net_pnl_pct).toFixed(6)):null,
-        gates,passed:Object.values(gates).every(Boolean)});
+        gates,passed:Object.values(gates).every(Boolean)
+      });
     }
   }
   trials.sort((a,b)=>Number(b.passed)-Number(a.passed)||
-    Number(b.model_metrics.net_pnl_pct??-Infinity)-Number(a.model_metrics.net_pnl_pct??-Infinity)||
-    Number(b.model_metrics.win_rate_pct??-Infinity)-Number(a.model_metrics.win_rate_pct??-Infinity)||
-    Number(a.model_metrics.max_drawdown_pct??Infinity)-Number(b.model_metrics.max_drawdown_pct??Infinity));
+    Number(b.model_metrics.trade_count>=minimumTrades)-
+      Number(a.model_metrics.trade_count>=minimumTrades)||
+    Number(b.model_metrics.net_pnl_pct??-Infinity)-
+      Number(a.model_metrics.net_pnl_pct??-Infinity)||
+    Number(b.model_metrics.win_rate_pct??-Infinity)-
+      Number(a.model_metrics.win_rate_pct??-Infinity)||
+    Number(a.model_metrics.max_drawdown_pct??Infinity)-
+      Number(b.model_metrics.max_drawdown_pct??Infinity));
   const best=trials[0];
-  return {schema:'RADARX_TCN_LSTM_EXECUTION_RISK_POLICY_V1',
-    status:'EVALUATED',selection_partition_only:true,holdout_values_used:false,
-    round_trip_cost_bps:Number(roundTripCostBps),minimum_trades:minimumTrades,
-    minimum_win_rate_pct:minimumWinRatePct,maximum_drawdown_pct:maximumDrawdownPct,
-    passed:best?.passed===true,selected_risk_penalty_weight:best?.risk_penalty_weight??null,
-    selected_top_k_per_timestamp:best?.top_k_per_timestamp??null,
-    selected_trial:best??null,trials};
+  const passed=best?.passed===true;
+  return {
+    schema:'RADARX_TCN_LSTM_SELECTIVE_EXECUTION_POLICY_V2',
+    status:passed?'SELECTIVE_EXECUTION_POLICY_PASSED_INNER_SELECTION':
+      'ABSTAIN_NO_SELECTIVE_EXECUTION_POLICY_PASSED',
+    selection_partition_only:true,
+    threshold_selected_on_inner_selection:true,
+    threshold_frozen_before_outer_validation:true,
+    holdout_values_used:false,
+    round_trip_cost_bps:Number(roundTripCostBps),
+    minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,
+    maximum_drawdown_pct:maximumDrawdownPct,
+    top_k_per_timestamp:1,
+    passed,
+    selected_risk_penalty_weight:best?.risk_penalty_weight??null,
+    selected_top_k_per_timestamp:1,
+    selected_minimum_risk_adjusted_score:best?.minimum_risk_adjusted_score??null,
+    selected_abstention_percentile:best?.abstention_percentile??null,
+    selected_abstention_rate_pct:best?.abstention_rate_pct??null,
+    selected_trade_count:best?.selected_trade_count??0,
+    selected_trial:best??null,
+    trials
+  };
 }
 
 /**
