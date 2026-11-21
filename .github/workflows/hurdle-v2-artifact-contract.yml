@@ -1,0 +1,110 @@
+name: RadarX Hurdle V2 artifact contract
+
+on:
+  push:
+    branches:
+      - research/build224-hurdle-v2-artifact-contract-20261122
+    paths:
+      - '.ci/hurdle-v2-artifact-contract.tar.xz.part*'
+      - '.github/workflows/hurdle-v2-artifact-contract.yml'
+  pull_request:
+    paths:
+      - '.ci/hurdle-v2-artifact-contract.tar.xz.part*'
+      - '.github/workflows/hurdle-v2-artifact-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-contract:
+    name: Verify Hurdle V2 hash, reload, gradients and semantics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Reassemble and verify the versioned source/artifact payload
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hurdle-v2-payload"
+          cat .ci/hurdle-v2-artifact-contract.tar.xz.part* > "$RUNNER_TEMP/hurdle-v2-payload.tar.xz"
+          tar -xJf "$RUNNER_TEMP/hurdle-v2-payload.tar.xz" -C "$RUNNER_TEMP/hurdle-v2-payload"
+          (cd "$RUNNER_TEMP/hurdle-v2-payload" && sha256sum --check SHA256SUMS)
+          cp -a "$RUNNER_TEMP/hurdle-v2-payload/docs" .
+          cp -a "$RUNNER_TEMP/hurdle-v2-payload/phase2" .
+          cp -a "$RUNNER_TEMP/hurdle-v2-payload/artifacts" .
+      - name: Syntax checks only
+        run: |
+          node --check phase2/core/hurdle-return-head.mjs
+          node --check phase2/core/hurdle-v2-artifact-contract.mjs
+          node --check phase2/tools/write-hurdle-v2-artifact.mjs
+          node --check phase2/tests/hurdle-v2-artifact.test.mjs
+      - name: Hurdle V2 artifact contract tests
+        id: contract-tests
+        run: |
+          set -o pipefail
+          node --test phase2/tests/hurdle-v2-artifact.test.mjs 2>&1 | tee hurdle-v2-artifact-test.log
+      - name: Record CI provenance and artifact hashes
+        if: always()
+        env:
+          CONTRACT_TEST_OUTCOME: ${{ steps.contract-tests.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {readHurdleV2Artifact,verifyHurdleV2Artifact} from './phase2/core/hurdle-v2-artifact-contract.mjs';
+          const artifactPath='artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.json';
+          const manifestPath='artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.manifest.json';
+          const hash=path=>createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+          const artifact=await readHurdleV2Artifact(artifactPath);
+          const verified=verifyHurdleV2Artifact(artifact);
+          if(!verified.valid) throw new Error('HURDLE_V2_ARTIFACT_VERIFY_FAILED:'+verified.reason);
+          const evidence={
+            workflow:process.env.GITHUB_WORKFLOW,
+            run_id:process.env.GITHUB_RUN_ID,
+            run_attempt:process.env.GITHUB_RUN_ATTEMPT,
+            commit_sha:process.env.GITHUB_SHA,
+            ref:process.env.GITHUB_REF,
+            branch:process.env.GITHUB_REF_NAME,
+            contract_tests_outcome:process.env.CONTRACT_TEST_OUTCOME,
+            artifact_path:artifactPath,
+            manifest_path:manifestPath,
+            artifact_file_sha256:hash(artifactPath),
+            manifest_file_sha256:hash(manifestPath),
+            artifact_content_hash:artifact.artifact_content_hash,
+            artifact_manifest_hash:artifact.artifact_manifest_hash,
+            holdout_status:artifact.holdout_status,
+            paper_trading:artifact.paper_trading,
+            real_order_execution:artifact.real_order_execution,
+            scientific_qualification_status:artifact.scientific_qualification_status,
+            execution_qualification_status:artifact.execution_qualification_status,
+            promotion_status:artifact.promotion_status,
+            full_cohort_replay_started:false,
+            model_training_started:false,
+            holdout_data_accessed:false,
+            deployment_attempted:false
+          };
+          fs.writeFileSync('hurdle-v2-artifact-ci-evidence.json',JSON.stringify(evidence,null,2)+'\n');
+          console.log(JSON.stringify(evidence,null,2));
+          NODE
+      - name: Upload artifact and CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: radarx-hurdle-v2-artifact-contract-${{ github.sha }}
+          path: |
+            artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.json
+            artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.manifest.json
+            hurdle-v2-artifact-test.log
+            hurdle-v2-artifact-ci-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
