@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createVersionedModelArtifact,verifyVersionedModelArtifact}
+import {createVersionedModelArtifact,verifyVersionedModelArtifact,attachResearchLineageToModelArtifact}
   from '../core/model-artifact-guardian.mjs';
 import {buildFeatureSchemaFingerprint,createFeatureParityGuardian,FeatureParityError}
   from '../core/feature-parity-guardian.mjs';
@@ -91,4 +91,40 @@ test('schema fingerprint changes when feature order or scaler values change',()=
   const changedScaler={...manifest,normalization:{...manifest.normalization,
     mean:[1,1.01,0.5]}};
   assert.notEqual(buildFeatureSchemaFingerprint(changedScaler),original);
+});
+
+
+test('research model artifacts bind dataset, target, horizon, cost and split lineage tamper-evidently',()=>{
+  const base=artifact();
+  const enriched=attachResearchLineageToModelArtifact(base,{
+    datasetSha256:'a'.repeat(64),
+    inputFileSha256:'b'.repeat(64),
+    datasetSourceCommitSha:'e'.repeat(40),
+    targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+    targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+    featureSchemaId:base.feature_schema_id,
+    horizonMs:4*60*60*1000,
+    costModelId:'FIXED_LINEAR_ROUND_TRIP_BPS_V1',
+    roundTripCostBps:30,
+    splitId:'RADARX_NEURAL_CLOSURE_PURGED_60_20_20_UTC_DAY_SPLIT_V1'
+  });
+  assert.equal(enriched.research_lineage.dataset_sha256,'a'.repeat(64));
+  assert.equal(enriched.research_lineage.horizon_ms,4*60*60*1000);
+  assert.equal(enriched.research_lineage.round_trip_cost_bps,30);
+  assert.equal(verifyVersionedModelArtifact(enriched,{
+    expectedSourceCommitSha:'c'.repeat(40),requireResearchLineage:true
+  }).valid,true);
+  const missingLineage={...base};
+  assert.equal(verifyVersionedModelArtifact(missingLineage,{requireResearchLineage:true}).reason,
+    'MODEL_ARTIFACT_RESEARCH_LINEAGE_MISSING');
+  const changedLineage={...enriched,research_lineage:{
+    ...enriched.research_lineage,dataset_sha256:'invalid'
+  }};
+  assert.equal(verifyVersionedModelArtifact(changedLineage).reason,
+    'MODEL_ARTIFACT_RESEARCH_LINEAGE_INVALID');
+  const wrongFeatureLineage={...enriched,research_lineage:{
+    ...enriched.research_lineage,feature_schema_id:'OTHER_FEATURE_SCHEMA'
+  }};
+  assert.equal(verifyVersionedModelArtifact(wrongFeatureLineage).reason,
+    'MODEL_ARTIFACT_RESEARCH_LINEAGE_INVALID');
 });
