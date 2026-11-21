@@ -163,8 +163,8 @@ jobs:
             ablation_available:ablation?.status==='AVAILABLE',
             exact_matched_opportunities:ablation?.same_outer_validation_opportunities===true,
             same_frozen_risk_penalty:ablation?.same_frozen_lambda_for_both_variants===true,
-            outer_validation_used_for_selection:ablation?.outer_validation_used_for_lambda_or_top_k_selection!==false,
-            holdout_used:ablation?.holdout_rows_or_scores_used!==false,
+            outer_validation_selection_isolation:ablation?.outer_validation_used_for_lambda_or_top_k_selection===false,
+            holdout_isolation:ablation?.holdout_rows_or_scores_used===false,
             round_trip_cost_30_bps:contextualRisk?.round_trip_cost_bps===30&&
               pooledOnlyRisk?.round_trip_cost_bps===30&&ablation?.same_round_trip_cost_bps===30,
             complete_contextual_metrics:completeMetrics(contextualMetrics),
