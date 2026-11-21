@@ -2428,6 +2428,7 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
  */
 export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   executionScoresByPolicy={},
+  executionPolicyConfigurations={},
   topKGrid=[1,2,3],
   roundTripCostBps=30,
   repetitions=250,
@@ -2478,11 +2479,20 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   }
   const policyNames=Object.keys(executionScoresByPolicy);
   if(!policyNames.length)return unavailable('BOOTSTRAP_EXECUTION_POLICIES_EMPTY');
+  if(!executionPolicyConfigurations||typeof executionPolicyConfigurations!=='object')
+    return unavailable('BOOTSTRAP_EXECUTION_POLICY_CONFIGURATIONS_INVALID');
   for(const name of policyNames){
     const values=executionScoresByPolicy[name];
     if(!Array.isArray(values)||values.length!==rows.length||
       values.some(value=>!finite(value)))
       return unavailable('BOOTSTRAP_EXECUTION_SCORE_ALIGNMENT_INVALID',{policy:name});
+    const config=executionPolicyConfigurations[name]??{};
+    if(config.minimum_score!==undefined&&!finite(config.minimum_score))
+      return unavailable('BOOTSTRAP_EXECUTION_POLICY_THRESHOLD_INVALID',{policy:name});
+    if(config.match_trade_counts_with!==undefined&&
+      (!policyNames.includes(config.match_trade_counts_with)||
+        config.match_trade_counts_with===name))
+      return unavailable('BOOTSTRAP_EXECUTION_POLICY_MATCH_TARGET_INVALID',{policy:name});
   }
 
   const dayMap=new Map();
@@ -2509,8 +2519,25 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
   const selectedMasks={};
   try{
     for(const topK of topKGrid){
+      const selectionDetails={};
+      // First create each strategy's own frozen score-threshold mask.
       for(const [policyName,scores] of Object.entries(executionScoresByPolicy)){
-        selectedMasks[policyName+'|'+topK]=topKRankingSignals(rows,scores,topK).probabilities;
+        const config=executionPolicyConfigurations[policyName]??{};
+        if(config.match_trade_counts_with)continue;
+        const detail=topKThresholdSignals(rows,scores,topK,
+          config.minimum_score===undefined?null:Number(config.minimum_score));
+        selectionDetails[policyName]=detail;
+        selectedMasks[policyName+'|'+topK]=detail.probabilities;
+      }
+      // Comparator policies follow the exact per-bucket trade counts of the
+      // target selective policy, but rank with their own frozen scores.
+      for(const [policyName,scores] of Object.entries(executionScoresByPolicy)){
+        const config=executionPolicyConfigurations[policyName]??{};
+        if(!config.match_trade_counts_with)continue;
+        const target=selectionDetails[config.match_trade_counts_with];
+        if(!target)throw new Error('BOOTSTRAP_MATCHED_POLICY_TARGET_NOT_PREPARED:'+policyName);
+        const detail=topKMatchedCountSignals(rows,scores,target);
+        selectedMasks[policyName+'|'+topK]=detail.probabilities;
       }
     }
   }catch(error){
@@ -2732,6 +2759,11 @@ export function bootstrapOuterValidationUncertainty(rows,probabilitiesByModel,{
     execution:{
       policy_score_source:'FROZEN_OUTER_VALIDATION_RANK_SCORES',
       top_k_grid:[...topKGrid],
+      policy_configurations:Object.fromEntries(policyNames.map(name=>[
+        name,{...(executionPolicyConfigurations[name]??{})}
+      ])),
+      selective_policies_use_inner_selection_thresholds_only:true,
+      matched_comparator_trade_counts_by_decision_bucket:true,
       round_trip_cost_bps:Number(roundTripCostBps),
       max_concurrent_positions:maxConcurrentPositions,
       strategy_confidence_intervals:executionPolicies,
