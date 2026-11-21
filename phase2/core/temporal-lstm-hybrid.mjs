@@ -1799,8 +1799,8 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
 ){
   const pooledMetrics=pooledOnlyPolicy?.selected_trial?.model_metrics??null;
   const contextMetrics=contextPolicy?.selected_trial?.model_metrics??null;
-  const available=pooledOnlyPolicy?.status==='EVALUATED'&&
-    contextPolicy?.status==='EVALUATED'&&pooledMetrics!==null&&contextMetrics!==null&&
+  const available=pooledOnlyPolicy?.status!=='UNAVAILABLE'&&
+    contextPolicy?.status!=='UNAVAILABLE'&&pooledMetrics!==null&&contextMetrics!==null&&
     finite(pooledMetrics.net_pnl_pct)&&finite(pooledMetrics.win_rate_pct)&&
     finite(pooledMetrics.max_drawdown_pct)&&finite(contextMetrics.net_pnl_pct)&&
     finite(contextMetrics.win_rate_pct)&&finite(contextMetrics.max_drawdown_pct);
@@ -3045,7 +3045,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     fit.execution_logistic_context_metadata=externalLogisticContextMetadata;
     const executionHeadsFitted=fit.training.execution_regression_heads?.fitted===true;
     const executionRiskPolicyUnavailable={
-      schema:'RADARX_TCN_LSTM_EXECUTION_RISK_POLICY_V1',
+      schema:'RADARX_TCN_LSTM_SELECTIVE_EXECUTION_POLICY_V2',
       status:'UNAVAILABLE',reason:'EXECUTION_REGRESSION_HEADS_NOT_FITTED',
       selection_partition_only:true,holdout_values_used:false,passed:false
     };
@@ -3078,10 +3078,19 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     const executionHeadContextAblation=summarizeTcnLstmExecutionHeadContextAblation(
       pooledOnlyExecutionRiskPolicy,executionRiskPolicy
     );
-    if(executionRiskPolicy.status==='EVALUATED'&&
-      finite(executionRiskPolicy.selected_risk_penalty_weight)){
+    // Persist both thresholds selected on the same inner-selection block.
+    // A failed policy is retained for diagnostic outer evaluation only; it
+    // cannot become qualified or production-eligible.
+    if(executionRiskPolicy.status!=='UNAVAILABLE'&&
+      finite(executionRiskPolicy.selected_risk_penalty_weight)&&
+      finite(executionRiskPolicy.selected_minimum_risk_adjusted_score)){
       fit.execution_risk_penalty_weight=executionRiskPolicy.selected_risk_penalty_weight;
       fit.execution_risk_policy=executionRiskPolicy;
+    }
+    if(pooledOnlyExecutionRiskPolicy.status!=='UNAVAILABLE'&&
+      finite(pooledOnlyExecutionRiskPolicy.selected_risk_penalty_weight)&&
+      finite(pooledOnlyExecutionRiskPolicy.selected_minimum_risk_adjusted_score)){
+      fit.pooled_only_execution_risk_policy=pooledOnlyExecutionRiskPolicy;
     }
     const selectionLogits = selectionRows.map(row => {
       const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
