@@ -564,12 +564,12 @@ async function main(){
       diagnostic_only:cognitiveProfile.hybrid_model?.probability_ready!==true
     },
     HYBRID_TCN_ATTENTION:{
-      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
-      diagnostic_only:false
+      passed:false,reason:'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED',
+      diagnostic_only:true
     },
     DENSE_MLP:{
-      passed:true,reason:'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION',
-      diagnostic_only:false
+      passed:false,reason:'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED',
+      diagnostic_only:true
     }
   };
   training.model_internal_diagnostics={
@@ -1777,18 +1777,17 @@ async function main(){
     });
     if(!verified.valid)throw new Error('HYBRID_ARTIFACT_INVALID:'+verified.reason);
     modelArtifactsByModel.HYBRID_TCN_ATTENTION=hybridArtifact;
-    predictionsByModel.HYBRID_TCN_ATTENTION=predictionRows(eventRows,
-      row=>predictHybridTcnAttention(row.temporal_sequence,hybridFit)?.probability,{
-        sourceCommitSha,artifactSha256:hybridArtifact.artifact_sha256,
-        modelName:'HYBRID_TCN_ATTENTION'
-      });
     trainingArtifacts.HYBRID_TCN_ATTENTION={
       artifact_sha256:hybridArtifact.artifact_sha256,
       architecture:hybridFit.architecture,
       training_samples:hybridFit.training_samples,
       epochs:hybridFit.epochs,
+      outer_validation_scored:false,
+      inner_selection_protocol:'NOT_IMPLEMENTED',
       memory_profile:hybridFit.memory_profile
     };
+    markOuterValidationSuppressed(unavailable,'HYBRID_TCN_ATTENTION',
+      'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED');
   }catch(error){
     unavailable.HYBRID_TCN_ATTENTION={
       reason:String(error?.message||error),training_rows:split.train.length
@@ -1823,10 +1822,6 @@ async function main(){
   if(!denseVerified.valid)throw new Error('DENSE_MLP_ARTIFACT_INVALID:'+denseVerified.reason);
   const denseRowsById=new Map(densePrepared.rows.map(row=>[row.id,row]));
   modelArtifactsByModel.DENSE_MLP=denseArtifact;
-  predictionsByModel.DENSE_MLP=predictionRows(eventRows,
-    row=>predictDenseProjectionProbability(denseRowsById.get(row.id)?.vector,denseFit),{
-      sourceCommitSha,artifactSha256:denseArtifact.artifact_sha256,modelName:'DENSE_MLP'
-    });
   trainingArtifacts.DENSE_MLP={
     artifact_sha256:denseArtifact.artifact_sha256,
     training_rows:denseFit.training_rows,
@@ -1834,24 +1829,21 @@ async function main(){
     training_negatives:denseFit.training_negatives,
     best_epoch:denseFit.best_epoch,
     early_stopping:denseFit.early_stopping,
+    outer_validation_scored:false,
+    inner_selection_protocol:'NOT_IMPLEMENTED',
     validation_split_rows:denseSplit.validation.length,
     holdout_split_rows:denseSplit.holdout.length
   };
-
   qualificationByModel.HYBRID_TCN_ATTENTION={
-    passed:trainingArtifacts.HYBRID_TCN_ATTENTION!==undefined,
-    reason:trainingArtifacts.HYBRID_TCN_ATTENTION
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
-      :unavailable.HYBRID_TCN_ATTENTION?.reason??'HYBRID_TCN_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    passed:false,reason:'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED',
+    diagnostic_only:true
   };
   qualificationByModel.DENSE_MLP={
-    passed:trainingArtifacts.DENSE_MLP!==undefined,
-    reason:trainingArtifacts.DENSE_MLP
-      ?'FIXED_CONFIG_TRAINED_ON_TRAIN_PARTITION'
-      :'DENSE_MLP_TRAINING_UNAVAILABLE',
-    diagnostic_only:false
+    passed:false,reason:'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED',
+    diagnostic_only:true
   };
+  markOuterValidationSuppressed(unavailable,'DENSE_MLP',
+    'INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED');
   // Bind every serialized model to the exact data, target, feature, cost and
   // chronological split contract before hashing the final benchmark artifact.
   const modelArtifactResearchLineage={};
