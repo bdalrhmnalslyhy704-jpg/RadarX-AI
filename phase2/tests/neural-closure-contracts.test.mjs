@@ -1291,7 +1291,10 @@ test('score threshold policy abstains per bucket and Logistic matches its trade 
   assert.equal(report.trials[0].neural_selected_count,1);
   assert.equal(report.trials[0].logistic_selected_count,1);
   assert.equal(report.trials[0].abstention_active,true);
+  assert.equal(report.trials[0].logistic_matched_candidate_signal_counts,true);
   assert.equal(report.trials[0].logistic_matched_candidate_trade_counts,true);
+  assert.equal(report.trials[0].neural_metrics.trade_count,
+    report.trials[0].logistic_metrics.trade_count);
 });
 
 test('outer-validation moving-block bootstrap returns paired Brier and execution confidence intervals without holdout access',()=>{
