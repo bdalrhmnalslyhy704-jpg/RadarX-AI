@@ -327,7 +327,7 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
   assert.match(trainer,/max_training_samples:6144/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
-  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_INDEPENDENT_RANK_SCORE_V6/,
     'the active execution head must include the purged temporal-CV Logistic score plus neural classifier and ranking scores');
   assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
     'the score-conditioned head must be the default execution path');
@@ -343,8 +343,8 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the same external temporal Logistic logit must be used by fitting and inference');
   assert.match(temporal,/x_neural_classifier_score/,
     'each pooled channel must be gated by the neural classifier score');
-  assert.match(temporal,/x_ranking_residual_score/,
-    'each pooled channel must also receive the train-only ranking residual score');
+  assert.match(temporal,/x_independent_return_rank_score/,
+    'each pooled channel must also receive the train-only independent raw ranking score');
   assert.match(temporal,/POOLED_ONLY/,
     'the pooled-only head must be retained as a matched ablation control');
   assert.match(temporal,/execution_head_context_ablation\?\.passed===true/,
@@ -359,8 +359,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the external Logistic context must attest to out-of-sample score generation');
   assert.match(temporal,/TCN_LSTM_EXECUTION_HEAD_TRAINING_PURGE_VIOLATION/,
     'encoder and execution-head training rows must satisfy a strict forward-label purge');
-  assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(executionRows,executionRows,model,anchor/,
-    'execution-head latent features must be produced by a model that did not fit those rows');
+  assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(\s*executionHeadRowsWithLogisticContext,executionHeadRowsWithLogisticContext,\s*item\.fit\.model,anchor/,
+    'execution-head latent features must be fitted only after the dual inner gate on a later purged block');
+  assert.match(temporal,/const stageOneQualified=evaluated\.filter/,
+    'execution heads must be skipped for candidates that fail inner Brier or independent ranking');
+  assert.match(temporal,/item\.brier_improvement>requiredImprovement/);
+  assert.match(temporal,/item\.pairwise_ranking_improvement>0/);
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
   assert.match(temporal,/fitHurdleReturnHead/,
@@ -459,7 +463,7 @@ test('fixed-SHA temporal challengers use extended train-only epoch budgets witho
 });
 
 
-test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selector cap',async()=>{
+test('TCN-LSTM classifier Brier and independent ranking sweep stay within the selector cap',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   const candidateBlock=trainer.match(/candidates:\[([\s\S]*?)\n\s+\]\n\s+\}\);/);
@@ -493,9 +497,13 @@ test('TCN-LSTM Brier plus shared-classifier ranking sweep stays within the selec
   assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
   assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
     'the proper-scoring classifier probability must remain independent of ranking features');
-  assert.match(recurrent,/function predictTcnLstmHybridRankingProbability[\s\S]*?forward\.logit\+blendWeight\*forward\.ranking_residual_logit/);
-  assert.match(recurrent,/SEPARATE_RANKING_SIDECAR_NOT_CLASSIFIER_PROBABILITY_V1/);
-  assert.doesNotMatch(recurrent,/forward\.logit\+blendWeight\*forward\.ranking_logit/);
+  assert.match(recurrent,/export function predictTcnLstmHybridRankingScore[\s\S]*?return Number\(forward\.ranking_score\)/);
+  assert.match(recurrent,/RADARX_TCN_LSTM_INDEPENDENT_MULTISCALE_RETURN_RANKER_V2/);
+  assert.match(recurrent,/FULL_WINDOW_ATTENTION_POOL[\s\S]*LATEST_LSTM_STATE[\s\S]*TRAILING_4_STEP_MEAN_STATE[\s\S]*TRAILING_8_STEP_MEAN_STATE/);
+  assert.doesNotMatch(recurrent,/forward\.logit\s*\+\s*blendWeight\s*\*/);
+  assert.doesNotMatch(recurrent,/predictTcnLstmHybridRankingProbability/);
+  assert.match(recurrent,/INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6/);
+  assert.match(recurrent,/DEFERRED_UNTIL_DUAL_INNER_GATE/);
   assert.match(recurrent,/projectTcnLstmAuxiliaryGradient/);
   assert.match(recurrent,/PCGRAD_PROJECT_AUXILIARY_RANKING_GRADIENT/);
 });
@@ -562,6 +570,14 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
 
+
+test('TCN-LSTM never opens holdout automatically after external validation',async()=>{
+  const recurrent=await readFile(lstmModuleUrl,'utf8');
+  assert.match(recurrent,/HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION/);
+  assert.match(recurrent,/VALIDATION_PASSED_HOLDOUT_STILL_LOCKED/);
+  assert.doesNotMatch(recurrent,/evaluateCalibratedSplit\(\s*holdoutRows/,
+    'no automatic holdout metrics or predictions may be generated by the TCN-LSTM evaluation path');
+});
 
 test('neural candidates cannot open outer validation before passing their purged inner-selection and calibration gates',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
