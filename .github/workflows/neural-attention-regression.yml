@@ -38,6 +38,11 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A candidate branch updated by both push and pull_request gets one regression.
+  group: build224-neural-attention-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   tcn-v11-regression:
     name: Verify V11 training, artifact reload and two-regime gates

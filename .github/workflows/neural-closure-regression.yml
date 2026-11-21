@@ -13,6 +13,7 @@ on:
       - research/build224-tcn-lstm-expanded-threshold-window-20261117
       - research/build224-tcn-lstm-fine-threshold-diagnostic-20261117
       - research/build224-tcn-lstm-shared-loss-20261120
+      - research/build224-neural-inner-gate-outer-isolation-20261121
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -48,6 +49,7 @@ on:
       - research/build224-neural-closure-low-probability-threshold-grid-20261117
       - research/build224-tcn-lstm-single-stage-calibration-diagnostic-20261117
       - research/build224-neural-universe-expansion-20261119
+      - research/build224-tcn-lstm-inner-logistic-parity-20261121
     paths:
       - '.github/workflows/neural-closure-regression.yml'
       - 'phase2/core/neural-closure-contracts.mjs'
@@ -76,8 +78,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: build224-neural-closure-${{ github.ref }}-${{ github.sha }}
-  cancel-in-progress: false
+  # Push and pull_request for the same candidate branch share a lock.
+  group: build224-neural-closure-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   regression:

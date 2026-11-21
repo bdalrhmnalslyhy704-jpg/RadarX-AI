@@ -1515,3 +1515,23 @@ test('selective Top-K treats singleton 15m buckets as valid decisions and matche
   assert.deepEqual(matched.probabilities,[0,1,1,0]);
 });
 
+
+
+test('inner-selection abstention leaves only the tuned Logistic baseline externally evaluated and keeps holdout locked',()=>{
+  const rows=makeRows(),sourceCommitSha='e'.repeat(40);
+  const modelArtifactsByModel=makeArtifacts(sourceCommitSha);
+  const predictionsByModel=makePredictions(rows,sourceCommitSha,modelArtifactsByModel);
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES)
+    delete predictionsByModel[family];
+  const report=runNeuralClosureBenchmark({
+    rows,predictionsByModel,modelArtifactsByModel,sourceCommitSha
+  });
+  assert.equal(report.models.LOGISTIC_REGRESSION.status,'VALIDATION_EVALUATED');
+  for(const family of NEURAL_CLOSURE_MODEL_FAMILIES){
+    assert.equal(report.models[family].status,'NOT_EVALUATED',family);
+    assert.equal(report.models[family].reason,'MODEL_PREDICTIONS_MISSING',family);
+  }
+  assert.equal(report.holdout_access.opened,false);
+  assert.deepEqual(report.holdout_access.opened_for_models,[]);
+  assert.equal(report.holdout_access.opening_protocol.holdout_metrics_read,false);
+});

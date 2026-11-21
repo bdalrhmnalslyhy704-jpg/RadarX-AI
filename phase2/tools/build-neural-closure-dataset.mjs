@@ -4,6 +4,7 @@ import {mkdir,writeFile,unlink} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
@@ -444,6 +445,18 @@ async function main(){
 
   if(rawArchiveRecords.length!==included.length*3)
     throw new Error('RAW_ARCHIVE_INTERVAL_COUNT_MISMATCH:'+rawArchiveRecords.length+':'+included.length);
+  // Verify every persisted archive byte and gzip payload before publishing the
+  // cohort. This catches post-write truncation/replacement as well as a bad
+  // writer-side digest; each file is streamed sequentially to bound RSS.
+  const rawArchiveVerification=await verifyBinanceRawArchives({
+    archiveDirectory:archiveDir,
+    archiveRecords:rawArchiveRecords,
+    expectedCount:included.length*3
+  });
+  if(rawArchiveVerification.verified_count!==included.length*3||
+    rawArchiveVerification.total_rows<=0)
+    throw new Error('RAW_ARCHIVE_POST_WRITE_VERIFICATION_INCOMPLETE');
+
   const validated=validateFourHourRows(rows);
   // Validation clones only row envelopes; release the prevalidated envelopes
   // before split/hash/output allocations while preserving shared feature data.
@@ -547,6 +560,7 @@ async function main(){
       intervals:NEURAL_CLOSURE_DATASET_INTERVALS,
       raw_archive_files:rawArchiveRecords.length,
       raw_archive_records:rawArchiveRecords,
+      raw_archive_verification:rawArchiveVerification,
       request_pages:pageCounts,
       rejected_event_reasons:rejectedCounts,
       feature_masks:{

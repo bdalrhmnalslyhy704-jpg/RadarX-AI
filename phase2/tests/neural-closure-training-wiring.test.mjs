@@ -203,16 +203,21 @@ test('fixed-SHA trainer maps TCN-LSTM to the exact 4h first-touch target on spli
     'the legacy 24h-only benchmark must not be used for the 4h first-touch cohort');
 });
 
-test('fixed-SHA trainer exports failed-inner TCN-LSTM candidates only as diagnostic outer predictions',async()=>{
+test('fixed-SHA trainer keeps failed-inner TCN-LSTM diagnostic fits out of outer validation',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
-  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/);
-  assert.match(trainer,/selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
-  assert.match(trainer,/if\(selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(recurrent,/diagnostic_fit: passed \? null : winner\.fit/,
+    'the selector may retain a diagnostic fit for inner audit only');
+  assert.match(trainer,/const selectedFit=selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
+  assert.match(trainer,/const innerQualified=selection\.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'[\s\S]*?calibrator\.fitted===true/);
+  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
+    'only an inner-qualified model with supported calibration may create an outer-scored artifact');
   assert.match(trainer,/passed:innerQualified/);
   assert.match(trainer,/inner_selection_qualified:innerQualified/);
   assert.match(trainer,/diagnostic_only:!innerQualified/);
   assert.match(trainer,/INNER_BEST_DIAGNOSTIC_ONLY/);
+  assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.match(trainer,/outer_validation_opened:false/);
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.doesNotMatch(trainer,/qualificationByModel\.TCN_LSTM_HYBRID=\{\s*passed:true/,
     'trainer must never force-pass a diagnostic-only LSTM');
@@ -555,4 +560,22 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'the model artifact must preserve the external Logistic context provenance');
   assert.match(recurrent,/variant='LOGIT_CONTEXT_AUGMENTED'/);
   assert.match(recurrent,/variant:'POOLED_ONLY'/);
+});
+
+
+test('neural candidates cannot open outer validation before passing their purged inner-selection and calibration gates',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.match(trainer,/function markOuterValidationSuppressed\([\s\S]*?outer_validation_opened:false[\s\S]*?holdout_rows_or_scores_used:false/);
+  assert.match(trainer,/if\(cognitiveProfile\.neural_network\?\.probability_ready===true\)/);
+  assert.match(trainer,/if\(cognitiveProfile\.hybrid_model\?\.probability_ready===true\)/);
+  assert.match(trainer,/if\(temporalProfile\?\._research_fit&&v8Coverage\.complete&&v8PerformanceQualified\)/);
+  assert.match(trainer,/if\(!qualificationPassed\)[\s\S]*?INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED[\s\S]*?return;/);
+  assert.match(trainer,/if\(attentionInnerQualified&&[\s\S]*?missingAttentionRegimes\.length===0\)/);
+  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.match(trainer,/INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED/);
+  assert.doesNotMatch(trainer,/predictionsByModel\.HYBRID_TCN_ATTENTION\s*=/);
+  assert.doesNotMatch(trainer,/predictionsByModel\.DENSE_MLP\s*=/);
+  assert.match(trainer,/qualificationByModel\.HYBRID_TCN_ATTENTION=\{\s*passed:false/);
+  assert.match(trainer,/qualificationByModel\.DENSE_MLP=\{\s*passed:false/);
 });
