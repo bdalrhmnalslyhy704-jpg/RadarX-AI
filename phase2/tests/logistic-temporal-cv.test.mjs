@@ -154,13 +154,16 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
 
 test('matched Logistic baseline transform preserves all 29 TCN-LSTM input channels from the 24-step sequence',()=>{
   const sequence=Array.from({length:24},(_,step)=>
-    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>step+channel*2));
+    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>
+      (step-11.5)/12+channel*0.01));
   const vector=buildTcnLstmAnchorFeatures(sequence);
   assert.equal(TCN_LSTM_INPUT_CHANNELS,29);
   assert.equal(vector.length,58);
+  assert.ok(sequence.flat().every(value=>Math.abs(value)<=4));
   for(let channel=0;channel<TCN_LSTM_INPUT_CHANNELS;channel++){
-    assert.ok(Math.abs(vector[channel]-(11.5+channel*2))<1e-12);
-    assert.ok(Math.abs(vector[TCN_LSTM_INPUT_CHANNELS+channel]-Math.sqrt(47.916666666666664))<1e-12);
+    assert.ok(Math.abs(vector[channel]-channel*0.01)<1e-12);
+    assert.ok(Math.abs(vector[TCN_LSTM_INPUT_CHANNELS+channel]-
+      Math.sqrt(47.916666666666664/144))<1e-12);
   }
   const malformed=sequence.map(row=>[...row]);
   malformed[23].pop();
