@@ -505,7 +505,7 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
 });
 
-test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with one frozen lambda',async()=>{
+test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with separately frozen risk penalties',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
@@ -513,7 +513,9 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
   assert.match(trainer,/evaluateExternalExecutionRiskTopK\([\s\S]*?pooledScores[\s\S]*?pooledLambdas/);
   assert.match(trainer,/same_outer_validation_opportunities:true/);
-  assert.match(trainer,/same_frozen_lambda_for_both_variants:true/);
+  assert.match(trainer,/separate_inner_selected_risk_penalties:true/);
+  assert.match(trainer,/context_risk_penalty_weight:externalExecutionRiskTopK\.risk_penalty_weight/);
+  assert.match(trainer,/pooled_only_risk_penalty_weight:pooledOnlyExternalExecutionRiskTopK\.risk_penalty_weight/);
   assert.match(trainer,/outer_validation_used_for_lambda_or_top_k_selection:false/);
   assert.match(trainer,/holdout_rows_or_scores_used:false/);
   assert.match(trainer,/context_minus_pooled_only/);
