@@ -419,7 +419,8 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     ...row,
     max_adverse_excursion_pct:index%4===0?-0.35:index%4===1?-0.75:
       index%4===2?-1.4:-2.1,
-    max_adverse_excursion_at:row.at+60*60*1000
+    max_adverse_excursion_at:row.at+60*60*1000,
+    external_logistic_logit:row.target===1?1.25:-0.65
   }));
   const modelTrainingEvidence=addDownside(
     makeRankedRows(0,10,'execution-model-train')
@@ -446,15 +447,21 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
     profile.training.execution_regression_heads.execution_head_min_at);
   assert.equal(profile.training.execution_regression_heads.round_trip_cost_bps,30);
   assert.equal(profile.training.execution_regression_heads.schema,
-    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V4');
+    'RADARX_TCN_LSTM_SCORE_GATED_RETURN_DOWNSIDE_HEADS_V5');
   assert.equal(profile.training.execution_regression_heads.logit_context_augmented.feature_count,
-    4*TCN_LSTM_HIDDEN+3);
+    5*TCN_LSTM_HIDDEN+4);
   assert.equal(profile.training.execution_regression_heads.pooled_only_reference.feature_count,
     TCN_LSTM_HIDDEN);
-  assert.equal(profile.model.executionReturnHeadWeights.length,4*TCN_LSTM_HIDDEN+3);
+  assert.equal(profile.model.executionReturnHeadWeights.length,5*TCN_LSTM_HIDDEN+4);
   assert.equal(profile.model.executionReturnHeadPooledOnlyWeights.length,TCN_LSTM_HIDDEN);
-  const contextInputs=buildTcnLstmExecutionHeadInputFeatures(
+  const externalLogisticLogit=evidence[0].external_logistic_logit;
+  assert.throws(()=>buildTcnLstmExecutionHeadInputFeatures(
     evidence[0].sequence,profile.model,profile.baseline_fit
+  ),/TCN_LSTM_EXECUTION_HEAD_EXTERNAL_LOGISTIC_SCORE_REQUIRED/);
+  const contextInputs=buildTcnLstmExecutionHeadInputFeatures(
+    evidence[0].sequence,profile.model,profile.baseline_fit,{
+      externalLogisticLogit
+    }
   );
   const pooledInputs=buildTcnLstmExecutionHeadInputFeatures(
     evidence[0].sequence,profile.model,profile.baseline_fit,{variant:'POOLED_ONLY'}
@@ -464,28 +471,34 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   const neuralLogit=forward.logit;
   const rankingResidualLogit=forward.ranking_residual_logit;
   assert.equal(contextInputs.schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(contextInputs.features.length,4*TCN_LSTM_HIDDEN+3);
+  assert.equal(contextInputs.features.length,5*TCN_LSTM_HIDDEN+4);
   assert.equal(pooledInputs.features.length,TCN_LSTM_HIDDEN);
-  assert.ok(Math.abs(contextInputs.features.at(-3)-Math.tanh(anchorLogit/4))<1e-12);
-  assert.ok(Math.abs(contextInputs.features.at(-2)-Math.tanh(neuralLogit/4))<1e-12);
-  assert.ok(Math.abs(contextInputs.features.at(-1)-Math.tanh(rankingResidualLogit/4))<1e-12);
+  const externalLogisticScore=Math.tanh(externalLogisticLogit/4);
   const logisticScore=Math.tanh(anchorLogit/4);
   const neuralScore=Math.tanh(neuralLogit/4);
   const rankingScore=Math.tanh(rankingResidualLogit/4);
+  assert.ok(Math.abs(contextInputs.features.at(-4)-logisticScore)<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-3)-externalLogisticScore)<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-2)-neuralScore)<1e-12);
+  assert.ok(Math.abs(contextInputs.features.at(-1)-rankingScore)<1e-12);
   for(let index=0;index<TCN_LSTM_HIDDEN;index++){
     assert.ok(Math.abs(contextInputs.features[TCN_LSTM_HIDDEN+index]-
       pooledInputs.features[index]*logisticScore)<1e-12);
     assert.ok(Math.abs(contextInputs.features[2*TCN_LSTM_HIDDEN+index]-
-      pooledInputs.features[index]*neuralScore)<1e-12);
+      pooledInputs.features[index]*externalLogisticScore)<1e-12);
     assert.ok(Math.abs(contextInputs.features[3*TCN_LSTM_HIDDEN+index]-
+      pooledInputs.features[index]*neuralScore)<1e-12);
+    assert.ok(Math.abs(contextInputs.features[4*TCN_LSTM_HIDDEN+index]-
       pooledInputs.features[index]*rankingScore)<1e-12);
   }
-  for(const score of contextInputs.features.slice(-3))
+  for(const score of contextInputs.features.slice(-4))
     assert.ok(score>=-1&&score<=1);
-  const prediction=predictTcnLstmHybridExecutionHeads(evidence[0].sequence,profile);
+  const prediction=predictTcnLstmHybridExecutionHeads(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
   assert.equal(prediction.variant,'LOGIT_CONTEXT_AUGMENTED');
   assert.equal(prediction.input_feature_schema,TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA);
-  assert.equal(prediction.input_feature_count,4*TCN_LSTM_HIDDEN+3);
+  assert.equal(prediction.input_feature_count,5*TCN_LSTM_HIDDEN+4);
   const pooledOnlyPrediction=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,profile,{variant:'POOLED_ONLY'}
   );
@@ -495,10 +508,14 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.ok(Number.isFinite(prediction.predicted_net_return_pct));
   assert.ok(Number.isFinite(prediction.predicted_downside_risk_pct));
   assert.ok(prediction.predicted_downside_risk_pct>=0);
-  const unavailable=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  const unavailable=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
   assert.equal(unavailable.status,'UNAVAILABLE');
   profile.execution_risk_penalty_weight=0.5;
-  const scored=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  const scored=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
   assert.equal(scored.status,'AVAILABLE');
   assert.equal(scored.risk_penalty_weight,0.5);
   assert.equal(scored.score_semantics,
@@ -506,10 +523,14 @@ test('TCN-LSTM fits return and downside heads on later purged rows unseen by the
   assert.ok(Math.abs(scored.risk_adjusted_net_return_score-
     (prediction.predicted_net_return_pct-0.5*prediction.predicted_downside_risk_pct))<1e-10);
   profile.execution_risk_penalty_weight=2;
-  const higherPenalty=predictTcnLstmHybridExecutionScore(evidence[0].sequence,profile);
+  const higherPenalty=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,profile,{externalLogisticLogit}
+  );
   assert.ok(higherPenalty.risk_adjusted_net_return_score<=scored.risk_adjusted_net_return_score);
   const restored=JSON.parse(JSON.stringify(profile));
-  const restoredScore=predictTcnLstmHybridExecutionScore(evidence[0].sequence,restored);
+  const restoredScore=predictTcnLstmHybridExecutionScore(
+    evidence[0].sequence,restored,{externalLogisticLogit}
+  );
   assert.equal(restoredScore.status,'AVAILABLE');
   const restoredPooledOnly=predictTcnLstmHybridExecutionHeads(
     evidence[0].sequence,restored,{variant:'POOLED_ONLY'}
@@ -632,10 +653,40 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
 test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
   const trainingRows=makeRankedRows(0,10,'selector-train');
   const selectionRows=makeRankedRows(20,10,'selector-selection');
+  let externalContextProviderCalls=0;
+  let externalContextPurgeVerified=false;
+  let externalContextLabelIsolationVerified=false;
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
     requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    externalLogisticExecutionContextProvider:(modelRows,scoringRows)=>{
+      externalContextProviderCalls++;
+      externalContextPurgeVerified=
+        Math.max(...modelRows.map(row=>row.resolved_at))<
+        Math.min(...scoringRows.map(row=>row.at));
+      externalContextLabelIsolationVerified=
+        modelRows.every(row=>row.target===0||row.target===1)&&
+        modelRows.every(row=>!Object.hasOwn(row,'realized_return_pct')&&
+          !Object.hasOwn(row,'max_adverse_excursion_pct'))&&
+        scoringRows.every(row=>!Object.hasOwn(row,'target')&&
+          !Object.hasOwn(row,'realized_return_pct')&&
+          !Object.hasOwn(row,'max_adverse_excursion_pct'));
+      return {
+        model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
+        feature_schema_id:'TEST_COGNITIVE_FEATURE_SCHEMA_V1',
+        report:{
+          schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
+          status:'COMPLETE',training_partition_only:true,
+          outer_validation_rows_used:false,holdout_rows_or_labels_used:false,
+          selected_configuration:{l2:0.01,learning_rate:0.01},
+          calibration:{status:'RAW_FALLBACK'}
+        },
+        predictions:scoringRows.map(row=>({
+          id:String(row.id),at:Number(row.at),logit:row.target?0.35:-0.25
+        }))
+      };
+    },
     candidates:[
       {name:'BRIER_ONLY',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1},
       {name:'PAIRWISE_RANK',learningRate:0.0015,l2:0.0005,dropout:0,epochs:1,rankingWeight:0.02}
@@ -649,6 +700,17 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.candidate_count_requested,2);
   assert.equal(result.candidate_count_evaluated,2);
   assert.equal(result.training_return_pair_support.status,'AVAILABLE');
+  assert.equal(externalContextProviderCalls,1,
+    'one frozen temporal Logistic fit must score both the execution-head and later selection rows');
+  assert.equal(externalContextPurgeVerified,true,
+    'the provider training labels must all resolve before any score-context row');
+  assert.equal(externalContextLabelIsolationVerified,true,
+    'score-only rows must not expose target labels or realized execution outcomes');
+  assert.equal(result.execution_logistic_context.status,'AVAILABLE');
+  assert.equal(result.execution_logistic_context.validation_or_holdout_used,false);
+  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
+  assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
+    'TEST_PURGED_TEMPORAL_LOGISTIC');
   assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0.02);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));

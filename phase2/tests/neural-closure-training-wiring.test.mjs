@@ -320,14 +320,20 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the TCN-LSTM research ablation must use the existing supported 6144-row training budget');
   assert.match(trainer,/max_training_samples:6144/,
     'the reported TCN-LSTM training budget must match the actual trainer configuration');
-  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
-    'the active execution head must include normalized Logistic and neural classifier scores');
+  assert.match(temporal,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
+    'the active execution head must include the purged temporal-CV Logistic score plus neural classifier and ranking scores');
   assert.match(temporal,/LOGIT_CONTEXT_AUGMENTED/,
     'the score-conditioned head must be the default execution path');
   assert.match(temporal,/pooled_latent_'\+index/,
     'score conditioning must expose pooled-channel multiplicative interactions');
   assert.match(temporal,/x_logistic_anchor_score/,
-    'each pooled channel must be gated by the Logistic score');
+    'each pooled channel must be gated by the TCN-internal Logistic anchor');
+  assert.match(temporal,/x_temporal_logistic_cv_score/,
+    'each pooled channel must also be gated by the separate purged temporal-CV Logistic score');
+  assert.match(temporal,/TCN_LSTM_EXECUTION_HEAD_EXTERNAL_LOGISTIC_SCORE_REQUIRED/,
+    'contextual inference must not silently omit the external temporal Logistic score');
+  assert.match(temporal,/external_logistic_logit/,
+    'the same external temporal Logistic logit must be used by fitting and inference');
   assert.match(temporal,/x_neural_classifier_score/,
     'each pooled channel must be gated by the neural classifier score');
   assert.match(temporal,/x_ranking_residual_score/,
@@ -338,14 +344,20 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'inner qualification must require a matched execution-head ablation pass');
   assert.match(temporal,/splitTcnLstmTrainingRowsForExecutionHead/,
     'the execution regression heads must use a purged later training-only block');
+  assert.match(temporal,/externalLogisticExecutionContextProvider/,
+    'the recurrent candidate selector must receive the train-only external Logistic score provider');
+  assert.match(temporal,/PRE_EXECUTION_HEAD_TRAINING_ROWS_ONLY/,
+    'the external Logistic fit boundary must end before execution-head score rows');
+  assert.match(temporal,/predictions_are_out_of_sample_for_scoring_rows:true/,
+    'the external Logistic context must attest to out-of-sample score generation');
   assert.match(temporal,/TCN_LSTM_EXECUTION_HEAD_TRAINING_PURGE_VIOLATION/,
     'encoder and execution-head training rows must satisfy a strict forward-label purge');
   assert.match(temporal,/fitTcnLstmExecutionRegressionHeads\(executionRows,executionRows,model,anchor/,
     'execution-head latent features must be produced by a model that did not fit those rows');
   assert.match(temporal,/representation_out_of_sample:true/,
     'the fitted execution head must attest to out-of-sample representations');
-  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_LOGISTIC_CLASSIFIER_AND_RANKER_V4/,
-    'the report must publish the exact active V4 score-gated execution-head schema');
+  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
+    'the report must publish the exact active V5 score-gated execution-head schema');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
@@ -504,6 +516,15 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/holdout_rows_or_scores_used:false/);
   assert.match(trainer,/context_minus_pooled_only/);
   assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
+  assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/,
+    'the main trainer must fit a separate Logistic context only after the recurrent pre-head training block is fixed');
+  assert.match(trainer,/fitTunedTemporalLogisticBaseline\([\s\S]*?modelTrainingRows/);
+  assert.match(trainer,/selectedFit\.execution_logistic_context_model/,
+    'outer-validation inference must reuse the exact frozen pre-head Logistic model');
+  assert.match(trainer,/temporal_logistic_cv_context_probability/,
+    'the external temporal Logistic probability and logit must be recorded for audit');
+  assert.match(trainer,/execution_logistic_context_metadata/,
+    'the model artifact must preserve the external Logistic context provenance');
   assert.match(recurrent,/variant='LOGIT_CONTEXT_AUGMENTED'/);
   assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
