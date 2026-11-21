@@ -2233,11 +2233,104 @@ export function topKProbabilitySignals(rows,probabilities,topK) {
 
 
 /**
+ * Select at most Top-K opportunities per simultaneous decision bucket, but
+ * abstain whenever the best available risk-adjusted score is below the
+ * threshold learned on the earlier inner-selection partition.
+ */
+export function topKThresholdSignals(rows,scores,topK,minimumScore=null){
+  if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
+    !Number.isInteger(topK)||topK<1||
+    (minimumScore!==null&&(!finite(minimumScore))))
+    throw new TypeError('NEURAL_TOP_K_THRESHOLD_INPUT_INVALID');
+  const groups=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=number(rows[index]?.at),score=number(scores[index]);
+    if(at===null||score===null||!rows[index]?.id||!rows[index]?.symbol)
+      throw new TypeError('NEURAL_TOP_K_THRESHOLD_ROW_INVALID:'+index);
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    if(!groups.has(bucket))groups.set(bucket,[]);
+    groups.get(bucket).push(index);
+  }
+  const selected=Array(rows.length).fill(0);
+  const selectedCounts={};
+  let decisionGroupCount=0,abstainedDecisionGroupCount=0;
+  for(const [bucket,indices] of groups){
+    if(indices.length<2)continue;
+    decisionGroupCount++;
+    const ordered=[...indices].sort((a,b)=>
+      Number(scores[b])-Number(scores[a])||
+      String(rows[a].symbol).localeCompare(String(rows[b].symbol))||
+      String(rows[a].id).localeCompare(String(rows[b].id)));
+    const qualifying=minimumScore===null?ordered:
+      ordered.filter(index=>Number(scores[index])>=Number(minimumScore));
+    const chosen=qualifying.slice(0,Math.min(topK,indices.length));
+    selectedCounts[String(bucket)]=chosen.length;
+    for(const index of chosen)selected[index]=1;
+    if(chosen.length<Math.min(topK,indices.length))abstainedDecisionGroupCount++;
+  }
+  const signalCount=selected.reduce((sum,value)=>sum+value,0);
+  return {
+    probabilities:selected,
+    signal_count:signalCount,
+    decision_group_count:decisionGroupCount,
+    selected_count_by_bucket:selectedCounts,
+    abstained_decision_group_count:abstainedDecisionGroupCount,
+    abstention_active:minimumScore!==null&&abstainedDecisionGroupCount>0,
+    minimum_score:minimumScore,
+    top_k_per_timestamp:topK
+  };
+}
+
+/**
+ * Build a comparator signal mask that executes the same number of trades in
+ * each decision bucket as a selective policy, while ranking its own scores.
+ * This prevents the baseline from benefiting from a forced full Top-K slate
+ * when the candidate abstains.
+ */
+export function topKMatchedCountSignals(rows,scores,targetSelection){
+  if(!Array.isArray(rows)||!Array.isArray(scores)||rows.length!==scores.length||
+    !targetSelection||!targetSelection.selected_count_by_bucket||
+    typeof targetSelection.selected_count_by_bucket!=='object')
+    throw new TypeError('NEURAL_TOP_K_MATCHED_COUNT_INPUT_INVALID');
+  const groups=new Map();
+  for(let index=0;index<rows.length;index++){
+    const at=number(rows[index]?.at),score=number(scores[index]);
+    if(at===null||score===null||!rows[index]?.id||!rows[index]?.symbol)
+      throw new TypeError('NEURAL_TOP_K_MATCHED_COUNT_ROW_INVALID:'+index);
+    const bucket=Math.floor(at/NEURAL_CLOSURE_RANKING_BUCKET_MS);
+    if(!groups.has(bucket))groups.set(bucket,[]);
+    groups.get(bucket).push(index);
+  }
+  const selected=Array(rows.length).fill(0);
+  let decisionGroupCount=0;
+  for(const [bucket,indices] of groups){
+    if(indices.length<2)continue;
+    decisionGroupCount++;
+    const count=Math.max(0,Math.min(indices.length,
+      Number(targetSelection.selected_count_by_bucket[String(bucket)]??0)));
+    if(count===0)continue;
+    const ordered=[...indices].sort((a,b)=>
+      Number(scores[b])-Number(scores[a])||
+      String(rows[a].symbol).localeCompare(String(rows[b].symbol))||
+      String(rows[a].id).localeCompare(String(rows[b].id)));
+    for(const index of ordered.slice(0,count))selected[index]=1;
+  }
+  return {
+    probabilities:selected,
+    signal_count:selected.reduce((sum,value)=>sum+value,0),
+    decision_group_count:decisionGroupCount,
+    matched_target_signal_count:targetSelection.signal_count??null,
+    matches_target_counts_by_bucket:true
+  };
+}
+
+/**
  * Compare a frozen execution-risk score with the frozen Logistic ranker on
  * identical outer-validation opportunities. Lambda is read-only here.
  */
 export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logisticProbabilities,{
-  riskPenaltyWeights,topKGrid=[1,2,3],roundTripCostBps=30
+  riskPenaltyWeights,topKGrid=[1,2,3],roundTripCostBps=30,
+  minimumRiskAdjustedScore=null,abstentionPercentile=null
 }={}){
   if(!Array.isArray(rows)||!rows.length||
     !Array.isArray(riskAdjustedScores)||riskAdjustedScores.length!==rows.length||
@@ -2258,9 +2351,18 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     throw new TypeError('EXTERNAL_EXECUTION_RISK_LAMBDA_NOT_FROZEN');
   if(new Set(rows.map(row=>String(row.id))).size!==rows.length)
     throw new TypeError('EXTERNAL_EXECUTION_RISK_TOP_K_DUPLICATE_ROW_ID');
+  if(minimumRiskAdjustedScore!==null&&!finite(minimumRiskAdjustedScore))
+    throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_THRESHOLD_INVALID');
+  if(abstentionPercentile!==null&&
+    (!finite(abstentionPercentile)||Number(abstentionPercentile)<=0||Number(abstentionPercentile)>=1))
+    throw new TypeError('EXTERNAL_EXECUTION_ABSTENTION_PERCENTILE_INVALID');
   const trials=topKGrid.map(topK=>{
-    const neuralMask=topKRankingSignals(rows,riskAdjustedScores,topK);
-    const logisticMask=topKRankingSignals(rows,logisticProbabilities,topK);
+    const neuralMask=minimumRiskAdjustedScore===null
+      ?topKRankingSignals(rows,riskAdjustedScores,topK)
+      :topKThresholdSignals(rows,riskAdjustedScores,topK,Number(minimumRiskAdjustedScore));
+    const logisticMask=minimumRiskAdjustedScore===null
+      ?topKRankingSignals(rows,logisticProbabilities,topK)
+      :topKMatchedCountSignals(rows,logisticProbabilities,neuralMask);
     const options={threshold:0.5,roundTripCostBps:Number(roundTripCostBps),
       maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
       initialEquity:100};
@@ -2274,6 +2376,11 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
       logistic_decision_group_count:logisticMask.decision_group_count,
       neural_selected_count:neuralMask.signal_count,
       logistic_selected_count:logisticMask.signal_count,
+      abstained_decision_group_count:neuralMask.abstained_decision_group_count??0,
+      abstention_active:neuralMask.abstention_active===true,
+      minimum_risk_adjusted_score:minimumRiskAdjustedScore,
+      abstention_percentile:abstentionPercentile,
+      logistic_matched_candidate_trade_counts:minimumRiskAdjustedScore!==null,
       neural_metrics:neural,logistic_metrics:logistic,
       neural_minus_logistic:{
         executed_trade_count:delta(neural,logistic,'trade_count'),
@@ -2292,6 +2399,14 @@ export function evaluateExternalExecutionRiskTopK(rows,riskAdjustedScores,logist
     ranking:'TOP_K_PER_IDENTICAL_CLOSED_15M_DECISION_TIMESTAMP',
     top_k_grid:[...topKGrid],opportunity_rows:rows.length,
     round_trip_cost_bps:Number(roundTripCostBps),
+    frozen_abstention_policy:{
+      enabled:minimumRiskAdjustedScore!==null,
+      minimum_risk_adjusted_score:minimumRiskAdjustedScore,
+      percentile_selected_on_inner_selection:abstentionPercentile,
+      source_partition:'INNER_SELECTION_ONLY',
+      threshold_refitted_on_outer_validation:false,
+      baseline_trade_counts_matched:true
+    },
     portfolio_policy:NEURAL_CLOSURE_PORTFOLIO_POLICY,
     lambda_refitted_on_outer_validation:false,
     outer_validation_used_for_model_fit_or_selection:false,
