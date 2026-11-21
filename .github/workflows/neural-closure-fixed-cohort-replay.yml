@@ -154,6 +154,7 @@ jobs:
           const primaryTopK=1;
           const contextualTrial=contextualRisk?.trials?.find(item=>item.top_k_per_timestamp===primaryTopK)??null;
           const pooledTrial=pooledOnlyRisk?.trials?.find(item=>item.top_k_per_timestamp===primaryTopK)??null;
+          const matchedAblationTrial=ablation?.trials?.find(item=>item.top_k_per_timestamp===primaryTopK)??null;
           const contextualMetrics=contextualTrial?.neural_metrics??null;
           const pooledMetrics=pooledTrial?.neural_metrics??null;
           const logisticMetrics=contextualTrial?.logistic_metrics??null;
@@ -212,7 +213,8 @@ jobs:
               }
             },
             comparisons:{
-              contextual_vs_pooled_only:contextualTrial?.neural_minus_logistic??null,
+              contextual_vs_pooled_only:matchedAblationTrial?.context_minus_pooled_only??null,
+              contextual_vs_logistic:contextualTrial?.neural_minus_logistic??null,
               contextual_risk_penalty_weight:contextualRisk?.risk_penalty_weight??null,
               pooled_only_risk_penalty_weight:pooledOnlyRisk?.risk_penalty_weight??null,
               bootstrap_status:bootstrap?.status??'UNAVAILABLE'
