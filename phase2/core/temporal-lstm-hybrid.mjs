@@ -3514,7 +3514,6 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false
     };
     const executionRiskPenaltyWeight=null;
-    const executionHeadsFitted=false;
     const ranking_score_method='RAW_INDEPENDENT_MULTISCALE_TEMPORAL_RANK_SCORE_V2';
     const ranking_score_domain='RAW_LINEAR_SCORE_NO_SIGMOID_NO_CLASSIFIER_LOGIT_ADDITION';
     evaluated.push({
