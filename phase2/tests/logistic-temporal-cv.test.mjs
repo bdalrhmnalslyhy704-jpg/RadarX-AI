@@ -8,6 +8,8 @@ import {
   predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
 } from '../core/temporal-logistic-baseline.mjs';
+import {buildTcnLstmAnchorFeatures,TCN_LSTM_INPUT_CHANNELS}
+  from '../core/temporal-lstm-hybrid.mjs';
 
 function cohort(days=90,rowsPerDay=10){
   const rows=[],vectors=[];
@@ -146,4 +148,34 @@ test('trainer wires tuned Logistic on split.train only and retains legacy fixed 
   assert.match(trainer,/outer_validation_used_for_hyperparameter_selection:false/);
   assert.match(trainer,/holdout_used:false/);
   assert.match(trainer,/threshold:0\.15,roundTripCostBps:args\.roundTripCostBps/);
+});
+
+
+
+test('matched Logistic baseline transform preserves all 29 TCN-LSTM input channels from the 24-step sequence',()=>{
+  const sequence=Array.from({length:24},(_,step)=>
+    Array.from({length:TCN_LSTM_INPUT_CHANNELS},(_,channel)=>step+channel*2));
+  const vector=buildTcnLstmAnchorFeatures(sequence);
+  assert.equal(TCN_LSTM_INPUT_CHANNELS,29);
+  assert.equal(vector.length,58);
+  for(let channel=0;channel<TCN_LSTM_INPUT_CHANNELS;channel++){
+    assert.ok(Math.abs(vector[channel]-(11.5+channel*2))<1e-12);
+    assert.ok(Math.abs(vector[TCN_LSTM_INPUT_CHANNELS+channel]-Math.sqrt(47.916666666666664))<1e-12);
+  }
+  const malformed=sequence.map(row=>[...row]);
+  malformed[23].pop();
+  assert.throws(()=>buildTcnLstmAnchorFeatures(malformed));
+});
+
+test('fixed-cohort promotion Logistic consumes the same pooled 29-channel temporal tensor as TCN-LSTM and is persisted',async()=>{
+  const trainer=await readFile(new URL('../tools/train-neural-closure-models.mjs',import.meta.url),'utf8');
+  assert.match(trainer,/logisticTrainingVectors=split\.train\.map\(row=>\s*buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)\)/);
+  assert.match(trainer,/predictTemporalLogisticProbability\([\s\S]*?buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/LOGISTIC_SEQUENCE_SUMMARY_FEATURE_SCHEMA/);
+  assert.match(trainer,/modelArtifactsByModel\.LOGISTIC_REGRESSION=logisticArtifact/);
+  assert.match(trainer,/trainingArtifacts\.LOGISTIC_REGRESSION=/);
+  assert.match(trainer,/feature_transform:'24X29_CHANNEL_MEAN_AND_STANDARD_DEVIATION'/);
+  assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/);
+  assert.match(trainer,/logistic_feature_vector:buildTcnLstmAnchorFeatures\(row\.temporal_sequence\)/);
+  assert.match(trainer,/buildTcnLstmAnchorFeatures\(sourceRow\.temporal_sequence\)/);
 });
