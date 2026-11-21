@@ -1364,6 +1364,38 @@ test('outer-validation moving-block bootstrap returns paired Brier and execution
   assert.ok(drawdown.lower_95<=drawdown.upper_95);
 });
 
+test('outer bootstrap reuses frozen selective thresholds and matched per-bucket Logistic counts',()=>{
+  const rows=makeRows({days:60,rowsPerDay:80});
+  const contextScores=rows.map((row,index)=>Number((0.2+(index%11)/100).toFixed(5)));
+  const logisticScores=rows.map((row,index)=>Number((0.25+((index*7)%13)/100).toFixed(5)));
+  const predictionsByModel={
+    LOGISTIC_REGRESSION:rows.map(row=>row.target?0.7:0.3),
+    TCN_LSTM_HYBRID:rows.map(row=>row.target?0.72:0.28)
+  };
+  const result=bootstrapOuterValidationUncertainty(rows,predictionsByModel,{
+    executionScoresByPolicy:{
+      LOGIT_CONTEXT_AUGMENTED:contextScores,
+      LOGISTIC_MATCHED_CONTEXT:logisticScores
+    },
+    executionPolicyConfigurations:{
+      LOGIT_CONTEXT_AUGMENTED:{minimum_score:0.28},
+      LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'}
+    },
+    topKGrid:[1],roundTripCostBps:30,
+    repetitions:100,blockLengthDays:2,seed:22430,maxConcurrentPositions:30
+  });
+  assert.equal(result.status,'AVAILABLE',JSON.stringify(result));
+  assert.deepEqual(result.execution.policy_configurations,{
+    LOGIT_CONTEXT_AUGMENTED:{minimum_score:0.28},
+    LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'}
+  });
+  assert.equal(result.execution.selective_policies_use_inner_selection_thresholds_only,true);
+  assert.equal(result.execution.matched_comparator_trade_counts_by_decision_bucket,true);
+  assert.equal(result.isolation.thresholds_selected,false);
+  assert.equal(result.isolation.top_k_selected,false);
+  assert.equal(result.isolation.holdout_rows_or_scores_used,false);
+});
+
 test('outer-validation bootstrap fails closed when there are too few UTC-day blocks',()=>{
   const rows=makeRows({days:10,rowsPerDay:10});
   const result=bootstrapOuterValidationUncertainty(rows,{
@@ -1375,6 +1407,31 @@ test('outer-validation bootstrap fails closed when there are too few UTC-day blo
   assert.equal(result.status,'UNAVAILABLE');
   assert.equal(result.reason,'BOOTSTRAP_TOO_FEW_INDEPENDENT_TIME_BLOCKS');
   assert.equal(result.holdout_rows_or_scores_used,false);
+});
+
+test('external selective execution abstains below its frozen inner-selection score floor',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const contextScores=rows.map((row,index)=>
+    Number((index<15?0.20+(index%15)/100:0.18+(index%15)/100).toFixed(4)));
+  const logisticProbabilities=rows.map((row,index)=>
+    Number((0.3+((index*7)%15)/100).toFixed(4)));
+  const lambdas=rows.map(()=>0.5);
+  const report=evaluateExternalExecutionRiskTopK(rows,contextScores,logisticProbabilities,{
+    riskPenaltyWeights:lambdas,topKGrid:[1],roundTripCostBps:30,
+    minimumRiskAdjustedScore:0.34,abstentionPercentile:0.5
+  });
+  assert.equal(report.status,'AVAILABLE');
+  assert.equal(report.evaluation_partition,'OUTER_VALIDATION_ONLY');
+  assert.equal(report.frozen_abstention_policy.enabled,true);
+  assert.equal(report.frozen_abstention_policy.minimum_risk_adjusted_score,0.34);
+  assert.equal(report.frozen_abstention_policy.percentile_selected_on_inner_selection,0.5);
+  assert.equal(report.frozen_abstention_policy.threshold_refitted_on_outer_validation,false);
+  assert.equal(report.frozen_abstention_policy.baseline_trade_counts_matched,true);
+  assert.equal(report.trials[0].abstention_active,true);
+  assert.equal(report.trials[0].abstained_decision_group_count,1);
+  assert.equal(report.trials[0].neural_selected_count,1);
+  assert.equal(report.trials[0].logistic_selected_count,1);
+  assert.equal(report.trials[0].logistic_matched_candidate_trade_counts,true);
 });
 
 test('external execution Top-K compares identical opportunities and rejects unfrozen risk penalties',()=>{
