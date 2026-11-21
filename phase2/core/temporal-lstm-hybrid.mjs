@@ -2023,11 +2023,27 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
 ){
   const pooledMetrics=pooledOnlyPolicy?.selected_trial?.model_metrics??null;
   const contextMetrics=contextPolicy?.selected_trial?.model_metrics??null;
+  const pooledTradeCount=Number(pooledMetrics?.trade_count);
+  const contextTradeCount=Number(contextMetrics?.trade_count);
+  // A fully abstaining pooled policy is a valid zero-exposure reference, not
+  // missing evidence. Its win rate is correctly null because it made no trades.
+  const pooledOnlyNoExposure=pooledMetrics!==null&&
+    finite(pooledMetrics?.signal_count)&&Number(pooledMetrics.signal_count)===0&&
+    finite(pooledMetrics?.trade_count)&&pooledTradeCount===0&&
+    finite(pooledMetrics?.net_pnl_pct)&&Number(pooledMetrics.net_pnl_pct)===0&&
+    finite(pooledMetrics?.max_drawdown_pct)&&Number(pooledMetrics.max_drawdown_pct)===0&&
+    pooledMetrics?.return_data_status==='COMPLETE';
+  const pooledPolicyHasTrades=pooledMetrics!==null&&
+    finite(pooledMetrics?.trade_count)&&pooledTradeCount>0&&
+    finite(pooledMetrics?.win_rate_pct)&&finite(pooledMetrics?.net_pnl_pct)&&
+    finite(pooledMetrics?.max_drawdown_pct);
+  const contextPolicyHasTrades=contextMetrics!==null&&
+    finite(contextMetrics?.trade_count)&&contextTradeCount>0&&
+    finite(contextMetrics?.win_rate_pct)&&finite(contextMetrics?.net_pnl_pct)&&
+    finite(contextMetrics?.max_drawdown_pct);
   const available=pooledOnlyPolicy?.status!=='UNAVAILABLE'&&
-    contextPolicy?.status!=='UNAVAILABLE'&&pooledMetrics!==null&&contextMetrics!==null&&
-    finite(pooledMetrics.net_pnl_pct)&&finite(pooledMetrics.win_rate_pct)&&
-    finite(pooledMetrics.max_drawdown_pct)&&finite(contextMetrics.net_pnl_pct)&&
-    finite(contextMetrics.win_rate_pct)&&finite(contextMetrics.max_drawdown_pct);
+    contextPolicy?.status!=='UNAVAILABLE'&&contextPolicyHasTrades&&
+    (pooledOnlyNoExposure||pooledPolicyHasTrades);
   if(!available)return {
     schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1',
     status:'UNAVAILABLE',source_partition:'INNER_SELECTION_ONLY',
@@ -2036,17 +2052,35 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
     passed:false,reason:'BOTH_EXECUTION_HEAD_POLICIES_MUST_HAVE_COMPLETE_SELECTION_METRICS',
     holdout_values_used:false
   };
+  const minimumWinRatePct=finite(contextPolicy?.minimum_win_rate_pct)
+    ?Number(contextPolicy.minimum_win_rate_pct):55;
+  const maximumDrawdownPct=finite(contextPolicy?.maximum_drawdown_pct)
+    ?Number(contextPolicy.maximum_drawdown_pct):8;
   const gates={
     context_policy_absolute_gates:contextPolicy.passed===true,
-    net_pnl_strictly_improved:contextMetrics.net_pnl_pct>pooledMetrics.net_pnl_pct,
-    win_rate_not_worse:contextMetrics.win_rate_pct>=pooledMetrics.win_rate_pct,
-    drawdown_not_worse:contextMetrics.max_drawdown_pct<=pooledMetrics.max_drawdown_pct
+    net_pnl_strictly_improved:
+      Number(contextMetrics.net_pnl_pct)>Number(pooledMetrics.net_pnl_pct),
+    // With no pooled trades, compare against the predeclared absolute win-rate
+    // gate instead of comparing against an undefined baseline win rate.
+    win_rate_not_worse:pooledOnlyNoExposure
+      ?Number(contextMetrics.win_rate_pct)>=minimumWinRatePct
+      :Number(contextMetrics.win_rate_pct)>=Number(pooledMetrics.win_rate_pct),
+    // No-exposure has zero drawdown by construction; requiring a trading
+    // candidate to have <= 0 drawdown would make the comparison impossible.
+    // Keep the unchanged absolute drawdown cap in this special case.
+    drawdown_not_worse:pooledOnlyNoExposure
+      ?Number(contextMetrics.max_drawdown_pct)<=maximumDrawdownPct
+      :Number(contextMetrics.max_drawdown_pct)<=Number(pooledMetrics.max_drawdown_pct)
   };
   return {
     schema:'RADARX_TCN_LSTM_EXECUTION_HEAD_CONTEXT_ABLATION_V1',
     status:'EVALUATED',source_partition:'INNER_SELECTION_ONLY',
     baseline_variant:'POOLED_ONLY',
     candidate_variant:'LOGIT_CONTEXT_AUGMENTED',
+    pooled_only_no_exposure:pooledOnlyNoExposure,
+    comparison_reference_mode:pooledOnlyNoExposure
+      ?'NO_EXPOSURE_ZERO_TRADE_REFERENCE'
+      :'BOTH_POLICIES_EXECUTED_TRADES',
     pooled_only_policy_passed:pooledOnlyPolicy.passed===true,
     context_policy_passed:contextPolicy.passed===true,
     both_policies_frozen_on_selection:
@@ -2070,25 +2104,33 @@ export function summarizeTcnLstmExecutionHeadContextAblation(
       top_k_per_timestamp:contextPolicy.selected_top_k_per_timestamp??null
     },
     pooled_only_metrics:{
-      trade_count:pooledMetrics.trade_count,win_rate_pct:pooledMetrics.win_rate_pct,
+      signal_count:pooledMetrics.signal_count??0,
+      trade_count:pooledMetrics.trade_count,win_rate_pct:pooledMetrics.win_rate_pct??null,
       net_pnl_pct:pooledMetrics.net_pnl_pct,max_drawdown_pct:pooledMetrics.max_drawdown_pct
     },
     context_metrics:{
+      signal_count:contextMetrics.signal_count??null,
       trade_count:contextMetrics.trade_count,win_rate_pct:contextMetrics.win_rate_pct,
       net_pnl_pct:contextMetrics.net_pnl_pct,max_drawdown_pct:contextMetrics.max_drawdown_pct
     },
     delta:{
       trade_count:Number(contextMetrics.trade_count)-Number(pooledMetrics.trade_count),
-      win_rate_percentage_points:Number((contextMetrics.win_rate_pct-pooledMetrics.win_rate_pct).toFixed(6)),
-      net_pnl_percentage_points:Number((contextMetrics.net_pnl_pct-pooledMetrics.net_pnl_pct).toFixed(6)),
-      drawdown_percentage_points:Number((contextMetrics.max_drawdown_pct-pooledMetrics.max_drawdown_pct).toFixed(6))
+      win_rate_percentage_points:pooledOnlyNoExposure?null:
+        Number((contextMetrics.win_rate_pct-pooledMetrics.win_rate_pct).toFixed(6)),
+      net_pnl_percentage_points:Number(
+        (contextMetrics.net_pnl_pct-pooledMetrics.net_pnl_pct).toFixed(6)
+      ),
+      drawdown_percentage_points:pooledOnlyNoExposure?null:
+        Number((contextMetrics.max_drawdown_pct-pooledMetrics.max_drawdown_pct).toFixed(6))
     },
     gates,passed:Object.values(gates).every(Boolean),
-    reason:Object.values(gates).every(Boolean)?null:'CONTEXT_AUGMENTED_HEAD_DID_NOT_STRICTLY_BEAT_POOLED_ONLY_REFERENCE',
+    reason:Object.values(gates).every(Boolean)?null:
+      pooledOnlyNoExposure
+        ?'CONTEXT_POLICY_FAILED_ABSOLUTE_GATES_VS_NO_EXPOSURE_REFERENCE'
+        :'CONTEXT_AUGMENTED_HEAD_DID_NOT_STRICTLY_BEAT_POOLED_ONLY_REFERENCE',
     holdout_values_used:false
   };
 }
-
 /** Choose risk penalty only on purged inner-selection rows, against identical Logistic opportunities. */
 /**
  * Frozen inference score for cross-sectional execution ranking.
