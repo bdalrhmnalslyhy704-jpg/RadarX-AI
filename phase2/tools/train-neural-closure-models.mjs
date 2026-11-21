@@ -411,7 +411,7 @@ async function main(){
     featureNames:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
     normalization:{mean:logisticFit.standardizer.means,std:logisticFit.standardizer.scales},
     modelState:{
-      schema:'RADARX_TRAINED_TEMPORAL_LOGISTIC_SEQUENCE_SUMMARY_STATE_V1',
+      schema:'RADARX_TRAINED_TEMPORAL_LOGISTIC_FULL_SEQUENCE_STATE_V1',
       standardizer:logisticFit.standardizer,fit:logisticFit.fit,
       calibration:logisticFit.calibration,calibrator:logisticFit.calibrator,
       selected_configuration:logisticTuning.report.selected_configuration,
