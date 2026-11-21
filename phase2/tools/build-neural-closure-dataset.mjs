@@ -4,6 +4,7 @@ import {mkdir,writeFile,unlink} from 'node:fs/promises';
 import {dirname,resolve,join} from 'node:path';
 import {writeJsonObjectWithArrayStreaming} from '../core/neural-closure-json-writer.mjs';
 import {writeRawSpotKlineArchive} from '../core/neural-closure-raw-archive.mjs';
+import {verifyBinanceRawArchives} from '../core/neural-closure-archive-guardian.mjs';
 import {binanceServerRetryDelayMs} from '../core/binance-server-retry-policy.mjs';
 import {
   NEURAL_CLOSURE_DATASET_SCHEMA,NEURAL_CLOSURE_DATASET_INTERVALS,
@@ -442,6 +443,22 @@ async function main(){
     throw new Error('VALIDATED_SYMBOL_COUNT_BELOW_MINIMUM:'+included.length);
   if(rows.length<600)throw new Error('NEURAL_CLOSURE_COHORT_BELOW_600_ROWS:'+rows.length);
 
+  if(rawArchiveRecords.length!==included.length*3)
+    throw new Error('RAW_ARCHIVE_INTERVAL_COUNT_MISMATCH:'+rawArchiveRecords.length+':'+included.length);
+  // Verify the actual files on disk, not only the hashes returned while
+  // writing them. The guardian streams each compressed file and its gzip
+  // payload sequentially, checking byte lengths and both SHA-256 digests.
+  // Dataset publication fails closed if any archive is missing, truncated,
+  // replaced, malformed, or inconsistent with the completed symbol manifest.
+  const rawArchiveVerification=await verifyBinanceRawArchives({
+    archiveDirectory:archiveDir,
+    archiveRecords:rawArchiveRecords,
+    expectedCount:included.length*3
+  });
+  if(rawArchiveVerification.verified_count!==included.length*3||
+    rawArchiveVerification.total_rows<=0)
+    throw new Error('RAW_ARCHIVE_POST_WRITE_VERIFICATION_INCOMPLETE');
+
   const validated=validateFourHourRows(rows);
   // Validation clones only row envelopes; release the prevalidated envelopes
   // before split/hash/output allocations while preserving shared feature data.
@@ -545,6 +562,7 @@ async function main(){
       intervals:NEURAL_CLOSURE_DATASET_INTERVALS,
       raw_archive_files:rawArchiveRecords.length,
       raw_archive_records:rawArchiveRecords,
+      raw_archive_verification:rawArchiveVerification,
       request_pages:pageCounts,
       rejected_event_reasons:rejectedCounts,
       feature_masks:{
