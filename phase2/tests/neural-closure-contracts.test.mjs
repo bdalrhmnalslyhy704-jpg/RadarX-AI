@@ -1412,6 +1412,20 @@ test('outer-validation bootstrap fails closed when there are too few UTC-day blo
   assert.equal(result.holdout_rows_or_scores_used,false);
 });
 
+test('zero score floor rejects zero and negative predicted net-return scores',()=>{
+  const rows=makeRows({days:1,rowsPerDay:30});
+  const scores=rows.map((row,index)=>index<15
+    ?(index===14?0.05:0):(index%15===0?-0.01:0));
+  const selection=topKThresholdSignals(rows,scores,1,0);
+  assert.equal(selection.signal_count,1);
+  assert.equal(selection.abstained_decision_group_count,1);
+  assert.equal(selection.abstention_active,true);
+  assert.equal(selection.probabilities[14],1);
+  assert.ok(selection.probabilities.every((selected,index)=>
+    selected===0||scores[index]>0
+  ));
+});
+
 test('external selective execution abstains below its frozen inner-selection score floor',()=>{
   const rows=makeRows({days:1,rowsPerDay:30});
   const contextScores=rows.map((row,index)=>
@@ -1421,12 +1435,12 @@ test('external selective execution abstains below its frozen inner-selection sco
   const lambdas=rows.map(()=>0.5);
   const report=evaluateExternalExecutionRiskTopK(rows,contextScores,logisticProbabilities,{
     riskPenaltyWeights:lambdas,topKGrid:[1],roundTripCostBps:30,
-    minimumRiskAdjustedScore:0.34,abstentionPercentile:0.5
+    minimumRiskAdjustedScore:0.33,abstentionPercentile:0.5
   });
   assert.equal(report.status,'AVAILABLE');
   assert.equal(report.evaluation_partition,'OUTER_VALIDATION_ONLY');
   assert.equal(report.frozen_abstention_policy.enabled,true);
-  assert.equal(report.frozen_abstention_policy.minimum_risk_adjusted_score,0.34);
+  assert.equal(report.frozen_abstention_policy.minimum_risk_adjusted_score,0.33);
   assert.equal(report.frozen_abstention_policy.percentile_selected_on_inner_selection,0.5);
   assert.equal(report.frozen_abstention_policy.threshold_refitted_on_outer_validation,false);
   assert.equal(report.frozen_abstention_policy.baseline_trade_counts_matched,true);
