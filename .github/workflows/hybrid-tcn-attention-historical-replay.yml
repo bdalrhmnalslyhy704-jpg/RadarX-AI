@@ -1,0 +1,148 @@
+name: Hybrid TCN Attention — Binance Spot fixed-SHA replay
+
+on:
+  pull_request:
+    branches:
+      - build224-multi-analyst-20261007
+    paths:
+      - 'phase2/core/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/core/historical-replay.mjs'
+      - 'phase2/tools/historical-replay.mjs'
+      - 'phase2/tools/historical-replay-matrix.mjs'
+      - 'phase2/tools/hybrid-tcn-attention-benchmark.mjs'
+      - 'phase2/benchmarks/hybrid-tcn-attention-windows.json'
+      - 'phase2/benchmarks/hybrid-tcn-attention-symbols.json'
+      - 'phase2/tests/hybrid-tcn-attention-benchmark.test.mjs'
+      - '.github/workflows/hybrid-tcn-attention-historical-replay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hybrid-tcn-attention-historical-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spot-fixed-sha-replay:
+    name: 33-symbol x expanded 3-regime Binance Spot replay and neural acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      REPORT_DIR: reports/hybrid-tcn-attention
+      DATASET_PATH: reports/hybrid-tcn-attention/spot-events.json
+      BENCHMARK_PATH: reports/hybrid-tcn-attention/fixed-sha-benchmark.json
+    steps:
+      - name: Checkout exact Build 224 research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify neural benchmark, historical adapter and replay source
+        run: |
+          node --check phase2/core/hybrid-tcn-attention-benchmark.mjs
+          node --check phase2/core/historical-replay.mjs
+          node --check phase2/tools/historical-replay.mjs
+          node --check phase2/tools/historical-replay-matrix.mjs
+          node --check phase2/tools/hybrid-tcn-attention-benchmark.mjs
+          node --test phase2/tests/hybrid-tcn-attention-benchmark.test.mjs
+          node --test phase2/tests/historical-replay.test.mjs
+          node --test phase2/tests/historical-replay-matrix.test.mjs
+      - name: Validate three historical regime windows without network
+        run: |
+          SYMBOLS="$(node --input-type=module -e "import fs from 'node:fs'; console.log(JSON.parse(fs.readFileSync('phase2/benchmarks/hybrid-tcn-attention-symbols.json','utf8')).join(','))")"
+          node phase2/tools/historical-replay-matrix.mjs \
+            --symbols "$SYMBOLS" \
+            --windows phase2/benchmarks/hybrid-tcn-attention-windows.json \
+            --outcome-horizon-hours 4 \
+            --dry-run
+      - name: Capture same-timestamp Binance Spot features and four-hour barrier outcomes
+        id: capture
+        continue-on-error: true
+        timeout-minutes: 300
+        run: |
+          mkdir -p "$REPORT_DIR"
+          SYMBOLS="$(node --input-type=module -e "import fs from 'node:fs'; console.log(JSON.parse(fs.readFileSync('phase2/benchmarks/hybrid-tcn-attention-symbols.json','utf8')).join(','))")"
+          node phase2/tools/historical-replay-matrix.mjs \
+            --symbols "$SYMBOLS" \
+            --windows phase2/benchmarks/hybrid-tcn-attention-windows.json \
+            --output "$REPORT_DIR/matrix" \
+            --max-trade-pages 500 \
+            --max-trades 4000000 \
+            --archive-prefetch-concurrency 3 \
+            --window-replay-concurrency 2 \
+            --outcome-horizon-hours 4 \
+            --timeout-ms 3600000 \
+            --hybrid-benchmark-output "$DATASET_PATH"
+      - name: Run fixed-SHA purged walk-forward neural versus classic benchmark
+        id: benchmark
+        if: always() && hashFiles('reports/hybrid-tcn-attention/spot-events.json') != ''
+        continue-on-error: true
+        run: |
+          node phase2/tools/hybrid-tcn-attention-benchmark.mjs \
+            --input "$DATASET_PATH" \
+            --source-commit-sha "$GITHUB_SHA" \
+            --folds 5 \
+            --epochs 32 \
+            --learning-rate 0.003 \
+            --ranking-weight 1.0 \
+            --round-trip-cost-bps 30 \
+            --output "$BENCHMARK_PATH"
+      - name: Upload complete replay dataset and benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-tcn-attention-fixed-sha-evidence-${{ github.run_number }}
+          path: reports/hybrid-tcn-attention/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce the real-market neural acceptance gates
+        if: always()
+        run: |
+          if [ ! -s "$BENCHMARK_PATH" ]; then
+            echo "::error::HYBRID_BENCHMARK_REPORT_MISSING"
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync(process.env.BENCHMARK_PATH, 'utf8'));
+          const expectedSha = process.env.GITHUB_SHA;
+          const errors = [];
+          if (report.status !== 'HYBRID_TCN_ATTENTION_ACCEPTED') errors.push('NEURAL_SUPERIORITY_NOT_PROVEN');
+          if (report.integrity?.source_commit_sha !== expectedSha) errors.push('SOURCE_SHA_MISMATCH');
+          if (!(report.integrity?.rows > 0)) errors.push('NO_REAL_SPOT_ROWS');
+          if (report.walk_forward?.status !== 'READY') errors.push('PURGED_WALK_FORWARD_NOT_READY');
+          if (report.neural?.trade_count < 100) errors.push('FEWER_THAN_100_OOS_TRADES');
+          if (report.neural?.win_rate_pct < 55) errors.push('NET_WIN_RATE_BELOW_55_PERCENT');
+          if (report.neural?.max_drawdown_pct > 8) errors.push('DRAWDOWN_ABOVE_8_PERCENT');
+          if (!(report.neural?.net_pnl_pct > 0)) errors.push('NET_PNL_NOT_POSITIVE');
+          if (report.acceptance_gates?.agg_trade_flow_coverage_at_least_80_pct !== 'PASS') errors.push('AGGTRADE_FLOW_COVERAGE_LOW');
+          if (report.acceptance_gates?.trade_level_volume_profile_coverage_at_least_70_pct !== 'PASS') errors.push('TRADE_LEVEL_VOLUME_PROFILE_COVERAGE_LOW');
+          if (report.acceptance_gates?.adverse_excursion_coverage_at_least_99_9_pct !== 'PASS') errors.push('MAE_COVERAGE_LOW');
+          if (report.acceptance_gates?.favourable_excursion_coverage_at_least_99_9_pct !== 'PASS') errors.push('MFE_COVERAGE_LOW');
+          if (report.acceptance_gates?.relative_btc_reference_coverage_at_least_80_pct !== 'PASS') errors.push('RELATIVE_BTC_COVERAGE_LOW');
+          if (report.acceptance_gates?.all_three_observed_btc_regimes !== 'PASS') errors.push('BULL_BEAR_SIDEWAYS_REGIME_COVERAGE_INCOMPLETE');
+          if (report.acceptance_gates?.each_required_btc_regime_has_30_oos_events !== 'PASS') errors.push('ONE_OR_MORE_BTC_REGIMES_MISSING_30_OOS_EVENTS');
+          if (report.acceptance_gates?.all_input_rows_valid_and_unique !== 'PASS') errors.push('INVALID_OR_DUPLICATE_ROWS_REJECTED');
+          if (report.acceptance_gates?.same_fixed_sha_and_oos_event_rows !== 'PASS') errors.push('NEURAL_CLASSIC_OOS_EVENTS_OR_SHA_MISMATCH');
+          if (report.acceptance_gates?.no_future_features_and_purged_boundaries !== 'PASS') errors.push('TEMPORAL_LEAKAGE_OR_PURGE_FAILURE');
+          if (report.acceptance_gates?.beat_classic_on_net_pnl_sharpe_without_higher_drawdown !== 'PASS') errors.push('CLASSIC_BASELINE_NOT_BEATEN');
+          console.log(JSON.stringify({
+            source_sha: report.integrity?.source_commit_sha,
+            dataset_sha256: report.integrity?.dataset_sha256,
+            fixed_benchmark_sha256: report.integrity?.fixed_benchmark_sha256,
+            rows: report.integrity?.rows,
+            walk_forward: report.walk_forward,
+            neural: report.neural,
+            classic_baseline: report.classic_baseline,
+            acceptance_gates: report.acceptance_gates,
+            errors
+          }, null, 2));
+          if (errors.length) process.exit(1);
+          NODE

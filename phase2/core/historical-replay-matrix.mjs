@@ -44,7 +44,8 @@ export function normalizeMatrixWindows(windows=HISTORICAL_MATRIX_DEFAULT_WINDOWS
     if(!Number.isFinite(startMs)||!Number.isFinite(endMs)||startMs>=endMs)throw new Error('HISTORICAL_MATRIX_INVALID_WINDOW_RANGE:'+id);
     if(endMs>Number(now)+60_000)throw new Error('HISTORICAL_MATRIX_FUTURE_WINDOW:'+id);
     if(endMs-startMs>maxWindowMs)throw new Error('HISTORICAL_MATRIX_WINDOW_OVER_SEVEN_DAYS:'+id);
-    return {id,label:String(w.label??id).slice(0,120),start:new Date(startMs).toISOString(),end:new Date(endMs).toISOString(),startMs,endMs};
+    const symbols=w.symbols===undefined?null:normalizeMatrixSymbols(w.symbols);
+    return {id,label:String(w.label??id).slice(0,120),start:new Date(startMs).toISOString(),end:new Date(endMs).toISOString(),startMs,endMs,...(symbols?{symbols}:{})};
   });
 }
 
