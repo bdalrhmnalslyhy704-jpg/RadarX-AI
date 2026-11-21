@@ -622,6 +622,30 @@ export function fitTcnLstmLogisticAnchor(rows, {
 
 export function predictTcnLstmLogisticLogit(sequence, anchor) {
   validateSequence(sequence);
+  if(anchor?.kind==='TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1'){
+    const standardizer=anchor.standardizer,fit=anchor.fit;
+    const featureCount=TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT;
+    if(!Array.isArray(standardizer?.means)||standardizer.means.length!==featureCount||
+      !Array.isArray(standardizer?.scales)||standardizer.scales.length!==featureCount||
+      standardizer.means.some(value=>!finite(value))||
+      standardizer.scales.some(value=>!finite(value)||Number(value)<=0)||
+      !Array.isArray(fit?.weights)||fit.weights.length!==featureCount||
+      fit.weights.some(value=>!finite(value))||!finite(fit.bias))
+      throw new TypeError('TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_INVALID');
+    const features=buildTcnLstmFlattenedFeatures(sequence);
+    let rawLogit=Number(fit.bias);
+    for(let feature=0;feature<featureCount;feature++){
+      const normalized=(Number(features[feature])-Number(standardizer.means[feature]))/
+        Number(standardizer.scales[feature]);
+      rawLogit+=Number(fit.weights[feature])*normalized;
+    }
+    if(!finite(rawLogit))
+      throw new TypeError('TCN_LSTM_FULL_SEQUENCE_LOGISTIC_LOGIT_NON_FINITE');
+    // Match predictTemporalLogisticProbability exactly: its public raw score is
+    // clamped to [1e-6, 1-1e-6] before the inner baseline logit is recorded.
+    const probability=clamp(sigmoid(rawLogit),1e-6,1-1e-6);
+    return clamp(Math.log(probability/(1-probability)),-LOGIT_LIMIT,LOGIT_LIMIT);
+  }
   if (!anchor || !Array.isArray(anchor.weights) ||
       anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias))
@@ -2523,8 +2547,19 @@ export function trainTcnLstmHybrid(trainingRows, {
     rankingPairsByTime.get(key).push(pair);
   }
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
-  if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
-      anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
+  const fullSequenceAnchor=anchor?.kind==='TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1';
+  const pooledAnchorValid=Array.isArray(anchor?.weights)&&
+    anchor.weights.length===BASELINE_FEATURES&&
+    anchor.weights.every(value=>finite(value))&&finite(anchor.bias);
+  const fullSequenceAnchorValid=fullSequenceAnchor&&
+    Array.isArray(anchor.standardizer?.means)&&
+    anchor.standardizer.means.length===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT&&
+    Array.isArray(anchor.standardizer?.scales)&&
+    anchor.standardizer.scales.length===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT&&
+    Array.isArray(anchor.fit?.weights)&&
+    anchor.fit.weights.length===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT&&
+    finite(anchor.fit.bias);
+  if (!(fullSequenceAnchorValid||(!fullSequenceAnchor&&pooledAnchorValid))||
       anchor.training_rows !== rows.length ||
       anchor.training_fingerprint !== trainingFingerprint(rows))
     throw new TypeError('TCN_LSTM_TRAINING_ANCHOR_INVALID_OR_TRAINING_ROWS_MISMATCH');
@@ -3220,7 +3255,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       };
     }
   }
-  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
+  let anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
   const externalLogisticScoringSourceRows=[
     ...(Array.isArray(executionHeadRows)?executionHeadRows:[]),...selectionRows
   ];
@@ -3303,6 +3338,32 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       ?enrichRows(executionHeadRows):null;
     selectionRowsWithLogisticContext=enrichRows(selectionRows);
     externalLogisticContextModel=provided.model;
+    if(requireExternalLogisticSelectionBaseline){
+      const model=externalLogisticContextModel;
+      const featureCount=TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT;
+      if(!Array.isArray(model.standardizer?.means)||
+        model.standardizer.means.length!==featureCount||
+        !Array.isArray(model.standardizer?.scales)||
+        model.standardizer.scales.length!==featureCount||
+        !Array.isArray(model.fit?.weights)||model.fit.weights.length!==featureCount||
+        !finite(model.fit.bias))
+        throw new TypeError('TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_MODEL_INVALID');
+      anchor={
+        kind:'TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1',
+        standardizer:{
+          means:[...model.standardizer.means],
+          scales:[...model.standardizer.scales]
+        },
+        fit:{weights:[...model.fit.weights],bias:Number(model.fit.bias)},
+        training_rows:modelTrainingRows.length,
+        training_fingerprint:trainingFingerprint(effectiveTrainingRowsForFit),
+        feature_count:featureCount,
+        feature_schema_id:TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID,
+        fit_partition:'PRE_EXECUTION_HEAD_MODEL_TRAINING_ROWS_ONLY',
+        probability_stage:'RAW_UNCALIBRATED',
+        validation_or_holdout_used:false
+      };
+    }
     externalLogisticContextMetadata={
       schema:'RADARX_TCN_LSTM_TEMPORAL_LOGISTIC_CV_EXECUTION_CONTEXT_V1',
       status:'AVAILABLE',
@@ -3649,7 +3710,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       selection_score:Number(baselineSelectionScore.toFixed(8))
     },
     training_residual_anchor:{
-      kind:anchor.kind,feature_count:BASELINE_FEATURES,
+      kind:anchor.kind,
+      feature_count:anchor.feature_count??BASELINE_FEATURES,
+      feature_schema_id:anchor.feature_schema_id??
+        'RADARX_TCN_LSTM_POOLED_ANCHOR_MEAN_STD_58_V1',
+      probability_stage:anchor.probability_stage??'RAW_UNCALIBRATED',
       training_rows:anchor.training_rows,
       role:'TCN_LSTM_RESIDUAL_INITIALIZATION_AND_FIT_OBJECTIVE_ONLY'
     },
