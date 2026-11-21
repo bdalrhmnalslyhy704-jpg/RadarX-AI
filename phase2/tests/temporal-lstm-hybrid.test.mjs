@@ -821,6 +821,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
     rankingMinimumReturnGapPct:0.5,rankingPairsPerTimestamp:4,
+    requireExternalLogisticSelectionBaseline:true,
     externalLogisticExecutionContextProvider:(modelRows,scoringRows)=>{
       externalContextProviderCalls++;
       externalContextPurgeVerified=
@@ -835,7 +836,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           !Object.hasOwn(row,'max_adverse_excursion_pct'));
       return {
         model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
-        feature_schema_id:'TEST_COGNITIVE_FEATURE_SCHEMA_V1',
+        feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1',
+        feature_schema_names:Array.from({length:696},(_,index)=>'STEP_FEATURE_'+index),
         report:{
           schema:'RADARX_TRAIN_ONLY_PURGED_EXPANDING_LOGISTIC_CV_V2',
           status:'COMPLETE',training_partition_only:true,
@@ -844,7 +846,9 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           calibration:{status:'RAW_FALLBACK'}
         },
         predictions:scoringRows.map(row=>({
-          id:String(row.id),at:Number(row.at),logit:row.target?0.35:-0.25
+          id:String(row.id),at:Number(row.at),
+          raw_logit:Number(row.sequence[0][1]),
+          logit:-0.25
         }))
       };
     },
@@ -855,6 +859,23 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   });
   assert.equal(result.baseline.pairwise_ranking.status,'AVAILABLE');
   assert.equal(result.baseline.pairwise_ranking.comparison_pairs,10);
+  assert.equal(result.baseline.kind,'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+  assert.equal(result.baseline.feature_schema_id,
+    'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1');
+  assert.equal(result.baseline.feature_count,696);
+  assert.equal(result.baseline.probability_stage,'RAW_UNCALIBRATED');
+  assert.equal(result.training_residual_anchor.kind,
+    'TCN_LSTM_FROZEN_POOLED_LOGISTIC_ANCHOR_V1');
+  const expectedRawProbabilities=selectionRows.map(row=>
+    1/(1+Math.exp(-Number(row.sequence[0][1])))
+  );
+  const expectedRawBrier=selectionRows.reduce((sum,row,index)=>
+    sum+(expectedRawProbabilities[index]-row.target)**2,0
+  )/selectionRows.length;
+  assert.ok(Math.abs(result.baseline.selection_brier-expectedRawBrier)<1e-8,
+    'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
+  assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
   assert.equal(result.candidates.length,2);
