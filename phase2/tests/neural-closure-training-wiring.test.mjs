@@ -33,7 +33,8 @@ test('fixed-cohort replay workflow downloads the exact validated dataset and ver
     'the tuned Logistic research branch must trigger the fixed-cohort replay');
   assert.match(workflow,/RADARX_BUILD224_OUTER_VALIDATION_SCIENTIFIC_DECISION_V1/);
   assert.match(workflow,/HOLDOUT_WAS_OPENED/);
-  assert.match(workflow,/HOLDOUT_PREDICTION_ROWS_NOT_ZERO/);
+  assert.match(workflow,/MANIFEST_HOLDOUT_LOCK_MISMATCH/);
+  assert.match(workflow,/rows_included_in_scored_predictions\\)!==0/);
   assert.match(workflow,/TUNED_LOGISTIC_CV_INCOMPLETE/);
   assert.ok(workflow.includes('scientific-decision.json'));
 });
@@ -505,7 +506,7 @@ test('Logistic reference threshold and probability evaluation are strictly prede
   assert.doesNotMatch(recurrent,/modelMetrics\.win_rate_pct>anchorMetrics\.win_rate_pct/);
 });
 
-test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with one frozen lambda',async()=>{
+test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with separately frozen inner-selection lambdas',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
@@ -513,7 +514,13 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
   assert.match(trainer,/evaluateExternalExecutionRiskTopK\([\s\S]*?pooledScores[\s\S]*?pooledLambdas/);
   assert.match(trainer,/same_outer_validation_opportunities:true/);
-  assert.match(trainer,/same_frozen_lambda_for_both_variants:true/);
+  assert.match(trainer,/selection_partition_only_for_lambda_and_abstention:true/);
+  assert.match(trainer,/both_policies_frozen_on_selection:true/);
+  assert.match(trainer,/separate_inner_selected_risk_penalties:true/);
+  assert.match(trainer,/context_risk_penalty_weight:/);
+  assert.match(trainer,/pooled_only_risk_penalty_weight:/);
+  assert.match(trainer,/contextLambdas/);
+  assert.match(trainer,/pooledLambdas/);
   assert.match(trainer,/outer_validation_used_for_lambda_or_top_k_selection:false/);
   assert.match(trainer,/holdout_rows_or_scores_used:false/);
   assert.match(trainer,/context_minus_pooled_only/);
