@@ -1343,13 +1343,13 @@ async function main(){
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
+          requireExternalLogisticSelectionBaseline:true,
           // Fit a separate purged expanding-window Logistic model on the
           // recurrent model-training block only. Its predictions are then
           // generated for the later execution-head and inner-selection rows.
           // No execution-head/selection/calibration/outer-validation labels can
           // influence this Logistic context model.
           externalLogisticExecutionContextProvider:(modelTrainingRows,scoringRows)=>{
-          requireExternalLogisticSelectionBaseline:true,
             if(modelTrainingRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
                 row.logistic_feature_vector.length!==LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length)||
               scoringRows.some(row=>!Array.isArray(row.logistic_feature_vector)||
