@@ -207,6 +207,10 @@ assert.match(service, /getRunningAppProcesses\(\)/,
   'a fresh stored heartbeat must not be treated as proof that Android still has the background process');
 assert.match(service, /getPackageName\(\)\s*\+\s*":radar_background"/,
   'background recovery must specifically verify the dedicated service process after force-stop');
+assert.match(service, /getRunningServices\(Integer\.MAX_VALUE\)/,
+  'a cached isolated process without an active Android ServiceRecord must not suppress service restart');
+assert.match(service, /new ComponentName\(\s*context,\s*RadarXBackgroundMonitorService\.class\)/,
+  'restart detection must verify this exact service component and PID, not any process in the package');
 assert.ok(service.includes('manager.notify(notificationIdentity, notificationId, builder.build())'),
   'distinct archived alert IDs must have distinct notification identities rather than overwriting each other by symbol');
 assert.ok(service.includes('/api/whale-accumulation-radar?quote=USDT&limit=50'),
