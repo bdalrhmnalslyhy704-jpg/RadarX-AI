@@ -655,6 +655,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   const selectionRows=makeRankedRows(20,10,'selector-selection');
   let externalContextProviderCalls=0;
   let externalContextPurgeVerified=false;
+  let externalContextLabelIsolationVerified=false;
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
     requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
@@ -664,6 +665,13 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
       externalContextPurgeVerified=
         Math.max(...modelRows.map(row=>row.resolved_at))<
         Math.min(...scoringRows.map(row=>row.at));
+      externalContextLabelIsolationVerified=
+        modelRows.every(row=>row.target===0||row.target===1)&&
+        modelRows.every(row=>!Object.hasOwn(row,'realized_return_pct')&&
+          !Object.hasOwn(row,'max_adverse_excursion_pct'))&&
+        scoringRows.every(row=>!Object.hasOwn(row,'target')&&
+          !Object.hasOwn(row,'realized_return_pct')&&
+          !Object.hasOwn(row,'max_adverse_excursion_pct'));
       return {
         model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
         feature_schema_id:'TEST_COGNITIVE_FEATURE_SCHEMA_V1',
@@ -696,6 +704,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'one frozen temporal Logistic fit must score both the execution-head and later selection rows');
   assert.equal(externalContextPurgeVerified,true,
     'the provider training labels must all resolve before any score-context row');
+  assert.equal(externalContextLabelIsolationVerified,true,
+    'score-only rows must not expose target labels or realized execution outcomes');
   assert.equal(result.execution_logistic_context.status,'AVAILABLE');
   assert.equal(result.execution_logistic_context.validation_or_holdout_used,false);
   const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
