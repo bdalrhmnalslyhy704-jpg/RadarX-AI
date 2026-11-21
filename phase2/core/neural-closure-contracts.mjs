@@ -2261,8 +2261,11 @@ export function topKThresholdSignals(rows,scores,topK,minimumScore=null){
       Number(scores[b])-Number(scores[a])||
       String(rows[a].symbol).localeCompare(String(rows[b].symbol))||
       String(rows[a].id).localeCompare(String(rows[b].id)));
+    // A score exactly at the floor is not an attractive entry either.
+    // With a zero floor, this enforces strictly positive predicted
+    // risk-adjusted net return; negative/zero candidates are always abstained.
     const qualifying=minimumScore===null?ordered:
-      ordered.filter(index=>Number(scores[index])>=Number(minimumScore));
+      ordered.filter(index=>Number(scores[index])>Number(minimumScore));
     const chosen=qualifying.slice(0,Math.min(topK,indices.length));
     selectedCounts[String(bucket)]=chosen.length;
     for(const index of chosen)selected[index]=1;
