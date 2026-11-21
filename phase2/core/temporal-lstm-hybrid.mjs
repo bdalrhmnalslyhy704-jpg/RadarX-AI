@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  focalAsymmetricBrierLoss,deriveTrainingClassWeights,
+  topKProbabilitySignals,simulateFirstTouchPaperPortfolio,
+  NEURAL_CLOSURE_PORTFOLIO_POLICY
+} from './neural-closure-contracts.mjs';
 
 /**
  * RadarX Build 224 — Research-only TCN → LSTM → temporal-attention challenger.
@@ -576,7 +581,8 @@ function zeroGradients(model) {
 }
 
 export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineLogit = 0, {
-  dropoutScale = null
+  dropoutScale = null,objective='BRIER',classWeights=null,
+  gammaPositive=1,gammaNegative=2
 } = {}) {
   if (target !== 0 && target !== 1)
     throw new TypeError('TCN_LSTM_TARGET_INVALID');
@@ -584,8 +590,19 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   const parameters = trainableParameters(model);
   const gradients = zeroGradients(model);
   const hidden = TCN_LSTM_HIDDEN;
+  if(!['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(objective))
+    throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_INVALID');
   const error = forward.probability - target;
-  const logitGradient = 2 * error * forward.probability * (1 - forward.probability);
+  const focal=objective==='FOCAL_ASYMMETRIC_BRIER'
+    ?focalAsymmetricBrierLoss(forward.probability,target,{
+      ...(classWeights??{}),gammaPositive,gammaNegative
+    }):null;
+  if(objective==='FOCAL_ASYMMETRIC_BRIER'&&classWeights===null)
+    throw new TypeError('TCN_LSTM_FOCAL_CLASS_WEIGHTS_REQUIRED');
+  const logitGradient = focal
+    ?focal.logitGradient
+    :2 * error * forward.probability * (1 - forward.probability);
+  const objectiveLoss=focal?focal.loss:error*error;
   const cache = forward.cache;
   gradients.outputBias[0] = logitGradient;
   const pooledGradient = Array(hidden).fill(0);
@@ -711,7 +728,8 @@ export function lossAndGradientsTcnLstmHybrid(sequence, target, model, baselineL
   if (!treeFinite(gradients) || !finite(logitGradient))
     throw new TypeError('TCN_LSTM_BACKPROP_NON_FINITE');
   return {
-    loss: error * error,
+    loss: objectiveLoss,
+    loss_objective:objective,
     gradient_logits: logitGradient,
     probability: forward.probability,
     gradients,
@@ -741,13 +759,28 @@ export function auditTcnLstmHybridGradients(sequence, target, {
   model = initializeModel(29),
   baselineLogit = 0,
   epsilon = 1e-5,
-  dropoutScale = null
+  dropoutScale = null,
+  objective='BRIER',
+  classWeights=null,
+  gammaPositive=1,
+  gammaNegative=2
 } = {}) {
   validateSequence(sequence);
   if (!finite(epsilon) || epsilon <= 0) throw new TypeError('TCN_LSTM_GRADIENT_EPSILON_INVALID');
+  const objectiveOptions={dropoutScale,objective,classWeights,gammaPositive,gammaNegative};
   const analytic = lossAndGradientsTcnLstmHybrid(
-    sequence, target, model, baselineLogit, {dropoutScale}
+    sequence, target, model, baselineLogit, objectiveOptions
   );
+  const objectiveLoss=()=>{
+    const probability=inspectTcnLstmForward(
+      sequence,model,baselineLogit,{dropoutScale}
+    ).probability;
+    return objective==='FOCAL_ASYMMETRIC_BRIER'
+      ?focalAsymmetricBrierLoss(probability,target,{
+        ...(classWeights??{}),gammaPositive,gammaNegative
+      }).loss
+      :(probability-target)**2;
+  };
   const parameters = trainableParameters(model);
   const parameterPaths = flattenPaths(parameters);
   const gradientPaths = flattenPaths(analytic.gradients);
@@ -760,9 +793,9 @@ export function auditTcnLstmHybridGradients(sequence, target, {
     const path = parameterPaths[index];
     const original = getPath(parameters, path);
     setPath(parameters, path, original + epsilon);
-    const plus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const plus = objectiveLoss();
     setPath(parameters, path, original - epsilon);
-    const minus = (inspectTcnLstmForward(sequence, model, baselineLogit, {dropoutScale}).probability - target) ** 2;
+    const minus = objectiveLoss();
     setPath(parameters, path, original);
     const numerical = (plus - minus) / (2 * epsilon);
     const exact = getPath(analytic.gradients, gradientPaths[index]);
@@ -845,7 +878,8 @@ function evaluateBrier(rows, model, anchor) {
 export function trainTcnLstmHybrid(trainingRows, {
   epochs = 8, learningRate = 0.0025, l2 = 0.0015, dropout = TCN_LSTM_DROPOUT,
   batchSize = 32, seed = 29, maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
-  baselineFit = null, earlyStoppingPatience = 5
+  baselineFit = null, earlyStoppingPatience = 5,
+  objective='BRIER',gammaPositive=1,gammaNegative=2
 } = {}) {
   assertRows(trainingRows, 'TRAINING');
   if (!Number.isSafeInteger(batchSize) || batchSize < 4 || batchSize > 256 ||
@@ -855,6 +889,10 @@ export function trainTcnLstmHybrid(trainingRows, {
     throw new TypeError('TCN_LSTM_TRAINING_CONFIGURATION_INVALID');
   const rate = clamp(Number(learningRate), 0.0001, 0.01);
   const regularization = clamp(Number(l2), 0, 0.2);
+  if(!['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(objective)||
+    !finite(gammaPositive)||gammaPositive<0||
+    !finite(gammaNegative)||gammaNegative<0)
+    throw new TypeError('TCN_LSTM_LOSS_OBJECTIVE_CONFIGURATION_INVALID');
   const dropoutRate = Number(dropout);
   if (!finite(rate) || !finite(regularization) ||
       !finite(dropoutRate) || dropoutRate < 0 || dropoutRate > 0.40)
@@ -863,6 +901,8 @@ export function trainTcnLstmHybrid(trainingRows, {
     (finite(a.at) ? a.at : 0) - (finite(b.at) ? b.at : 0));
   const rows = ordered.slice(-Math.min(maxTrainingSamples, ordered.length));
   const support = assertRows(rows, 'EFFECTIVE_TRAINING');
+  const classWeights=objective==='FOCAL_ASYMMETRIC_BRIER'
+    ?deriveTrainingClassWeights(rows.map(row=>row.target)):null;
   const anchor = baselineFit || fitTcnLstmLogisticAnchor(rows);
   if (!Array.isArray(anchor.weights) || anchor.weights.length !== BASELINE_FEATURES ||
       anchor.weights.some(value => !finite(value)) || !finite(anchor.bias) ||
@@ -907,7 +947,8 @@ export function trainTcnLstmHybrid(trainingRows, {
         const dropoutScale = Array(TCN_LSTM_HIDDEN).fill(0).map(() =>
           dropoutRate > 0 && random() < dropoutRate ? 0 : 1 / (1 - dropoutRate));
         const item = lossAndGradientsTcnLstmHybrid(
-          row.sequence, row.target, model, baselineLogit, {dropoutScale}
+          row.sequence, row.target, model, baselineLogit,
+          {dropoutScale,objective,classWeights,gammaPositive,gammaNegative}
         );
         epochLoss += item.loss;
         seen++;
@@ -936,13 +977,14 @@ export function trainTcnLstmHybrid(trainingRows, {
     } else wait++;
     history.push({
       epoch,
-      pre_update_mean_batch_brier: Number((epochLoss / Math.max(1, seen)).toFixed(8)),
+      pre_update_mean_batch_objective_loss: Number((epochLoss / Math.max(1, seen)).toFixed(8)),
       post_update_training_brier: Number(trainingBrier.toFixed(8)),
       learning_rate: Number(epochRate.toFixed(8)),
       maximum_batch_gradient_l2_norm: Number(maxGradientNorm.toFixed(8)),
       clipped_batches: clippedBatches,
       dropout: dropoutRate,
-      dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1'
+      dropout_mode:'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_V1',
+      loss_objective:objective
     });
     if (epoch >= Math.min(5, epochs) && wait >= patience) {
       stoppedEarly = true;
@@ -969,6 +1011,9 @@ export function trainTcnLstmHybrid(trainingRows, {
     trainable_parameter_count: TCN_LSTM_PARAMETER_COUNT,
     dropout: dropoutRate,
     dropout_policy: 'LOCKED_PER_SEQUENCE_TCN_TO_LSTM_INPUT_DROPOUT_V1',
+    loss_objective:objective,
+    loss_class_weights:classWeights,
+    loss_focal_gamma:{positive:gammaPositive,negative:gammaNegative},
     model, baseline_fit: anchor,
     training: {
       rows: rows.length,
@@ -1022,6 +1067,186 @@ function brierFrom(rows, probabilities) {
 }
 
 /**
+ * Research-only realized-return diagnostics on the inner-selection block.
+ * The binary model objective and candidate ranking remain Brier-based; this
+ * sidecar answers whether a model's scores also concentrate positive net
+ * first-touch returns after the declared round-trip cost. It is not a
+ * portfolio simulator and cannot qualify a model for validation or live use.
+ */
+export function summarizeTcnLstmSelectionReturns(rows, probabilities, {
+  roundTripCostBps = 30,
+  minimumTrades = 20,
+  minimumWinRatePct = 55,
+  baselineProbabilities = null,
+  thresholds = [
+    0.10,0.15,0.20,0.25,0.30,0.325,0.35,0.355,0.36,0.365,
+    0.37,0.375,0.38,0.39,0.40,0.425,0.45,0.475,0.50,0.55,0.60
+  ]
+} = {}) {
+  const unavailable = reason => ({
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',
+    reason,
+    diagnostic_only:true,
+    selection_partition_only:true,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false
+  });
+  if(!Array.isArray(rows)||!Array.isArray(probabilities)||!rows.length||
+    rows.length!==probabilities.length)
+    return unavailable('SELECTION_ROWS_OR_PROBABILITY_LENGTH_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||
+    !Number.isInteger(minimumTrades)||minimumTrades<1||
+    !finite(minimumWinRatePct)||minimumWinRatePct<0||minimumWinRatePct>100||
+    !Array.isArray(thresholds)||!thresholds.length||
+    thresholds.some(value=>!finite(value)||value<0||value>1)||
+    new Set(thresholds).size!==thresholds.length)
+    return unavailable('RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
+  if(rows.some(row=>!finite(row?.realized_return_pct))||
+    probabilities.some(value=>!finite(value)||value<0||value>1))
+    return unavailable('SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+  if(baselineProbabilities!==null&&
+    (!Array.isArray(baselineProbabilities)||baselineProbabilities.length!==rows.length||
+      baselineProbabilities.some(value=>!finite(value)||value<0||value>1)))
+    return unavailable('LOGISTIC_BASELINE_PROBABILITY_VECTOR_INVALID');
+
+  const roundTripCostPct=Number(roundTripCostBps)/100;
+  const trials=thresholds.map(threshold=>{
+    const selected=[];
+    for(let index=0;index<rows.length;index++){
+      if(probabilities[index]>=threshold){
+        selected.push(Number(rows[index].realized_return_pct)-roundTripCostPct);
+      }
+    }
+    const wins=selected.filter(value=>value>0);
+    const losses=selected.filter(value=>value<0);
+    const sum=values=>values.reduce((total,value)=>total+value,0);
+    const sorted=[...selected].sort((a,b)=>a-b);
+    const median=sorted.length
+      ?(sorted.length%2
+        ?sorted[(sorted.length-1)/2]
+        :(sorted[sorted.length/2-1]+sorted[sorted.length/2])/2)
+      :null;
+    const meanNet=selected.length?sum(selected)/selected.length:null;
+    const winRate=selected.length?100*wins.length/selected.length:null;
+    return {
+      threshold,
+      trade_count:selected.length,
+      net_wins:wins.length,
+      net_losses:losses.length,
+      win_rate_pct:winRate===null?null:Number(winRate.toFixed(4)),
+      mean_net_trade_return_pct:meanNet===null?null:Number(meanNet.toFixed(6)),
+      median_net_trade_return_pct:median===null?null:Number(median.toFixed(6)),
+      profit_factor:losses.length
+        ?Number((sum(wins)/Math.abs(sum(losses))).toFixed(6))
+        :wins.length?null:0,
+      minimum_trade_and_win_rate_screen_passed:
+        selected.length>=minimumTrades&&winRate!==null&&winRate>=minimumWinRatePct,
+      positive_mean_net_return:
+        meanNet!==null&&meanNet>0,
+      preliminary_return_screen_passed:
+        selected.length>=minimumTrades&&winRate!==null&&
+        winRate>=minimumWinRatePct&&meanNet!==null&&meanNet>0
+    };
+  });
+  const preliminary=trials.filter(item=>item.preliminary_return_screen_passed)
+    .sort((a,b)=>b.mean_net_trade_return_pct-a.mean_net_trade_return_pct||
+      b.trade_count-a.trade_count||a.threshold-b.threshold);
+  // Diagnose cross-sectional ordering against the frozen Logistic anchor
+  // using the exact first-touch execution simulator. This is selection-only:
+  // the comparison is reported but never chooses the model, its threshold,
+  // or any outer-validation/holdout acceptance gate.
+  let crossSectionalRankDiagnostics={
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RANK_DIAGNOSTICS_V1',
+    status:'UNAVAILABLE',
+    reason:'LOGISTIC_BASELINE_OR_DECISION_TIMESTAMP_SUPPORT_UNAVAILABLE',
+    diagnostic_only:true,
+    selection_partition_only:true,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false
+  };
+  const rankRowsValid=rows.every(row=>finite(row?.at)&&
+    typeof row?.symbol==='string'&&row.symbol.length>0);
+  if(baselineProbabilities!==null&&rankRowsValid){
+    const trials=[1,2,3].map(topK=>{
+      const modelMask=topKProbabilitySignals(rows,probabilities,topK);
+      const logisticMask=topKProbabilitySignals(rows,baselineProbabilities,topK);
+      const portfolioOptions={
+        threshold:0.5,
+        roundTripCostBps:Number(roundTripCostBps),
+        maxConcurrentPositions:NEURAL_CLOSURE_PORTFOLIO_POLICY.max_concurrent_positions,
+        initialEquity:100
+      };
+      const modelMetrics=simulateFirstTouchPaperPortfolio(
+        rows,modelMask.probabilities,portfolioOptions
+      );
+      const logisticMetrics=simulateFirstTouchPaperPortfolio(
+        rows,logisticMask.probabilities,portfolioOptions
+      );
+      const delta=(left,right,key)=>finite(left?.[key])&&finite(right?.[key])
+        ?Number((Number(left[key])-Number(right[key])).toFixed(6)):null;
+      return {
+        top_k_per_timestamp:topK,
+        decision_group_count:modelMask.decision_group_count,
+        logistic_decision_group_count:logisticMask.decision_group_count,
+        model_signal_count:modelMask.signal_count,
+        logistic_signal_count:logisticMask.signal_count,
+        model_metrics:modelMetrics,
+        logistic_metrics:logisticMetrics,
+        model_minus_logistic:{
+          net_pnl_pct:delta(modelMetrics,logisticMetrics,'net_pnl_pct'),
+          win_rate_percentage_points:delta(modelMetrics,logisticMetrics,'win_rate_pct'),
+          max_drawdown_percentage_points:delta(modelMetrics,logisticMetrics,'max_drawdown_pct'),
+          trade_count:delta(modelMetrics,logisticMetrics,'trade_count')
+        }
+      };
+    });
+    crossSectionalRankDiagnostics={
+      schema:'RADARX_TCN_LSTM_INNER_SELECTION_RANK_DIAGNOSTICS_V1',
+      status:'AVAILABLE',
+      diagnostic_only:true,
+      selection_partition_only:true,
+      policy:'TOP_K_PER_DECISION_TIMESTAMP',
+      decision_bucket_ms:15*60*1000,
+      decision_grouping:'FLOOR_UNIX_EPOCH_15M_BUCKET',
+      baseline:'FROZEN_LOGISTIC_ANCHOR_FIT_ON_IDENTICAL_TRAINING_ROWS',
+      top_k_grid:[1,2,3],
+      score_source:'RAW_FROZEN_CANDIDATE_AND_LOGISTIC_PROBABILITIES',
+      round_trip_cost_bps:Number(roundTripCostBps),
+      portfolio_simulation:NEURAL_CLOSURE_PORTFOLIO_POLICY,
+      holdout_values_used:false,
+      affects_candidate_ranking:false,
+      affects_acceptance_gates:false,
+      trials
+    };
+  }
+
+  return {
+    schema:'RADARX_TCN_LSTM_INNER_SELECTION_RETURN_DIAGNOSTICS_V1',
+    status:'AVAILABLE',
+    diagnostic_only:true,
+    selection_partition_only:true,
+    selection_sample_count:rows.length,
+    round_trip_cost_bps:Number(roundTripCostBps),
+    round_trip_cost_pct:roundTripCostPct,
+    thresholds_tested:thresholds.length,
+    minimum_trades:minimumTrades,
+    minimum_win_rate_pct:minimumWinRatePct,
+    holdout_values_used:false,
+    affects_candidate_ranking:false,
+    affects_acceptance_gates:false,
+    portfolio_drawdown_evaluated:false,
+    trials,
+    preliminary_return_screen_candidates:preliminary.length,
+    best_preliminary_threshold:preliminary[0]?.threshold??null,
+    best_preliminary_metrics:preliminary[0]??null,
+    cross_sectional_rank_diagnostics:crossSectionalRankDiagnostics
+  };
+}
+
+/**
  * Predeclared LR/L2 calibration on inner selection only. The frozen Logistic
  * anchor is fit once on training rows and reused for every challenger config.
  */
@@ -1033,7 +1258,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   ],
   requiredImprovement = 0.00025,
   seed = 29,
-  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES
+  maxTrainingSamples = TCN_LSTM_MAX_TRAINING_SAMPLES,
+  roundTripCostBps=30,minimumReturnTrades=20,minimumReturnWinRatePct=55
 } = {}) {
   const trainSupport = assertRows(trainingRows, 'TRAINING');
   const selectionSupport = assertRows(selectionRows, 'SELECTION');
@@ -1041,11 +1267,21 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     throw new TypeError('TCN_LSTM_HYPERPARAMETER_GRID_INVALID');
   if (!finite(requiredImprovement) || requiredImprovement < 0)
     throw new TypeError('TCN_LSTM_SELECTION_MARGIN_INVALID');
+  if(!finite(roundTripCostBps)||roundTripCostBps<0||roundTripCostBps>300||
+    !Number.isInteger(minimumReturnTrades)||minimumReturnTrades<1||
+    !finite(minimumReturnWinRatePct)||minimumReturnWinRatePct<0||minimumReturnWinRatePct>100)
+    throw new TypeError('TCN_LSTM_RETURN_DIAGNOSTIC_CONFIGURATION_INVALID');
   const effectiveTrainingBudget=effectiveTcnLstmTrainingSampleBudget(
     maxTrainingSamples,trainingRows.length
   );
   const effectiveTrainingRows = [...trainingRows].sort((a, b) => a.at - b.at)
     .slice(-effectiveTrainingBudget);
+  // Realized returns belong only to the separate selection diagnostic; strip
+  // them before either the Logistic anchor or neural optimizer sees fit rows.
+  const effectiveTrainingRowsForFit=effectiveTrainingRows.map(row=>{
+    const {realized_return_pct,...fitRow}=row;
+    return fitRow;
+  });
   const trainAt = effectiveTrainingRows.map(row => row.at);
   const trainResolved = effectiveTrainingRows.map(row => row.resolved_at);
   const selectionAt = selectionRows.map(row => row.at);
@@ -1059,7 +1295,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   const trainingIds = new Set(effectiveTrainingRows.map(sampleIdentity));
   if (selectionRows.some(row => trainingIds.has(sampleIdentity(row))))
     throw new TypeError('TCN_LSTM_TRAIN_SELECTION_IDENTITY_OVERLAP');
-  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRows);
+  const anchor = fitTcnLstmLogisticAnchor(effectiveTrainingRowsForFit);
   const baselinePredictions = selectionRows.map(row =>
     sigmoid(predictTcnLstmLogisticLogit(row.sequence, anchor)));
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
@@ -1067,27 +1303,36 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
   for (let index = 0; index < candidates.length; index++) {
     const config = candidates[index];
     const candidateDropout = config?.dropout === undefined ? 0 : config.dropout;
+    const candidateObjective=config?.objective??'BRIER';
     if (!config || typeof config.name !== 'string' ||
         !finite(config.learningRate) || !finite(config.l2) ||
         !finite(candidateDropout) || candidateDropout < 0 || candidateDropout > 0.40 ||
+        !['BRIER','FOCAL_ASYMMETRIC_BRIER'].includes(candidateObjective)||
         !Number.isSafeInteger(config.epochs) || config.epochs < 1 || config.epochs > 30)
       throw new TypeError('TCN_LSTM_HYPERPARAMETER_CANDIDATE_INVALID:' + index);
-    const fit = trainTcnLstmHybrid(effectiveTrainingRows, {
+    const fit = trainTcnLstmHybrid(effectiveTrainingRowsForFit, {
       epochs: config.epochs,
       learningRate: config.learningRate,
       l2: config.l2,
       dropout:candidateDropout,
+      objective:candidateObjective,
       seed: seed + index * 101,
       maxTrainingSamples: effectiveTrainingRows.length,
       baselineFit: anchor
     });
     const predictions = selectionRows.map(row => predictTcnLstmHybridProbability(row.sequence, fit));
     const score = brierFrom(selectionRows, predictions);
+    const returnDiagnostics=summarizeTcnLstmSelectionReturns(
+      selectionRows,predictions,{roundTripCostBps,minimumTrades:minimumReturnTrades,
+        minimumWinRatePct:minimumReturnWinRatePct,
+        baselineProbabilities:baselinePredictions}
+    );
     evaluated.push({
-      name: config.name, config: { ...config, dropout: candidateDropout },
+      name: config.name, config: { ...config, dropout: candidateDropout,objective:candidateObjective },
       selection_brier: score,
       logistic_selection_brier: baselineBrier,
       improvement: baselineBrier - score,
+      return_selection_diagnostics:returnDiagnostics,
       fit
     });
   }
@@ -1107,12 +1352,13 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       training_rows: anchor.training_rows,
       selection_brier: Number(baselineBrier.toFixed(8))
     },
-    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement }) => ({
+    candidates: evaluated.map(({ name, config, selection_brier, logistic_selection_brier, improvement, return_selection_diagnostics }) => ({
       name, config,
       selection_brier: Number(selection_brier.toFixed(8)),
       logistic_selection_brier: Number(logistic_selection_brier.toFixed(8)),
       improvement: Number(improvement.toFixed(8)),
-      passed_inner_margin: improvement > requiredImprovement
+      passed_inner_margin: improvement > requiredImprovement,
+      return_selection_diagnostics
     })),
     selected_configuration: passed ? winner.name : null,
     diagnostic_configuration: passed ? null : winner.name,

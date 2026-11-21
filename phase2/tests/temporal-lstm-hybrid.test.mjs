@@ -17,6 +17,7 @@ import {
   fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   selectTcnLstmHybridHyperparameters,
+  summarizeTcnLstmSelectionReturns,
   benchmarkTcnLstmHybridChronological,
   evaluateTcnLstmHybridGeneralization,
   benchmarkTcnLstmHybridInference,
@@ -46,12 +47,49 @@ function makeRows(start,count,prefix='sample'){
       id:prefix+'-'+absolute,
       symbol:'TST'+String(absolute%4)+'USDT',
       at,resolved_at:at+DAY,target,
+      realized_return_pct:target===1?2.8:-2.2,
       sequence:makeSequence(target?1:-1,absolute*0.017),
       temporal_sequence_timestamps:Array.from({length:24},(_,step)=>
         at-(23-step)*900000)
     };
   });
 }
+
+function makeExecutionRow(index,outcome,at){
+  const baseline=100,take=103,stop=98;
+  const candleOpenTime=at+120_000;
+  const candleCloseTime=candleOpenTime+59_999;
+  const up=outcome==='UP';
+  const exit=up?take:stop;
+  const candle=up?{
+    source:'BINANCE_PUBLIC_REST',is_closed:true,
+    open_time:candleOpenTime,close_time:candleCloseTime,
+    open:100.4,high:103.2,low:99.2,close:102.8
+  }:{
+    source:'BINANCE_PUBLIC_REST',is_closed:true,
+    open_time:candleOpenTime,close_time:candleCloseTime,
+    open:99.5,high:102.4,low:97.8,close:98.2
+  };
+  return {
+    id:'rank-'+index,
+    symbol:'RANK'+index+'USDT',
+    at,resolved_at:at+4*60*60*1000,
+    outcome,target:up?1:0,
+    realized_return_pct:up?3:-2,
+    execution_return_contract:'FIRST_TOUCH_PRICE_WITH_OPEN_GAP_AWARE_EXITS_V1',
+    first_touch:{
+      resolution:up?'TAKE_PROFIT_FIRST':'STOP_LOSS_FIRST',
+      first_touch_at:candleCloseTime,
+      baseline_price:baseline,take_profit_price:take,stop_loss_price:stop,
+      exit_price:exit,exit_price_source:'BARRIER',exit_candle:candle
+    },
+    max_adverse_excursion_pct:up?-0.3:-2,
+    max_adverse_excursion_at:up?at+60_000:candleCloseTime,
+    max_favorable_excursion_pct:up?3:0.3,
+    max_favorable_excursion_at:up?candleCloseTime:at+90_000
+  };
+}
+
 
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
   const sequence=makeSequence(1,3);
@@ -97,6 +135,38 @@ test('TCN, LSTM BPTT and temporal-attention analytic gradients match central fin
   assert.ok(result.maximum_absolute_error<2e-5);
 });
 
+test('focal-asymmetric TCN-LSTM objective matches finite-difference gradients',()=>{
+  const audit=auditTcnLstmHybridGradients(makeSequence(1,37),1,{
+    model:createTcnLstmHybridModelForAudit(43),
+    baselineLogit:-0.11,
+    epsilon:1e-5,
+    objective:'FOCAL_ASYMMETRIC_BRIER',
+    classWeights:{positiveWeight:2.4,negativeWeight:0.53},
+    gammaPositive:1,
+    gammaNegative:2
+  });
+  assert.equal(audit.passed,true,
+    'focal TCN-LSTM max abs error='+audit.maximum_absolute_error+
+    ', max relative error='+audit.maximum_relative_error+
+    ', worst='+JSON.stringify(audit.worst_parameter));
+  assert.ok(audit.maximum_absolute_error<2e-5);
+});
+
+test('focal-asymmetric TCN-LSTM fits class weights on the training rows only',()=>{
+  const rows=makeRows(0,40,'focal-train');
+  const profile=trainTcnLstmHybrid(rows,{
+    epochs:1,learningRate:0.0015,l2:0.001,batchSize:8,
+    seed:107,maxTrainingSamples:40,objective:'FOCAL_ASYMMETRIC_BRIER'
+  });
+  assert.equal(profile.loss_objective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.loss_class_weights.derived_from,'TRAINING_PARTITION_ONLY');
+  assert.equal(profile.loss_class_weights.training_positive,20);
+  assert.equal(profile.loss_class_weights.training_negative,20);
+  assert.equal(profile.training.history[0].loss_objective,'FOCAL_ASYMMETRIC_BRIER');
+  assert.equal(profile.probability_ready,false);
+  assert.equal(profile.real_order_execution,false);
+});
+
 test('locked variational dropout uses one channel mask across 24 steps and passes BPTT finite differences',()=>{
   const sequence=makeSequence(1,19);
   const scale=[0,1.25,0,1.25,1.25,0,1.25,0];
@@ -133,6 +203,70 @@ test('training-only Logistic anchor is deterministic and identity-bound to its t
   assert.equal(buildTcnLstmAnchorFeatures(rows[0].sequence).length,58);
 });
 
+test('inner-selection return diagnostics deduct round-trip fees and never alter model acceptance',()=>{
+  const rows=Array.from({length:24},(_,index)=>({
+    id:'return-'+index,
+    realized_return_pct:index<14?3:-2
+  }));
+  const probabilities=rows.map(()=>0.7);
+  const result=summarizeTcnLstmSelectionReturns(rows,probabilities,{
+    thresholds:[0.5],roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55
+  });
+  assert.equal(result.status,'AVAILABLE');
+  assert.equal(result.selection_partition_only,true);
+  assert.equal(result.holdout_values_used,false);
+  assert.equal(result.affects_candidate_ranking,false);
+  assert.equal(result.affects_acceptance_gates,false);
+  assert.equal(result.portfolio_drawdown_evaluated,false);
+  assert.equal(result.trials[0].trade_count,24);
+  assert.equal(result.trials[0].net_wins,14);
+  assert.equal(result.trials[0].net_losses,10);
+  assert.equal(result.trials[0].win_rate_pct,58.3333);
+  assert.equal(result.trials[0].mean_net_trade_return_pct,0.616667);
+  assert.equal(result.best_preliminary_threshold,0.5);
+  const incomplete=summarizeTcnLstmSelectionReturns(
+    [{realized_return_pct:1},{realized_return_pct:null}],
+    [0.8,0.7],{thresholds:[0.5]}
+  );
+  assert.equal(incomplete.status,'UNAVAILABLE');
+  assert.equal(incomplete.reason,'SELECTION_REALIZED_RETURN_OR_PROBABILITY_INCOMPLETE');
+});
+
+test('inner-selection top-K diagnostics compare TCN-LSTM with the frozen Logistic anchor on identical decision times',()=>{
+  const rows=[];
+  const modelProbabilities=[];
+  const logisticProbabilities=[];
+  for(let group=0;group<8;group++){
+    const at=Math.floor((BASE+group*4*60*60*1000)/900000)*900000;
+    rows.push(
+      makeExecutionRow(group*3,'UP',at),
+      makeExecutionRow(group*3+1,'DOWN',at),
+      makeExecutionRow(group*3+2,'DOWN',at)
+    );
+    modelProbabilities.push(0.9,0.2,0.1);
+    logisticProbabilities.push(0.1,0.9,0.2);
+  }
+  const result=summarizeTcnLstmSelectionReturns(rows,modelProbabilities,{
+    baselineProbabilities:logisticProbabilities,
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,
+    thresholds:[0.5]
+  });
+  const rank=result.cross_sectional_rank_diagnostics;
+  assert.equal(rank.status,'AVAILABLE');
+  assert.equal(rank.selection_partition_only,true);
+  assert.equal(rank.holdout_values_used,false);
+  assert.equal(rank.affects_candidate_ranking,false);
+  assert.equal(rank.affects_acceptance_gates,false);
+  assert.deepEqual(rank.top_k_grid,[1,2,3]);
+  const topOne=rank.trials[0];
+  assert.equal(topOne.decision_group_count,8);
+  assert.equal(topOne.model_metrics.trade_count,8);
+  assert.equal(topOne.model_metrics.win_rate_pct,100);
+  assert.equal(topOne.logistic_metrics.trade_count,8);
+  assert.equal(topOne.logistic_metrics.win_rate_pct,0);
+  assert.ok(topOne.model_minus_logistic.net_pnl_pct>0);
+});
+
 test('mini-batch TCN-LSTM training restores a finite train-only checkpoint and predicts probabilities',()=>{
   const rows=makeRows(0,32);
   const profile=trainTcnLstmHybrid(rows,{
@@ -167,6 +301,12 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.ok(result.candidates.every(row=>
     Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
   assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
+  assert.ok(result.candidates.every(row=>
+    row.return_selection_diagnostics.status==='AVAILABLE'&&
+    row.return_selection_diagnostics.selection_partition_only===true));
+  assert.ok(result.candidates.every(row=>
+    row.return_selection_diagnostics.affects_candidate_ranking===false&&
+    row.return_selection_diagnostics.affects_acceptance_gates===false));
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
