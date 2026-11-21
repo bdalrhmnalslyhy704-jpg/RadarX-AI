@@ -1112,12 +1112,13 @@ test('classifier probability and raw multi-scale return ranking are independent 
   const hidden=profile.model.rankingHeadWeights.length;
   const sigmoid=value=>1/(1+Math.exp(-value));
   profile.model.rankingHeadWeights=Array(hidden).fill(0.01);
-  const forward=inspectTcnLstmForward(sequence,profile.model,0);
-  const classifierProbability=sigmoid(forward.logit);
+  const rankingForward=inspectTcnLstmForward(sequence,profile.model,0);
+  const classifierForward=inspectTcnLstmForward(sequence,profile.model,anchorLogit);
+  const classifierProbability=sigmoid(classifierForward.logit);
   const score=predictTcnLstmHybridRankingScore(sequence,profile);
   assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-
     classifierProbability)<1e-12);
-  assert.equal(score,forward.ranking_score);
+  assert.equal(score,rankingForward.ranking_score);
   const changedLogisticContext=inspectTcnLstmForward(sequence,profile.model,anchorLogit+15);
   assert.equal(changedLogisticContext.ranking_score,score,
     'rank score must not depend on the frozen Logistic anchor/classifier logit');
@@ -1177,12 +1178,15 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
   assert.ok(result.candidates.every(row=>
     Number.isFinite(row.selection_brier)&&Number.isFinite(row.logistic_selection_brier)));
   assert.equal(result.candidates.find(row=>row.name==='MID_RATE').config.dropout,0.10);
-  assert.ok(result.candidates.every(row=>
-    row.return_selection_diagnostics.status==='AVAILABLE'&&
-    row.return_selection_diagnostics.selection_partition_only===true));
-  assert.ok(result.candidates.every(row=>
-    row.return_selection_diagnostics.affects_candidate_ranking===true&&
-    row.return_selection_diagnostics.affects_acceptance_gates===true));
+  assert.ok(result.candidates.every(row=>{
+    const dualInnerGatePassed=row.brier_improvement>0.00025&&
+      Number.isFinite(row.pairwise_ranking_improvement)&&
+      row.pairwise_ranking_improvement>0;
+    return dualInnerGatePassed
+      ?row.return_selection_diagnostics.selection_partition_only===true
+      :row.return_selection_diagnostics.status==='DEFERRED_UNTIL_DUAL_INNER_GATE'&&
+        row.return_selection_diagnostics.selection_partition_only===true;
+  }), 'return/risk stage must remain deferred until both inner gates pass');
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
