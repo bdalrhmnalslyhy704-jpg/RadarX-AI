@@ -8,6 +8,7 @@ import {
   TCN_LSTM_RECEPTIVE_FIELD,
   TCN_LSTM_HIDDEN,
   buildTcnLstmAnchorFeatures,
+  buildTcnLstmFlattenedFeatures,
   fitTcnLstmLogisticAnchor,
   inspectTcnLstmForward,
   lossAndGradientsTcnLstmHybrid,
@@ -869,12 +870,28 @@ test('TCN-LSTM shared classifier pairwise ranking loss backpropagates through th
   assert.equal(shared.real_order_execution,false);
 });
 
-test('TCN-LSTM inner selector scores pairwise ranking on its own purged selection partition',()=>{
-  const trainingRows=makeRankedRows(0,10,'selector-train');
-  const selectionRows=makeRankedRows(20,10,'selector-selection');
+test('TCN-LSTM inner selector uses the same purged full-sequence Logistic model as its residual anchor and selection reference',()=>{
+  const withLogisticFeatures=rows=>rows.map(row=>({
+    ...row,logistic_feature_vector:buildTcnLstmFlattenedFeatures(row.sequence)
+  }));
+  const trainingRows=withLogisticFeatures(makeRankedRows(0,10,'selector-train'));
+  const selectionRows=withLogisticFeatures(makeRankedRows(20,10,'selector-selection'));
   let externalContextProviderCalls=0;
   let externalContextPurgeVerified=false;
   let externalContextLabelIsolationVerified=false;
+  const logisticWeights=Array(696).fill(0);
+  logisticWeights[0]=0.08;
+  logisticWeights[17]=-0.035;
+  logisticWeights[695]=0.012;
+  const logisticBias=-0.18;
+  const standardizer={means:Array(696).fill(0),scales:Array(696).fill(1)};
+  const logisticFit={weights:logisticWeights,bias:logisticBias};
+  const rawLogitForVector=vector=>{
+    let z=logisticBias;
+    for(let i=0;i<696;i++)z+=Number(vector[i])*logisticWeights[i];
+    const p=Math.max(1e-6,Math.min(1-1e-6,1/(1+Math.exp(-z))));
+    return Math.log(p/(1-p));
+  };
   const result=selectTcnLstmHybridHyperparameters(trainingRows,selectionRows,{
     requiredImprovement:0.00025,maxTrainingSamples:40,seed:131,
     roundTripCostBps:30,rankingScoreWeight:0.01,
@@ -893,7 +910,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           !Object.hasOwn(row,'realized_return_pct')&&
           !Object.hasOwn(row,'max_adverse_excursion_pct'));
       return {
-        model:{training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC'},
+        model:{
+          training_partition_only:true,kind:'TEST_PURGED_TEMPORAL_LOGISTIC',
+          standardizer,fit:logisticFit
+        },
         feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1',
         feature_schema_names:Array.from({length:696},(_,index)=>'STEP_FEATURE_'+index),
         report:{
@@ -905,7 +925,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
         },
         predictions:scoringRows.map(row=>({
           id:String(row.id),at:Number(row.at),
-          raw_logit:(Number(row.at)%997)/997-0.5,
+          raw_logit:rawLogitForVector(row.logistic_feature_vector),
           logit:-0.25
         }))
       };
@@ -923,15 +943,16 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.baseline.feature_count,696);
   assert.equal(result.baseline.probability_stage,'RAW_UNCALIBRATED');
   assert.equal(result.training_residual_anchor.kind,
-    'TCN_LSTM_FROZEN_POOLED_LOGISTIC_ANCHOR_V1');
+    'TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1');
+  assert.equal(result.training_residual_anchor.feature_count,696);
   const expectedRawProbabilities=selectionRows.map(row=>
-    1/(1+Math.exp(-((Number(row.at)%997)/997-0.5)))
+    1/(1+Math.exp(-rawLogitForVector(row.logistic_feature_vector)))
   );
   const expectedRawBrier=selectionRows.reduce((sum,row,index)=>
     sum+(expectedRawProbabilities[index]-row.target)**2,0
   )/selectionRows.length;
   assert.ok(Math.abs(result.baseline.selection_brier-expectedRawBrier)<1e-8,
-    'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
+    'inner selection must compare the neural probability against the same raw 696D Logistic model used as the neural residual anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
@@ -941,7 +962,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.candidate_count_evaluated,2);
   assert.equal(result.training_return_pair_support.status,'AVAILABLE');
   assert.equal(externalContextProviderCalls,1,
-    'one frozen temporal Logistic fit must score both the execution-head and later selection rows');
+    'one frozen temporal Logistic fit must score execution-head and later selection rows');
   assert.equal(externalContextPurgeVerified,true,
     'the provider training labels must all resolve before any score-context row');
   assert.equal(externalContextLabelIsolationVerified,true,
@@ -951,6 +972,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
+  assert.equal(selectedOrDiagnostic.baseline_fit.kind,
+    'TCN_LSTM_FULL_SEQUENCE_LOGISTIC_ANCHOR_V1');
+  const expectedAnchorLogit=rawLogitForVector(
+    selectionRows[0].logistic_feature_vector
+  );
+  assert.ok(Math.abs(predictTcnLstmLogisticLogit(
+    selectionRows[0].sequence,selectedOrDiagnostic.baseline_fit
+  )-expectedAnchorLogit)<1e-10);
   assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0.02);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
