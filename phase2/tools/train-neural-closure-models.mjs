@@ -1471,15 +1471,25 @@ async function main(){
             if(executionScore.status!=='AVAILABLE'||
               !finite(executionScore.risk_adjusted_net_return_score))
               throw new Error('TCN_LSTM_EXECUTION_RISK_ADJUSTED_SCORE_UNAVAILABLE:'+item.id);
-            // Matched outer-validation ablation: run the pooled-only reference
-            // with the SAME risk penalty chosen for the contextual head inside
-            // selection. This isolates score conditioning from lambda selection.
+            const contextRiskPolicy=selectedFit.execution_risk_policy;
+            const pooledOnlyRiskPolicy=selectedFit.pooled_only_execution_risk_policy;
+            if(!contextRiskPolicy||!pooledOnlyRiskPolicy||
+              !finite(contextRiskPolicy.selected_minimum_risk_adjusted_score)||
+              !finite(pooledOnlyRiskPolicy.selected_minimum_risk_adjusted_score)||
+              !finite(pooledOnlyRiskPolicy.selected_risk_penalty_weight))
+              throw new Error('TCN_LSTM_FROZEN_SELECTIVE_POLICIES_UNAVAILABLE:'+item.id);
+            // The pooled-only reference receives its own score penalty and
+            // abstention threshold, both selected on the same inner block.
+            // Neither policy may refit its threshold or lambda on outer rows.
             const pooledOnlyExecution=predictTcnLstmHybridExecutionHeads(
               sourceRow.temporal_sequence,selectedFit,{variant:'POOLED_ONLY'}
             );
+            const pooledOnlyRiskPenaltyWeight=Number(
+              pooledOnlyRiskPolicy.selected_risk_penalty_weight
+            );
             const pooledOnlyRiskAdjustedScore=
               pooledOnlyExecution.predicted_net_return_pct-
-              executionScore.risk_penalty_weight*pooledOnlyExecution.predicted_downside_risk_pct;
+              pooledOnlyRiskPenaltyWeight*pooledOnlyExecution.predicted_downside_risk_pct;
             if(!finite(pooledOnlyRiskAdjustedScore)||
               !finite(pooledOnlyExecution.predicted_net_return_pct)||
               !finite(pooledOnlyExecution.predicted_downside_risk_pct))
@@ -1510,13 +1520,23 @@ async function main(){
               predicted_downside_risk_pct:Number(executionScore.predicted_downside_risk_pct),
               execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight),
               execution_risk_adjusted_score:Number(executionScore.risk_adjusted_net_return_score),
+              execution_risk_abstention_threshold:Number(contextRiskPolicy.selected_minimum_risk_adjusted_score),
+              execution_risk_abstention_percentile:Number(contextRiskPolicy.selected_abstention_percentile),
+              execution_risk_abstention_source_partition:'INNER_SELECTION_ONLY',
               temporal_logistic_cv_context_probability:Number(externalLogisticContextProbability),
               temporal_logistic_cv_context_logit:Number(externalLogisticLogit),
               execution_risk_score_semantics:executionScore.score_semantics,
               pooled_only_predicted_net_return_pct:Number(pooledOnlyExecution.predicted_net_return_pct),
               pooled_only_predicted_downside_risk_pct:Number(pooledOnlyExecution.predicted_downside_risk_pct),
               pooled_only_execution_risk_adjusted_score:Number(pooledOnlyRiskAdjustedScore),
-              pooled_only_execution_risk_penalty_weight:Number(executionScore.risk_penalty_weight)
+              pooled_only_execution_risk_penalty_weight:Number(pooledOnlyRiskPenaltyWeight),
+              pooled_only_execution_risk_abstention_threshold:Number(
+                pooledOnlyRiskPolicy.selected_minimum_risk_adjusted_score
+              ),
+              pooled_only_execution_risk_abstention_percentile:Number(
+                pooledOnlyRiskPolicy.selected_abstention_percentile
+              ),
+              pooled_only_execution_risk_abstention_source_partition:'INNER_SELECTION_ONLY'
             };
           });
           trainingArtifacts.TCN_LSTM_HYBRID={
@@ -1746,8 +1766,13 @@ async function main(){
       const neural=riskById.get(String(row.id)),logistic=logisticById.get(String(row.id));
       return neural&&logistic&&finite(neural.execution_risk_adjusted_score)&&
         finite(neural.execution_risk_penalty_weight)&&
+        finite(neural.execution_risk_abstention_threshold)&&
+        finite(neural.execution_risk_abstention_percentile)&&
         finite(neural.pooled_only_execution_risk_adjusted_score)&&
-        finite(neural.pooled_only_execution_risk_penalty_weight)&&finite(logistic.probability);
+        finite(neural.pooled_only_execution_risk_penalty_weight)&&
+        finite(neural.pooled_only_execution_risk_abstention_threshold)&&
+        finite(neural.pooled_only_execution_risk_abstention_percentile)&&
+        finite(logistic.probability);
     });
     if(complete){
       const contextScores=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_adjusted_score);
@@ -1757,17 +1782,26 @@ async function main(){
         logisticById.get(String(row.id)).probability);
       const contextLambdas=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_penalty_weight);
       const pooledLambdas=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_penalty_weight);
+      const contextThresholds=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_threshold);
+      const pooledThresholds=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_threshold);
+      const contextPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).execution_risk_abstention_percentile);
+      const pooledPercentiles=alignedRows.map(row=>riskById.get(String(row.id)).pooled_only_execution_risk_abstention_percentile);
+      if(new Set(contextThresholds).size!==1||new Set(pooledThresholds).size!==1||
+        new Set(contextPercentiles).size!==1||new Set(pooledPercentiles).size!==1)
+        throw new Error('OUTER_SELECTIVE_EXECUTION_POLICY_NOT_FROZEN');
       externalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,contextScores,logisticScores,
-        {riskPenaltyWeights:contextLambdas,topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+        {riskPenaltyWeights:contextLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+          minimumRiskAdjustedScore:contextThresholds[0],abstentionPercentile:contextPercentiles[0]}
       );
       pooledOnlyExternalExecutionRiskTopK=evaluateExternalExecutionRiskTopK(
         alignedRows,pooledScores,logisticScores,
-        {riskPenaltyWeights:pooledLambdas,topKGrid:[1,2,3],roundTripCostBps:args.roundTripCostBps}
+        {riskPenaltyWeights:pooledLambdas,topKGrid:[1],roundTripCostBps:args.roundTripCostBps,
+          minimumRiskAdjustedScore:pooledThresholds[0],abstentionPercentile:pooledPercentiles[0]}
       );
       const contextTrials=new Map(externalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
       const pooledTrials=new Map(pooledOnlyExternalExecutionRiskTopK.trials.map(row=>[row.top_k_per_timestamp,row]));
-      const pairedTopK=[1,2,3].map(topK=>{
+      const pairedTopK=[1].map(topK=>{
         const context=contextTrials.get(topK),pooled=pooledTrials.get(topK);
         const c=context?.neural_metrics,p=pooled?.neural_metrics;
         const delta=key=>finite(c?.[key])&&finite(p?.[key])
@@ -1831,22 +1865,38 @@ async function main(){
     const riskById=new Map(lstmExternalPredictions.filter(item=>
       bootstrapIds.includes(String(item?.id))).map(item=>[String(item.id),item]));
     const contextComplete=bootstrapIds.every(id=>
-      finite(riskById.get(id)?.execution_risk_adjusted_score));
+      finite(riskById.get(id)?.execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.execution_risk_abstention_threshold));
     const pooledComplete=bootstrapIds.every(id=>
-      finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score));
+      finite(riskById.get(id)?.pooled_only_execution_risk_adjusted_score)&&
+      finite(riskById.get(id)?.pooled_only_execution_risk_abstention_threshold));
     if(contextComplete&&pooledComplete){
       const logisticExecutionById=new Map(predictionsByModel.LOGISTIC_REGRESSION
         .map(item=>[String(item.id),Number(item.calibrated_probability??item.probability)]));
+      const contextThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).execution_risk_abstention_threshold))];
+      const pooledThresholds=[...new Set(bootstrapIds.map(id=>
+        riskById.get(id).pooled_only_execution_risk_abstention_threshold))];
+      if(contextThresholds.length!==1||pooledThresholds.length!==1)
+        throw new Error('BOOTSTRAP_SELECTIVE_EXECUTION_THRESHOLDS_NOT_FROZEN');
       const executionScoresByPolicy={
         LOGIT_CONTEXT_AUGMENTED:bootstrapIds.map(id=>
           riskById.get(id).execution_risk_adjusted_score),
         POOLED_ONLY:bootstrapIds.map(id=>
           riskById.get(id).pooled_only_execution_risk_adjusted_score),
+        LOGISTIC_MATCHED_CONTEXT:bootstrapIds.map(id=>logisticExecutionById.get(id)),
+        LOGISTIC_MATCHED_POOLED:bootstrapIds.map(id=>logisticExecutionById.get(id)),
         LOGISTIC_REGRESSION:bootstrapIds.map(id=>logisticExecutionById.get(id))
+      };
+      const executionPolicyConfigurations={
+        LOGIT_CONTEXT_AUGMENTED:{minimum_score:contextThresholds[0]},
+        POOLED_ONLY:{minimum_score:pooledThresholds[0]},
+        LOGISTIC_MATCHED_CONTEXT:{match_trade_counts_with:'LOGIT_CONTEXT_AUGMENTED'},
+        LOGISTIC_MATCHED_POOLED:{match_trade_counts_with:'POOLED_ONLY'}
       };
       outerValidationUncertaintyBootstrap=bootstrapOuterValidationUncertainty(
         bootstrapRows,bootstrapProbabilityByModel,{
-          executionScoresByPolicy,topKGrid:[1,2,3],
+          executionScoresByPolicy,executionPolicyConfigurations,topKGrid:[1],
           roundTripCostBps:args.roundTripCostBps,
           repetitions:250,blockLengthDays:3,seed:22429,
           maxConcurrentPositions:30
