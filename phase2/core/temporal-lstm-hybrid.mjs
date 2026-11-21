@@ -1963,6 +1963,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
       const abstainedDecisionGroups=modelSelection.abstained_decision_group_count;
       const abstentionRate=eligible.length
         ?100*abstainedDecisionGroups/eligible.length:0;
+      const matchedSignalCount=modelSelection.signal_count===logisticSelection.signal_count;
+      const matchedExecutedTradeCount=Number(modelMetrics.trade_count)===
+        Number(anchorMetrics.trade_count);
       const gates={
         positive_risk_penalty_weight:lambda>0,
         return_data_complete:complete,
@@ -1974,7 +1977,9 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
           modelMetrics.max_drawdown_pct<=maximumDrawdownPct,
         genuine_abstention:abstainedDecisionGroups>0&&
           modelSelection.signal_count<eligible.length,
-        beats_matched_logistic_anchor:complete&&
+        matched_logistic_signal_count:matchedSignalCount,
+        matched_logistic_executed_trade_count:matchedExecutedTradeCount,
+        beats_matched_logistic_anchor:complete&&matchedExecutedTradeCount&&
           modelMetrics.net_pnl_pct>anchorMetrics.net_pnl_pct&&
           modelMetrics.max_drawdown_pct<=anchorMetrics.max_drawdown_pct
       };
@@ -1989,7 +1994,8 @@ export function selectTcnLstmExecutionRiskPolicy(rows,executionPredictions,logis
         abstention_rate_pct:Number(abstentionRate.toFixed(4)),
         model_metrics:modelMetrics,
         logistic_anchor_metrics:anchorMetrics,
-        logistic_anchor_trade_counts_matched:true,
+        logistic_anchor_signal_counts_matched:matchedSignalCount,
+        logistic_anchor_trade_counts_matched:matchedExecutedTradeCount,
         model_minus_logistic_net_pnl_pct:finite(modelMetrics.net_pnl_pct)&&
           finite(anchorMetrics.net_pnl_pct)
           ?Number((modelMetrics.net_pnl_pct-anchorMetrics.net_pnl_pct).toFixed(6)):null,
