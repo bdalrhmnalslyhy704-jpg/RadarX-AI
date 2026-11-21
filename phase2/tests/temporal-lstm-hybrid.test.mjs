@@ -1271,14 +1271,16 @@ test('full TCN-LSTM benchmark uses purged time partitions and reports untouched 
   if(hasCalibration){
     assert.equal(result.calibration.model.fit_boundary,'CALIBRATION_PARTITION_ONLY');
     assert.equal(result.validation.evaluated,true);
-    assert.equal(result.holdout.evaluated,result.validation.passed);
+    assert.equal(result.holdout.evaluated,false);
+    assert.equal(result.holdout.status,'LOCKED');
+    assert.equal(result.holdout.labels_read,false);
+    assert.equal(result.holdout.metrics_read,false);
     assert.equal(result.validation.sample_count,result.partition_support.validation.rows);
-    if(result.validation.passed){
-      assert.equal(result.holdout.sample_count,result.partition_support.holdout.rows);
-      assert.equal(result.holdout.required_brier_improvement,0.003);
-    }else{
-        }
     assert.equal(result.validation.required_brier_improvement,0.003);
+    if(result.validation.passed){
+      assert.equal(result.status,'VALIDATION_PASSED_HOLDOUT_STILL_LOCKED');
+      assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION');
+    }
   }else{
     assert.ok(['ABSTAIN_INNER_SELECTION_GATE_FAILED','ABSTAIN_CALIBRATION_SUPPORT_FAILED']
       .includes(result.status));
@@ -1376,7 +1378,7 @@ test('holdout outcome labels remain unread until external validation passes',()=
   assert.notEqual(result.validation?.evaluated,true);
   assert.notEqual(result.validation?.passed,true);
   assert.notEqual(result.holdout?.evaluated,true);
-  assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_UNTIL_VALIDATION_PASSES');
+  assert.equal(result.holdout.reason,'HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION');
 });
 
 test('five-partition evaluator rejects leakage, overlapping identities and unresolved label maturity',()=>{
