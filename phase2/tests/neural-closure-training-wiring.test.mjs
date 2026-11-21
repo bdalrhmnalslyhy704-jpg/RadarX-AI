@@ -534,11 +534,11 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'production inner selection must fail closed without the full ordered Logistic reference');
   assert.match(trainer,/raw_logit:probabilityLogit\(rawProbability\)/,
     'the external Logistic provider must expose its raw probability score separately from calibrated context');
-  assert.match(temporal,/resolveTcnLstmInnerSelectionLogisticBaseline/,
+  assert.match(recurrent,/resolveTcnLstmInnerSelectionLogisticBaseline/,
     'the internal classifier gate must resolve a matched Logistic baseline distinct from the residual anchor');
-  assert.match(temporal,/external_logistic_raw_logit/,
+  assert.match(recurrent,/external_logistic_raw_logit/,
     'the full-sequence Logistic raw logit must be retained on inner-selection rows');
-  assert.match(temporal,/requireFullSequenceLogistic:requireExternalLogisticSelectionBaseline/,
+  assert.match(recurrent,/requireFullSequenceLogistic:requireExternalLogisticSelectionBaseline/,
     'the main inner-selection path must require the exact 696-feature baseline');
   assert.match(trainer,/logistic_feature_vector:buildTcnLstmFlattenedFeatures\(row\.temporal_sequence\)/,
     'the external Logistic context must be derived from the same 24x29 TCN-LSTM sequence channels');
