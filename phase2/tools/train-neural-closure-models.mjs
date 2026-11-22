@@ -1512,7 +1512,7 @@ async function main(){
             qualification_status:innerQualified
               ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'NOT_QUALIFIED',
             selection_status:selection.status,
-            execution_ablation:selection.execution_head_context_ablation??null,
+            execution_ablation:selection.execution_head_context_ablation??selection.execution_head_context_ablation_qualification?.result??null,
             selection_scoring:selection.selection_scoring??null
           };
           trainingArtifacts.HURDLE_V2={
@@ -1529,7 +1529,7 @@ async function main(){
           };
           training.model_internal_diagnostics.HURDLE_V2={
             ...trainingArtifacts.HURDLE_V2,
-            context_ablation:selection.execution_head_context_ablation??null,
+            context_ablation:selection.execution_head_context_ablation??selection.execution_head_context_ablation_qualification?.result??null,
             selection_scoring:selection.selection_scoring??null,
             holdout_values_used:false
           };
