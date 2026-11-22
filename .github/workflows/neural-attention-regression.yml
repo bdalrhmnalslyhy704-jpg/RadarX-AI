@@ -16,6 +16,8 @@ on:
       - 'phase2/tests/neural-closure-contracts.test.mjs'
       - 'phase2/tests/neural-closure-training-wiring.test.mjs'
       - 'phase2/core/model-artifact-guardian.mjs'
+      - 'phase2/core/hurdle-v2-artifact-contract.mjs'
+      - 'phase2/tests/hurdle-v2-artifact-contract.test.mjs'
       - 'phase2/tests/model-artifact-feature-parity.test.mjs'
       - 'phase2/tests/logistic-temporal-cv.test.mjs'
       - 'phase2/core/temporal-logistic-baseline.mjs'
@@ -72,6 +74,8 @@ jobs:
         run: node --test phase2/tests/neural-closure-contracts.test.mjs
       - name: Verify tuned Logistic CV and matched temporal-feature baseline
         run: node --test --test-timeout=180000 phase2/tests/logistic-temporal-cv.test.mjs
+      - name: Verify Hurdle V2 dual-head artifact export, hashes and fresh-process reload
+        run: node --test --test-timeout=180000 phase2/tests/hurdle-v2-artifact-contract.test.mjs
       - name: Verify checksummed model artifacts and experiment lineage
         run: node --test --test-timeout=180000 phase2/tests/model-artifact-feature-parity.test.mjs
       - name: Verify temporal training and exact artifact inference round-trip
