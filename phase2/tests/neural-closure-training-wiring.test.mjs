@@ -540,6 +540,7 @@ test('Logistic reference threshold and probability evaluation are strictly prede
 test('score-conditioned execution heads receive a matched pooled-only outer-validation ablation with separately frozen risk penalties',async()=>{
   const trainer=await readFile(trainerUrl,'utf8');
   const recurrent=await readFile(lstmModuleUrl,'utf8');
+  const logistic=await readFile(new URL('../core/temporal-logistic-baseline.mjs',import.meta.url),'utf8');
   assert.match(trainer,/predictTcnLstmHybridExecutionHeads/);
   assert.match(trainer,/variant:'POOLED_ONLY'/);
   assert.match(trainer,/pooled_only_execution_risk_adjusted_score/);
@@ -558,19 +559,31 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'production inner selection must fail closed without the full ordered Logistic reference');
   assert.match(trainer,/raw_logit:probabilityLogit\(rawProbability\)/,
     'the external Logistic provider must expose its raw probability score separately from calibrated context');
-  assert.match(trainer,/const trainingPredictions=modelTrainingRows\.map/,
-    'the exact same full-sequence Logistic fit must provide baseline logits for recurrent model-training rows');
-  assert.match(trainer,/training_predictions,/,
-    'the external Logistic provider must return train-partition residual baseline logits');
-  assert.match(recurrent,/provided\?\.training_predictions/,
-    'the selector must require matched 696D baseline scores on all recurrent fitting rows');
+  assert.match(logistic,/const oofPredictionByIndex=new Map/,
+    'the Logistic trainer must expose raw purged expanding-fold OOF predictions');
+  assert.match(logistic,/maximum_training_label_resolved_at/,
+    'each OOF baseline score must carry the last time used to train its fold');
+  assert.match(logistic,/oof_prediction_coverage/,
+    'the Logistic report must disclose unscored warmup/tail rows');
+  assert.match(trainer,/const trainingPredictions=temporalLogisticContext\.oof_predictions\.map/,
+    'neural residual training must consume only the purged OOF Logistic predictions');
+  assert.match(trainer,/training_predictions_are_out_of_fold:true/,
+    'the external Logistic provider must explicitly attest OOF provenance');
+  assert.doesNotMatch(trainer,/trainingPredictions=modelTrainingRows\.map/,
+    'in-sample Logistic predictions must never be used as neural training residuals');
+  assert.match(recurrent,/provided\.training_predictions_are_out_of_fold!==true/,
+    'the selector must reject non-OOF residual baseline scores');
   assert.match(recurrent,/classifier_baseline_logit:prediction\.rawLogit/,
     'the external raw Logistic logit must be attached to score rows as the classifier residual baseline');
   assert.match(recurrent,/const selectionLogits = selectionRows\.map\(\(row,rowIndex\)/,
     'the neural classifier must be scored from the same ordered Logistic baseline vector');
   assert.match(recurrent,/baseLogit=baselineLogits\[rowIndex\]/);
-  assert.match(recurrent,/same_reference_used_for_training_and_selection:true/,
-    'training and inner-selection residuals must use the identical Logistic reference model');
+  assert.match(recurrent,/training_logits_are_purged_out_of_fold:requireExternalLogisticSelectionBaseline/,
+    'neural training residuals must be fitted only on strictly purged OOF baseline scores');
+  assert.match(recurrent,/selection_logits_from_final_train_only_refit:true/,
+    'inner-selection scores must use the final Logistic refit trained only on the earlier training block');
+  assert.match(recurrent,/minimumOofTrainingRows=Math\.max\(20,Math\.ceil\(modelTrainingRows\.length\*0\.50\)\)/,
+    'at least half of the pre-head model rows must have valid OOF baseline scores');
   assert.match(recurrent,/resolveTcnLstmProfileClassifierBaselineLogit/,
     'frozen full-sequence Logistic logits must also be reused at inference');
   assert.match(recurrent,/resolveTcnLstmInnerSelectionLogisticBaseline/,
