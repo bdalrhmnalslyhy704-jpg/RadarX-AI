@@ -492,10 +492,12 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
+  // Stop at the return statement; the earlier closing brace belongs to
+  // the destructured options parameter, not the function body.
   const classifierProbabilityImplementation=recurrent.match(
-    /export function predictTcnLstmHybridProbability\([\s\S]*?\n}/
+    /export function predictTcnLstmHybridProbability\\([\\s\\S]*?\\n  return sigmoid\\(forward\\.logit\\);/
   )?.[0]??'';
-  assert.ok(classifierProbabilityImplementation.includes('return sigmoid(forward.logit);'));
+  assert.ok(classifierProbabilityImplementation.endsWith('return sigmoid(forward.logit);'));
   assert.doesNotMatch(classifierProbabilityImplementation,/ranking_residual_logit|blendWeight/,
     'the proper-scoring classifier probability must remain independent of ranking features');
   assert.match(recurrent,/export function predictTcnLstmHybridRankingScore[\s\S]*?return Number\(forward\.ranking_score\)/);
