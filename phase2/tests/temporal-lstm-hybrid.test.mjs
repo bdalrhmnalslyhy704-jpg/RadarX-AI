@@ -225,6 +225,13 @@ test('external execution-risk Top-K uses one frozen lambda and identical validat
 });
 
 
+test('fresh TCN-LSTM classifier residual is exactly neutral to the frozen Logistic anchor',()=>{
+  const model=createTcnLstmHybridModelForAudit(711);
+  const output=inspectTcnLstmForward(makeSequence(1,12),model,0.173);
+  assert.equal(output.logit,0.173);
+  assert.equal(output.probability,1/(1+Math.exp(-0.173)));
+});
+
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
   const sequence=makeSequence(1,3);
   const model=createTcnLstmHybridModelForAudit(71);
