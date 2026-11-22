@@ -575,6 +575,20 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
 });
 
 
+test('fixed-SHA manifest identifies the actual TCN-LSTM selection objective and hashes the exact serialized manifest bytes',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.ok(trainer.includes('objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,'),
+    'the manifest must bind the actual selected classifier/ranking objective identifier');
+  assert.ok(trainer.includes("const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\\n','utf8');"),
+    'manifest hashing must use the exact pretty-printed UTF-8 bytes written to disk');
+  assert.ok(trainer.includes('const experimentManifestSha256=sha256(experimentManifestBytes);'),
+    'manifest digest must be computed from its serialized bytes');
+  assert.ok(trainer.includes('experiment_manifest_sha256:experimentManifestSha256,'),
+    'the report integrity block must publish the exact manifest digest');
+  assert.ok(trainer.includes("await atomicJson(join(dirname(outputPath),'experiment-manifest.json'),experimentManifest);"),
+    'the hashed manifest bytes must match the separately written manifest file');
+});
+
 test('TCN-LSTM never opens holdout automatically after external validation',async()=>{
   const recurrent=await readFile(lstmModuleUrl,'utf8');
   assert.match(recurrent,/HOLDOUT_LOCKED_PENDING_EXPLICIT_FINAL_PROTOCOL_AUTHORIZATION/);
