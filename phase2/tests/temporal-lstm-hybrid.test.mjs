@@ -796,6 +796,49 @@ test('execution-head ablation treats a fully abstaining pooled policy as a zero-
   assert.equal(rejected.gates.drawdown_not_worse,false);
 });
 
+test('rank execution policy selects an inner-only abstention threshold instead of forcing one trade per bucket',()=>{
+  const groupCount=50;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const winner=group<30&&rank===0;
+    const outcome=winner?'UP':'DOWN';
+    const at=BASE+group*15*60*1000+rank*75;
+    return makeExecutionRow(index,outcome,at);
+  });
+  const rankScores=rows.map((row,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    if(rank===1)return -100-group;
+    return group<30?100-group:20-(group-30)*0.1;
+  });
+  const logisticScores=rows.map((row,index)=>index%2===1?3:0);
+  const policy=summarizeTcnLstmRankingExecutionSelection(rows,rankScores,logisticScores,{
+    roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
+  });
+  assert.equal(policy.status,'EVALUATED');
+  assert.equal(policy.source_partition,'INNER_SELECTION_ONLY');
+  assert.equal(policy.threshold_selected_on_inner_selection,true);
+  assert.equal(policy.threshold_frozen_before_outer_validation,true);
+  assert.equal(policy.holdout_values_used,false);
+  assert.equal(policy.top_k_per_timestamp,1);
+  assert.equal(policy.passed,true);
+  assert.equal(policy.selected_trial.threshold_source,
+    'INNER_SELECTION_GROUP_MAX_SCORE_QUANTILE_V1');
+  assert.ok(policy.selected_abstention_percentile>0);
+  assert.ok(policy.selected_trial.selected_trade_count>=20);
+  assert.ok(policy.selected_trial.selected_trade_count<groupCount);
+  assert.ok(policy.selected_trial.model_metrics.win_rate_pct>=55);
+  assert.ok(policy.selected_trial.model_metrics.net_pnl_pct>0);
+  assert.ok(policy.selected_trial.model_metrics.max_drawdown_pct<=8);
+  assert.ok(policy.selected_trial.abstained_decision_group_count>0);
+  assert.equal(policy.selected_trial.logistic_anchor_signal_counts_matched,true);
+  assert.equal(policy.selected_trial.logistic_anchor_trade_counts_matched,true);
+  assert.ok(policy.top_k_trials.every(trial=>
+    trial.threshold_selected_on_inner_selection===true&&
+    trial.threshold_frozen_before_outer_validation===true&&
+    trial.gates.genuine_abstention===true
+  ));
+});
+
 test('TCN-LSTM pairwise ranking updates only the auxiliary head from training returns',()=>{
   const rows=makeRankedRows(0,10,'rank-train');
   const fitRows=rows.map(({realized_return_pct,...row})=>row);
@@ -953,8 +996,16 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
-  assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.rankingWeight,0);
-  assert.equal(result.candidates.find(item=>item.name==='PAIRWISE_RANK')?.config.requested_shared_classifier_ranking_weight,0.02);
+  const pairwiseCandidate=result.candidates.find(item=>item.name==='PAIRWISE_RANK');
+  assert.equal(pairwiseCandidate?.config.rankingWeight,0.02,
+    'the selected candidate weight must be passed into the actual classifier optimizer');
+  assert.equal(pairwiseCandidate?.config.requested_shared_classifier_ranking_weight,0.02);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.enabled,true);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.weight,0.02);
+  assert.ok(pairwiseCandidate?.shared_classifier_training?.gradient_batches_applied>0,
+    'a positive configured ranking weight must apply real classifier-gradient batches');
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.classifier_parameters_updated,true);
+  assert.equal(pairwiseCandidate?.shared_classifier_training?.validation_or_holdout_used,false);
   assert.ok(result.candidates.every(item=>item.pairwise_ranking.status==='AVAILABLE'));
   assert.ok(result.candidates.every(item=>item.ranking_head?.fitted===true));
   assert.ok(result.candidates.every(item=>
