@@ -961,6 +961,10 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           selected_configuration:{l2:0.01,learning_rate:0.01},
           calibration:{status:'RAW_FALLBACK'}
         },
+        training_predictions:modelRows.map(row=>({
+          id:String(row.id),at:Number(row.at),
+          raw_logit:(Number(row.at)%997)/997-0.5
+        })),
         predictions:scoringRows.map(row=>({
           id:String(row.id),at:Number(row.at),
           raw_logit:(Number(row.at)%997)/997-0.5,
@@ -992,6 +996,13 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+  assert.equal(result.classifier_baseline_source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+  assert.equal(result.classifier_baseline_feature_count,696);
+  assert.equal(result.classifier_baseline_training_logits_used,true);
+  assert.equal(result.classifier_residual_reference.same_reference_used_for_training_and_selection,true);
+  assert.equal(result.classifier_residual_reference.training_logits_used_for_fit,true);
+  assert.equal(result.classifier_residual_reference.feature_count,696);
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
   assert.equal(result.candidates.length,2);
