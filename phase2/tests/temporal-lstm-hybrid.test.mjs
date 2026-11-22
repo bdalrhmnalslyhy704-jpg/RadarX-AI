@@ -225,11 +225,32 @@ test('external execution-risk Top-K uses one frozen lambda and identical validat
 });
 
 
-test('fresh TCN-LSTM classifier residual is exactly neutral to the frozen Logistic anchor',()=>{
+test('fresh TCN-LSTM classifier residual is exactly neutral to the matched full-sequence Logistic reference',()=>{
   const model=createTcnLstmHybridModelForAudit(711);
-  const output=inspectTcnLstmForward(makeSequence(1,12),model,0.173);
+  const sequence=makeSequence(1,12);
+  const output=inspectTcnLstmForward(sequence,model,0.173);
   assert.equal(output.logit,0.173);
   assert.equal(output.probability,1/(1+Math.exp(-0.173)));
+  const anchor=fitTcnLstmLogisticAnchor(makeRows(0,40,'neutral-anchor'));
+  const externalLogisticModel={
+    training_partition_only:true,
+    standardizer:{means:Array(696).fill(0),scales:Array(696).fill(1)},
+    fit:{weights:Array(696).fill(0),bias:0.173}
+  };
+  const profile={
+    model,baseline_fit:anchor,
+    execution_logistic_context_model:externalLogisticModel,
+    execution_logistic_context_metadata:{
+      logistic_feature_schema_id:'RADARX_TCN_LSTM_LOGISTIC_FULL_ORDERED_SEQUENCE_24X29_696_V1'
+    }
+  };
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile)-
+    1/(1+Math.exp(-0.173)))<1e-12,
+    'inference must add the temporal residual to the exact full-sequence Logistic baseline');
+  assert.ok(Math.abs(predictTcnLstmHybridProbability(sequence,profile,{
+    externalLogisticLogit:-0.27
+  })-1/(1+Math.exp(0.27)))<1e-12,
+  'an explicitly aligned raw full-sequence Logistic logit must override the pooled fallback');
 });
 
 test('TCN-LSTM attention forward pass is finite, normalized and exposes sequential memory states',()=>{
