@@ -1733,14 +1733,17 @@ function evaluateClassifierTrainingObjective(rows,model,anchor,{
  * preserving their relative ranking signal alongside pooled latent channels.
  */
 export function buildTcnLstmExecutionHeadInputFeatures(sequence,model,anchor,{
-  variant='LOGIT_CONTEXT_AUGMENTED',externalLogisticLogit=null
+  variant='LOGIT_CONTEXT_AUGMENTED',externalLogisticLogit=null,
+  classifierBaselineLogit=null
 }={}) {
   if(!['POOLED_ONLY','LOGIT_CONTEXT_AUGMENTED'].includes(variant))
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_VARIANT_INVALID');
   if(variant==='LOGIT_CONTEXT_AUGMENTED'&&!finite(externalLogisticLogit))
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_EXTERNAL_LOGISTIC_SCORE_REQUIRED');
   const baselineLogit=predictTcnLstmLogisticLogit(sequence,anchor);
-  const forward=inspectTcnLstmForward(sequence,model,baselineLogit);
+  const matchedClassifierBaselineLogit=finite(classifierBaselineLogit)
+    ?clamp(Number(classifierBaselineLogit),-LOGIT_LIMIT,LOGIT_LIMIT):baselineLogit;
+  const forward=inspectTcnLstmForward(sequence,model,matchedClassifierBaselineLogit);
   const pooled=Array.from(forward.cache.pooled);
   const normalizedLogisticScore=Math.tanh(
     baselineLogit/TCN_LSTM_EXECUTION_HEAD_SCORE_LOGIT_SCALE
@@ -1835,14 +1838,20 @@ function fitTcnLstmExecutionRegressionHeads(rows,evidenceRows,model,anchor,{
       String(item.symbol??'')!==String(row.symbol??''))
       throw new TypeError('TCN_LSTM_EXECUTION_TRAINING_IDENTITY_MISMATCH');
     const pooled=buildTcnLstmExecutionHeadInputFeatures(
-      row.sequence,model,anchor,{variant:'POOLED_ONLY'}
+      row.sequence,model,anchor,{
+        variant:'POOLED_ONLY',
+        classifierBaselineLogit:finite(row.classifier_baseline_logit)
+          ?Number(row.classifier_baseline_logit):null
+      }
     ).features;
     if(!finite(row.external_logistic_logit))
       throw new TypeError('TCN_LSTM_EXECUTION_HEAD_EXTERNAL_LOGISTIC_TRAINING_SCORE_MISSING:'+id);
     const contextual=buildTcnLstmExecutionHeadInputFeatures(
       row.sequence,model,anchor,{
         variant:'LOGIT_CONTEXT_AUGMENTED',
-        externalLogisticLogit:Number(row.external_logistic_logit)
+        externalLogisticLogit:Number(row.external_logistic_logit),
+        classifierBaselineLogit:finite(row.classifier_baseline_logit)
+          ?Number(row.classifier_baseline_logit):null
       }
     ).features;
     const net=Math.max(-30,Math.min(30,Number(item.realized_return_pct)-costPct));
@@ -2069,8 +2078,13 @@ export function predictTcnLstmHybridExecutionHeads(sequence,profile,{
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_FEATURE_SCHEMA_OR_FIT_FLAG_INVALID');
   if(!['POOLED_ONLY','LOGIT_CONTEXT_AUGMENTED'].includes(variant))
     throw new TypeError('TCN_LSTM_EXECUTION_HEAD_VARIANT_INVALID');
+  const classifierBaselineLogit=resolveTcnLstmProfileClassifierBaselineLogit(
+    sequence,profile
+  );
   const input=buildTcnLstmExecutionHeadInputFeatures(
-    sequence,profile.model,profile.baseline_fit,{variant,externalLogisticLogit}
+    sequence,profile.model,profile.baseline_fit,{
+      variant,externalLogisticLogit,classifierBaselineLogit
+    }
   );
   const contextual=variant==='LOGIT_CONTEXT_AUGMENTED';
   const rw=contextual?profile.model.executionReturnHeadWeights:
