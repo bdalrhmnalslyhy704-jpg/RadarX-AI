@@ -34,7 +34,7 @@ export function buildPurgedExpandingLogisticFolds(rows,{
   minimumValidationRows=50,minimumClassCount=5
 }={}) {
   if(!Array.isArray(rows)||rows.length===0||
-    !Number.isInteger(foldCount)||foldCount<2||foldCount>6||
+    !Number.isInteger(foldCount)||foldCount<2||foldCount>10||
     !finite(purgeMs)||Number(purgeMs)<1||
     !finite(initialTrainingFraction)||Number(initialTrainingFraction)<=0||
     !finite(validationFraction)||Number(validationFraction)<=0||
@@ -444,7 +444,11 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     foldCount,purgeMs,initialTrainingFraction,validationFraction,
     minimumTrainingRows,minimumValidationRows,minimumClassCount
   });
-  const tuningFolds=folds.folds.slice(0,-2);
+  // Hyperparameters are chosen on the first three early folds only. Any
+  // additional middle folds are reserved for purged OOF baseline generation;
+  // the final two folds remain disjoint calibration fit/check partitions.
+  const tuningFolds=folds.folds.slice(0,3);
+  const oofBaselineFolds=folds.folds.slice(tuningFolds.length,-2);
   const calibrationFitFold=folds.folds.at(-2);
   const calibrationCheckFold=folds.folds.at(-1);
   if(tuningFolds.length<3||!calibrationFitFold||!calibrationCheckFold)
@@ -485,7 +489,13 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   if(!selected||!Number.isFinite(selected.mean_fold_brier))
     throw new Error('TEMPORAL_LOGISTIC_NO_VALID_CV_CANDIDATE');
 
-  // These two folds are strictly excluded from candidate hyperparameter choice.
+  // Later intermediate folds are not used to select the Logistic hyperparameters.
+  // Fit the selected configuration on each earlier-only fold and retain only
+  // its held-out predictions for downstream residual training.
+  const oofBaselineResults=oofBaselineFolds.map(fold=>
+    fitFoldModel(rows,featureVectors,fold,selected,maxEpochs)
+  );
+  // These two final folds are strictly excluded from candidate hyperparameter choice.
   const calibrationFitResult=fitFoldModel(rows,featureVectors,
     calibrationFitFold,selected,maxEpochs);
   const calibrationCheckResult=fitFoldModel(rows,featureVectors,
@@ -618,6 +628,8 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
   const selectedFoldReports=[
     ...selected.folds.map((result,index)=>
       buildFoldReport(tuningFolds[index],result,'HYPERPARAMETER_SELECTION')),
+    ...oofBaselineResults.map((result,index)=>
+      buildFoldReport(oofBaselineFolds[index],result,'OOF_BASELINE_GENERATION')),
     buildFoldReport(calibrationFitFold,calibrationFitResult,'CALIBRATION_FIT'),
     buildFoldReport(calibrationCheckFold,calibrationCheckResult,'CALIBRATION_CHECK')
   ];
@@ -650,8 +662,8 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
       });
     }
   };
-  for(let foldIndex=0;foldIndex<tuningFolds.length;foldIndex++)
-    appendOofPredictions(tuningFolds[foldIndex],selected.folds[foldIndex]);
+  for(let foldIndex=0;foldIndex<oofBaselineFolds.length;foldIndex++)
+    appendOofPredictions(oofBaselineFolds[foldIndex],oofBaselineResults[foldIndex]);
   appendOofPredictions(calibrationFitFold,calibrationFitResult);
   appendOofPredictions(calibrationCheckFold,calibrationCheckResult);
   const oofPredictions=[...oofPredictionByIndex.values()]
@@ -664,6 +676,9 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     unscored_warmup_or_tail_rows:rows.length-oofPredictions.length,
     coverage_pct:Number((100*oofPredictions.length/rows.length).toFixed(4)),
     fold_count:folds.fold_count,
+    hyperparameter_selection_folds:tuningFolds.map(fold=>fold.fold),
+    oof_prediction_folds:[...oofBaselineFolds,calibrationFitFold,calibrationCheckFold]
+      .map(fold=>fold.fold),
     maximum_training_label_resolution_before_scored_row:true,
     outer_validation_or_holdout_used:false
   };
@@ -694,6 +709,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     fold_schema:folds.schema,
     fold_count:folds.fold_count,
     hyperparameter_selection_folds:tuningFolds.length,
+    oof_baseline_generation_folds:oofBaselineFolds.length,
     calibration_fit_fold:calibrationFitFold.fold,
     calibration_check_fold:calibrationCheckFold.fold,
     folds:selectedFoldReports,
@@ -721,6 +737,7 @@ export function fitTunedTemporalLogisticBaseline(rows,featureVectors,{
     },
     all_candidate_selection_used_only_early_training_folds:true,
     calibration_fit_and_check_inside_outer_train:true,
+    oof_baseline_generation_uses_only_folds_after_hyperparameter_selection:true,
     outer_validation_used_for_hyperparameter_selection:false,
     outer_validation_used_for_calibrator_selection:false,
     execution_metrics_used_for_hyperparameter_selection:false,
