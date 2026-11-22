@@ -116,6 +116,23 @@ test('tuned Logistic selects hyperparameters only on purged train folds then ref
   assert.equal(result.report.outer_validation_rows_used,false);
   assert.equal(result.report.holdout_rows_or_labels_used,false);
   assert.equal(result.report.holdout_opened,false);
+  assert.equal(result.oof_prediction_coverage.schema,
+    'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1');
+  assert.equal(result.oof_prediction_coverage.total_training_rows,rows.length);
+  assert.equal(result.oof_prediction_coverage.oof_scored_rows,result.oof_predictions.length);
+  assert.ok(result.oof_predictions.length>=Math.ceil(rows.length*0.5));
+  assert.ok(result.oof_predictions.length<rows.length,
+    'warmup/tail rows without a forward purged fold must stay unscored');
+  const oofIndices=result.oof_predictions.map(item=>item.index);
+  assert.equal(new Set(oofIndices).size,oofIndices.length);
+  for(const item of result.oof_predictions){
+    assert.equal(item.id,rows[item.index].id);
+    assert.equal(item.at,rows[item.index].at);
+    assert.ok(item.raw_probability>0&&item.raw_probability<1);
+    assert.ok(item.maximum_training_label_resolved_at<item.at);
+    assert.equal(item.source_partition,'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLD');
+  }
+  assert.equal(result.oof_prediction_coverage.outer_validation_or_holdout_used,false);
   assert.equal(result.report.outer_validation_used_for_hyperparameter_selection,false);
   assert.equal(result.report.execution_metrics_used_for_hyperparameter_selection,false);
   assert.equal(result.report.candidate_results.length,2);
