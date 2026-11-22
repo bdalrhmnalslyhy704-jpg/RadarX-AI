@@ -3323,7 +3323,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     };
   const modelTrainingRows=executionHeadSplit.model_training_rows;
   const executionHeadRows=executionHeadSplit.execution_head_rows;
-  const effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
+  let effectiveTrainingRowsForFit=modelTrainingRows.map(row=>{
     const {realized_return_pct,...fitRow}=row;
     return fitRow;
   });
@@ -3419,10 +3419,33 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       !Array.isArray(provided?.predictions)||
       provided.predictions.length!==externalLogisticScoringRows.length||
       requireExternalLogisticSelectionBaseline&&
-        (provided.feature_schema_id!==TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID||
+        (!Array.isArray(provided?.training_predictions)||
+          provided.training_predictions.length!==modelTrainingRows.length||
+          provided.feature_schema_id!==TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID||
           !Array.isArray(provided.feature_schema_names)||
           provided.feature_schema_names.length!==TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT))
       throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_PROVIDER_CONTRACT_INVALID');
+    const trainingPredictedById=new Map();
+    if(requireExternalLogisticSelectionBaseline){
+      for(const prediction of provided.training_predictions){
+        const id=String(prediction?.id??'');
+        if(!id||trainingPredictedById.has(id)||!finite(prediction?.at)||
+          !finite(prediction?.raw_logit))
+          throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_TRAINING_PREDICTION_INVALID:'+id);
+        trainingPredictedById.set(id,{
+          at:Number(prediction.at),
+          rawLogit:clamp(Number(prediction.raw_logit),-LOGIT_LIMIT,LOGIT_LIMIT)
+        });
+      }
+      if(trainingPredictedById.size!==modelTrainingRows.length)
+        throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_TRAINING_PREDICTION_COVERAGE_MISMATCH');
+      effectiveTrainingRowsForFit=effectiveTrainingRowsForFit.map(row=>{
+        const id=sampleIdentity(row),prediction=trainingPredictedById.get(id);
+        if(!prediction||prediction.at!==Number(row.at))
+          throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_TRAINING_ROW_ALIGNMENT_FAILED:'+id);
+        return {...row,classifier_baseline_logit:prediction.rawLogit};
+      });
+    }
     const predictedById=new Map();
     for(const prediction of provided.predictions){
       const id=String(prediction?.id??'');
@@ -3441,7 +3464,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
         throw new TypeError('TCN_LSTM_EXTERNAL_LOGISTIC_CONTEXT_ROW_ALIGNMENT_FAILED:'+row.id);
       return {...row,
         external_logistic_logit:prediction.logit,
-        external_logistic_raw_logit:prediction.rawLogit
+        external_logistic_raw_logit:prediction.rawLogit,
+        classifier_baseline_logit:prediction.rawLogit
       };
     });
     executionHeadRowsWithLogisticContext=Array.isArray(executionHeadRows)
@@ -3493,6 +3517,12 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     innerSelectionBaseline.feature_count;
   externalLogisticContextMetadata.inner_selection_baseline_probability_stage=
     innerSelectionBaseline.probability_stage;
+  externalLogisticContextMetadata.classifier_training_baseline_source=
+    requireExternalLogisticSelectionBaseline
+      ?'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
+      :'FROZEN_POOLED_LOGISTIC_ANCHOR_58_FALLBACK';
+  externalLogisticContextMetadata.classifier_training_baseline_rows=
+    effectiveTrainingRowsForFit.filter(row=>finite(row.classifier_baseline_logit)).length;
   const baselineBrier = brierFrom(selectionRows, baselinePredictions);
   const baselineRanking=summarizeTcnLstmPairwiseLogitRanking(
     selectionRows,baselineLogits,{
@@ -3568,8 +3598,8 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       status:'DEFERRED_UNTIL_DUAL_INNER_GATE',
       passed:false,source_partition:'INNER_SELECTION_ONLY',holdout_values_used:false
     };
-    const selectionLogits = selectionRows.map(row => {
-      const baseLogit=predictTcnLstmLogisticLogit(row.sequence,fit.baseline_fit);
+    const selectionLogits = selectionRows.map((row,rowIndex) => {
+      const baseLogit=baselineLogits[rowIndex];
       return inspectTcnLstmForward(row.sequence,fit.model,baseLogit).logit;
     });
     const selectionRankingScores = selectionRows.map(row => {
@@ -3802,6 +3832,9 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     model_training_rows:modelTrainingRows.length,
     execution_head_training_rows:executionHeadRows?.length??0,
     execution_logistic_context:externalLogisticContextMetadata,
+    classifier_baseline_source:innerSelectionBaseline.source,
+    classifier_baseline_feature_count:innerSelectionBaseline.feature_count,
+    classifier_baseline_training_logits_used:requireExternalLogisticSelectionBaseline,
     training_sample_selection:{
       ...trainingSampleSelection.diagnostics,
       execution_head_split:executionHeadSplit.diagnostics
@@ -3824,7 +3857,18 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
     training_residual_anchor:{
       kind:anchor.kind,feature_count:BASELINE_FEATURES,
       training_rows:anchor.training_rows,
-      role:'TCN_LSTM_RESIDUAL_INITIALIZATION_AND_FIT_OBJECTIVE_ONLY'
+      role:requireExternalLogisticSelectionBaseline
+        ?'POOLED_58D_INTERNAL_REFERENCE_FOR_ABLATION_AND_COMPATIBILITY_ONLY'
+        :'TCN_LSTM_RESIDUAL_INITIALIZATION_AND_FIT_OBJECTIVE_ONLY'
+    },
+    classifier_residual_reference:{
+      source:innerSelectionBaseline.source,
+      feature_schema_id:innerSelectionBaseline.feature_schema_id,
+      feature_count:innerSelectionBaseline.feature_count,
+      probability_stage:innerSelectionBaseline.probability_stage,
+      training_logits_used_for_fit:requireExternalLogisticSelectionBaseline,
+      selection_logits_used_for_scoring:true,
+      same_reference_used_for_training_and_selection:true
     },
     selection_scoring:{
       method:'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6',
