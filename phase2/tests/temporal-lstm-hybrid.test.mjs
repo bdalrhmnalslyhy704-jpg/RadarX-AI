@@ -1182,11 +1182,19 @@ test('hyper-parameter selection uses only a purged chronological inner-selection
     const dualInnerGatePassed=row.brier_improvement>0.00025&&
       Number.isFinite(row.pairwise_ranking_improvement)&&
       row.pairwise_ranking_improvement>0;
-    return dualInnerGatePassed
-      ?row.return_selection_diagnostics.selection_partition_only===true
-      :row.return_selection_diagnostics.status==='DEFERRED_UNTIL_DUAL_INNER_GATE'&&
-        row.return_selection_diagnostics.selection_partition_only===true;
-  }), 'return/risk stage must remain deferred until both inner gates pass');
+    const diagnosticWinner=row.name===result.diagnostic_configuration;
+    if(dualInnerGatePassed||diagnosticWinner){
+      return row.return_selection_diagnostics.selection_partition_only===true&&
+        row.return_selection_diagnostics.holdout_values_used===false;
+    }
+    return row.return_selection_diagnostics.status==='DEFERRED_UNTIL_DUAL_INNER_GATE'&&
+      row.return_selection_diagnostics.selection_partition_only===true;
+  }), 'only dual-gate candidates and the single diagnostic winner may fit train-only execution heads');
+  assert.equal(result.status,'ABSTAIN_NO_INNER_SELECTION_SUPERIORITY');
+  assert.equal(result.selected_fit,null);
+  assert.ok(result.diagnostic_fit);
+  assert.equal(result.probability_ready,false);
+  assert.equal(result.live_eligibility_ready,false);
   assert.equal(result.validation_or_holdout_used_for_fit_or_selection,false);
   assert.equal(result.probability_ready,false);
   assert.equal(result.live_eligibility_ready,false);
