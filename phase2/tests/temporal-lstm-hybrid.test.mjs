@@ -1035,6 +1035,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.baseline.kind,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW',
     'the explicit baseline result must identify the final-refit Logistic used to score inner-selection rows');
+  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(result.classifier_baseline_feature_count,696);
   assert.equal(result.classifier_baseline_training_logits_used,true);
   assert.equal(result.classifier_baseline_training_logits_are_purged_oof,true);
@@ -1059,7 +1060,6 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'score-only rows must not expose target labels or realized execution outcomes');
   assert.equal(result.execution_logistic_context.status,'AVAILABLE');
   assert.equal(result.execution_logistic_context.validation_or_holdout_used,false);
-  const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.source,
