@@ -3976,7 +3976,7 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       pairwise_ranking_improvement,shared_classifier_pairwise_ranking,
       shared_classifier_pairwise_ranking_improvement,
       ranking_execution_selection,execution_risk_policy,
-      execution_heads_fitted,return_selection_diagnostics,
+      execution_heads_fitted,return_selection_diagnostics,stage_two_diagnostic_only,
       pooled_only_execution_risk_policy,execution_head_context_ablation,
       execution_risk_penalty_weight,ranking_head_selection_qualified,selection_score,logistic_selection_score,
       composite_improvement,fit})=>({
