@@ -510,7 +510,6 @@ async function main(){
     outer_validation_used_for_hyperparameter_selection:false,
     outer_validation_used_for_threshold_selection:false,
     holdout_used:false
-  }
   };
   const logisticRawPredictionRows=args.hurdleInnerOnly?[]:predictionRows(eventRows,
     row=>predictTemporalLogisticProbability(
