@@ -1503,7 +1503,7 @@ export function summarizeTcnLstmPairwiseLogitRanking(rows,logits,{
  */
 export function summarizeTcnLstmRankingExecutionSelection(rows,rankingLogits,anchorLogits,{
   roundTripCostBps=30,minimumTrades=20,minimumWinRatePct=55,maximumDrawdownPct=8,
-  abstentionPercentileGrid=[0.50,0.60,0.65,0.70,0.75,0.80,0.825,0.85,0.875,0.90,0.925,0.95]
+  abstentionPercentileGrid=[0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.375,0.40,0.425,0.45,0.475,0.50,0.60,0.70,0.80,0.90,0.95]
 }={}){
   const unavailable=reason=>({
     schema:'RADARX_TCN_LSTM_RANKING_EXECUTION_SELECTION_V2',
