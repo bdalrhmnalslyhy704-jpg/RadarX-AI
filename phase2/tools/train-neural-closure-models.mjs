@@ -2148,6 +2148,7 @@ async function main(){
     cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,
     round_trip_cost_bps:args.roundTripCostBps,
     split_id:split.schema,
+    objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,
     feature_schema_ids:Object.fromEntries(Object.entries(benchmark.models).map(([name])=>[
       name,modelArtifactsByModel[name]?.feature_schema_id??
         (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null)
@@ -2212,6 +2213,8 @@ async function main(){
       deployment_triggered:false
     }
   };
+  const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\n','utf8');
+  const experimentManifestSha256=sha256(experimentManifestBytes);
   const report={
     schema:MODEL_SCHEMA,
     status:benchmark.status,
@@ -2219,6 +2222,7 @@ async function main(){
     integrity:{
       model_source_commit_sha:sourceCommitSha,
       dataset_source_commit_sha:datasetSourceCommitSha,
+      experiment_manifest_sha256:experimentManifestSha256,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
       row_count:rows.length
