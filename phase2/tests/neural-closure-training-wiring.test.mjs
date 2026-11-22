@@ -555,13 +555,14 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(trainer,/score_conditioned_external_ablation:executionHeadExternalAblation/);
   assert.match(trainer,/externalLogisticExecutionContextProvider:\(modelTrainingRows,scoringRows\)/,
     'the main trainer must fit a separate Logistic context only after the recurrent pre-head training block is fixed');
-  assert.match(trainer,/foldCount:9,purgeMs:86_400_000,[\\s\\S]*?initialTrainingFraction:0\.15,validationFraction:0\.09/,
+  assert.ok(trainer.includes('foldCount:9,purgeMs:86_400_000')&&
+    trainer.includes('initialTrainingFraction:0.15,validationFraction:0.09'),
     'the execution-context Logistic must reserve later forward folds for OOF residual generation');
-  assert.match(logistic,/const tuningFolds=folds\.folds\.slice\(0,3\)/,
+  assert.ok(logistic.includes('const tuningFolds=folds.folds.slice(0,3)'),
     'only the first three early folds may select Logistic hyperparameters');
-  assert.match(logistic,/const oofBaselineFolds=folds\.folds\.slice\(tuningFolds\.length,-2\)/,
+  assert.ok(logistic.includes('const oofBaselineFolds=folds.folds.slice(tuningFolds.length,-2)'),
     'OOF residual scores must come from folds after hyperparameter selection and before the separate calibration folds');
-  assert.match(logistic,/oof_baseline_generation_folds:oofBaselineFolds\.length/);
+  assert.ok(logistic.includes('oof_baseline_generation_folds:oofBaselineFolds.length'));
   assert.match(trainer,/requireExternalLogisticSelectionBaseline:true/,
     'production inner selection must fail closed without the full ordered Logistic reference');
   assert.match(trainer,/raw_logit:probabilityLogit\(rawProbability\)/,
