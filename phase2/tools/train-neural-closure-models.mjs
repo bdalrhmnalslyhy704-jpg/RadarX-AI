@@ -358,13 +358,18 @@ async function main(){
     throw new Error('TEMPORAL_SEQUENCE_CHANNEL_19_MUST_BE_BTC_TREND_RETURN_12BAR');
   const split=splitFourHourRows(rows);
   const supports={
-    train:assertMinimumClassSupport('train',split.train),
-    validation:assertMinimumClassSupport('validation',split.validation)
+    train:assertMinimumClassSupport('train',split.train)
   };
-  // The untouched holdout is present only as a row-count/integrity boundary.
-  // No holdout labels, features, predictions, returns or metrics are consumed.
-  const eventRows=[...split.validation];
-  if(!eventRows.length)throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
+  // Inner-only Hurdle training must not inspect outer-validation labels or
+  // generate outer predictions. In normal benchmark mode, class support is
+  // checked before the external scoring phase as in the frozen protocol.
+  if(!args.hurdleInnerOnly)
+    supports.validation=assertMinimumClassSupport('validation',split.validation);
+  // The untouched holdout remains a row-count/integrity boundary only. Inner
+  // mode does not even copy outer-validation rows into its scoring envelope.
+  const eventRows=args.hurdleInnerOnly?[]:[...split.validation];
+  if(!args.hurdleInnerOnly&&!eventRows.length)
+    throw new Error('SHARED_EXTERNAL_SCORING_ROWS_EMPTY');
   const training={
     model_source_commit_sha:sourceCommitSha,
     dataset_source_commit_sha:datasetSourceCommitSha,
