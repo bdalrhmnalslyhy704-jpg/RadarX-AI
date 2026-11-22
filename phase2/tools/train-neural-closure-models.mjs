@@ -35,6 +35,7 @@ import {
 } from '../core/temporal-neural-brain.mjs';
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
+  TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
   buildTcnLstmFlattenedFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
@@ -1700,7 +1701,7 @@ async function main(){
             execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
             execution_head_context_ablation_required_for_inner_qualification:true,
             execution_head_input_feature_schema:
-              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5',
+              TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
           execution_logistic_context:selection.execution_logistic_context??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
