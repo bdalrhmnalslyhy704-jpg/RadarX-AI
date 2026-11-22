@@ -611,6 +611,10 @@ test('neural candidates cannot open outer validation before passing their purged
   assert.match(trainer,/if\(attentionInnerQualified&&[\s\S]*?missingAttentionRegimes\.length===0\)/);
   assert.match(trainer,/if\(!args\.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
   assert.match(trainer,/if\(args\.hurdleInnerOnly\)[\s\S]*?HURDLE_V2_INNER_TRAINING_REPORT_V1[\s\S]*?outer_validation_replay_started:false/);
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly\)\s*supports\.validation=assertMinimumClassSupport\('validation',split\.validation\)/,
+    'inner-only Hurdle training must not inspect outer-validation class labels');
+  assert.match(trainer,/const eventRows=args\.hurdleInnerOnly\?\[\]:\[\.\.\.split\.validation\]/,
+    'inner-only Hurdle training must not materialize outer scoring rows');
   assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
   assert.match(trainer,/INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED/);
   assert.doesNotMatch(trainer,/predictionsByModel\.HYBRID_TCN_ATTENTION\s*=/);
