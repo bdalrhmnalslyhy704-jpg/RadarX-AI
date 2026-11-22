@@ -210,8 +210,12 @@ test('fixed-SHA trainer keeps failed-inner TCN-LSTM diagnostic fits out of outer
     'the selector may retain a diagnostic fit for inner audit only');
   assert.match(trainer,/const selectedFit=selection\.selected_fit\?\?selection\.diagnostic_fit\?\?null/);
   assert.match(trainer,/const innerQualified=selection\.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'[\s\S]*?calibrator\.fitted===true/);
-  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
-    'only an inner-qualified model with supported calibration may create an outer-scored artifact');
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/,
+    'the legacy TCN outer-scored artifact still requires full inner qualification and calibration');
+  assert.match(trainer,/if\(hurdleHeadsAvailable\)[\s\S]*?createHurdleV2Artifact\([\s\S]*?writeHurdleV2ArtifactAtomic\(/,
+    'the dual-head Hurdle V2 diagnostic artifact must export independently of the scientific gate');
+  assert.match(recurrent,/const stageTwoCandidates=stageOneQualified\.slice\(\)/,
+    'the best diagnostic fit must receive train-only Hurdle heads when stage one abstains');
   assert.match(trainer,/passed:innerQualified/);
   assert.match(trainer,/inner_selection_qualified:innerQualified/);
   assert.match(trainer,/diagnostic_only:!innerQualified/);
@@ -605,7 +609,8 @@ test('neural candidates cannot open outer validation before passing their purged
   assert.match(trainer,/if\(temporalProfile\?\._research_fit&&v8Coverage\.complete&&v8PerformanceQualified\)/);
   assert.match(trainer,/if\(!qualificationPassed\)[\s\S]*?INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED[\s\S]*?return;/);
   assert.match(trainer,/if\(attentionInnerQualified&&[\s\S]*?missingAttentionRegimes\.length===0\)/);
-  assert.match(trainer,/if\(innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator\.fitted===true\)/);
+  assert.match(trainer,/if\(args\.hurdleInnerOnly\)[\s\S]*?HURDLE_V2_INNER_TRAINING_REPORT_V1[\s\S]*?outer_validation_replay_started:false/);
   assert.match(trainer,/INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED/);
   assert.match(trainer,/INNER_SELECTION_PROTOCOL_NOT_IMPLEMENTED_OUTER_VALIDATION_NOT_OPENED/);
   assert.doesNotMatch(trainer,/predictionsByModel\.HYBRID_TCN_ATTENTION\s*=/);
