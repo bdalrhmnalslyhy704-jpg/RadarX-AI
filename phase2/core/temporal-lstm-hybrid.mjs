@@ -2674,6 +2674,14 @@ export function trainTcnLstmHybrid(trainingRows, {
       anchor.training_rows !== rows.length ||
       anchor.training_fingerprint !== trainingFingerprint(rows))
     throw new TypeError('TCN_LSTM_TRAINING_ANCHOR_INVALID_OR_TRAINING_ROWS_MISMATCH');
+  const explicitClassifierBaselineRows=rows.filter(row=>
+    Object.prototype.hasOwnProperty.call(row,'classifier_baseline_logit')
+  ).length;
+  if(explicitClassifierBaselineRows!==0&&explicitClassifierBaselineRows!==rows.length)
+    throw new TypeError('TCN_LSTM_CLASSIFIER_BASELINE_PARTIAL_ROW_COVERAGE');
+  const classifierBaselineSource=explicitClassifierBaselineRows===rows.length
+    ?'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
+    :'FROZEN_POOLED_LOGISTIC_ANCHOR_58_FALLBACK';
 
   const model = initializeModel(seed);
   let optimizer = {
@@ -2944,6 +2952,15 @@ export function trainTcnLstmHybrid(trainingRows, {
       negatives: support.negative,
       training_fingerprint: trainingFingerprint(rows),
       anchor_training_fingerprint: anchor.training_fingerprint,
+      classifier_baseline:{
+        source:classifierBaselineSource,
+        feature_count:explicitClassifierBaselineRows===rows.length
+          ?TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_COUNT:BASELINE_FEATURES,
+        training_logits_available_rows:explicitClassifierBaselineRows,
+        source_partition:'TRAINING_PARTITION_ONLY',
+        validation_or_holdout_used:false
+      },
+      initial_training_brier:Number(initialBrier.toFixed(8)),
       fit_boundary: 'TRAINING_PARTITION_ONLY',
       optimizer: 'ADAMW_DECOUPLED_WEIGHT_DECAY',
       scheduler: 'COSINE_DECAY_10_PERCENT_FLOOR',
