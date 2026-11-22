@@ -222,13 +222,23 @@ export function createHurdleV2Artifact({
     selection_scoring: selection.selection_scoring ?? null,
     gate_results: selection.execution_head_context_ablation_qualification ?? null,
     context_ablation: selection.execution_head_context_ablation ?? null,
-    candidates: selection.candidates ?? [],
+    candidates: (selection.candidates ?? []).map(candidate => ({
+      name: candidate.name ?? null,
+      selection_brier: candidate.selection_brier ?? null,
+      brier_improvement: candidate.brier_improvement ?? null,
+      pairwise_ranking_improvement: candidate.pairwise_ranking_improvement ?? null,
+      execution_head_context_ablation: candidate.execution_head_context_ablation ?? null
+    })),
     baseline: selection.baseline ?? null,
     validation_or_holdout_used: false
   };
   const core = {
     artifact_schema: HURDLE_V2_ARTIFACT_SCHEMA,
     artifact_schema_version: 1,
+    head_parameter_hashes: {
+      contextual: hashObject(contextual),
+      pooled: hashObject(pooled)
+    },
     model_family: 'TCN_LSTM_HURDLE_EXPECTED_NET_RETURN',
     model_version: 'HURDLE_V2_FEATURE_CONDITIONAL_MEANS_V2',
     code_commit_sha: String(codeCommitSha).toLowerCase(),
