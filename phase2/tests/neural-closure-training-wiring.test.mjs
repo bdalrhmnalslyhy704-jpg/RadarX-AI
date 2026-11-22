@@ -43,7 +43,8 @@ test('trainer emits a reproducible manifest and scores only outer validation whi
   const contracts=await readFile(new URL('../core/neural-closure-contracts.mjs',import.meta.url),'utf8');
   assert.match(trainer,/holdout_access_status:'LOCKED_NOT_SCORED'/);
   assert.match(trainer,/holdout_metrics_read:false/);
-  assert.ok(trainer.includes('const eventRows=[...split.validation];'));
+  assert.ok(trainer.includes('const eventRows=args.hurdleInnerOnly?[]:[...split.validation];'));
+  assert.match(trainer,/if\(!args\.hurdleInnerOnly\)\s*supports\.validation=assertMinimumClassSupport\('validation',split\.validation\)/);
   assert.match(trainer,/experiment_manifest:experimentManifest/);
   assert.ok(trainer.includes('experiment-manifest.json'));
   assert.ok(trainer.includes('node_version:process.version'));
