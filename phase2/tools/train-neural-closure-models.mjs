@@ -56,6 +56,10 @@ import {
   attachResearchLineageToModelArtifact
 } from '../core/model-artifact-guardian.mjs';
 import {
+  createHurdleV2Artifact,writeHurdleV2ArtifactAtomic,
+  HURDLE_V2_OBJECTIVE
+} from '../core/hurdle-v2-artifact-contract.mjs';
+import {
   fitTunedTemporalLogisticBaseline,predictTemporalLogisticProbability,
   predictCrossFittedCalibratedTemporalLogisticProbability,
   evaluateBinaryProbabilityMetrics
@@ -86,10 +90,12 @@ function argsMap(argv){
   const args={input:'artifacts/neural-closure/dataset.json',
     output:'reports/neural-closure/fixed-sha-benchmark.json',
     epochs:8,denseEpochs:36,minimumHoldoutTrades:100,
-    minimumWinRatePct:55,maximumDrawdownPct:8,roundTripCostBps:30};
+    minimumWinRatePct:55,maximumDrawdownPct:8,roundTripCostBps:30,
+    hurdleInnerOnly:false};
   for(let index=2;index<argv.length;index++){
     const token=argv[index];
     if(!token.startsWith('--'))throw new Error('UNKNOWN_ARGUMENT:'+token);
+    if(token==='--hurdleInnerOnly'){args.hurdleInnerOnly=true;continue;}
     const value=argv[index+1];
     if(value===undefined||value.startsWith('--'))throw new Error('ARGUMENT_VALUE_MISSING:'+token);
     const key=token.slice(2);
@@ -379,6 +385,7 @@ async function main(){
   const modelArtifactsByModel={};
   const trainingArtifacts={};
   const unavailable={};
+  let hurdleV2ExportStatus=null;
   const logisticTrainingVectors=split.train.map(row=>
     buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
@@ -1466,6 +1473,66 @@ async function main(){
         ):{fitted:false,reason:'INNER_SELECTION_DID_NOT_QUALIFY'};
         const innerQualified=selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'&&
           selectedFit!==null&&calibrator.fitted===true;
+        const hurdleHeadsAvailable=selectedFit?.model?.executionRegressionHeadsFitted===true&&
+          selectedFit?.model?.executionHeadInputFeatureSchema===TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA&&
+          selectedFit?.model?.executionHurdleReturnHeads?.LOGIT_CONTEXT_AUGMENTED?.fitted===true&&
+          selectedFit?.model?.executionHurdleReturnHeads?.POOLED_ONLY?.fitted===true;
+        if(hurdleHeadsAvailable){
+          const hurdleArtifact=createHurdleV2Artifact({
+            fit:selectedFit,selection,
+            datasetSha256:datasetSha,inputFileSha256,
+            datasetSourceCommitSha,datasetRowCount:rows.length,
+            targetDefinition:NEURAL_CLOSURE_TARGET_DEFINITION,
+            targetSemantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+            splitDefinition:{
+              schema:split.schema,purge_ms:split.purge_ms,
+              counts:{train:split.train.length,validation:split.validation.length,
+                holdout:split.holdout.length},
+              boundaries:split.boundaries
+            },
+            codeCommitSha:sourceCommitSha,
+            roundTripCostBps:args.roundTripCostBps,
+            randomSeed:22429,innerQualified,
+            objectiveId:HURDLE_V2_OBJECTIVE,
+            selectionObjectiveId:selection.selection_scoring?.method??
+              'INNER_CLASSIFIER_BRIER_PLUS_INDEPENDENT_MULTISCALE_RETURN_RANKING_V6'
+          });
+          const exportResult=await writeHurdleV2ArtifactAtomic(
+            join(dirname(outputPath),'model-artifacts'),hurdleArtifact
+          );
+          hurdleV2ExportStatus={
+            ...exportResult,inner_qualified:innerQualified,
+            qualification_status:innerQualified
+              ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'NOT_QUALIFIED',
+            selection_status:selection.status,
+            execution_ablation:selection.execution_head_context_ablation??null,
+            selection_scoring:selection.selection_scoring??null
+          };
+          trainingArtifacts.HURDLE_V2={
+            artifact_content_hash:exportResult.artifact_content_hash,
+            artifact_manifest_hash:exportResult.artifact_manifest_hash,
+            artifact_path:exportResult.artifact_path,
+            manifest_path:exportResult.manifest_path,
+            training_status:'TRAINED',
+            evaluation_status:innerQualified?'INNER_QUALIFIED':'NOT_QUALIFIED',
+            contextual_head_present:true,pooled_head_present:true,
+            reload_status:'FRESH_PROCESS_RELOAD_VERIFIED',
+            inner_qualification_status:selection.status,
+            promotion_status:'NOT_APPROVED'
+          };
+          training.model_internal_diagnostics.HURDLE_V2={
+            ...trainingArtifacts.HURDLE_V2,
+            context_ablation:selection.execution_head_context_ablation??null,
+            selection_scoring:selection.selection_scoring??null,
+            holdout_values_used:false
+          };
+        }else{
+          hurdleV2ExportStatus={
+            status:'HURDLE_V2_DUAL_HEAD_TRAINING_UNAVAILABLE',
+            reason:'DIAGNOSTIC_FIT_DID_NOT_PRODUCE_BOTH_FITTED_HURDLE_HEADS',
+            inner_qualified:false,holdout_values_used:false
+          };
+        }
         training.model_internal_diagnostics.TCN_LSTM_HYBRID={
           status:innerQualified?'INNER_SELECTION_AND_CALIBRATION_QUALIFIED':
             selection.status==='INNER_SELECTION_QUALIFIED_RESEARCH_ONLY'
@@ -1750,6 +1817,36 @@ async function main(){
       status:'TRAINING_OR_ARTIFACT_FAILED_CLOSED',
       reason:String(error?.message||error)
     };
+  }
+
+  if(args.hurdleInnerOnly){
+    const innerOnlyReport={
+      schema:'RADARX_BUILD224_HURDLE_V2_INNER_TRAINING_REPORT_V1',
+      status:hurdleV2ExportStatus?.artifact_path
+        ?(hurdleV2ExportStatus.inner_qualified
+          ?'INNER_QUALIFIED_FOR_OUTER_REPLAY':'INNER_NOT_QUALIFIED_RETAIN_LOGISTIC')
+        :'HURDLE_V2_TRAINING_OR_EXPORT_FAILED',
+      code_commit_sha:sourceCommitSha,
+      dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
+      dataset_source_commit_sha:datasetSourceCommitSha,dataset_row_count:rows.length,
+      target_definition:NEURAL_CLOSURE_TARGET_DEFINITION,
+      target_semantics:NEURAL_CLOSURE_TARGET_SEMANTICS,
+      cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,round_trip_cost_bps:args.roundTripCostBps,
+      split_id:split.schema,split_counts:{train:split.train.length,
+        validation:split.validation.length,holdout:split.holdout.length},
+      hurdle_v2:hurdleV2ExportStatus,
+      tcn_lstm_inner_diagnostics:training.model_internal_diagnostics?.TCN_LSTM_HYBRID??null,
+      logistic_baseline_cv:logisticTuning.report??null,
+      holdout:{status:'LOCKED',opened:false,predictions_generated:false,
+        metrics_read:false,rows_included_in_scored_predictions:0},
+      paper_trading:true,real_order_execution:false,
+      outer_validation_replay_started:false,holdout_values_used:false
+    };
+    await atomicJson(outputPath,innerOnlyReport);
+    console.log(JSON.stringify(innerOnlyReport,null,2));
+    if(!hurdleV2ExportStatus?.artifact_path)
+      throw new Error(hurdleV2ExportStatus?.reason??'HURDLE_V2_INNER_ONLY_EXPORT_FAILED');
+    return;
   }
 
   // Hybrid TCN+Attention: train only on the shared train partition.
@@ -2149,6 +2246,7 @@ async function main(){
     round_trip_cost_bps:args.roundTripCostBps,
     split_id:split.schema,
     objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,
+    hurdle_v2_artifact:trainingArtifacts.HURDLE_V2??null,
     feature_schema_ids:Object.fromEntries(Object.entries(benchmark.models).map(([name])=>[
       name,modelArtifactsByModel[name]?.feature_schema_id??
         (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null)
