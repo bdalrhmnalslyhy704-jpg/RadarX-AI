@@ -579,7 +579,7 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'the external Logistic provider must explicitly attest OOF provenance');
   assert.doesNotMatch(trainer,/trainingPredictions=modelTrainingRows\.map/,
     'in-sample Logistic predictions must never be used as neural training residuals');
-  assert.ok(recurrent.includes('provided?.training_predictions_are_out_of_fold!==true'),
+  assert.ok(recurrent.includes('provided.training_predictions_are_out_of_fold!==true'),
     'the selector must reject non-OOF residual baseline scores');
   assert.match(recurrent,/classifier_baseline_logit:prediction\.rawLogit/,
     'the external raw Logistic logit must be attached to score rows as the classifier residual baseline');
