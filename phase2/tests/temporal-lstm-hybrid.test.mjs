@@ -1028,11 +1028,16 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(result.classifier_baseline_source,
-    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(result.classifier_baseline_feature_count,696);
   assert.equal(result.classifier_baseline_training_logits_used,true);
-  assert.equal(result.classifier_residual_reference.same_reference_used_for_training_and_selection,true);
+  assert.equal(result.classifier_baseline_training_logits_are_purged_oof,true);
+  assert.equal(result.classifier_baseline_training_rows,
+    selectedOrDiagnostic.training.rows);
   assert.equal(result.classifier_residual_reference.training_logits_used_for_fit,true);
+  assert.equal(result.classifier_residual_reference.training_logits_are_purged_out_of_fold,true);
+  assert.equal(result.classifier_residual_reference.selection_logits_from_final_train_only_refit,true);
+  assert.equal(result.classifier_residual_reference.same_logistic_feature_schema_and_objective,true);
   assert.equal(result.classifier_residual_reference.feature_count,696);
   assert.equal(result.selection_scoring.ranking_uses_inner_selection_partition_only,true);
   assert.equal(result.selection_scoring.outer_validation_or_holdout_used,false);
