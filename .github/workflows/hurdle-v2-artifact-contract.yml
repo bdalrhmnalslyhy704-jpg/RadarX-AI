@@ -5,11 +5,27 @@ on:
     branches:
       - research/build224-hurdle-v2-artifact-contract-20261122
     paths:
-      - '.ci/hurdle-v2-artifact-contract.tar.xz.part*'
+      - 'phase2/core/hurdle-return-head.mjs'
+      - 'phase2/core/hurdle-v2-artifact-contract.mjs'
+      - 'phase2/core/hurdle-v2-preflight-contract.mjs'
+      - 'phase2/tools/write-hurdle-v2-artifact.mjs'
+      - 'phase2/tests/hurdle-v2-artifact.test.mjs'
+      - 'phase2/tests/hurdle-v2-preflight-contract.test.mjs'
+      - 'phase2/tests/run-tests.mjs'
+      - 'artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.json'
+      - 'artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.manifest.json'
       - '.github/workflows/hurdle-v2-artifact-contract.yml'
   pull_request:
     paths:
-      - '.ci/hurdle-v2-artifact-contract.tar.xz.part*'
+      - 'phase2/core/hurdle-return-head.mjs'
+      - 'phase2/core/hurdle-v2-artifact-contract.mjs'
+      - 'phase2/core/hurdle-v2-preflight-contract.mjs'
+      - 'phase2/tools/write-hurdle-v2-artifact.mjs'
+      - 'phase2/tests/hurdle-v2-artifact.test.mjs'
+      - 'phase2/tests/hurdle-v2-preflight-contract.test.mjs'
+      - 'phase2/tests/run-tests.mjs'
+      - 'artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.json'
+      - 'artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.manifest.json'
       - '.github/workflows/hurdle-v2-artifact-contract.yml'
 
 permissions:
@@ -46,8 +62,14 @@ jobs:
         run: |
           node --check phase2/core/hurdle-return-head.mjs
           node --check phase2/core/hurdle-v2-artifact-contract.mjs
+          node --check phase2/core/hurdle-v2-preflight-contract.mjs
           node --check phase2/tools/write-hurdle-v2-artifact.mjs
-          node --check phase2/tests/hurdle-v2-artifact.test.mjs
+          node --check phase2/tests/hurdle-v2-preflight-contract.test.mjs
+      - name: Hurdle V2 preflight identity contract tests
+        id: preflight-tests
+        run: |
+          set -o pipefail
+          node --test phase2/tests/hurdle-v2-preflight-contract.test.mjs 2>&1 | tee hurdle-v2-preflight-test.log
       - name: Hurdle V2 artifact contract tests
         id: contract-tests
         run: |
@@ -57,6 +79,7 @@ jobs:
         if: always()
         env:
           CONTRACT_TEST_OUTCOME: ${{ steps.contract-tests.outcome }}
+          PREFLIGHT_TEST_OUTCOME: ${{ steps.preflight-tests.outcome }}
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
@@ -76,6 +99,7 @@ jobs:
             ref:process.env.GITHUB_REF,
             branch:process.env.GITHUB_REF_NAME,
             contract_tests_outcome:process.env.CONTRACT_TEST_OUTCOME,
+            preflight_tests_outcome:process.env.PREFLIGHT_TEST_OUTCOME,
             artifact_path:artifactPath,
             manifest_path:manifestPath,
             artifact_file_sha256:hash(artifactPath),
@@ -88,6 +112,8 @@ jobs:
             scientific_qualification_status:artifact.scientific_qualification_status,
             execution_qualification_status:artifact.execution_qualification_status,
             promotion_status:artifact.promotion_status,
+            preflight_only:true,
+            dataset_bytes_verified:false,
             full_cohort_replay_started:false,
             model_training_started:false,
             holdout_data_accessed:false,
@@ -100,11 +126,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: radarx-hurdle-v2-artifact-contract-${{ github.sha }}
+          name: radarx-hurdle-v2-preflight-contract-${{ github.sha }}
           path: |
             artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.json
             artifacts/neural-closure-replay/model-artifacts/HURDLE_V2.manifest.json
             hurdle-v2-artifact-test.log
+            hurdle-v2-preflight-test.log
             hurdle-v2-artifact-ci-evidence.json
           if-no-files-found: warn
           retention-days: 30
