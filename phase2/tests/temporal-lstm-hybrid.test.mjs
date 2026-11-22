@@ -982,10 +982,20 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
           selected_configuration:{l2:0.01,learning_rate:0.01},
           calibration:{status:'RAW_FALLBACK'}
         },
-        training_predictions:modelRows.map(row=>({
+        training_predictions:modelRows.map((row,index)=>({
           id:String(row.id),at:Number(row.at),
-          raw_logit:(Number(row.at)%997)/997-0.5
+          raw_logit:(Number(row.at)%997)/997-0.5,
+          oof_fold:(index%3)+1,
+          maximum_training_label_resolved_at:Number(row.at)-1,
+          source_partition:'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLD'
         })),
+        training_predictions_are_out_of_fold:true,
+        training_prediction_coverage:{
+          schema:'RADARX_PURGED_EXPANDING_TEMPORAL_LOGISTIC_OOF_PREDICTIONS_V1',
+          total_training_rows:modelRows.length,
+          oof_scored_rows:modelRows.length,
+          outer_validation_or_holdout_used:false
+        },
         predictions:scoringRows.map(row=>({
           id:String(row.id),at:Number(row.at),
           raw_logit:(Number(row.at)%997)/997-0.5,
@@ -1016,7 +1026,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(Math.abs(result.baseline.selection_brier-expectedRawBrier)<1e-8,
     'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
-    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(result.classifier_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.classifier_baseline_feature_count,696);
@@ -1047,7 +1057,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.training_logits_available_rows,
     selectedOrDiagnostic.training.rows);
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.source_partition,
-    'TRAINING_PARTITION_ONLY');
+    'PURGED_EXPANDING_TRAIN_ONLY_OOF_FOLDS');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.predictions_are_purged_out_of_fold,true);
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.validation_or_holdout_used,false);
   const pairwiseCandidate=result.candidates.find(item=>item.name==='PAIRWISE_RANK');
   assert.equal(pairwiseCandidate?.config.rankingWeight,0.02,
