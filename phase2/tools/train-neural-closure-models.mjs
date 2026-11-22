@@ -1433,6 +1433,15 @@ async function main(){
                 ],
                 maxEpochs:160,seed:22429
               });
+            // Train-time residuals use the exact same 696D Logistic model as
+            // the inner-selection reference. These are in-sample baseline scores
+            // on the model-training partition only; selection scores remain OOS.
+            const trainingPredictions=modelTrainingRows.map(row=>({
+              id:String(row.id),at:Number(row.at),
+              raw_logit:probabilityLogit(predictTemporalLogisticProbability(
+                row.logistic_feature_vector,temporalLogisticContext.model
+              ))
+            }));
             const predictions=scoringRows.map(row=>{
               const rawProbability=predictTemporalLogisticProbability(
                 row.logistic_feature_vector,temporalLogisticContext.model
@@ -1451,6 +1460,7 @@ async function main(){
               report:temporalLogisticContext.report,
               feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
               feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
+              training_predictions,
               predictions
             };
           },
