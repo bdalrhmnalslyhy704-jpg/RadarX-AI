@@ -389,8 +389,8 @@ async function main(){
   const logisticTrainingVectors=split.train.map(row=>
     buildTcnLstmFlattenedFeatures(row.temporal_sequence));
   const fixedLogisticFit=fitLogisticBaseline(split.train);
-  const fixedLogisticValidationProbabilities=split.validation.map(row=>
-    predictLogistic(row.features,fixedLogisticFit));
+  const fixedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictLogistic(row.features,fixedLogisticFit));
   const logisticTuning=fitTunedTemporalLogisticBaseline(
     split.train,logisticTrainingVectors,{
       foldCount:5,purgeMs:86_400_000,
