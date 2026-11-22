@@ -1580,7 +1580,7 @@ async function main(){
               :'FOUR_HOUR_LSTM_CALIBRATION_SUPPORT_NOT_MET',
           diagnostic_only:!innerQualified
         };
-        if(innerQualified&&selectedFit!==null&&calibrator.fitted===true){
+        if(!args.hurdleInnerOnly&&innerQualified&&selectedFit!==null&&calibrator.fitted===true){
           const artifact=makeArtifact({
             name:'RADARX_TCN_LSTM_HYBRID_FIRST_TOUCH_4H',
             family:'TCN_LSTM_HYBRID',version:'TCN_LSTM_ATTENTION_FIRST_TOUCH_4H_V2',
@@ -1799,11 +1799,13 @@ async function main(){
           };
         }else{
           unavailable.TCN_LSTM_HYBRID={
-            reason:!innerQualified
-              ?'INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED'
-              :selectedFit===null
-                ?'NO_SELECTED_OR_DIAGNOSTIC_TCN_LSTM_FIT'
-                :'TCN_LSTM_INTERNAL_CALIBRATION_SUPPORT_NOT_MET',
+            reason:args.hurdleInnerOnly
+              ?'HURDLE_INNER_ONLY_MODE_OUTER_VALIDATION_SCORING_SUPPRESSED'
+              :!innerQualified
+                ?'INNER_SELECTION_NOT_QUALIFIED_OUTER_VALIDATION_NOT_OPENED'
+                :selectedFit===null
+                  ?'NO_SELECTED_OR_DIAGNOSTIC_TCN_LSTM_FIT'
+                  :'TCN_LSTM_INTERNAL_CALIBRATION_SUPPORT_NOT_MET',
             inner_qualification_passed:innerQualified,
             outer_validation_opened:false,
             selection_status:selection.status,
