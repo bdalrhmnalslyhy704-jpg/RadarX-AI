@@ -731,7 +731,10 @@ function initializeModel(seed = 29) {
     lstmInputWeights, lstmRecurrentWeights, lstmBiases,
     attentionQuery: Array.from({ length: hidden }, () => (random() - 0.5) * 0.06),
     attentionPositionBiases: Array(TCN_LSTM_STEPS).fill(0),
-    outputWeights: Array.from({ length: hidden }, () => (random() - 0.5) * 0.04),
+    // Start exactly at the frozen Logistic baseline. The temporal network must
+    // learn a residual correction instead of perturbing reference probabilities
+    // with a random output layer before any evidence-based update.
+    outputWeights: Array(hidden).fill(0),
     // Trainable scalars are one-element arrays so optimizer/finite-difference
     // updates mutate the model object rather than a detached wrapper property.
     outputBias: [0],
