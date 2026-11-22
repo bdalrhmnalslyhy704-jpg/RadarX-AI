@@ -1100,10 +1100,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(result.candidates.every(item=>{
     const stageOnePassed=item.brier_improvement>0.00025&&
       Number.isFinite(item.pairwise_ranking_improvement)&&item.pairwise_ranking_improvement>0;
-    return stageOnePassed
+    const stageTwoAttempted=stageOnePassed||item.stage_two_diagnostic_only===true;
+    return stageTwoAttempted
       ?item.ranking_execution_selection.status!=='DEFERRED_UNTIL_DUAL_INNER_GATE'
       :item.ranking_execution_selection.status==='DEFERRED_UNTIL_DUAL_INNER_GATE';
   }));
+  assert.equal(result.candidates.filter(item=>item.stage_two_diagnostic_only===true).length,
+    result.candidates.some(item=>item.passed_inner_composite_margin===true)?0:1,
+    'when Stage 1 has no qualifier, only the best candidate may enter diagnostic Stage 2');
   assert.equal(result.ranking_head_selection_qualification.qualified,false);
   assert.equal(result.real_order_execution,false);
 });
