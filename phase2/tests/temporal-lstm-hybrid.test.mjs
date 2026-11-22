@@ -1041,6 +1041,14 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   const selectedOrDiagnostic=result.selected_fit??result.diagnostic_fit;
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.feature_count,696);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.training_logits_available_rows,
+    selectedOrDiagnostic.training.rows);
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.source_partition,
+    'TRAINING_PARTITION_ONLY');
+  assert.equal(selectedOrDiagnostic.training.classifier_baseline.validation_or_holdout_used,false);
   const pairwiseCandidate=result.candidates.find(item=>item.name==='PAIRWISE_RANK');
   assert.equal(pairwiseCandidate?.config.rankingWeight,0.02,
     'the selected candidate weight must be passed into the actual classifier optimizer');
