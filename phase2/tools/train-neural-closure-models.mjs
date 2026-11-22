@@ -1401,8 +1401,8 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          // Bound shared-ranking backprop to two comparison pairs per 15m group.
-          // All eight candidate weights remain evaluated without a 12-pair BPTT multiplier.
+          // Bound the independent training-only return-ranker pair budget.
+          // Classifier Brier gradients stay separate from ranking gradients in this sweep.
           rankingPairsPerTimestamp:2,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
@@ -1455,26 +1455,26 @@ async function main(){
             };
           },
           candidates:[
-            // Keep the proper-scoring Brier objective fixed while sweeping a
-            // wider shared-classifier ranking-loss range. The previous Focal
-            // sweep improved the sidecar rank score but degraded inner Brier;
-            // this grid tests joint probability quality and return ordering.
-            {name:'4H_BRIER_BASE_LR0015_L2_0005_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
-              objective:'BRIER'},
-            {name:'4H_BRIER_SHARED_RANK_W005_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.005},
-            {name:'4H_BRIER_SHARED_RANK_W010_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.01},
-            {name:'4H_BRIER_SHARED_RANK_W020_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.02},
-            {name:'4H_BRIER_SHARED_RANK_W040_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.04},
-            {name:'4H_BRIER_SHARED_RANK_W060_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.06},
-            {name:'4H_BRIER_SHARED_RANK_W080_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.08},
-            {name:'4H_BRIER_SHARED_RANK_W120_LR0015_E16',learningRate:0.0015,l2:0.0005,dropout:0,epochs:16,
-              objective:'BRIER',rankingWeight:0.12}
+            // The previous fixed-SHA run showed that shared classifier-ranking
+            // gradients improved pairwise rank loss but consistently degraded
+            // Brier. Keep return ranking in its independent sidecar and use this
+            // grid to search for a better-generalizing Brier residual instead.
+            {name:'4H_BRIER_RESIDUAL_BASE_LR0015_L2_0005_D000_E12',learningRate:0.0015,l2:0.0005,dropout:0,epochs:12,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0015_L2_005_D005_E12',learningRate:0.0015,l2:0.005,dropout:0.05,epochs:12,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0010_L2_010_D010_E10',learningRate:0.0010,l2:0.01,dropout:0.10,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR00075_L2_020_D010_E10',learningRate:0.00075,l2:0.02,dropout:0.10,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0010_L2_050_D015_E10',learningRate:0.0010,l2:0.05,dropout:0.15,epochs:10,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0015_L2_020_D020_E08',learningRate:0.0015,l2:0.02,dropout:0.20,epochs:8,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR0020_L2_010_D015_E08',learningRate:0.0020,l2:0.01,dropout:0.15,epochs:8,
+              objective:'BRIER',rankingWeight:0},
+            {name:'4H_BRIER_REG_LR00075_L2_050_D020_E08',learningRate:0.00075,l2:0.05,dropout:0.20,epochs:8,
+              objective:'BRIER',rankingWeight:0}
           ]
         });
         const selectedFit=selection.selected_fit??selection.diagnostic_fit??null;
