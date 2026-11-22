@@ -313,18 +313,20 @@ test('TCN-LSTM pairwise return ranking loss orders high-return candidates above 
 
 
 test('auxiliary rank head must pass inner-selection Top-K execution gates and beat the Logistic anchor',()=>{
-  const rows=Array.from({length:24*4},(_,index)=>{
-    const group=Math.floor(index/4),rank=index%4;
-    const at=BASE+group*DAY+rank*75;
-    const execution=makeExecutionRow(index,rank<2?'UP':'DOWN',at);
-    return {...execution,sequence:makeSequence(rank<2?1:-1,index*0.01)};
+  const groupCount=50;
+  const rows=Array.from({length:groupCount*2},(_,index)=>{
+    const group=Math.floor(index/2),rank=index%2;
+    const outcome=group<30&&rank===0?'UP':'DOWN';
+    const at=BASE+group*15*60*1000+rank*75;
+    const execution=makeExecutionRow(index,outcome,at);
+    return {...execution,sequence:makeSequence(outcome==='UP'?1:-1,index*0.01)};
   });
   const head=rows.map((_,index)=>{
-    const group=Math.floor(index/4),rank=index%4;
-    const groupBest=group<20?100-group:20-(group-20);
-    return rank===0?groupBest:rank===1?groupBest-1:rank===2?-100-group:-110-group;
+    const group=Math.floor(index/2),rank=index%2;
+    if(rank===1)return -100-group;
+    return group<30?100-group:20-(group-30)*0.1;
   });
-  const anchor=rows.map((_,index)=>index%4===2?10:0);
+  const anchor=rows.map((_,index)=>index%2===1?10:0);
   const passed=summarizeTcnLstmRankingExecutionSelection(rows,head,anchor,{
     roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
   });
