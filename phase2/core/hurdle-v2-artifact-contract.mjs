@@ -357,6 +357,12 @@ export function createHurdleV2Artifact({
     calibration_id: HURDLE_V2_CALIBRATION_ID,
     cost_model_id: 'FIXED_LINEAR_ROUND_TRIP_BPS_V1',
     round_trip_cost_bps: roundTripCostBps,
+    cost_application: {
+      training_target_includes_declared_round_trip_cost: true,
+      applied_exactly_once: true,
+      subtract_again_at_inference: false,
+      predicted_return_semantics: 'ALREADY_NET_OF_DECLARED_ROUND_TRIP_COST'
+    },
     random_seed: randomSeed,
     optimizer_randomness: 'DETERMINISTIC_FULL_BATCH_HURDLE_HEAD_FIT_NO_INTERNAL_RANDOM_DRAWS',
     split_id: splitDefinition.schema,
@@ -461,7 +467,10 @@ export function verifyHurdleV2Artifact(artifact) {
         artifact.target_semantics !== 'UP_IF_PLUS_3_PCT_FIRST_BEFORE_MINUS_2_PCT_ELSE_NON_SUCCESS_WITHIN_4H_1M_V1')
       return fail('TARGET_PROVENANCE_MISMATCH');
     if (artifact.cost_model_id !== 'FIXED_LINEAR_ROUND_TRIP_BPS_V1' ||
-        artifact.round_trip_cost_bps !== 30) return fail('COST_PROVENANCE_MISMATCH');
+        artifact.round_trip_cost_bps !== 30 ||
+        artifact.cost_application?.applied_exactly_once !== true ||
+        artifact.cost_application?.subtract_again_at_inference !== false)
+      return fail('COST_PROVENANCE_MISMATCH');
     if (artifact.objective_id !== HURDLE_V2_OBJECTIVE ||
         artifact.calibration_id !== HURDLE_V2_CALIBRATION_ID) return fail('OBJECTIVE_OR_CALIBRATION_MISSING');
     if (artifact.holdout_status !== 'LOCKED' || artifact.split_definition?.holdout_scored_rows !== 0 ||
