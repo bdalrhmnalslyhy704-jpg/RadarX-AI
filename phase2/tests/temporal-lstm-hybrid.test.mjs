@@ -1026,7 +1026,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.ok(Math.abs(result.baseline.selection_brier-expectedRawBrier)<1e-8,
     'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
-    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.classifier_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(result.classifier_baseline_feature_count,696);
@@ -1057,7 +1057,7 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
   assert.equal(selectedOrDiagnostic.execution_logistic_context_model.kind,
     'TEST_PURGED_TEMPORAL_LOGISTIC');
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.source,
-    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.feature_count,696);
   assert.equal(selectedOrDiagnostic.training.classifier_baseline.training_logits_available_rows,
     selectedOrDiagnostic.training.rows);
