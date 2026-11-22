@@ -411,14 +411,12 @@ async function main(){
         })
     });
   const logisticFit=logisticTuning.model;
-  const rawTunedLogisticValidationProbabilities=split.validation.map(row=>
-    predictTemporalLogisticProbability(
-      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
-    ));
-  const calibratedTunedLogisticValidationProbabilities=split.validation.map(row=>
-    predictCrossFittedCalibratedTemporalLogisticProbability(
-      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
-    ));
+  const rawTunedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictTemporalLogisticProbability(
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit));
+  const calibratedTunedLogisticValidationProbabilities=args.hurdleInnerOnly?[]:
+    split.validation.map(row=>predictCrossFittedCalibratedTemporalLogisticProbability(
+      buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit));
   const logisticArtifact=makeArtifact({
     name:'RADARX_LOGISTIC_TCN_LSTM_FULL_ORDERED_SEQUENCE_BASELINE',
     family:'LOGISTIC_REGRESSION',version:'FULL_ORDERED_TEMPORAL_SEQUENCE_696_V1',
@@ -452,15 +450,15 @@ async function main(){
     fit_partition:'FIXED_SHA_OUTER_TRAIN_ONLY',
     training_rows:split.train.length
   };
-  const fixedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    fixedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
-  const rawTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    rawTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
-  const calibratedTunedLogisticValidationMetrics=evaluateBinaryProbabilityMetrics(
-    calibratedTunedLogisticValidationProbabilities,split.validation.map(row=>row.target)
-  );
+  const fixedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(fixedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
+  const rawTunedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(rawTunedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
+  const calibratedTunedLogisticValidationMetrics=args.hurdleInnerOnly?null:
+    evaluateBinaryProbabilityMetrics(calibratedTunedLogisticValidationProbabilities,
+      split.validation.map(row=>row.target));
   training.logistic_baseline_temporal_cv={
     ...logisticTuning.report,
     feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
@@ -468,8 +466,16 @@ async function main(){
     feature_transform:'24X29_ROW_MAJOR_FLATTENED_CLOSED_SEQUENCE',
     feature_source:'SAME_CLOSED_24X29_TEMPORAL_SEQUENCE_AS_TCN_LSTM'
   };
-  training.logistic_baseline_comparison={
-    schema:'RADARX_FIXED_VS_TUNED_LOGISTIC_OUTER_VALIDATION_DIAGNOSTIC_V2',
+  training.logistic_baseline_comparison=args.hurdleInnerOnly?{
+    schema:'RADARX_TUNED_LOGISTIC_INNER_CV_ONLY_V1',
+    status:'OUTER_VALIDATION_NOT_SCORED_IN_HURDLE_INNER_ONLY_MODE',
+    feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
+    cv_status:logisticTuning.report.status,
+    fold_count:logisticTuning.report.fold_count,
+    selected_configuration:logisticTuning.report.selected_configuration,
+    outer_validation_rows_scored:0,holdout_used:false
+  }:{
+
     primary_promotion_baseline:{
       feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
       feature_count:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES.length,
@@ -504,8 +510,9 @@ async function main(){
     outer_validation_used_for_hyperparameter_selection:false,
     outer_validation_used_for_threshold_selection:false,
     holdout_used:false
+  }
   };
-  const logisticRawPredictionRows=predictionRows(eventRows,
+  const logisticRawPredictionRows=args.hurdleInnerOnly?[]:predictionRows(eventRows,
     row=>predictTemporalLogisticProbability(
       buildTcnLstmFlattenedFeatures(row.temporal_sequence),logisticFit
     ),{
