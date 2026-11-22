@@ -1422,8 +1422,8 @@ async function main(){
             const temporalLogisticContext=fitTunedTemporalLogisticBaseline(
               modelTrainingRows,
               modelTrainingRows.map(row=>row.logistic_feature_vector),{
-                foldCount:5,purgeMs:86_400_000,
-                initialTrainingFraction:0.32,validationFraction:0.12,
+                foldCount:9,purgeMs:86_400_000,
+                initialTrainingFraction:0.15,validationFraction:0.09,
                 minimumTrainingRows:100,minimumValidationRows:50,minimumClassCount:5,
                 candidateGrid:[
                   {l2:0.001,learningRate:0.01},{l2:0.01,learningRate:0.01},
