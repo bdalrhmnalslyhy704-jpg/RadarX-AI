@@ -184,9 +184,7 @@ jobs:
           const result=verifyHurdleV2Artifact(artifact);
           if(!result.valid) throw new Error('HURDLE_V2_ARTIFACT_INVALID:'+result.reason);
           const failures=[];
-          if(artifact.code_commit_sha!==process.env.GITHUB_SHA &&
-             artifact.code_commit_sha!==process.env.GITHUB_EVENT_PULL_REQUEST_HEAD_SHA)
-            failures.push('CODE_SHA_MISMATCH');
+          if(artifact.code_commit_sha!==process.env.GITHUB_SHA) failures.push('CODE_SHA_MISMATCH');
           if(artifact.dataset_sha256!==process.env.EXPECTED_DATASET_SHA256) failures.push('DATASET_SHA_MISMATCH');
           if(artifact.input_file_sha256!==process.env.EXPECTED_INPUT_FILE_SHA256) failures.push('INPUT_FILE_SHA_MISMATCH');
           if(artifact.dataset_source_commit_sha!==process.env.EXPECTED_DATASET_SOURCE_COMMIT) failures.push('DATASET_SOURCE_COMMIT_MISMATCH');
