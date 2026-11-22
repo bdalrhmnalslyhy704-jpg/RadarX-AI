@@ -548,6 +548,21 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
     'production inner selection must fail closed without the full ordered Logistic reference');
   assert.match(trainer,/raw_logit:probabilityLogit\(rawProbability\)/,
     'the external Logistic provider must expose its raw probability score separately from calibrated context');
+  assert.match(trainer,/const trainingPredictions=modelTrainingRows\.map/,
+    'the exact same full-sequence Logistic fit must provide baseline logits for recurrent model-training rows');
+  assert.match(trainer,/training_predictions,/,
+    'the external Logistic provider must return train-partition residual baseline logits');
+  assert.match(temporal,/provided\?\.training_predictions/,
+    'the selector must require matched 696D baseline scores on all recurrent fitting rows');
+  assert.match(temporal,/classifier_baseline_logit:prediction\.rawLogit/,
+    'the external raw Logistic logit must be attached to score rows as the classifier residual baseline');
+  assert.match(temporal,/const selectionLogits = selectionRows\.map\(\(row,rowIndex\)/,
+    'the neural classifier must be scored from the same ordered Logistic baseline vector');
+  assert.match(temporal,/baseLogit=baselineLogits\[rowIndex\]/);
+  assert.match(temporal,/same_reference_used_for_training_and_selection:true/,
+    'training and inner-selection residuals must use the identical Logistic reference model');
+  assert.match(recurrent,/resolveTcnLstmProfileClassifierBaselineLogit/,
+    'frozen full-sequence Logistic logits must also be reused at inference');
   assert.match(recurrent,/resolveTcnLstmInnerSelectionLogisticBaseline/,
     'the internal classifier gate must resolve a matched Logistic baseline distinct from the residual anchor');
   assert.match(recurrent,/external_logistic_raw_logit/,
