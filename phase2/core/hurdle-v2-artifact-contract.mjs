@@ -221,7 +221,8 @@ export function createHurdleV2Artifact({
     selection_status: selection.status ?? 'UNKNOWN',
     selection_scoring: selection.selection_scoring ?? null,
     gate_results: selection.execution_head_context_ablation_qualification ?? null,
-    context_ablation: selection.execution_head_context_ablation ?? null,
+    context_ablation: selection.execution_head_context_ablation ??
+      selection.execution_head_context_ablation_qualification?.result ?? null,
     candidates: (selection.candidates ?? []).map(candidate => ({
       name: candidate.name ?? null,
       selection_brier: candidate.selection_brier ?? null,
