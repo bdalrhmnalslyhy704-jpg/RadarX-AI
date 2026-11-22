@@ -1433,14 +1433,16 @@ async function main(){
                 ],
                 maxEpochs:160,seed:22429
               });
-            // Train-time residuals use the exact same 696D Logistic model as
-            // the inner-selection reference. These are in-sample baseline scores
-            // on the model-training partition only; selection scores remain OOS.
-            const trainingPredictions=modelTrainingRows.map(row=>({
-              id:String(row.id),at:Number(row.at),
-              raw_logit:probabilityLogit(predictTemporalLogisticProbability(
-                row.logistic_feature_vector,temporalLogisticContext.model
-              ))
+            // Train-time residuals use raw purged expanding-fold OOF scores.
+            // Rows without a valid forward-fold prediction are deliberately
+            // excluded from the neural residual fit rather than assigned an
+            // in-sample score from the final Logistic refit.
+            const trainingPredictions=temporalLogisticContext.oof_predictions.map(item=>({
+              id:String(item.id),at:Number(item.at),
+              raw_logit:Number(item.raw_logit),
+              oof_fold:Number(item.fold),
+              maximum_training_label_resolved_at:Number(item.maximum_training_label_resolved_at),
+              source_partition:item.source_partition
             }));
             const predictions=scoringRows.map(row=>{
               const rawProbability=predictTemporalLogisticProbability(
@@ -1461,6 +1463,8 @@ async function main(){
               feature_schema_id:LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_SCHEMA,
               feature_schema_names:[...LOGISTIC_TEMPORAL_SEQUENCE_FEATURE_NAMES],
               training_predictions,
+              training_predictions_are_out_of_fold:true,
+              training_prediction_coverage:temporalLogisticContext.oof_prediction_coverage,
               predictions
             };
           },
