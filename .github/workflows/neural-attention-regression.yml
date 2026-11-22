@@ -3,6 +3,7 @@ name: RadarX TCN V11 attention regression
 on:
   push:
     branches:
+      - research/build224-hurdle-v2-artifact-export-20261122
       - research/neural-closure-streaming-writer-20261114
       - research/build224-tcn-lstm-inner-logistic-parity-20261121
       - research/build224-execution-head-no-exposure-ablation-20261121
