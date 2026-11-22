@@ -319,21 +319,25 @@ test('auxiliary rank head must pass inner-selection Top-K execution gates and be
     const execution=makeExecutionRow(index,rank<2?'UP':'DOWN',at);
     return {...execution,sequence:makeSequence(rank<2?1:-1,index*0.01)};
   });
-  const head=rows.map((_,index)=>[4,3,-3,-4][index%4]);
-  const anchor=rows.map((_,index)=>[-4,-3,3,4][index%4]);
+  const head=rows.map((_,index)=>{
+    const group=Math.floor(index/4),rank=index%4;
+    const groupBest=group<20?100-group:20-(group-20);
+    return rank===0?groupBest:rank===1?groupBest-1:rank===2?-100-group:-110-group;
+  });
+  const anchor=rows.map((_,index)=>index%4===2?10:0);
   const passed=summarizeTcnLstmRankingExecutionSelection(rows,head,anchor,{
     roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
   });
   assert.equal(passed.status,'EVALUATED');
   assert.equal(passed.source_partition,'INNER_SELECTION_ONLY');
   assert.equal(passed.passed,true);
-  assert.ok(passed.top_k_trials.some(item=>item.risk_gates_passed));
+  assert.ok(passed.top_k_trials.some(item=>item.passed));
   const rejected=summarizeTcnLstmRankingExecutionSelection(rows,head,head,{
     roundTripCostBps:30,minimumTrades:20,minimumWinRatePct:55,maximumDrawdownPct:8
   });
   assert.equal(rejected.passed,false);
   assert.ok(rejected.top_k_trials.every(item=>
-    item.risk_gates.beats_logistic_anchor===false));
+    item.gates.beats_logistic_anchor===false));
   assert.equal(rejected.holdout_values_used,false);
 });
 
