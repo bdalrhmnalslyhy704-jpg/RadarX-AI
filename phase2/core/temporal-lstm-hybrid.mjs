@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { fitHurdleReturnHead,predictHurdleExpectedNetReturn } from './hurdle-return-head.mjs';
+import { predictTemporalLogisticProbability } from './temporal-logistic-baseline.mjs';
 import {
   focalAsymmetricBrierLoss,deriveTrainingClassWeights,
   topKProbabilitySignals,topKThresholdSignals,topKMatchedCountSignals,
@@ -633,6 +634,31 @@ export function predictTcnLstmLogisticLogit(sequence, anchor) {
     logit += anchor.weights[feature] * features[feature];
   if (!finite(logit)) throw new TypeError('TCN_LSTM_LOGISTIC_LOGIT_NON_FINITE');
   return clamp(logit, -LOGIT_LIMIT, LOGIT_LIMIT);
+}
+
+function resolveTcnLstmRowClassifierBaselineLogit(row,anchor){
+  if(Object.prototype.hasOwnProperty.call(row??{},'classifier_baseline_logit')){
+    if(!finite(row.classifier_baseline_logit))
+      throw new TypeError('TCN_LSTM_CLASSIFIER_BASELINE_ROW_LOGIT_INVALID');
+    return clamp(Number(row.classifier_baseline_logit),-LOGIT_LIMIT,LOGIT_LIMIT);
+  }
+  return predictTcnLstmLogisticLogit(row.sequence,anchor);
+}
+
+function resolveTcnLstmProfileClassifierBaselineLogit(sequence,profile,explicitLogit=null){
+  if(finite(explicitLogit))
+    return clamp(Number(explicitLogit),-LOGIT_LIMIT,LOGIT_LIMIT);
+  const externalModel=profile?.execution_logistic_context_model??null;
+  const externalSchema=profile?.execution_logistic_context_metadata?.logistic_feature_schema_id;
+  if(externalSchema===TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID&&
+    externalModel?.training_partition_only===true&&externalModel?.standardizer&&externalModel?.fit){
+    const probability=predictTemporalLogisticProbability(
+      buildTcnLstmFlattenedFeatures(sequence),externalModel
+    );
+    const bounded=clamp(Number(probability),1e-9,1-1e-9);
+    return clamp(Math.log(bounded/(1-bounded)),-LOGIT_LIMIT,LOGIT_LIMIT);
+  }
+  return predictTcnLstmLogisticLogit(sequence,profile?.baseline_fit);
 }
 
 export const TCN_LSTM_FULL_SEQUENCE_LOGISTIC_FEATURE_SCHEMA_ID =
@@ -1348,7 +1374,7 @@ function updateParameters(model, gradients, optimizer, step, learningRate, l2) {
 function evaluateBrier(rows, model, anchor) {
   let sum = 0;
   for (const row of rows) {
-    const baselineLogit = predictTcnLstmLogisticLogit(row.sequence, anchor);
+    const baselineLogit = resolveTcnLstmRowClassifierBaselineLogit(row,anchor);
     const probability = inspectTcnLstmForward(row.sequence, model, baselineLogit).probability;
     sum += (probability - row.target) ** 2;
   }
@@ -1671,8 +1697,8 @@ function evaluateSharedClassifierRankingLoss(rows,pairs,model,anchor) {
   let total=0;
   for(const pair of pairs){
     const high=rows[pair.high_index],low=rows[pair.low_index];
-    const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
-    const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
+    const highBase=resolveTcnLstmRowClassifierBaselineLogit(high,anchor);
+    const lowBase=resolveTcnLstmRowClassifierBaselineLogit(low,anchor);
     const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
     const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
     total+=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit).loss;
@@ -1688,7 +1714,7 @@ function evaluateClassifierTrainingObjective(rows,model,anchor,{
     throw new TypeError('TCN_LSTM_TRAINING_OBJECTIVE_CONFIGURATION_INVALID');
   let total=0;
   for(const row of rows){
-    const baselineLogit=predictTcnLstmLogisticLogit(row.sequence,anchor);
+    const baselineLogit=resolveTcnLstmRowClassifierBaselineLogit(row,anchor);
     const probability=inspectTcnLstmForward(row.sequence,model,baselineLogit).probability;
     total+=focalAsymmetricBrierLoss(probability,row.target,{
       ...classWeights,gammaPositive,gammaNegative
@@ -2702,7 +2728,7 @@ export function trainTcnLstmHybrid(trainingRows, {
       let accumulated = zeroGradients(model);
       for (const rowIndex of indexes) {
         const row = rows[rowIndex];
-        const baselineLogit = predictTcnLstmLogisticLogit(row.sequence, anchor);
+        const baselineLogit = resolveTcnLstmRowClassifierBaselineLogit(row,anchor);
         // One Bernoulli mask per channel, locked for all 24 time steps.
         // This is variational input dropout, not per-step recurrent dropout.
         const dropoutScale = Array(TCN_LSTM_HIDDEN).fill(0).map(() =>
@@ -2979,10 +3005,14 @@ export function trainTcnLstmHybrid(trainingRows, {
   };
 }
 
-export function predictTcnLstmHybridProbability(sequence, profile) {
+export function predictTcnLstmHybridProbability(sequence, profile, {
+  externalLogisticLogit=null
+}={}) {
   if (!profile?.model || !profile?.baseline_fit)
     throw new TypeError('TCN_LSTM_PROFILE_NOT_TRAINED');
-  const baselineLogit = predictTcnLstmLogisticLogit(sequence, profile.baseline_fit);
+  const baselineLogit = resolveTcnLstmProfileClassifierBaselineLogit(
+    sequence,profile,externalLogisticLogit
+  );
   const forward=inspectTcnLstmForward(sequence,profile.model,baselineLogit);
   // Primary classifier probability only. Ranking residuals stay independent
   // and cannot change Brier, calibration, or the Logistic entry-threshold gate.
@@ -3011,7 +3041,7 @@ export function predictTcnLstmHybridRankingAnchorLogit(sequence, profile) {
 function splitPredictions(rows, profile) {
   const modelPredictions = rows.map(row => predictTcnLstmHybridProbability(row.sequence, profile));
   const baselinePredictions = rows.map(row =>
-    sigmoid(predictTcnLstmLogisticLogit(row.sequence, profile.baseline_fit)));
+    sigmoid(resolveTcnLstmProfileClassifierBaselineLogit(row.sequence,profile)));
   return { modelPredictions, baselinePredictions };
 }
 
@@ -4237,10 +4267,10 @@ function applyPlattCalibration(probability, calibrator) {
   return sigmoid(clamp(calibrator.slope * logit + calibrator.intercept, -LOGIT_LIMIT, LOGIT_LIMIT));
 }
 
-export function predictTcnLstmHybridCalibratedProbability(sequence, profile, calibrator) {
+export function predictTcnLstmHybridCalibratedProbability(sequence, profile, calibrator,options={}) {
   if (!calibrator?.fitted)
     throw new TypeError('TCN_LSTM_INFERENCE_CALIBRATOR_NOT_FITTED');
-  const raw = predictTcnLstmHybridProbability(sequence, profile);
+  const raw = predictTcnLstmHybridProbability(sequence, profile,options);
   const calibrated = applyPlattCalibration(raw, calibrator);
   if (!finite(calibrated) || calibrated < 0 || calibrated > 1)
     throw new TypeError('TCN_LSTM_CALIBRATED_INFERENCE_NON_FINITE');
