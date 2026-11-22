@@ -1401,7 +1401,9 @@ async function main(){
           minimumReturnWinRatePct:55,
           rankingScoreWeight:0.01,
           rankingMinimumReturnGapPct:0.50,
-          rankingPairsPerTimestamp:12,
+          // Bound shared-ranking backprop to two comparison pairs per 15m group.
+          // All eight candidate weights remain evaluated without a 12-pair BPTT multiplier.
+          rankingPairsPerTimestamp:2,
           rankingHeadLearningRate:0.03,
           rankingHeadEpochs:40,
           rankingHeadL2:0.001,
