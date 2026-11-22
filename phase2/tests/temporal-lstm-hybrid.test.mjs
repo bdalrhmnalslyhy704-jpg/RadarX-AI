@@ -1027,11 +1027,11 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'inner selection must compare the neural probability against the raw 696D Logistic scores, not the calibrated context or pooled 58D anchor');
   assert.equal(result.execution_logistic_context.inner_selection_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
-  // The public baseline-source field identifies the final refit used for
-  // inner-selection scoring. The actual neural training baseline is separately
-  // recorded as OOF in the selected fit's training diagnostics below.
+  // The top-level classifier baseline source identifies OOF logits consumed
+  // during neural training. The explicit baseline object identifies the final
+  // Logistic refit used to score the later inner-selection rows.
   assert.equal(result.classifier_baseline_source,
-    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
   assert.equal(result.baseline.kind,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW',
     'the explicit baseline result must identify the final-refit Logistic used to score inner-selection rows');
