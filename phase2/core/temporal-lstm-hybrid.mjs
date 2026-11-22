@@ -2766,8 +2766,8 @@ export function trainTcnLstmHybrid(trainingRows, {
           let rankGradient=zeroGradients(model);
           for(const pair of batchPairs){
             const high=rows[pair.high_index],low=rows[pair.low_index];
-            const highBase=predictTcnLstmLogisticLogit(high.sequence,anchor);
-            const lowBase=predictTcnLstmLogisticLogit(low.sequence,anchor);
+            const highBase=resolveTcnLstmRowClassifierBaselineLogit(high,anchor);
+            const lowBase=resolveTcnLstmRowClassifierBaselineLogit(low,anchor);
             const highLogit=inspectTcnLstmForward(high.sequence,model,highBase).logit;
             const lowLogit=inspectTcnLstmForward(low.sequence,model,lowBase).logit;
             const pairLoss=tcnLstmPairwiseLogitRankingLoss(highLogit,lowLogit);
@@ -3487,6 +3487,11 @@ export function selectTcnLstmHybridHyperparameters(trainingRows, selectionRows, 
       logistic_cv_selected_configuration:provided.report.selected_configuration,
       logistic_cv_calibration:provided.report.calibration,
       predictions_are_out_of_sample_for_scoring_rows:true,
+      training_predictions_are_in_sample:true,
+      training_predictions_source_partition:'PRE_EXECUTION_HEAD_MODEL_TRAINING_ROWS_ONLY',
+      classifier_training_baseline_source:requireExternalLogisticSelectionBaseline
+        ?'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW'
+        :'FROZEN_POOLED_LOGISTIC_ANCHOR_58_FALLBACK',
       validation_or_holdout_used:false
     };
   }else{
