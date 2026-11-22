@@ -375,8 +375,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the selected return estimator must be frozen before outer validation');
   assert.match(trainer,/pooledOnlyExpectedNetReturnPct/,
     'the pooled-only outer comparator must use its own inner-selected return estimator');
-  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
-    'the report must publish the exact active V5 score-gated execution-head schema');
+  assert.match(trainer,/TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the report must publish the exact execution-head schema exported by the inference module');
+  assert.match(trainer,/execution_head_input_feature_schema:\s*TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the public artifact contract must reference the same schema used by model fitting and inference');
+  assert.doesNotMatch(trainer,/RANKER_V5/,
+    'the report must not mislabel the active independent rank-score V6 features as V5');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
@@ -570,6 +574,20 @@ test('score-conditioned execution heads receive a matched pooled-only outer-vali
   assert.match(recurrent,/variant:'POOLED_ONLY'/);
 });
 
+
+test('fixed-SHA manifest identifies the actual TCN-LSTM selection objective and hashes the exact serialized manifest bytes',async()=>{
+  const trainer=await readFile(trainerUrl,'utf8');
+  assert.ok(trainer.includes('objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,'),
+    'the manifest must bind the actual selected classifier/ranking objective identifier');
+  assert.ok(trainer.includes("const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\\n','utf8');"),
+    'manifest hashing must use the exact pretty-printed UTF-8 bytes written to disk');
+  assert.ok(trainer.includes('const experimentManifestSha256=sha256(experimentManifestBytes);'),
+    'manifest digest must be computed from its serialized bytes');
+  assert.ok(trainer.includes('experiment_manifest_sha256:experimentManifestSha256,'),
+    'the report integrity block must publish the exact manifest digest');
+  assert.ok(trainer.includes("await atomicJson(join(dirname(outputPath),'experiment-manifest.json'),experimentManifest);"),
+    'the hashed manifest bytes must match the separately written manifest file');
+});
 
 test('TCN-LSTM never opens holdout automatically after external validation',async()=>{
   const recurrent=await readFile(lstmModuleUrl,'utf8');

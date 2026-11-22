@@ -35,6 +35,7 @@ import {
 } from '../core/temporal-neural-brain.mjs';
 import {
   TCN_LSTM_HYBRID_SCHEMA,TCN_LSTM_STEPS,TCN_LSTM_INPUT_CHANNELS,TCN_LSTM_HIDDEN,
+  TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
   buildTcnLstmFlattenedFeatures,selectTcnLstmHybridHyperparameters,fitTcnLstmHybridCalibration,
   splitFourHourTcnLstmTrainingRows,
   predictTcnLstmHybridProbability,predictTcnLstmHybridCalibratedProbability,
@@ -1700,7 +1701,7 @@ async function main(){
             execution_head_context_ablation:selection.execution_head_context_ablation_qualification?.result??null,
             execution_head_context_ablation_required_for_inner_qualification:true,
             execution_head_input_feature_schema:
-              'RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5',
+              TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA,
           execution_logistic_context:selection.execution_logistic_context??null,
             ranking_head_schema:'RADARX_TCN_LSTM_AUXILIARY_PAIRWISE_LOGIT_RESIDUAL_HEAD_V1',
             ranking_head_parameters:TCN_LSTM_HIDDEN,
@@ -2147,6 +2148,7 @@ async function main(){
     cost_model_id:NEURAL_CLOSURE_COST_MODEL_ID,
     round_trip_cost_bps:args.roundTripCostBps,
     split_id:split.schema,
+    objective_id:training.model_internal_diagnostics?.TCN_LSTM_HYBRID?.selection_scoring?.method??null,
     feature_schema_ids:Object.fromEntries(Object.entries(benchmark.models).map(([name])=>[
       name,modelArtifactsByModel[name]?.feature_schema_id??
         (name==='COGNITIVE_MLP_V5'||name==='MLP_GBDT_HYBRID'?COGNITIVE_FEATURE_SCHEMA:null)
@@ -2211,6 +2213,8 @@ async function main(){
       deployment_triggered:false
     }
   };
+  const experimentManifestBytes=Buffer.from(JSON.stringify(experimentManifest,null,2)+'\n','utf8');
+  const experimentManifestSha256=sha256(experimentManifestBytes);
   const report={
     schema:MODEL_SCHEMA,
     status:benchmark.status,
@@ -2218,6 +2222,7 @@ async function main(){
     integrity:{
       model_source_commit_sha:sourceCommitSha,
       dataset_source_commit_sha:datasetSourceCommitSha,
+      experiment_manifest_sha256:experimentManifestSha256,
       dataset_sha256:datasetSha,input_file_sha256:inputFileSha256,
       fixed_benchmark_sha256:benchmark.integrity.fixed_benchmark_sha256,
       row_count:rows.length
