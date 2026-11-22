@@ -375,8 +375,12 @@ test('fixed-SHA summary exposes disjoint threshold-selection and outer-validatio
     'the selected return estimator must be frozen before outer validation');
   assert.match(trainer,/pooledOnlyExpectedNetReturnPct/,
     'the pooled-only outer comparator must use its own inner-selected return estimator');
-  assert.match(trainer,/RADARX_TCN_LSTM_EXECUTION_HEAD_POOLED_SCORE_GATED_BY_TEMPORAL_LOGISTIC_CV_CLASSIFIER_AND_RANKER_V5/,
-    'the report must publish the exact active V5 score-gated execution-head schema');
+  assert.match(trainer,/TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the report must publish the exact execution-head schema exported by the inference module');
+  assert.match(trainer,/execution_head_input_feature_schema:\s*TCN_LSTM_EXECUTION_HEAD_INPUT_FEATURE_SCHEMA/,
+    'the public artifact contract must reference the same schema used by model fitting and inference');
+  assert.doesNotMatch(trainer,/RANKER_V5/,
+    'the report must not mislabel the active independent rank-score V6 features as V5');
   assert.match(temporal,/RECENCY_WEIGHTED_COMPLETE_15M_DECISION_BUCKETS_V1/,
     'the recurrent fit budget must cover full inner-training chronology in complete decision buckets');
   assert.match(trainer,/training_sample_selection:selection\.training_sample_selection\?\?null/,
