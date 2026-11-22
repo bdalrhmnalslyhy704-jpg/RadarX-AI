@@ -1029,6 +1029,8 @@ test('TCN-LSTM inner selector scores pairwise ranking on its own purged selectio
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.classifier_baseline_source,
     'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW_OOF');
+  assert.equal(result.classifier_selection_baseline_source,
+    'TUNED_FULL_ORDERED_TEMPORAL_LOGISTIC_696_RAW');
   assert.equal(result.classifier_baseline_feature_count,696);
   assert.equal(result.classifier_baseline_training_logits_used,true);
   assert.equal(result.classifier_baseline_training_logits_are_purged_oof,true);
