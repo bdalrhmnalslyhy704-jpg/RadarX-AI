@@ -495,8 +495,8 @@ test('TCN-LSTM classifier Brier and independent ranking sweep stay within the se
   }
   assert.equal((candidateBlock[1].match(/objective:'BRIER',rankingWeight:/g)||[]).length,7,
     'all seven ranking candidates must retain the proper-scoring Brier objective');
-  assert.match(trainer,/rankingPairsPerTimestamp:12/,
-    'ranking supervision must use a broader bounded set of same-time return pairs');
+  assert.match(trainer,/rankingPairsPerTimestamp:2/,
+    'shared-ranking backprop must use a bounded, executable pair budget per 15m group');
   assert.match(trainer,/requiredImprovement:0\.00025/);
   assert.match(trainer,/minimumReturnWinRatePct:55/);
   assert.match(trainer,/rankingMinimumReturnGapPct:0\.50/);
